@@ -33,6 +33,7 @@ MyApplet.prototype = {
     this.language = "en";
     this.maxSeconds = 30;
     this.recorder = "auto";
+    this.inputDevice = "";
     this.insertMethod = "clipboard-paste";
     this.appendSpace = true;
     this.typingDelayMs = 8;
@@ -64,6 +65,7 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "language", "language", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "max-seconds", "maxSeconds", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "recorder", "recorder", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "input-device", "inputDevice", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "insert-method", "insertMethod", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "append-space", "appendSpace", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "typing-delay-ms", "typingDelayMs", null, null);
@@ -104,6 +106,10 @@ MyApplet.prototype = {
     let doctor = new PopupMenu.PopupIconMenuItem(_("Run doctor"), "dialog-information-symbolic", St.IconType.SYMBOLIC);
     doctor.connect("activate", () => this._runDoctor());
     this.menu.addMenuItem(doctor);
+
+    let inputs = new PopupMenu.PopupIconMenuItem(_("Show input source"), "audio-input-microphone-symbolic", St.IconType.SYMBOLIC);
+    inputs.connect("activate", () => this._showInputSource());
+    this.menu.addMenuItem(inputs);
 
     let transcripts = new PopupMenu.PopupIconMenuItem(_("Open transcripts"), "folder-documents-symbolic", St.IconType.SYMBOLIC);
     transcripts.connect("activate", () => {
@@ -153,6 +159,9 @@ MyApplet.prototype = {
     if (this.appendSpace) {
       args.push("--append-space");
     }
+    if (this.inputDevice && this.inputDevice.trim() !== "") {
+      args.push("--input-device", this.inputDevice);
+    }
     if (this.transcriberCommand && this.transcriberCommand.trim() !== "") {
       args.push("--transcriber-command", this.transcriberCommand);
     }
@@ -168,6 +177,10 @@ MyApplet.prototype = {
 
   _doctorArgs: function() {
     return [this.cliPath || DEFAULT_CLI, "doctor", "--json"];
+  },
+
+  _listInputsArgs: function() {
+    return [this.cliPath || DEFAULT_CLI, "list-inputs", "--json"];
   },
 
   _usesCinnamonClipboard: function() {
@@ -207,6 +220,32 @@ MyApplet.prototype = {
       } else {
         this._setStatus("error", _("Missing: ") + missing.join(", "), this.lastTranscript);
       }
+    });
+  },
+
+  _showInputSource: function() {
+    if (this.inputDevice && this.inputDevice.trim() !== "") {
+      this._setStatus("ready", _("Input device: ") + this.inputDevice, this.lastTranscript);
+      return;
+    }
+    this._spawnJson(this._listInputsArgs(), (payload) => {
+      if (payload.error) {
+        this._setStatus("error", payload.error, this.lastTranscript);
+        return;
+      }
+      let sources = payload.sources || [];
+      if (sources.length === 0) {
+        this._setStatus("error", _("No input sources found"), this.lastTranscript);
+        return;
+      }
+      let selected = sources[0];
+      for (let source of sources) {
+        if (source.default) {
+          selected = source;
+          break;
+        }
+      }
+      this._setStatus("ready", _("Default input: ") + (selected.description || selected.name), this.lastTranscript);
     });
   },
 

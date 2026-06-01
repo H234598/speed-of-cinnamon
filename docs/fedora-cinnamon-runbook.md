@@ -48,9 +48,32 @@ Required for the intended Fedora Cinnamon X11 path:
 sudo dnf install -y python3 pipewire-utils xdotool libnotify
 ```
 
+Install `pulseaudio-utils` as well for `pactl` input source discovery and the `parecord` fallback recorder:
+
+```bash
+sudo dnf install -y pulseaudio-utils
+```
+
 `xdotool` is needed only for automatic paste or direct typing. The applet uses Cinnamon's own clipboard API for copying
 the transcript, and falls back to copy-only when automatic paste is not available. `xclip` is optional for standalone CLI
 clipboard insertion outside the applet.
+
+## Input Source Selection
+
+The default PipeWire/Pulse input is used when `Input device` is empty. To pin a microphone, inspect the source names:
+
+```bash
+speed-of-cinnamon list-inputs --json
+```
+
+Use the `name` value, not the localized description:
+
+```bash
+speed-of-cinnamon start --input-device alsa_input.usb-Creative_Technology_Ltd_Sound_BlasterX_G6_8400614358X-00.analog-stereo
+```
+
+The same value can be stored in the applet's `Input device` setting. It is passed to `pw-record --target`,
+`parecord --device`, or `arecord --device`, depending on the selected recorder.
 
 ## ASR Configuration
 

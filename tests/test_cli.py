@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from speed_of_cinnamon import cli
+from speed_of_cinnamon.recorder import InputSource
 from speed_of_cinnamon.state import RecordingState, StateStore
 
 
@@ -34,6 +35,26 @@ class CliTest(unittest.TestCase):
                     "--json",
                 ])
         self.assertEqual(code, 0)
+
+    @mock.patch("speed_of_cinnamon.cli.list_input_sources")
+    def test_list_inputs_outputs_sources(self, mocked_sources: mock.Mock) -> None:
+        mocked_sources.return_value = [
+            InputSource(
+                id="11",
+                name="alsa_input.usb-mic.analog-stereo",
+                description="USB Microphone",
+                driver="PipeWire",
+                state="RUNNING",
+                default=True,
+            )
+        ]
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["list-inputs", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["sources"][0]["name"], "alsa_input.usb-mic.analog-stereo")
+        self.assertTrue(payload["sources"][0]["default"])
 
     @mock.patch("speed_of_cinnamon.cli.command_start")
     def test_toggle_starts_when_idle(self, mocked_start: mock.Mock) -> None:

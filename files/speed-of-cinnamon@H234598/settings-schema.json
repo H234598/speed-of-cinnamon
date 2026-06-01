@@ -15,7 +15,7 @@
     "recording-section": {
       "type": "section",
       "title": "Recording",
-      "keys": ["language", "max-seconds", "recorder"]
+      "keys": ["language", "max-seconds", "recorder", "input-device"]
     },
     "output-section": {
       "type": "section",
@@ -70,6 +70,12 @@
       "ALSA arecord": "arecord"
     },
     "default": "auto"
+  },
+  "input-device": {
+    "type": "entry",
+    "description": "Input device",
+    "tooltip": "Optional PipeWire/Pulse source name. Leave empty for the current default. Run 'speed-of-cinnamon list-inputs --json' to inspect available sources.",
+    "default": ""
   },
   "insert-method": {
     "type": "combobox",

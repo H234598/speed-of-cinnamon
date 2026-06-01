@@ -24,6 +24,7 @@ def run_checks() -> list[Check]:
         command_check("python3", "python3"),
         command_check("pw-record", "pipewire-utils"),
         command_check("parecord", "pulseaudio-utils"),
+        command_check("pactl", "pulseaudio-utils"),
         command_check("xdotool", "xdotool"),
         command_check("xclip", "xclip"),
         command_check("notify-send", "libnotify"),
@@ -41,6 +42,7 @@ def report() -> dict[str, object]:
         "checks": [asdict(check) for check in checks],
         "notes": [
             "The Cinnamon applet uses Cinnamon's own clipboard API.",
+            "Install pactl/pulseaudio-utils for input source discovery.",
             "Install xdotool for automatic paste or direct typing on Cinnamon X11.",
             "Install xclip or xsel only if you use the backend CLI clipboard insertion without the applet.",
             "ASR can use Automatic, the 'whisper' command, whisper.cpp plus a model path, or a custom command.",

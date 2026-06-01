@@ -9,6 +9,7 @@ fi
 sudo dnf install -y \
   python3 \
   pipewire-utils \
+  pulseaudio-utils \
   xdotool \
   libnotify
 
@@ -20,4 +21,3 @@ Optional standalone CLI clipboard helpers:
 Reload Cinnamon after installing the applet if it is already open:
   Alt+F2, r, Enter
 MSG
-

@@ -22,6 +22,7 @@ class RecordingState:
     stopped_at: str | None = None
     language: str = "en"
     recorder: str = "auto"
+    input_device: str = ""
     max_seconds: int = 30
     transcript: str = ""
     transcript_path: str | None = None
@@ -69,4 +70,3 @@ def process_is_alive(pid: int | None) -> bool:
     except PermissionError:
         return True
     return True
-

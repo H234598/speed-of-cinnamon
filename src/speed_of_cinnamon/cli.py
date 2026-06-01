@@ -11,7 +11,7 @@ from pathlib import Path
 from .doctor import report as doctor_report
 from .output import insert_text
 from .paths import APP_NAME, default_state_file, ensure_runtime_dirs, recordings_dir, transcript_dir
-from .recorder import choose_recorder, start_recorder, stop_process
+from .recorder import choose_recorder, list_input_sources, start_recorder, stop_process
 from .state import RecordingState, StateStore, now_iso, process_is_alive
 from .transcriber import transcribe
 
@@ -70,7 +70,7 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
     stamp = timestamp()
     audio_path = recordings_dir() / f"{stamp}.wav"
     log_path = recordings_dir() / f"{stamp}.log"
-    command = choose_recorder(args.recorder, audio_path, args.max_seconds)
+    command = choose_recorder(args.recorder, audio_path, args.max_seconds, args.input_device)
     proc = start_recorder(command, log_path)
     time.sleep(RECORDER_START_GRACE_SECONDS)
     if proc.poll() is not None:
@@ -85,6 +85,7 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
         language=args.language,
         recorder=command.name,
         max_seconds=args.max_seconds,
+        input_device=args.input_device,
     )
     store.write(state)
     return {
@@ -93,6 +94,7 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
         "pid": proc.pid,
         "audio_path": str(audio_path),
         "recorder": command.name,
+        "input_device": args.input_device,
     }
 
 
@@ -172,6 +174,25 @@ def command_doctor(args: argparse.Namespace) -> dict[str, object]:
     return doctor_report()
 
 
+def command_list_inputs(args: argparse.Namespace) -> dict[str, object]:
+    sources = list_input_sources(args.include_monitors)
+    return {
+        "status": "done",
+        "sources": [
+            {
+                "id": source.id,
+                "name": source.name,
+                "description": source.description,
+                "driver": source.driver,
+                "state": source.state,
+                "default": source.default,
+                "monitor": source.monitor,
+            }
+            for source in sources
+        ],
+    }
+
+
 def command_insert_text(args: argparse.Namespace) -> dict[str, object]:
     inserted = insert_text(args.text, args.insert_method, args.typing_delay_ms)
     return {"status": "done", "inserted": inserted}
@@ -201,6 +222,7 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--language", default="en")
     parser.add_argument("--max-seconds", type=int, default=30)
     parser.add_argument("--recorder", default="auto", choices=["auto", "pw-record", "parecord", "arecord"])
+    parser.add_argument("--input-device", default="")
     parser.add_argument("--transcriber", default="auto", choices=["auto", "whisper", "whisper-cpp", "command"])
     parser.add_argument("--transcriber-command", default="")
     parser.add_argument("--whisper-model", default="")
@@ -230,6 +252,11 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = subparsers.add_parser("doctor")
     add_common_options(doctor)
     doctor.set_defaults(handler=command_doctor)
+
+    list_inputs = subparsers.add_parser("list-inputs")
+    add_common_options(list_inputs)
+    list_inputs.add_argument("--include-monitors", action="store_true")
+    list_inputs.set_defaults(handler=command_list_inputs)
 
     insert = subparsers.add_parser("insert-text")
     add_common_options(insert)
