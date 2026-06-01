@@ -44,9 +44,6 @@ required_files=(
   /usr/share/cinnamon/applets/speed-of-cinnamon@H234598/applet.js
   /usr/share/cinnamon/applets/speed-of-cinnamon@H234598/metadata.json
   /usr/share/cinnamon/applets/speed-of-cinnamon@H234598/settings-schema.json
-  /usr/share/doc/speed-of-cinnamon/README.md
-  /usr/share/doc/speed-of-cinnamon/fedora-cinnamon-runbook.md
-  /usr/share/licenses/speed-of-cinnamon/LICENSE
 )
 file_list="${tmp_dir}/rpm-files.txt"
 
@@ -61,6 +58,16 @@ if ! grep -Eq '^/usr/lib/python[^/]+/site-packages/speed_of_cinnamon/cli\.py$' "
   printf 'RPM is missing speed_of_cinnamon/cli.py under site-packages\n' >&2
   exit 1
 fi
+for pattern in \
+  '^/usr/share/doc/speed-of-cinnamon(-[^/]*)?/README\.md$' \
+  '^/usr/share/doc/speed-of-cinnamon(-[^/]*)?/fedora-cinnamon-runbook\.md$' \
+  '^/usr/share/(doc|licenses)/speed-of-cinnamon(-[^/]*)?/LICENSE$'
+do
+  if ! grep -Eq "${pattern}" "${file_list}"; then
+    printf 'RPM is missing a file matching %s\n' "${pattern}" >&2
+    exit 1
+  fi
+done
 
 (
   cd "${tmp_dir}"
