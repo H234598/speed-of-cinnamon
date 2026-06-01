@@ -149,3 +149,14 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('Util.spawn(args);', source)
         self.assertIn('["xdotool", "type", "--clearmodifiers", "--delay", String(delay), text]', source)
         self.assertIn('["xdotool", "key", "--clearmodifiers", "ctrl+v"]', source)
+
+    def test_history_entries_can_be_copied_or_inserted(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("let entry = new PopupMenu.PopupSubMenuMenuItem(label)", source)
+        self.assertIn('new PopupMenu.PopupIconMenuItem(_("Insert transcript"), "edit-paste-symbolic"', source)
+        self.assertIn("insertItem.connect(\"activate\", () => this._insertHistoryTranscript(transcript.text || \"\"))", source)
+        self.assertIn('new PopupMenu.PopupIconMenuItem(_("Copy transcript"), "edit-copy-symbolic"', source)
+        self.assertIn("copyItem.connect(\"activate\", () => this._copyHistoryTranscript(transcript.text || \"\"))", source)
+        self.assertIn("_insertHistoryTranscript: function(text)", source)
+        self.assertIn("this._insertTranscriptText(text);", source)

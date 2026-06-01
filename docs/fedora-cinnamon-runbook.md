@@ -92,8 +92,8 @@ Each completed transcription is saved as a text file under the transcript direct
 speed-of-cinnamon history --limit 5 --json
 ```
 
-The Cinnamon applet exposes the same recent entries under `Recent transcripts`; selecting one copies it through
-Cinnamon's clipboard API.
+The Cinnamon applet exposes the same recent entries under `Recent transcripts`. Each entry offers `Insert transcript`
+with the currently selected output mode and `Copy transcript` through Cinnamon's clipboard API.
 
 Use `Insert last transcript` to retry the most recent transcript with the currently selected output mode. This is useful
 when the first paste went to the wrong target, when the target application was not ready, or when you switched from

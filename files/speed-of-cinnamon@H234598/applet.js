@@ -1452,9 +1452,17 @@ MyApplet.prototype = {
       return;
     }
     for (let transcript of transcripts) {
-      let item = new PopupMenu.PopupMenuItem(transcript.preview || transcript.name || _("Transcript"));
-      item.connect("activate", () => this._copyHistoryTranscript(transcript.text || ""));
-      this.historyItem.menu.addMenuItem(item);
+      let label = transcript.preview || transcript.name || _("Transcript");
+      let entry = new PopupMenu.PopupSubMenuMenuItem(label);
+      this.historyItem.menu.addMenuItem(entry);
+
+      let insertItem = new PopupMenu.PopupIconMenuItem(_("Insert transcript"), "edit-paste-symbolic", St.IconType.SYMBOLIC);
+      insertItem.connect("activate", () => this._insertHistoryTranscript(transcript.text || ""));
+      entry.menu.addMenuItem(insertItem);
+
+      let copyItem = new PopupMenu.PopupIconMenuItem(_("Copy transcript"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
+      copyItem.connect("activate", () => this._copyHistoryTranscript(transcript.text || ""));
+      entry.menu.addMenuItem(copyItem);
     }
   },
 
@@ -1464,6 +1472,13 @@ MyApplet.prototype = {
     }
     this.clipboard.set_text(St.ClipboardType.CLIPBOARD, this._preparedTranscriptText(text));
     this._setStatus("done", _("Copied transcript"), text);
+  },
+
+  _insertHistoryTranscript: function(text) {
+    if (!text) {
+      return;
+    }
+    this._insertTranscriptText(text);
   },
 
   _setStatus: function(status, message, transcript) {
