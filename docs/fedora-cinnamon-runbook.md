@@ -49,7 +49,8 @@ sudo dnf install -y python3 pipewire-utils xdotool libnotify
 ```
 
 `xdotool` is needed only for automatic paste or direct typing. The applet uses Cinnamon's own clipboard API for copying
-the transcript. `xclip` is optional for standalone CLI clipboard insertion outside the applet.
+the transcript, and falls back to copy-only when automatic paste is not available. `xclip` is optional for standalone CLI
+clipboard insertion outside the applet.
 
 ## ASR Configuration
 
@@ -86,6 +87,7 @@ speed-of-cinnamon toggle --language de --transcriber command --transcriber-comma
 
 - The app is intentionally local-first and does not bundle an ASR model.
 - Automatic paste/direct typing needs `xdotool` on X11.
+- The applet can copy the last transcript again from its menu.
 - The applet is designed for Cinnamon 6.x style settings and keybinding APIs.
 
 ## Timeout Behavior

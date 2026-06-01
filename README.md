@@ -15,6 +15,7 @@ path.
 - PipeWire/PulseAudio/ALSA recording through `pw-record`, `parecord`, or `arecord`.
 - ASR presets for Automatic, OpenAI Whisper command, whisper.cpp with a model path, or a custom command template.
 - Cinnamon clipboard output through the applet, optional `xdotool` paste/direct typing, clipboard-only, or no insertion.
+- Applet menu action to copy the last transcript again.
 - Recordings that hit the configured maximum length are preserved and transcribed on the next shortcut press.
 - Per-user runtime state under `~/.local/state/speed-of-cinnamon/` and temporary recordings under
   `~/.cache/speed-of-cinnamon/`.
@@ -30,6 +31,8 @@ sudo dnf install python3 pipewire-utils xdotool libnotify
 
 The applet uses Cinnamon's own clipboard API, so `xclip` is not required for normal panel usage. Install `xclip` or
 `xsel` only if you want to use `speed-of-cinnamon` as a standalone CLI clipboard inserter outside Cinnamon.
+If `xdotool` is missing, the applet still copies transcripts through Cinnamon and reports that automatic paste is
+unavailable.
 
 `parecord` and `arecord` are supported fallback recorders when installed. For transcription, install one local ASR
 backend and choose it in the applet settings:
@@ -121,6 +124,6 @@ Cinnamon keybinding / panel click
 ```
 
 The applet handles the normal clipboard path through Cinnamon's `St.Clipboard`, then uses `xdotool` only for the X11
-paste keystroke. This keeps desktop integration in Cinnamon where it belongs and keeps ASR replaceable. The Speed of
-Sound JVM/GTK portal stack is intentionally not reused because its central integration point is the part that does not
-fit this goal.
+paste keystroke when it is available. Without `xdotool`, dictation still completes as a Cinnamon clipboard copy. This
+keeps desktop integration in Cinnamon where it belongs and keeps ASR replaceable. The Speed of Sound JVM/GTK portal
+stack is intentionally not reused because its central integration point is the part that does not fit this goal.

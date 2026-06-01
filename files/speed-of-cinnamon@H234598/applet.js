@@ -90,6 +90,11 @@ MyApplet.prototype = {
     this.transcriptItem.setSensitive(false);
     this.menu.addMenuItem(this.transcriptItem);
 
+    this.copyLastItem = new PopupMenu.PopupIconMenuItem(_("Copy last transcript"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
+    this.copyLastItem.setSensitive(false);
+    this.copyLastItem.connect("activate", () => this._copyLastTranscript());
+    this.menu.addMenuItem(this.copyLastItem);
+
     this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
     let statusNow = new PopupMenu.PopupIconMenuItem(_("Refresh status"), "view-refresh-symbolic", St.IconType.SYMBOLIC);
@@ -187,15 +192,19 @@ MyApplet.prototype = {
 
   _runDoctor: function() {
     this._spawnJson(this._doctorArgs(), (payload) => {
-      if (payload.ok) {
-        this._setStatus("ready", _("Doctor: required Cinnamon/X11 helpers found"), this.lastTranscript);
-      } else {
-        let missing = [];
-        for (let check of payload.checks || []) {
-          if (!check.ok) {
-            missing.push(check.name);
-          }
+      let missing = [];
+      for (let check of payload.checks || []) {
+        if (!check.ok) {
+          missing.push(check.name);
         }
+      }
+      if (payload.ok) {
+        if (missing.length > 0) {
+          this._setStatus("ready", _("Doctor: core OK; optional missing: ") + missing.join(", "), this.lastTranscript);
+        } else {
+          this._setStatus("ready", _("Doctor: all checked helpers found"), this.lastTranscript);
+        }
+      } else {
         this._setStatus("error", _("Missing: ") + missing.join(", "), this.lastTranscript);
       }
     });
@@ -252,10 +261,7 @@ MyApplet.prototype = {
   },
 
   _finishCinnamonClipboardInsert: function(payload) {
-    let text = payload.transcript || "";
-    if (this.appendSpace && text && !/\s$/.test(text)) {
-      text += " ";
-    }
+    let text = this._preparedTranscriptText(payload.transcript);
     this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
     if (this.insertMethod === "clipboard") {
       this._setStatus("done", _("Copied to clipboard"), payload.transcript);
@@ -265,8 +271,25 @@ MyApplet.prototype = {
       Util.spawn(["xdotool", "key", "--clearmodifiers", "ctrl+v"]);
       this._setStatus("done", _("Copied and pasted"), payload.transcript);
     } else {
-      this._setStatus("error", _("Copied to clipboard; install xdotool for automatic paste"), payload.transcript);
+      this._setStatus("done", _("Copied to clipboard; install xdotool for automatic paste"), payload.transcript);
     }
+  },
+
+  _preparedTranscriptText: function(transcript) {
+    let text = transcript || "";
+    if (this.appendSpace && text && !/\s$/.test(text)) {
+      text += " ";
+    }
+    return text;
+  },
+
+  _copyLastTranscript: function() {
+    if (!this.lastTranscript) {
+      this._setStatus(this.status, _("No transcript yet"), this.lastTranscript);
+      return;
+    }
+    this.clipboard.set_text(St.ClipboardType.CLIPBOARD, this._preparedTranscriptText(this.lastTranscript));
+    this._setStatus("done", _("Copied last transcript"), this.lastTranscript);
   },
 
   _setStatus: function(status, message, transcript) {
@@ -274,6 +297,9 @@ MyApplet.prototype = {
     this.lastMessage = message || "";
     if (transcript) {
       this.lastTranscript = transcript;
+    }
+    if (this.copyLastItem) {
+      this.copyLastItem.setSensitive(Boolean(this.lastTranscript));
     }
     this._updatePanel();
     this._scheduleStatusPoll();
