@@ -29,6 +29,7 @@ mkdir -p "${dist_dir}" "${work_dir}/${package}"
 
 for path in \
   .github \
+  .mailmap \
   docs \
   files \
   packaging \
@@ -55,7 +56,7 @@ Contains:
 - Cinnamon applet files under files/speed-of-cinnamon@H234598/
 - Python backend under src/speed_of_cinnamon/
 - local build, verify, install, uninstall, and dependency scripts under scripts/
-- tests, CI workflow, README, license, and Fedora Cinnamon runbook
+- tests, CI workflow, author mailmap, README, license, and Fedora Cinnamon runbook
 EOF
 
 tarball="${dist_dir}/${package}.tar.gz"

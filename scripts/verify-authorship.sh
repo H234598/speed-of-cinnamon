@@ -103,6 +103,9 @@ def check_mailmap() -> None:
     if missing:
         fail(".mailmap misses legacy GitHub author mappings:\n" + "\n".join(sorted(missing)))
 
+    if not in_git_worktree():
+        return
+
     checks = [
         f"{legacy_name} <180772946+{legacy_name}@users.noreply.github.com>",
         f"{legacy_name} <54270221+{legacy_name}@users.noreply.github.com>",

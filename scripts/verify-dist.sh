@@ -18,6 +18,7 @@ if [[ -z "${package_dir}" ]]; then
 fi
 
 for path in \
+  .mailmap \
   README.md \
   LICENSE \
   RELEASE-MANIFEST.txt \
