@@ -55,12 +55,15 @@ speed-of-cinnamon setup --applet \
 
 ```text
 Applet:      ~/.local/share/cinnamon/applets/speed-of-cinnamon@H234598/
-Backend:     ~/.local/bin/speed-of-cinnamon
+Backend:     ~/.local/bin/speed-of-cinnamon or /usr/bin/speed-of-cinnamon
 State:       ~/.local/state/speed-of-cinnamon/state.json
 Transcripts: ~/.local/state/speed-of-cinnamon/transcripts/
 Recordings:  ~/.cache/speed-of-cinnamon/recordings/
 Models:      ~/.local/share/speed-of-cinnamon/models/whisper.cpp/
 ```
+
+Leave the applet's `Backend command` setting empty for normal installs. The applet first uses the per-user backend
+from `~/.local/bin`, then the RPM/system backend from `/usr/bin`, then `speed-of-cinnamon` from `PATH`.
 
 ## Transcript History
 
@@ -191,8 +194,8 @@ disabled for normal Cinnamon clipboard output unless a target application cannot
 ```bash
 make check
 make smoke-backend
-~/.local/bin/speed-of-cinnamon doctor --json
-~/.local/bin/speed-of-cinnamon doctor \
+speed-of-cinnamon doctor --json
+speed-of-cinnamon doctor \
   --applet \
   --settings-json '{"transcriber":"command","transcriber-command":"printf ok","insert-method":"clipboard-paste"}' \
   --json

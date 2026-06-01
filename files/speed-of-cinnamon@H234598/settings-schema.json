@@ -169,7 +169,7 @@
   "cli-path": {
     "type": "entry",
     "description": "Backend command",
-    "tooltip": "Optional override. Leave empty to use ~/.local/bin/speed-of-cinnamon for the current user.",
+    "tooltip": "Optional override. Leave empty to use ~/.local/bin/speed-of-cinnamon when installed for the user, then /usr/bin/speed-of-cinnamon from the RPM/system install.",
     "default": ""
   },
   "transcriber": {

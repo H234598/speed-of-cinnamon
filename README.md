@@ -118,6 +118,10 @@ The backend command is installed to:
 ~/.local/bin/speed-of-cinnamon
 ```
 
+When the `Backend command` setting is empty, the applet auto-detects the backend in this order:
+`~/.local/bin/speed-of-cinnamon`, `/usr/bin/speed-of-cinnamon`, then `speed-of-cinnamon` from `PATH`. This keeps the
+per-user development install and the Fedora RPM/system install usable without editing the setting.
+
 On startup, the applet runs a lightweight doctor check against its current Cinnamon settings. A `SET` panel label means
 the configured pipeline needs setup, usually because no ASR backend or local voice model is available yet. Use the
 applet menu's `Copy setup plan`, `Open applet settings`, `Open setup guide`, `Run doctor`, and `Voice model` actions to
@@ -225,7 +229,7 @@ The RPM installs the backend command to `/usr/bin/speed-of-cinnamon` and the Cin
 ```text
 Cinnamon keybinding / panel click
   -> files/speed-of-cinnamon@H234598/applet.js
-  -> ~/.local/bin/speed-of-cinnamon
+  -> ~/.local/bin/speed-of-cinnamon or /usr/bin/speed-of-cinnamon
   -> Python backend:
        recorder.py      pw-record / parecord / arecord and pactl source discovery
        transcriber.py   ASR preset resolver and command runners

@@ -10,6 +10,7 @@ const Mainloop = imports.mainloop;
 const UUID = "speed-of-cinnamon@H234598";
 const HOTKEY_ID = "speed-of-cinnamon-toggle";
 const DEFAULT_CLI = GLib.build_filenamev([GLib.get_home_dir(), ".local", "bin", "speed-of-cinnamon"]);
+const SYSTEM_CLI = "/usr/bin/speed-of-cinnamon";
 const RUNBOOK_URL = "https://gist.github.com/H234598/b95129e13ac0b09c9777edd41aeedfa0";
 const EXPORTABLE_SETTINGS = [
   ["toggle-keybinding", "toggleKeybinding"],
@@ -69,7 +70,7 @@ MyApplet.prototype = {
     this.appendSpace = true;
     this.typingDelayMs = 8;
     this.sanitizeSpecialChars = false;
-    this.cliPath = DEFAULT_CLI;
+    this.cliPath = "";
     this.transcriber = "auto";
     this.whisperModel = "";
     this.transcriberCommand = "";
@@ -285,7 +286,7 @@ MyApplet.prototype = {
   _baseArgs: function(command) {
     let backendInsertMethod = this._usesCinnamonClipboard() ? "none" : String(this.insertMethod || "clipboard-paste");
     let args = [
-      this.cliPath || DEFAULT_CLI,
+      this._cliCommand(),
       command,
       "--json",
       "--language", String(this._currentLanguage()),
@@ -333,47 +334,47 @@ MyApplet.prototype = {
   },
 
   _statusArgs: function() {
-    return [this.cliPath || DEFAULT_CLI, "status", "--json"];
+    return [this._cliCommand(), "status", "--json"];
   },
 
   _doctorArgs: function() {
-    return [this.cliPath || DEFAULT_CLI, "doctor", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--json"];
+    return [this._cliCommand(), "doctor", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--json"];
   },
 
   _setupArgs: function() {
-    return [this.cliPath || DEFAULT_CLI, "setup", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--json"];
+    return [this._cliCommand(), "setup", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--json"];
   },
 
   _diagnosticsArgs: function() {
-    return [this.cliPath || DEFAULT_CLI, "diagnostics", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--json"];
+    return [this._cliCommand(), "diagnostics", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--json"];
   },
 
   _diagnosticsSaveArgs: function() {
-    return [this.cliPath || DEFAULT_CLI, "diagnostics", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--save", "--json"];
+    return [this._cliCommand(), "diagnostics", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--save", "--json"];
   },
 
   _cancelArgs: function() {
-    return [this.cliPath || DEFAULT_CLI, "cancel", "--json"];
+    return [this._cliCommand(), "cancel", "--json"];
   },
 
   _historyArgs: function() {
-    return [this.cliPath || DEFAULT_CLI, "history", "--limit", "5", "--json"];
+    return [this._cliCommand(), "history", "--limit", "5", "--json"];
   },
 
   _cleanupArgs: function() {
-    return [this.cliPath || DEFAULT_CLI, "cleanup", "--keep-transcripts", "100", "--keep-recordings", "25", "--json"];
+    return [this._cliCommand(), "cleanup", "--keep-transcripts", "100", "--keep-recordings", "25", "--json"];
   },
 
   _listInputsArgs: function() {
-    return [this.cliPath || DEFAULT_CLI, "list-inputs", "--json"];
+    return [this._cliCommand(), "list-inputs", "--json"];
   },
 
   _modelsArgs: function() {
-    return [this.cliPath || DEFAULT_CLI, "models", "--json"];
+    return [this._cliCommand(), "models", "--json"];
   },
 
   _textModelsArgs: function() {
-    let args = [this.cliPath || DEFAULT_CLI, "text-models", "--json"];
+    let args = [this._cliCommand(), "text-models", "--json"];
     if (this.ollamaUrl && this.ollamaUrl.trim() !== "") {
       args.push("--ollama-url", this.ollamaUrl);
     }
@@ -381,19 +382,33 @@ MyApplet.prototype = {
   },
 
   _downloadModelArgs: function(model) {
-    return [this.cliPath || DEFAULT_CLI, "download-model", String(model || "tiny.en"), "--json"];
+    return [this._cliCommand(), "download-model", String(model || "tiny.en"), "--json"];
   },
 
   _removeModelArgs: function(model) {
-    return [this.cliPath || DEFAULT_CLI, "remove-model", String(model || "tiny.en"), "--json"];
+    return [this._cliCommand(), "remove-model", String(model || "tiny.en"), "--json"];
   },
 
   _settingsExportArgs: function() {
-    return [this.cliPath || DEFAULT_CLI, "settings-export", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--json"];
+    return [this._cliCommand(), "settings-export", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--json"];
   },
 
   _settingsImportArgs: function() {
-    return [this.cliPath || DEFAULT_CLI, "settings-import", "--json"];
+    return [this._cliCommand(), "settings-import", "--json"];
+  },
+
+  _cliCommand: function() {
+    let configured = String(this.cliPath || "").trim();
+    if (configured !== "") {
+      return configured;
+    }
+    if (GLib.file_test(DEFAULT_CLI, GLib.FileTest.IS_EXECUTABLE)) {
+      return DEFAULT_CLI;
+    }
+    if (GLib.file_test(SYSTEM_CLI, GLib.FileTest.IS_EXECUTABLE)) {
+      return SYSTEM_CLI;
+    }
+    return "speed-of-cinnamon";
   },
 
   _usesCinnamonClipboard: function() {
