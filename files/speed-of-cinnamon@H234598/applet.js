@@ -5,6 +5,7 @@ const Settings = imports.ui.settings;
 const St = imports.gi.St;
 const Util = imports.misc.util;
 const GLib = imports.gi.GLib;
+const Gio = imports.gi.Gio;
 const Mainloop = imports.mainloop;
 
 const UUID = "speed-of-cinnamon@H234598";
@@ -275,7 +276,7 @@ MyApplet.prototype = {
 
     let transcripts = new PopupMenu.PopupIconMenuItem(_("Open transcripts"), "folder-documents-symbolic", St.IconType.SYMBOLIC);
     transcripts.connect("activate", () => {
-      Util.spawn(["xdg-open", GLib.build_filenamev([GLib.get_user_state_dir(), "speed-of-cinnamon", "transcripts"])]);
+      this._openFolder(GLib.build_filenamev([GLib.get_user_state_dir(), "speed-of-cinnamon", "transcripts"]), _("Opened transcripts"));
     });
     this.menu.addMenuItem(transcripts);
 
@@ -644,12 +645,30 @@ MyApplet.prototype = {
   },
 
   _openSetupGuide: function() {
-    if (!GLib.find_program_in_path("xdg-open")) {
-      this._setStatus("error", _("xdg-open command not found"), this.lastTranscript);
-      return;
+    this._openUri(RUNBOOK_URL, _("Opened setup guide"));
+  },
+
+  _openUri: function(uri, successMessage) {
+    try {
+      Gio.AppInfo.launch_default_for_uri(uri, null);
+      this._setStatus("ready", successMessage, this.lastTranscript);
+    } catch (err) {
+      global.logError(err);
+      this._setStatus("error", _("Could not open link: ") + err.message, this.lastTranscript);
     }
-    Util.spawn(["xdg-open", RUNBOOK_URL]);
-    this._setStatus("ready", _("Opened setup guide"), this.lastTranscript);
+  },
+
+  _openFolder: function(path, successMessage) {
+    try {
+      GLib.mkdir_with_parents(path, 0o755);
+      if (!GLib.file_test(path, GLib.FileTest.IS_DIR)) {
+        throw new Error("folder is not available: " + path);
+      }
+      this._openUri(GLib.filename_to_uri(path, null), successMessage);
+    } catch (err) {
+      global.logError(err);
+      this._setStatus("error", _("Could not open folder: ") + err.message, this.lastTranscript);
+    }
   },
 
   _copySetupPlan: function() {
@@ -784,7 +803,7 @@ MyApplet.prototype = {
 
     let openFolder = new PopupMenu.PopupIconMenuItem(_("Open model folder"), "folder-symbolic", St.IconType.SYMBOLIC);
     openFolder.connect("activate", () => {
-      Util.spawn(["xdg-open", GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon", "models", "whisper.cpp"])]);
+      this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon", "models", "whisper.cpp"]), _("Opened model folder"));
     });
     this.modelItem.menu.addMenuItem(openFolder);
 

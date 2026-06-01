@@ -14,6 +14,7 @@ path.
 - Status-colored Cinnamon panel indicator for recording, processing, ready, setup, recorded, and error states.
 - Configuration-aware doctor check for the selected recorder, ASR backend, desktop session, and output mode.
 - Startup setup check in the applet, plus direct menu actions for Cinnamon applet settings and the setup runbook.
+- Applet guide/folder actions use Cinnamon's GJS/Gio default-app launcher instead of shelling out to `xdg-open`.
 - Live recording progress in the panel tooltip and menu, with a compact elapsed-time panel label.
 - Copyable or saveable diagnostics bundle for support reports without transcript contents.
 - Cinnamon global hotkey via `Main.keybindingManager`; default is `Super+Z`, with optional dedicated shortcuts for
@@ -275,10 +276,11 @@ Cinnamon keybinding / panel click
 ```
 
 The applet handles the normal clipboard path through Cinnamon's `St.Clipboard`, remembers the last focused normal
-window, restores that window before paste, then uses `xdotool` only for the X11 paste keystroke when it is available.
-Without `xdotool`, dictation still completes as a Cinnamon clipboard copy. This keeps desktop integration in Cinnamon
-where it belongs and keeps ASR replaceable. The Speed of Sound JVM/GTK portal stack is intentionally not reused because
-its central integration point is the part that does not fit this goal.
+window, restores that window before paste, and opens guide/folder actions through GJS/Gio's default-app launcher. It
+uses `xdotool` only for the X11 paste keystroke when it is available. Without `xdotool`, dictation still completes as a
+Cinnamon clipboard copy. This keeps desktop integration in Cinnamon where it belongs and keeps ASR replaceable. The
+Speed of Sound JVM/GTK portal stack is intentionally not reused because its central integration point is the part that
+does not fit this goal.
 
 The doctor command accepts the applet settings as JSON and evaluates the configured pipeline, not only installed
 binaries. The applet passes `--applet`, which tells the doctor to evaluate Cinnamon's own clipboard path. A missing ASR

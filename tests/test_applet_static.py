@@ -97,3 +97,16 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._restoreTargetWindowForPaste()", source)
         self.assertIn("this._pasteClipboardAfterFocus();", source)
         self.assertIn("Copied and pasted into target window", source)
+
+    def test_applet_uses_gio_for_desktop_links_and_folders(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("const Gio = imports.gi.Gio;", source)
+        self.assertIn("Gio.AppInfo.launch_default_for_uri(uri, null)", source)
+        self.assertIn("GLib.filename_to_uri(path, null)", source)
+        self.assertIn("GLib.mkdir_with_parents(path, 0o755)", source)
+        self.assertIn("GLib.file_test(path, GLib.FileTest.IS_DIR)", source)
+        self.assertIn('this._openUri(RUNBOOK_URL, _("Opened setup guide"))', source)
+        self.assertIn('this._openFolder(GLib.build_filenamev([GLib.get_user_state_dir(), "speed-of-cinnamon", "transcripts"])', source)
+        self.assertIn('this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon", "models", "whisper.cpp"])', source)
+        self.assertNotIn('Util.spawn(["xdg-open"', source)
