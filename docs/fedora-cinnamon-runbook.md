@@ -40,6 +40,18 @@ speed-of-cinnamon history --limit 5 --json
 The Cinnamon applet exposes the same recent entries under `Recent transcripts`; selecting one copies it through
 Cinnamon's clipboard API.
 
+## Cleanup
+
+Old transcript files and cached recordings can be pruned without touching the currently referenced state files:
+
+```bash
+speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 25 --dry-run --json
+speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 25 --json
+```
+
+The Cinnamon applet exposes the same conservative cleanup as `Clean old files`. Recordings and their companion logs are
+handled as one cache group, and the current `state.json` audio/log/transcript paths are skipped.
+
 ## Language Switching
 
 Configure `Primary recognition language` and `Secondary recognition language` in the applet settings. The `Language`

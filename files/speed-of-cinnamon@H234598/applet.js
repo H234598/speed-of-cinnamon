@@ -144,6 +144,10 @@ MyApplet.prototype = {
       Util.spawn(["xdg-open", GLib.build_filenamev([GLib.get_user_state_dir(), "speed-of-cinnamon", "transcripts"])]);
     });
     this.menu.addMenuItem(transcripts);
+
+    let cleanup = new PopupMenu.PopupIconMenuItem(_("Clean old files"), "edit-clear-symbolic", St.IconType.SYMBOLIC);
+    cleanup.connect("activate", () => this._cleanupOldFiles());
+    this.menu.addMenuItem(cleanup);
   },
 
   _hotkeyName: function() {
@@ -220,6 +224,10 @@ MyApplet.prototype = {
 
   _historyArgs: function() {
     return [this.cliPath || DEFAULT_CLI, "history", "--limit", "5", "--json"];
+  },
+
+  _cleanupArgs: function() {
+    return [this.cliPath || DEFAULT_CLI, "cleanup", "--keep-transcripts", "100", "--keep-recordings", "25", "--json"];
   },
 
   _listInputsArgs: function() {
@@ -361,6 +369,24 @@ MyApplet.prototype = {
         return;
       }
       this._populateHistoryMenu(payload.transcripts || []);
+    });
+  },
+
+  _cleanupOldFiles: function() {
+    if (this.isCommandRunning) {
+      return;
+    }
+    this.isCommandRunning = true;
+    this._setStatus("processing", _("Cleaning old files..."), this.lastTranscript);
+    this._spawnJson(this._cleanupArgs(), (payload) => {
+      this.isCommandRunning = false;
+      if (payload.error) {
+        this._setStatus("error", payload.error, this.lastTranscript);
+        return;
+      }
+      let deleted = Number(payload.deleted_transcripts || 0) + Number(payload.deleted_recordings || 0) + Number(payload.deleted_logs || 0);
+      this._setStatus("done", _("Cleaned old files: ") + String(deleted), this.lastTranscript);
+      this._refreshHistory();
     });
   },
 

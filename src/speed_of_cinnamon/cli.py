@@ -20,6 +20,8 @@ from .state import RecordingState, StateStore, now_iso, process_is_alive
 from .transcriber import transcribe
 
 RECORDER_START_GRACE_SECONDS = 0.2
+DEFAULT_KEEP_TRANSCRIPTS = 100
+DEFAULT_KEEP_RECORDINGS = 25
 
 
 def timestamp() -> str:
@@ -90,6 +92,134 @@ def read_transcript_history(limit: int = 10) -> list[dict[str, object]]:
         if len(entries) >= limit:
             break
     return entries
+
+
+def normalized_path(path_value: str | None) -> Path | None:
+    if not path_value:
+        return None
+    return Path(path_value).expanduser().resolve(strict=False)
+
+
+def active_artifact_paths(state: RecordingState) -> set[Path]:
+    paths: set[Path] = set()
+    for value in (state.audio_path, state.log_path, state.transcript_path):
+        path = normalized_path(value)
+        if path:
+            paths.add(path)
+    return paths
+
+
+def sorted_files(paths: list[Path]) -> list[Path]:
+    entries: list[tuple[float, str, Path]] = []
+    for path in paths:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        if path.is_file():
+            entries.append((stat.st_mtime, path.name, path))
+    return [path for _, _, path in sorted(entries, reverse=True)]
+
+
+def delete_artifact(path: Path) -> bool:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+    return True
+
+
+def prune_files_by_mtime(paths: list[Path], keep: int, active_paths: set[Path], dry_run: bool) -> dict[str, object]:
+    planned_paths: list[str] = []
+    deleted_paths: list[str] = []
+    failed_paths: list[str] = []
+    skipped_active: list[str] = []
+    candidates = sorted_files(paths)[max(keep, 0) :]
+    for path in candidates:
+        normalized = path.resolve(strict=False)
+        if normalized in active_paths:
+            skipped_active.append(str(path))
+            continue
+        if dry_run:
+            planned_paths.append(str(path))
+            continue
+        if delete_artifact(path):
+            deleted_paths.append(str(path))
+        else:
+            failed_paths.append(str(path))
+    return {
+        "planned_paths": planned_paths,
+        "deleted_paths": deleted_paths,
+        "failed_paths": failed_paths,
+        "skipped_active_paths": skipped_active,
+    }
+
+
+def recording_groups() -> list[dict[str, object]]:
+    groups: dict[str, dict[str, object]] = {}
+    directory = recordings_dir()
+    if not directory.exists():
+        return []
+    for path in list(directory.glob("*.wav")) + list(directory.glob("*.log")):
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        if not path.is_file():
+            continue
+        group = groups.setdefault(path.stem, {"stem": path.stem, "mtime": 0.0, "files": []})
+        group["mtime"] = max(float(group["mtime"]), stat.st_mtime)
+        group_files = group["files"]
+        if isinstance(group_files, list):
+            group_files.append(path)
+    return sorted(groups.values(), key=lambda group: (float(group["mtime"]), str(group["stem"])), reverse=True)
+
+
+def prune_recording_groups(keep: int, active_paths: set[Path], dry_run: bool) -> dict[str, object]:
+    planned_recordings = 0
+    planned_logs = 0
+    planned_paths: list[str] = []
+    deleted_recordings = 0
+    deleted_logs = 0
+    deleted_paths: list[str] = []
+    failed_paths: list[str] = []
+    skipped_active_paths: list[str] = []
+    groups = recording_groups()[max(keep, 0) :]
+    for group in groups:
+        files = group.get("files", [])
+        if not isinstance(files, list):
+            continue
+        if any(path.resolve(strict=False) in active_paths for path in files):
+            skipped_active_paths.extend(str(path) for path in files)
+            continue
+        for path in files:
+            if dry_run:
+                planned_paths.append(str(path))
+                if path.suffix == ".wav":
+                    planned_recordings += 1
+                elif path.suffix == ".log":
+                    planned_logs += 1
+                continue
+            if delete_artifact(path):
+                deleted_paths.append(str(path))
+                if path.suffix == ".wav":
+                    deleted_recordings += 1
+                elif path.suffix == ".log":
+                    deleted_logs += 1
+            else:
+                failed_paths.append(str(path))
+    return {
+        "planned_recordings": planned_recordings,
+        "planned_logs": planned_logs,
+        "planned_paths": planned_paths,
+        "deleted_recordings": deleted_recordings,
+        "deleted_logs": deleted_logs,
+        "deleted_paths": deleted_paths,
+        "failed_paths": failed_paths,
+        "skipped_active_paths": skipped_active_paths,
+    }
 
 
 def command_start(args: argparse.Namespace) -> dict[str, object]:
@@ -285,6 +415,48 @@ def command_history(args: argparse.Namespace) -> dict[str, object]:
     return {"status": "done", "transcripts": read_transcript_history(max(args.limit, 0))}
 
 
+def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
+    ensure_runtime_dirs()
+    state = build_store(args).read()
+    active_paths = active_artifact_paths(state)
+    transcript_result = prune_files_by_mtime(
+        list(transcript_dir().glob("*.txt")),
+        args.keep_transcripts,
+        active_paths,
+        args.dry_run,
+    )
+    recording_result = prune_recording_groups(args.keep_recordings, active_paths, args.dry_run)
+    deleted_transcripts = len(transcript_result["deleted_paths"])
+    deleted_recordings = int(recording_result["deleted_recordings"])
+    deleted_logs = int(recording_result["deleted_logs"])
+    would_delete_transcripts = len(transcript_result["planned_paths"])
+    would_delete_recordings = int(recording_result["planned_recordings"])
+    would_delete_logs = int(recording_result["planned_logs"])
+    total = (
+        would_delete_transcripts + would_delete_recordings + would_delete_logs
+        if args.dry_run
+        else deleted_transcripts + deleted_recordings + deleted_logs
+    )
+    verb = "would clean" if args.dry_run else "cleaned"
+    return {
+        "status": "done",
+        "message": f"{verb} {total} old file(s)",
+        "dry_run": args.dry_run,
+        "keep_transcripts": max(args.keep_transcripts, 0),
+        "keep_recordings": max(args.keep_recordings, 0),
+        "deleted_transcripts": deleted_transcripts,
+        "deleted_recordings": deleted_recordings,
+        "deleted_logs": deleted_logs,
+        "would_delete_transcripts": would_delete_transcripts,
+        "would_delete_recordings": would_delete_recordings,
+        "would_delete_logs": would_delete_logs,
+        "deleted_paths": transcript_result["deleted_paths"] + recording_result["deleted_paths"],
+        "would_delete_paths": transcript_result["planned_paths"] + recording_result["planned_paths"],
+        "failed_paths": transcript_result["failed_paths"] + recording_result["failed_paths"],
+        "skipped_active_paths": transcript_result["skipped_active_paths"] + recording_result["skipped_active_paths"],
+    }
+
+
 def command_diagnostics(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     source_payload: dict[str, object]
@@ -419,6 +591,13 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(history)
     history.add_argument("--limit", type=int, default=10)
     history.set_defaults(handler=command_history)
+
+    cleanup = subparsers.add_parser("cleanup")
+    add_common_options(cleanup)
+    cleanup.add_argument("--keep-transcripts", type=int, default=DEFAULT_KEEP_TRANSCRIPTS)
+    cleanup.add_argument("--keep-recordings", type=int, default=DEFAULT_KEEP_RECORDINGS)
+    cleanup.add_argument("--dry-run", action="store_true")
+    cleanup.set_defaults(handler=command_cleanup)
 
     diagnostics = subparsers.add_parser("diagnostics")
     add_common_options(diagnostics)

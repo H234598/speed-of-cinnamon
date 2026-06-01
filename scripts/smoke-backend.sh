@@ -37,3 +37,4 @@ sleep 2
   --json
 sleep 1
 "${backend}" cancel --json
+"${backend}" cleanup --keep-transcripts 100 --keep-recordings 25 --dry-run --json

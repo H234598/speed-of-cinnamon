@@ -22,6 +22,7 @@ path.
 - Applet menu action to copy the last transcript again.
 - Applet and CLI transcript history for quickly copying recent results.
 - Applet and CLI action to cancel and discard a current recording.
+- Applet and CLI cleanup for old transcript/history files and cached recordings.
 - Recordings that hit the configured maximum length are preserved and transcribed on the next shortcut press.
 - Per-user runtime state under `~/.local/state/speed-of-cinnamon/` and temporary recordings under
   `~/.cache/speed-of-cinnamon/`.
@@ -92,6 +93,7 @@ speed-of-cinnamon doctor --json
 speed-of-cinnamon diagnostics --json
 speed-of-cinnamon list-inputs --json
 speed-of-cinnamon history --limit 5 --json
+speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 25 --dry-run --json
 speed-of-cinnamon start --language de
 speed-of-cinnamon start --language de --input-device alsa_input.usb-Creative_Technology_Ltd_Sound_BlasterX_G6_8400614358X-00.analog-stereo
 speed-of-cinnamon stop --language de --insert-method clipboard-paste

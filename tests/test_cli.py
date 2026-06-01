@@ -95,6 +95,100 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["transcripts"], [])
 
+    def test_cleanup_prunes_old_transcripts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            older = transcript_dir / "older.txt"
+            middle = transcript_dir / "middle.txt"
+            newer = transcript_dir / "newer.txt"
+            for path, mtime in [(older, 100), (middle, 200), (newer, 300)]:
+                path.write_text(path.stem, encoding="utf-8")
+                os.utime(path, (mtime, mtime))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cleanup", "--keep-transcripts", "2", "--keep-recordings", "0", "--json"])
+            payload = json.loads(stdout.getvalue())
+            older_exists = older.exists()
+            middle_exists = middle.exists()
+            newer_exists = newer.exists()
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["deleted_transcripts"], 1)
+        self.assertFalse(older_exists)
+        self.assertTrue(middle_exists)
+        self.assertTrue(newer_exists)
+
+    def test_cleanup_prunes_recording_groups_and_skips_active_state_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            state_file = tmp_path / "state.json"
+
+            def write_group(stem: str, mtime: int) -> tuple[Path, Path]:
+                audio = recordings / f"{stem}.wav"
+                log = recordings / f"{stem}.log"
+                audio.write_bytes(b"audio")
+                log.write_text("log", encoding="utf-8")
+                os.utime(audio, (mtime, mtime))
+                os.utime(log, (mtime, mtime))
+                return audio, log
+
+            old_audio, old_log = write_group("old", 100)
+            new_audio, new_log = write_group("new", 300)
+            active_audio, active_log = write_group("active", 50)
+            StateStore(state_file).write(
+                RecordingState(status="recording", audio_path=str(active_audio), log_path=str(active_log))
+            )
+
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "cleanup",
+                    "--state-file",
+                    str(state_file),
+                    "--keep-transcripts",
+                    "0",
+                    "--keep-recordings",
+                    "1",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+            old_audio_exists = old_audio.exists()
+            old_log_exists = old_log.exists()
+            new_audio_exists = new_audio.exists()
+            new_log_exists = new_log.exists()
+            active_audio_exists = active_audio.exists()
+            active_log_exists = active_log.exists()
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["deleted_recordings"], 1)
+        self.assertEqual(payload["deleted_logs"], 1)
+        self.assertFalse(old_audio_exists)
+        self.assertFalse(old_log_exists)
+        self.assertTrue(new_audio_exists)
+        self.assertTrue(new_log_exists)
+        self.assertTrue(active_audio_exists)
+        self.assertTrue(active_log_exists)
+        self.assertIn(str(active_audio), payload["skipped_active_paths"])
+        self.assertIn(str(active_log), payload["skipped_active_paths"])
+
+    def test_cleanup_dry_run_does_not_delete_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            old = transcript_dir / "old.txt"
+            old.write_text("old", encoding="utf-8")
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cleanup", "--keep-transcripts", "0", "--keep-recordings", "0", "--dry-run", "--json"])
+            payload = json.loads(stdout.getvalue())
+            old_exists = old.exists()
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["dry_run"])
+        self.assertEqual(payload["deleted_transcripts"], 0)
+        self.assertEqual(payload["would_delete_transcripts"], 1)
+        self.assertTrue(old_exists)
+
     @mock.patch("speed_of_cinnamon.cli.list_input_sources")
     def test_diagnostics_omits_transcript_text(self, mocked_sources: mock.Mock) -> None:
         mocked_sources.return_value = [
