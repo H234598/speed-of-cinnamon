@@ -20,7 +20,8 @@ path.
 - Cinnamon global hotkey via `Main.keybindingManager`; default is `Super+Z`, with optional dedicated shortcuts for
   starting dictation in the primary or secondary language.
 - Applet shortcut reference menu showing the active Cinnamon hotkeys, with a copy action for setup/support notes.
-- Cinnamon desktop notifications for completion and failures, with optional recording-state notifications.
+- Cinnamon desktop notifications for completion and failures, with optional recording-state notifications and applet
+  toggles.
 - Primary/secondary recognition languages with a Cinnamon submenu for selecting the active language or starting directly
   with either language.
 - PipeWire/PulseAudio/ALSA recording through `pw-record`, `parecord`, or `arecord`, selectable from the applet menu.
@@ -162,6 +163,9 @@ while recording, it applies to the next recording.
 
 Use the `Recording options` submenu to toggle automatic transcription at the time limit and whether temporary WAV/log
 files are kept after successful transcription. Recording files are discarded by default.
+
+Use the `Notifications` submenu to toggle recording, completion, and error notifications without opening Cinnamon
+settings.
 
 Use the `Text options` applet submenu to toggle trailing spaces and accent replacement without opening Cinnamon
 settings. Those values are the same settings used by normal applet output and the backend CLI flags.

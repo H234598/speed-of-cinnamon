@@ -183,9 +183,9 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-prompt", "postProcessPrompt", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "personal-context", "personalContext", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "vocabulary", "vocabulary", null, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "notify-recording", "notifyRecording", null, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "notify-complete", "notifyComplete", null, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "notify-error", "notifyError", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "notify-recording", "notifyRecording", this._onNotificationSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "notify-complete", "notifyComplete", this._onNotificationSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "notify-error", "notifyError", this._onNotificationSettingsChanged, null);
   },
 
   _buildMenu: function() {
@@ -241,6 +241,15 @@ MyApplet.prototype = {
     });
     this.menu.addMenuItem(this.recordingOptionsItem);
     this._populateRecordingOptionsMenu();
+
+    this.notificationOptionsItem = new PopupMenu.PopupSubMenuMenuItem(_("Notifications"));
+    this.notificationOptionsItem.menu.connect("open-state-changed", (menu, open) => {
+      if (open) {
+        this._populateNotificationOptionsMenu();
+      }
+    });
+    this.menu.addMenuItem(this.notificationOptionsItem);
+    this._populateNotificationOptionsMenu();
 
     this.shortcutItem = new PopupMenu.PopupSubMenuMenuItem(_("Keyboard shortcuts"));
     this.shortcutItem.menu.connect("open-state-changed", (menu, open) => {
@@ -422,6 +431,11 @@ MyApplet.prototype = {
 
   _onRecordingOptionsChanged: function() {
     this._populateRecordingOptionsMenu();
+    this._updatePanel();
+  },
+
+  _onNotificationSettingsChanged: function() {
+    this._populateNotificationOptionsMenu();
     this._updatePanel();
   },
 
@@ -720,6 +734,61 @@ MyApplet.prototype = {
     this._populateRecordingOptionsMenu();
     this._setRecordingOptionStatus(
       this.keepRecordingArtifacts ? _("Recording files will be kept") : _("Recording files will be discarded")
+    );
+  },
+
+  _populateNotificationOptionsMenu: function() {
+    if (!this.notificationOptionsItem) {
+      return;
+    }
+    this.notificationOptionsItem.menu.removeAll();
+
+    let recording = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.notifyRecording), _("Recording start and limit")));
+    recording.connect("activate", () => this._toggleNotifyRecording());
+    this.notificationOptionsItem.menu.addMenuItem(recording);
+
+    let complete = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.notifyComplete), _("Dictation complete")));
+    complete.connect("activate", () => this._toggleNotifyComplete());
+    this.notificationOptionsItem.menu.addMenuItem(complete);
+
+    let errors = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.notifyError), _("Dictation errors")));
+    errors.connect("activate", () => this._toggleNotifyError());
+    this.notificationOptionsItem.menu.addMenuItem(errors);
+  },
+
+  _setNotificationOptionStatus: function(message) {
+    if (this._hasActiveRecordingState()) {
+      this.lastMessage = message;
+      this._updatePanel();
+      return;
+    }
+    this._setStatus("ready", message, this.lastTranscript);
+  },
+
+  _toggleNotifyRecording: function() {
+    this.notifyRecording = !Boolean(this.notifyRecording);
+    this.settings.setValue("notify-recording", this.notifyRecording);
+    this._populateNotificationOptionsMenu();
+    this._setNotificationOptionStatus(
+      this.notifyRecording ? _("Recording notifications enabled") : _("Recording notifications disabled")
+    );
+  },
+
+  _toggleNotifyComplete: function() {
+    this.notifyComplete = !Boolean(this.notifyComplete);
+    this.settings.setValue("notify-complete", this.notifyComplete);
+    this._populateNotificationOptionsMenu();
+    this._setNotificationOptionStatus(
+      this.notifyComplete ? _("Completion notifications enabled") : _("Completion notifications disabled")
+    );
+  },
+
+  _toggleNotifyError: function() {
+    this.notifyError = !Boolean(this.notifyError);
+    this.settings.setValue("notify-error", this.notifyError);
+    this._populateNotificationOptionsMenu();
+    this._setNotificationOptionStatus(
+      this.notifyError ? _("Error notifications enabled") : _("Error notifications disabled")
     );
   },
 
@@ -1494,6 +1563,7 @@ MyApplet.prototype = {
     this.maxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
     this._populateRecordingLimitMenu();
     this._populateRecordingOptionsMenu();
+    this._populateNotificationOptionsMenu();
     this.insertMethod = this._normalizeOutputMethod(this.insertMethod);
     this._populateOutputMethodMenu();
     this._registerHotkeys();

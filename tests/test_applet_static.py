@@ -151,6 +151,29 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('_("Keep recording files")', source)
         self.assertIn('this._populateRecordingOptionsMenu();', source)
 
+    def test_applet_exposes_notification_options_submenu(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
+
+        self.assertFalse(schema["notify-recording"]["default"])
+        self.assertTrue(schema["notify-complete"]["default"])
+        self.assertTrue(schema["notify-error"]["default"])
+        self.assertIn('this.notificationOptionsItem = new PopupMenu.PopupSubMenuMenuItem(_("Notifications"))', source)
+        self.assertIn("_populateNotificationOptionsMenu: function()", source)
+        self.assertIn("_toggleNotifyRecording: function()", source)
+        self.assertIn("_toggleNotifyComplete: function()", source)
+        self.assertIn("_toggleNotifyError: function()", source)
+        self.assertIn("_setNotificationOptionStatus: function(message)", source)
+        self.assertIn('this.settings.bindProperty(Settings.BindingDirection.IN, "notify-recording", "notifyRecording", this._onNotificationSettingsChanged, null)', source)
+        self.assertIn('this.settings.bindProperty(Settings.BindingDirection.IN, "notify-complete", "notifyComplete", this._onNotificationSettingsChanged, null)', source)
+        self.assertIn('this.settings.bindProperty(Settings.BindingDirection.IN, "notify-error", "notifyError", this._onNotificationSettingsChanged, null)', source)
+        self.assertIn('this.settings.setValue("notify-recording", this.notifyRecording)', source)
+        self.assertIn('this.settings.setValue("notify-complete", this.notifyComplete)', source)
+        self.assertIn('this.settings.setValue("notify-error", this.notifyError)', source)
+        self.assertIn('_("Recording start and limit")', source)
+        self.assertIn('_("Dictation complete")', source)
+        self.assertIn('_("Dictation errors")', source)
+
     def test_panel_status_style_classes_are_applied(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         stylesheet = (APPLET_DIR / "stylesheet.css").read_text(encoding="utf-8")
