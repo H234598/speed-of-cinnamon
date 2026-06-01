@@ -53,7 +53,15 @@ the transcript. `xclip` is optional for standalone CLI clipboard insertion outsi
 
 ## ASR Configuration
 
-Set the applet's `Transcriber command template` to an installed ASR command. Placeholders:
+Choose one transcriber in the applet settings:
+
+- `Automatic`: uses a custom command when configured, otherwise the installed `whisper` command, otherwise whisper.cpp
+  when a model path is set.
+- `OpenAI Whisper command`: runs `whisper` and writes the transcript into the runtime transcript directory.
+- `whisper.cpp`: runs `whisper-cli`; set `whisper.cpp model` to a local model file such as `ggml-base.bin`.
+- `Custom command`: runs `Transcriber command template`.
+
+Custom template placeholders:
 
 ```text
 {audio} {language} {text} {output_dir} {output_base}
@@ -66,9 +74,17 @@ whisper {audio} --language {language} --output_format txt --output_dir {output_d
 whisper-cli -m ~/.local/share/whisper/models/ggml-base.bin -f {audio} -l {language} -otxt -of {output_base} && cat {text}
 ```
 
+Equivalent CLI examples:
+
+```bash
+speed-of-cinnamon toggle --language de --transcriber whisper
+speed-of-cinnamon toggle --language de --transcriber whisper-cpp --whisper-model ~/.local/share/whisper/models/ggml-base.bin
+speed-of-cinnamon toggle --language de --transcriber command --transcriber-command "printf 'test transcript'"
+```
+
 ## Current Known Limits
 
-- The first version is intentionally local-first and does not bundle an ASR model.
+- The app is intentionally local-first and does not bundle an ASR model.
 - Automatic paste/direct typing needs `xdotool` on X11.
 - The applet is designed for Cinnamon 6.x style settings and keybinding APIs.
 

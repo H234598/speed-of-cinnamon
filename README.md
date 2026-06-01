@@ -13,7 +13,7 @@ path.
 - Cinnamon panel applet with microphone icon, concise status label, status menu, transcript preview, and a doctor check.
 - Cinnamon global hotkey via `Main.keybindingManager`; default is `Super+Z`.
 - PipeWire/PulseAudio/ALSA recording through `pw-record`, `parecord`, or `arecord`.
-- Configurable transcription command template. Leave it empty to use the `whisper` command when installed.
+- ASR presets for Automatic, OpenAI Whisper command, whisper.cpp with a model path, or a custom command template.
 - Cinnamon clipboard output through the applet, optional `xdotool` paste/direct typing, clipboard-only, or no insertion.
 - Recordings that hit the configured maximum length are preserved and transcribed on the next shortcut press.
 - Per-user runtime state under `~/.local/state/speed-of-cinnamon/` and temporary recordings under
@@ -31,8 +31,15 @@ sudo dnf install python3 pipewire-utils xdotool libnotify
 The applet uses Cinnamon's own clipboard API, so `xclip` is not required for normal panel usage. Install `xclip` or
 `xsel` only if you want to use `speed-of-cinnamon` as a standalone CLI clipboard inserter outside Cinnamon.
 
-`parecord` and `arecord` are supported fallback recorders when installed. For transcription, install an ASR command and
-configure it in the applet settings. Examples:
+`parecord` and `arecord` are supported fallback recorders when installed. For transcription, install one local ASR
+backend and choose it in the applet settings:
+
+- `Automatic`: uses a custom command when configured, otherwise `whisper`, otherwise whisper.cpp when a model path is set.
+- `OpenAI Whisper command`: runs the installed `whisper` CLI.
+- `whisper.cpp`: runs `whisper-cli` with the configured model file.
+- `Custom command`: runs the command template below.
+
+Custom command examples:
 
 ```text
 printf 'test transcript'
@@ -71,13 +78,15 @@ The backend command is installed to:
 speed-of-cinnamon doctor --json
 speed-of-cinnamon start --language de
 speed-of-cinnamon stop --language de --insert-method clipboard-paste
-speed-of-cinnamon toggle --language de --transcriber-command "printf 'Hallo Cinnamon'"
+speed-of-cinnamon toggle --language de --transcriber whisper
+speed-of-cinnamon toggle --language de --transcriber whisper-cpp --whisper-model ~/.local/share/whisper/models/ggml-base.bin
+speed-of-cinnamon toggle --language de --transcriber command --transcriber-command "printf 'Hallo Cinnamon'"
 ```
 
 For backend-only testing without touching the focused application:
 
 ```bash
-speed-of-cinnamon toggle --insert-method none --transcriber-command "printf 'test'"
+speed-of-cinnamon toggle --insert-method none --transcriber command --transcriber-command "printf 'test'"
 ```
 
 ## Development
@@ -106,7 +115,7 @@ Cinnamon keybinding / panel click
   -> ~/.local/bin/speed-of-cinnamon
   -> Python backend:
        recorder.py      pw-record / parecord / arecord
-       transcriber.py   configured ASR command
+       transcriber.py   ASR preset resolver and command runners
        output.py        xclip / xdotool for standalone CLI output
        state.py         JSON state for applet status
 ```

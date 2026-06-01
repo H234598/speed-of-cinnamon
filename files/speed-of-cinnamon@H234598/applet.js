@@ -37,6 +37,8 @@ MyApplet.prototype = {
     this.appendSpace = true;
     this.typingDelayMs = 8;
     this.cliPath = DEFAULT_CLI;
+    this.transcriber = "auto";
+    this.whisperModel = "";
     this.transcriberCommand = "";
     this.status = "idle";
     this.lastTranscript = "";
@@ -66,6 +68,8 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "append-space", "appendSpace", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "typing-delay-ms", "typingDelayMs", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "cli-path", "cliPath", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "transcriber", "transcriber", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "whisper-model", "whisperModel", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "transcriber-command", "transcriberCommand", null, null);
   },
 
@@ -137,6 +141,7 @@ MyApplet.prototype = {
       "--language", String(this.language || "en"),
       "--max-seconds", String(this.maxSeconds || 30),
       "--recorder", String(this.recorder || "auto"),
+      "--transcriber", String(this.transcriber || "auto"),
       "--insert-method", backendInsertMethod,
       "--typing-delay-ms", String(this.typingDelayMs || 8)
     ];
@@ -145,6 +150,9 @@ MyApplet.prototype = {
     }
     if (this.transcriberCommand && this.transcriberCommand.trim() !== "") {
       args.push("--transcriber-command", this.transcriberCommand);
+    }
+    if (this.whisperModel && this.whisperModel.trim() !== "") {
+      args.push("--whisper-model", this.whisperModel);
     }
     return args;
   },

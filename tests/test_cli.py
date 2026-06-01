@@ -27,6 +27,8 @@ class CliTest(unittest.TestCase):
                 code = cli.run([
                     "transcribe-file",
                     str(audio),
+                    "--transcriber",
+                    "command",
                     "--transcriber-command",
                     "printf test",
                     "--json",
@@ -58,6 +60,8 @@ class CliTest(unittest.TestCase):
                     str(state_file),
                     "--insert-method",
                     "none",
+                    "--transcriber",
+                    "command",
                     "--transcriber-command",
                     "printf expired-transcript",
                     "--json",

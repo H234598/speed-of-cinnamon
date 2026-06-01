@@ -25,7 +25,7 @@
     "backend-section": {
       "type": "section",
       "title": "Backend",
-      "keys": ["cli-path", "transcriber-command"]
+      "keys": ["cli-path", "transcriber", "whisper-model", "transcriber-command"]
     }
   },
   "toggle-keybinding": {
@@ -101,11 +101,28 @@
     "description": "Backend command",
     "default": "/home/teladi/.local/bin/speed-of-cinnamon"
   },
+  "transcriber": {
+    "type": "combobox",
+    "description": "Transcriber",
+    "tooltip": "Automatic uses a custom command when one is configured, then the whisper command when installed, then whisper.cpp when a model path is configured.",
+    "options": {
+      "Automatic": "auto",
+      "OpenAI Whisper command": "whisper",
+      "whisper.cpp": "whisper-cpp",
+      "Custom command": "command"
+    },
+    "default": "auto"
+  },
+  "whisper-model": {
+    "type": "filechooser",
+    "description": "whisper.cpp model",
+    "tooltip": "Model file used when the transcriber is whisper.cpp, for example ggml-base.bin.",
+    "default": ""
+  },
   "transcriber-command": {
     "type": "entry",
     "description": "Transcriber command template",
-    "tooltip": "Leave empty to use the whisper command if installed. Template placeholders: {audio}, {language}, {text}, {output_dir}, {output_base}. The command must print the transcript or write it to {text}.",
+    "tooltip": "Used by the Custom command transcriber, or by Automatic when filled. Template placeholders: {audio}, {language}, {text}, {output_dir}, {output_base}. The command must print the transcript or write it to {text}.",
     "default": ""
   }
 }
-

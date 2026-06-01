@@ -27,12 +27,15 @@ def run_checks() -> list[Check]:
         command_check("xdotool", "xdotool"),
         command_check("xclip", "xclip"),
         command_check("notify-send", "libnotify"),
+        command_check("whisper", "python3-openai-whisper or pipx/pip whisper"),
+        command_check("whisper-cli", "whisper.cpp"),
     ]
 
 
 def report() -> dict[str, object]:
     checks = run_checks()
-    required_ok = checks[0].ok and (checks[1].ok or checks[2].ok)
+    by_name = {check.name: check for check in checks}
+    required_ok = by_name["python3"].ok and (by_name["pw-record"].ok or by_name["parecord"].ok)
     return {
         "ok": required_ok,
         "checks": [asdict(check) for check in checks],
@@ -40,6 +43,6 @@ def report() -> dict[str, object]:
             "The Cinnamon applet uses Cinnamon's own clipboard API.",
             "Install xdotool for automatic paste or direct typing on Cinnamon X11.",
             "Install xclip or xsel only if you use the backend CLI clipboard insertion without the applet.",
-            "ASR is supplied by the configured transcriber command, or by the 'whisper' command when installed.",
+            "ASR can use Automatic, the 'whisper' command, whisper.cpp plus a model path, or a custom command.",
         ],
     }

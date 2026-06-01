@@ -102,7 +102,14 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
     audio_path = Path(state.audio_path)
     text_path = transcript_dir() / f"{audio_path.stem}.txt"
     try:
-        text = transcribe(audio_path, args.language or state.language, text_path, args.transcriber_command)
+        text = transcribe(
+            audio_path=audio_path,
+            language=args.language or state.language,
+            text_path=text_path,
+            command_template=args.transcriber_command,
+            backend=args.transcriber,
+            whisper_model=args.whisper_model,
+        )
         text_to_insert = append_space_if_needed(text, args.append_space)
         inserted = insert_text(text_to_insert, args.insert_method, args.typing_delay_ms)
     except Exception as exc:
@@ -174,7 +181,14 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     audio_path = Path(args.audio_path).expanduser()
     text_path = transcript_dir() / f"{audio_path.stem}.txt"
-    text = transcribe(audio_path, args.language, text_path, args.transcriber_command)
+    text = transcribe(
+        audio_path=audio_path,
+        language=args.language,
+        text_path=text_path,
+        command_template=args.transcriber_command,
+        backend=args.transcriber,
+        whisper_model=args.whisper_model,
+    )
     return {"status": "done", "transcript": text, "transcript_path": str(text_path)}
 
 
@@ -187,7 +201,9 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--language", default="en")
     parser.add_argument("--max-seconds", type=int, default=30)
     parser.add_argument("--recorder", default="auto", choices=["auto", "pw-record", "parecord", "arecord"])
+    parser.add_argument("--transcriber", default="auto", choices=["auto", "whisper", "whisper-cpp", "command"])
     parser.add_argument("--transcriber-command", default="")
+    parser.add_argument("--whisper-model", default="")
     parser.add_argument(
         "--insert-method",
         default="clipboard-paste",
@@ -226,7 +242,9 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(transcribe_file)
     transcribe_file.add_argument("audio_path")
     transcribe_file.add_argument("--language", default="en")
+    transcribe_file.add_argument("--transcriber", default="auto", choices=["auto", "whisper", "whisper-cpp", "command"])
     transcribe_file.add_argument("--transcriber-command", default="")
+    transcribe_file.add_argument("--whisper-model", default="")
     transcribe_file.set_defaults(handler=command_transcribe_file)
     return parser
 

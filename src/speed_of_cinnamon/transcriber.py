@@ -3,11 +3,19 @@ from __future__ import annotations
 import shlex
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 
 class TranscriptionError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class TranscriberConfig:
+    backend: str = "auto"
+    command_template: str = ""
+    whisper_model: str = ""
 
 
 def _quote(value: Path | str) -> str:
@@ -72,14 +80,103 @@ def transcribe_with_openai_whisper(audio_path: Path, language: str, text_path: P
     raise TranscriptionError("whisper completed but did not produce a transcript")
 
 
-def transcribe(audio_path: Path, language: str, text_path: Path, command_template: str = "") -> str:
+def resolve_whisper_cpp_command() -> str | None:
+    for command in ("whisper-cli", "whisper.cpp"):
+        if shutil.which(command):
+            return command
+    return None
+
+
+def transcribe_with_whisper_cpp(audio_path: Path, language: str, text_path: Path, model_path: str) -> str:
+    if not model_path.strip():
+        raise TranscriptionError("whisper.cpp model path is required")
+    command = resolve_whisper_cpp_command()
+    if not command:
+        raise TranscriptionError("whisper.cpp command is not installed")
+
+    output_base = text_path.with_suffix("")
+    proc = subprocess.run(
+        [
+            command,
+            "-m",
+            model_path,
+            "-f",
+            str(audio_path),
+            "-l",
+            language,
+            "-otxt",
+            "-of",
+            str(output_base),
+        ],
+        text=True,
+        capture_output=True,
+        timeout=900,
+    )
+    if proc.returncode != 0:
+        raise TranscriptionError(proc.stderr.strip() or proc.stdout.strip() or "whisper.cpp failed")
+
+    if text_path.exists():
+        return text_path.read_text(encoding="utf-8").strip()
+    raise TranscriptionError("whisper.cpp completed but did not produce a transcript")
+
+
+def normalize_backend(value: str) -> str:
+    normalized = (value or "auto").strip().lower().replace("_", "-")
+    aliases = {
+        "openai": "whisper",
+        "openai-whisper": "whisper",
+        "whisper-cpp": "whisper-cpp",
+        "whisper.cpp": "whisper-cpp",
+        "custom": "command",
+        "template": "command",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def resolve_transcriber(config: TranscriberConfig) -> str:
+    backend = normalize_backend(config.backend)
+    if backend == "auto":
+        if config.command_template.strip():
+            return "command"
+        if shutil.which("whisper"):
+            return "whisper"
+        if config.whisper_model.strip() and resolve_whisper_cpp_command():
+            return "whisper-cpp"
+        raise TranscriptionError(
+            "no transcriber available; install 'whisper', configure whisper.cpp with a model, "
+            "or set a custom transcriber command"
+        )
+    if backend not in {"command", "whisper", "whisper-cpp"}:
+        raise TranscriptionError(f"unknown transcriber backend: {config.backend}")
+    return backend
+
+
+def transcribe(
+    audio_path: Path,
+    language: str,
+    text_path: Path,
+    command_template: str = "",
+    backend: str = "auto",
+    whisper_model: str = "",
+) -> str:
     if not audio_path.exists() or audio_path.stat().st_size == 0:
         raise TranscriptionError(f"audio file is missing or empty: {audio_path}")
     text_path.parent.mkdir(parents=True, exist_ok=True)
-    if command_template.strip():
+    config = TranscriberConfig(
+        backend=backend,
+        command_template=command_template,
+        whisper_model=whisper_model,
+    )
+    resolved_backend = resolve_transcriber(config)
+    if resolved_backend == "command":
+        if not command_template.strip():
+            raise TranscriptionError("custom transcriber command is required")
         text = transcribe_with_template(command_template.strip(), audio_path, language, text_path)
-    else:
+    elif resolved_backend == "whisper":
         text = transcribe_with_openai_whisper(audio_path, language, text_path)
+    elif resolved_backend == "whisper-cpp":
+        text = transcribe_with_whisper_cpp(audio_path, language, text_path, whisper_model)
+    else:
+        raise TranscriptionError(f"unknown transcriber backend: {resolved_backend}")
     text_path.write_text(text.strip() + "\n", encoding="utf-8")
     return text.strip()
-
