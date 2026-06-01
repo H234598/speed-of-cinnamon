@@ -170,6 +170,9 @@ submenu shows the current runtime language, lets you choose primary or secondary
 recording directly with either language. The shortcut and panel action then pass that active language to the backend as
 `--language`.
 
+Both language settings use the same common Whisper-compatible ISO-code preset list, including English, German, Spanish,
+French, Portuguese, Polish, Russian, Ukrainian, Turkish, Arabic, Chinese, Japanese, Korean, and Hindi.
+
 Optional Cinnamon global shortcuts for the same direct-start actions can be configured as `Start dictation with the
 primary language` and `Start dictation with the secondary language`. If a recording is already active, those actions
 stop or transcribe the current recording without changing its saved language.

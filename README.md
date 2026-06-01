@@ -22,8 +22,8 @@ path.
 - Applet shortcut reference menu showing the active Cinnamon hotkeys, with a copy action for setup/support notes.
 - Cinnamon desktop notifications for completion and failures, with optional recording-state notifications and applet
   toggles.
-- Primary/secondary recognition languages with a Cinnamon submenu for selecting the active language or starting directly
-  with either language.
+- Primary/secondary recognition languages with broader ISO-code presets and a Cinnamon submenu for selecting the active
+  language or starting directly with either language.
 - PipeWire/PulseAudio/ALSA recording through `pw-record`, `parecord`, or `arecord`, selectable from the applet menu.
 - Applet duration menu for common maximum recording lengths without opening Cinnamon settings.
 - Applet recording-options menu for time-limit transcription and private-by-default recording-file retention.
@@ -154,6 +154,9 @@ Cinnamon's clipboard for setup notes or issue reports.
 
 Use the `Language` submenu to select the active runtime language, start a recording directly with the primary or
 secondary language, or switch between both without opening Cinnamon settings.
+
+The primary/secondary language settings provide common Whisper-compatible ISO-code presets, including English, German,
+Spanish, French, Portuguese, Polish, Russian, Ukrainian, Turkish, Arabic, Chinese, Japanese, Korean, and Hindi.
 
 Use the `Recorder` submenu to choose Automatic, PipeWire `pw-record`, PulseAudio `parecord`, or ALSA `arecord` without
 opening Cinnamon settings. The selected recorder is used for the next recording.

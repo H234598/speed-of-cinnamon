@@ -70,6 +70,32 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("startSecondary.connect(\"activate\", () => this._startWithLanguage(secondary))", source)
         self.assertIn("this._populateLanguageMenu();", source)
 
+    def test_language_settings_offer_broader_whisper_codes(self) -> None:
+        schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
+        primary = schema["language"]["options"]
+        secondary = schema["secondary-language"]["options"]
+
+        self.assertEqual(primary, secondary)
+        for label, code in {
+            "Arabic": "ar",
+            "Chinese": "zh",
+            "Czech": "cs",
+            "Danish": "da",
+            "English": "en",
+            "Finnish": "fi",
+            "German": "de",
+            "Greek": "el",
+            "Hindi": "hi",
+            "Japanese": "ja",
+            "Korean": "ko",
+            "Portuguese": "pt",
+            "Russian": "ru",
+            "Spanish": "es",
+            "Turkish": "tr",
+            "Ukrainian": "uk",
+        }.items():
+            self.assertEqual(primary[label], code)
+
     def test_applet_exposes_recorder_submenu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
