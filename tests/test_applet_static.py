@@ -56,6 +56,20 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._startWithLanguage(this._secondaryLanguage())', source)
         self.assertIn('this._hasActiveRecordingState()', source)
 
+    def test_applet_exposes_language_submenu(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn('this.languageItem = new PopupMenu.PopupSubMenuMenuItem(_("Language: en"))', source)
+        self.assertIn("_populateLanguageMenu: function()", source)
+        self.assertIn('new PopupMenu.PopupMenuItem((current === primary ? "[x] " : "[ ] ") + _("Use primary: ") + primary)', source)
+        self.assertIn('new PopupMenu.PopupMenuItem((current === secondary ? "[x] " : "[ ] ") + _("Use secondary: ") + secondary)', source)
+        self.assertIn('new PopupMenu.PopupIconMenuItem(_("Start primary: ") + primary', source)
+        self.assertIn('new PopupMenu.PopupIconMenuItem(_("Start secondary: ") + secondary', source)
+        self.assertIn('new PopupMenu.PopupIconMenuItem(_("Switch primary/secondary")', source)
+        self.assertIn("selectPrimary.connect(\"activate\", () => this._setActiveLanguage(primary", source)
+        self.assertIn("startSecondary.connect(\"activate\", () => this._startWithLanguage(secondary))", source)
+        self.assertIn("this._populateLanguageMenu();", source)
+
     def test_applet_exposes_shortcut_reference_menu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

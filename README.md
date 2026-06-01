@@ -21,7 +21,8 @@ path.
   starting dictation in the primary or secondary language.
 - Applet shortcut reference menu showing the active Cinnamon hotkeys, with a copy action for setup/support notes.
 - Cinnamon desktop notifications for completion and failures, with optional recording-state notifications.
-- Primary/secondary recognition languages with quick switching and language-specific start actions from the applet menu.
+- Primary/secondary recognition languages with a Cinnamon submenu for selecting the active language or starting directly
+  with either language.
 - PipeWire/PulseAudio/ALSA recording through `pw-record`, `parecord`, or `arecord`.
 - Optional microphone/source selection from the applet menu or by PipeWire/Pulse source name, with a `list-inputs`
   helper.
@@ -147,6 +148,9 @@ finish setup without leaving Cinnamon's applet workflow.
 The applet menu also includes `Keyboard shortcuts`, a live reference for the configured Cinnamon hotkeys. It lists the
 main toggle, optional primary/secondary language shortcuts, and applet-only actions, and can copy that reference through
 Cinnamon's clipboard for setup notes or issue reports.
+
+Use the `Language` submenu to select the active runtime language, start a recording directly with the primary or
+secondary language, or switch between both without opening Cinnamon settings.
 
 Use the `Text options` applet submenu to toggle trailing spaces and accent replacement without opening Cinnamon
 settings. Those values are the same settings used by normal applet output and the backend CLI flags.

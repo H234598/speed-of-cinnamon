@@ -193,17 +193,14 @@ MyApplet.prototype = {
     this.statusItem.setSensitive(false);
     this.menu.addMenuItem(this.statusItem);
 
-    this.languageItem = new PopupMenu.PopupIconMenuItem(_("Language: en"), "preferences-desktop-locale-symbolic", St.IconType.SYMBOLIC);
-    this.languageItem.connect("activate", () => this._switchLanguage());
+    this.languageItem = new PopupMenu.PopupSubMenuMenuItem(_("Language: en"));
+    this.languageItem.menu.connect("open-state-changed", (menu, open) => {
+      if (open) {
+        this._populateLanguageMenu();
+      }
+    });
     this.menu.addMenuItem(this.languageItem);
-
-    this.primaryLanguageItem = new PopupMenu.PopupIconMenuItem(_("Start primary language"), "media-record-symbolic", St.IconType.SYMBOLIC);
-    this.primaryLanguageItem.connect("activate", () => this._startWithLanguage(this._primaryLanguage()));
-    this.menu.addMenuItem(this.primaryLanguageItem);
-
-    this.secondaryLanguageItem = new PopupMenu.PopupIconMenuItem(_("Start secondary language"), "media-record-symbolic", St.IconType.SYMBOLIC);
-    this.secondaryLanguageItem.connect("activate", () => this._startWithLanguage(this._secondaryLanguage()));
-    this.menu.addMenuItem(this.secondaryLanguageItem);
+    this._populateLanguageMenu();
 
     this.shortcutItem = new PopupMenu.PopupSubMenuMenuItem(_("Keyboard shortcuts"));
     this.shortcutItem.menu.connect("open-state-changed", (menu, open) => {
@@ -644,6 +641,7 @@ MyApplet.prototype = {
 
   _onLanguageSettingsChanged: function() {
     this._syncActiveLanguage();
+    this._populateLanguageMenu();
     this._updatePanel();
   },
 
@@ -675,6 +673,40 @@ MyApplet.prototype = {
       this._updatePanel();
     }
     this._toggleRecording();
+  },
+
+  _populateLanguageMenu: function() {
+    if (!this.languageItem) {
+      return;
+    }
+    this.languageItem.menu.removeAll();
+    let primary = this._primaryLanguage();
+    let secondary = this._secondaryLanguage();
+    let current = this._currentLanguage();
+
+    let selectPrimary = new PopupMenu.PopupMenuItem((current === primary ? "[x] " : "[ ] ") + _("Use primary: ") + primary);
+    selectPrimary.connect("activate", () => this._setActiveLanguage(primary, _("Language: ") + primary));
+    this.languageItem.menu.addMenuItem(selectPrimary);
+
+    let selectSecondary = new PopupMenu.PopupMenuItem((current === secondary ? "[x] " : "[ ] ") + _("Use secondary: ") + secondary);
+    selectSecondary.connect("activate", () => this._setActiveLanguage(secondary, _("Language: ") + secondary));
+    this.languageItem.menu.addMenuItem(selectSecondary);
+
+    this.languageItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+    let startPrimary = new PopupMenu.PopupIconMenuItem(_("Start primary: ") + primary, "media-record-symbolic", St.IconType.SYMBOLIC);
+    startPrimary.connect("activate", () => this._startWithLanguage(primary));
+    this.languageItem.menu.addMenuItem(startPrimary);
+
+    let startSecondary = new PopupMenu.PopupIconMenuItem(_("Start secondary: ") + secondary, "media-record-symbolic", St.IconType.SYMBOLIC);
+    startSecondary.connect("activate", () => this._startWithLanguage(secondary));
+    this.languageItem.menu.addMenuItem(startSecondary);
+
+    this.languageItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+    let switchItem = new PopupMenu.PopupIconMenuItem(_("Switch primary/secondary"), "preferences-desktop-locale-symbolic", St.IconType.SYMBOLIC);
+    switchItem.connect("activate", () => this._switchLanguage());
+    this.languageItem.menu.addMenuItem(switchItem);
   },
 
   _formatKeybinding: function(binding) {
@@ -1780,12 +1812,6 @@ MyApplet.prototype = {
     }
     if (this.languageItem) {
       this.languageItem.label.text = _("Language: ") + this._currentLanguage();
-    }
-    if (this.primaryLanguageItem) {
-      this.primaryLanguageItem.label.text = _("Start primary: ") + this._primaryLanguage();
-    }
-    if (this.secondaryLanguageItem) {
-      this.secondaryLanguageItem.label.text = _("Start secondary: ") + this._secondaryLanguage();
     }
     if (this.outputMethodItem) {
       this.outputMethodItem.label.text = _("Output: ") + this._outputMethodLabel(this._normalizeOutputMethod(this.insertMethod));

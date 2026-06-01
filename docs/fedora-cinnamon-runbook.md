@@ -166,13 +166,13 @@ templates and personal context may contain private data, keep the export file pr
 ## Language Switching
 
 Configure `Primary recognition language` and `Secondary recognition language` in the applet settings. The `Language`
-menu item switches the active runtime language for future recordings. The shortcut and panel action then pass that
-active language to the backend as `--language`.
+submenu shows the current runtime language, lets you choose primary or secondary for future recordings, and can start a
+recording directly with either language. The shortcut and panel action then pass that active language to the backend as
+`--language`.
 
-The applet also exposes `Start primary language` and `Start secondary language` menu actions. Optional Cinnamon global
-shortcuts for the same actions can be configured as `Start dictation with the primary language` and `Start dictation
-with the secondary language`. If a recording is already active, those actions stop or transcribe the current recording
-without changing its saved language.
+Optional Cinnamon global shortcuts for the same direct-start actions can be configured as `Start dictation with the
+primary language` and `Start dictation with the secondary language`. If a recording is already active, those actions
+stop or transcribe the current recording without changing its saved language.
 
 ## Personalization
 
