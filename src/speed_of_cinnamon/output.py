@@ -16,20 +16,45 @@ MAX_ERROR_CHARS = 1_024
 MAX_PASTE_TIMEOUT_SECONDS = 10
 MAX_TYPE_TIMEOUT_SECONDS = 30
 MAX_EXEC_TIMEOUT_SECONDS = 10
+MAX_TYPE_DELAY_MS = 10_000
+
+
+def _contains_escaped_null(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise OutputError("value must be text")
+    lowered = (value or "").lower()
+    return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
 
 
 def _filesize(file: io.BufferedRandom) -> int:
+    if not hasattr(file, "seek") or not hasattr(file, "tell"):
+        raise OutputError("file must be a binary file handle")
     file.seek(0, 2)
     return file.tell()
 
 
 def _read_file_head(file: io.BufferedRandom, max_chars: int) -> str:
+    if not hasattr(file, "seek") or not hasattr(file, "read"):
+        raise OutputError("file must be a binary file handle")
+    if not isinstance(max_chars, int) or isinstance(max_chars, bool):
+        raise OutputError("max_chars must be an integer")
+    if max_chars <= 0:
+        raise OutputError("max_chars must be positive")
+
     file.seek(0)
-    return file.read(max_chars).decode("utf-8", errors="replace")
+    try:
+        text = file.read(max_chars).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise OutputError(f"command output is not valid UTF-8: {exc}") from exc
+    if _contains_escaped_null(text):
+        raise OutputError("command output contains invalid null byte")
+    return text
 
 
 def _validate_text_input(text: str) -> bytes:
-    if "\x00" in text:
+    if not isinstance(text, str) or isinstance(text, bool):
+        raise OutputError("text must be text")
+    if _contains_escaped_null(text):
         raise OutputError("command input contains invalid null byte")
     if len(text) > MAX_INPUT_CHARS:
         raise OutputError(f"command input is too large (max {MAX_INPUT_CHARS} characters)")
@@ -43,18 +68,28 @@ def _run_with_input(
     timeout: int = MAX_EXEC_TIMEOUT_SECONDS,
     max_output_chars: int | None = None,
 ) -> None:
+    if not isinstance(argv, (list, tuple)):
+        raise OutputError("argv must be a sequence")
+    if not all(isinstance(arg, str) for arg in argv):
+        raise OutputError("command arguments must be text")
     if not argv:
         raise OutputError("empty command is not allowed")
+    if not isinstance(timeout, int) or isinstance(timeout, bool):
+        raise OutputError("timeout must be an integer")
     if timeout <= 0:
         raise OutputError("timeout must be positive")
     if max_output_chars is None:
         max_output_chars = MAX_OUTPUT_CHARS
+    if not isinstance(max_output_chars, int) or isinstance(max_output_chars, bool):
+        raise OutputError("max_output_chars must be an integer")
     if max_output_chars < 0:
         raise OutputError("max_output_chars must be non-negative")
 
     command = argv[0].strip()
     if not command:
         raise OutputError("command is empty")
+    if _contains_escaped_null(command) or any(_contains_escaped_null(arg) for arg in argv[1:]):
+        raise OutputError("command argument contains invalid null byte")
 
     input_bytes = _validate_text_input(text)
 
@@ -87,6 +122,8 @@ def _run_with_input(
 
 
 def set_clipboard(text: str) -> str:
+    if not isinstance(text, str) or isinstance(text, bool):
+        raise OutputError("text must be text")
     if shutil.which("xclip"):
         _run_with_input(["xclip", "-selection", "clipboard"], text)
         return "xclip"
@@ -112,7 +149,13 @@ def paste_from_clipboard() -> None:
 def type_text(text: str, delay_ms: int) -> None:
     if not shutil.which("xdotool"):
         raise OutputError("xdotool is required for direct typing on Cinnamon X11")
+    if not isinstance(delay_ms, int) or isinstance(delay_ms, bool):
+        raise OutputError("typing delay must be an integer")
     _validate_text_input(text)
+    if delay_ms < 0:
+        delay_ms = 0
+    if delay_ms > MAX_TYPE_DELAY_MS:
+        raise OutputError(f"typing delay must be at most {MAX_TYPE_DELAY_MS}")
     _run_with_input(
         ["xdotool", "type", "--clearmodifiers", "--delay", str(max(delay_ms, 0)), text],
         "",
@@ -121,6 +164,8 @@ def type_text(text: str, delay_ms: int) -> None:
 
 
 def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
+    if not isinstance(method, str) or isinstance(method, bool):
+        raise OutputError("method must be text")
     method = (method or "clipboard-paste").strip().lower()
     if method == "none":
         return False

@@ -142,6 +142,254 @@ class ModelsTest(unittest.TestCase):
             self.assertNotIn("/does/not/exist.bin", models._model_checksum_cache)
             self.assertNotIn(str(path.with_name("bad.bin")), models._model_checksum_cache)
 
+    def test_model_checksum_cache_rejects_invalid_checksum_entries(self) -> None:
+        spec = models.ModelSpec(
+            name="cache-invalid-checksum",
+            filename="ggml-invalid-checksum.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(b"invalid checksum").hexdigest(),
+            description="invalid checksum cache",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"invalid checksum")
+            cache_payload = {
+                str(path): {
+                    "checksum": "bad",
+                    "size": 1,
+                    "mtime_ns": 2,
+                }
+            }
+            cache_path.write_text(json.dumps(cache_payload), encoding="utf-8")
+            models._load_model_checksum_cache()
+            self.assertNotIn(str(path), models._model_checksum_cache)
+
+    def test_model_checksum_cache_rejects_negative_metadata_entries(self) -> None:
+        spec = models.ModelSpec(
+            name="cache-negative-meta",
+            filename="ggml-negative.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(b"negative meta").hexdigest(),
+            description="negative checksum cache metadata",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"negative meta")
+            cache_payload = {
+                str(path): {
+                    "checksum": hashlib.sha1(b"negative meta").hexdigest(),
+                    "size": -1,
+                    "mtime_ns": -1,
+                }
+            }
+            cache_path.write_text(json.dumps(cache_payload), encoding="utf-8")
+            models._load_model_checksum_cache()
+            self.assertNotIn(str(path), models._model_checksum_cache)
+
+    def test_model_checksum_cache_rejects_oversized_path_entries(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            key = "x" * (models.MAX_MODEL_CHECKSUM_PATH_CHARS + 1)
+            cache_path.write_text(
+                json.dumps({key: {"checksum": "a" * 40, "size": 1, "mtime_ns": 1}}),
+                encoding="utf-8",
+            )
+            models._load_model_checksum_cache()
+            self.assertNotIn(key, models._model_checksum_cache)
+
+    def test_model_checksum_cache_rejects_null_byte_paths(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(
+                json.dumps({"a\x00b.bin": {"checksum": "a" * 40, "size": 1, "mtime_ns": 1}}),
+                encoding="utf-8",
+            )
+            models._load_model_checksum_cache()
+            self.assertEqual(models._model_checksum_cache, {})
+
+    def test_model_checksum_cache_rejects_escaped_null_paths(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(
+                json.dumps({"a\\\\x00b.bin": {"checksum": "a" * 40, "size": 1, "mtime_ns": 1}}),
+                encoding="utf-8",
+            )
+            models._load_model_checksum_cache()
+            self.assertEqual(models._model_checksum_cache, {})
+
+    def test_write_model_checksum_cache_rejects_oversized_payload(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            cache_path = models._model_checksum_cache_path()
+            for idx in range(25000):
+                models._model_checksum_cache[f"path-{idx}.bin"] = {
+                    "checksum": "a" * 40,
+                    "size": idx,
+                    "mtime_ns": idx,
+                }
+            models._write_model_checksum_cache()
+            self.assertFalse(cache_path.exists())
+
+    def test_write_model_checksum_cache_overflow_clears_cache(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            cache_path = models._model_checksum_cache_path()
+            for idx in range(25000):
+                models._model_checksum_cache[f"path-{idx}.bin"] = {
+                    "checksum": "a" * 40,
+                    "size": idx,
+                    "mtime_ns": idx,
+                }
+            models._write_model_checksum_cache()
+            self.assertEqual(models._model_checksum_cache, {})
+            self.assertFalse(cache_path.exists())
+
+    def test_set_model_checksum_cache_rejects_invalid_checksum(self) -> None:
+        stat = os.stat_result((0, 0, 0, 0, 0, 0, 12, 0, 0, 0))
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+        ):
+            path = models._model_checksum_cache_path().parent / "ggml-invalid.bin"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"invalid checksum")
+            with self.assertRaisesRegex(models.ModelError, "invalid model checksum cache state"):
+                models._set_model_checksum_cache(path, "bad", stat)
+
+    def test_set_model_checksum_cache_rejects_boolean_size(self) -> None:
+        stat = os.stat_result((0, 0, 0, 0, 0, 0, True, 0, 0, 0))
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+        ):
+            path = models._model_checksum_cache_path().parent / "ggml-boolean-size.bin"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"boolean")
+            with self.assertRaisesRegex(models.ModelError, "invalid model checksum cache state"):
+                models._set_model_checksum_cache(path, hashlib.sha1(b"boolean").hexdigest(), stat)
+
+    def test_load_model_checksum_cache_rejects_boolean_entries(self) -> None:
+        spec = models.ModelSpec(
+            name="cache-boolean",
+            filename="ggml-boolean.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(b"boolean").hexdigest(),
+            description="boolean metadata cache",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            path = models._model_checksum_cache_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            model_path = models.model_path(spec)
+            model_path.parent.mkdir(parents=True, exist_ok=True)
+            model_path.write_bytes(b"boolean")
+            payload = {
+                str(model_path): {"checksum": spec.sha1, "size": True, "mtime_ns": 123},
+                "other.bin": {"checksum": spec.sha1, "size": 123, "mtime_ns": False},
+            }
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            models._load_model_checksum_cache()
+            self.assertEqual(models._model_checksum_cache, {})
+
+    def test_set_model_checksum_cache_rejects_invalid_path(self) -> None:
+        stat = os.stat_result((0, 0, 0, 0, 0, 0, 12, 0, 0, 0))
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+        ):
+            path = models._model_checksum_cache_path().parent / "a\x00b.bin"
+            with self.assertRaisesRegex(models.ModelError, "invalid model checksum cache state"):
+                models._set_model_checksum_cache(path, "a" * 40, stat)
+
+    def test_model_checksum_cache_rejects_oversized_file(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text("x" * (models.MAX_MODEL_CHECKSUM_JSON_BYTES + 1), encoding="utf-8")
+            models._load_model_checksum_cache()
+            self.assertFalse(cache_path.exists())
+
+    def test_model_checksum_cache_rejects_invalid_utf8(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_bytes(b"\xff")
+            models._load_model_checksum_cache()
+            self.assertFalse(cache_path.exists())
+            self.assertEqual(models._model_checksum_cache, {})
+
+    def test_model_checksum_cache_rejects_escaped_x00_paths(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(
+                json.dumps({"a\\\\x00b.bin": {"checksum": "a" * 40, "size": 1, "mtime_ns": 1}}),
+                encoding="utf-8",
+            )
+            models._load_model_checksum_cache()
+            self.assertEqual(models._model_checksum_cache, {})
+
     def test_remove_model_clears_checksum_cache(self) -> None:
         spec = models.ModelSpec(
             name="cache-clear",
@@ -245,6 +493,45 @@ class ModelsTest(unittest.TestCase):
             path.write_bytes(good_data)
             self.assertEqual(models.default_whisper_cpp_model_path(), str(path))
 
+    def test_default_model_path_skips_english_only_model_for_non_english_language(self) -> None:
+        english_data = b"english model"
+        multilingual_data = b"multilingual model"
+        english = models.ModelSpec(
+            name="tiny.en",
+            filename="ggml-tiny.en.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(english_data).hexdigest(),
+            description="english only",
+        )
+        multilingual = models.ModelSpec(
+            name="tiny",
+            filename="ggml-tiny.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(multilingual_data).hexdigest(),
+            description="multilingual",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (english, multilingual)),
+        ):
+            english_path = models.model_path(english)
+            multilingual_path = models.model_path(multilingual)
+            english_path.parent.mkdir(parents=True)
+            english_path.write_bytes(english_data)
+            multilingual_path.write_bytes(multilingual_data)
+
+            self.assertEqual(models.default_whisper_cpp_model_path("en"), str(english_path))
+            self.assertEqual(models.default_whisper_cpp_model_path("de"), str(multilingual_path))
+            self.assertFalse(models.model_supports_language(english_path, "de"))
+            self.assertTrue(models.model_supports_language(multilingual_path, "de"))
+
+    def test_model_supports_language_rejects_null_byte_path(self) -> None:
+        self.assertFalse(models.model_supports_language("a\x00.bin", "en"))
+
+    def test_model_supports_language_rejects_escaped_null_path(self) -> None:
+        self.assertFalse(models.model_supports_language("a\\x00.bin", "de"))
+
     def test_unknown_model_raises_clear_error(self) -> None:
         with self.assertRaisesRegex(models.ModelError, "unknown model"):
             models.resolve_model("missing")
@@ -293,6 +580,95 @@ class ModelsTest(unittest.TestCase):
             with self.assertRaisesRegex(models.ModelError, "size mismatch"):
                 models.download_model("mismatch")
 
+    def test_parse_model_size_bytes_rejects_unknown_unit(self) -> None:
+        with self.assertRaisesRegex(models.ModelError, "unsupported format"):
+            models._parse_model_size_bytes("1 XB")
+
+    def test_parse_model_size_bytes_rejects_non_positive_sizes(self) -> None:
+        with self.assertRaisesRegex(models.ModelError, "must be positive"):
+            models._parse_model_size_bytes("0 MiB")
+        with self.assertRaisesRegex(models.ModelError, "must be positive"):
+            models._parse_model_size_bytes("-3 MiB")
+
+    def test_parse_model_size_bytes_rejects_empty_value(self) -> None:
+        with self.assertRaisesRegex(models.ModelError, "empty value"):
+            models._parse_model_size_bytes("   ")
+
+    def test_parse_model_size_bytes_rejects_non_numeric_value(self) -> None:
+        with self.assertRaisesRegex(models.ModelError, "invalid model size"):
+            models._parse_model_size_bytes("abc MiB")
+
+    def test_parse_model_size_bytes_rejects_non_text(self) -> None:
+        with self.assertRaisesRegex(models.ModelError, "must be text"):
+            models._parse_model_size_bytes(42)  # type: ignore[arg-type]
+
+    def test_download_model_rejects_unknown_model_size_format(self) -> None:
+        spec = models.ModelSpec(
+            name="bad-size",
+            filename="ggml-bad-size.bin",
+            size="1",  # missing unit
+            sha1=hashlib.sha1(b"x").hexdigest(),
+            description="bad size format",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            ):
+            with self.assertRaisesRegex(models.ModelError, "unsupported format"):
+                models.download_model("bad-size")
+
+    def test_resolve_model_rejects_non_text_name(self) -> None:
+        with self.assertRaisesRegex(models.ModelError, "model name must be text"):
+            models.resolve_model(1)  # type: ignore[arg-type]
+
+    def test_model_supports_language_rejects_non_text_inputs(self) -> None:
+        self.assertFalse(models.model_supports_language(12, "en"))  # type: ignore[arg-type]
+        self.assertFalse(models.model_supports_language("models/ggml-tiny.bin", 12))
+
+    def test_model_path_is_english_only_rejects_non_text_path(self) -> None:
+        self.assertFalse(models.model_path_is_english_only(12))  # type: ignore[arg-type]
+
+    def test_contains_escaped_null_rejects_non_text(self) -> None:
+        with self.assertRaisesRegex(models.ModelError, "must be text"):
+            models._contains_escaped_null(12)  # type: ignore[arg-type]
+
+    def test_parse_content_length_rejects_invalid_or_non_positive_headers(self) -> None:
+        with self.assertRaisesRegex(models.ModelError, "invalid content-length header"):
+            models._parse_content_length("x")
+        with self.assertRaisesRegex(models.ModelError, "invalid content-length header"):
+            models._parse_content_length("0")
+        with self.assertRaisesRegex(models.ModelError, "invalid content-length header"):
+            models._parse_content_length("-10")
+        with self.assertRaisesRegex(models.ModelError, "invalid content-length header"):
+            models._parse_content_length(b"10")
+        with self.assertRaisesRegex(models.ModelError, "invalid content-length header"):
+            models._parse_content_length(True)  # type: ignore[arg-type]
+        with self.assertRaisesRegex(models.ModelError, "invalid content-length header"):
+            models._parse_content_length(False)  # type: ignore[arg-type]
+
+    def test_download_model_rejects_invalid_content_length_header(self) -> None:
+        data = b"model"
+        expected_checksum = hashlib.sha1(data).hexdigest()
+        spec = models.ModelSpec(
+            name="bad-length",
+            filename="ggml-bad-length.bin",
+            size="1 MiB",
+            sha1=expected_checksum,
+            description="invalid content length",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch(
+                "speed_of_cinnamon.models.urllib.request.urlopen",
+                return_value=FakeResponseWithLength(data=data, content_length=-1),
+            ),
+        ):
+            with self.assertRaisesRegex(models.ModelError, "invalid content-length header"):
+                models.download_model("bad-length")
+
     @mock.patch("speed_of_cinnamon.models.os.replace")
     def test_download_model_raises_model_error_when_atomic_replace_fails(self, mocked_replace: mock.Mock) -> None:
         data = b"tiny model"
@@ -315,6 +691,14 @@ class ModelsTest(unittest.TestCase):
         path = models.model_path(spec)
         self.assertFalse(path.exists())
         self.assertFalse(path.with_suffix(path.suffix + ".tmp").exists())
+
+    def test_model_status_rejects_non_boolean_verify(self) -> None:
+        with self.assertRaisesRegex(models.ModelError, "verify must be a boolean"):
+            models.model_status(models.CATALOG[0], verify="true")  # type: ignore[arg-type]
+
+    def test_download_model_rejects_non_boolean_force(self) -> None:
+        with self.assertRaisesRegex(models.ModelError, "force must be a boolean"):
+            models.download_model("tiny.en", force="yes")  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":

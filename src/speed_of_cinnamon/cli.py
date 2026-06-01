@@ -42,8 +42,8 @@ from .postprocessor import (
     list_openai_compatible_models,
     post_process_text,
 )
-from .recorder import choose_recorder, list_input_sources, start_recorder, stop_process
-from .recorder import RecorderError, validate_recording_path
+from .recorder import choose_recorder, list_input_sources, read_recording_level, start_recorder, stop_process
+from .recorder import MAX_RECORDING_SECONDS, RecorderError, validate_recording_path
 from .settings_export import read_export, write_export
 from .setup_plan import build_setup_plan
 from .state import RecordingState, StateStore, now_iso, process_is_alive
@@ -55,15 +55,31 @@ DEFAULT_KEEP_TRANSCRIPTS = 100
 DEFAULT_KEEP_RECORDINGS = 25
 MAX_LOG_EXCERPT_CHARS = 2000
 MAX_TRANSCRIPT_HISTORY_TEXT_CHARS = 4_000
+MAX_HISTORY_LIMIT = 1_000
+DEFAULT_MAX_SECONDS = 30
+MAX_KEEP_TRANSCRIPTS = 1_000
+MAX_KEEP_RECORDINGS = 1_000
+MAX_TYPING_DELAY_MS = 10_000
+DEFAULT_TYPING_DELAY_MS = 8
 MAX_PATH_CHARS = 240
 MAX_TRANSCRIBER_TEXT_CHARS = 65_535
 MAX_SETTINGS_JSON_CHARS = 250_000
 MAX_SETTINGS_FILE_BYTES = 1_000_000
 MAX_DIAGNOSTICS_JSON_BYTES = 1_000_000
 MAX_URL_CHARS = 2_048
+MAX_ALARM_CATCH_UP_MINUTES = 14_400
+
+
+def _contains_escaped_null(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise RuntimeError("value must be text")
+    lowered = (value or "").lower()
+    return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
 
 
 def _assert_text_limit(value: str, *, field_name: str, max_chars: int) -> str:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise RuntimeError(f"{field_name} must be text")
     if len(value) > max_chars:
         if field_name == "audio file path":
             raise RuntimeError(f"{field_name} is too long (max {max_chars} characters)")
@@ -72,7 +88,7 @@ def _assert_text_limit(value: str, *, field_name: str, max_chars: int) -> str:
 
 
 def _assert_clean_text(value: str, *, field_name: str, max_chars: int) -> str:
-    if "\x00" in value:
+    if _contains_escaped_null(value):
         raise RuntimeError(f"{field_name} contains invalid null byte")
     return _assert_text_limit(value, field_name=field_name, max_chars=max_chars)
 
@@ -101,9 +117,16 @@ def _validate_pipeline_text_args(
 
 
 def read_file_tail(path: Path, max_chars: int) -> str:
+    if isinstance(path, str):
+        path = Path(path)
+    elif not isinstance(path, Path):
+        raise TypeError("path must be a Path")
+    if not isinstance(max_chars, int) or isinstance(max_chars, bool):
+        raise TypeError("max_chars must be an integer")
     if max_chars <= 0:
-        return ""
-    max_chars = max(0, min(max_chars, MAX_TRANSCRIPT_HISTORY_TEXT_CHARS))
+        raise ValueError("max_chars must be positive")
+    if max_chars > MAX_TRANSCRIPT_HISTORY_TEXT_CHARS:
+        raise ValueError(f"max_chars must be at most {MAX_TRANSCRIPT_HISTORY_TEXT_CHARS}")
     max_bytes = max_chars * 4
     with path.open("rb") as handle:
         handle.seek(0, os.SEEK_END)
@@ -112,7 +135,12 @@ def read_file_tail(path: Path, max_chars: int) -> str:
             handle.seek(0)
         else:
             handle.seek(size - max_bytes)
-        text = handle.read().decode("utf-8", errors="replace")
+        try:
+            text = handle.read().decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"failed to decode file as UTF-8: {path}") from exc
+    if _contains_escaped_null(text):
+        raise ValueError(f"file tail contains invalid null byte: {path}")
     if len(text) > max_chars:
         text = text[-max_chars:]
     return text
@@ -132,12 +160,22 @@ def print_result(payload: dict[str, object], json_output: bool) -> None:
 
 
 def append_space_if_needed(text: str, append_space: bool) -> str:
+    if isinstance(text, bool) or not isinstance(text, str):
+        raise RuntimeError("text must be text")
+    if not isinstance(append_space, bool):
+        raise RuntimeError("append_space must be a boolean")
     if append_space and text and not text.endswith((" ", "\n", "\t")):
         return text + " "
     return text
 
 
 def prepare_output_text(text: str, append_space: bool, sanitize: bool) -> str:
+    if isinstance(text, bool) or not isinstance(text, str):
+        raise RuntimeError("text must be text")
+    if not isinstance(append_space, bool):
+        raise RuntimeError("append_space must be a boolean")
+    if not isinstance(sanitize, bool):
+        raise RuntimeError("sanitize must be a boolean")
     output = sanitize_special_chars(text) if sanitize else text
     return append_space_if_needed(output, append_space)
 
@@ -150,13 +188,24 @@ def build_store(args: argparse.Namespace) -> StateStore:
 
 
 def read_log_excerpt(path: Path | None, max_chars: int = 2000) -> str:
+    if path is not None and not isinstance(path, Path):
+        if isinstance(path, str):
+            path = Path(path)
+        else:
+            raise TypeError("path must be a Path")
+    if not isinstance(max_chars, int) or isinstance(max_chars, bool):
+        raise TypeError("max_chars must be an integer")
+    if max_chars <= 0:
+        return ""
+    if max_chars > MAX_LOG_EXCERPT_CHARS:
+        raise ValueError(f"max_chars must be at most {MAX_LOG_EXCERPT_CHARS}")
     if not path or not path.exists():
         return ""
     try:
-        text = read_file_tail(path, min(max_chars, MAX_LOG_EXCERPT_CHARS))
+        text = read_file_tail(path, max_chars)
     except OSError:
         return ""
-    return text[-max_chars:].strip()
+    return text.strip()
 
 
 def transcript_preview(text: str, max_chars: int = 80) -> str:
@@ -280,9 +329,138 @@ def _coerce_path(
     resolve: bool = False,
     max_chars: int = MAX_PATH_CHARS,
 ) -> Path:
+    if isinstance(path_value, bool) or not isinstance(path_value, str):
+        raise RuntimeError(f"{field_name} must be text")
+    if not isinstance(max_chars, int) or isinstance(max_chars, bool):
+        raise RuntimeError("max_chars must be an integer")
+    if max_chars <= 0:
+        raise RuntimeError("max_chars must be positive")
     _assert_clean_text(path_value, field_name=field_name, max_chars=max_chars)
     path = Path(path_value).expanduser()
     return path.resolve(strict=False) if resolve else path
+
+
+def _coerce_int(
+    value: int,
+    *,
+    field_name: str,
+    min_value: int = 0,
+    max_value: int | None = None,
+) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise RuntimeError(f"{field_name} must be an integer")
+    if not isinstance(min_value, int) or isinstance(min_value, bool):
+        raise RuntimeError("min_value must be an integer")
+    if max_value is not None:
+        if not isinstance(max_value, int) or isinstance(max_value, bool):
+            raise RuntimeError("max_value must be an integer")
+        if max_value < min_value:
+            raise RuntimeError(f"{field_name} has invalid max_value")
+    if value < min_value:
+        raise RuntimeError(f"{field_name} must be at least {min_value}")
+    if max_value is not None and value > max_value:
+        raise RuntimeError(f"{field_name} must be at most {max_value}")
+    return value
+
+
+def _coerce_bool(value: object, *, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise RuntimeError(f"{field_name} must be a boolean")
+    return value
+
+
+def _normalize_input_sources(sources: object) -> list[dict[str, object]]:
+    if not isinstance(sources, list):
+        raise RuntimeError("input sources must be a list")
+
+    normalized: list[dict[str, object]] = []
+    for source in sources:
+        source_id = source.id if hasattr(source, "id") else None
+        if not isinstance(source_id, str) or isinstance(source_id, bool):
+            raise RuntimeError("input source id must be text")
+        if _contains_escaped_null(source_id):
+            raise RuntimeError("input source id contains invalid null byte")
+
+        name = source.name if hasattr(source, "name") else None
+        if not isinstance(name, str) or isinstance(name, bool):
+            raise RuntimeError("input source name must be text")
+        if _contains_escaped_null(name):
+            raise RuntimeError("input source name contains invalid null byte")
+
+        description = source.description if hasattr(source, "description") else None
+        if not isinstance(description, str) or isinstance(description, bool):
+            raise RuntimeError("input source description must be text")
+        if _contains_escaped_null(description):
+            raise RuntimeError("input source description contains invalid null byte")
+
+        driver = source.driver if hasattr(source, "driver") else None
+        if not isinstance(driver, str) or isinstance(driver, bool):
+            raise RuntimeError("input source driver must be text")
+        if _contains_escaped_null(driver):
+            raise RuntimeError("input source driver contains invalid null byte")
+
+        state = source.state if hasattr(source, "state") else None
+        if not isinstance(state, str) or isinstance(state, bool):
+            raise RuntimeError("input source state must be text")
+        if _contains_escaped_null(state):
+            raise RuntimeError("input source state contains invalid null byte")
+
+        default = source.default if hasattr(source, "default") else None
+        if not isinstance(default, bool):
+            raise RuntimeError("input source default must be a boolean")
+
+        monitor = source.monitor if hasattr(source, "monitor") else None
+        if not isinstance(monitor, bool):
+            raise RuntimeError("input source monitor must be a boolean")
+
+        normalized.append(
+            {
+                "id": source_id,
+                "name": name,
+                "description": description,
+                "driver": driver,
+                "state": state,
+                "default": default,
+                "monitor": monitor,
+            }
+        )
+    return normalized
+
+
+def _normalize_model_payloads(models: object) -> list[dict[str, object]]:
+    if not isinstance(models, list):
+        raise RuntimeError("model payload must be a list")
+
+    normalized: list[dict[str, object]] = []
+    for model in models:
+        if not isinstance(model, dict):
+            raise RuntimeError("model payload entry must be an object")
+        name = model.get("name")
+        if not isinstance(name, str) or isinstance(name, bool):
+            raise RuntimeError("model name must be text")
+        if _contains_escaped_null(name):
+            raise RuntimeError("model name contains invalid null byte")
+        normalized.append(model)
+    return normalized
+
+
+def _normalize_text_models_payload(payload: object) -> dict[str, object]:
+    if not isinstance(payload, dict):
+        raise RuntimeError("text models payload must be an object")
+    available = payload.get("available")
+    if not isinstance(available, bool):
+        raise RuntimeError("text models payload available must be a boolean")
+    message = payload.get("message")
+    if not isinstance(message, str) or isinstance(message, bool):
+        raise RuntimeError("text models payload message must be text")
+    if _contains_escaped_null(message):
+        raise RuntimeError("text models payload message contains invalid null byte")
+    models = _normalize_model_payloads(payload.get("models"))
+    return {
+        "available": available,
+        "models": models,
+        "message": message,
+    }
 
 
 def active_artifact_paths(state: RecordingState) -> set[Path]:
@@ -309,14 +487,31 @@ def _safe_recording_artifact_path(
         return None
     try:
         return validate_recording_path(Path(value), suffix=suffix, require_recordings_dir=require_recordings_dir)
-    except (RecorderError, ValueError, OSError):
+    except (RecorderError, ValueError, OSError, TypeError):
         return None
 
 
 def _is_recording_process_alive(pid: object) -> bool:
-    if not isinstance(pid, int) or pid <= 0:
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
         return False
     return process_is_alive(pid)
+
+
+def _raise_if_state_unreadable(state: RecordingState) -> None:
+    if state.error.startswith("state file "):
+        raise RuntimeError(state.error)
+
+
+def _recording_level_payload(state: RecordingState) -> dict[str, object] | None:
+    audio_path = _safe_recording_artifact_path(state.audio_path, suffix=".wav")
+    if not audio_path:
+        if state.audio_path:
+            return {"ok": False, "percent": 0, "peak": 0.0, "rms": 0.0, "samples": 0, "detail": "recording audio path is invalid"}
+        return None
+    try:
+        return asdict(read_recording_level(audio_path))
+    except RecorderError as exc:
+        return {"ok": False, "percent": 0, "peak": 0.0, "rms": 0.0, "samples": 0, "detail": str(exc)}
 
 
 def sorted_files(paths: list[Path]) -> list[Path]:
@@ -436,6 +631,7 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     store = build_store(args)
     current = store.read()
+    _raise_if_state_unreadable(current)
     if current.status == "recording":
         current_audio_path = _safe_recording_artifact_path(
             current.audio_path, suffix=".wav", require_recordings_dir=False
@@ -476,7 +672,8 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
     log_path = recordings_dir() / f"{stamp}.log"
     audio_path = validate_recording_path(audio_path, suffix=".wav", require_recordings_dir=True)
     log_path = validate_recording_path(log_path, suffix=".log", require_recordings_dir=True)
-    command = choose_recorder(args.recorder, audio_path, args.max_seconds, args.input_device)
+    max_seconds = _coerce_int(args.max_seconds, field_name="max-seconds", max_value=MAX_RECORDING_SECONDS)
+    command = choose_recorder(args.recorder, audio_path, max_seconds, args.input_device)
     proc = start_recorder(command, log_path)
     time.sleep(RECORDER_START_GRACE_SECONDS)
     if proc.poll() is not None:
@@ -491,7 +688,7 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
         started_at=now_iso(),
         language=language,
         recorder=command.name,
-        max_seconds=args.max_seconds,
+        max_seconds=max_seconds,
         input_device=args.input_device,
     )
     store.write(state)
@@ -542,12 +739,21 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             args.openai_compatible_url,
         )
         _write_text_atomic(text_path, text.strip() + "\n")
-        text_to_insert = prepare_output_text(text, args.append_space, args.sanitize_special_chars)
-        inserted = insert_text(text_to_insert, args.insert_method, args.typing_delay_ms)
+        append_space = _coerce_bool(args.append_space, field_name="append_space")
+        sanitize_special_chars = _coerce_bool(
+            args.sanitize_special_chars,
+            field_name="sanitize_special_chars",
+        )
+        text_to_insert = prepare_output_text(text, append_space, sanitize_special_chars)
+        typing_delay_ms = _coerce_int(args.typing_delay_ms, field_name="typing-delay-ms", max_value=MAX_TYPING_DELAY_MS)
+        inserted = insert_text(text_to_insert, args.insert_method, typing_delay_ms)
     except Exception as exc:
         store.update(status="error", stopped_at=state.stopped_at or now_iso(), error=str(exc))
         raise
-    keep_recording_artifacts = bool(getattr(args, "keep_recording_artifacts", False))
+    keep_recording_artifacts = _coerce_bool(
+        getattr(args, "keep_recording_artifacts", False),
+        field_name="keep_recording_artifacts",
+    )
     audio_deleted = False
     log_deleted = False
     done_audio_path = state.audio_path
@@ -607,13 +813,14 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     store = build_store(args)
     state = store.read()
+    _raise_if_state_unreadable(state)
     if state.status != "recording":
         if state.status in {"recorded", "processing"} and state.audio_path:
             return finalize_recording(args, store, state)
         return {"status": state.status, "message": "not recording"}
 
     if _is_recording_process_alive(state.pid):
-        stop_process(int(state.pid))
+        stop_process(_coerce_int(state.pid, field_name="state pid"))
     state = store.update(status="processing", stopped_at=now_iso())
     return finalize_recording(args, store, state)
 
@@ -622,8 +829,9 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     store = build_store(args)
     state = store.read()
+    _raise_if_state_unreadable(state)
     if state.status == "recording" and _is_recording_process_alive(state.pid):
-        stop_process(int(state.pid))
+        stop_process(_coerce_int(state.pid, field_name="state pid"))
 
     discarded_audio_path = state.audio_path
     audio_deleted = remove_file(state.audio_path, suffix=".wav")
@@ -652,6 +860,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
 def command_toggle(args: argparse.Namespace) -> dict[str, object]:
     store = build_store(args)
     state = store.read()
+    _raise_if_state_unreadable(state)
     if state.status == "recording":
         if _is_recording_process_alive(state.pid):
             return command_stop(args)
@@ -664,20 +873,29 @@ def command_toggle(args: argparse.Namespace) -> dict[str, object]:
 def command_status(args: argparse.Namespace) -> dict[str, object]:
     state = build_store(args).read()
     payload = asdict(state)
+    if state.error.startswith("state file "):
+        payload["status"] = "error"
+        return payload
     if state.status == "recording" and not _is_recording_process_alive(state.pid):
         payload["status"] = "recorded"
         payload["message"] = "recording process has exited; run stop to transcribe"
+    if payload.get("status") in {"recording", "recorded"}:
+        microphone_level = _recording_level_payload(state)
+        if microphone_level is not None:
+            payload["microphone_level"] = microphone_level
     return payload
 
 
 def command_doctor(args: argparse.Namespace) -> dict[str, object]:
     settings = _parse_cli_settings_json(getattr(args, "settings_json", ""))
-    return doctor_report(settings, applet=getattr(args, "applet", False))
+    applet = _coerce_bool(getattr(args, "applet", False), field_name="applet")
+    return doctor_report(settings, applet=applet)
 
 
 def command_setup(args: argparse.Namespace) -> dict[str, object]:
     settings = _parse_cli_settings_json(getattr(args, "settings_json", ""))
-    doctor_payload = doctor_report(settings, applet=getattr(args, "applet", False))
+    applet = _coerce_bool(getattr(args, "applet", False), field_name="applet")
+    doctor_payload = doctor_report(settings, applet=applet)
     return {
         "status": "done",
         "doctor": doctor_payload,
@@ -686,18 +904,19 @@ def command_setup(args: argparse.Namespace) -> dict[str, object]:
 
 
 def command_list_inputs(args: argparse.Namespace) -> dict[str, object]:
-    sources = list_input_sources(args.include_monitors)
+    include_monitors = _coerce_bool(args.include_monitors, field_name="include_monitors")
+    sources = _normalize_input_sources(list_input_sources(include_monitors))
     return {
         "status": "done",
         "sources": [
             {
-                "id": source.id,
-                "name": source.name,
-                "description": source.description,
-                "driver": source.driver,
-                "state": source.state,
-                "default": source.default,
-                "monitor": source.monitor,
+                "id": source["id"],
+                "name": source["name"],
+                "description": source["description"],
+                "driver": source["driver"],
+                "state": source["state"],
+                "default": source["default"],
+                "monitor": source["monitor"],
             }
             for source in sources
         ],
@@ -706,31 +925,36 @@ def command_list_inputs(args: argparse.Namespace) -> dict[str, object]:
 
 def command_models(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
-    return {"status": "done", "models": list_models()}
+    return {"status": "done", "models": _normalize_model_payloads(list_models())}
 
 
 def command_text_models(args: argparse.Namespace) -> dict[str, object]:
     backend = (args.backend or "ollama").strip().lower().replace("_", "-")
-    if backend in {"openai-compatible", "openai", "local-openai"}:
+    if backend not in {"ollama", "openai-compatible"}:
+        raise RuntimeError("text models backend must be ollama or openai-compatible")
+    if backend == "openai-compatible":
         url = _validate_text_model_url(args.openai_compatible_url or DEFAULT_OPENAI_COMPATIBLE_URL, field_name="openai-compatible url")
+        payload = _normalize_text_models_payload(list_openai_compatible_models(url))
         return {
             "status": "done",
             "backend": "openai-compatible",
             "url": url,
-            **list_openai_compatible_models(url),
+            **payload,
         }
     url = _validate_text_model_url(args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url")
+    payload = _normalize_text_models_payload(list_ollama_models(url))
     return {
         "status": "done",
         "backend": "ollama",
         "url": url,
-        **list_ollama_models(url),
+        **payload,
     }
 
 
 def command_download_model(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
-    return download_model(args.model, args.force)
+    force = _coerce_bool(args.force, field_name="force")
+    return download_model(args.model, force)
 
 
 def command_remove_model(args: argparse.Namespace) -> dict[str, object]:
@@ -740,38 +964,42 @@ def command_remove_model(args: argparse.Namespace) -> dict[str, object]:
 
 def command_history(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
-    return {"status": "done", "transcripts": read_transcript_history(max(args.limit, 0))}
+    limit = _coerce_int(args.limit, field_name="history limit", max_value=MAX_HISTORY_LIMIT)
+    return {"status": "done", "transcripts": read_transcript_history(limit)}
 
 
 def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
+    keep_transcripts = _coerce_int(args.keep_transcripts, field_name="keep-transcripts", max_value=MAX_KEEP_TRANSCRIPTS)
+    keep_recordings = _coerce_int(args.keep_recordings, field_name="keep-recordings", max_value=MAX_KEEP_RECORDINGS)
+    dry_run = _coerce_bool(args.dry_run, field_name="dry-run")
     state = build_store(args).read()
     active_paths = active_artifact_paths(state)
     transcript_result = prune_files_by_mtime(
         list(transcript_dir().glob("*.txt")),
-        args.keep_transcripts,
+        keep_transcripts,
         active_paths,
-        args.dry_run,
+        dry_run,
     )
-    recording_result = prune_recording_groups(args.keep_recordings, active_paths, args.dry_run)
+    recording_result = prune_recording_groups(keep_recordings, active_paths, dry_run)
     deleted_transcripts = len(transcript_result["deleted_paths"])
-    deleted_recordings = int(recording_result["deleted_recordings"])
-    deleted_logs = int(recording_result["deleted_logs"])
+    deleted_recordings = _coerce_int(recording_result["deleted_recordings"], field_name="deleted-recordings")  # type: ignore[arg-type]
+    deleted_logs = _coerce_int(recording_result["deleted_logs"], field_name="deleted-logs")  # type: ignore[arg-type]
     would_delete_transcripts = len(transcript_result["planned_paths"])
-    would_delete_recordings = int(recording_result["planned_recordings"])
-    would_delete_logs = int(recording_result["planned_logs"])
+    would_delete_recordings = _coerce_int(recording_result["planned_recordings"], field_name="planned-recordings")  # type: ignore[arg-type]
+    would_delete_logs = _coerce_int(recording_result["planned_logs"], field_name="planned-logs")  # type: ignore[arg-type]
     total = (
         would_delete_transcripts + would_delete_recordings + would_delete_logs
-        if args.dry_run
+        if dry_run
         else deleted_transcripts + deleted_recordings + deleted_logs
     )
-    verb = "would clean" if args.dry_run else "cleaned"
+    verb = "would clean" if dry_run else "cleaned"
     return {
         "status": "done",
         "message": f"{verb} {total} old file(s)",
-        "dry_run": args.dry_run,
-        "keep_transcripts": max(args.keep_transcripts, 0),
-        "keep_recordings": max(args.keep_recordings, 0),
+        "dry_run": dry_run,
+        "keep_transcripts": keep_transcripts,
+        "keep_recordings": keep_recordings,
         "deleted_transcripts": deleted_transcripts,
         "deleted_recordings": deleted_recordings,
         "deleted_logs": deleted_logs,
@@ -788,7 +1016,8 @@ def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
 def command_diagnostics(args: argparse.Namespace) -> dict[str, object]:
     payload = build_diagnostics_payload(args)
     output = str(getattr(args, "output", "") or "").strip()
-    if output or getattr(args, "save", False):
+    save = _coerce_bool(getattr(args, "save", False), field_name="save")
+    if output or save:
         path = (
             _require_json_path(output, field_name="diagnostics output")
             if output
@@ -809,12 +1038,13 @@ def command_alarms_list(args: argparse.Namespace) -> dict[str, object]:
 
 def command_alarms_add(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
+    disabled = _coerce_bool(args.disabled, field_name="disabled")
     alarm = add_alarm(
         args.time,
         name=args.name,
         days=args.days,
         urgency=args.urgency,
-        enabled=not args.disabled,
+        enabled=not disabled,
     )
     return {"status": "done", "message": f"alarm added: {alarm['label']} at {alarm['time']}", "alarm": alarm}
 
@@ -836,32 +1066,37 @@ def command_alarms_disable(args: argparse.Namespace) -> dict[str, object]:
 
 def command_alarms_check(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
-    return check_due_alarms(mark=args.mark, catch_up_minutes=args.catch_up_minutes)
+    mark = _coerce_bool(args.mark, field_name="mark")
+    catch_up_minutes = _coerce_int(args.catch_up_minutes, field_name="catch-up-minutes", max_value=MAX_ALARM_CATCH_UP_MINUTES)
+    return check_due_alarms(mark=mark, catch_up_minutes=catch_up_minutes)
 
 
 def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
     settings_json = getattr(args, "settings_json", "")
     settings = _parse_cli_settings_json(settings_json)
     ensure_runtime_dirs()
-    applet = getattr(args, "applet", False)
+    applet = _coerce_bool(getattr(args, "applet", False), field_name="applet")
     alarm_payload = list_alarm_payload()
+    if not isinstance(alarm_payload, dict):
+        raise RuntimeError("alarms payload must be an object")
     alarm_entries = alarm_payload.get("alarms", [])
     if not isinstance(alarm_entries, list):
-        alarm_entries = []
+        raise RuntimeError("alarms entries must be a list")
     source_payload: dict[str, object]
     try:
-        sources = list_input_sources(False)
+        source_items_raw = _normalize_input_sources(list_input_sources(False))
+        source_items: list[dict[str, object]] = [
+            {
+                "name": source["name"],
+                "description": source["description"],
+                "default": source["default"],
+                "state": source["state"],
+            }
+            for source in source_items_raw
+        ]
         source_payload = {
             "ok": True,
-            "sources": [
-                {
-                    "name": source.name,
-                    "description": source.description,
-                    "default": source.default,
-                    "state": source.state,
-                }
-                for source in sources
-            ],
+            "sources": source_items,
         }
     except Exception as exc:
         source_payload = {"ok": False, "error": str(exc)}
@@ -904,7 +1139,7 @@ def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
         "state": state_payload,
         "doctor": doctor_report(settings, applet=applet),
         "inputs": source_payload,
-        "models": list_models(),
+        "models": _normalize_model_payloads(list_models()),
         "alarms": {
             "configured": len(alarm_entries),
             "active": sum(1 for alarm in alarm_entries if isinstance(alarm, dict) and alarm.get("enabled", True)),
@@ -950,9 +1185,11 @@ def command_settings_import(args: argparse.Namespace) -> dict[str, object]:
 
 def command_insert_text(args: argparse.Namespace) -> dict[str, object]:
     text = _assert_clean_text(args.text, field_name="text", max_chars=MAX_TRANSCRIBER_TEXT_CHARS)
-    if args.sanitize_special_chars:
+    sanitize_special_chars_flag = _coerce_bool(args.sanitize_special_chars, field_name="sanitize_special_chars")
+    if sanitize_special_chars_flag:
         text = sanitize_special_chars(text)
-    inserted = insert_text(text, args.insert_method, args.typing_delay_ms)
+    typing_delay_ms = _coerce_int(args.typing_delay_ms, field_name="typing-delay-ms", max_value=MAX_TYPING_DELAY_MS)
+    inserted = insert_text(text, args.insert_method, typing_delay_ms)
     return {"status": "done", "inserted": inserted}
 
 
@@ -996,7 +1233,7 @@ def add_common_options(parser: argparse.ArgumentParser) -> None:
 
 def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--language", default="")
-    parser.add_argument("--max-seconds", type=int, default=30)
+    parser.add_argument("--max-seconds", type=int, default=DEFAULT_MAX_SECONDS)
     parser.add_argument("--recorder", default="auto", choices=["auto", "pw-record", "parecord", "arecord"])
     parser.add_argument("--input-device", default="")
     parser.add_argument("--transcriber", default="auto", choices=["auto", "whisper", "whisper-cpp", "command"])
@@ -1016,7 +1253,7 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
         default="clipboard-paste",
         choices=["clipboard-paste", "clipboard", "type", "none"],
     )
-    parser.add_argument("--typing-delay-ms", type=int, default=8)
+    parser.add_argument("--typing-delay-ms", type=int, default=DEFAULT_TYPING_DELAY_MS)
     parser.add_argument("--sanitize-special-chars", action="store_true")
     parser.add_argument("--append-space", action="store_true")
     parser.add_argument(
@@ -1167,7 +1404,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(insert)
     insert.add_argument("text")
     insert.add_argument("--insert-method", default="clipboard-paste", choices=["clipboard-paste", "clipboard", "type", "none"])
-    insert.add_argument("--typing-delay-ms", type=int, default=8)
+    insert.add_argument("--typing-delay-ms", type=int, default=DEFAULT_TYPING_DELAY_MS)
     insert.add_argument("--sanitize-special-chars", action="store_true")
     insert.set_defaults(handler=command_insert_text)
 
@@ -1194,13 +1431,15 @@ def build_parser() -> argparse.ArgumentParser:
 def run(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    json_output = False
     try:
+        json_output = _coerce_bool(getattr(args, "json", False), field_name="json")
         payload = args.handler(args)
-        print_result(payload, args.json)
+        print_result(payload, json_output)
         return 0 if not payload.get("error") else 1
     except Exception as exc:
         payload = {"status": "error", "error": str(exc)}
-        print_result(payload, getattr(args, "json", False))
+        print_result(payload, json_output)
         return 1
 
 

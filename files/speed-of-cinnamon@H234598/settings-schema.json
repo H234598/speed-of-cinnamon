@@ -121,8 +121,8 @@
   "max-seconds": {
     "type": "spinbutton",
     "description": "Maximum recording length",
-    "min": 5,
-    "max": 300,
+    "min": 0,
+    "max": 3600,
     "step": 5,
     "units": "s",
     "default": 30
@@ -153,20 +153,20 @@
   "input-device": {
     "type": "entry",
     "description": "Input device",
-    "tooltip": "Optional PipeWire/Pulse source name. Leave empty for the current default. Run 'speed-of-cinnamon list-inputs --json' to inspect available sources.",
+    "tooltip": "Optional PipeWire/Pulse source name. Max 4096 chars. Leave empty for the current default. Run 'speed-of-cinnamon list-inputs --json' to inspect available sources.",
     "default": ""
   },
   "personal-context": {
     "type": "textview",
     "description": "Personal context",
-    "tooltip": "Optional local-only context for custom ASR or post-processing commands. Available as {context}, {prompt}, and SPEED_OF_CINNAMON_CONTEXT.",
+    "tooltip": "Optional local-only context for custom ASR or post-processing commands. Max 4096 chars. Available as {context}, {prompt}, and SPEED_OF_CINNAMON_CONTEXT.",
     "height": 120,
     "default": ""
   },
   "vocabulary": {
     "type": "textview",
     "description": "Custom vocabulary",
-    "tooltip": "Optional terms, one per line. Available as {vocabulary}, {prompt}, and SPEED_OF_CINNAMON_VOCABULARY.",
+    "tooltip": "Optional terms, one per line. Max 4096 chars. Available as {vocabulary}, {prompt}, and SPEED_OF_CINNAMON_VOCABULARY.",
     "height": 120,
     "default": ""
   },
@@ -211,7 +211,7 @@
     "type": "spinbutton",
     "description": "Direct typing delay",
     "min": 0,
-    "max": 100,
+    "max": 10000,
     "step": 1,
     "units": "ms",
     "default": 8
@@ -237,13 +237,13 @@
   "whisper-model": {
     "type": "filechooser",
     "description": "whisper.cpp model",
-    "tooltip": "Model file used when the transcriber is whisper.cpp, for example ggml-base.bin.",
+    "tooltip": "Model file used when the transcriber is whisper.cpp, for example ggml-base.bin. Max 4096 chars.",
     "default": ""
   },
   "transcriber-command": {
     "type": "entry",
     "description": "Transcriber command template",
-    "tooltip": "Used by the Custom command transcriber, or by Automatic when filled. The template is executed as arguments (no shell expansion), with direct support for `&&`-chained commands only. Placeholders: {audio}, {language}, {text}, {output_dir}, {output_base}, {context}, {vocabulary}, {prompt}. The command must print the transcript or write it to {text}.",
+    "tooltip": "Used by the Custom command transcriber, or by Automatic when filled. Max 4096 chars. The template is executed as arguments (no shell expansion), with direct support for `&&`-chained commands only. Placeholders: {audio}, {language}, {text}, {output_dir}, {output_base}, {context}, {vocabulary}, {prompt}. The command must print the transcript or write it to {text}.",
     "default": ""
   },
   "post-process-backend": {
@@ -261,37 +261,37 @@
   "post-process-command": {
     "type": "entry",
     "description": "Post-process command",
-    "tooltip": "Used when Text polishing is Custom command. It receives the transcript on stdin and must print the final text. The template is executed as arguments (no shell expansion), with direct support for `&&`-chained commands only. Placeholders: {text}, {language}, {context}, {vocabulary}, {prompt}.",
+    "tooltip": "Used when Text polishing is Custom command. Max 4096 chars. It receives the transcript on stdin and must print the final text. The template is executed as arguments (no shell expansion), with direct support for `&&`-chained commands only. Placeholders: {text}, {language}, {context}, {vocabulary}, {prompt}.",
     "default": ""
   },
   "ollama-url": {
     "type": "entry",
     "description": "Ollama URL",
-    "tooltip": "Local Ollama base URL used when Text polishing is Ollama local model.",
+    "tooltip": "Local Ollama base URL used when Text polishing is Ollama local model. Max 4096 chars.",
     "default": "http://127.0.0.1:11434"
   },
   "ollama-model": {
     "type": "entry",
     "description": "Ollama text model",
-    "tooltip": "Model name for local Ollama polishing, for example llama3.2:3b or mistral.",
+    "tooltip": "Model name for local Ollama polishing, for example llama3.2:3b or mistral. Max 4096 chars.",
     "default": ""
   },
   "openai-compatible-url": {
     "type": "entry",
     "description": "OpenAI-compatible URL",
-    "tooltip": "Local OpenAI-compatible base URL, for example vLLM or llama.cpp at http://127.0.0.1:8000/v1.",
+    "tooltip": "Local OpenAI-compatible base URL, for example vLLM or llama.cpp at http://127.0.0.1:8000/v1. Max 4096 chars.",
     "default": "http://127.0.0.1:8000/v1"
   },
   "openai-compatible-model": {
     "type": "entry",
     "description": "OpenAI-compatible text model",
-    "tooltip": "Local model name for OpenAI-compatible polishing, for example served by vLLM, llama.cpp, or LM Studio.",
+    "tooltip": "Local model name for OpenAI-compatible polishing, for example served by vLLM, llama.cpp, or LM Studio. Max 4096 chars.",
     "default": ""
   },
   "post-process-prompt": {
     "type": "textview",
     "description": "Text polishing instruction",
-    "tooltip": "Optional instruction for Ollama or OpenAI-compatible polishing. The transcript, language, context, and vocabulary are added automatically.",
+    "tooltip": "Optional instruction for Ollama or OpenAI-compatible polishing. Max 4096 chars. The transcript, language, context, and vocabulary are added automatically.",
     "height": 100,
     "default": ""
   }

@@ -9,7 +9,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from .models import default_whisper_cpp_model_path
+from .models import default_whisper_cpp_model_path, model_supports_language
 from .command_chain import CommandChainError, MAX_COMMAND_OUTPUT_CHARS, run_command_chain, split_command_chain
 from .personalization import build_personalization_prompt, normalize_context, normalize_vocabulary
 
@@ -21,9 +21,21 @@ MAX_AUDIO_PATH_CHARS = 240
 MAX_AUDIO_STEM_CHARS = 120
 ALLOWED_AUDIO_EXTENSIONS = {".wav", ".m4a", ".flac", ".ogg", ".mp3", ".aac", ".webm"}
 MAX_TRANSCRIPT_TEXT_CHARS = 1_000_000
+PLACEHOLDER_TRANSCRIPTS = {"[speaking in foreign language]"}
+
+
+def _contains_escaped_null(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise TranscriptionError("value must be text")
+    lowered = (value or "").lower()
+    return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
 
 
 def _write_text_atomic(path: Path, text: str) -> None:
+    if not isinstance(path, Path):
+        raise TranscriptionError("path must be a Path")
+    if isinstance(text, bool) or not isinstance(text, str):
+        raise TranscriptionError("text must be text")
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
         handle.write(text)
@@ -39,31 +51,56 @@ def _write_text_atomic(path: Path, text: str) -> None:
 
 
 def _read_file_head(file: io.BufferedRandom, max_chars: int) -> str:
+    if not hasattr(file, "seek") or not hasattr(file, "read"):
+        raise TranscriptionError("file must be a binary file handle")
+    if not isinstance(max_chars, int) or isinstance(max_chars, bool):
+        raise TranscriptionError("max_chars must be an integer")
+    if max_chars <= 0:
+        raise TranscriptionError("max_chars must be positive")
     file.seek(0)
-    return file.read(max_chars).decode("utf-8", errors="replace")
+    try:
+        text = file.read(max_chars).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise TranscriptionError(f"command output is not valid UTF-8: {exc}") from exc
+    if _contains_escaped_null(text):
+        raise TranscriptionError("command output contains invalid null byte")
+    return text
 
 
 def _read_text_file(path: Path) -> str:
+    if not isinstance(path, Path):
+        raise TranscriptionError("path must be a Path")
     try:
-        return path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise TranscriptionError(f"failed to read generated transcript: {path}") from exc
     except OSError as exc:
         raise TranscriptionError(f"failed to read generated transcript: {path}") from exc
+    if _contains_escaped_null(text):
+        raise TranscriptionError(f"failed to read generated transcript: {path}")
+    return text
 
 
 def _file_size(file: io.BufferedRandom) -> int:
+    if not hasattr(file, "seek") or not hasattr(file, "tell"):
+        raise TranscriptionError("file must be a binary file handle")
     file.seek(0, 2)
     return file.tell()
 
 
 def _run_limited_process(command: list[str], *, timeout: int = TRANSCRIBE_COMMAND_TIMEOUT_SECONDS) -> None:
+    if not isinstance(command, list):
+        raise TranscriptionError("transcriber command must be a list")
     if not command:
         raise TranscriptionError("empty transcriber command is not allowed")
-    if timeout <= 0:
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
         raise TranscriptionError("timeout must be positive")
+    if any(not isinstance(item, str) or isinstance(item, bool) for item in command):
+        raise TranscriptionError("transcriber command items must be text")
     executable = command[0].strip()
     if not executable:
         raise TranscriptionError("empty transcriber executable is not allowed")
-    if "\x00" in executable or any("\x00" in arg for arg in command[1:]):
+    if _contains_escaped_null(executable) or any(_contains_escaped_null(arg) for arg in command[1:]):
         raise TranscriptionError("command argument contains invalid null byte")
     try:
         with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
@@ -105,9 +142,14 @@ class TranscriberConfig:
     backend: str = "auto"
     command_template: str = ""
     whisper_model: str = ""
+    language: str = "en"
 
 
 def validate_audio_file(path: Path) -> Path:
+    if not isinstance(path, Path):
+        raise TranscriptionError("audio path must be a Path")
+    if _contains_escaped_null(str(path)):
+        raise TranscriptionError("audio path contains invalid null byte")
     normalized = path.expanduser().resolve(strict=False)
     if len(str(normalized)) > MAX_AUDIO_PATH_CHARS:
         raise TranscriptionError(f"audio file path is too long: {path}")
@@ -133,14 +175,31 @@ def validate_audio_file(path: Path) -> Path:
 
 
 def _assert_text_length(value: str, *, field_name: str, max_chars: int | None = None) -> str:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise TranscriptionError(f"{field_name} must be text")
     if max_chars is None:
         max_chars = MAX_TRANSCRIPT_TEXT_CHARS
+    if not isinstance(max_chars, int) or isinstance(max_chars, bool):
+        raise TranscriptionError("max_chars must be an integer")
+    if max_chars <= 0:
+        raise TranscriptionError("max_chars must be positive")
     if len(value) > max_chars:
         raise TranscriptionError(f"{field_name} is too large (max {max_chars} characters)")
     return value
 
 
+def _reject_placeholder_transcript(text: str, language: str) -> None:
+    normalized = " ".join(text.strip().lower().split())
+    if normalized in PLACEHOLDER_TRANSCRIPTS:
+        raise TranscriptionError(
+            f"transcriber detected speech outside configured language {language}; "
+            "switch the applet language or use a multilingual model"
+        )
+
+
 def _quote(value: Path | str) -> str:
+    if isinstance(value, bool) or not isinstance(value, (Path, str)):
+        raise TranscriptionError("value must be text")
     return shlex.quote(str(value))
 
 
@@ -152,17 +211,20 @@ def render_command_template(
     personal_context: str = "",
     vocabulary: str = "",
 ) -> str:
-    output_base = text_path.with_suffix("")
-    replacements = {
-        "audio": _quote(audio_path),
-        "language": _quote(language),
-        "text": _quote(text_path),
-        "output_base": _quote(output_base),
-        "output_dir": _quote(text_path.parent),
-        "context": _quote(normalize_context(personal_context)),
-        "vocabulary": _quote(normalize_vocabulary(vocabulary)),
-        "prompt": _quote(build_personalization_prompt(personal_context, vocabulary)),
-    }
+    try:
+        output_base = text_path.with_suffix("")
+        replacements = {
+            "audio": _quote(audio_path),
+            "language": _quote(language),
+            "text": _quote(text_path),
+            "output_base": _quote(output_base),
+            "output_dir": _quote(text_path.parent),
+            "context": _quote(normalize_context(personal_context)),
+            "vocabulary": _quote(normalize_vocabulary(vocabulary)),
+            "prompt": _quote(build_personalization_prompt(personal_context, vocabulary)),
+        }
+    except ValueError as exc:
+        raise TranscriptionError(str(exc)) from exc
     rendered = template
     for key, value in replacements.items():
         rendered = rendered.replace("{" + key + "}", value)
@@ -200,12 +262,20 @@ def transcribe_with_template(
         ):
             raise TranscriptionError(message) from exc
         if (
-            "command failed" in message
+            "personal context is too large" in message
+            or "vocabulary is too large" in message
+            or "command output contains invalid null byte" in message
+            or "command contains invalid null byte" in message
+            or "command failed" in message
             or "command not found" in message
             or "command execution failed" in message
             or "command input exceeded" in message
+            or "max_input_chars must be positive" in message
             or "max_input_chars must be non-negative" in message
+            or "max_input_chars must not exceed" in message
             or "max_output_chars must be non-negative" in message
+            or "max_output_chars must be positive" in message
+            or "max_output_chars must not exceed" in message
             or "timeout_seconds must be positive" in message
             or "command input contains invalid null byte" in message
         ):
@@ -297,6 +367,10 @@ def _whisper_cpp_invocation(
 def transcribe_with_whisper_cpp(audio_path: Path, language: str, text_path: Path, model_path: str) -> str:
     if not model_path.strip():
         raise TranscriptionError("whisper.cpp model path is required")
+    if not model_supports_language(model_path, language):
+        raise TranscriptionError(
+            f"English-only whisper.cpp model does not support language {language}; use a multilingual model"
+        )
     command = resolve_whisper_cpp_command()
     if not command:
         raise TranscriptionError("whisper.cpp command is not installed")
@@ -317,6 +391,8 @@ def transcribe_with_whisper_cpp(audio_path: Path, language: str, text_path: Path
 
 
 def normalize_backend(value: str) -> str:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise TranscriptionError("backend must be text")
     normalized = (value or "auto").strip().lower().replace("_", "-")
     aliases = {
         "openai": "whisper",
@@ -330,8 +406,12 @@ def normalize_backend(value: str) -> str:
 
 
 def resolve_transcriber(config: TranscriberConfig) -> str:
+    if not isinstance(config, TranscriberConfig):
+        raise TranscriptionError("config must be TranscriberConfig")
     backend = normalize_backend(config.backend)
-    local_model = config.whisper_model.strip() or default_whisper_cpp_model_path()
+    local_model = config.whisper_model.strip() or default_whisper_cpp_model_path(config.language)
+    if _contains_escaped_null(config.whisper_model or ""):
+        raise TranscriptionError("whisper model contains invalid null byte")
     if backend == "auto":
         if config.command_template.strip():
             return "command"
@@ -358,12 +438,27 @@ def transcribe(
     personal_context: str = "",
     vocabulary: str = "",
 ) -> str:
+    if not isinstance(audio_path, Path):
+        raise TranscriptionError("audio path must be a Path")
+    if isinstance(language, bool) or not isinstance(language, str):
+        raise TranscriptionError("language must be text")
     audio_path = validate_audio_file(audio_path)
     text_path.parent.mkdir(parents=True, exist_ok=True)
+    if not isinstance(command_template, str) or isinstance(command_template, bool):
+        raise TranscriptionError("command template must be text")
+    if not isinstance(backend, str) or isinstance(backend, bool):
+        raise TranscriptionError("backend must be text")
+    if not isinstance(whisper_model, str) or isinstance(whisper_model, bool):
+        raise TranscriptionError("whisper model must be text")
+    if not isinstance(personal_context, str) or isinstance(personal_context, bool):
+        raise TranscriptionError("personal context must be text")
+    if not isinstance(vocabulary, str) or isinstance(vocabulary, bool):
+        raise TranscriptionError("vocabulary must be text")
     config = TranscriberConfig(
         backend=backend,
         command_template=command_template,
         whisper_model=whisper_model,
+        language=language,
     )
     resolved_backend = resolve_transcriber(config)
     if resolved_backend == "command":
@@ -384,11 +479,12 @@ def transcribe(
             audio_path,
             language,
             text_path,
-            whisper_model or default_whisper_cpp_model_path(),
+            whisper_model or default_whisper_cpp_model_path(language),
         )
     else:
         raise TranscriptionError(f"unknown transcriber backend: {resolved_backend}")
     text = text.strip()
+    _reject_placeholder_transcript(text, language)
     _assert_text_length(text, field_name="transcript")
     _write_text_atomic(text_path, text + "\n")
     return text

@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import subprocess
 import unittest
+import tempfile
 from unittest import mock
 
 from speed_of_cinnamon.output import (
     OutputError,
     MAX_OUTPUT_CHARS,
+    MAX_TYPE_DELAY_MS,
+    _contains_escaped_null,
+    _filesize,
+    _read_file_head,
+    _validate_text_input,
     _run_with_input,
     insert_text,
     paste_from_clipboard,
@@ -16,6 +22,14 @@ from speed_of_cinnamon.output import (
 
 
 class OutputTest(unittest.TestCase):
+    def test_contains_escaped_null_rejects_non_text(self) -> None:
+        with self.assertRaisesRegex(OutputError, "value must be text"):
+            _contains_escaped_null(12)  # type: ignore[arg-type]
+
+    def test_contains_escaped_null_rejects_bool(self) -> None:
+        with self.assertRaisesRegex(OutputError, "value must be text"):
+            _contains_escaped_null(True)  # type: ignore[arg-type]
+
     def test_set_clipboard_prefers_xclip(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which") as mocked_which,
@@ -51,6 +65,26 @@ class OutputTest(unittest.TestCase):
             with self.assertRaisesRegex(OutputError, "no clipboard helper found"):
                 set_clipboard("hello")
 
+    def test_run_with_input_rejects_non_sequence_argv(self) -> None:
+        with self.assertRaisesRegex(OutputError, "argv must be a sequence"):
+            _run_with_input("echo", "input")  # type: ignore[arg-type]
+
+    def test_run_with_input_rejects_non_text_argument(self) -> None:
+        with self.assertRaisesRegex(OutputError, "command arguments must be text"):
+            _run_with_input(["echo", 12], "input")  # type: ignore[arg-type]
+
+    def test_run_with_input_rejects_non_int_timeout(self) -> None:
+        with self.assertRaisesRegex(OutputError, "timeout must be an integer"):
+            _run_with_input(["sleep"], "", timeout="1")  # type: ignore[arg-type]
+
+    def test_run_with_input_rejects_non_int_output_limit(self) -> None:
+        with self.assertRaisesRegex(OutputError, "max_output_chars must be an integer"):
+            _run_with_input(["sleep"], "", max_output_chars=True)  # type: ignore[arg-type]
+
+    def test_run_with_input_rejects_non_text_input(self) -> None:
+        with self.assertRaisesRegex(OutputError, "text must be text"):
+            _run_with_input(["echo"], 123)  # type: ignore[arg-type]
+
     def test_run_with_input_rejects_command_error_output(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             stderr = kwargs["stderr"]
@@ -73,6 +107,14 @@ class OutputTest(unittest.TestCase):
         with mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=FileNotFoundError("missing")):
             with self.assertRaisesRegex(OutputError, "is not available"):
                 _run_with_input(["missing"], "input")
+
+    def test_run_with_input_rejects_null_byte_in_command_argument(self) -> None:
+        with self.assertRaisesRegex(OutputError, "command argument contains invalid null byte"):
+            _run_with_input(["cmd", "bad\x00arg"], "input")
+
+    def test_run_with_input_rejects_escaped_null_in_command_argument(self) -> None:
+        with self.assertRaisesRegex(OutputError, "command argument contains invalid null byte"):
+            _run_with_input(["cmd", "bad\\x00arg"], "input")
 
     def test_run_with_input_rejects_empty_executable(self) -> None:
         with self.assertRaisesRegex(OutputError, "command is empty"):
@@ -98,6 +140,18 @@ class OutputTest(unittest.TestCase):
                 with self.assertRaisesRegex(OutputError, "too much output"):
                     _run_with_input(["cmd"], "input")
 
+    def test_read_file_head_rejects_invalid_utf8(self) -> None:
+        with tempfile.TemporaryFile() as handle:
+            handle.write(b"ok\xff")
+            with self.assertRaisesRegex(OutputError, "not valid UTF-8"):
+                _read_file_head(handle, 10)
+
+    def test_read_file_head_rejects_escaped_null(self) -> None:
+        with tempfile.TemporaryFile() as handle:
+            handle.write("ok\\x00end".encode("utf-8"))
+            with self.assertRaisesRegex(OutputError, "contains invalid null byte"):
+                _read_file_head(handle, 10)
+
     def test_paste_without_helper_is_error(self) -> None:
         with mock.patch("speed_of_cinnamon.output.shutil.which", return_value=None):
             with self.assertRaisesRegex(OutputError, "no keyboard helper"):
@@ -107,6 +161,15 @@ class OutputTest(unittest.TestCase):
         with mock.patch("speed_of_cinnamon.output.shutil.which", return_value="xdotool"):
             with self.assertRaisesRegex(OutputError, "command input contains invalid null byte"):
                 type_text("hello\x00", 8)
+
+    def test_type_text_rejects_non_int_delay(self) -> None:
+        with mock.patch("speed_of_cinnamon.output.shutil.which", return_value="xdotool"):
+            with self.assertRaisesRegex(OutputError, "typing delay must be an integer"):
+                type_text("hello", "8")  # type: ignore[arg-type]
+
+    def test_insert_text_rejects_non_text_method(self) -> None:
+        with self.assertRaisesRegex(OutputError, "method must be text"):
+            insert_text("hello", 1)  # type: ignore[arg-type]
 
     def test_type_text_with_invalid_delay_clamps_to_zero(self) -> None:
         calls: list[list[str]] = []
@@ -123,6 +186,32 @@ class OutputTest(unittest.TestCase):
             self.assertTrue(insert_text("hello", "type", delay_ms=-10))
 
         self.assertIn(["xdotool", "type", "--clearmodifiers", "--delay", "0", "hello"], calls)
+
+    def test_type_text_rejects_overly_large_delay(self) -> None:
+        with mock.patch("speed_of_cinnamon.output.shutil.which", return_value="xdotool"):
+            with self.assertRaisesRegex(OutputError, "typing delay must be at most"):
+                insert_text("hello", "type", delay_ms=MAX_TYPE_DELAY_MS + 10)
+
+    def test_validate_text_input_rejects_escaped_null(self) -> None:
+        with self.assertRaisesRegex(OutputError, "contains invalid null byte"):
+            _run_with_input(["echo"], "ok\\x00")
+
+    def test_validate_text_input_rejects_non_text_input(self) -> None:
+        with self.assertRaisesRegex(OutputError, "text must be text"):
+            _validate_text_input(123)  # type: ignore[arg-type]
+
+    def test_read_file_head_rejects_invalid_file(self) -> None:
+        with self.assertRaisesRegex(OutputError, "file must be a binary file handle"):
+            _read_file_head(object(), 10)
+
+    def test_read_file_head_rejects_invalid_max_chars(self) -> None:
+        with tempfile.TemporaryFile() as handle:
+            with self.assertRaisesRegex(OutputError, "max_chars must be an integer"):
+                _read_file_head(handle, "10")  # type: ignore[arg-type]
+
+    def test_filesize_rejects_invalid_file(self) -> None:
+        with self.assertRaisesRegex(OutputError, "file must be a binary file handle"):
+            _filesize(object())  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":

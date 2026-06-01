@@ -2,12 +2,43 @@ from __future__ import annotations
 
 import subprocess
 import unittest
+import tempfile
 from unittest import mock
 
-from speed_of_cinnamon.command_chain import CommandChainError, run_command_chain, split_command_chain
+from speed_of_cinnamon.command_chain import (
+    CommandChainError,
+    MAX_COMMAND_INPUT_CHARS,
+    MAX_COMMAND_OUTPUT_CHARS,
+    _contains_escaped_null,
+    _filesize,
+    _read_file_head,
+    run_command_chain,
+    split_command_chain,
+)
+from speed_of_cinnamon.personalization import MAX_PERSONAL_CONTEXT_CHARS, MAX_VOCABULARY_CHARS
 
 
 class CommandChainTest(unittest.TestCase):
+    def test_split_command_chain_rejects_non_text_command(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "command must be text"):
+            split_command_chain(123)
+
+    def test_split_command_chain_rejects_non_text_label_type(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "label must be text"):
+            split_command_chain("printf hello", label=True)
+
+    def test_contains_escaped_null_rejects_non_text(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "value must be text"):
+            _contains_escaped_null(123)  # type: ignore[arg-type]
+
+    def test_contains_escaped_null_rejects_bool(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "value must be text"):
+            _contains_escaped_null(True)  # type: ignore[arg-type]
+
+    def test_split_command_chain_rejects_non_text_label(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "label must be text"):
+            split_command_chain("printf hello", label=123)
+
     def test_split_command_chain_supports_and_and_rejects_unsupported_operators(self) -> None:
         self.assertEqual(
             split_command_chain("printf hello && printf world"),
@@ -23,6 +54,10 @@ class CommandChainTest(unittest.TestCase):
     def test_split_command_chain_rejects_null_bytes(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "invalid command command: contains invalid null byte"):
             split_command_chain("printf hello\x00world")
+
+    def test_split_command_chain_rejects_escaped_null(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "invalid command command: contains invalid null byte"):
+            split_command_chain("printf hello\\\\x00world")
 
     def test_split_command_chain_rejects_too_long_command(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "command too long"):
@@ -95,11 +130,45 @@ class CommandChainTest(unittest.TestCase):
             run_command_chain([], "seed", label="post-process")
 
     def test_run_command_chain_rejects_invalid_limits(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "max_output_chars must be non-negative"):
+        with self.assertRaisesRegex(CommandChainError, "max_output_chars must be positive"):
+            run_command_chain([("cmd",)], "", label="post-process", max_output_chars=0)
+        with self.assertRaisesRegex(CommandChainError, "max_output_chars must not exceed"):
+            run_command_chain([("cmd",)], "", label="post-process", max_output_chars=MAX_COMMAND_OUTPUT_CHARS + 1)
+        with self.assertRaisesRegex(CommandChainError, "max_output_chars must be positive"):
             run_command_chain([("cmd",)], "", label="post-process", max_output_chars=-1)
+        with self.assertRaisesRegex(CommandChainError, "max_input_chars must not exceed"):
+            run_command_chain([("cmd",)], "", label="post-process", max_input_chars=MAX_COMMAND_INPUT_CHARS + 1)
 
         with self.assertRaisesRegex(CommandChainError, "max_input_chars must be non-negative"):
             run_command_chain([("cmd",)], "", label="post-process", max_input_chars=-1)
+        with self.assertRaisesRegex(CommandChainError, "personal context is too large"):
+            run_command_chain([("cmd",)], "", label="post-process", personal_context="x" * (MAX_PERSONAL_CONTEXT_CHARS + 1))
+        with self.assertRaisesRegex(CommandChainError, "vocabulary is too large"):
+            run_command_chain([("cmd",)], "", label="post-process", vocabulary="x" * (MAX_VOCABULARY_CHARS + 1))
+
+    def test_run_command_chain_rejects_non_text_values(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "segments must be a sequence"):
+            run_command_chain("cmd", "", label="post-process")  # type: ignore[arg-type]
+        with self.assertRaisesRegex(CommandChainError, "segments must contain sequences"):
+            run_command_chain([("cmd",), 123], "", label="post-process")  # type: ignore[list-item]
+        with self.assertRaisesRegex(CommandChainError, "input text must be text"):
+            run_command_chain([("cmd",)], 123, label="post-process")  # type: ignore[arg-type]
+        with self.assertRaisesRegex(CommandChainError, "personal context must be text"):
+            run_command_chain([("cmd",)], "", label="post-process", personal_context=123)  # type: ignore[arg-type]
+        with self.assertRaisesRegex(CommandChainError, "vocabulary must be text"):
+            run_command_chain([("cmd",)], "", label="post-process", vocabulary=123)  # type: ignore[arg-type]
+        with self.assertRaisesRegex(CommandChainError, "label must be text"):
+            run_command_chain([("cmd",)], "", label=123)  # type: ignore[arg-type]
+        with self.assertRaisesRegex(CommandChainError, "label must be text"):
+            run_command_chain([("cmd",)], "", label=True)  # type: ignore[arg-type]
+
+    def test_run_command_chain_rejects_non_int_limits(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "max_output_chars must be an integer"):
+            run_command_chain([("cmd",)], "", label="post-process", max_output_chars="1")  # type: ignore[arg-type]
+        with self.assertRaisesRegex(CommandChainError, "max_input_chars must be an integer"):
+            run_command_chain([("cmd",)], "", label="post-process", max_input_chars=True)  # type: ignore[arg-type]
+        with self.assertRaisesRegex(CommandChainError, "timeout_seconds must be an integer"):
+            run_command_chain([("cmd",)], "", label="post-process", timeout_seconds=False)  # type: ignore[arg-type]
 
     def test_run_command_chain_rejects_non_positive_timeout(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "timeout_seconds must be positive"):
@@ -109,13 +178,46 @@ class CommandChainTest(unittest.TestCase):
         with self.assertRaisesRegex(CommandChainError, "invalid null byte"):
             run_command_chain([("cmd",)], "hello\x00", label="post-process")
 
+    def test_run_command_chain_rejects_escaped_null_in_input(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "invalid null byte"):
+            run_command_chain([("cmd",)], "hello\\\\x00", label="post-process")
+
     def test_run_command_chain_rejects_null_bytes_in_command_segment(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "command contains invalid null byte"):
             run_command_chain([("cmd\x00",)], "", label="post-process")
 
+    def test_run_command_chain_rejects_escaped_null_in_command_segment(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "command contains invalid null byte"):
+            run_command_chain([("cmd\\\\x00",)], "", label="post-process")
+
     def test_run_command_chain_rejects_too_large_input(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "input exceeded"):
             run_command_chain([("cmd",)], "x" * 1_000_001, label="post-process", max_input_chars=1_000_000)
+
+    def test_read_file_head_rejects_invalid_utf8(self) -> None:
+        with tempfile.TemporaryFile() as handle:
+            handle.write(b"ok\xff")
+            with self.assertRaisesRegex(CommandChainError, "not valid UTF-8"):
+                _read_file_head(handle, 10)
+
+    def test_read_file_head_rejects_invalid_file(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "file must be a binary file handle"):
+            _read_file_head(object(), 10)
+
+    def test_read_file_head_rejects_invalid_max_chars(self) -> None:
+        with tempfile.TemporaryFile() as handle:
+            with self.assertRaisesRegex(CommandChainError, "max_chars must be an integer"):
+                _read_file_head(handle, "10")  # type: ignore[arg-type]
+
+    def test_filesize_rejects_invalid_file(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "file must be a binary file handle"):
+            _filesize(object())  # type: ignore[arg-type]
+
+    def test_read_file_head_rejects_escaped_null(self) -> None:
+        with tempfile.TemporaryFile() as handle:
+            handle.write("ok\\x00end".encode("utf-8"))
+            with self.assertRaisesRegex(CommandChainError, "contains invalid null byte"):
+                _read_file_head(handle, 10)
 
 
 if __name__ == "__main__":

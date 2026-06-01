@@ -1,21 +1,36 @@
 from __future__ import annotations
 
+import argparse
 import io
 import json
 import os
 import tempfile
 import unittest
+import wave
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
 from speed_of_cinnamon import cli
-from speed_of_cinnamon.alarms import add_alarm, list_alarm_payload, save_alarm_store
+from speed_of_cinnamon.alarms import (
+    MAX_ALARM_NAME_CHARS,
+    MAX_ALARM_ID_CHARS,
+    add_alarm,
+    list_alarm_payload,
+    save_alarm_store,
+)
 from speed_of_cinnamon.recorder import InputSource, RecorderCommand
 from speed_of_cinnamon.state import RecordingState, StateStore
 
 
 class CliTest(unittest.TestCase):
+    def _write_wav(self, path: Path, samples: list[int]) -> None:
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(16000)
+            handle.writeframes(b"".join(sample.to_bytes(2, "little", signed=True) for sample in samples))
+
     def test_insert_text_can_be_disabled(self) -> None:
         with redirect_stdout(io.StringIO()):
             code = cli.run(["insert-text", "hello", "--insert-method", "none", "--json"])
@@ -47,6 +62,28 @@ class CliTest(unittest.TestCase):
         payload = json.loads(capture.getvalue())
         self.assertEqual(code, 1)
         self.assertIn("contains invalid null byte", payload["error"])
+
+    def test_insert_text_rejects_negative_typing_delay(self) -> None:
+        with redirect_stdout(io.StringIO()) as capture:
+            code = cli.run(["insert-text", "hello", "--insert-method", "none", "--typing-delay-ms", "-1", "--json"])
+        payload = json.loads(capture.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("typing-delay-ms must be at least 0", payload["error"])
+
+    def test_insert_text_rejects_excessive_typing_delay(self) -> None:
+        with redirect_stdout(io.StringIO()) as capture:
+            code = cli.run([
+                "insert-text",
+                "hello",
+                "--insert-method",
+                "none",
+                "--typing-delay-ms",
+                str(cli.MAX_TYPING_DELAY_MS + 1),
+                "--json",
+            ])
+        payload = json.loads(capture.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("typing-delay-ms must be at most", payload["error"])
 
     def test_transcribe_file_with_command_template(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -140,6 +177,22 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["sources"][0]["name"], "alsa_input.usb-mic.analog-stereo")
         self.assertTrue(payload["sources"][0]["default"])
 
+    @mock.patch("speed_of_cinnamon.cli.list_input_sources", return_value="invalid")
+    def test_list_inputs_rejects_non_list_sources(self, mocked_sources: mock.Mock) -> None:
+        with redirect_stdout(io.StringIO()) as capture:
+            code = cli.run(["list-inputs", "--json"])
+        payload = json.loads(capture.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("input sources must be a list", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_input_sources", return_value=[object()])
+    def test_list_inputs_rejects_invalid_source_entry(self, mocked_sources: mock.Mock) -> None:
+        with redirect_stdout(io.StringIO()) as capture:
+            code = cli.run(["list-inputs", "--json"])
+        payload = json.loads(capture.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("input source id must be text", payload["error"])
+
     def test_models_lists_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             stdout = io.StringIO()
@@ -150,6 +203,24 @@ class CliTest(unittest.TestCase):
         self.assertGreater(len(payload["models"]), 0)
         self.assertEqual(payload["models"][0]["name"], "tiny.en")
         self.assertFalse(payload["models"][0]["downloaded"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_models", return_value="invalid")
+    def test_models_rejects_non_list_models_payload(self, mocked_models: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["models", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("model payload must be a list", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_models", return_value=["invalid"])
+    def test_models_rejects_invalid_model_entry(self, mocked_models: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["models", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("model payload entry must be an object", payload["error"])
 
     @mock.patch("speed_of_cinnamon.cli.list_ollama_models")
     def test_text_models_lists_local_ollama_models(self, mocked_list: mock.Mock) -> None:
@@ -244,6 +315,235 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["models"][0]["name"], "local-llama")
         mocked_list.assert_called_once_with("http://127.0.0.1:8000/v1")
 
+    @mock.patch("speed_of_cinnamon.cli.list_ollama_models", return_value="invalid")
+    def test_text_models_rejects_non_object_ollama_payload(self, mocked_list: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["text-models", "--ollama-url", "http://localhost:11434", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("text models payload must be an object", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_ollama_models", return_value={
+        "available": "yes",
+        "models": [{"name": "llama3.2:3b"}],
+        "message": "Ollama models loaded",
+    })
+    def test_text_models_rejects_ollama_invalid_available(self, mocked_list: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["text-models", "--ollama-url", "http://localhost:11434", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("text models payload available must be a boolean", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_ollama_models", return_value={
+        "available": True,
+        "models": "invalid",
+        "message": "Ollama models loaded",
+    })
+    def test_text_models_rejects_ollama_invalid_models(self, mocked_list: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["text-models", "--ollama-url", "http://localhost:11434", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("model payload must be a list", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_ollama_models", return_value={
+        "available": True,
+        "models": [{"detail": 1}],
+        "message": "Ollama models loaded",
+    })
+    def test_text_models_rejects_ollama_invalid_model_entry(self, mocked_list: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["text-models", "--ollama-url", "http://localhost:11434", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("model name must be text", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_ollama_models", return_value={
+        "available": True,
+        "models": [{"name": "llama3.2:3b"}],
+        "message": 123,
+    })
+    def test_text_models_rejects_ollama_invalid_message(self, mocked_list: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["text-models", "--ollama-url", "http://localhost:11434", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("text models payload message must be text", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_ollama_models", return_value={
+        "available": True,
+        "models": [{"name": "llama3.2:3b"}],
+        "message": "contains\x00",
+    })
+    def test_text_models_rejects_ollama_invalid_message_bytes(self, mocked_list: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["text-models", "--ollama-url", "http://localhost:11434", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("text models payload message contains invalid null byte", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_ollama_models", return_value={
+        "available": True,
+        "models": [{"name": "llama3.2:3b"}],
+    })
+    def test_text_models_rejects_ollama_missing_message(self, mocked_list: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["text-models", "--ollama-url", "http://localhost:11434", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("text models payload message must be text", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models", return_value="invalid")
+    def test_text_models_rejects_non_object_openai_payload(self, mocked_list: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run([
+                "text-models",
+                "--backend",
+                "openai-compatible",
+                "--openai-compatible-url",
+                "http://127.0.0.1:8000/v1",
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("text models payload must be an object", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models", return_value={
+        "available": True,
+        "models": ["invalid"],
+        "message": "OpenAI-compatible models loaded",
+    })
+    def test_text_models_rejects_openai_invalid_model_entry(self, mocked_list: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run([
+                "text-models",
+                "--backend",
+                "openai-compatible",
+                "--openai-compatible-url",
+                "http://127.0.0.1:8000/v1",
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("model payload entry must be an object", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models", return_value={
+        "available": "yes",
+        "models": [{"name": "local-llama"}],
+        "message": "OpenAI-compatible models loaded",
+    })
+    def test_text_models_rejects_openai_invalid_available(self, mocked_list: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run([
+                "text-models",
+                "--backend",
+                "openai-compatible",
+                "--openai-compatible-url",
+                "http://127.0.0.1:8000/v1",
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("text models payload available must be a boolean", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models", return_value={
+        "available": True,
+        "models": "invalid",
+        "message": "OpenAI-compatible models loaded",
+    })
+    def test_text_models_rejects_openai_invalid_models(self, mocked_list: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run([
+                "text-models",
+                "--backend",
+                "openai-compatible",
+                "--openai-compatible-url",
+                "http://127.0.0.1:8000/v1",
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("model payload must be a list", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models", return_value={
+        "available": True,
+        "models": [{"name": "local-llama"}],
+        "message": "\u0000",
+    })
+    def test_text_models_rejects_openai_invalid_message_bytes(self, mocked_list: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run([
+                "text-models",
+                "--backend",
+                "openai-compatible",
+                "--openai-compatible-url",
+                "http://127.0.0.1:8000/v1",
+                "--json",
+        ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("text models payload message contains invalid null byte", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models", return_value={
+        "available": True,
+        "models": [{"name": "local-llama"}],
+        "message": True,
+    })
+    def test_text_models_rejects_openai_invalid_message(self, mocked_list: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run([
+                "text-models",
+                "--backend",
+                "openai-compatible",
+                "--openai-compatible-url",
+                "http://127.0.0.1:8000/v1",
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("text models payload message must be text", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models", return_value={
+        "available": True,
+        "models": [{"name": "local-llama"}],
+    })
+    def test_text_models_rejects_openai_missing_message(self, mocked_list: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run([
+                "text-models",
+                "--backend",
+                "openai-compatible",
+                "--openai-compatible-url",
+                "http://127.0.0.1:8000/v1",
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("text models payload message must be text", payload["error"])
+
+    def test_text_models_rejects_invalid_backend(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "text models backend must be ollama or openai-compatible"):
+            cli.command_text_models(argparse.Namespace(
+                backend="openai",
+                ollama_url="http://localhost:11434",
+                openai_compatible_url="http://127.0.0.1:8000/v1",
+            ))
+
     @mock.patch("speed_of_cinnamon.cli.doctor_report")
     def test_setup_command_outputs_copyable_plan(self, mocked_doctor: mock.Mock) -> None:
         mocked_doctor.return_value = {
@@ -271,6 +571,40 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["steps"][0]["id"], "asr-backend")
         mocked_doctor.assert_called_once()
 
+    @mock.patch("speed_of_cinnamon.cli.doctor_report")
+    def test_doctor_command_rejects_non_boolean_applet(self, mocked_doctor: mock.Mock) -> None:
+        with self.assertRaisesRegex(RuntimeError, "applet must be a boolean"):
+            cli.command_doctor(argparse.Namespace(settings_json="{}", applet="yes"))
+        mocked_doctor.assert_not_called()
+
+    @mock.patch("speed_of_cinnamon.cli.build_setup_plan")
+    @mock.patch("speed_of_cinnamon.cli.doctor_report")
+    def test_setup_command_rejects_non_boolean_applet(self, mocked_doctor: mock.Mock, mocked_setup_plan: mock.Mock) -> None:
+        with self.assertRaisesRegex(RuntimeError, "applet must be a boolean"):
+            cli.command_setup(argparse.Namespace(settings_json="{}", applet="yes"))
+        mocked_doctor.assert_not_called()
+        mocked_setup_plan.assert_not_called()
+
+    def test_alarms_check_rejects_non_boolean_mark(self) -> None:
+        with mock.patch("speed_of_cinnamon.cli.ensure_runtime_dirs"):
+            with self.assertRaisesRegex(RuntimeError, "mark must be a boolean"):
+                cli.command_alarms_check(argparse.Namespace(catch_up_minutes=15, mark="true"))
+
+    @mock.patch("speed_of_cinnamon.cli.add_alarm")
+    def test_alarms_add_rejects_non_boolean_disabled(self, mocked_add_alarm: mock.Mock) -> None:
+        with mock.patch("speed_of_cinnamon.cli.ensure_runtime_dirs"):
+            with self.assertRaisesRegex(RuntimeError, "disabled must be a boolean"):
+                cli.command_alarms_add(argparse.Namespace(time="09:00", name="", days="daily", urgency="normal", disabled="yes"))
+            mocked_add_alarm.assert_not_called()
+
+    def test_coerce_bool_rejects_non_boolean_values(self) -> None:
+        self.assertTrue(cli._coerce_bool(True, field_name="flag"))
+        self.assertFalse(cli._coerce_bool(False, field_name="flag"))
+        with self.assertRaisesRegex(RuntimeError, "flag must be a boolean"):
+            cli._coerce_bool("true", field_name="flag")
+        with self.assertRaisesRegex(RuntimeError, "flag must be a boolean"):
+            cli._coerce_bool(1, field_name="flag")
+
     @mock.patch("speed_of_cinnamon.cli.remove_model")
     def test_remove_model_command(self, mocked_remove: mock.Mock) -> None:
         mocked_remove.return_value = {"status": "done", "removed": True, "name": "tiny.en"}
@@ -281,6 +615,24 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertTrue(payload["removed"])
         mocked_remove.assert_called_once_with("tiny.en")
+
+    @mock.patch("speed_of_cinnamon.cli.download_model")
+    def test_download_model_command_rejects_non_boolean_force(self, mocked_download: mock.Mock) -> None:
+        with mock.patch("speed_of_cinnamon.cli.ensure_runtime_dirs"):
+            with self.assertRaisesRegex(RuntimeError, "force must be a boolean"):
+                cli.command_download_model(argparse.Namespace(model="tiny.en", force="yes"))
+            mocked_download.assert_not_called()
+
+    @mock.patch("speed_of_cinnamon.cli.insert_text")
+    def test_insert_text_command_rejects_non_boolean_sanitize_special_chars(self, mocked_insert: mock.Mock) -> None:
+        with self.assertRaisesRegex(RuntimeError, "sanitize_special_chars must be a boolean"):
+            cli.command_insert_text(argparse.Namespace(
+                text="Hello",
+                insert_method="none",
+                typing_delay_ms=0,
+                sanitize_special_chars="yes",
+            ))
+        mocked_insert.assert_not_called()
 
     def test_settings_export_import_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -391,6 +743,24 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["transcripts"][0]["name"], "huge.txt")
         self.assertLessEqual(len(payload["transcripts"][0]["text"]), 4000)
 
+    def test_history_rejects_negative_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["history", "--limit", "-1", "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("history limit must be at least 0", payload["error"])
+
+    def test_history_rejects_excessive_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["history", "--limit", str(cli.MAX_HISTORY_LIMIT + 1), "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("history limit must be at most", payload["error"])
+
     def test_cleanup_prunes_old_transcripts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
@@ -485,6 +855,270 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["would_delete_transcripts"], 1)
         self.assertTrue(old_exists)
 
+    def test_cleanup_rejects_boolean_recording_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch(
+                    "speed_of_cinnamon.cli.prune_recording_groups",
+                    return_value={
+                        "planned_recordings": True,
+                        "planned_logs": 0,
+                        "planned_paths": [],
+                        "deleted_recordings": 0,
+                        "deleted_logs": 0,
+                        "deleted_paths": [],
+                        "failed_paths": [],
+                        "skipped_active_paths": [],
+                    },
+                ),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["cleanup", "--keep-transcripts", "0", "--keep-recordings", "0", "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("planned-recordings must be an integer", payload["error"])
+
+    def test_cleanup_rejects_negative_keep_transcripts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cleanup", "--keep-transcripts", "-1", "--keep-recordings", "0", "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("keep-transcripts must be at least 0", payload["error"])
+
+    def test_cleanup_rejects_excessive_keep_recordings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "cleanup",
+                    "--keep-transcripts",
+                    "0",
+                    "--keep-recordings",
+                    str(cli.MAX_KEEP_RECORDINGS + 1),
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("keep-recordings must be at most", payload["error"])
+
+    def test_alarms_check_rejects_negative_catch_up_minutes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["alarms", "check", "--catch-up-minutes", "-1", "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("catch-up-minutes must be at least 0", payload["error"])
+
+    def test_alarms_check_rejects_excessive_catch_up_minutes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "alarms",
+                    "check",
+                    "--catch-up-minutes",
+                    str(cli.MAX_ALARM_CATCH_UP_MINUTES + 1),
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("catch-up-minutes must be at most", payload["error"])
+
+    def test_alarms_add_rejects_null_byte_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "alarms",
+                    "add",
+                    "--time",
+                    "09:00",
+                    "--name",
+                    "private\x00alarm",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("alarm name contains invalid null byte", payload["error"])
+
+    def test_alarms_add_rejects_null_byte_days(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "alarms",
+                    "add",
+                    "--time",
+                    "09:00",
+                    "--days",
+                    "mon\x00,fri",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("alarm days contains invalid null byte", payload["error"])
+
+    def test_alarms_add_rejects_oversized_days_input(self) -> None:
+        days = ",".join(["mon", "tue", "wed", "thu", "fri", "sat", "sun"] * 30)
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "alarms",
+                    "add",
+                    "--time",
+                    "09:00",
+                    "--days",
+                    days,
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("alarm days is too large", payload["error"])
+
+    def test_alarms_add_rejects_oversized_name_input(self) -> None:
+        name = "A" * (MAX_ALARM_NAME_CHARS + 10)
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "alarms",
+                    "add",
+                    "--time",
+                    "09:00",
+                    "--name",
+                    name,
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("alarm name is too large", payload["error"])
+
+    def test_alarms_remove_rejects_null_byte_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["alarms", "remove", "alarm\x00id", "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("alarm id contains invalid null byte", payload["error"])
+
+    def test_alarms_enable_rejects_null_byte_id(self) -> None:
+        stdout = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["alarms", "enable", "alarm\x00id", "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("alarm id contains invalid null byte", payload["error"])
+
+    def test_alarms_enable_rejects_oversized_id(self) -> None:
+        oversized_id = "X" * (MAX_ALARM_ID_CHARS + 30)
+        with tempfile.TemporaryDirectory() as tmp:
+            alarm_path = Path(tmp) / "speed-of-cinnamon" / "alarms.json"
+            save_alarm_store(
+                {
+                    "version": 1,
+                    "alarms": [
+                        {
+                            "id": oversized_id[:MAX_ALARM_ID_CHARS],
+                            "hour": 9,
+                            "minute": 0,
+                            "days": ["mon"],
+                            "enabled": False,
+                            "urgency": "normal",
+                        }
+                    ],
+                    "last_checked_at": "",
+                },
+                alarm_path,
+            )
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["alarms", "enable", oversized_id, "--json"])
+            payload = json.loads(stdout.getvalue())
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}):
+                after = list_alarm_payload(alarm_path)
+        self.assertEqual(code, 1)
+        self.assertIn("alarm id is too large", payload["error"])
+        self.assertFalse(after["alarms"][0]["enabled"])
+
+    def test_alarms_remove_rejects_oversized_id_without_removing_matching_entry(self) -> None:
+        oversized_id = "X" * (MAX_ALARM_ID_CHARS + 30)
+        with tempfile.TemporaryDirectory() as tmp:
+            alarm_path = Path(tmp) / "speed-of-cinnamon" / "alarms.json"
+            save_alarm_store(
+                {
+                    "version": 1,
+                    "alarms": [
+                        {
+                            "id": oversized_id[:MAX_ALARM_ID_CHARS],
+                            "hour": 9,
+                            "minute": 0,
+                            "days": ["mon"],
+                            "enabled": True,
+                            "urgency": "normal",
+                        }
+                    ],
+                    "last_checked_at": "",
+                },
+                alarm_path,
+            )
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["alarms", "remove", oversized_id, "--json"])
+            payload = json.loads(stdout.getvalue())
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}):
+                after = list_alarm_payload(alarm_path)
+        self.assertEqual(code, 1)
+        self.assertIn("alarm id is too large", payload["error"])
+        self.assertEqual(len(after["alarms"]), 1)
+
+    def test_alarms_disable_rejects_oversized_id(self) -> None:
+        oversized_id = "X" * (MAX_ALARM_ID_CHARS + 30)
+        with tempfile.TemporaryDirectory() as tmp:
+            alarm_path = Path(tmp) / "speed-of-cinnamon" / "alarms.json"
+            save_alarm_store(
+                {
+                    "version": 1,
+                    "alarms": [
+                        {
+                            "id": oversized_id[:MAX_ALARM_ID_CHARS],
+                            "hour": 9,
+                            "minute": 0,
+                            "days": ["mon"],
+                            "enabled": True,
+                            "urgency": "normal",
+                        }
+                    ],
+                    "last_checked_at": "",
+                },
+                alarm_path,
+            )
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["alarms", "disable", oversized_id, "--json"])
+            payload = json.loads(stdout.getvalue())
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}):
+                after = list_alarm_payload(alarm_path)
+        self.assertEqual(code, 1)
+        self.assertIn("alarm id is too large", payload["error"])
+        self.assertTrue(after["alarms"][0]["enabled"])
+
+    def test_alarms_disable_rejects_null_byte_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["alarms", "disable", "alarm\x00id", "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("alarm id contains invalid null byte", payload["error"])
+
     @mock.patch("speed_of_cinnamon.cli.list_input_sources")
     def test_diagnostics_omits_transcript_text(self, mocked_sources: mock.Mock) -> None:
         mocked_sources.return_value = [
@@ -513,6 +1147,106 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("private alarm name", encoded)
         self.assertNotIn("preview", encoded)
         self.assertNotIn('"text"', encoded)
+
+    @mock.patch("speed_of_cinnamon.cli.list_alarm_payload", return_value={"alarms": [], "last_checked_at": ""})
+    @mock.patch("speed_of_cinnamon.cli.list_input_sources", return_value=[])
+    def test_diagnostics_rejects_non_boolean_applet(self, mocked_sources: mock.Mock, mocked_alarms: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_DATA_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.ensure_runtime_dirs"),
+                mock.patch("speed_of_cinnamon.cli.list_models", return_value=[]),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "applet must be a boolean"):
+                    cli.command_diagnostics(argparse.Namespace(
+                        settings_json="{}",
+                        applet="yes",
+                        output="",
+                        save=False,
+                        state_file=str(state_file),
+                    ))
+        mocked_sources.assert_not_called()
+        mocked_alarms.assert_not_called()
+
+    @mock.patch("speed_of_cinnamon.cli.list_alarm_payload", return_value={"alarms": "invalid", "last_checked_at": ""})
+    @mock.patch("speed_of_cinnamon.cli.list_input_sources", return_value=[])
+    def test_diagnostics_rejects_non_list_alarms(self, mocked_sources: mock.Mock, mocked_alarms: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_DATA_HOME": tmp}):
+                with redirect_stdout(io.StringIO()) as capture:
+                    code = cli.run(["diagnostics", "--state-file", str(state_file), "--json"])
+            payload = json.loads(capture.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("alarms entries must be a list", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_alarm_payload", return_value=[])
+    @mock.patch("speed_of_cinnamon.cli.list_input_sources", return_value=[])
+    @mock.patch("speed_of_cinnamon.cli.list_models", return_value=[])
+    def test_diagnostics_rejects_non_object_alarm_payload(self, mocked_models: mock.Mock, mocked_sources: mock.Mock, mocked_alarms: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_DATA_HOME": tmp}):
+                with redirect_stdout(io.StringIO()) as capture:
+                    code = cli.run(["diagnostics", "--state-file", str(state_file), "--json"])
+            payload = json.loads(capture.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("alarms payload must be an object", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_alarm_payload", return_value={"alarms": [], "last_checked_at": ""})
+    @mock.patch("speed_of_cinnamon.cli.list_input_sources", return_value="invalid")
+    @mock.patch("speed_of_cinnamon.cli.list_models", return_value=[])
+    def test_diagnostics_rejects_non_list_input_sources(self, mocked_models: mock.Mock, mocked_sources: mock.Mock, mocked_alarms: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_DATA_HOME": tmp}):
+                with redirect_stdout(io.StringIO()) as capture:
+                    code = cli.run(["diagnostics", "--state-file", str(state_file), "--json"])
+            payload = json.loads(capture.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["inputs"]["ok"], False)
+        self.assertIn("input sources must be a list", payload["inputs"]["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_alarm_payload", return_value={"alarms": [], "last_checked_at": ""})
+    @mock.patch("speed_of_cinnamon.cli.list_input_sources", return_value=[object()])
+    @mock.patch("speed_of_cinnamon.cli.list_models", return_value=[])
+    def test_diagnostics_rejects_invalid_input_source_entry(self, mocked_models: mock.Mock, mocked_sources: mock.Mock, mocked_alarms: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_DATA_HOME": tmp}):
+                with redirect_stdout(io.StringIO()) as capture:
+                    code = cli.run(["diagnostics", "--state-file", str(state_file), "--json"])
+            payload = json.loads(capture.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["inputs"]["ok"], False)
+        self.assertIn("input source id must be text", payload["inputs"]["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_alarm_payload", return_value={"alarms": [], "last_checked_at": ""})
+    @mock.patch("speed_of_cinnamon.cli.list_input_sources", return_value=[])
+    @mock.patch("speed_of_cinnamon.cli.list_models", return_value="invalid")
+    def test_diagnostics_rejects_non_list_models_payload(self, mocked_models: mock.Mock, mocked_sources: mock.Mock, mocked_alarms: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_DATA_HOME": tmp}):
+                with redirect_stdout(io.StringIO()) as capture:
+                    code = cli.run(["diagnostics", "--state-file", str(state_file), "--json"])
+            payload = json.loads(capture.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("model payload must be a list", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_alarm_payload", return_value={"alarms": [], "last_checked_at": ""})
+    @mock.patch("speed_of_cinnamon.cli.list_input_sources", return_value=[])
+    @mock.patch("speed_of_cinnamon.cli.list_models", return_value=["invalid"])
+    def test_diagnostics_rejects_invalid_model_entry(self, mocked_models: mock.Mock, mocked_sources: mock.Mock, mocked_alarms: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_DATA_HOME": tmp}):
+                with redirect_stdout(io.StringIO()) as capture:
+                    code = cli.run(["diagnostics", "--state-file", str(state_file), "--json"])
+            payload = json.loads(capture.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("model payload entry must be an object", payload["error"])
 
     @mock.patch("speed_of_cinnamon.cli.list_input_sources")
     def test_diagnostics_save_writes_private_report(self, mocked_sources: mock.Mock) -> None:
@@ -674,6 +1408,22 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("settings JSON could not be parsed", payload["error"])
 
+    def test_settings_export_rejects_null_byte_in_settings_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "settings-export",
+                    "--settings-json",
+                    '{"language":"en\\u0000"}',
+                    "--output",
+                    str(Path(tmp) / "settings.json"),
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("contains invalid null byte", payload["error"])
+
     def test_settings_export_rejects_non_json_output_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             stdout = io.StringIO()
@@ -707,6 +1457,46 @@ class CliTest(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 1)
         self.assertIn("must end with .json", payload["error"])
+
+    def test_settings_import_rejects_null_byte_in_export_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings.json"
+            path.write_text('{"app":"speed-of-cinnamon","version":2,"settings":{"language":"de\\u0000"}}', encoding="utf-8")
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["settings-import", "--input", str(path), "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("invalid null byte", payload["error"])
+
+    def test_settings_import_rejects_invalid_utf8_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings.json"
+            path.write_bytes(b"\xff")
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["settings-import", "--input", str(path), "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("settings export could not be read", payload["error"])
+
+    def test_settings_import_skips_invalid_alarm_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings.json"
+            path.write_text(
+                '{"app":"speed-of-cinnamon","version":2,"settings":{"language":"en"},'
+                '"alarms":{"version":2,"alarms":[{"id":"good","hour":9,"minute":0,"days":["mon"],"name":"Good"},'
+                '{"id":"bad","hour":"not-a-number","minute":0,"days":["mon"],"name":"Bad"}],'
+                '"last_checked_at":"2026-06-01T09:00"}}',
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["settings-import", "--input", str(path), "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["alarms_count"], 1)
+        self.assertGreater(payload["settings_count"], 0)
 
     def test_settings_export_rejects_null_output_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -875,8 +1665,7 @@ class CliTest(unittest.TestCase):
     def test_stop_rejects_invalid_state_audio_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "state.json"
-            store = StateStore(state_file)
-            store.write(RecordingState(status="processing", audio_path="x\x00.wav"))
+            state_file.write_text('{"status":"processing","audio_path":"x\\u0000.wav"}', encoding="utf-8")
             stdout = io.StringIO()
             with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
                 code = cli.run([
@@ -892,10 +1681,8 @@ class CliTest(unittest.TestCase):
                     "--json",
                 ])
             payload = json.loads(stdout.getvalue())
-            final_state = store.read()
         self.assertEqual(code, 1)
-        self.assertIn("recording audio path is invalid", payload["error"])
-        self.assertEqual(final_state.status, "error")
+        self.assertIn("state file could not be read", payload["error"])
 
     def test_remove_file_rejects_null_path(self) -> None:
         self.assertFalse(cli.remove_file("x\x00.wav", suffix=".wav"))
@@ -905,13 +1692,13 @@ class CliTest(unittest.TestCase):
             audio = Path(tmp) / "processing.wav"
             audio.write_bytes(b"audio")
             state_file = Path(tmp) / "state.json"
-            state = StateStore(state_file)
-            state.write(
-                RecordingState(
-                    status="recording",
-                    pid="not-an-int",  # type: ignore[arg-type]
-                    audio_path=str(audio),
-                )
+            state_file.write_text(
+                json.dumps({
+                    "status": "recording",
+                    "pid": "not-an-int",
+                    "audio_path": str(audio),
+                }),
+                encoding="utf-8",
             )
             stdout = io.StringIO()
             with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
@@ -928,9 +1715,8 @@ class CliTest(unittest.TestCase):
                     "--json",
                 ])
             payload = json.loads(stdout.getvalue())
-        self.assertEqual(code, 0)
-        self.assertEqual(payload["status"], "done")
-        self.assertEqual(payload["transcript"], "transcript")
+        self.assertEqual(code, 1)
+        self.assertIn("state file could not be read", payload["error"])
 
     def test_toggle_rejects_null_personal_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1063,8 +1849,8 @@ class CliTest(unittest.TestCase):
         self.assertTrue(payload["log_deleted"])
         self.assertFalse(audio_exists)
         self.assertFalse(log_exists)
-        self.assertIsNone(final_state.audio_path)
-        self.assertIsNone(final_state.log_path)
+        self.assertEqual(final_state.audio_path, "")
+        self.assertEqual(final_state.log_path, "")
 
     def test_finalize_can_keep_recording_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1107,6 +1893,130 @@ class CliTest(unittest.TestCase):
         self.assertEqual(final_state.audio_path, str(audio))
         self.assertEqual(final_state.log_path, str(log))
 
+    def test_finalize_rejects_non_boolean_keep_recording_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = argparse.Namespace(
+                language="en",
+                transcriber="command",
+                transcriber_command="printf transcript",
+                whisper_model="",
+                post_process_command="",
+                post_process_backend="command",
+                post_process_prompt="",
+                openai_compatible_url=cli.DEFAULT_OPENAI_COMPATIBLE_URL,
+                ollama_url=cli.DEFAULT_OLLAMA_URL,
+                ollama_model="",
+                openai_compatible_model="",
+                personal_context="",
+                vocabulary="",
+                append_space=False,
+                sanitize_special_chars=False,
+                typing_delay_ms=0,
+                insert_method="none",
+                keep_recording_artifacts="true",
+            )
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+            ):
+                with self.assertRaises(RuntimeError) as context:
+                    cli.finalize_recording(args, store, store.read())
+                self.assertIn("must be a boolean", str(context.exception))
+            final_state = store.read()
+            self.assertEqual(final_state.status, "processing")
+            self.assertTrue(audio.exists())
+            self.assertTrue(log.exists())
+
+    def _build_finalize_args(
+        self,
+        *,
+        keep_recording_artifacts: bool | str = True,
+        append_space: bool = False,
+        sanitize_special_chars: bool = False,
+    ) -> argparse.Namespace:
+        return argparse.Namespace(
+            language="en",
+            transcriber="command",
+            transcriber_command="printf transcript",
+            whisper_model="",
+            post_process_command="",
+            post_process_backend="command",
+            post_process_prompt="",
+            openai_compatible_url=cli.DEFAULT_OPENAI_COMPATIBLE_URL,
+            ollama_url=cli.DEFAULT_OLLAMA_URL,
+            ollama_model="",
+            openai_compatible_model="",
+            personal_context="",
+            vocabulary="",
+            append_space=append_space,
+            sanitize_special_chars=sanitize_special_chars,
+            typing_delay_ms=0,
+            insert_method="none",
+            keep_recording_artifacts=keep_recording_artifacts,
+        )
+
+    def test_finalize_rejects_non_boolean_append_space(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(append_space="yes")
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "append_space must be a boolean"):
+                    cli.finalize_recording(args, store, store.read())
+
+    def test_finalize_rejects_non_boolean_sanitize_special_chars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(sanitize_special_chars="yes")
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "sanitize_special_chars must be a boolean"):
+                    cli.finalize_recording(args, store, store.read())
+
     def test_cancel_does_not_delete_artifacts_outside_recordings_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -1146,6 +2056,25 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["status"], "recorded")
         self.assertEqual(payload["audio_path"], str(audio))
 
+    def test_status_includes_microphone_level_for_recording_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "active.wav"
+            self._write_wav(audio, [0, 8192, -16384])
+            state_file = tmp_path / "state.json"
+            StateStore(state_file).write(RecordingState(status="recording", pid=999999999, audio_path=str(audio)))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["status", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "recorded")
+        self.assertEqual(payload["microphone_level"]["percent"], 50)
+        self.assertEqual(payload["microphone_level"]["source"], "recording-file")
+
     def test_start_defaults_language_to_english(self) -> None:
         proc = mock.Mock()
         proc.pid = 12345
@@ -1165,6 +2094,56 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["language"], "en")
         self.assertEqual(state.language, "en")
+
+    def test_start_rejects_negative_max_seconds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["start", "--max-seconds", "-1", "--state-file", str(Path(tmp) / "state.json"), "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("max-seconds must be at least 0", payload["error"])
+
+    def test_start_rejects_excessive_max_seconds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "start",
+                    "--max-seconds",
+                    str(cli.MAX_RECORDING_SECONDS + 1),
+                    "--state-file",
+                    str(Path(tmp) / "state.json"),
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("max-seconds must be at most", payload["error"])
+
+    def test_start_rejects_escaped_null_in_state_file_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["start", "--state-file", "state\\x00.json", "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("contains invalid null byte", payload["error"])
+
+    def test_start_rejects_null_byte_input_device(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "start",
+                    "--input-device",
+                    "alsa\x00bad",
+                    "--state-file",
+                    str(Path(tmp) / "state.json"),
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("recording input device contains invalid null byte", payload["error"])
 
     def test_cancel_recorded_discards_files_and_resets_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1191,7 +2170,7 @@ class CliTest(unittest.TestCase):
         self.assertFalse(audio.exists())
         self.assertFalse(log.exists())
         self.assertEqual(final_state.status, "idle")
-        self.assertIsNone(final_state.audio_path)
+        self.assertEqual(final_state.audio_path, "")
 
     @mock.patch("speed_of_cinnamon.cli.stop_process")
     @mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=True)
@@ -1257,7 +2236,95 @@ class CliTest(unittest.TestCase):
         self.assertIn("failed to write transcript file", payload["error"])
         self.assertIn("failed to write transcript file", final_state.error)
 
+    def test_read_file_tail_rejects_invalid_utf8(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "broken.txt"
+            path.write_bytes(b"bad\xff")
+            with self.assertRaisesRegex(ValueError, "failed to decode file as UTF-8"):
+                cli.read_file_tail(path, 10)
 
+    def test_read_file_tail_rejects_escaped_null(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "broken.txt"
+            path.write_text("line\\x00end", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "contains invalid null byte"):
+                cli.read_file_tail(path, 10)
+
+    def test_read_file_tail_rejects_request_exceeding_history_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "log.txt"
+            path.write_text("ok", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "max_chars must be at most"):
+                cli.read_file_tail(path, cli.MAX_TRANSCRIPT_HISTORY_TEXT_CHARS + 1)
+
+    def test_read_log_excerpt_rejects_request_exceeding_log_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "log.txt"
+            path.write_text("ok", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "max_chars must be at most"):
+                cli.read_log_excerpt(path, cli.MAX_LOG_EXCERPT_CHARS + 1)
+
+    def test_coerce_int_rejects_bool(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "must be an integer"):
+            cli._coerce_int(True, field_name="max")
+
+    def test_coerce_int_rejects_float(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "must be an integer"):
+            cli._coerce_int(1.0, field_name="max")  # type: ignore[arg-type]
+
+    def test_assert_clean_text_rejects_non_text_value(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "must be text"):
+            cli._assert_clean_text(123, field_name="value", max_chars=10)  # type: ignore[arg-type]
+
+    def test_coerce_path_rejects_non_text_value(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "must be text"):
+            cli._coerce_path(123, field_name="path")  # type: ignore[arg-type]
+
+    def test_read_file_tail_rejects_nonpositive_max_chars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "log.txt"
+            path.write_text("ok", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "max_chars must be positive"):
+                cli.read_file_tail(path, 0)
+
+    def test_read_file_tail_rejects_invalid_path_type(self) -> None:
+        with self.assertRaisesRegex(TypeError, "path must be a Path"):
+            cli.read_file_tail(123, 10)  # type: ignore[arg-type]
+
+    def test_read_log_excerpt_rejects_invalid_path_type(self) -> None:
+        with self.assertRaisesRegex(TypeError, "path must be a Path"):
+            cli.read_log_excerpt(123, 10)  # type: ignore[arg-type]
+
+    def test_read_file_tail_rejects_non_integer_max_chars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "log.txt"
+            path.write_text("ok", encoding="utf-8")
+            with self.assertRaisesRegex(TypeError, "max_chars must be an integer"):
+                cli.read_file_tail(path, 1.5)  # type: ignore[arg-type]
+
+    def test_parse_cli_settings_json_rejects_non_text(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "must be text"):
+            cli._parse_cli_settings_json({} )  # type: ignore[arg-type]
+
+    def test_contains_escaped_null_rejects_non_text(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "value must be text"):
+            cli._contains_escaped_null(12)  # type: ignore[arg-type]
+
+    def test_contains_escaped_null_rejects_bool(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "value must be text"):
+            cli._contains_escaped_null(True)  # type: ignore[arg-type]
+
+    def test_append_space_if_needed_rejects_non_text(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "text must be text"):
+            cli.append_space_if_needed(123, True)  # type: ignore[arg-type]
+
+    def test_append_space_if_needed_rejects_non_bool_flag(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "append_space must be a boolean"):
+            cli.append_space_if_needed("hello", "yes")  # type: ignore[arg-type]
+
+    def test_prepare_output_text_rejects_non_bool_sanitize_flag(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "sanitize must be a boolean"):
+            cli.prepare_output_text("hello", True, "yes")  # type: ignore[arg-type]
 
 if __name__ == "__main__":
     unittest.main()

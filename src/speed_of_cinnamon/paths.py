@@ -6,18 +6,41 @@ from pathlib import Path
 APP_ID = "speed-of-cinnamon"
 APP_NAME = "Speed of Cinnamon"
 APPLET_UUID = "speed-of-cinnamon@H234598"
+MAX_XDG_PATH_CHARS = 4_096
+
+
+def _contains_escaped_null(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise RuntimeError("value must be text")
+    lowered = (value or "").lower()
+    return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
+
+
+def _xdg_path(environment_variable: str, default: Path) -> Path:
+    if isinstance(environment_variable, bool) or not isinstance(environment_variable, str):
+        raise RuntimeError("environment variable name must be text")
+    value = os.environ.get(environment_variable)
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        return default
+    normalized = (value or "").strip()
+    if not normalized or len(normalized) > MAX_XDG_PATH_CHARS or _contains_escaped_null(normalized):
+        return default
+    candidate = Path(normalized)
+    return candidate if candidate.is_absolute() else default
 
 
 def xdg_data_home() -> Path:
-    return Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    return _xdg_path("XDG_DATA_HOME", Path.home() / ".local" / "share")
 
 
 def xdg_state_home() -> Path:
-    return Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+    return _xdg_path("XDG_STATE_HOME", Path.home() / ".local" / "state")
 
 
 def xdg_cache_home() -> Path:
-    return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    return _xdg_path("XDG_CACHE_HOME", Path.home() / ".cache")
 
 
 def state_dir() -> Path:

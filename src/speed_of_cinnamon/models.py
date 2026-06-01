@@ -15,9 +15,45 @@ HUGGING_FACE_BASE_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/ma
 MAX_MODEL_DOWNLOAD_BYTES = 1_200_000_000
 MAX_MODEL_DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 MODEL_SIZE_SLACK_BYTES = 32 * 1024 * 1024
+MAX_MODEL_CHECKSUM_JSON_BYTES = 1_000_000
+MAX_MODEL_CHECKSUM_PATH_CHARS = 1_024
+MAX_MODEL_CHECKSUM_CHARS = 40
 _MODEL_CHECKSUM_CACHE_FILE = "model_checksums.json"
 _model_checksum_cache: dict[str, dict[str, int | str]] = {}
 _model_checksum_cache_loaded = False
+ENGLISH_LANGUAGE_CODES = {"", "en", "eng", "english"}
+
+
+def _contains_escaped_null(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise ModelError("value must be text")
+    lowered = (value or "").lower()
+    return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
+
+
+def _is_valid_checksum(value: str) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == MAX_MODEL_CHECKSUM_CHARS
+        and all(char in "0123456789abcdef" for char in value.lower())
+    )
+
+
+def _is_valid_cache_entry(entry: Any) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    checksum = entry.get("checksum")
+    size = entry.get("size")
+    mtime_ns = entry.get("mtime_ns")
+    return (
+        _is_valid_checksum(checksum)
+        and isinstance(size, int)
+        and not isinstance(size, bool)
+        and isinstance(mtime_ns, int)
+        and not isinstance(mtime_ns, bool)
+        and size >= 0
+        and mtime_ns >= 0
+    )
 
 
 def _model_checksum_cache_path() -> Path:
@@ -35,9 +71,29 @@ def _load_model_checksum_cache() -> None:
         return
 
     try:
+        if cache_path.stat().st_size > MAX_MODEL_CHECKSUM_JSON_BYTES:
+            try:
+                cache_path.unlink()
+            except OSError:
+                pass
+            return
         with cache_path.open("r", encoding="utf-8") as handle:
-            payload = json.load(handle)
-    except (OSError, json.JSONDecodeError):
+            text = handle.read()
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        try:
+            cache_path.unlink()
+        except OSError:
+            pass
+        return
+    if _contains_escaped_null(text):
+        try:
+            cache_path.unlink()
+        except OSError:
+            pass
+        return
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
         try:
             cache_path.unlink()
         except OSError:
@@ -52,13 +108,18 @@ def _load_model_checksum_cache() -> None:
         return
 
     for key, raw_entry in payload.items():
-        if not isinstance(key, str) or not isinstance(raw_entry, dict):
+        if (
+            not isinstance(key, str)
+            or len(key) > MAX_MODEL_CHECKSUM_PATH_CHARS
+            or _contains_escaped_null(key)
+            or not _is_valid_cache_entry(raw_entry)
+        ):
             continue
-        checksum = raw_entry.get("checksum")
-        size = raw_entry.get("size")
-        mtime_ns = raw_entry.get("mtime_ns")
-        if isinstance(checksum, str) and isinstance(size, int) and isinstance(mtime_ns, int):
-            _model_checksum_cache[key] = {"checksum": checksum, "size": size, "mtime_ns": mtime_ns}
+        _model_checksum_cache[key] = {
+            "checksum": raw_entry["checksum"],
+            "size": raw_entry["size"],
+            "mtime_ns": raw_entry["mtime_ns"],
+        }
 
     _prune_model_checksum_cache()
 
@@ -70,9 +131,7 @@ def _prune_model_checksum_cache() -> None:
             _model_checksum_cache.pop(key, None)
             removed = True
             continue
-        size = cached.get("size")
-        mtime_ns = cached.get("mtime_ns")
-        if not isinstance(size, int) or not isinstance(mtime_ns, int):
+        if not _is_valid_cache_entry(cached):
             _model_checksum_cache.pop(key, None)
             removed = True
             continue
@@ -99,8 +158,16 @@ def _write_model_checksum_cache() -> None:
     cache_path = _model_checksum_cache_path()
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
+        rendered = json.dumps(_model_checksum_cache, indent=2, sort_keys=True) + "\n"
+        if len(rendered.encode("utf-8")) > MAX_MODEL_CHECKSUM_JSON_BYTES:
+            _model_checksum_cache.clear()
+            try:
+                cache_path.unlink()
+            except OSError:
+                pass
+            return
         with tempfile.NamedTemporaryFile("w", delete=False, dir=cache_path.parent, encoding="utf-8") as handle:
-            json.dump(_model_checksum_cache, handle)
+            handle.write(rendered)
             tmp_path = Path(handle.name)
         try:
             os.replace(tmp_path, cache_path)
@@ -119,6 +186,22 @@ def _write_model_checksum_cache() -> None:
 
 
 def _set_model_checksum_cache(path: Path, checksum: str, stat: os.stat_result) -> None:
+    key = str(path)
+    if (
+        not isinstance(path, Path)
+        or not _is_valid_checksum(checksum)
+        or not isinstance(stat, os.stat_result)
+        or not isinstance(stat.st_size, int)
+        or isinstance(stat.st_size, bool)
+        or not isinstance(stat.st_mtime_ns, int)
+        or isinstance(stat.st_mtime_ns, bool)
+        or stat.st_size < 0
+        or stat.st_mtime_ns < 0
+        or not isinstance(key, str)
+        or len(key) > MAX_MODEL_CHECKSUM_PATH_CHARS
+        or _contains_escaped_null(key)
+    ):
+        raise ModelError(f"invalid model checksum cache state for {path!r}")
     _model_checksum_cache[str(path)] = {
         "checksum": checksum,
         "size": stat.st_size,
@@ -156,8 +239,12 @@ def _cached_or_computed_sha1(path: Path) -> str:
     return checksum
 
 
-def _parse_model_size_bytes(value: str) -> int | None:
-    stripped = value.strip().lower().replace(" ", "")
+def _parse_model_size_bytes(value: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise ModelError(f"invalid model size for {value!r}: must be text")
+    stripped = (value or "").strip().lower().replace(" ", "")
+    if not stripped:
+        raise ModelError(f"invalid model size for {value!r}: empty value")
     unit_map = {
         "kib": 1024,
         "kb": 1000,
@@ -172,25 +259,33 @@ def _parse_model_size_bytes(value: str) -> int | None:
                 number = float(stripped[: -len(suffix)])
             except ValueError as exc:
                 raise ModelError(f"invalid model size for {value!r}: {exc}") from exc
+            if number <= 0:
+                raise ModelError(f"invalid model size for {value!r}: must be positive")
             return int(number * factor)
-    return None
+    raise ModelError(f"invalid model size for {value!r}: unsupported format")
 
 
 def _download_size_limit(model: ModelSpec) -> int:
     expected = _parse_model_size_bytes(model.size)
-    if expected is None:
-        return MAX_MODEL_DOWNLOAD_BYTES
+    if expected <= 0:
+        raise ModelError(f"invalid model size for {model.name}: {model.size!r}")
     return min(MAX_MODEL_DOWNLOAD_BYTES, expected + max(MODEL_SIZE_SLACK_BYTES, int(expected * 0.2)))
 
 
 def _parse_content_length(value: str | None) -> int | None:
-    if not value:
+    if value is None:
         return None
+    if isinstance(value, bool):
+        raise ModelError(f"invalid content-length header: {value!r}")
+    if not isinstance(value, str):
+        raise ModelError(f"invalid content-length header: {value!r}")
     try:
         parsed = int(value)
-    except ValueError:
-        return None
-    return parsed if parsed > 0 else None
+    except (ValueError, TypeError):
+        raise ModelError(f"invalid content-length header: {value!r}")
+    if parsed <= 0:
+        raise ModelError(f"invalid content-length header: {value!r}")
+    return parsed
 
 
 def _read_content_length(response: Any) -> int | None:
@@ -301,6 +396,8 @@ def catalog_by_name() -> dict[str, ModelSpec]:
 
 
 def resolve_model(name: str) -> ModelSpec:
+    if isinstance(name, bool) or not isinstance(name, str):
+        raise ModelError("model name must be text")
     key = (name or "").strip()
     models = catalog_by_name()
     if key in models:
@@ -312,11 +409,42 @@ def model_path(model: ModelSpec) -> Path:
     return models_dir() / model.filename
 
 
+def is_english_language(language: str) -> bool:
+    if not isinstance(language, str):
+        return False
+    normalized = (language or "").strip().lower().replace("_", "-")
+    return normalized in ENGLISH_LANGUAGE_CODES or normalized.startswith("en-")
+
+
+def model_name_is_english_only(name: str) -> bool:
+    return (name or "").strip().lower().endswith(".en")
+
+
+def model_path_is_english_only(path: str | Path) -> bool:
+    if not isinstance(path, (str, Path)):
+        return False
+    filename = Path(path).name.lower()
+    for model in CATALOG:
+        if filename == model.filename.lower() or filename == model.name.lower():
+            return model_name_is_english_only(model.name)
+    return ".en." in filename or filename.endswith(".en.bin")
+
+
+def model_supports_language(path: str | Path, language: str) -> bool:
+    if not isinstance(path, (str, Path)) or not isinstance(language, str):
+        return False
+    if _contains_escaped_null(str(path)):
+        return False
+    return is_english_language(language) or not model_path_is_english_only(path)
+
+
 def sha1_file(path: Path) -> str:
     return _cached_or_computed_sha1(path)
 
 
 def model_status(model: ModelSpec, verify: bool = False) -> dict[str, object]:
+    if not isinstance(verify, bool):
+        raise ModelError("verify must be a boolean")
     path = model_path(model)
     exists = path.exists()
     checksum = sha1_file(path) if verify and exists and path.is_file() else ""
@@ -334,22 +462,24 @@ def list_models() -> list[dict[str, object]]:
     return [model_status(model) for model in CATALOG]
 
 
-def downloaded_model_paths() -> list[Path]:
+def downloaded_model_paths(language: str = "") -> list[Path]:
     paths: list[Path] = []
     for model in CATALOG:
         path = model_path(model)
-        if path.exists() and path.is_file() and sha1_file(path) == model.sha1:
+        if path.exists() and path.is_file() and model_supports_language(path, language) and sha1_file(path) == model.sha1:
             paths.append(path)
     return paths
 
 
-def default_whisper_cpp_model_path() -> str:
-    for path in downloaded_model_paths():
+def default_whisper_cpp_model_path(language: str = "") -> str:
+    for path in downloaded_model_paths(language):
         return str(path)
     return ""
 
 
 def download_model(name: str, force: bool = False) -> dict[str, object]:
+    if not isinstance(force, bool):
+        raise ModelError("force must be a boolean")
     model = resolve_model(name)
     path = model_path(model)
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -26,6 +26,9 @@ make install-local
 
 Then add `Speed of Cinnamon` from Cinnamon's applet settings.
 
+After updating an installed checkout, `make install-local` reloads the applet through Cinnamon when a session bus is
+available. The applet menu also includes `Restart applet` for stale UI or settings state.
+
 ## Current Runtime Paths
 
 ```text

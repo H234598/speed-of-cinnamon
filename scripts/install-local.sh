@@ -34,6 +34,18 @@ if ! command -v whisper >/dev/null 2>&1 \
     && ! command -v whisper-cli >/dev/null 2>&1 \
     && ! command -v whisper.cpp >/dev/null 2>&1 \
     && ! command -v pwcpp >/dev/null 2>&1; then
-    printf 'ASR backend missing. On Fedora install python3-pywhispercpp, then run: speed-of-cinnamon download-model tiny.en --json\n'
+    printf 'ASR backend missing. On Fedora install python3-pywhispercpp, then run: speed-of-cinnamon download-model tiny --json\n'
 fi
-printf 'Reload Cinnamon with Alt+F2, r, Enter if the applet list does not refresh.\n'
+account_home="$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f6 || true)"
+if [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" && -n "${account_home}" && "${HOME}" == "${account_home}" ]] \
+    && command -v dbus-send >/dev/null 2>&1; then
+    if dbus-send --session --dest=org.Cinnamon.LookingGlass --type=method_call \
+        /org/Cinnamon/LookingGlass org.Cinnamon.LookingGlass.ReloadExtension \
+        string:"${uuid}" string:'APPLET' >/dev/null 2>&1; then
+        printf 'Reloaded Cinnamon applet %s\n' "${uuid}"
+    else
+        printf 'Reload Cinnamon with Alt+F2, r, Enter if the applet list does not refresh.\n'
+    fi
+else
+    printf 'Reload Cinnamon with Alt+F2, r, Enter if the applet list does not refresh.\n'
+fi

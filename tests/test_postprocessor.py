@@ -9,6 +9,10 @@ from speed_of_cinnamon.postprocessor import (
     PostProcessError,
     build_ollama_prompt,
     build_openai_compatible_messages,
+    _contains_escaped_null,
+    _quote,
+    _assert_text_length,
+    _format_model_size,
     post_process_text,
     MAX_POSTPROCESS_JSON_BYTES,
     MAX_POSTPROCESS_URL_CHARS,
@@ -17,6 +21,7 @@ from speed_of_cinnamon.postprocessor import (
     render_postprocess_template,
 )
 from speed_of_cinnamon.command_chain import CommandChainError
+from speed_of_cinnamon.personalization import MAX_PERSONAL_CONTEXT_CHARS, MAX_VOCABULARY_CHARS
 
 
 class FakeResponse:
@@ -28,6 +33,21 @@ class FakeResponse:
         self.buffer = io.BytesIO(self.data)
 
     def __enter__(self) -> "FakeResponse":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        return None
+
+    def read(self, size: int = -1) -> bytes:
+        return self.buffer.read(size)
+
+
+class FakeBytesResponse:
+    def __init__(self, payload: bytes) -> None:
+        self.data = payload
+        self.buffer = io.BytesIO(self.data)
+
+    def __enter__(self) -> "FakeBytesResponse":
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
@@ -65,6 +85,26 @@ class PostProcessorTest(unittest.TestCase):
         self.assertIn("Use Cinnamon terms.", rendered)
         self.assertIn("PipeWire", rendered)
 
+    def test_template_rejects_oversized_personal_context(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "personal context is too large"):
+            render_postprocess_template(
+                "tool --prompt {prompt}",
+                "hello",
+                "en",
+                "x" * (MAX_PERSONAL_CONTEXT_CHARS + 1),
+                "PipeWire",
+            )
+
+    def test_template_rejects_oversized_vocabulary(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "vocabulary is too large"):
+            render_postprocess_template(
+                "tool --prompt {prompt}",
+                "hello",
+                "en",
+                "Use terms",
+                "x" * (MAX_VOCABULARY_CHARS + 1),
+            )
+
     def test_command_receives_personalization_environment(self) -> None:
         command = "python3 -c \"import os, sys; print(sys.stdin.read().strip() + '|' + os.environ['SPEED_OF_CINNAMON_VOCABULARY'])\""
         self.assertEqual(
@@ -100,6 +140,14 @@ class PostProcessorTest(unittest.TestCase):
             with self.assertRaisesRegex(PostProcessError, "max_input_chars must be non-negative"):
                 post_process_text("hello", "en", "cmd")
 
+    def test_post_process_reports_updated_chain_limit_error(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.postprocessor.run_command_chain",
+            side_effect=CommandChainError("max_output_chars must not exceed 1"),
+        ):
+            with self.assertRaisesRegex(PostProcessError, "max_output_chars must not exceed"):
+                post_process_text("hello", "en", "cmd")
+
     def test_empty_output_is_an_error(self) -> None:
         with self.assertRaisesRegex(PostProcessError, "without output"):
             post_process_text("hello", "en", "true")
@@ -128,6 +176,32 @@ class PostProcessorTest(unittest.TestCase):
                     ollama_model="llama3.2:3b",
                 )
 
+    def test_post_process_with_ollama_rejects_invalid_utf8_response(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.postprocessor.urllib.request.urlopen",
+            return_value=FakeBytesResponse(b"\xff"),
+        ):
+            with self.assertRaisesRegex(PostProcessError, "invalid UTF-8"):
+                post_process_text("hello", "en", backend="ollama", ollama_model="llama3.2:3b")
+
+    def test_post_process_with_ollama_rejects_escaped_null_response(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.postprocessor.urllib.request.urlopen",
+            return_value=FakeResponse('{"response":"hello\\\\u0000"}'),
+        ):
+            with self.assertRaisesRegex(PostProcessError, "invalid null byte"):
+                post_process_text("hello", "en", backend="ollama", ollama_model="llama3.2:3b")
+
+    def test_ollama_url_rejects_escaped_null(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "ollama url contains invalid null byte"):
+            post_process_text(
+                "hello",
+                "en",
+                backend="ollama",
+                ollama_model="llama3.2:3b",
+                ollama_url="http://127.0.0.1:11434\\\\x00",
+            )
+
     def test_disabled_backend_returns_original_text(self) -> None:
         self.assertEqual(post_process_text("hello", "en", backend="none"), "hello")
 
@@ -144,6 +218,26 @@ class PostProcessorTest(unittest.TestCase):
         self.assertIn("Use project wording.", prompt)
         self.assertIn("PipeWire", prompt)
         self.assertIn("hallo cinnamon", prompt)
+
+    def test_ollama_backend_rejects_oversized_personal_context(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "personal context is too large"):
+            post_process_text(
+                "hello",
+                "en",
+                backend="ollama",
+                ollama_model="llama3.2:3b",
+                personal_context="x" * (MAX_PERSONAL_CONTEXT_CHARS + 1),
+            )
+
+    def test_openai_compatible_backend_rejects_oversized_vocabulary(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "vocabulary is too large"):
+            post_process_text(
+                "hello",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="local",
+                vocabulary="x" * (MAX_VOCABULARY_CHARS + 1),
+            )
 
     def test_ollama_backend_calls_generate_endpoint(self) -> None:
         requests = []
@@ -213,6 +307,16 @@ class PostProcessorTest(unittest.TestCase):
                     ollama_url="http://127.0.0.1",
                 )
 
+    def test_openai_compatible_url_rejects_escaped_null(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "openai-compatible url contains invalid null byte"):
+            post_process_text(
+                "hello",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="local",
+                openai_compatible_url="http://127.0.0.1:8000/v1\\\\u0000",
+            )
+
     def test_openai_compatible_backend_calls_chat_completions_endpoint(self) -> None:
         requests = []
 
@@ -251,10 +355,48 @@ class PostProcessorTest(unittest.TestCase):
             with self.assertRaisesRegex(PostProcessError, "without choices"):
                 post_process_text("hello", "en", backend="openai-compatible", openai_compatible_model="local-model")
 
+    def test_quote_rejects_non_text(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "value must be text"):
+            _quote(123)  # type: ignore[arg-type]
+
+    def test_assert_text_length_rejects_non_text(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "must be text"):
+            _assert_text_length(123, field_name="input text")  # type: ignore[arg-type]
+
+    def test_post_process_text_rejects_non_text_language(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "language must be text"):
+            post_process_text("hello", 123, "command")  # type: ignore[arg-type]
+
+    def test_post_process_text_rejects_non_text_backend(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "backend must be text"):
+            post_process_text("hello", "en", backend=123)  # type: ignore[arg-type]
+
+    def test_post_process_text_rejects_non_text_urls(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "openai-compatible url must be text"):
+            post_process_text(
+                "hello",
+                "en",
+                "command",
+                backend="openai-compatible",
+                openai_compatible_model="local",
+                openai_compatible_url=123,  # type: ignore[arg-type]
+            )
+
+    def test_contains_escaped_null_rejects_non_text(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "value must be text"):
+            _contains_escaped_null(123)  # type: ignore[arg-type]
+
     def test_ollama_empty_response_is_an_error(self) -> None:
         with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", return_value=FakeResponse({"response": ""})):
             with self.assertRaisesRegex(PostProcessError, "without output"):
                 post_process_text("hello", "en", backend="ollama", ollama_model="llama3.2:3b")
+
+    def test_format_model_size_rejects_boolean(self) -> None:
+        self.assertEqual(_format_model_size(True), "")
+        self.assertEqual(_format_model_size(False), "")
+
+    def test_format_model_size_rejects_float(self) -> None:
+        self.assertEqual(_format_model_size(3.5), "")
 
     def test_list_ollama_models_reads_local_tags(self) -> None:
         payload = {

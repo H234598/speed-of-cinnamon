@@ -27,6 +27,7 @@ use:
 - `Copy setup plan` for a readable checklist.
 - `Copy setup commands` for only the concrete shell commands.
 - `Run doctor` for the current readiness state.
+- `Restart applet` to reload the Cinnamon applet after an update or stale setting state.
 - `Open applet settings` for Cinnamon's settings UI.
 - `Open setup guide` for the Fedora runbook.
 - `Voice model` to download or select a local whisper.cpp model.
@@ -127,7 +128,12 @@ application.
 ## Voice Models
 
 The `Voice model` menu exposes a small whisper.cpp catalog. It can download, select, and remove catalog models, or
-switch back to `Automatic ASR backend`.
+switch back to `Automatic ASR backend`. The starter model is based on the primary recognition language from Cinnamon
+settings, so a German primary language uses `tiny`, not `tiny.en`.
+
+For German and other non-English dictation, use a multilingual model (`tiny`, `base`, `small`, or
+`large-v3-turbo-q5_0`). The `.en` models are English-only. `tiny` is the fastest starter; `base` and `small` trade more
+latency for accuracy; `large-v3-turbo-q5_0` is much more accurate but can be very slow on CPU.
 
 Downloaded files are stored below:
 

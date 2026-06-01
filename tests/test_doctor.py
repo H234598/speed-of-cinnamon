@@ -141,6 +141,23 @@ class DoctorTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["configured"]["transcriber"]["resolved"], "whisper-cpp")
 
+    def test_english_only_whisper_cpp_model_fails_for_non_english_language(self) -> None:
+        tools = {"python3", "pw-record", "pwcpp"}
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "ggml-tiny.en.bin"
+            model.write_bytes(b"model")
+            settings = {
+                "language": "de",
+                "recorder": "auto",
+                "transcriber": "whisper-cpp",
+                "whisper-model": str(model),
+                "insert-method": "none",
+            }
+            with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
+                payload = doctor.report(settings)
+        self.assertFalse(payload["ok"])
+        self.assertIn("English-only", payload["configured"]["transcriber"]["detail"])
+
     def test_auto_asr_accepts_fedora_pwcpp(self) -> None:
         tools = {"python3", "pw-record", "pwcpp"}
         with tempfile.TemporaryDirectory() as tmp:
@@ -236,17 +253,149 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(payload["configured"]["transcriber"]["ok"])
         self.assertIn("invalid", payload["configured"]["transcriber"]["detail"])
 
+    def test_report_rejects_escaped_null_in_whisper_model_path(self) -> None:
+        tools = {"python3", "pw-record", "whisper-cli"}
+        settings = {
+            "recorder": "auto",
+            "transcriber": "whisper-cpp",
+            "whisper-model": "x\\\\x00y",
+            "insert-method": "none",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
+            payload = doctor.report(settings)
+        self.assertFalse(payload["configured"]["transcriber"]["ok"])
+        self.assertIn("invalid", payload["configured"]["transcriber"]["detail"])
+
     def test_parse_settings_json_rejects_null_byte(self) -> None:
         with self.assertRaisesRegex(ValueError, "contains invalid null byte"):
             doctor.parse_settings_json('{\"language\":\"en\x00\"}')
+
+    def test_parse_settings_json_rejects_escaped_null_byte(self) -> None:
+        with self.assertRaisesRegex(ValueError, "contains invalid null byte"):
+            doctor.parse_settings_json('{"language":"en\\\\u0000"}')
+
+    def test_parse_settings_json_rejects_escaped_x00_null_byte(self) -> None:
+        with self.assertRaisesRegex(ValueError, "contains invalid null byte"):
+            doctor.parse_settings_json('{"language":"en\\\\x00"}')
 
     def test_parse_settings_json_rejects_large_payload(self) -> None:
         with self.assertRaisesRegex(ValueError, "settings JSON is too large"):
             doctor.parse_settings_json(json.dumps({"payload": "x" * (doctor.MAX_SETTINGS_JSON_CHARS + 1)}))
 
+    def test_parse_settings_json_rejects_non_text_payload(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must be text"):
+            doctor.parse_settings_json({})  # type: ignore[arg-type]
+
+    def test_parse_settings_json_rejects_bool_payload(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must be text"):
+            doctor.parse_settings_json(True)  # type: ignore[arg-type]
+
+    def test_contains_escaped_null_rejects_non_text(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must be text"):
+            doctor._contains_escaped_null(123)  # type: ignore[arg-type]
+
+    def test_contains_escaped_null_rejects_bool(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must be text"):
+            doctor._contains_escaped_null(True)  # type: ignore[arg-type]
+
     def test_parse_settings_json_rejects_non_object_root(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be an object"):
             doctor.parse_settings_json("[\"en\"]")
+
+    def test_setting_rejects_non_text_payload(self) -> None:
+        with self.assertRaisesRegex(ValueError, "setting language must be text"):
+            doctor._setting({"language": 1}, "language")  # type: ignore[arg-type]
+
+    def test_setting_rejects_bool_payload(self) -> None:
+        with self.assertRaisesRegex(ValueError, "setting language must be text"):
+            doctor._setting({"language": True}, "language")  # type: ignore[arg-type]
+
+    def test_ok_rejects_non_check_object(self) -> None:
+        self.assertFalse(doctor._ok({"python3": {"ok": True}}, "python3"))  # type: ignore[arg-type]
+
+    def test_output_status_rejects_non_boolean_desktop_flags(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "cinnamon must be a boolean"):
+            doctor._output_status(
+                {"insert-method": "clipboard"},
+                {},
+                {"cinnamon": "false", "x11": "true"},
+                applet=True,
+            )
+
+    def test_output_status_rejects_non_boolean_applet(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "applet must be a boolean"):
+            doctor._output_status(
+                {"insert-method": "clipboard"},
+                {},
+                {"cinnamon": True, "x11": False},
+                applet="yes",
+            )
+
+    def test_report_rejects_non_boolean_desktop_cinnamon_flag(self) -> None:
+        def checks_with_python3() -> list[doctor.Check]:
+            return [
+                doctor.Check(name="python3", ok=True, detail="/usr/bin/python3"),
+            ]
+
+        with (
+            mock.patch("speed_of_cinnamon.doctor._env_desktop", return_value={"cinnamon": "false"}),
+            mock.patch("speed_of_cinnamon.doctor.run_checks", side_effect=checks_with_python3),
+            mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "", "XDG_SESSION_TYPE": "", "DESKTOP_SESSION": ""}),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "cinnamon must be a boolean"):
+                doctor.report({}, applet=True)
+
+    def test_report_rejects_non_boolean_applet(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "applet must be a boolean"):
+            doctor.report({}, applet="yes")  # type: ignore[arg-type]
+
+    def test_configured_status_rejects_non_boolean_applet(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "applet must be a boolean"):
+            doctor.configured_status({}, {}, {"cinnamon": True}, applet="yes")  # type: ignore[arg-type]
+
+    def test_report_rejects_non_boolean_python_check(self) -> None:
+        checks = [
+            doctor.Check(name="python3", ok="yes", detail="/usr/bin/python3"),  # type: ignore[arg-type]
+            doctor.Check(name="arecord", ok=True, detail="/usr/bin/arecord"),
+        ]
+        with (
+            mock.patch("speed_of_cinnamon.doctor.run_checks", return_value=checks),
+            mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "", "XDG_SESSION_TYPE": "", "DESKTOP_SESSION": ""}),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "python3\\.ok must be a boolean"):
+                doctor.report(
+                    {
+                        "recorder": "arecord",
+                        "transcriber": "command",
+                        "transcriber-command": "printf ok",
+                        "insert-method": "none",
+                    }
+                )
+
+    def test_configured_status_rejects_non_boolean_output_flags_for_warning(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.doctor._output_status",
+            return_value={"ok": True, "value": "clipboard-paste", "paste_ok": "false"},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "paste_ok must be a boolean"):
+                doctor.configured_status({"insert-method": "clipboard-paste"}, {}, {"cinnamon": True}, applet=True)
+
+    def test_configured_status_rejects_non_boolean_output_ok_for_warning(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.doctor._output_status",
+            return_value={"ok": "yes", "value": "clipboard-paste", "paste_ok": False},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "ok must be a boolean"):
+                doctor.configured_status({"insert-method": "clipboard-paste"}, {}, {"cinnamon": True}, applet=True)
+
+    def test_report_rejects_missing_python3_check(self) -> None:
+        checks = [doctor.Check(name="arecord", ok=True, detail="/usr/bin/arecord")]
+        with (
+            mock.patch("speed_of_cinnamon.doctor.run_checks", return_value=checks),
+            mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "", "XDG_SESSION_TYPE": "", "DESKTOP_SESSION": ""}),
+        ):
+            payload = doctor.report({"recorder": "arecord", "transcriber": "command", "transcriber-command": "printf ok"})
+        self.assertFalse(payload["ok"])
 
 
 if __name__ == "__main__":

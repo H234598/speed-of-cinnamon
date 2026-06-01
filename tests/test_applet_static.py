@@ -34,8 +34,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertEqual(schema["openai-compatible-url"]["default"], "http://127.0.0.1:8000/v1")
         self.assertIn('["openai-compatible-url", "openaiCompatibleUrl"]', source)
         self.assertIn('args.push("--backend", "openai-compatible")', source)
-        self.assertIn('args.push("--openai-compatible-url", this.openaiCompatibleUrl)', source)
-        self.assertIn('args.push("--openai-compatible-model", this.openaiCompatibleModel)', source)
+        self.assertIn('args.push("--openai-compatible-url", safeOpenAiCompatibleUrl)', source)
+        self.assertIn('args.push("--openai-compatible-model", safeOpenAiCompatibleModel)', source)
         self.assertIn('_selectTextModelBackend("openai-compatible"', source)
 
     def test_applet_registers_optional_language_specific_hotkeys(self) -> None:
@@ -59,6 +59,8 @@ class AppletStaticTest(unittest.TestCase):
     def test_applet_exposes_language_submenu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
+        self.assertIn('this.activeLanguage = "";', source)
+        self.assertIn("this.activeLanguageExplicit = false;", source)
         self.assertIn('this.languageItem = new PopupMenu.PopupSubMenuMenuItem(_("Language: en"))', source)
         self.assertIn("_populateLanguageMenu: function()", source)
         self.assertIn('new PopupMenu.PopupMenuItem((current === primary ? "[x] " : "[ ] ") + _("Use primary: ") + primary)', source)
@@ -68,6 +70,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('new PopupMenu.PopupIconMenuItem(_("Switch primary/secondary")', source)
         self.assertIn("selectPrimary.connect(\"activate\", () => this._setActiveLanguage(primary", source)
         self.assertIn("startSecondary.connect(\"activate\", () => this._startWithLanguage(secondary))", source)
+        self.assertIn("if (!this.activeLanguageExplicit || (current !== primary && current !== secondary))", source)
+        self.assertIn("this.activeLanguageExplicit = false;", source)
+        self.assertIn("this.activeLanguageExplicit = true;", source)
+        self.assertIn('status === "recording" || status === "recorded" || status === "processing"', source)
         self.assertIn("this._populateLanguageMenu();", source)
 
     def test_language_settings_offer_broader_whisper_codes(self) -> None:
@@ -119,10 +125,10 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
 
-        self.assertEqual(schema["max-seconds"]["min"], 5)
-        self.assertEqual(schema["max-seconds"]["max"], 300)
+        self.assertEqual(schema["max-seconds"]["min"], 0)
+        self.assertEqual(schema["max-seconds"]["max"], 3600)
         self.assertIn("const RECORDING_LIMIT_SECONDS = [", source)
-        for seconds in ["15", "30", "60", "120", "300"]:
+        for seconds in ["15", "30", "60", "120", "300", "600", "900", "1200", "1800", "3600"]:
             self.assertIn(seconds, source)
         self.assertIn('this.recordingLimitItem = new PopupMenu.PopupSubMenuMenuItem(_("Duration: 30s"))', source)
         self.assertIn("_populateRecordingLimitMenu: function()", source)
@@ -133,6 +139,27 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('"--max-seconds", String(this._normalizeRecordingLimit(this.maxSeconds))', source)
         self.assertIn('this.recordingLimitItem.label.text = _("Duration: ") + this._formatSeconds(this._normalizeRecordingLimit(this.maxSeconds))', source)
         self.assertIn('this.lastMessage = _("Duration for next recording: ") + label', source)
+
+    def test_typing_delay_has_backend_limits(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(schema["typing-delay-ms"]["min"], 0)
+        self.assertEqual(schema["typing-delay-ms"]["max"], 10000)
+        self.assertIn("_normalizeTypingDelayMs: function(delay)", source)
+        self.assertIn("_normalizeTypingDelayMs(this.typingDelayMs)", source)
+        self.assertIn('"--typing-delay-ms", String(this._normalizeTypingDelayMs(this.typingDelayMs))', source)
+        self.assertIn('_typeTextAfterFocus: function(text) {', source)
+
+    def test_recording_progress_path_uses_recording_limit_normalizer(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn('this.recordingMaxSeconds = this._normalizeRecordingLimit(this.maxSeconds);', source)
+        self.assertIn(
+            'this.recordingMaxSeconds !== undefined && this.recordingMaxSeconds !== null ? this.recordingMaxSeconds : this.maxSeconds',
+            source,
+        )
+        self.assertIn("_recordingProgressText: function() {", source)
 
     def test_applet_exposes_shortcut_reference_menu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -263,6 +290,87 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("const DOCTOR_COMMAND_TIMEOUT_MS = 20000;", source)
         self.assertIn("_runDoctor: function(startupCheck) {", source)
         self.assertIn("}, { timeoutMs: DOCTOR_COMMAND_TIMEOUT_MS });", source)
+        self.assertIn('this.doctorSummaryItem = new PopupMenu.PopupMenuItem(_("Doctor: not checked"))', source)
+        self.assertIn('_setDoctorSummary(_("Doctor: checking..."))', source)
+        self.assertIn("_doctorSummary: function(payload)", source)
+        self.assertIn('this.doctorSummaryItem.label.text = this.doctorSummaryText || _("Doctor: not checked")', source)
+
+    def test_recording_status_shows_microphone_level(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn('this.microphoneLevelItem = new PopupMenu.PopupMenuItem(_("Microphone: idle"))', source)
+        self.assertIn("this._applyMicrophoneLevel(payload.microphone_level, status);", source)
+        self.assertIn("_microphoneLevelText: function()", source)
+        self.assertIn("_levelBar: function(percent)", source)
+        self.assertIn('this.microphoneLevelItem.label.text = this._microphoneLevelText();', source)
+
+    def test_large_selection_menus_get_more_width_and_trim_long_rows(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("const Pango = imports.gi.Pango;", source)
+        self.assertIn("const MENU_MIN_WIDTH_EM = 36;", source)
+        self.assertIn("const SELECTION_MENU_MIN_WIDTH_EM = 42;", source)
+        self.assertIn("_styleWideMenus: function()", source)
+        self.assertIn("this._styleSelectionSubmenu(this.inputSourceItem);", source)
+        self.assertIn("this._styleSelectionSubmenu(this.modelItem);", source)
+        self.assertIn("this._styleSelectionSubmenu(this.textModelItem);", source)
+        self.assertIn("_selectionMenuItem: function(label)", source)
+        self.assertIn("_shortMenuText: function(value, maxChars)", source)
+        self.assertIn("item.label.clutter_text.ellipsize = options.wrap ? Pango.EllipsizeMode.NONE : Pango.EllipsizeMode.END", source)
+
+    def test_applet_adds_frontend_validation_for_long_or_invalid_text_fields(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("const CLI_TEXT_SETTINGS = {", source)
+        self.assertIn("const MAX_SETTING_TEXT_CHARS = 4096;", source)
+        self.assertIn("_coerceCliTextArg: function(value, fieldName)", source)
+        self.assertIn('"personal-context": "personal context"', source)
+        self.assertIn('"vocabulary": "vocabulary"', source)
+        self.assertIn("let safeOpenAiCompatibleUrl = this._coerceCliTextArg(this.openaiCompatibleUrl, \"openai-compatible URL\")", source)
+        self.assertIn("safePersonalContext = this._coerceCliTextArg(this.personalContext, \"personal context\")", source)
+        self.assertIn("safeVocabulary = this._coerceCliTextArg(this.vocabulary, \"vocabulary\")", source)
+        self.assertIn("for (let key in CLI_TEXT_SETTINGS)", source)
+        self.assertIn("let safeOllamaUrl = this._coerceCliTextArg(this.ollamaUrl, \"ollama URL\")", source)
+        self.assertIn("let safeOpenAiCompatibleUrl = this._coerceCliTextArg(this.openaiCompatibleUrl, \"openai-compatible URL\")", source)
+        self.assertIn("_coerceImportedSetting: function(key, value, fallback)", source)
+
+    def test_applet_settings_schema_mentions_frontend_limits(self) -> None:
+        schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
+
+        self.assertIn("Max 4096 chars", schema["personal-context"]["tooltip"])
+        self.assertIn("Max 4096 chars", schema["vocabulary"]["tooltip"])
+        self.assertIn("Max 4096 chars", schema["transcriber-command"]["tooltip"])
+        self.assertIn("Max 4096 chars", schema["post-process-command"]["tooltip"])
+        self.assertIn("Max 4096 chars", schema["post-process-prompt"]["tooltip"])
+        self.assertIn("Max 4096 chars", schema["input-device"]["tooltip"])
+        self.assertIn("Max 4096 chars", schema["whisper-model"]["tooltip"])
+        self.assertIn("Max 4096 chars", schema["ollama-model"]["tooltip"])
+        self.assertIn("Max 4096 chars", schema["openai-compatible-model"]["tooltip"])
+        self.assertIn("Max 4096 chars", schema["ollama-url"]["tooltip"])
+        self.assertIn("Max 4096 chars", schema["openai-compatible-url"]["tooltip"])
+
+    def test_starter_voice_model_matches_current_language(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("_starterVoiceModelName: function()", source)
+        self.assertIn("_voiceModelLanguage: function()", source)
+        self.assertIn("return this._primaryLanguage();", source)
+        self.assertIn('return this._isEnglishLanguage(this._voiceModelLanguage()) ? "tiny.en" : "tiny";', source)
+        self.assertIn("_ensureVoiceModelCompatibleWithPrimaryLanguage(false);", source)
+        self.assertIn("_ensureVoiceModelCompatibleWithCurrentLanguage(true)", source)
+        self.assertIn('_("Active: ") + this._currentLanguage() + _(", primary: ") + this._voiceModelLanguage()', source)
+        self.assertIn('String(model || this._starterVoiceModelName())', source)
+        self.assertIn("_voiceModelSupportsCurrentLanguage: function(model)", source)
+        self.assertIn("English-only model cannot transcribe primary language", source)
+
+    def test_applet_exposes_restart_button(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("const Extension = imports.ui.extension;", source)
+        self.assertIn('new PopupMenu.PopupIconMenuItem(_("Restart applet"), "view-refresh-symbolic"', source)
+        self.assertIn("restartApplet.connect(\"activate\", () => this._restartApplet())", source)
+        self.assertIn("_restartApplet: function()", source)
+        self.assertIn("Extension.reloadExtension(UUID, Extension.Type.APPLET)", source)
 
     def test_cli_command_expands_home_directory_shortcut(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

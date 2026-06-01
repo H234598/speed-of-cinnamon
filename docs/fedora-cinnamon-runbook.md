@@ -62,11 +62,11 @@ author/committer identity, applet metadata, Python project metadata, RPM spec me
 markers in tracked text files.
 
 On first load, the applet runs a lightweight setup check against its current Cinnamon settings. If the panel shows
-`SET`, open the applet menu and use `Copy setup plan`, `Copy setup commands`, `Run doctor`, `Open applet settings`,
-`Open setup guide`, and `Voice model` to finish the local pipeline setup. `Copy setup commands` copies only the concrete
-shell commands from the setup plan; it does not run `sudo`, `pkexec`, or a package manager from the applet. The startup
-check does not use portals and does not open a separate window. Guide and folder actions are launched through Cinnamon's
-GJS/Gio default-app API, not an `xdg-open` shell command.
+`SET`, open the applet menu and use `Copy setup plan`, `Copy setup commands`, `Run doctor`, `Restart applet`, `Open
+applet settings`, `Open setup guide`, and `Voice model` to finish the local pipeline setup. `Copy setup commands` copies
+only the concrete shell commands from the setup plan; it does not run `sudo`, `pkexec`, or a package manager from the
+applet. The startup check does not use portals and does not open a separate window. Guide and folder actions are launched
+through Cinnamon's GJS/Gio default-app API, not an `xdg-open` shell command.
 
 Use `Keyboard shortcuts` in the applet menu as the live shortcut reference. It shows the configured Cinnamon global
 toggle, optional primary/secondary language shortcuts, and applet-only actions such as cancel or language switching.
@@ -236,17 +236,20 @@ The built-in `diagnostics` output does not include these values.
 
 ## Voice Models
 
-The applet's `Voice model` menu exposes a small whisper.cpp catalog. Use `Download starter model` for `tiny.en`, or open
-each catalog model to download, select, or remove it. Use `Automatic ASR backend` to clear an explicit whisper.cpp
-selection and return to the normal automatic resolver without opening Cinnamon settings. The same model actions are
-available from the CLI:
+The applet's `Voice model` menu exposes a small whisper.cpp catalog. Use `Download starter model` for a primary-language
+starter: `tiny.en` for English, `tiny` for German and other non-English dictation. Open each catalog model to download,
+select, or remove it. Use `Automatic ASR backend` to clear an explicit whisper.cpp selection and return to the normal
+automatic resolver without opening Cinnamon settings. The same model actions are available from the CLI:
 
 ```bash
 speed-of-cinnamon models --json
-speed-of-cinnamon download-model tiny.en --json
+speed-of-cinnamon download-model tiny --json
 speed-of-cinnamon download-model base --json
-speed-of-cinnamon remove-model tiny.en --json
+speed-of-cinnamon remove-model tiny --json
 ```
+
+Avoid `.en` models for German dictation. Whisper can otherwise return placeholder text like
+`[speaking in foreign language]` instead of the spoken words.
 
 Downloaded files are saved below:
 

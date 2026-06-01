@@ -14,6 +14,15 @@ def now_iso() -> str:
 
 
 MAX_STATE_FILE_BYTES = 1_000_000
+MAX_STATE_STRING_CHARS = 1_000_000
+MAX_STATE_PATH_CHARS = 4_096
+
+
+def _contains_escaped_null(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise ValueError("value must be text")
+    lowered = (value or "").lower()
+    return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
 
 
 @dataclass
@@ -37,9 +46,69 @@ class RecordingState:
 
 class StateStore:
     def __init__(self, path: Path):
-        if "\x00" in str(path):
+        if isinstance(path, bool) or not isinstance(path, Path):
+            raise RuntimeError("state file path must be a Path")
+        text = str(path)
+        if not text or len(text) > MAX_STATE_PATH_CHARS:
+            raise RuntimeError("state file path is invalid")
+        if _contains_escaped_null(text):
             raise RuntimeError("state file path contains invalid null byte")
         self.path = path
+
+    @staticmethod
+    def _sanitize_text_field(value: Any, *, field_name: str) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bool) or not isinstance(value, str):
+            raise ValueError(f"state {field_name} must be text")
+        text = str(value)
+        if _contains_escaped_null(text):
+            raise ValueError(f"state {field_name} contains invalid null byte")
+        if len(text) > MAX_STATE_STRING_CHARS:
+            raise ValueError(f"state {field_name} is too large (max {MAX_STATE_STRING_CHARS} characters)")
+        return text
+
+    @staticmethod
+    def _coerce_boolean(value: Any) -> bool:
+        if not isinstance(value, bool):
+            raise ValueError(f"state inserted contains invalid boolean value: {value!r}")
+        return value
+
+    @staticmethod
+    def _coerce_state_int(value: Any, *, field_name: str) -> int:
+        if isinstance(value, bool):
+            raise ValueError(f"{field_name} must be an integer")
+        if isinstance(value, float):
+            raise ValueError(f"{field_name} must be an integer")
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                raise ValueError(f"{field_name} must be an integer")
+            try:
+                parsed = int(value)
+            except ValueError as exc:
+                raise ValueError(f"{field_name} must be an integer") from exc
+            return parsed
+        raise ValueError(f"{field_name} must be an integer")
+
+    @staticmethod
+    def _normalize_state_data(raw: dict[str, Any]) -> dict[str, Any]:
+        normalized: dict[str, Any] = {}
+        for field in RecordingState.__dataclass_fields__:
+            if field not in raw:
+                continue
+            value = raw[field]
+            if field in {"status", "audio_path", "log_path", "started_at", "stopped_at", "language", "recorder", "input_device", "transcript", "transcript_path", "error", "updated_at"}:
+                normalized[field] = StateStore._sanitize_text_field(value, field_name=field)
+            elif field == "pid":
+                normalized[field] = StateStore._coerce_state_int(value, field_name="state pid") if value is not None else None
+            elif field == "max_seconds":
+                normalized[field] = StateStore._coerce_state_int(value, field_name="state max_seconds")
+            elif field == "inserted":
+                normalized[field] = StateStore._coerce_boolean(value)
+        return normalized
 
     def read(self) -> RecordingState:
         if not self.path.exists():
@@ -50,16 +119,28 @@ class StateStore:
         except OSError:
             return RecordingState(error="state file could not be read")
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            data_text = self.path.read_text(encoding="utf-8")
+            if _contains_escaped_null(data_text):
+                return RecordingState(error="state file could not be read")
+            data = json.loads(data_text)
+            if not isinstance(data, dict):
+                return RecordingState(error="state file is malformed")
+            normalized = StateStore._normalize_state_data(data)
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError):
             return RecordingState(error="state file could not be read")
-        return RecordingState(**{k: v for k, v in data.items() if k in RecordingState.__dataclass_fields__})
+        return RecordingState(**normalized)
 
     def write(self, state: RecordingState) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         state.updated_at = now_iso()
+        payload = asdict(state)
+        normalized_payload = StateStore._normalize_state_data(payload)
+        normalized_payload["updated_at"] = now_iso()
+        rendered = json.dumps(normalized_payload, indent=2, sort_keys=True) + "\n"
+        if len(rendered.encode("utf-8")) > MAX_STATE_FILE_BYTES:
+            raise RuntimeError("state file is too large")
         with tempfile.NamedTemporaryFile("w", delete=False, dir=self.path.parent, encoding="utf-8") as handle:
-            handle.write(json.dumps(asdict(state), indent=2, sort_keys=True) + "\n")
+            handle.write(rendered)
             tmp_path = Path(handle.name)
         try:
             os.replace(tmp_path, self.path)
@@ -80,7 +161,7 @@ class StateStore:
 
 
 def process_is_alive(pid: int | None) -> bool:
-    if not pid:
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
     try:
         os.kill(pid, 0)

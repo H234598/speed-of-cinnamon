@@ -164,10 +164,14 @@ If the OpenAI-compatible server requires a bearer token, set
 
 ```bash
 speed-of-cinnamon models --json
-speed-of-cinnamon download-model tiny.en --json
+speed-of-cinnamon download-model tiny --json
 speed-of-cinnamon download-model base --json
-speed-of-cinnamon remove-model tiny.en --json
+speed-of-cinnamon remove-model tiny --json
 ```
+
+Use multilingual models such as `tiny`, `base`, or `small` for German and other non-English dictation. The `.en`
+models are English-only and can produce placeholder text such as `[speaking in foreign language]` when the recording
+language is not English.
 
 Downloaded whisper.cpp models are stored below:
 

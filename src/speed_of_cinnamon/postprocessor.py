@@ -26,31 +26,58 @@ MAX_POSTPROCESS_URL_CHARS = 2_048
 
 
 def _quote(value: str) -> str:
+    if not isinstance(value, str) or isinstance(value, bool):
+        raise PostProcessError("value must be text")
     return shlex.quote(value)
 
 
 def _assert_text_length(value: str, *, field_name: str, max_chars: int | None = None) -> str:
+    if not isinstance(value, str) or isinstance(value, bool):
+        raise PostProcessError(f"{field_name} must be text")
     if max_chars is None:
         max_chars = MAX_POSTPROCESS_TEXT_CHARS
+    if not isinstance(max_chars, int) or isinstance(max_chars, bool):
+        raise PostProcessError(f"{field_name} max chars must be an integer")
     if len(value) > max_chars:
         raise PostProcessError(f"{field_name} is too large (max {max_chars} characters)")
     return value
 
 
 def _assert_clean_url(url: str, *, field_name: str) -> str:
+    if not isinstance(url, str) or isinstance(url, bool):
+        raise PostProcessError(f"{field_name} must be text")
     normalized = (url or "").strip()
     if not normalized:
         raise PostProcessError(f"{field_name} is required")
-    if "\x00" in normalized:
+    if _contains_escaped_null(normalized):
         raise PostProcessError(f"{field_name} contains invalid null byte")
     return _assert_text_length(normalized, field_name=field_name, max_chars=MAX_POSTPROCESS_URL_CHARS)
 
 
+def _contains_escaped_null(value: str) -> bool:
+    if not isinstance(value, str) or isinstance(value, bool):
+        raise PostProcessError("value must be text")
+    lowered = (value or "").lower()
+    return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
+
+
 def _read_response_text(response: object, max_bytes: int) -> str:
+    if not hasattr(response, "read"):
+        raise PostProcessError("remote response must be readable")
+    if not isinstance(max_bytes, int) or isinstance(max_bytes, bool):
+        raise PostProcessError("max response bytes must be an integer")
+    if max_bytes < 0:
+        raise PostProcessError("max response bytes must be non-negative")
     raw = response.read(max_bytes + 1)
     if len(raw) > max_bytes:
         raise PostProcessError(f"remote response is too large (max {max_bytes} bytes)")
-    return raw.decode("utf-8", errors="replace")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise PostProcessError("remote response contains invalid UTF-8") from exc
+    if _contains_escaped_null(text):
+        raise PostProcessError("remote response contains invalid null byte")
+    return text
 
 
 def render_postprocess_template(
@@ -60,13 +87,16 @@ def render_postprocess_template(
     personal_context: str = "",
     vocabulary: str = "",
 ) -> str:
-    values = {
-        "text": _quote(text),
-        "language": _quote(language),
-        "context": _quote(normalize_context(personal_context)),
-        "vocabulary": _quote(normalize_vocabulary(vocabulary)),
-        "prompt": _quote(build_personalization_prompt(personal_context, vocabulary)),
-    }
+    try:
+        values = {
+            "text": _quote(text),
+            "language": _quote(language),
+            "context": _quote(normalize_context(personal_context)),
+            "vocabulary": _quote(normalize_vocabulary(vocabulary)),
+            "prompt": _quote(build_personalization_prompt(personal_context, vocabulary)),
+        }
+    except ValueError as exc:
+        raise PostProcessError(str(exc)) from exc
     rendered = template
     for key, value in values.items():
         rendered = rendered.replace("{" + key + "}", value)
@@ -80,11 +110,25 @@ def build_ollama_prompt(
     vocabulary: str = "",
     instruction: str = "",
 ) -> str:
+    if not isinstance(text, str) or isinstance(text, bool):
+        raise PostProcessError("text must be text")
+    if not isinstance(language, str) or isinstance(language, bool):
+        raise PostProcessError("language must be text")
+    if not isinstance(personal_context, str) or isinstance(personal_context, bool):
+        raise PostProcessError("personal context must be text")
+    if not isinstance(vocabulary, str) or isinstance(vocabulary, bool):
+        raise PostProcessError("vocabulary must be text")
+    if not isinstance(instruction, str) or isinstance(instruction, bool):
+        raise PostProcessError("instruction must be text")
+    try:
+        personalization = build_personalization_prompt(personal_context, vocabulary)
+    except ValueError as exc:
+        raise PostProcessError(str(exc)) from exc
+
     sections = [
         (instruction or DEFAULT_OLLAMA_PROMPT).strip(),
         f"Language: {language}",
     ]
-    personalization = build_personalization_prompt(personal_context, vocabulary)
     if personalization:
         sections.append(personalization)
     sections.append("Transcript:\n" + text.strip())
@@ -105,12 +149,18 @@ def _openai_compatible_endpoint(url: str, path: str) -> str:
 
 
 def _read_json(request: urllib.request.Request, timeout: int) -> object:
+    if not isinstance(timeout, int) or isinstance(timeout, bool):
+        raise PostProcessError("timeout must be an integer")
     with urllib.request.urlopen(request, timeout=timeout) as response:
         raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
     return json.loads(raw)
 
 
 def _format_model_size(size: object) -> str:
+    if isinstance(size, bool):
+        return ""
+    if isinstance(size, float):
+        return ""
     try:
         value = int(size)
     except (TypeError, ValueError):
@@ -271,6 +321,10 @@ def post_process_with_ollama(
     vocabulary: str = "",
     prompt: str = "",
 ) -> str:
+    if not isinstance(model, str) or isinstance(model, bool):
+        raise PostProcessError("ollama model must be text")
+    if not isinstance(prompt, str) or isinstance(prompt, bool):
+        raise PostProcessError("prompt must be text")
     model_name = (model or "").strip()
     if not model_name:
         raise PostProcessError("Ollama model is required")
@@ -322,11 +376,15 @@ def build_openai_compatible_messages(
     vocabulary: str = "",
     instruction: str = "",
 ) -> list[dict[str, str]]:
+    try:
+        personalization = build_personalization_prompt(personal_context, vocabulary)
+    except ValueError as exc:
+        raise PostProcessError(str(exc)) from exc
+
     system_sections = [
         (instruction or DEFAULT_OLLAMA_PROMPT).strip(),
         f"Language: {language}",
     ]
-    personalization = build_personalization_prompt(personal_context, vocabulary)
     if personalization:
         system_sections.append(personalization)
     return [
@@ -363,6 +421,10 @@ def post_process_with_openai_compatible(
     vocabulary: str = "",
     prompt: str = "",
 ) -> str:
+    if not isinstance(model, str) or isinstance(model, bool):
+        raise PostProcessError("openai-compatible model must be text")
+    if not isinstance(prompt, str) or isinstance(prompt, bool):
+        raise PostProcessError("prompt must be text")
     model_name = (model or "").strip()
     if not model_name:
         raise PostProcessError("OpenAI-compatible model is required")
@@ -418,6 +480,22 @@ def post_process_text(
     openai_compatible_model: str = "",
     openai_compatible_url: str = DEFAULT_OPENAI_COMPATIBLE_URL,
 ) -> str:
+    if not isinstance(text, str) or isinstance(text, bool):
+        raise PostProcessError("text must be text")
+    if not isinstance(language, str) or isinstance(language, bool):
+        raise PostProcessError("language must be text")
+    if not isinstance(command_template, str) or isinstance(command_template, bool):
+        raise PostProcessError("command template must be text")
+    if not isinstance(personal_context, str) or isinstance(personal_context, bool):
+        raise PostProcessError("personal context must be text")
+    if not isinstance(vocabulary, str) or isinstance(vocabulary, bool):
+        raise PostProcessError("vocabulary must be text")
+    if not isinstance(backend, str) or isinstance(backend, bool):
+        raise PostProcessError("backend must be text")
+    if not isinstance(ollama_url, str) or isinstance(ollama_url, bool):
+        raise PostProcessError("ollama url must be text")
+    if not isinstance(openai_compatible_url, str) or isinstance(openai_compatible_url, bool):
+        raise PostProcessError("openai-compatible url must be text")
     normalized_backend = (backend or "command").strip().lower().replace("_", "-")
     if normalized_backend in {"none", "off", "disabled"}:
         return text
@@ -474,13 +552,21 @@ def post_process_text(
         ):
             raise PostProcessError(message) from exc
         if (
-            "command failed" in message
+            "personal context is too large" in message
+            or "vocabulary is too large" in message
+            or "command contains invalid null byte" in message
+            or "command output contains invalid null byte" in message
+            or "command failed" in message
             or "command not found" in message
             or "command timed out" in message
             or "command execution failed" in message
             or "command input exceeded" in message
+            or "max_input_chars must be positive" in message
             or "max_input_chars must be non-negative" in message
+            or "max_input_chars must not exceed" in message
+            or "max_output_chars must be positive" in message
             or "max_output_chars must be non-negative" in message
+            or "max_output_chars must not exceed" in message
             or "timeout_seconds must be positive" in message
             or "command input contains invalid null byte" in message
         ):

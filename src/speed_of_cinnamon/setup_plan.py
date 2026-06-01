@@ -3,12 +3,18 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 
-def _section(payload: Mapping[str, Any], name: str) -> Mapping[str, Any]:
+def _configured(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     configured = payload.get("configured")
     if not isinstance(configured, Mapping):
-        return {}
+        raise RuntimeError("configured must be an object")
+    return configured
+
+
+def _section(configured: Mapping[str, Any], name: str) -> Mapping[str, Any]:
     section = configured.get(name)
-    return section if isinstance(section, Mapping) else {}
+    if not isinstance(section, Mapping):
+        raise RuntimeError(f"{name} must be an object")
+    return section
 
 
 def _warnings(payload: Mapping[str, Any]) -> list[str]:
@@ -16,14 +22,25 @@ def _warnings(payload: Mapping[str, Any]) -> list[str]:
     if not isinstance(configured, Mapping):
         return []
     warnings = configured.get("warnings")
-    if not isinstance(warnings, list):
+    if warnings is None:
         return []
+    if not isinstance(warnings, list):
+        raise RuntimeError("warnings must be a list")
     return [str(item) for item in warnings if str(item).strip()]
+
+
+def _coerce_plan_bool(payload: Mapping[str, Any], key: str) -> bool:
+    value = payload.get(key)
+    if not isinstance(value, bool):
+        raise RuntimeError(f"{key} must be a boolean")
+    return value
 
 
 def _desktop(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     desktop = payload.get("desktop")
-    return desktop if isinstance(desktop, Mapping) else {}
+    if not isinstance(desktop, Mapping):
+        raise RuntimeError("desktop must be an object")
+    return desktop
 
 
 def _add_step(
@@ -46,11 +63,12 @@ def _add_step(
 
 
 def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
-    ready = bool(doctor_payload.get("ok"))
+    ready = _coerce_plan_bool(doctor_payload, "ok")
     steps: list[dict[str, object]] = []
 
+    configured = _configured(doctor_payload)
     desktop = _desktop(doctor_payload)
-    if desktop and not bool(desktop.get("cinnamon")):
+    if not _coerce_plan_bool(desktop, "cinnamon"):
         _add_step(
             steps,
             "cinnamon-session",
@@ -58,8 +76,8 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
             "Speed of Cinnamon is designed for Cinnamon's applet, clipboard, and keybinding APIs.",
         )
 
-    recorder = _section(doctor_payload, "recorder")
-    if recorder and not bool(recorder.get("ok")):
+    recorder = _section(configured, "recorder")
+    if not _coerce_plan_bool(recorder, "ok"):
         _add_step(
             steps,
             "recorder-tools",
@@ -68,8 +86,8 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
             ["sudo dnf install -y pipewire-utils pulseaudio-utils alsa-utils"],
         )
 
-    transcriber = _section(doctor_payload, "transcriber")
-    if transcriber and not bool(transcriber.get("ok")):
+    transcriber = _section(configured, "transcriber")
+    if not _coerce_plan_bool(transcriber, "ok"):
         value = str(transcriber.get("value") or "auto")
         detail = str(transcriber.get("detail") or "Configure a local ASR backend.")
         if value == "command":
@@ -87,7 +105,7 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
                 "voice-model",
                 "Download or select a whisper.cpp voice model",
                 detail,
-                ["speed-of-cinnamon download-model tiny.en --json"],
+                ["speed-of-cinnamon download-model tiny --json"],
             )
         else:
             _add_step(
@@ -100,12 +118,12 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
                 [
                     "sudo dnf install -y python3-pywhispercpp",
                     "speed-of-cinnamon models --json",
-                    "speed-of-cinnamon download-model tiny.en --json",
+                    "speed-of-cinnamon download-model tiny --json",
                 ],
             )
 
-    output = _section(doctor_payload, "output")
-    if output and not bool(output.get("ok")):
+    output = _section(configured, "output")
+    if not _coerce_plan_bool(output, "ok"):
         _add_step(
             steps,
             "output-tools",
@@ -125,8 +143,8 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
                 optional=True,
             )
 
-    postprocessor = _section(doctor_payload, "postprocessor")
-    if postprocessor and not bool(postprocessor.get("ok")):
+    postprocessor = _section(configured, "postprocessor")
+    if not _coerce_plan_bool(postprocessor, "ok"):
         value = str(postprocessor.get("value") or "")
         detail = str(postprocessor.get("detail") or "Configure text polishing.")
         if value == "ollama":

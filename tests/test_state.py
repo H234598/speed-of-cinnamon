@@ -5,13 +5,37 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
-from speed_of_cinnamon.state import MAX_STATE_FILE_BYTES, StateStore
+from speed_of_cinnamon.state import (
+    MAX_STATE_FILE_BYTES,
+    MAX_STATE_STRING_CHARS,
+    MAX_STATE_PATH_CHARS,
+    RecordingState,
+    StateStore,
+    process_is_alive,
+    _contains_escaped_null,
+)
 
 
 class StateStoreTest(unittest.TestCase):
+    def test_contains_escaped_null_rejects_non_text(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must be text"):
+            _contains_escaped_null(1)  # type: ignore[arg-type]
+
+    def test_state_store_rejects_non_path(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "must be a Path"):
+            StateStore("state.json")  # type: ignore[arg-type]
+
     def test_state_store_rejects_null_byte_path(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "invalid null byte"):
             StateStore(Path("state\x00.json"))
+
+    def test_state_store_rejects_escaped_null_path(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "invalid null byte"):
+            StateStore(Path("state\\\\x00.json"))
+
+    def test_state_store_rejects_oversized_path(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "state file path is invalid"):
+            StateStore(Path("a" * (MAX_STATE_PATH_CHARS + 1)))
 
     def test_missing_state_defaults_to_idle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -43,6 +67,116 @@ class StateStoreTest(unittest.TestCase):
             path.write_text("x" * (MAX_STATE_FILE_BYTES + 1), encoding="utf-8")
             state = StateStore(path).read()
         self.assertEqual(state.error, "state file is too large")
+
+    def test_read_rejects_invalid_utf8_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_bytes(b"\xff")
+            state = StateStore(path).read()
+        self.assertEqual(state.error, "state file could not be read")
+
+    def test_read_rejects_escaped_x00_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('{"status":"idle\\\\x00"}', encoding="utf-8")
+            state = StateStore(path).read()
+        self.assertEqual(state.error, "state file could not be read")
+
+    def test_read_rejects_null_byte_text_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('{"status":"idle\\u0000"}', encoding="utf-8")
+            state = StateStore(path).read()
+        self.assertEqual(state.error, "state file could not be read")
+
+    def test_read_rejects_non_object_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('["idle"]', encoding="utf-8")
+            state = StateStore(path).read()
+        self.assertEqual(state.error, "state file is malformed")
+
+    def test_read_rejects_oversized_long_text_state(self) -> None:
+        long_value = "X" * (MAX_STATE_STRING_CHARS + 5)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text(f'{{"status":"{long_value}"}}', encoding="utf-8")
+            state = StateStore(path).read()
+        self.assertEqual(state.error, "state file is too large")
+
+    def test_write_rejects_invalid_text_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            store = StateStore(path)
+            with self.assertRaisesRegex(ValueError, "state status contains invalid null byte"):
+                store.write(RecordingState(status="oops\x00"))
+
+    def test_write_rejects_oversized_state(self) -> None:
+        long_value = "Y" * (MAX_STATE_STRING_CHARS + 5)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            store = StateStore(path)
+            state = store.read()
+            state.transcript = long_value
+            with self.assertRaisesRegex(ValueError, "is too large"):
+                store.update(transcript=long_value)
+
+    def test_sanitize_text_field_rejects_non_text(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must be text"):
+            StateStore._sanitize_text_field(12, field_name="status")
+
+    def test_process_is_alive_rejects_non_int(self) -> None:
+        self.assertFalse(process_is_alive("123"))  # type: ignore[arg-type]
+        self.assertFalse(process_is_alive(True))
+
+    def test_read_rejects_invalid_boolean_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('{"inserted":"maybe"}', encoding="utf-8")
+            state = StateStore(path).read()
+        self.assertEqual(state.error, "state file could not be read")
+
+    def test_read_rejects_string_boolean_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('{"inserted":"true"}', encoding="utf-8")
+            state = StateStore(path).read()
+        self.assertEqual(state.error, "state file could not be read")
+
+    def test_read_rejects_integer_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('{"inserted":1}', encoding="utf-8")
+            state = StateStore(path).read()
+        self.assertEqual(state.error, "state file could not be read")
+
+    def test_read_rejects_boolean_pid_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('{"pid": true}', encoding="utf-8")
+            state = StateStore(path).read()
+        self.assertEqual(state.error, "state file could not be read")
+
+    def test_read_rejects_boolean_max_seconds_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('{"max_seconds": true}', encoding="utf-8")
+            state = StateStore(path).read()
+        self.assertEqual(state.error, "state file could not be read")
+
+    def test_read_rejects_float_pid_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('{"pid": 12.5}', encoding="utf-8")
+            state = StateStore(path).read()
+        self.assertEqual(state.error, "state file could not be read")
+
+    def test_read_rejects_float_max_seconds_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('{"max_seconds": 12.5}', encoding="utf-8")
+            state = StateStore(path).read()
+        self.assertEqual(state.error, "state file could not be read")
 
 
 if __name__ == "__main__":

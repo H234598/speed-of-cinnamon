@@ -58,6 +58,7 @@ Use the applet menu actions:
 - `Copy setup plan`
 - `Copy setup commands`
 - `Run doctor`
+- `Restart applet`
 - `Open applet settings`
 - `Open setup guide`
 - `Voice model`

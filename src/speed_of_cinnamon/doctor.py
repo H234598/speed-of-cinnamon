@@ -5,9 +5,9 @@ import os
 import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Mapping
 
-from .models import default_whisper_cpp_model_path
+from .models import default_whisper_cpp_model_path, model_supports_language
 
 
 @dataclass(frozen=True)
@@ -49,7 +49,27 @@ MAX_SETTINGS_JSON_CHARS = 250_000
 
 
 def _ok(checks: Mapping[str, Check], name: str) -> bool:
-    return bool(checks.get(name) and checks[name].ok)
+    check = checks.get(name)
+    if isinstance(check, Check):
+        if not isinstance(check.ok, bool):
+            raise RuntimeError(f"{name}.ok must be a boolean")
+        return check.ok
+    return False
+
+
+def _coerce_payload_bool(payload: Mapping[str, Any], key: str) -> bool:
+    value = payload.get(key)
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    raise RuntimeError(f"{key} must be a boolean")
+
+
+def _coerce_required_bool(value: object, *, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise RuntimeError(f"{field_name} must be a boolean")
+    return value
 
 
 def _env_desktop() -> dict[str, object]:
@@ -67,7 +87,12 @@ def _env_desktop() -> dict[str, object]:
 
 
 def _setting(settings: Mapping[str, object], key: str, default: str = "") -> str:
-    return str(settings.get(key, default) or "").strip()
+    value = settings.get(key, default)
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise ValueError(f"setting {key} must be text")
+    return value.strip()
 
 
 def _recorder_status(settings: Mapping[str, object], checks: Mapping[str, Check]) -> dict[str, object]:
@@ -94,13 +119,23 @@ def _recorder_status(settings: Mapping[str, object], checks: Mapping[str, Check]
 
 
 def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Check]) -> dict[str, object]:
+    language = _setting(settings, "language", "en")
     transcriber = _setting(settings, "transcriber", "auto").lower().replace("_", "-")
     command_template = _setting(settings, "transcriber-command")
     whisper_model = _setting(settings, "whisper-model")
-    local_model = whisper_model or default_whisper_cpp_model_path()
+    if whisper_model:
+        local_model = whisper_model
+        fallback_model = ""
+    else:
+        local_model = default_whisper_cpp_model_path(language)
+        fallback_model = "" if local_model else default_whisper_cpp_model_path(language)
+    incompatible_default_model = bool(
+        not whisper_model and not local_model and fallback_model and not model_supports_language(fallback_model, language)
+    )
     whisper_ok = _ok(checks, "whisper")
     whisper_cpp_ok = _ok(checks, "whisper-cli") or _ok(checks, "whisper.cpp") or _ok(checks, "pwcpp")
-    local_model_is_invalid = bool(local_model and "\x00" in local_model)
+    local_model_is_invalid = bool(local_model and _contains_escaped_null(local_model))
+    local_model_language_ok = bool(not local_model or model_supports_language(local_model, language))
     model_ok = False
     if local_model and not local_model_is_invalid:
         try:
@@ -117,8 +152,20 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
             return {"ok": True, "value": "auto", "resolved": "command", "detail": "custom command configured"}
         if local_model_is_invalid:
             return {"ok": False, "value": "auto", "detail": f"whisper.cpp model path is invalid: {local_model}"}
+        if local_model and not local_model_language_ok:
+            return {
+                "ok": False,
+                "value": "auto",
+                "detail": f"English-only whisper.cpp model does not support language {language}; use a multilingual model",
+            }
         if whisper_ok:
             return {"ok": True, "value": "auto", "resolved": "whisper", "detail": "whisper command available"}
+        if incompatible_default_model:
+            return {
+                "ok": False,
+                "value": "auto",
+                "detail": f"English-only whisper.cpp model does not support language {language}; download a multilingual model",
+            }
         if local_model and whisper_cpp_ok and model_ok:
             return {
                 "ok": True,
@@ -150,6 +197,12 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
             return {"ok": False, "value": "whisper-cpp", "detail": "whisper.cpp command is missing"}
         if local_model_is_invalid:
             return {"ok": False, "value": "whisper-cpp", "detail": f"whisper.cpp model path is invalid: {local_model}"}
+        if local_model and not local_model_language_ok:
+            return {
+                "ok": False,
+                "value": "whisper-cpp",
+                "detail": f"English-only whisper.cpp model does not support language {language}; use a multilingual model",
+            }
         if not local_model:
             return {"ok": False, "value": "whisper-cpp", "detail": "whisper.cpp model path is empty"}
         return {
@@ -170,9 +223,12 @@ def _output_status(
     desktop: Mapping[str, object],
     applet: bool = False,
 ) -> dict[str, object]:
+    applet = _coerce_required_bool(applet, field_name="applet")
     insert_method = _setting(settings, "insert-method", "clipboard-paste").lower()
-    cinnamon_clipboard = applet and bool(desktop.get("cinnamon"))
-    x11_paste = bool(desktop.get("x11")) and _ok(checks, "xdotool")
+    cinnamon_flag = _coerce_payload_bool(desktop, "cinnamon")
+    x11_flag = _coerce_payload_bool(desktop, "x11")
+    cinnamon_clipboard = applet and cinnamon_flag
+    x11_paste = x11_flag and _ok(checks, "xdotool")
     wayland_paste = _ok(checks, "wtype")
     paste_ok = x11_paste or wayland_paste
     cli_clipboard = _ok(checks, "xclip") or _ok(checks, "xsel") or _ok(checks, "wl-copy")
@@ -263,12 +319,18 @@ def configured_status(
     desktop: Mapping[str, object],
     applet: bool = False,
 ) -> dict[str, object]:
+    applet = _coerce_required_bool(applet, field_name="applet")
     recorder = _recorder_status(settings, checks)
     transcriber = _transcriber_status(settings, checks)
     output = _output_status(settings, checks, desktop, applet)
     postprocessor = _postprocessor_status(settings)
     warnings = []
-    if applet and output.get("value") == "clipboard-paste" and output.get("ok") and not output.get("paste_ok"):
+    if (
+        applet
+        and output.get("value") == "clipboard-paste"
+        and _coerce_payload_bool(output, "ok")
+        and not _coerce_payload_bool(output, "paste_ok")
+    ):
         warnings.append("automatic paste is unavailable; Cinnamon clipboard copy still works")
     return {
         "recorder": recorder,
@@ -280,17 +342,20 @@ def configured_status(
 
 
 def report(settings: Mapping[str, object] | None = None, applet: bool = False) -> dict[str, object]:
+    applet = _coerce_required_bool(applet, field_name="applet")
     checks = run_checks()
     by_name = {check.name: check for check in checks}
     desktop = _env_desktop()
     configured = configured_status(settings or {}, by_name, desktop, applet)
+    python_check = by_name.get("python3")
+    python_ok = _ok({"python3": python_check}, "python3")
     required_ok = (
-        by_name["python3"].ok
-        and (not applet or bool(desktop.get("cinnamon")))
-        and bool(configured["recorder"]["ok"])
-        and bool(configured["transcriber"]["ok"])
-        and bool(configured["output"]["ok"])
-        and bool(configured["postprocessor"]["ok"])
+        python_ok
+        and (not applet or _coerce_payload_bool(desktop, "cinnamon"))
+        and _coerce_payload_bool(configured["recorder"], "ok")
+        and _coerce_payload_bool(configured["transcriber"], "ok")
+        and _coerce_payload_bool(configured["output"], "ok")
+        and _coerce_payload_bool(configured["postprocessor"], "ok")
     )
     return {
         "ok": required_ok,
@@ -310,10 +375,19 @@ def report(settings: Mapping[str, object] | None = None, applet: bool = False) -
     }
 
 
+def _contains_escaped_null(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise ValueError("settings JSON must be text")
+    lowered = (value or "").lower()
+    return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
+
+
 def parse_settings_json(value: str) -> dict[str, object]:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise ValueError("settings JSON must be text")
     if not value:
         return {}
-    if "\x00" in value:
+    if _contains_escaped_null(value):
         raise ValueError("settings JSON contains invalid null byte")
     if len(value) > MAX_SETTINGS_JSON_CHARS:
         raise ValueError(f"settings JSON is too large (max {MAX_SETTINGS_JSON_CHARS} characters)")

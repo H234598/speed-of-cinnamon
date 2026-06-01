@@ -6,7 +6,9 @@ const St = imports.gi.St;
 const Util = imports.misc.util;
 const GLib = imports.gi.GLib;
 const Gio = imports.gi.Gio;
+const Pango = imports.gi.Pango;
 const Mainloop = imports.mainloop;
+const Extension = imports.ui.extension;
 
 const UUID = "speed-of-cinnamon@H234598";
 const HOTKEY_ID = "speed-of-cinnamon-toggle";
@@ -21,11 +23,34 @@ const MAX_CLI_ARG_BYTES = 4096;
 const MAX_CLI_ARG_COUNT = 128;
 const MAX_CLI_COMMAND_BYTES = 32768;
 const MAX_TEXT_INSERT_CHARS = 120000;
+const MAX_SETTING_TEXT_CHARS = 4096;
+const CLI_TEXT_SETTINGS = {
+  "input-device": "input device",
+  "transcriber-command": "transcriber command",
+  "post-process-command": "post-process command",
+  "ollama-url": "ollama URL",
+  "ollama-model": "ollama model",
+  "openai-compatible-url": "openai-compatible URL",
+  "openai-compatible-model": "openai-compatible model",
+  "post-process-prompt": "post-process prompt",
+  "whisper-model": "whisper model",
+  "personal-context": "personal context",
+  "vocabulary": "vocabulary"
+};
 const MAX_TYPE_COMMAND_CHARS = 4000;
 const MAX_SPAWN_JSON_BYTES = 262144;
+const MIN_RECORDING_SECONDS = 0;
+const MAX_RECORDING_SECONDS = 3600;
+const DEFAULT_RECORDING_SECONDS = 30;
+const MIN_TYPING_DELAY_MS = 0;
+const MAX_TYPING_DELAY_MS = 10000;
+const DEFAULT_TYPING_DELAY_MS = 8;
 const CLI_COMMAND_TIMEOUT_MS = 300000;
 const STATUS_COMMAND_TIMEOUT_MS = 10000;
 const DOCTOR_COMMAND_TIMEOUT_MS = 20000;
+const MENU_MIN_WIDTH_EM = 36;
+const SELECTION_MENU_MIN_WIDTH_EM = 42;
+const SELECTION_MENU_LABEL_WIDTH_EM = 40;
 const PANEL_STATUS_CLASSES = [
   "speed-of-cinnamon-recording",
   "speed-of-cinnamon-processing",
@@ -51,7 +76,12 @@ const RECORDING_LIMIT_SECONDS = [
   30,
   60,
   120,
-  300
+  300,
+  600,
+  900,
+  1200,
+  1800,
+  3600
 ];
 const EXPORTABLE_SETTINGS = [
   ["toggle-keybinding", "toggleKeybinding"],
@@ -109,15 +139,16 @@ MyApplet.prototype = {
     this.showPanelLabel = true;
     this.language = "en";
     this.secondaryLanguage = "de";
-    this.activeLanguage = "en";
-    this.maxSeconds = 30;
+    this.activeLanguage = "";
+    this.activeLanguageExplicit = false;
+    this.maxSeconds = DEFAULT_RECORDING_SECONDS;
     this.autoTranscribeTimeout = true;
     this.keepRecordingArtifacts = false;
     this.recorder = "auto";
     this.inputDevice = "";
     this.insertMethod = "clipboard-paste";
     this.appendSpace = true;
-    this.typingDelayMs = 8;
+    this.typingDelayMs = DEFAULT_TYPING_DELAY_MS;
     this.sanitizeSpecialChars = false;
     this.cliPath = "";
     this.transcriber = "auto";
@@ -141,6 +172,8 @@ MyApplet.prototype = {
     this.isCommandRunning = false;
     this._statusCommandRunning = false;
     this._doctorCommandRunning = false;
+    this.microphoneLevel = null;
+    this.doctorSummaryText = "";
     this.notificationSessionActive = false;
     this.lastNotificationKey = "";
     this.autoTranscribeRecordingKey = "";
@@ -161,6 +194,7 @@ MyApplet.prototype = {
     this.settings = new Settings.AppletSettings(this, UUID, instanceId);
     this._bindSettings();
     this._syncActiveLanguage();
+    this._ensureVoiceModelCompatibleWithPrimaryLanguage(false);
     this._buildMenu();
     this._registerHotkeys();
     this._refreshStatus();
@@ -179,22 +213,22 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "auto-transcribe-timeout", "autoTranscribeTimeout", this._onRecordingOptionsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "keep-recording-artifacts", "keepRecordingArtifacts", this._onRecordingOptionsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "recorder", "recorder", this._onRecorderSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "input-device", "inputDevice", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "input-device", "inputDevice", this._onInputSourceSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "insert-method", "insertMethod", this._onOutputSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "append-space", "appendSpace", this._onTextOutputSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "typing-delay-ms", "typingDelayMs", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "typing-delay-ms", "typingDelayMs", this._onTextOutputSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "sanitize-special-chars", "sanitizeSpecialChars", this._onTextOutputSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "cli-path", "cliPath", null, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "transcriber", "transcriber", null, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "whisper-model", "whisperModel", null, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "transcriber-command", "transcriberCommand", null, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-backend", "postProcessBackend", null, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-command", "postProcessCommand", null, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "ollama-url", "ollamaUrl", null, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "ollama-model", "ollamaModel", null, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-url", "openaiCompatibleUrl", null, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-model", "openaiCompatibleModel", null, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-prompt", "postProcessPrompt", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "transcriber", "transcriber", this._onVoiceBackendSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "whisper-model", "whisperModel", this._onVoiceBackendSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "transcriber-command", "transcriberCommand", this._onVoiceBackendSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-backend", "postProcessBackend", this._onTextModelSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-command", "postProcessCommand", this._onTextModelSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "ollama-url", "ollamaUrl", this._onTextModelSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "ollama-model", "ollamaModel", this._onTextModelSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-url", "openaiCompatibleUrl", this._onTextModelSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-model", "openaiCompatibleModel", this._onTextModelSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-prompt", "postProcessPrompt", this._onTextModelSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "personal-context", "personalContext", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "vocabulary", "vocabulary", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "notify-recording", "notifyRecording", this._onNotificationSettingsChanged, null);
@@ -219,6 +253,14 @@ MyApplet.prototype = {
     this.statusItem = new PopupMenu.PopupMenuItem(_("Status: idle"));
     this.statusItem.setSensitive(false);
     this.menu.addMenuItem(this.statusItem);
+
+    this.microphoneLevelItem = new PopupMenu.PopupMenuItem(_("Microphone: idle"));
+    this.microphoneLevelItem.setSensitive(false);
+    this.menu.addMenuItem(this.microphoneLevelItem);
+
+    this.doctorSummaryItem = new PopupMenu.PopupMenuItem(_("Doctor: not checked"));
+    this.doctorSummaryItem.setSensitive(false);
+    this.menu.addMenuItem(this.doctorSummaryItem);
 
     this.languageItem = new PopupMenu.PopupSubMenuMenuItem(_("Language: en"));
     this.languageItem.menu.connect("open-state-changed", (menu, open) => {
@@ -325,6 +367,10 @@ MyApplet.prototype = {
     statusNow.connect("activate", () => this._refreshStatus());
     this.menu.addMenuItem(statusNow);
 
+    let restartApplet = new PopupMenu.PopupIconMenuItem(_("Restart applet"), "view-refresh-symbolic", St.IconType.SYMBOLIC);
+    restartApplet.connect("activate", () => this._restartApplet());
+    this.menu.addMenuItem(restartApplet);
+
     let doctor = new PopupMenu.PopupIconMenuItem(_("Run doctor"), "dialog-information-symbolic", St.IconType.SYMBOLIC);
     doctor.connect("activate", () => this._runDoctor());
     this.menu.addMenuItem(doctor);
@@ -360,7 +406,7 @@ MyApplet.prototype = {
       }
     });
     this.menu.addMenuItem(this.inputSourceItem);
-    this._populateInputSourceMenu([]);
+    this._populateInputSourceMenu([], _("Open menu to load input sources"));
 
     this.modelItem = new PopupMenu.PopupSubMenuMenuItem(_("Voice model"));
     this.modelItem.menu.connect("open-state-changed", (menu, open) => {
@@ -369,7 +415,7 @@ MyApplet.prototype = {
       }
     });
     this.menu.addMenuItem(this.modelItem);
-    this._populateModelMenu([]);
+    this._populateModelMenu([], _("Open menu to load voice models"));
 
     this.textModelItem = new PopupMenu.PopupSubMenuMenuItem(_("Text model"));
     this.textModelItem.menu.connect("open-state-changed", (menu, open) => {
@@ -401,6 +447,74 @@ MyApplet.prototype = {
     let importSettings = new PopupMenu.PopupIconMenuItem(_("Import settings"), "document-open-symbolic", St.IconType.SYMBOLIC);
     importSettings.connect("activate", () => this._importSettings());
     this.menu.addMenuItem(importSettings);
+
+    this._styleWideMenus();
+  },
+
+  _styleWideMenus: function() {
+    if (this.menu && this.menu.box && this.menu.box.set_style) {
+      this.menu.box.set_style("min-width: " + String(MENU_MIN_WIDTH_EM) + "em;");
+    }
+    this._styleSelectionSubmenu(this.inputSourceItem);
+    this._styleSelectionSubmenu(this.modelItem);
+    this._styleSelectionSubmenu(this.textModelItem);
+  },
+
+  _styleSelectionSubmenu: function(menuItem) {
+    if (!menuItem || !menuItem.menu) {
+      return;
+    }
+    let style = "min-width: " + String(SELECTION_MENU_MIN_WIDTH_EM) + "em;";
+    if (menuItem.menu.box && menuItem.menu.box.set_style) {
+      menuItem.menu.box.set_style(style);
+    }
+    if (menuItem.menu.actor && menuItem.menu.actor.set_style) {
+      menuItem.menu.actor.set_style(style);
+    }
+  },
+
+  _styleMenuItemLabel: function(item, options) {
+    options = options || {};
+    if (!item || !item.label) {
+      return item;
+    }
+    let maxWidth = Number(options.maxWidthEm || SELECTION_MENU_LABEL_WIDTH_EM);
+    if (item.label.set_style) {
+      item.label.set_style("max-width: " + String(maxWidth) + "em;");
+    }
+    try {
+      if (item.label.clutter_text) {
+        item.label.clutter_text.ellipsize = options.wrap ? Pango.EllipsizeMode.NONE : Pango.EllipsizeMode.END;
+        item.label.clutter_text.line_wrap = Boolean(options.wrap);
+        if (options.wrap) {
+          item.label.clutter_text.line_wrap_mode = Pango.WrapMode.WORD_CHAR;
+        }
+      }
+    } catch (err) {
+      global.logError(err);
+    }
+    return item;
+  },
+
+  _selectionMenuItem: function(label) {
+    return this._styleMenuItemLabel(new PopupMenu.PopupMenuItem(String(label || "")));
+  },
+
+  _selectionInfoItem: function(label) {
+    let item = this._styleMenuItemLabel(new PopupMenu.PopupMenuItem(String(label || "")), { wrap: true });
+    item.setSensitive(false);
+    return item;
+  },
+
+  _shortMenuText: function(value, maxChars) {
+    let text = String(value || "").replace(/\s+/g, " ").trim();
+    let limit = Math.max(16, Number(maxChars || 72));
+    if (text.length <= limit) {
+      return text;
+    }
+    let head = Math.max(8, Math.floor((limit - 3) * 0.55));
+    let tail = Math.max(5, limit - 3 - head);
+    return text.slice(0, head) + "..." + text.slice(text.length - tail);
   },
 
   _hotkeyName: function(id) {
@@ -444,6 +558,7 @@ MyApplet.prototype = {
   },
 
   _onTextOutputSettingsChanged: function() {
+    this.typingDelayMs = this._normalizeTypingDelayMs(this.typingDelayMs);
     this._populateTextOptionsMenu();
     this._updatePanel();
   },
@@ -470,6 +585,22 @@ MyApplet.prototype = {
     this._updatePanel();
   },
 
+  _onInputSourceSettingsChanged: function() {
+    this._populateInputSourceMenu([], _("Open menu to load input sources"));
+    this._updatePanel();
+  },
+
+  _onVoiceBackendSettingsChanged: function() {
+    this._ensureVoiceModelCompatibleWithPrimaryLanguage(false);
+    this._populateModelMenu([], _("Open menu to load voice models"));
+    this._updatePanel();
+  },
+
+  _onTextModelSettingsChanged: function() {
+    this._populateTextModelMenu([], _("Open menu to load local text models"));
+    this._updatePanel();
+  },
+
   on_applet_clicked: function() {
     this._rememberFocusedWindow();
     this.menu.toggle();
@@ -490,6 +621,18 @@ MyApplet.prototype = {
   },
 
   _baseArgs: function(command) {
+    let safeInputDevice = this._coerceCliTextArg(this.inputDevice, "input device");
+    let safeTranscriberCommand = this._coerceCliTextArg(this.transcriberCommand, "transcriber command");
+    let safePostProcessCommand = this._coerceCliTextArg(this.postProcessCommand, "post-process command");
+    let safeOllamaUrl = this._coerceCliTextArg(this.ollamaUrl, "ollama URL");
+    let safeOllamaModel = this._coerceCliTextArg(this.ollamaModel, "ollama model");
+    let safeOpenAiCompatibleUrl = this._coerceCliTextArg(this.openaiCompatibleUrl, "openai-compatible URL");
+    let safeOpenAiCompatibleModel = this._coerceCliTextArg(this.openaiCompatibleModel, "openai-compatible model");
+    let safePostProcessPrompt = this._coerceCliTextArg(this.postProcessPrompt, "post-process prompt");
+    let safeWhisperModel = this._coerceCliTextArg(this.whisperModel, "whisper model");
+    let safePersonalContext = this._coerceCliTextArg(this.personalContext, "personal context");
+    let safeVocabulary = this._coerceCliTextArg(this.vocabulary, "vocabulary");
+
     let args = [
       this._cliCommand(),
       command,
@@ -500,7 +643,7 @@ MyApplet.prototype = {
       "--transcriber", String(this.transcriber || "auto"),
       "--post-process-backend", String(this.postProcessBackend || "command"),
       "--insert-method", "none",
-      "--typing-delay-ms", String(this.typingDelayMs || 8)
+      "--typing-delay-ms", String(this._normalizeTypingDelayMs(this.typingDelayMs))
     ];
     if (this.appendSpace) {
       args.push("--append-space");
@@ -511,38 +654,38 @@ MyApplet.prototype = {
     if (this.keepRecordingArtifacts) {
       args.push("--keep-recording-artifacts");
     }
-    if (this.inputDevice && this.inputDevice.trim() !== "") {
-      args.push("--input-device", this.inputDevice);
+    if (safeInputDevice.trim() !== "") {
+      args.push("--input-device", safeInputDevice);
     }
-    if (this.transcriberCommand && this.transcriberCommand.trim() !== "") {
-      args.push("--transcriber-command", this.transcriberCommand);
+    if (safeTranscriberCommand.trim() !== "") {
+      args.push("--transcriber-command", safeTranscriberCommand);
     }
-    if (this.postProcessCommand && this.postProcessCommand.trim() !== "") {
-      args.push("--post-process-command", this.postProcessCommand);
+    if (safePostProcessCommand.trim() !== "") {
+      args.push("--post-process-command", safePostProcessCommand);
     }
-    if (this.ollamaUrl && this.ollamaUrl.trim() !== "") {
-      args.push("--ollama-url", this.ollamaUrl);
+    if (safeOllamaUrl.trim() !== "") {
+      args.push("--ollama-url", safeOllamaUrl);
     }
-    if (this.ollamaModel && this.ollamaModel.trim() !== "") {
-      args.push("--ollama-model", this.ollamaModel);
+    if (safeOllamaModel.trim() !== "") {
+      args.push("--ollama-model", safeOllamaModel);
     }
-    if (this.openaiCompatibleUrl && this.openaiCompatibleUrl.trim() !== "") {
-      args.push("--openai-compatible-url", this.openaiCompatibleUrl);
+    if (safeOpenAiCompatibleUrl.trim() !== "") {
+      args.push("--openai-compatible-url", safeOpenAiCompatibleUrl);
     }
-    if (this.openaiCompatibleModel && this.openaiCompatibleModel.trim() !== "") {
-      args.push("--openai-compatible-model", this.openaiCompatibleModel);
+    if (safeOpenAiCompatibleModel.trim() !== "") {
+      args.push("--openai-compatible-model", safeOpenAiCompatibleModel);
     }
-    if (this.postProcessPrompt && this.postProcessPrompt.trim() !== "") {
-      args.push("--post-process-prompt", this.postProcessPrompt);
+    if (safePostProcessPrompt.trim() !== "") {
+      args.push("--post-process-prompt", safePostProcessPrompt);
     }
-    if (this.whisperModel && this.whisperModel.trim() !== "") {
-      args.push("--whisper-model", this.whisperModel);
+    if (safeWhisperModel.trim() !== "") {
+      args.push("--whisper-model", safeWhisperModel);
     }
-    if (this.personalContext && this.personalContext.trim() !== "") {
-      args.push("--personal-context", this.personalContext);
+    if (safePersonalContext.trim() !== "") {
+      args.push("--personal-context", safePersonalContext);
     }
-    if (this.vocabulary && this.vocabulary.trim() !== "") {
-      args.push("--vocabulary", this.vocabulary);
+    if (safeVocabulary.trim() !== "") {
+      args.push("--vocabulary", safeVocabulary);
     }
     return args;
   },
@@ -552,19 +695,19 @@ MyApplet.prototype = {
   },
 
   _doctorArgs: function() {
-    return [this._cliCommand(), "doctor", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--json"];
+    return [this._cliCommand(), "doctor", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshotForCli()), "--json"];
   },
 
   _setupArgs: function() {
-    return [this._cliCommand(), "setup", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--json"];
+    return [this._cliCommand(), "setup", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshotForCli()), "--json"];
   },
 
   _diagnosticsArgs: function() {
-    return [this._cliCommand(), "diagnostics", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--json"];
+    return [this._cliCommand(), "diagnostics", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshotForCli()), "--json"];
   },
 
   _diagnosticsSaveArgs: function() {
-    return [this._cliCommand(), "diagnostics", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--save", "--json"];
+    return [this._cliCommand(), "diagnostics", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshotForCli()), "--save", "--json"];
   },
 
   _alarmListArgs: function() {
@@ -608,32 +751,35 @@ MyApplet.prototype = {
   },
 
   _textModelsArgs: function() {
+    let safeOllamaUrl = this._coerceCliTextArg(this.ollamaUrl, "ollama URL");
+    let safeOpenAiCompatibleUrl = this._coerceCliTextArg(this.openaiCompatibleUrl, "openai-compatible URL");
+
     let args = [this._cliCommand(), "text-models", "--json"];
     let backend = String(this.postProcessBackend || "");
     if (backend === "openai-compatible") {
       args.push("--backend", "openai-compatible");
-      if (this.openaiCompatibleUrl && this.openaiCompatibleUrl.trim() !== "") {
-        args.push("--openai-compatible-url", this.openaiCompatibleUrl);
+      if (safeOpenAiCompatibleUrl.trim() !== "") {
+        args.push("--openai-compatible-url", safeOpenAiCompatibleUrl);
       }
       return args;
     }
     args.push("--backend", "ollama");
-    if (this.ollamaUrl && this.ollamaUrl.trim() !== "") {
-      args.push("--ollama-url", this.ollamaUrl);
+    if (safeOllamaUrl.trim() !== "") {
+      args.push("--ollama-url", safeOllamaUrl);
     }
     return args;
   },
 
   _downloadModelArgs: function(model) {
-    return [this._cliCommand(), "download-model", String(model || "tiny.en"), "--json"];
+    return [this._cliCommand(), "download-model", String(model || this._starterVoiceModelName()), "--json"];
   },
 
   _removeModelArgs: function(model) {
-    return [this._cliCommand(), "remove-model", String(model || "tiny.en"), "--json"];
+    return [this._cliCommand(), "remove-model", String(model || this._starterVoiceModelName()), "--json"];
   },
 
   _settingsExportArgs: function() {
-    return [this._cliCommand(), "settings-export", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--json"];
+    return [this._cliCommand(), "settings-export", "--settings-json", JSON.stringify(this._settingsSnapshotForCli()), "--json"];
   },
 
   _settingsImportArgs: function() {
@@ -709,11 +855,19 @@ MyApplet.prototype = {
   },
 
   _normalizeRecordingLimit: function(seconds) {
-    let value = Math.floor(Number(seconds || 30));
+    let value = Math.floor(Number(seconds));
     if (!isFinite(value)) {
-      value = 30;
+      value = DEFAULT_RECORDING_SECONDS;
     }
-    return Math.max(5, Math.min(300, value));
+    return Math.max(MIN_RECORDING_SECONDS, Math.min(MAX_RECORDING_SECONDS, value));
+  },
+
+  _normalizeTypingDelayMs: function(delay) {
+    let value = Math.floor(Number(delay));
+    if (!isFinite(value)) {
+      value = DEFAULT_TYPING_DELAY_MS;
+    }
+    return Math.max(MIN_TYPING_DELAY_MS, Math.min(MAX_TYPING_DELAY_MS, value));
   },
 
   _populateRecordingLimitMenu: function() {
@@ -938,14 +1092,17 @@ MyApplet.prototype = {
     let primary = this._primaryLanguage();
     let secondary = this._secondaryLanguage();
     let current = this._currentLanguage();
-    if (current !== primary && current !== secondary) {
+    if (!this.activeLanguageExplicit || (current !== primary && current !== secondary)) {
       this.activeLanguage = primary;
     }
   },
 
   _onLanguageSettingsChanged: function() {
+    this.activeLanguageExplicit = false;
     this._syncActiveLanguage();
+    this._ensureVoiceModelCompatibleWithPrimaryLanguage(false);
     this._populateLanguageMenu();
+    this._populateModelMenu([], _("Open menu to load voice models"));
     this._updatePanel();
   },
 
@@ -960,6 +1117,7 @@ MyApplet.prototype = {
       return false;
     }
     this.activeLanguage = nextLanguage;
+    this.activeLanguageExplicit = true;
     this._setStatus("ready", message || _("Language: ") + this._currentLanguage(), this.lastTranscript);
     return true;
   },
@@ -974,6 +1132,7 @@ MyApplet.prototype = {
   _startWithLanguage: function(language) {
     if (!this._hasActiveRecordingState()) {
       this.activeLanguage = this._normalizeLanguage(language, this._primaryLanguage());
+      this.activeLanguageExplicit = true;
       this._updatePanel();
     }
     this._toggleRecording();
@@ -1064,17 +1223,30 @@ MyApplet.prototype = {
     if (this.isCommandRunning) {
       return;
     }
+    if (!this._ensureVoiceModelCompatibleWithCurrentLanguage(true)) {
+      return;
+    }
     this.notificationSessionActive = true;
     this.lastNotificationKey = "";
     this.autoTranscribeRecordingKey = "";
     this.recordingStartedAtMs = 0;
-    this.recordingMaxSeconds = Number(this.maxSeconds || 30);
+    this.recordingMaxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
     this.isCommandRunning = true;
     this._setStatus("processing", _("Working..."), "");
     this._spawnJson(this._baseArgs("toggle"), (payload) => {
       this.isCommandRunning = false;
       this._applyPayload(payload);
     });
+  },
+
+  _restartApplet: function() {
+    this._setStatus("processing", _("Restarting applet..."), this.lastTranscript);
+    try {
+      Extension.reloadExtension(UUID, Extension.Type.APPLET);
+    } catch (err) {
+      global.logError(err);
+      this._setStatus("error", _("Could not restart applet: ") + String(err), this.lastTranscript);
+    }
   },
 
   _refreshStatus: function() {
@@ -1106,11 +1278,25 @@ MyApplet.prototype = {
 
   _runDoctor: function(startupCheck) {
     if (this._doctorCommandRunning) {
+      if (!startupCheck) {
+        this._setDoctorSummary(_("Doctor: already running"));
+        this._setStatus(this._hasActiveRecordingState() ? this.status : "ready", _("Doctor: already running"), this.lastTranscript);
+      }
       return;
     }
     this._doctorCommandRunning = true;
+    if (!startupCheck) {
+      this._setDoctorSummary(_("Doctor: checking..."));
+      this._setStatus(this._hasActiveRecordingState() ? this.status : "processing", _("Doctor: checking..."), this.lastTranscript);
+    }
     this._spawnJson(this._doctorArgs(), (payload) => {
       try {
+        if (payload.error) {
+          let message = _("Doctor failed: ") + payload.error;
+          this._setDoctorSummary(message);
+          this._setStatus(startupCheck ? "setup" : "error", message, this.lastTranscript);
+          return;
+        }
         if (payload.configured) {
           this._applyDoctorPayload(payload, Boolean(startupCheck));
           return;
@@ -1124,6 +1310,8 @@ MyApplet.prototype = {
 
   _applyDoctorPayload: function(payload, startupCheck) {
     let configured = payload.configured || {};
+    let summary = this._doctorSummary(payload);
+    this._setDoctorSummary(summary);
     let missing = [];
     for (let name of ["recorder", "transcriber", "output", "postprocessor"]) {
       let section = configured[name] || {};
@@ -1138,10 +1326,10 @@ MyApplet.prototype = {
     }
     let warnings = configured.warnings || [];
     if (warnings.length > 0) {
-      this._setStatus("ready", _("Doctor: ready; ") + warnings.join("; "), this.lastTranscript);
+      this._setStatus("ready", summary + "; " + warnings.join("; "), this.lastTranscript);
       return;
     }
-    this._setStatus("ready", _("Doctor: configured pipeline ready"), this.lastTranscript);
+    this._setStatus("ready", summary, this.lastTranscript);
   },
 
   _applyLegacyDoctorPayload: function(payload, startupCheck) {
@@ -1152,10 +1340,37 @@ MyApplet.prototype = {
       }
     }
     if (payload.ok) {
-      this._setStatus("ready", _("Doctor: core OK; optional missing: ") + missing.join(", "), this.lastTranscript);
+      let message = _("Doctor: core OK; optional missing: ") + missing.join(", ");
+      this._setDoctorSummary(message);
+      this._setStatus("ready", message, this.lastTranscript);
     } else {
-      this._setStatus(startupCheck ? "setup" : "error", _("Missing: ") + missing.join(", "), this.lastTranscript);
+      let message = _("Missing: ") + missing.join(", ");
+      this._setDoctorSummary(message);
+      this._setStatus(startupCheck ? "setup" : "error", message, this.lastTranscript);
     }
+  },
+
+  _setDoctorSummary: function(message) {
+    this.doctorSummaryText = String(message || "");
+    if (this.doctorSummaryItem) {
+      this.doctorSummaryItem.label.text = this.doctorSummaryText || _("Doctor: not checked");
+    }
+  },
+
+  _doctorSummary: function(payload) {
+    let configured = payload.configured || {};
+    let rows = [
+      this._doctorSectionText("Rec", configured.recorder),
+      this._doctorSectionText("ASR", configured.transcriber),
+      this._doctorSectionText("Out", configured.output),
+      this._doctorSectionText("Text", configured.postprocessor)
+    ];
+    return (payload.ok ? _("Doctor: ready - ") : _("Doctor: setup needed - ")) + rows.join(", ");
+  },
+
+  _doctorSectionText: function(label, section) {
+    section = section || {};
+    return label + " " + (section.ok ? "OK" : "FAIL");
   },
 
   _openAppletSettings: function() {
@@ -1443,20 +1658,16 @@ MyApplet.prototype = {
     this.inputSourceItem.menu.removeAll();
     let current = String(this.inputDevice || "");
     let defaultLabel = (current === "" ? "[x] " : "[ ] ") + _("System default");
-    let defaultItem = new PopupMenu.PopupMenuItem(defaultLabel);
+    let defaultItem = this._selectionMenuItem(defaultLabel);
     defaultItem.connect("activate", () => this._selectInputSource("", _("system default")));
     this.inputSourceItem.menu.addMenuItem(defaultItem);
 
     if (message) {
-      let messageItem = new PopupMenu.PopupMenuItem(message);
-      messageItem.setSensitive(false);
-      this.inputSourceItem.menu.addMenuItem(messageItem);
+      this.inputSourceItem.menu.addMenuItem(this._selectionInfoItem(message));
       return;
     }
     if (!sources || sources.length === 0) {
-      let empty = new PopupMenu.PopupMenuItem(_("No input sources found"));
-      empty.setSensitive(false);
-      this.inputSourceItem.menu.addMenuItem(empty);
+      this.inputSourceItem.menu.addMenuItem(this._selectionInfoItem(_("No input sources found")));
       return;
     }
     for (let source of sources) {
@@ -1468,8 +1679,8 @@ MyApplet.prototype = {
       if (source.default) {
         label += _(" (system default)");
       }
-      let itemLabel = (current === sourceName ? "[x] " : "[ ] ") + label;
-      let item = new PopupMenu.PopupMenuItem(itemLabel);
+      let itemLabel = (current === sourceName ? "[x] " : "[ ] ") + this._shortMenuText(label + " - " + sourceName, 96);
+      let item = this._selectionMenuItem(itemLabel);
       item.connect("activate", () => this._selectInputSource(sourceName, label));
       this.inputSourceItem.menu.addMenuItem(item);
     }
@@ -1512,11 +1723,15 @@ MyApplet.prototype = {
     this.modelItem.menu.removeAll();
 
     let autoActive = String(this.transcriber || "auto") === "auto" && String(this.whisperModel || "") === "";
-    let automatic = new PopupMenu.PopupMenuItem((autoActive ? "[x] " : "[ ] ") + _("Automatic ASR backend"));
+    let automatic = this._selectionMenuItem((autoActive ? "[x] " : "[ ] ") + _("Automatic ASR backend"));
     automatic.connect("activate", () => this._selectAutomaticVoiceBackend());
     this.modelItem.menu.addMenuItem(automatic);
 
-    let download = new PopupMenu.PopupIconMenuItem(_("Download starter model"), "folder-download-symbolic", St.IconType.SYMBOLIC);
+    this.modelItem.menu.addMenuItem(this._selectionInfoItem(_("Active: ") + this._currentLanguage() + _(", primary: ") + this._voiceModelLanguage() + _(", starter: ") + this._starterVoiceModelName()));
+
+    let download = this._styleMenuItemLabel(
+      new PopupMenu.PopupIconMenuItem(_("Download starter model") + ": " + this._starterVoiceModelName(), "folder-download-symbolic", St.IconType.SYMBOLIC)
+    );
     download.connect("activate", () => this._downloadStarterModel());
     this.modelItem.menu.addMenuItem(download);
 
@@ -1529,15 +1744,11 @@ MyApplet.prototype = {
     this.modelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
     if (message) {
-      let messageItem = new PopupMenu.PopupMenuItem(message);
-      messageItem.setSensitive(false);
-      this.modelItem.menu.addMenuItem(messageItem);
+      this.modelItem.menu.addMenuItem(this._selectionInfoItem(message));
       return;
     }
     if (!models || models.length === 0) {
-      let empty = new PopupMenu.PopupMenuItem(_("No models in catalog"));
-      empty.setSensitive(false);
-      this.modelItem.menu.addMenuItem(empty);
+      this.modelItem.menu.addMenuItem(this._selectionInfoItem(_("No models in catalog")));
       return;
     }
     for (let model of models) {
@@ -1552,20 +1763,28 @@ MyApplet.prototype = {
     }
     let downloaded = Boolean(model.downloaded);
     let current = downloaded && this.whisperModel && String(model.path || "") === String(this.whisperModel);
+    let compatible = this._voiceModelSupportsCurrentLanguage(model);
     let label = (current ? "[x] " : "[ ] ") + name + " (" + String(model.size || "?") + ")";
+    if (!compatible) {
+      label += _(" - English only");
+    }
     if (!downloaded) {
       label += _(" - not downloaded");
     }
     let entry = new PopupMenu.PopupSubMenuMenuItem(label);
+    this._styleMenuItemLabel(entry);
+    this._styleSelectionSubmenu(entry);
     this.modelItem.menu.addMenuItem(entry);
 
-    let description = new PopupMenu.PopupMenuItem(String(model.description || ""));
-    description.setSensitive(false);
-    entry.menu.addMenuItem(description);
+    entry.menu.addMenuItem(this._selectionInfoItem(String(model.description || "")));
+    if (!compatible) {
+      entry.menu.addMenuItem(this._selectionInfoItem(_("Not suitable for primary language: ") + this._voiceModelLanguage()));
+    }
 
     if (downloaded) {
       let useItem = new PopupMenu.PopupIconMenuItem(_("Use this model"), "emblem-ok-symbolic", St.IconType.SYMBOLIC);
-      useItem.setSensitive(!current);
+      this._styleMenuItemLabel(useItem);
+      useItem.setSensitive(!current && compatible);
       useItem.connect("activate", () => this._selectVoiceModel(model));
       entry.menu.addMenuItem(useItem);
 
@@ -1575,20 +1794,77 @@ MyApplet.prototype = {
       return;
     }
 
-    let downloadItem = new PopupMenu.PopupIconMenuItem(_("Download model"), "folder-download-symbolic", St.IconType.SYMBOLIC);
+    let downloadItem = this._styleMenuItemLabel(new PopupMenu.PopupIconMenuItem(_("Download model"), "folder-download-symbolic", St.IconType.SYMBOLIC));
     downloadItem.connect("activate", () => this._downloadVoiceModel(model));
     entry.menu.addMenuItem(downloadItem);
   },
 
+  _isEnglishLanguage: function(language) {
+    let value = String(language || "").trim().toLowerCase().replace("_", "-");
+    return value === "" || value === "en" || value === "eng" || value === "english" || value.indexOf("en-") === 0;
+  },
+
+  _voiceModelSupportsCurrentLanguage: function(model) {
+    let name = String(model.name || "").trim().toLowerCase();
+    let filename = String(model.filename || model.path || "").trim().toLowerCase();
+    return this._voiceModelSupportsLanguage(name, filename, this._voiceModelLanguage());
+  },
+
+  _voiceModelSupportsLanguage: function(name, filename, language) {
+    let modelName = String(name || "").trim().toLowerCase();
+    let modelFile = String(filename || "").trim().toLowerCase();
+    let englishOnly = modelName.endsWith(".en") || modelFile.indexOf(".en.") >= 0 || modelFile.endsWith(".en.bin");
+    return this._isEnglishLanguage(language) || !englishOnly;
+  },
+
+  _voiceModelLanguage: function() {
+    return this._primaryLanguage();
+  },
+
+  _starterVoiceModelName: function() {
+    return this._isEnglishLanguage(this._voiceModelLanguage()) ? "tiny.en" : "tiny";
+  },
+
+  _whisperModelSupportsLanguage: function(language) {
+    let model = String(this.whisperModel || "").trim();
+    if (model === "") {
+      return true;
+    }
+    return this._voiceModelSupportsLanguage("", model, language);
+  },
+
+  _ensureVoiceModelCompatibleWithPrimaryLanguage: function(showStatus) {
+    return this._ensureVoiceModelCompatibleForLanguage(this._voiceModelLanguage(), showStatus, _("primary language"));
+  },
+
+  _ensureVoiceModelCompatibleWithCurrentLanguage: function(showStatus) {
+    return this._ensureVoiceModelCompatibleForLanguage(this._currentLanguage(), showStatus, _("current language"));
+  },
+
+  _ensureVoiceModelCompatibleForLanguage: function(language, showStatus, label) {
+    if (this._whisperModelSupportsLanguage(language)) {
+      return true;
+    }
+    this.transcriber = "auto";
+    this.whisperModel = "";
+    this.settings.setValue("transcriber", this.transcriber);
+    this.settings.setValue("whisper-model", this.whisperModel);
+    this._refreshModelMenu();
+    if (showStatus) {
+      this._setStatus("error", _("English-only model was disabled because it does not support ") + label + ": " + language, this.lastTranscript);
+    }
+    return false;
+  },
+
   _downloadStarterModel: function() {
-    this._downloadVoiceModel({ name: "tiny.en" });
+    this._downloadVoiceModel({ name: this._starterVoiceModelName() });
   },
 
   _downloadVoiceModel: function(model) {
     if (this.isCommandRunning) {
       return;
     }
-    let name = String(model.name || "tiny.en");
+    let name = String(model.name || this._starterVoiceModelName());
     this.isCommandRunning = true;
     this._setStatus("processing", _("Downloading model: ") + name, this.lastTranscript);
     this._spawnJson(this._downloadModelArgs(name), (payload) => {
@@ -1638,6 +1914,10 @@ MyApplet.prototype = {
     if (path === "") {
       return;
     }
+    if (!this._voiceModelSupportsCurrentLanguage(model)) {
+      this._setStatus("error", _("English-only model cannot transcribe primary language: ") + this._voiceModelLanguage(), this.lastTranscript);
+      return;
+    }
     this.transcriber = "whisper-cpp";
     this.whisperModel = path;
     this.settings.setValue("transcriber", this.transcriber);
@@ -1676,39 +1956,35 @@ MyApplet.prototype = {
     let backend = String(this.postProcessBackend || "command");
     let activeProvider = String(provider || (backend === "openai-compatible" ? "openai-compatible" : "ollama"));
 
-    let disabled = new PopupMenu.PopupMenuItem((backend === "none" ? "[x] " : "[ ] ") + _("Disabled"));
+    let disabled = this._selectionMenuItem((backend === "none" ? "[x] " : "[ ] ") + _("Disabled"));
     disabled.connect("activate", () => this._selectTextModelBackend("none", "", _("Text polishing disabled")));
     this.textModelItem.menu.addMenuItem(disabled);
 
-    let custom = new PopupMenu.PopupMenuItem((backend === "command" || backend === "custom" ? "[x] " : "[ ] ") + _("Custom command"));
+    let custom = this._selectionMenuItem((backend === "command" || backend === "custom" ? "[x] " : "[ ] ") + _("Custom command"));
     custom.connect("activate", () => this._selectTextModelBackend("command", "", _("Text polishing: custom command")));
     this.textModelItem.menu.addMenuItem(custom);
 
     this.textModelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-    let ollama = new PopupMenu.PopupMenuItem((backend === "ollama" ? "[x] " : "[ ] ") + _("Ollama local model"));
+    let ollama = this._selectionMenuItem((backend === "ollama" ? "[x] " : "[ ] ") + _("Ollama local model"));
     ollama.connect("activate", () => this._selectTextModelBackend("ollama", this.ollamaModel, _("Text polishing: Ollama")));
     this.textModelItem.menu.addMenuItem(ollama);
 
-    let openaiCompatible = new PopupMenu.PopupMenuItem((backend === "openai-compatible" ? "[x] " : "[ ] ") + _("OpenAI-compatible local server"));
+    let openaiCompatible = this._selectionMenuItem((backend === "openai-compatible" ? "[x] " : "[ ] ") + _("OpenAI-compatible local server"));
     openaiCompatible.connect("activate", () => this._selectTextModelBackend("openai-compatible", this.openaiCompatibleModel, _("Text polishing: OpenAI-compatible local server")));
     this.textModelItem.menu.addMenuItem(openaiCompatible);
 
     this.textModelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
     if (message) {
-      let messageItem = new PopupMenu.PopupMenuItem(message);
-      messageItem.setSensitive(false);
-      this.textModelItem.menu.addMenuItem(messageItem);
+      this.textModelItem.menu.addMenuItem(this._selectionInfoItem(message));
       return;
     }
     if (!models || models.length === 0) {
       let emptyLabel = activeProvider === "openai-compatible"
         ? _("No OpenAI-compatible local models found")
         : _("No local Ollama models found");
-      let empty = new PopupMenu.PopupMenuItem(emptyLabel);
-      empty.setSensitive(false);
-      this.textModelItem.menu.addMenuItem(empty);
+      this.textModelItem.menu.addMenuItem(this._selectionInfoItem(emptyLabel));
       return;
     }
     for (let model of models) {
@@ -1729,7 +2005,7 @@ MyApplet.prototype = {
     if (details !== "") {
       label += " (" + details + ")";
     }
-    let item = new PopupMenu.PopupMenuItem(label);
+    let item = this._selectionMenuItem(this._shortMenuText(label, 96));
     item.connect("activate", () => this._selectTextModelBackend(provider, name, _("Text model: ") + name));
     this.textModelItem.menu.addMenuItem(item);
   },
@@ -1809,6 +2085,16 @@ MyApplet.prototype = {
     return snapshot;
   },
 
+  _settingsSnapshotForCli: function() {
+    let snapshot = this._settingsSnapshot();
+    for (let key in CLI_TEXT_SETTINGS) {
+      if (Object.prototype.hasOwnProperty.call(CLI_TEXT_SETTINGS, key) && Object.prototype.hasOwnProperty.call(snapshot, key)) {
+        snapshot[key] = this._coerceCliTextArg(snapshot[key], CLI_TEXT_SETTINGS[key]);
+      }
+    }
+    return snapshot;
+  },
+
   _exportSettings: function() {
     this._setStatus("processing", _("Exporting settings..."), this.lastTranscript);
     this._spawnJson(this._settingsExportArgs(), (payload) => {
@@ -1840,14 +2126,15 @@ MyApplet.prototype = {
       if (!Object.prototype.hasOwnProperty.call(settings, key)) {
         continue;
       }
-      this[prop] = settings[key];
-      this.settings.setValue(key, settings[key]);
+      this[prop] = this._coerceImportedSetting(key, settings[key], this[prop]);
+      this.settings.setValue(key, this[prop]);
       applied++;
     }
     this._syncActiveLanguage();
     this.recorder = this._normalizeRecorder(this.recorder);
     this._populateRecorderMenu();
     this.maxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
+    this.typingDelayMs = this._normalizeTypingDelayMs(this.typingDelayMs);
     this._populateRecordingLimitMenu();
     this._populateRecordingOptionsMenu();
     this._populateNotificationOptionsMenu();
@@ -1897,6 +2184,29 @@ MyApplet.prototype = {
       throw new Error("Backend command is not executable");
     }
     return normalized;
+  },
+
+  _coerceCliTextArg: function(value, fieldName) {
+    let normalized = String(value || "");
+    if (normalized.indexOf("\u0000") >= 0) {
+      throw new Error(String(fieldName || "value") + " contains invalid bytes");
+    }
+    if (normalized.length > MAX_SETTING_TEXT_CHARS) {
+      throw new Error(String(fieldName || "value") + " is too long");
+    }
+    return normalized;
+  },
+
+  _coerceImportedSetting: function(key, value, fallback) {
+    if (!Object.prototype.hasOwnProperty.call(CLI_TEXT_SETTINGS, key)) {
+      return value;
+    }
+    try {
+      return this._coerceCliTextArg(value, CLI_TEXT_SETTINGS[key]);
+    } catch (err) {
+      global.logError(err);
+      return fallback;
+    }
   },
 
   _isAllowedCliCommand: function(command) {
@@ -1973,6 +2283,7 @@ MyApplet.prototype = {
     let status = payload.status || (payload.error ? "error" : "idle");
     this._applyPayloadLanguage(payload);
     this._updateRecordingTiming(payload, status);
+    this._applyMicrophoneLevel(payload.microphone_level, status);
     if (payload.error) {
       this._setStatus("error", payload.error, this.lastTranscript);
       return;
@@ -1987,11 +2298,27 @@ MyApplet.prototype = {
     this._maybeAutoTranscribeRecorded(payload);
   },
 
+  _applyMicrophoneLevel: function(level, status) {
+    if (status !== "recording" && status !== "recorded") {
+      this.microphoneLevel = null;
+      return;
+    }
+    if (!level || typeof level !== "object") {
+      this.microphoneLevel = null;
+      return;
+    }
+    this.microphoneLevel = level;
+  },
+
   _applyPayloadLanguage: function(payload) {
     let language = String(payload.language || "").trim();
-    if (language !== "") {
+    let status = String(payload.status || "");
+    if (language !== "" && (status === "recording" || status === "recorded" || status === "processing")) {
       this.activeLanguage = language;
+      this.activeLanguageExplicit = true;
+      return;
     }
+    this._syncActiveLanguage();
   },
 
   _updateRecordingTiming: function(payload, status) {
@@ -2006,8 +2333,11 @@ MyApplet.prototype = {
     } else if (this.recordingStartedAtMs <= 0) {
       this.recordingStartedAtMs = Date.now();
     }
-    let maxSeconds = Number(payload.max_seconds || this.maxSeconds || 30);
-    this.recordingMaxSeconds = maxSeconds > 0 ? maxSeconds : 30;
+    let maxSeconds = Number(payload.max_seconds);
+    if (!isFinite(maxSeconds)) {
+      maxSeconds = this.maxSeconds;
+    }
+    this.recordingMaxSeconds = this._normalizeRecordingLimit(maxSeconds);
   },
 
   _parseDateMs: function(value) {
@@ -2162,7 +2492,7 @@ MyApplet.prototype = {
   },
 
   _typeTextAfterFocus: function(text) {
-    let delay = Math.max(0, Math.floor(Number(this.typingDelayMs || 0)));
+    let delay = this._normalizeTypingDelayMs(this.typingDelayMs);
     let typedText = this._coerceTypeText(text);
     if (typedText === null) {
       return false;
@@ -2429,13 +2759,82 @@ MyApplet.prototype = {
   },
 
   _recordingProgressText: function() {
-    let maxSeconds = Number(this.recordingMaxSeconds || this.maxSeconds || 30);
+    let maxSeconds = this._normalizeRecordingLimit(
+      this.recordingMaxSeconds !== undefined && this.recordingMaxSeconds !== null ? this.recordingMaxSeconds : this.maxSeconds
+    );
     let elapsed = this._recordingElapsedSeconds();
     if (maxSeconds > 0) {
       elapsed = Math.min(elapsed, maxSeconds);
       return this._formatSeconds(elapsed) + " / " + this._formatSeconds(maxSeconds);
     }
     return this._formatSeconds(elapsed);
+  },
+
+  _microphoneLevelText: function() {
+    if (this.status !== "recording" && this.status !== "recorded") {
+      return _("Microphone: idle");
+    }
+    let level = this.microphoneLevel || {};
+    if (!level.ok) {
+      return _("Microphone: ") + String(level.detail || _("waiting for audio"));
+    }
+    let percent = Math.max(0, Math.min(100, Math.round(Number(level.percent || 0))));
+    return _("Microphone: ") + String(percent) + "% " + this._levelBar(percent);
+  },
+
+  _levelBar: function(percent) {
+    let filled = Math.max(0, Math.min(10, Math.round(Number(percent || 0) / 10)));
+    return "[" + "#".repeat(filled) + "-".repeat(10 - filled) + "]";
+  },
+
+  _recordingOptionsLabel: function() {
+    let timeout = this.autoTranscribeTimeout ? _("auto stop") : _("manual stop");
+    let artifacts = this.keepRecordingArtifacts ? _("keep files") : _("discard files");
+    return _("Recording: ") + timeout + ", " + artifacts;
+  },
+
+  _notificationOptionsLabel: function() {
+    let enabled = [];
+    if (this.notifyRecording) enabled.push(_("recording"));
+    if (this.notifyComplete) enabled.push(_("done"));
+    if (this.notifyError) enabled.push(_("errors"));
+    return _("Notifications: ") + (enabled.length > 0 ? enabled.join(", ") : _("off"));
+  },
+
+  _textOptionsLabel: function() {
+    let space = this.appendSpace ? _("space") : _("no space");
+    let accents = this.sanitizeSpecialChars ? _("ASCII") : _("accents");
+    return _("Text: ") + space + ", " + accents;
+  },
+
+  _inputSourceLabel: function() {
+    let value = String(this.inputDevice || "").trim();
+    if (value === "") {
+      return _("Input: system default");
+    }
+    return _("Input: ") + (value.length > 32 ? value.slice(0, 29) + "..." : value);
+  },
+
+  _voiceBackendLabel: function() {
+    let backend = String(this.transcriber || "auto");
+    let model = String(this.whisperModel || "").trim();
+    if (backend === "whisper-cpp" && model !== "") {
+      return _("Voice: ") + GLib.path_get_basename(model);
+    }
+    if (backend === "command") return _("Voice: custom command");
+    if (backend === "whisper") return _("Voice: whisper");
+    if (backend === "whisper-cpp") return _("Voice: whisper.cpp");
+    return _("Voice: automatic");
+  },
+
+  _textModelLabel: function() {
+    let backend = String(this.postProcessBackend || "command");
+    if (backend === "none") return _("Text model: disabled");
+    if (backend === "ollama") return _("Text model: ") + (String(this.ollamaModel || "").trim() || _("Ollama"));
+    if (backend === "openai-compatible") {
+      return _("Text model: ") + (String(this.openaiCompatibleModel || "").trim() || _("OpenAI-compatible"));
+    }
+    return _("Text model: custom command");
   },
 
   _panelStyleClassForStatus: function(status) {
@@ -2463,9 +2862,10 @@ MyApplet.prototype = {
     let statusText = this.status || "idle";
     if (this.status === "recording") {
       let progress = this._recordingProgressText();
+      let mic = this._microphoneLevelText();
       label = "REC " + this._formatSeconds(this._recordingElapsedSeconds());
-      tooltip = _("Recording...") + " " + progress;
-      statusText = "recording " + progress;
+      tooltip = _("Recording...") + " " + progress + "\n" + mic;
+      statusText = "recording " + progress + "; " + mic;
       if (this.toggleItem) this.toggleItem.label.text = _("Stop dictation");
     } else if (this.status === "processing") {
       label = "...";
@@ -2494,6 +2894,12 @@ MyApplet.prototype = {
     if (this.statusItem) {
       this.statusItem.label.text = _("Status: ") + statusText;
     }
+    if (this.microphoneLevelItem) {
+      this.microphoneLevelItem.label.text = this._microphoneLevelText();
+    }
+    if (this.doctorSummaryItem) {
+      this.doctorSummaryItem.label.text = this.doctorSummaryText || _("Doctor: not checked");
+    }
     if (this.languageItem) {
       this.languageItem.label.text = _("Language: ") + this._currentLanguage();
     }
@@ -2503,8 +2909,26 @@ MyApplet.prototype = {
     if (this.recordingLimitItem) {
       this.recordingLimitItem.label.text = _("Duration: ") + this._formatSeconds(this._normalizeRecordingLimit(this.maxSeconds));
     }
+    if (this.recordingOptionsItem) {
+      this.recordingOptionsItem.label.text = this._recordingOptionsLabel();
+    }
+    if (this.notificationOptionsItem) {
+      this.notificationOptionsItem.label.text = this._notificationOptionsLabel();
+    }
     if (this.outputMethodItem) {
       this.outputMethodItem.label.text = _("Output: ") + this._outputMethodLabel(this._normalizeOutputMethod(this.insertMethod));
+    }
+    if (this.textOptionsItem) {
+      this.textOptionsItem.label.text = this._textOptionsLabel();
+    }
+    if (this.inputSourceItem) {
+      this.inputSourceItem.label.text = this._inputSourceLabel();
+    }
+    if (this.modelItem) {
+      this.modelItem.label.text = this._voiceBackendLabel();
+    }
+    if (this.textModelItem) {
+      this.textModelItem.label.text = this._textModelLabel();
     }
     if (this.transcriptItem) {
       this.transcriptItem.label.text = this._shortTranscript();
