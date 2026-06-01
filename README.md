@@ -15,9 +15,10 @@ path.
 - Startup setup check in the applet, plus direct menu actions for Cinnamon applet settings and the setup runbook.
 - Live recording progress in the panel tooltip and menu, with a compact elapsed-time panel label.
 - Copyable or saveable diagnostics bundle for support reports without transcript contents.
-- Cinnamon global hotkey via `Main.keybindingManager`; default is `Super+Z`.
+- Cinnamon global hotkey via `Main.keybindingManager`; default is `Super+Z`, with optional dedicated shortcuts for
+  starting dictation in the primary or secondary language.
 - Cinnamon desktop notifications for completion and failures, with optional recording-state notifications.
-- Primary/secondary recognition languages with quick switching from the applet menu.
+- Primary/secondary recognition languages with quick switching and language-specific start actions from the applet menu.
 - PipeWire/PulseAudio/ALSA recording through `pw-record`, `parecord`, or `arecord`.
 - Optional microphone/source selection from the applet menu or by PipeWire/Pulse source name, with a `list-inputs`
   helper.

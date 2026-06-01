@@ -454,6 +454,35 @@ class CliTest(unittest.TestCase):
         self.assertEqual(final_state.status, "done")
         self.assertEqual(final_state.transcript, "expired-transcript")
 
+    def test_toggle_finalizes_recording_with_saved_language(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            audio = tmp_path / "expired.wav"
+            audio.write_bytes(b"audio")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="recording", pid=999999999, audio_path=str(audio), language="de"))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "toggle",
+                    "--state-file",
+                    str(state_file),
+                    "--insert-method",
+                    "none",
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf gespeicherte-sprache",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "done")
+        self.assertEqual(payload["language"], "de")
+        self.assertEqual(final_state.language, "de")
+
     def test_start_does_not_overwrite_expired_recording(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -468,6 +497,25 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["status"], "recorded")
         self.assertEqual(payload["audio_path"], str(audio))
+
+    def test_start_defaults_language_to_english(self) -> None:
+        proc = mock.Mock()
+        proc.pid = 12345
+        proc.poll.return_value = None
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=proc),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["start", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            state = StateStore(state_file).read()
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["language"], "en")
+        self.assertEqual(state.language, "en")
 
     def test_cancel_recorded_discards_files_and_resets_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

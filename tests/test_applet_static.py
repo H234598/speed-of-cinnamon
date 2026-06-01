@@ -37,3 +37,21 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('args.push("--openai-compatible-url", this.openaiCompatibleUrl)', source)
         self.assertIn('args.push("--openai-compatible-model", this.openaiCompatibleModel)', source)
         self.assertIn('_selectTextModelBackend("openai-compatible"', source)
+
+    def test_applet_registers_optional_language_specific_hotkeys(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
+
+        activation_keys = schema["layout"]["activation-section"]["keys"]
+        self.assertIn("primary-language-keybinding", activation_keys)
+        self.assertIn("secondary-language-keybinding", activation_keys)
+        self.assertEqual(schema["primary-language-keybinding"]["default"], "")
+        self.assertEqual(schema["secondary-language-keybinding"]["default"], "")
+        self.assertIn('const PRIMARY_HOTKEY_ID = "speed-of-cinnamon-primary-language";', source)
+        self.assertIn('const SECONDARY_HOTKEY_ID = "speed-of-cinnamon-secondary-language";', source)
+        self.assertIn('["primary-language-keybinding", "primaryLanguageKeybinding"]', source)
+        self.assertIn('this._registerHotkey(PRIMARY_HOTKEY_ID, this.primaryLanguageKeybinding', source)
+        self.assertIn('this._registerHotkey(SECONDARY_HOTKEY_ID, this.secondaryLanguageKeybinding', source)
+        self.assertIn('this._startWithLanguage(this._primaryLanguage())', source)
+        self.assertIn('this._startWithLanguage(this._secondaryLanguage())', source)
+        self.assertIn('this._hasActiveRecordingState()', source)

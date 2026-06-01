@@ -9,11 +9,15 @@ const Mainloop = imports.mainloop;
 
 const UUID = "speed-of-cinnamon@H234598";
 const HOTKEY_ID = "speed-of-cinnamon-toggle";
+const PRIMARY_HOTKEY_ID = "speed-of-cinnamon-primary-language";
+const SECONDARY_HOTKEY_ID = "speed-of-cinnamon-secondary-language";
 const DEFAULT_CLI = GLib.build_filenamev([GLib.get_home_dir(), ".local", "bin", "speed-of-cinnamon"]);
 const SYSTEM_CLI = "/usr/bin/speed-of-cinnamon";
 const RUNBOOK_URL = "https://gist.github.com/H234598/b95129e13ac0b09c9777edd41aeedfa0";
 const EXPORTABLE_SETTINGS = [
   ["toggle-keybinding", "toggleKeybinding"],
+  ["primary-language-keybinding", "primaryLanguageKeybinding"],
+  ["secondary-language-keybinding", "secondaryLanguageKeybinding"],
   ["show-panel-label", "showPanelLabel"],
   ["language", "language"],
   ["secondary-language", "secondaryLanguage"],
@@ -60,6 +64,8 @@ MyApplet.prototype = {
     this.orientation = orientation;
     this.instanceId = instanceId;
     this.toggleKeybinding = "<Super>z::";
+    this.primaryLanguageKeybinding = "";
+    this.secondaryLanguageKeybinding = "";
     this.showPanelLabel = true;
     this.language = "en";
     this.secondaryLanguage = "de";
@@ -110,13 +116,15 @@ MyApplet.prototype = {
     this._bindSettings();
     this._syncActiveLanguage();
     this._buildMenu();
-    this._registerHotkey();
+    this._registerHotkeys();
     this._refreshStatus();
     this._scheduleSetupCheck();
   },
 
   _bindSettings: function() {
     this.settings.bindProperty(Settings.BindingDirection.IN, "toggle-keybinding", "toggleKeybinding", this._onHotkeyChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "primary-language-keybinding", "primaryLanguageKeybinding", this._onHotkeyChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "secondary-language-keybinding", "secondaryLanguageKeybinding", this._onHotkeyChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "show-panel-label", "showPanelLabel", this._updatePanel, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "language", "language", this._onLanguageSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "secondary-language", "secondaryLanguage", this._onLanguageSettingsChanged, null);
@@ -167,6 +175,14 @@ MyApplet.prototype = {
     this.languageItem = new PopupMenu.PopupIconMenuItem(_("Language: en"), "preferences-desktop-locale-symbolic", St.IconType.SYMBOLIC);
     this.languageItem.connect("activate", () => this._switchLanguage());
     this.menu.addMenuItem(this.languageItem);
+
+    this.primaryLanguageItem = new PopupMenu.PopupIconMenuItem(_("Start primary language"), "media-record-symbolic", St.IconType.SYMBOLIC);
+    this.primaryLanguageItem.connect("activate", () => this._startWithLanguage(this._primaryLanguage()));
+    this.menu.addMenuItem(this.primaryLanguageItem);
+
+    this.secondaryLanguageItem = new PopupMenu.PopupIconMenuItem(_("Start secondary language"), "media-record-symbolic", St.IconType.SYMBOLIC);
+    this.secondaryLanguageItem.connect("activate", () => this._startWithLanguage(this._secondaryLanguage()));
+    this.menu.addMenuItem(this.secondaryLanguageItem);
 
     this.transcriptItem = new PopupMenu.PopupMenuItem(_("No transcript yet"));
     this.transcriptItem.setSensitive(false);
@@ -262,17 +278,28 @@ MyApplet.prototype = {
     this.menu.addMenuItem(importSettings);
   },
 
-  _hotkeyName: function() {
-    return HOTKEY_ID + "-" + this.instanceId;
+  _hotkeyName: function(id) {
+    return id + "-" + this.instanceId;
   },
 
-  _registerHotkey: function() {
-    Main.keybindingManager.removeHotKey(this._hotkeyName());
-    Main.keybindingManager.addHotKey(this._hotkeyName(), this.toggleKeybinding, () => this._toggleRecording());
+  _registerHotkey: function(id, binding, callback) {
+    let name = this._hotkeyName(id);
+    Main.keybindingManager.removeHotKey(name);
+    let accelerator = String(binding || "").trim();
+    if (accelerator === "") {
+      return;
+    }
+    Main.keybindingManager.addHotKey(name, accelerator, callback);
+  },
+
+  _registerHotkeys: function() {
+    this._registerHotkey(HOTKEY_ID, this.toggleKeybinding, () => this._toggleRecording());
+    this._registerHotkey(PRIMARY_HOTKEY_ID, this.primaryLanguageKeybinding, () => this._startWithLanguage(this._primaryLanguage()));
+    this._registerHotkey(SECONDARY_HOTKEY_ID, this.secondaryLanguageKeybinding, () => this._startWithLanguage(this._secondaryLanguage()));
   },
 
   _onHotkeyChanged: function() {
-    this._registerHotkey();
+    this._registerHotkeys();
   },
 
   on_applet_clicked: function() {
@@ -283,7 +310,9 @@ MyApplet.prototype = {
     this._clearStatusTimer();
     this._clearDisplayTimer();
     this._clearSetupCheckTimer();
-    Main.keybindingManager.removeHotKey(this._hotkeyName());
+    Main.keybindingManager.removeHotKey(this._hotkeyName(HOTKEY_ID));
+    Main.keybindingManager.removeHotKey(this._hotkeyName(PRIMARY_HOTKEY_ID));
+    Main.keybindingManager.removeHotKey(this._hotkeyName(SECONDARY_HOTKEY_ID));
     if (this.settings) {
       this.settings.finalize();
     }
@@ -467,11 +496,34 @@ MyApplet.prototype = {
     this._updatePanel();
   },
 
+  _hasActiveRecordingState: function() {
+    return this.status === "recording" || this.status === "recorded" || this.status === "processing";
+  },
+
+  _setActiveLanguage: function(language, message) {
+    let nextLanguage = this._normalizeLanguage(language, this._primaryLanguage());
+    if (this._hasActiveRecordingState()) {
+      this._setStatus(this.status, _("Finish the current recording before changing language"), this.lastTranscript);
+      return false;
+    }
+    this.activeLanguage = nextLanguage;
+    this._setStatus("ready", message || _("Language: ") + this._currentLanguage(), this.lastTranscript);
+    return true;
+  },
+
   _switchLanguage: function() {
     let primary = this._primaryLanguage();
     let secondary = this._secondaryLanguage();
-    this.activeLanguage = this._currentLanguage() === primary ? secondary : primary;
-    this._setStatus("ready", _("Language: ") + this._currentLanguage(), this.lastTranscript);
+    let nextLanguage = this._currentLanguage() === primary ? secondary : primary;
+    this._setActiveLanguage(nextLanguage, _("Language: ") + nextLanguage);
+  },
+
+  _startWithLanguage: function(language) {
+    if (!this._hasActiveRecordingState()) {
+      this.activeLanguage = this._normalizeLanguage(language, this._primaryLanguage());
+      this._updatePanel();
+    }
+    this._toggleRecording();
   },
 
   _toggleRecording: function() {
@@ -995,7 +1047,7 @@ MyApplet.prototype = {
       applied++;
     }
     this._syncActiveLanguage();
-    this._registerHotkey();
+    this._registerHotkeys();
     this._updatePanel();
     return applied;
   },
@@ -1018,6 +1070,7 @@ MyApplet.prototype = {
 
   _applyPayload: function(payload) {
     let status = payload.status || (payload.error ? "error" : "idle");
+    this._applyPayloadLanguage(payload);
     this._updateRecordingTiming(payload, status);
     if (payload.error) {
       this._setStatus("error", payload.error, this.lastTranscript);
@@ -1031,6 +1084,13 @@ MyApplet.prototype = {
     let transcript = payload.transcript || this.lastTranscript || "";
     this._setStatus(status, message, transcript);
     this._maybeAutoTranscribeRecorded(payload);
+  },
+
+  _applyPayloadLanguage: function(payload) {
+    let language = String(payload.language || "").trim();
+    if (language !== "") {
+      this.activeLanguage = language;
+    }
   },
 
   _updateRecordingTiming: function(payload, status) {
@@ -1361,6 +1421,12 @@ MyApplet.prototype = {
     }
     if (this.languageItem) {
       this.languageItem.label.text = _("Language: ") + this._currentLanguage();
+    }
+    if (this.primaryLanguageItem) {
+      this.primaryLanguageItem.label.text = _("Start primary: ") + this._primaryLanguage();
+    }
+    if (this.secondaryLanguageItem) {
+      this.secondaryLanguageItem.label.text = _("Start secondary: ") + this._secondaryLanguage();
     }
     if (this.transcriptItem) {
       this.transcriptItem.label.text = this._shortTranscript();

@@ -253,13 +253,19 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
     current = store.read()
     if current.status == "recording":
         if process_is_alive(current.pid):
-            return {"status": "recording", "message": "already recording", "pid": current.pid}
+            return {
+                "status": "recording",
+                "message": "already recording",
+                "pid": current.pid,
+                "language": current.language,
+            }
         if current.audio_path and Path(current.audio_path).exists() and Path(current.audio_path).stat().st_size > 0:
             recorded = store.update(status="recorded", stopped_at=current.stopped_at or now_iso())
             return {
                 "status": "recorded",
                 "message": "previous recording has exited; run stop or toggle to transcribe",
                 "audio_path": recorded.audio_path,
+                "language": recorded.language,
             }
         store.update(status="error", stopped_at=current.stopped_at or now_iso(), error="recording exited before audio was saved")
 
@@ -272,13 +278,14 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
     if proc.poll() is not None:
         detail = read_log_excerpt(log_path) or f"exit code {proc.returncode}"
         raise RuntimeError(f"{command.name} exited immediately: {detail}")
+    language = args.language or "en"
     state = RecordingState(
         status="recording",
         pid=proc.pid,
         audio_path=str(audio_path),
         log_path=str(log_path),
         started_at=now_iso(),
-        language=args.language,
+        language=language,
         recorder=command.name,
         max_seconds=args.max_seconds,
         input_device=args.input_device,
@@ -291,6 +298,7 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
         "audio_path": str(audio_path),
         "recorder": command.name,
         "input_device": args.input_device,
+        "language": language,
     }
 
 
@@ -299,10 +307,11 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         raise RuntimeError("no recording is available")
     audio_path = Path(state.audio_path)
     text_path = transcript_dir() / f"{audio_path.stem}.txt"
+    language = state.language or args.language or "en"
     try:
         text = transcribe(
             audio_path=audio_path,
-            language=args.language or state.language,
+            language=language,
             text_path=text_path,
             command_template=args.transcriber_command,
             backend=args.transcriber,
@@ -312,7 +321,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         )
         text = post_process_text(
             text,
-            args.language or state.language,
+            language,
             args.post_process_command,
             args.personal_context,
             args.vocabulary,
@@ -343,6 +352,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         "transcript": text,
         "transcript_path": str(text_path),
         "inserted": inserted,
+        "language": language,
     }
 
 
@@ -695,7 +705,7 @@ def add_common_options(parser: argparse.ArgumentParser) -> None:
 
 
 def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--language", default="en")
+    parser.add_argument("--language", default="")
     parser.add_argument("--max-seconds", type=int, default=30)
     parser.add_argument("--recorder", default="auto", choices=["auto", "pw-record", "parecord", "arecord"])
     parser.add_argument("--input-device", default="")

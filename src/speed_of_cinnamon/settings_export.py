@@ -13,6 +13,8 @@ EXPORT_VERSION = 1
 
 EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "toggle-keybinding": (str, "<Super>z::"),
+    "primary-language-keybinding": (str, ""),
+    "secondary-language-keybinding": (str, ""),
     "show-panel-label": (bool, True),
     "language": (str, "en"),
     "secondary-language": (str, "de"),

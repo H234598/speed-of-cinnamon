@@ -10,7 +10,7 @@
     "activation-section": {
       "type": "section",
       "title": "Activation",
-      "keys": ["toggle-keybinding", "show-panel-label"]
+      "keys": ["toggle-keybinding", "primary-language-keybinding", "secondary-language-keybinding", "show-panel-label"]
     },
     "recording-section": {
       "type": "section",
@@ -42,6 +42,18 @@
     "type": "keybinding",
     "description": "Start or stop dictation",
     "default": "<Super>z::"
+  },
+  "primary-language-keybinding": {
+    "type": "keybinding",
+    "description": "Start dictation with the primary language",
+    "tooltip": "Optional Cinnamon global shortcut. When already recording, it stops the current recording without changing its language.",
+    "default": ""
+  },
+  "secondary-language-keybinding": {
+    "type": "keybinding",
+    "description": "Start dictation with the secondary language",
+    "tooltip": "Optional Cinnamon global shortcut. When already recording, it stops the current recording without changing its language.",
+    "default": ""
   },
   "show-panel-label": {
     "type": "switch",

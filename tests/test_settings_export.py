@@ -10,6 +10,8 @@ from speed_of_cinnamon.settings_export import SettingsExportError, build_export,
 class SettingsExportTest(unittest.TestCase):
     def test_build_export_keeps_only_supported_settings(self) -> None:
         payload = build_export({
+            "primary-language-keybinding": "<Super><Alt>z::",
+            "secondary-language-keybinding": "<Super><Shift>z::",
             "language": "de",
             "append-space": False,
             "auto-transcribe-timeout": "false",
@@ -24,6 +26,8 @@ class SettingsExportTest(unittest.TestCase):
         })
         settings = payload["settings"]
         self.assertEqual(payload["app"], "speed-of-cinnamon")
+        self.assertEqual(settings["primary-language-keybinding"], "<Super><Alt>z::")
+        self.assertEqual(settings["secondary-language-keybinding"], "<Super><Shift>z::")
         self.assertEqual(settings["language"], "de")
         self.assertFalse(settings["append-space"])
         self.assertFalse(settings["auto-transcribe-timeout"])
