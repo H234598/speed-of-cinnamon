@@ -167,7 +167,8 @@ clipboard insertion outside the applet.
 
 ## Input Source Selection
 
-The default PipeWire/Pulse input is used when `Input device` is empty. To pin a microphone, inspect the source names:
+The default PipeWire/Pulse input is used when `Input device` is empty. In the Cinnamon applet, open `Input source` and
+select either `System default` or a concrete source. For scripts or manual settings, inspect the source names:
 
 ```bash
 speed-of-cinnamon list-inputs --json
@@ -179,8 +180,8 @@ Use the `name` value, not the localized description:
 speed-of-cinnamon start --input-device alsa_input.usb-Creative_Technology_Ltd_Sound_BlasterX_G6_8400614358X-00.analog-stereo
 ```
 
-The same value can be stored in the applet's `Input device` setting. It is passed to `pw-record --target`,
-`parecord --device`, or `arecord --device`, depending on the selected recorder.
+The same value can be stored in the applet's `Input device` setting or selected from the applet menu. It is passed to
+`pw-record --target`, `parecord --device`, or `arecord --device`, depending on the selected recorder.
 
 ## ASR Configuration
 

@@ -175,9 +175,14 @@ MyApplet.prototype = {
     diagnostics.connect("activate", () => this._copyDiagnostics());
     this.menu.addMenuItem(diagnostics);
 
-    let inputs = new PopupMenu.PopupIconMenuItem(_("Show input source"), "audio-input-microphone-symbolic", St.IconType.SYMBOLIC);
-    inputs.connect("activate", () => this._showInputSource());
-    this.menu.addMenuItem(inputs);
+    this.inputSourceItem = new PopupMenu.PopupSubMenuMenuItem(_("Input source"));
+    this.inputSourceItem.menu.connect("open-state-changed", (menu, open) => {
+      if (open) {
+        this._refreshInputSourceMenu();
+      }
+    });
+    this.menu.addMenuItem(this.inputSourceItem);
+    this._populateInputSourceMenu([]);
 
     let transcripts = new PopupMenu.PopupIconMenuItem(_("Open transcripts"), "folder-documents-symbolic", St.IconType.SYMBOLIC);
     transcripts.connect("activate", () => {
@@ -404,30 +409,73 @@ MyApplet.prototype = {
     });
   },
 
-  _showInputSource: function() {
-    if (this.inputDevice && this.inputDevice.trim() !== "") {
-      this._setStatus("ready", _("Input device: ") + this.inputDevice, this.lastTranscript);
+  _refreshInputSourceMenu: function() {
+    if (!this.inputSourceItem) {
       return;
     }
+    this._populateInputSourceMenu([], _("Loading input sources..."));
     this._spawnJson(this._listInputsArgs(), (payload) => {
       if (payload.error) {
+        this._populateInputSourceMenu([], payload.error);
         this._setStatus("error", payload.error, this.lastTranscript);
         return;
       }
-      let sources = payload.sources || [];
-      if (sources.length === 0) {
-        this._setStatus("error", _("No input sources found"), this.lastTranscript);
-        return;
-      }
-      let selected = sources[0];
-      for (let source of sources) {
-        if (source.default) {
-          selected = source;
-          break;
-        }
-      }
-      this._setStatus("ready", _("Default input: ") + (selected.description || selected.name), this.lastTranscript);
+      this._populateInputSourceMenu(payload.sources || []);
     });
+  },
+
+  _populateInputSourceMenu: function(sources, message) {
+    if (!this.inputSourceItem) {
+      return;
+    }
+    this.inputSourceItem.menu.removeAll();
+    let current = String(this.inputDevice || "");
+    let defaultLabel = (current === "" ? "[x] " : "[ ] ") + _("System default");
+    let defaultItem = new PopupMenu.PopupMenuItem(defaultLabel);
+    defaultItem.connect("activate", () => this._selectInputSource("", _("system default")));
+    this.inputSourceItem.menu.addMenuItem(defaultItem);
+
+    if (message) {
+      let messageItem = new PopupMenu.PopupMenuItem(message);
+      messageItem.setSensitive(false);
+      this.inputSourceItem.menu.addMenuItem(messageItem);
+      return;
+    }
+    if (!sources || sources.length === 0) {
+      let empty = new PopupMenu.PopupMenuItem(_("No input sources found"));
+      empty.setSensitive(false);
+      this.inputSourceItem.menu.addMenuItem(empty);
+      return;
+    }
+    for (let source of sources) {
+      let sourceName = String(source.name || "");
+      if (sourceName === "") {
+        continue;
+      }
+      let label = source.description || sourceName;
+      if (source.default) {
+        label += _(" (system default)");
+      }
+      let itemLabel = (current === sourceName ? "[x] " : "[ ] ") + label;
+      let item = new PopupMenu.PopupMenuItem(itemLabel);
+      item.connect("activate", () => this._selectInputSource(sourceName, label));
+      this.inputSourceItem.menu.addMenuItem(item);
+    }
+  },
+
+  _selectInputSource: function(name, label) {
+    this.inputDevice = String(name || "");
+    this.settings.setValue("input-device", this.inputDevice);
+    this._refreshInputSourceMenu();
+    let message = this.inputDevice === ""
+      ? _("Input device: system default")
+      : _("Input device: ") + label;
+    if (this.status === "recording" || this.status === "processing") {
+      this.lastMessage = _("Input device for next recording: ") + label;
+      this._updatePanel();
+      return;
+    }
+    this._setStatus("ready", message, this.lastTranscript);
   },
 
   _refreshHistory: function() {

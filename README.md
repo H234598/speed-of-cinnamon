@@ -16,7 +16,8 @@ path.
 - Cinnamon desktop notifications for completion and failures, with optional recording-state notifications.
 - Primary/secondary recognition languages with quick switching from the applet menu.
 - PipeWire/PulseAudio/ALSA recording through `pw-record`, `parecord`, or `arecord`.
-- Optional microphone/source selection by PipeWire/Pulse source name, with a `list-inputs` helper.
+- Optional microphone/source selection from the applet menu or by PipeWire/Pulse source name, with a `list-inputs`
+  helper.
 - ASR presets for Automatic, OpenAI Whisper command, whisper.cpp with a model path, or a custom command template.
 - Personal context and custom vocabulary fields for local ASR/post-process command wrappers.
 - Optional post-process command for local text cleanup or LLM polishing.
