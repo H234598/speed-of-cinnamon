@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install shell tooling
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Run checks
+        run: make check
+      - name: Shellcheck scripts
+        run: shellcheck scripts/*.sh
+

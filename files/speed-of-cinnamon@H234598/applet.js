@@ -1,0 +1,292 @@
+const Applet = imports.ui.applet;
+const Main = imports.ui.main;
+const PopupMenu = imports.ui.popupMenu;
+const Settings = imports.ui.settings;
+const St = imports.gi.St;
+const Util = imports.misc.util;
+const GLib = imports.gi.GLib;
+
+const UUID = "speed-of-cinnamon@H234598";
+const HOTKEY_ID = "speed-of-cinnamon-toggle";
+const DEFAULT_CLI = GLib.build_filenamev([GLib.get_home_dir(), ".local", "bin", "speed-of-cinnamon"]);
+
+function _(text) {
+  return text;
+}
+
+function MyApplet(metadata, orientation, panelHeight, instanceId) {
+  this._init(metadata, orientation, panelHeight, instanceId);
+}
+
+MyApplet.prototype = {
+  __proto__: Applet.TextIconApplet.prototype,
+
+  _init: function(metadata, orientation, panelHeight, instanceId) {
+    Applet.TextIconApplet.prototype._init.call(this, orientation, panelHeight, instanceId);
+
+    this.metadata = metadata;
+    this.orientation = orientation;
+    this.instanceId = instanceId;
+    this.toggleKeybinding = "<Super>z::";
+    this.showPanelLabel = true;
+    this.language = "en";
+    this.maxSeconds = 30;
+    this.recorder = "auto";
+    this.insertMethod = "clipboard-paste";
+    this.appendSpace = true;
+    this.typingDelayMs = 8;
+    this.cliPath = DEFAULT_CLI;
+    this.transcriberCommand = "";
+    this.status = "idle";
+    this.lastTranscript = "";
+    this.lastMessage = "";
+    this.isCommandRunning = false;
+    this.clipboard = St.Clipboard.get_default();
+
+    this.set_applet_icon_path(this.metadata.path + "/icon.svg");
+    this.set_applet_label("");
+    this.set_applet_tooltip(_("Speed of Cinnamon"));
+
+    this.settings = new Settings.AppletSettings(this, UUID, instanceId);
+    this._bindSettings();
+    this._buildMenu();
+    this._registerHotkey();
+    this._refreshStatus();
+  },
+
+  _bindSettings: function() {
+    this.settings.bindProperty(Settings.BindingDirection.IN, "toggle-keybinding", "toggleKeybinding", this._onHotkeyChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "show-panel-label", "showPanelLabel", this._updatePanel, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "language", "language", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "max-seconds", "maxSeconds", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "recorder", "recorder", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "insert-method", "insertMethod", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "append-space", "appendSpace", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "typing-delay-ms", "typingDelayMs", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "cli-path", "cliPath", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "transcriber-command", "transcriberCommand", null, null);
+  },
+
+  _buildMenu: function() {
+    this.menuManager = new PopupMenu.PopupMenuManager(this);
+    this.menu = new Applet.AppletPopupMenu(this, this.orientation);
+    this.menuManager.addMenu(this.menu);
+
+    this.toggleItem = new PopupMenu.PopupIconMenuItem(_("Start dictation"), "audio-input-microphone-symbolic", St.IconType.SYMBOLIC);
+    this.toggleItem.connect("activate", () => this._toggleRecording());
+    this.menu.addMenuItem(this.toggleItem);
+
+    this.statusItem = new PopupMenu.PopupMenuItem(_("Status: idle"));
+    this.statusItem.setSensitive(false);
+    this.menu.addMenuItem(this.statusItem);
+
+    this.transcriptItem = new PopupMenu.PopupMenuItem(_("No transcript yet"));
+    this.transcriptItem.setSensitive(false);
+    this.menu.addMenuItem(this.transcriptItem);
+
+    this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+    let statusNow = new PopupMenu.PopupIconMenuItem(_("Refresh status"), "view-refresh-symbolic", St.IconType.SYMBOLIC);
+    statusNow.connect("activate", () => this._refreshStatus());
+    this.menu.addMenuItem(statusNow);
+
+    let doctor = new PopupMenu.PopupIconMenuItem(_("Run doctor"), "dialog-information-symbolic", St.IconType.SYMBOLIC);
+    doctor.connect("activate", () => this._runDoctor());
+    this.menu.addMenuItem(doctor);
+
+    let transcripts = new PopupMenu.PopupIconMenuItem(_("Open transcripts"), "folder-documents-symbolic", St.IconType.SYMBOLIC);
+    transcripts.connect("activate", () => {
+      Util.spawn(["xdg-open", GLib.build_filenamev([GLib.get_user_state_dir(), "speed-of-cinnamon", "transcripts"])]);
+    });
+    this.menu.addMenuItem(transcripts);
+  },
+
+  _hotkeyName: function() {
+    return HOTKEY_ID + "-" + this.instanceId;
+  },
+
+  _registerHotkey: function() {
+    Main.keybindingManager.removeHotKey(this._hotkeyName());
+    Main.keybindingManager.addHotKey(this._hotkeyName(), this.toggleKeybinding, () => this._toggleRecording());
+  },
+
+  _onHotkeyChanged: function() {
+    this._registerHotkey();
+  },
+
+  on_applet_clicked: function() {
+    this.menu.toggle();
+  },
+
+  on_applet_removed_from_panel: function() {
+    Main.keybindingManager.removeHotKey(this._hotkeyName());
+    if (this.settings) {
+      this.settings.finalize();
+    }
+  },
+
+  _baseArgs: function(command) {
+    let backendInsertMethod = this._usesCinnamonClipboard() ? "none" : String(this.insertMethod || "clipboard-paste");
+    let args = [
+      this.cliPath || DEFAULT_CLI,
+      command,
+      "--json",
+      "--language", String(this.language || "en"),
+      "--max-seconds", String(this.maxSeconds || 30),
+      "--recorder", String(this.recorder || "auto"),
+      "--insert-method", backendInsertMethod,
+      "--typing-delay-ms", String(this.typingDelayMs || 8)
+    ];
+    if (this.appendSpace) {
+      args.push("--append-space");
+    }
+    if (this.transcriberCommand && this.transcriberCommand.trim() !== "") {
+      args.push("--transcriber-command", this.transcriberCommand);
+    }
+    return args;
+  },
+
+  _statusArgs: function() {
+    return [this.cliPath || DEFAULT_CLI, "status", "--json"];
+  },
+
+  _doctorArgs: function() {
+    return [this.cliPath || DEFAULT_CLI, "doctor", "--json"];
+  },
+
+  _usesCinnamonClipboard: function() {
+    return this.insertMethod === "clipboard" || this.insertMethod === "clipboard-paste";
+  },
+
+  _toggleRecording: function() {
+    if (this.isCommandRunning) {
+      return;
+    }
+    this.isCommandRunning = true;
+    this._setStatus("processing", _("Working..."), "");
+    this._spawnJson(this._baseArgs("toggle"), (payload) => {
+      this.isCommandRunning = false;
+      this._applyPayload(payload);
+    });
+  },
+
+  _refreshStatus: function() {
+    this._spawnJson(this._statusArgs(), (payload) => this._applyPayload(payload));
+  },
+
+  _runDoctor: function() {
+    this._spawnJson(this._doctorArgs(), (payload) => {
+      if (payload.ok) {
+        this._setStatus("ready", _("Doctor: required Cinnamon/X11 helpers found"), this.lastTranscript);
+      } else {
+        let missing = [];
+        for (let check of payload.checks || []) {
+          if (!check.ok) {
+            missing.push(check.name);
+          }
+        }
+        this._setStatus("error", _("Missing: ") + missing.join(", "), this.lastTranscript);
+      }
+    });
+  },
+
+  _spawnJson: function(args, callback) {
+    try {
+      Util.spawn_async(args, (stdout) => {
+        let payload;
+        try {
+          payload = JSON.parse(stdout || "{}");
+        } catch (err) {
+          payload = { status: "error", error: "Invalid backend response: " + err };
+        }
+        callback(payload);
+      });
+    } catch (err) {
+      callback({ status: "error", error: String(err) });
+    }
+  },
+
+  _applyPayload: function(payload) {
+    if (payload.error) {
+      this._setStatus("error", payload.error, this.lastTranscript);
+      return;
+    }
+    if (payload.status === "done" && payload.transcript && this._usesCinnamonClipboard()) {
+      this._finishCinnamonClipboardInsert(payload);
+      return;
+    }
+    let status = payload.status || "idle";
+    let message = payload.message || status;
+    let transcript = payload.transcript || this.lastTranscript || "";
+    this._setStatus(status, message, transcript);
+  },
+
+  _finishCinnamonClipboardInsert: function(payload) {
+    let text = payload.transcript || "";
+    if (this.appendSpace && text && !/\s$/.test(text)) {
+      text += " ";
+    }
+    this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
+    if (this.insertMethod === "clipboard") {
+      this._setStatus("done", _("Copied to clipboard"), payload.transcript);
+      return;
+    }
+    if (GLib.find_program_in_path("xdotool")) {
+      Util.spawn(["xdotool", "key", "--clearmodifiers", "ctrl+v"]);
+      this._setStatus("done", _("Copied and pasted"), payload.transcript);
+    } else {
+      this._setStatus("error", _("Copied to clipboard; install xdotool for automatic paste"), payload.transcript);
+    }
+  },
+
+  _setStatus: function(status, message, transcript) {
+    this.status = status;
+    this.lastMessage = message || "";
+    if (transcript) {
+      this.lastTranscript = transcript;
+    }
+    this._updatePanel();
+  },
+
+  _shortTranscript: function() {
+    if (!this.lastTranscript) {
+      return _("No transcript yet");
+    }
+    let clean = this.lastTranscript.replace(/\s+/g, " ").trim();
+    return clean.length > 80 ? clean.slice(0, 77) + "..." : clean;
+  },
+
+  _updatePanel: function() {
+    let label = "";
+    let tooltip = "Speed of Cinnamon";
+    if (this.status === "recording") {
+      label = "REC";
+      tooltip = _("Recording...");
+      if (this.toggleItem) this.toggleItem.label.text = _("Stop dictation");
+    } else if (this.status === "processing") {
+      label = "...";
+      tooltip = this.lastMessage || _("Processing...");
+      if (this.toggleItem) this.toggleItem.label.text = _("Working...");
+    } else if (this.status === "error") {
+      label = "ERR";
+      tooltip = this.lastMessage || _("Error");
+      if (this.toggleItem) this.toggleItem.label.text = _("Start dictation");
+    } else {
+      label = "SOC";
+      tooltip = this.lastMessage || _("Ready");
+      if (this.toggleItem) this.toggleItem.label.text = _("Start dictation");
+    }
+    this.set_applet_label(this.showPanelLabel ? label : "");
+    this.set_applet_tooltip(tooltip + "\n" + this._shortTranscript());
+    if (this.statusItem) {
+      this.statusItem.label.text = _("Status: ") + (this.status || "idle");
+    }
+    if (this.transcriptItem) {
+      this.transcriptItem.label.text = this._shortTranscript();
+    }
+  }
+};
+
+function main(metadata, orientation, panelHeight, instanceId) {
+  return new MyApplet(metadata, orientation, panelHeight, instanceId);
+}

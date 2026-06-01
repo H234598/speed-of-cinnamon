@@ -1,0 +1,111 @@
+{
+  "layout": {
+    "type": "layout",
+    "pages": ["main-page"],
+    "main-page": {
+      "type": "page",
+      "title": "Speed of Cinnamon",
+      "sections": ["activation-section", "recording-section", "output-section", "backend-section"]
+    },
+    "activation-section": {
+      "type": "section",
+      "title": "Activation",
+      "keys": ["toggle-keybinding", "show-panel-label"]
+    },
+    "recording-section": {
+      "type": "section",
+      "title": "Recording",
+      "keys": ["language", "max-seconds", "recorder"]
+    },
+    "output-section": {
+      "type": "section",
+      "title": "Text output",
+      "keys": ["insert-method", "append-space", "typing-delay-ms"]
+    },
+    "backend-section": {
+      "type": "section",
+      "title": "Backend",
+      "keys": ["cli-path", "transcriber-command"]
+    }
+  },
+  "toggle-keybinding": {
+    "type": "keybinding",
+    "description": "Start or stop dictation",
+    "default": "<Super>z::"
+  },
+  "show-panel-label": {
+    "type": "switch",
+    "description": "Show status text in the panel",
+    "default": true
+  },
+  "language": {
+    "type": "combobox",
+    "description": "Recognition language",
+    "options": {
+      "English": "en",
+      "German": "de",
+      "Spanish": "es",
+      "French": "fr",
+      "Italian": "it",
+      "Dutch": "nl"
+    },
+    "default": "en"
+  },
+  "max-seconds": {
+    "type": "spinbutton",
+    "description": "Maximum recording length",
+    "min": 5,
+    "max": 300,
+    "step": 5,
+    "units": "s",
+    "default": 30
+  },
+  "recorder": {
+    "type": "combobox",
+    "description": "Recorder",
+    "options": {
+      "Automatic": "auto",
+      "PipeWire pw-record": "pw-record",
+      "PulseAudio parecord": "parecord",
+      "ALSA arecord": "arecord"
+    },
+    "default": "auto"
+  },
+  "insert-method": {
+    "type": "combobox",
+    "description": "Insert method",
+    "options": {
+      "Clipboard and paste": "clipboard-paste",
+      "Clipboard only": "clipboard",
+      "Direct typing": "type",
+      "Do not insert": "none"
+    },
+    "default": "clipboard-paste"
+  },
+  "append-space": {
+    "type": "switch",
+    "description": "Append a space after inserted text",
+    "default": true
+  },
+  "typing-delay-ms": {
+    "type": "spinbutton",
+    "description": "Direct typing delay",
+    "min": 0,
+    "max": 100,
+    "step": 1,
+    "units": "ms",
+    "default": 8
+  },
+  "cli-path": {
+    "type": "entry",
+    "description": "Backend command",
+    "default": "/home/teladi/.local/bin/speed-of-cinnamon"
+  },
+  "transcriber-command": {
+    "type": "entry",
+    "description": "Transcriber command template",
+    "tooltip": "Leave empty to use the whisper command if installed. Template placeholders: {audio}, {language}, {text}, {output_dir}, {output_base}. The command must print the transcript or write it to {text}.",
+    "default": ""
+  }
+}
+
