@@ -5,6 +5,7 @@ const Settings = imports.ui.settings;
 const St = imports.gi.St;
 const Util = imports.misc.util;
 const GLib = imports.gi.GLib;
+const Mainloop = imports.mainloop;
 
 const UUID = "speed-of-cinnamon@H234598";
 const HOTKEY_ID = "speed-of-cinnamon-toggle";
@@ -42,6 +43,7 @@ MyApplet.prototype = {
     this.lastMessage = "";
     this.isCommandRunning = false;
     this.clipboard = St.Clipboard.get_default();
+    this.statusTimer = 0;
 
     this.set_applet_icon_path(this.metadata.path + "/icon.svg");
     this.set_applet_label("");
@@ -119,6 +121,7 @@ MyApplet.prototype = {
   },
 
   on_applet_removed_from_panel: function() {
+    this._clearStatusTimer();
     Main.keybindingManager.removeHotKey(this._hotkeyName());
     if (this.settings) {
       this.settings.finalize();
@@ -221,6 +224,25 @@ MyApplet.prototype = {
     this._setStatus(status, message, transcript);
   },
 
+  _clearStatusTimer: function() {
+    if (this.statusTimer) {
+      Mainloop.source_remove(this.statusTimer);
+      this.statusTimer = 0;
+    }
+  },
+
+  _scheduleStatusPoll: function() {
+    this._clearStatusTimer();
+    if (this.status !== "recording" && this.status !== "processing") {
+      return;
+    }
+    this.statusTimer = Mainloop.timeout_add_seconds(2, () => {
+      this.statusTimer = 0;
+      this._refreshStatus();
+      return false;
+    });
+  },
+
   _finishCinnamonClipboardInsert: function(payload) {
     let text = payload.transcript || "";
     if (this.appendSpace && text && !/\s$/.test(text)) {
@@ -246,6 +268,7 @@ MyApplet.prototype = {
       this.lastTranscript = transcript;
     }
     this._updatePanel();
+    this._scheduleStatusPoll();
   },
 
   _shortTranscript: function() {
@@ -271,6 +294,10 @@ MyApplet.prototype = {
       label = "ERR";
       tooltip = this.lastMessage || _("Error");
       if (this.toggleItem) this.toggleItem.label.text = _("Start dictation");
+    } else if (this.status === "recorded") {
+      label = "RDY";
+      tooltip = this.lastMessage || _("Ready to transcribe");
+      if (this.toggleItem) this.toggleItem.label.text = _("Transcribe recording");
     } else {
       label = "SOC";
       tooltip = this.lastMessage || _("Ready");

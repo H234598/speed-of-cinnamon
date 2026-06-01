@@ -45,8 +45,9 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
     try:
         return subprocess.Popen(command.argv, stdout=log_file, stderr=subprocess.STDOUT, start_new_session=True)
     except OSError as exc:
-        log_file.close()
         raise RecorderError(f"failed to start {command.name}: {exc}") from exc
+    finally:
+        log_file.close()
 
 
 def stop_process(pid: int, timeout_seconds: float = 5.0) -> None:
@@ -78,4 +79,3 @@ def stop_process(pid: int, timeout_seconds: float = 5.0) -> None:
         subprocess.run(["kill", "-KILL", str(pid)], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as exc:
         raise RecorderError(f"failed to stop recorder process {pid}: {exc}") from exc
-

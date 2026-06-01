@@ -14,7 +14,8 @@ path.
 - Cinnamon global hotkey via `Main.keybindingManager`; default is `Super+Z`.
 - PipeWire/PulseAudio/ALSA recording through `pw-record`, `parecord`, or `arecord`.
 - Configurable transcription command template. Leave it empty to use the `whisper` command when installed.
-- Cinnamon X11 output through `xclip` plus `xdotool` paste, direct `xdotool type`, clipboard-only, or no insertion.
+- Cinnamon clipboard output through the applet, optional `xdotool` paste/direct typing, clipboard-only, or no insertion.
+- Recordings that hit the configured maximum length are preserved and transcribed on the next shortcut press.
 - Per-user runtime state under `~/.local/state/speed-of-cinnamon/` and temporary recordings under
   `~/.cache/speed-of-cinnamon/`.
 - Local install and uninstall scripts, Python unit tests, shell checks, and GitHub Actions CI.
@@ -87,6 +88,15 @@ make check
 
 The checks run Python unit tests, compile Python files, validate Cinnamon JSON metadata/settings, and run a backend
 doctor smoke check. CI runs the same checks plus `shellcheck`.
+
+For a live backend check in a Cinnamon session:
+
+```bash
+make smoke-backend
+```
+
+This records short audio samples, uses harmless dummy transcriber commands, disables insertion, and verifies both manual
+stop and auto-expired recording finalization.
 
 ## Architecture
 

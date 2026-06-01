@@ -15,3 +15,14 @@ sleep 1
   --transcriber-command "printf speed-of-cinnamon-smoke" \
   --json
 
+"${backend}" start \
+  --max-seconds 1 \
+  --insert-method none \
+  --transcriber-command "printf speed-of-cinnamon-expired-smoke" \
+  --json
+sleep 2
+"${backend}" status --json
+"${backend}" toggle \
+  --insert-method none \
+  --transcriber-command "printf speed-of-cinnamon-expired-smoke" \
+  --json

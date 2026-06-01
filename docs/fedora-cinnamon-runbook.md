@@ -37,8 +37,8 @@ make smoke-backend
 ~/.local/bin/speed-of-cinnamon doctor --json
 ```
 
-The backend smoke records one second of audio through `pw-record`, uses a harmless dummy transcriber, and disables
-insertion.
+The backend smoke records short audio samples through `pw-record`, uses harmless dummy transcribers, disables insertion,
+and verifies both manual stop and the path where a recording expires at its maximum length before the next shortcut.
 
 ## Dependencies
 
@@ -72,3 +72,8 @@ whisper-cli -m ~/.local/share/whisper/models/ggml-base.bin -f {audio} -l {langua
 - Automatic paste/direct typing needs `xdotool` on X11.
 - The applet is designed for Cinnamon 6.x style settings and keybinding APIs.
 
+## Timeout Behavior
+
+If a recording reaches the configured maximum length, the backend preserves the audio and reports `recorded`. The next
+toggle/shortcut transcribes that existing recording instead of starting a new one. The applet polls while recording so the
+panel state can move from `REC` to `RDY` after the recorder exits.

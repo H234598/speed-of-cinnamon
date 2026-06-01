@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +14,8 @@ from .paths import APP_NAME, default_state_file, ensure_runtime_dirs, recordings
 from .recorder import choose_recorder, start_recorder, stop_process
 from .state import RecordingState, StateStore, now_iso, process_is_alive
 from .transcriber import transcribe
+
+RECORDER_START_GRACE_SECONDS = 0.2
 
 
 def timestamp() -> str:
@@ -38,18 +41,41 @@ def build_store(args: argparse.Namespace) -> StateStore:
     return StateStore(Path(args.state_file).expanduser())
 
 
+def read_log_excerpt(path: Path | None, max_chars: int = 2000) -> str:
+    if not path or not path.exists():
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+    return text[-max_chars:]
+
+
 def command_start(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     store = build_store(args)
     current = store.read()
-    if current.status == "recording" and process_is_alive(current.pid):
-        return {"status": "recording", "message": "already recording", "pid": current.pid}
+    if current.status == "recording":
+        if process_is_alive(current.pid):
+            return {"status": "recording", "message": "already recording", "pid": current.pid}
+        if current.audio_path and Path(current.audio_path).exists() and Path(current.audio_path).stat().st_size > 0:
+            recorded = store.update(status="recorded", stopped_at=current.stopped_at or now_iso())
+            return {
+                "status": "recorded",
+                "message": "previous recording has exited; run stop or toggle to transcribe",
+                "audio_path": recorded.audio_path,
+            }
+        store.update(status="error", stopped_at=current.stopped_at or now_iso(), error="recording exited before audio was saved")
 
     stamp = timestamp()
     audio_path = recordings_dir() / f"{stamp}.wav"
     log_path = recordings_dir() / f"{stamp}.log"
     command = choose_recorder(args.recorder, audio_path, args.max_seconds)
     proc = start_recorder(command, log_path)
+    time.sleep(RECORDER_START_GRACE_SECONDS)
+    if proc.poll() is not None:
+        detail = read_log_excerpt(log_path) or f"exit code {proc.returncode}"
+        raise RuntimeError(f"{command.name} exited immediately: {detail}")
     state = RecordingState(
         status="recording",
         pid=proc.pid,
@@ -75,9 +101,13 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         raise RuntimeError("no recording is available")
     audio_path = Path(state.audio_path)
     text_path = transcript_dir() / f"{audio_path.stem}.txt"
-    text = transcribe(audio_path, args.language or state.language, text_path, args.transcriber_command)
-    text_to_insert = append_space_if_needed(text, args.append_space)
-    inserted = insert_text(text_to_insert, args.insert_method, args.typing_delay_ms)
+    try:
+        text = transcribe(audio_path, args.language or state.language, text_path, args.transcriber_command)
+        text_to_insert = append_space_if_needed(text, args.append_space)
+        inserted = insert_text(text_to_insert, args.insert_method, args.typing_delay_ms)
+    except Exception as exc:
+        store.update(status="error", stopped_at=state.stopped_at or now_iso(), error=str(exc))
+        raise
     done = store.update(
         status="done",
         stopped_at=state.stopped_at or now_iso(),
@@ -113,8 +143,12 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
 def command_toggle(args: argparse.Namespace) -> dict[str, object]:
     store = build_store(args)
     state = store.read()
-    if state.status == "recording" and process_is_alive(state.pid):
-        return command_stop(args)
+    if state.status == "recording":
+        if process_is_alive(state.pid):
+            return command_stop(args)
+        if state.audio_path:
+            store.update(status="processing", stopped_at=state.stopped_at or now_iso())
+            return command_stop(args)
     return command_start(args)
 
 
