@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from .alarms import normalize_alarm
 from .paths import APP_ID
 
 EXPORT_VERSION = 2
+MAX_SETTINGS_EXPORT_BYTES = 1_000_000
 
 EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "toggle-keybinding": (str, "<Super>z::"),
@@ -49,6 +51,11 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
 
 class SettingsExportError(RuntimeError):
     pass
+
+
+def _assert_clean_path(path: Path, *, field_name: str) -> None:
+    if "\x00" in str(path):
+        raise SettingsExportError(f"{field_name} contains invalid null byte")
 
 
 def normalize_setting(key: str, value: Any) -> Any:
@@ -99,16 +106,28 @@ def build_export(settings: dict[str, Any], alarm_store: dict[str, Any] | None = 
 
 
 def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, Any] | None = None) -> dict[str, Any]:
+    _assert_clean_path(path, field_name="settings export path")
     payload = build_export(settings, alarm_store)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(tmp_path, path)
+    with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        tmp_path = Path(handle.name)
+    try:
+        os.replace(tmp_path, path)
+    except OSError as exc:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise SettingsExportError(f"failed to write settings export: {path}") from exc
     return payload
 
 
 def read_export(path: Path) -> dict[str, Any]:
+    _assert_clean_path(path, field_name="settings export path")
     try:
+        if path.stat().st_size > MAX_SETTINGS_EXPORT_BYTES:
+            raise SettingsExportError(f"settings export is too large: {path}")
         payload = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise SettingsExportError(f"settings export not found: {path}") from exc

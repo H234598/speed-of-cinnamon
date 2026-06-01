@@ -12,14 +12,32 @@ from unittest import mock
 from speed_of_cinnamon import cli
 from speed_of_cinnamon.alarms import (
     add_alarm,
+    load_alarm_store,
+    save_alarm_store,
     check_due_alarms,
     format_alarm_overview,
     list_alarm_payload,
     parse_repeat_days,
+    MAX_ALARM_STORE_BYTES,
 )
 
 
 class AlarmTest(unittest.TestCase):
+    def test_load_alarm_store_rejects_null_byte_path(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "invalid null byte"):
+            load_alarm_store(Path("alarms\x00.json"))
+
+    def test_save_alarm_store_rejects_null_byte_path(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "invalid null byte"):
+            save_alarm_store({}, Path("alarms\x00.json"))
+
+    def test_load_alarm_store_rejects_oversized_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            path.write_text("x" * (MAX_ALARM_STORE_BYTES + 1), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "alarm store is too large"):
+                load_alarm_store(path)
+
     def test_repeat_day_parser_supports_common_groups(self) -> None:
         self.assertEqual(parse_repeat_days("daily"), ["mon", "tue", "wed", "thu", "fri", "sat", "sun"])
         self.assertEqual(parse_repeat_days("weekdays"), ["mon", "tue", "wed", "thu", "fri"])
@@ -115,3 +133,25 @@ class AlarmTest(unittest.TestCase):
 
         self.assertEqual(payload["alarms"], [])
         self.assertEqual(payload["summary"], "No alarms configured")
+
+    def test_load_alarm_store_rejects_invalid_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            path.write_text("{invalid}", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "alarm store could not be parsed"):
+                load_alarm_store(path)
+
+    def test_load_alarm_store_rejects_non_object_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            path.write_text("[1, 2, 3]", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "alarm store must be a JSON object"):
+                load_alarm_store(path)
+
+    @mock.patch("speed_of_cinnamon.alarms.os.replace", side_effect=OSError("disk full"))
+    def test_save_alarm_store_raises_runtime_error_when_atomic_replace_fails(self, mocked_replace: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            with self.assertRaisesRegex(RuntimeError, "failed to persist alarm store"):
+                save_alarm_store({}, path)
+        mocked_replace.assert_called_once()

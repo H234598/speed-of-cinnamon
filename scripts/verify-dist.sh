@@ -24,7 +24,14 @@ for path in \
   Makefile \
   pyproject.toml \
   packaging/speed-of-cinnamon.spec \
+  docs/architecture.md \
+  docs/cli-reference.md \
+  docs/development.md \
   docs/fedora-cinnamon-runbook.md \
+  docs/man/speed-of-cinnamon.1 \
+  docs/man/speed-of-cinnamon-alarms.1 \
+  docs/user-guide.md \
+  docs/wiki/Home.md \
   files/speed-of-cinnamon@H234598/applet.js \
   files/speed-of-cinnamon@H234598/metadata.json \
   files/speed-of-cinnamon@H234598/settings-schema.json \

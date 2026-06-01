@@ -1,14 +1,20 @@
-.PHONY: check test lint verify-authorship smoke-doctor smoke-backend dist dist-check rpm rpm-check install-local uninstall-local
+.PHONY: check test coverage lint verify-authorship smoke-doctor smoke-backend release-dry-run release dist dist-check rpm rpm-check install-local uninstall-local
 
 PYTHON ?= python3
+PROJECT_VERSION := $(shell $(PYTHON) -c 'import tomllib, pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])')
 
 check: test lint verify-authorship smoke-doctor
 
 test:
 	PYTHONPATH=src $(PYTHON) -m unittest discover -s tests
 
+coverage:
+	mkdir -p reports
+	PYTHONPATH=src $(PYTHON) -m coverage run --source=src/speed_of_cinnamon -m unittest discover -s tests
+	$(PYTHON) -m coverage lcov -o reports/lcov.info
+
 lint:
-	$(PYTHON) -m py_compile $$(find src tests -name '*.py')
+	find src tests -name '*.py' -print0 | xargs -0 $(PYTHON) -m py_compile
 	$(PYTHON) -m json.tool files/speed-of-cinnamon@H234598/metadata.json >/dev/null
 	$(PYTHON) -m json.tool files/speed-of-cinnamon@H234598/settings-schema.json >/dev/null
 
@@ -20,6 +26,12 @@ smoke-doctor:
 
 smoke-backend:
 	./scripts/smoke-backend.sh ./scripts/dev-backend.sh
+
+release-dry-run: dist-check rpm rpm-check
+	./scripts/publish-github-release.sh --dry-run "v$(PROJECT_VERSION)"
+
+release: dist-check rpm rpm-check
+	./scripts/publish-github-release.sh "v$(PROJECT_VERSION)"
 
 dist:
 	./scripts/build-dist.sh

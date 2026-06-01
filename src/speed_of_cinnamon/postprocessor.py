@@ -6,7 +6,8 @@ import shlex
 import subprocess
 import urllib.request
 
-from .personalization import build_personalization_prompt, command_environment, normalize_context, normalize_vocabulary
+from .command_chain import CommandChainError, DEFAULT_COMMAND_TIMEOUT_SECONDS, MAX_COMMAND_OUTPUT_CHARS, run_command_chain, split_command_chain
+from .personalization import build_personalization_prompt, normalize_context, normalize_vocabulary
 
 
 class PostProcessError(RuntimeError):
@@ -19,10 +20,37 @@ DEFAULT_OLLAMA_PROMPT = (
     "Clean up the transcript for direct insertion. Preserve meaning, language, names, "
     "technical terms, and formatting. Return only the final text."
 )
+MAX_POSTPROCESS_TEXT_CHARS = 1_000_000
+MAX_POSTPROCESS_JSON_BYTES = 1_500_000
+MAX_POSTPROCESS_URL_CHARS = 2_048
 
 
 def _quote(value: str) -> str:
     return shlex.quote(value)
+
+
+def _assert_text_length(value: str, *, field_name: str, max_chars: int | None = None) -> str:
+    if max_chars is None:
+        max_chars = MAX_POSTPROCESS_TEXT_CHARS
+    if len(value) > max_chars:
+        raise PostProcessError(f"{field_name} is too large (max {max_chars} characters)")
+    return value
+
+
+def _assert_clean_url(url: str, *, field_name: str) -> str:
+    normalized = (url or "").strip()
+    if not normalized:
+        raise PostProcessError(f"{field_name} is required")
+    if "\x00" in normalized:
+        raise PostProcessError(f"{field_name} contains invalid null byte")
+    return _assert_text_length(normalized, field_name=field_name, max_chars=MAX_POSTPROCESS_URL_CHARS)
+
+
+def _read_response_text(response: object, max_bytes: int) -> str:
+    raw = response.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raise PostProcessError(f"remote response is too large (max {max_bytes} bytes)")
+    return raw.decode("utf-8", errors="replace")
 
 
 def render_postprocess_template(
@@ -64,12 +92,12 @@ def build_ollama_prompt(
 
 
 def _ollama_endpoint(url: str, path: str) -> str:
-    base = (url or DEFAULT_OLLAMA_URL).rstrip("/")
+    base = _assert_clean_url(url, field_name="ollama url").rstrip("/")
     return base + "/" + path.lstrip("/")
 
 
 def _openai_compatible_endpoint(url: str, path: str) -> str:
-    base = (url or DEFAULT_OPENAI_COMPATIBLE_URL).rstrip("/")
+    base = _assert_clean_url(url, field_name="openai-compatible url").rstrip("/")
     normalized_path = "/" + path.strip("/")
     if base.endswith(normalized_path):
         return base
@@ -78,7 +106,7 @@ def _openai_compatible_endpoint(url: str, path: str) -> str:
 
 def _read_json(request: urllib.request.Request, timeout: int) -> object:
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        raw = response.read().decode("utf-8")
+        raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
     return json.loads(raw)
 
 
@@ -133,6 +161,12 @@ def list_ollama_models(url: str = DEFAULT_OLLAMA_URL, timeout: int = 5) -> dict[
             "available": False,
             "models": [],
             "message": f"Ollama is not reachable at {(url or DEFAULT_OLLAMA_URL).rstrip('/')}: {exc}",
+        }
+    except PostProcessError as exc:
+        return {
+            "available": False,
+            "models": [],
+            "message": str(exc),
         }
     except json.JSONDecodeError:
         return {
@@ -194,6 +228,12 @@ def list_openai_compatible_models(
                 f"{(url or DEFAULT_OPENAI_COMPATIBLE_URL).rstrip('/')}: {exc}"
             ),
         }
+    except PostProcessError as exc:
+        return {
+            "available": False,
+            "models": [],
+            "message": str(exc),
+        }
     except json.JSONDecodeError:
         return {
             "available": False,
@@ -234,6 +274,7 @@ def post_process_with_ollama(
     model_name = (model or "").strip()
     if not model_name:
         raise PostProcessError("Ollama model is required")
+    _assert_text_length(text, field_name="input text")
     endpoint = _ollama_endpoint(url, "/api/generate")
     payload = {
         "model": model_name,
@@ -248,7 +289,7 @@ def post_process_with_ollama(
     )
     try:
         with urllib.request.urlopen(request, timeout=180) as response:
-            raw = response.read().decode("utf-8")
+            raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
     except OSError as exc:
         raise PostProcessError(f"Ollama request failed: {exc}") from exc
     try:
@@ -260,6 +301,7 @@ def post_process_with_ollama(
     if data.get("error"):
         raise PostProcessError(f"Ollama failed: {data['error']}")
     processed = str(data.get("response") or "").strip()
+    processed = _assert_text_length(processed, field_name="post-process output")
     if not processed:
         raise PostProcessError("Ollama completed without output")
     return processed
@@ -324,6 +366,7 @@ def post_process_with_openai_compatible(
     model_name = (model or "").strip()
     if not model_name:
         raise PostProcessError("OpenAI-compatible model is required")
+    _assert_text_length(text, field_name="input text")
     endpoint = _openai_compatible_endpoint(url, "/chat/completions")
     payload = {
         "model": model_name,
@@ -339,7 +382,7 @@ def post_process_with_openai_compatible(
     )
     try:
         with urllib.request.urlopen(request, timeout=180) as response:
-            raw = response.read().decode("utf-8")
+            raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
     except OSError as exc:
         raise PostProcessError(f"OpenAI-compatible request failed: {exc}") from exc
     try:
@@ -356,6 +399,7 @@ def post_process_with_openai_compatible(
     if not isinstance(choices, list) or not choices:
         raise PostProcessError("OpenAI-compatible server completed without choices")
     processed = _choice_text(choices[0]).strip()
+    processed = _assert_text_length(processed, field_name="post-process output")
     if not processed:
         raise PostProcessError("OpenAI-compatible server completed without output")
     return processed
@@ -378,6 +422,7 @@ def post_process_text(
     if normalized_backend in {"none", "off", "disabled"}:
         return text
     if normalized_backend == "ollama":
+        _assert_text_length(text, field_name="input text")
         return post_process_with_ollama(
             text,
             language,
@@ -388,6 +433,7 @@ def post_process_text(
             ollama_prompt,
         )
     if normalized_backend in {"openai-compatible", "openai", "local-openai"}:
+        _assert_text_length(text, field_name="input text")
         return post_process_with_openai_compatible(
             text,
             language,
@@ -399,26 +445,52 @@ def post_process_text(
         )
     if normalized_backend not in {"command", "custom"}:
         raise PostProcessError(f"unknown post-process backend: {backend}")
+    text = _assert_text_length(text, field_name="input text")
 
     template = command_template.strip()
     if not template:
         return text
 
     command = render_postprocess_template(template, text, language, personal_context, vocabulary)
-    proc = subprocess.run(
-        command,
-        input=text,
-        shell=True,
-        text=True,
-        capture_output=True,
-        timeout=180,
-        env=command_environment(personal_context, vocabulary),
-    )
-    if proc.returncode != 0:
-        detail = proc.stderr.strip() or proc.stdout.strip() or f"exit code {proc.returncode}"
-        raise PostProcessError(f"post-process command failed: {detail}")
-
-    processed = proc.stdout.strip()
+    try:
+        segments = split_command_chain(command, label="post-process")
+        processed = run_command_chain(
+            segments,
+            text,
+            label="post-process",
+            timeout_seconds=DEFAULT_COMMAND_TIMEOUT_SECONDS,
+            max_output_chars=MAX_COMMAND_OUTPUT_CHARS,
+            personal_context=personal_context,
+            vocabulary=vocabulary,
+        )
+    except CommandChainError as exc:
+        message = str(exc)
+        if message.startswith("invalid post-process") or message.startswith("unsupported shell operator in post-process"):
+            raise PostProcessError(message) from exc
+        if (
+            message.startswith("post-process command ended")
+            or message.startswith("empty post-process")
+            or message.startswith("post-process command chain is empty")
+        ):
+            raise PostProcessError(message) from exc
+        if (
+            "command failed" in message
+            or "command not found" in message
+            or "command timed out" in message
+            or "command execution failed" in message
+            or "command input exceeded" in message
+            or "max_input_chars must be non-negative" in message
+            or "max_output_chars must be non-negative" in message
+            or "timeout_seconds must be positive" in message
+            or "command input contains invalid null byte" in message
+        ):
+            raise PostProcessError(message) from exc
+        if "command output exceeded" in message:
+            raise PostProcessError(f"post-process output is too large: {message}") from exc
+        if "exceeded" in message:
+            raise PostProcessError(message) from exc
+        raise PostProcessError(f"post-process command failed: {message}") from exc
+    processed = _assert_text_length(processed, field_name="post-process output")
     if not processed:
         raise PostProcessError("post-process command completed without output")
     return processed

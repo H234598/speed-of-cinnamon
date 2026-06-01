@@ -1,0 +1,180 @@
+.TH SPEED-OF-CINNAMON 1 "June 2026" "speed-of-cinnamon 0.1.0" "User Commands"
+.SH NAME
+speed-of-cinnamon \- Cinnamon-native voice typing backend
+.SH SYNOPSIS
+.B speed-of-cinnamon
+.RI COMMAND
+.RI [ OPTIONS ]
+.SH DESCRIPTION
+.B speed-of-cinnamon
+is the local Python backend used by the Speed of Cinnamon Cinnamon applet.
+It records audio locally, runs a configurable speech recognition backend,
+optionally post-processes the text, and reports state to the applet.
+.PP
+Normal desktop use is driven by the Cinnamon applet. The command line is useful
+for setup checks, diagnostics, model management, backend-only tests, and
+scripted maintenance.
+.SH COMMANDS
+.TP
+.B doctor
+Inspect runtime dependencies and the configured recorder, transcriber, output,
+and post-processing pipeline.
+.TP
+.B setup
+Build a copyable setup plan from a doctor report.
+.TP
+.B diagnostics
+Collect a support bundle without transcript contents or private command
+templates.
+.TP
+.B start
+Start a recording and write state for the applet.
+.TP
+.B stop
+Stop or finalize the current recording, transcribe it, and apply the selected
+output mode.
+.TP
+.B toggle
+Start recording when idle, or stop/finalize when recording.
+.TP
+.B cancel
+Discard the current recording and remove local recording artifacts when they are
+inside the Speed of Cinnamon recordings directory.
+.TP
+.B transcribe-file
+Transcribe an existing local audio file without using the recorder.
+.TP
+.B list-inputs
+List PipeWire/Pulse input source names through
+.BR pactl (1).
+.TP
+.B models
+List local whisper.cpp model catalog status.
+.TP
+.B download-model
+Download and checksum-verify a catalog whisper.cpp model.
+.TP
+.B remove-model
+Remove a downloaded catalog model.
+.TP
+.B text-models
+List local Ollama or OpenAI-compatible text models.
+.TP
+.B history
+List recent transcript files.
+.TP
+.B cleanup
+Preview or remove old transcript files and cached recordings.
+.TP
+.B settings-export
+Write a portable applet settings backup.
+.TP
+.B settings-import
+Read a portable applet settings backup and restore local alarm state.
+.TP
+.B alarms
+Manage Cinnamon-local repeating alarms. See
+.BR speed-of-cinnamon-alarms (1).
+.SH COMMON OPTIONS
+.TP
+.B --json
+Print machine-readable JSON where supported.
+.TP
+.BI --state-file " PATH"
+Use an alternate state file.
+.TP
+.BI --language " CODE"
+Set the recognition language for the command.
+.TP
+.BI --insert-method " MODE"
+Use
+.BR clipboard-paste ,
+.BR clipboard-only ,
+.BR type ,
+or
+.BR none .
+.TP
+.BI --transcriber " BACKEND"
+Use
+.BR auto ,
+.BR whisper ,
+.BR whisper-cpp ,
+or
+.BR command .
+The
+.B whisper-cpp
+backend accepts
+.BR whisper-cli ,
+.BR whisper.cpp ,
+or Fedora
+.BR pwcpp .
+.TP
+.BI --transcriber-command " TEMPLATE"
+Use a custom ASR command template.
+.SH CUSTOM COMMANDS
+Custom transcriber and post-process templates are parsed into command argument
+lists and are not executed through a shell. Limited
+.B &&
+chaining is supported. Shell operators and redirections such as
+.BR | ,
+.BR || ,
+.BR & ,
+.BR > ,
+and
+.B 2>
+are rejected.
+.PP
+Transcriber templates can use:
+.PP
+.EX
+{audio} {language} {text} {output_dir} {output_base}
+.EE
+.PP
+Personalization placeholders are:
+.PP
+.EX
+{context} {vocabulary} {prompt}
+.EE
+.SH EXAMPLES
+.PP
+Run a setup-aware doctor check for applet mode:
+.PP
+.EX
+speed-of-cinnamon doctor --applet --settings-json '{"transcriber":"command","transcriber-command":"printf ok","insert-method":"clipboard-paste"}' --json
+.EE
+.PP
+Test transcription without inserting into the focused application:
+.PP
+.EX
+speed-of-cinnamon toggle --insert-method none --transcriber command --transcriber-command "printf test"
+.EE
+.PP
+Preview cleanup:
+.PP
+.EX
+speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 25 --dry-run --json
+.EE
+.SH FILES
+.TP
+.I ~/.local/state/speed-of-cinnamon/state.json
+Runtime state used by the applet.
+.TP
+.I ~/.local/state/speed-of-cinnamon/transcripts/
+Saved transcript history.
+.TP
+.I ~/.cache/speed-of-cinnamon/recordings/
+Temporary recording files.
+.TP
+.I ~/.local/share/speed-of-cinnamon/models/whisper.cpp/
+Downloaded whisper.cpp catalog models.
+.TP
+.I ~/.local/share/speed-of-cinnamon/settings-export.json
+Default portable settings backup.
+.TP
+.I ~/.local/share/speed-of-cinnamon/alarms.json
+Local repeating alarm store.
+.SH SEE ALSO
+.BR speed-of-cinnamon-alarms (1),
+.BR xdotool (1),
+.BR pactl (1),
+.BR pw-record (1)

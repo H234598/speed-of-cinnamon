@@ -54,13 +54,26 @@ for required in "${required_files[@]}"; do
     exit 1
   fi
 done
+for required in \
+  '^/usr/share/man/man1/speed-of-cinnamon\.1(\.gz)?$' \
+  '^/usr/share/man/man1/speed-of-cinnamon-alarms\.1(\.gz)?$' \
+; do
+  if ! grep -Eq "${required}" "${file_list}"; then
+    printf 'RPM is missing file matching %s\n' "${required}" >&2
+    exit 1
+  fi
+done
 if ! grep -Eq '^/usr/lib/python[^/]+/site-packages/speed_of_cinnamon/cli\.py$' "${file_list}"; then
   printf 'RPM is missing speed_of_cinnamon/cli.py under site-packages\n' >&2
   exit 1
 fi
 for pattern in \
   '^/usr/share/doc/speed-of-cinnamon(-[^/]*)?/README\.md$' \
+  '^/usr/share/doc/speed-of-cinnamon(-[^/]*)?/architecture\.md$' \
+  '^/usr/share/doc/speed-of-cinnamon(-[^/]*)?/cli-reference\.md$' \
+  '^/usr/share/doc/speed-of-cinnamon(-[^/]*)?/development\.md$' \
   '^/usr/share/doc/speed-of-cinnamon(-[^/]*)?/fedora-cinnamon-runbook\.md$' \
+  '^/usr/share/doc/speed-of-cinnamon(-[^/]*)?/user-guide\.md$' \
   '^/usr/share/(doc|licenses)/speed-of-cinnamon(-[^/]*)?/LICENSE$'
 do
   if ! grep -Eq "${pattern}" "${file_list}"; then

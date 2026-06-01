@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  printf 'usage: %s [--dry-run] vVERSION\n' "$0" >&2
+  printf 'usage: %s [--dry-run] [v]VERSION\n' "$0" >&2
 }
 
 dry_run=false
@@ -16,11 +16,22 @@ if [[ $# -ne 1 ]]; then
   exit 2
 fi
 
-tag="$1"
+input_tag="$1"
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_dir}"
+if [[ "${input_tag}" == v* ]]; then
+  tag="${input_tag}"
+else
+  tag="v${input_tag}"
+fi
 
-for tool in gh git python3; do
+if [[ "${dry_run}" == "true" ]]; then
+  required_tools=(git python3)
+else
+  required_tools=(gh git python3)
+fi
+
+for tool in "${required_tools[@]}"; do
   if ! command -v "${tool}" >/dev/null 2>&1; then
     printf '%s not found.\n' "${tool}" >&2
     exit 1
@@ -36,7 +47,7 @@ print(tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project
 PY
 )"
 expected_tag="v${version}"
-if [[ "${tag}" != "${expected_tag}" ]]; then
+if [[ "${dry_run}" == "false" && "${tag}" != "${expected_tag}" ]]; then
   printf 'release tag %s does not match pyproject version %s\n' "${tag}" "${expected_tag}" >&2
   exit 1
 fi

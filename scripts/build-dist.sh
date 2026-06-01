@@ -55,12 +55,19 @@ Contains:
 - Cinnamon applet files under files/speed-of-cinnamon@H234598/
 - Python backend under src/speed_of_cinnamon/
 - local build, verify, install, uninstall, and dependency scripts under scripts/
-- tests, CI workflow, README, license, and Fedora Cinnamon runbook
+- tests, CI workflow, README, license, and docs
 EOF
 
-tarball="${dist_dir}/${package}.tar.gz"
-tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@0" -C "${work_dir}" -czf "${tarball}" "${package}"
-sha256sum "${tarball}" > "${tarball}.sha256"
+final_tarball="${dist_dir}/${package}.tar.gz"
+final_checksum="${final_tarball}.sha256"
+staging_tarball="$(mktemp "${dist_dir}/.${package}.tar.gz.XXXXXX")"
+staging_checksum="${staging_tarball}.sha256"
+trap 'rm -f "${staging_tarball}" "${staging_checksum}"' EXIT
 
-printf 'Built %s\n' "${tarball}" >&2
-printf '%s\n' "${tarball}"
+tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@0" -C "${work_dir}" -czf "${staging_tarball}" "${package}"
+sha256sum "${staging_tarball}" > "${staging_checksum}"
+mv "${staging_tarball}" "${final_tarball}"
+mv "${staging_checksum}" "${final_checksum}"
+
+printf 'Built %s\n' "${final_tarball}" >&2
+printf '%s\n' "${final_tarball}"

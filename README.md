@@ -2,133 +2,37 @@
 
 Cinnamon-native voice typing for current Fedora Cinnamon sessions.
 
-This project uses Speed of Sound as a product reference, not as a blind fork. The useful idea is the workflow:
-press a shortcut, speak, transcribe, then put the result into the focused application. The implementation is
-Cinnamon-specific: a Cinnamon applet owns the panel UI and global hotkey, and a small Python backend records audio,
-runs a configurable transcriber, and inserts text through X11 clipboard/keyboard tools. There is no XDG portal core
-path.
+Speed of Cinnamon uses Speed of Sound as a product reference, not as a blind fork. The useful workflow is kept:
+press a shortcut, speak, transcribe, then insert the result into the focused application. The implementation is built
+for Cinnamon: a Cinnamon applet owns the panel UI, global hotkeys, clipboard handling, notifications, and target-window
+restore; a small Python backend records audio, runs a configurable local transcriber, and reports state. There is no
+XDG portal core path.
 
-## Features
+## What It Does
 
-- Cinnamon panel applet with microphone icon, concise status label, status menu, transcript preview, and a doctor check.
-- Status-colored Cinnamon panel indicator for recording, processing, ready, setup, recorded, and error states.
-- Configuration-aware doctor check for the selected recorder, ASR backend, desktop session, and output mode.
-- Startup setup check in the applet, plus direct menu actions for Cinnamon applet settings and the setup runbook.
-- Applet guide/folder actions use Cinnamon's GJS/Gio default-app launcher instead of shelling out to `xdg-open`.
-- Live recording progress in the panel tooltip and menu, with a compact elapsed-time panel label.
-- Copyable or saveable diagnostics bundle for support reports without transcript contents.
-- Cinnamon global hotkey via `Main.keybindingManager`; default is `Super+Z`, with optional dedicated shortcuts for
-  starting dictation in the primary or secondary language.
-- Applet shortcut reference menu showing the active Cinnamon hotkeys, with a copy action for setup/support notes.
-- Cinnamon desktop notifications for completion and failures, with optional recording-state notifications and applet
-  toggles.
-- Cinnamon-native repeating alarms with local JSON state, CLI management, applet summary/actions, resume catch-up, and
-  Cinnamon notifications without a portal service.
-- Primary/secondary recognition languages with broader ISO-code presets and a Cinnamon submenu for selecting the active
-  language or starting directly with either language.
-- PipeWire/PulseAudio/ALSA recording through `pw-record`, `parecord`, or `arecord`, selectable from the applet menu.
-- Applet duration menu for common maximum recording lengths without opening Cinnamon settings.
-- Applet recording-options menu for time-limit transcription and private-by-default recording-file retention.
-- Optional microphone/source selection from the applet menu or by PipeWire/Pulse source name, with a `list-inputs`
-  helper.
-- ASR presets for Automatic, OpenAI Whisper command, whisper.cpp with a model path, or a custom command template.
-- Local whisper.cpp model catalog with checksum-verified downloads into the user's XDG data directory.
-- Applet voice-model menu for downloading/selecting whisper.cpp models and returning to Automatic ASR without opening settings.
-- Personal context and custom vocabulary fields for local ASR/post-process command wrappers.
-- Optional text polishing through a custom command, a local Ollama model, or a local OpenAI-compatible server such as
-  vLLM, llama.cpp, or LM Studio, with applet selection of discovered local models.
-- Cinnamon clipboard output through the applet, optional `xdotool` paste/direct typing, clipboard-only, or no insertion.
-- Quick output-mode switcher in the applet for clipboard+paste, clipboard-only, direct typing, or no insertion.
-- Quick text-output options in the applet for trailing spaces and accent replacement.
-- Target-window restore before Cinnamon clipboard paste, so panel-triggered dictation can return focus to the last
-  normal application window.
-- Optional accent/special-character fallback for direct typing compatibility on X11.
-- Applet menu action to copy the last transcript again.
-- Applet menu action to insert the last transcript again with the current output mode.
-- Applet and CLI transcript history for quickly copying or inserting recent results.
-- Applet and CLI action to cancel and discard a current recording.
-- Applet and CLI cleanup preview/removal for old transcript/history files and cached recordings.
-- Applet and CLI settings export/import for portable Cinnamon backups.
-- Applet recordings that hit the configured maximum length are transcribed automatically, with a setting to keep the
-  old "ready, then transcribe on next shortcut" behavior.
-- Temporary recording files are discarded after successful transcription by default, with an opt-in setting to keep
-  them for debugging.
-- Per-user runtime state under `~/.local/state/speed-of-cinnamon/` and temporary recordings under
-  `~/.cache/speed-of-cinnamon/`.
-- Local install and uninstall scripts, reproducible source release archives, Python unit tests, shell checks, and GitHub
-  Actions CI.
-- CI authorship guard for the GitHub owner, commit identities, applet metadata, Python metadata, and RPM metadata.
-- CI uploads source archive, checksum, noarch RPM, and source RPM artifacts for each successful workflow run.
-- Experimental noarch RPM build for Fedora-style system installation.
+- Cinnamon panel applet with microphone status, setup hints, transcript preview, and menu actions.
+- Global Cinnamon shortcut, default `Super+Z`, plus optional primary/secondary language shortcuts.
+- Recording through PipeWire `pw-record`, PulseAudio `parecord`, or ALSA `arecord`.
+- ASR through Automatic mode, OpenAI Whisper CLI, whisper.cpp, or a hardened custom command template.
+- Optional local text polishing through a command, Ollama, or an OpenAI-compatible local server.
+- Cinnamon clipboard output, optional X11 paste/direct typing via `xdotool`, and clipboard-only/no-insert modes.
+- Transcript history, last-transcript retry, cleanup preview/removal, diagnostics, and portable settings backup.
+- Cinnamon-local repeating alarms with applet notifications and CLI management.
+- Local model catalog for checksum-verified whisper.cpp downloads.
+- Python tests, source archive verification, RPM checks, CI artifacts, release automation, and QLTY coverage upload.
 
-## Fedora Cinnamon Dependencies
+## Quick Install
 
-Required for the intended Cinnamon/X11 path:
+For the intended Fedora Cinnamon/X11 path:
 
 ```bash
-sudo dnf install python3 pipewire-utils pulseaudio-utils xdotool libnotify
-```
-
-`pulseaudio-utils` provides `pactl` for source discovery and `parecord` as a fallback recorder. Install `alsa-utils`
-only if you want the `arecord` fallback recorder. The applet uses Cinnamon's own clipboard API, so `xclip` is not
-required for normal panel usage. Install `xclip` or `xsel` only if you want to use `speed-of-cinnamon` as a standalone
-CLI clipboard inserter outside Cinnamon.
-If `xdotool` is missing, the applet still copies transcripts through Cinnamon and reports that automatic paste is
-unavailable.
-
-`parecord` and `arecord` are supported fallback recorders when installed. For transcription, install one local ASR
-backend and choose it in the applet settings:
-
-- `Automatic`: uses a custom command when configured, otherwise `whisper`, otherwise whisper.cpp when a model path is set.
-- `OpenAI Whisper command`: runs the installed `whisper` CLI.
-- `whisper.cpp`: runs `whisper-cli` with the configured model file.
-- `Custom command`: runs the command template below.
-
-Custom command examples:
-
-```text
-printf 'test transcript'
-whisper {audio} --language {language} --output_format txt --output_dir {output_dir}
-whisper-cli -m ~/.local/share/whisper/models/ggml-base.bin -f {audio} -l {language} -otxt -of {output_base} && cat {text}
-```
-
-Template placeholders are:
-
-```text
-{audio} {language} {text} {output_dir} {output_base}
-```
-
-Personalization is local-only. Configure `Personal context` and `Custom vocabulary` in the applet settings, or pass
-them through the CLI. Custom transcriber and custom post-process commands can use these shell-quoted placeholders;
-Ollama text polishing receives the same context and vocabulary in its generated prompt:
-
-```text
-{context} {vocabulary} {prompt}
-```
-
-The same values are exposed as environment variables:
-
-```text
-SPEED_OF_CINNAMON_CONTEXT
-SPEED_OF_CINNAMON_VOCABULARY
-SPEED_OF_CINNAMON_PROMPT
-```
-
-For text cleanup after ASR, configure `Text polishing`. `Custom command` receives the transcript on stdin and must print
-the final text. `{text}`, `{language}`, `{context}`, `{vocabulary}`, and `{prompt}` can also be used as shell-quoted
-placeholders. `Ollama local model` sends the transcript, language, context, and vocabulary to a local Ollama
-`/api/generate` endpoint and expects the final text in the `response` field. `OpenAI-compatible local server` sends a
-chat-completions request to a local `/v1/chat/completions` API such as vLLM, llama.cpp, or LM Studio. If your local
-server requires a bearer token, set `SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY` in the environment that starts the
-backend.
-
-## Install Locally
-
-```bash
+git clone https://github.com/H234598/speed-of-cinnamon.git
+cd speed-of-cinnamon
+./scripts/install-fedora-deps.sh
 make install-local
 ```
 
-Then add `Speed of Cinnamon` from Cinnamon's applet settings. If Cinnamon does not refresh the applet list immediately,
+Then add `Speed of Cinnamon` from Cinnamon's applet settings. If Cinnamon does not refresh the list immediately,
 reload Cinnamon with:
 
 ```text
@@ -141,117 +45,28 @@ The backend command is installed to:
 ~/.local/bin/speed-of-cinnamon
 ```
 
-When the `Backend command` setting is empty, the applet auto-detects the backend in this order:
-`~/.local/bin/speed-of-cinnamon`, `/usr/bin/speed-of-cinnamon`, then `speed-of-cinnamon` from `PATH`. This keeps the
-per-user development install and the Fedora RPM/system install usable without editing the setting.
+When the applet's `Backend command` setting is empty, it auto-detects the backend in this order:
+`~/.local/bin/speed-of-cinnamon`, `/usr/bin/speed-of-cinnamon`, then `speed-of-cinnamon` from `PATH`.
+
+## First Setup
 
 On startup, the applet runs a lightweight doctor check against its current Cinnamon settings. A `SET` panel label means
-the configured pipeline needs setup, usually because no ASR backend or local voice model is available yet. Use the
-applet menu's `Copy setup plan`, `Copy setup commands`, `Open applet settings`, `Open setup guide`, `Run doctor`, and
-`Voice model` actions to finish setup without leaving Cinnamon's applet workflow. `Copy setup commands` copies only the
-concrete shell commands from the setup plan; it does not run `sudo`, `pkexec`, or a package manager from the applet.
+the selected pipeline still needs setup, usually because no ASR backend or local voice model is available yet.
 
-The applet menu also includes `Keyboard shortcuts`, a live reference for the configured Cinnamon hotkeys. It lists the
-main toggle, optional primary/secondary language shortcuts, and applet-only actions, and can copy that reference through
-Cinnamon's clipboard for setup notes or issue reports.
+Use the applet menu actions:
 
-Use the `Language` submenu to select the active runtime language, start a recording directly with the primary or
-secondary language, or switch between both without opening Cinnamon settings.
+- `Copy setup plan`
+- `Copy setup commands`
+- `Run doctor`
+- `Open applet settings`
+- `Open setup guide`
+- `Voice model`
 
-The primary/secondary language settings provide common Whisper-compatible ISO-code presets, including English, German,
-Spanish, French, Portuguese, Polish, Russian, Ukrainian, Turkish, Arabic, Chinese, Japanese, Korean, and Hindi.
+`Copy setup commands` copies only concrete shell commands. The applet does not run `sudo`, `pkexec`, a package manager,
+or a portal helper.
 
-Use the `Recorder` submenu to choose Automatic, PipeWire `pw-record`, PulseAudio `parecord`, or ALSA `arecord` without
-opening Cinnamon settings. The selected recorder is used for the next recording.
-
-Use the `Duration` submenu to choose a common maximum recording length without opening Cinnamon settings. If changed
-while recording, it applies to the next recording.
-
-Use the `Recording options` submenu to toggle automatic transcription at the time limit and whether temporary WAV/log
-files are kept after successful transcription. Recording files are discarded by default.
-
-Use the `Notifications` submenu to toggle recording, completion, and error notifications without opening Cinnamon
-settings.
-
-Use the `Text options` applet submenu to toggle trailing spaces and accent replacement without opening Cinnamon
-settings. Those values are the same settings used by normal applet output and the backend CLI flags.
-
-## CLI
-
-```bash
-speed-of-cinnamon doctor --json
-speed-of-cinnamon doctor --applet --settings-json '{"transcriber":"command","transcriber-command":"printf ok","insert-method":"clipboard-paste"}' --json
-speed-of-cinnamon setup --applet --settings-json '{"transcriber":"auto","insert-method":"clipboard-paste"}' --json
-speed-of-cinnamon diagnostics --json
-speed-of-cinnamon diagnostics --save --json
-speed-of-cinnamon diagnostics --applet --settings-json '{"transcriber":"command","transcriber-command":"printf ok"}' --json
-speed-of-cinnamon alarms add --time 09:00 --name "Standup" --days weekdays --json
-speed-of-cinnamon alarms list --json
-speed-of-cinnamon alarms check --mark --json
-speed-of-cinnamon alarms disable alarm-0900 --json
-speed-of-cinnamon alarms remove alarm-0900 --json
-speed-of-cinnamon list-inputs --json
-speed-of-cinnamon models --json
-speed-of-cinnamon text-models --json
-speed-of-cinnamon text-models --backend openai-compatible --openai-compatible-url http://127.0.0.1:8000/v1 --json
-speed-of-cinnamon download-model tiny.en --json
-speed-of-cinnamon remove-model tiny.en --json
-speed-of-cinnamon history --limit 5 --json
-speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 25 --dry-run --json
-speed-of-cinnamon settings-export --settings-json '{"language":"de","append-space":true}' --json
-speed-of-cinnamon settings-import --json
-speed-of-cinnamon start --language de
-speed-of-cinnamon start --language de --input-device alsa_input.usb-Creative_Technology_Ltd_Sound_BlasterX_G6_8400614358X-00.analog-stereo
-speed-of-cinnamon stop --language de --insert-method clipboard-paste
-speed-of-cinnamon cancel
-speed-of-cinnamon toggle --language de --transcriber whisper
-speed-of-cinnamon toggle --language de --transcriber whisper-cpp --whisper-model ~/.local/share/whisper/models/ggml-base.bin
-speed-of-cinnamon toggle --language de --transcriber command --transcriber-command "printf 'Hallo Cinnamon'"
-speed-of-cinnamon toggle --post-process-command "python3 -c 'import sys; print(sys.stdin.read().strip().capitalize())'"
-speed-of-cinnamon toggle --post-process-backend ollama --ollama-model llama3.2:3b
-speed-of-cinnamon toggle --post-process-backend openai-compatible --openai-compatible-model local-llama --openai-compatible-url http://127.0.0.1:8000/v1
-speed-of-cinnamon toggle --personal-context "Use Fedora Cinnamon project terms." --vocabulary "PipeWire"
-speed-of-cinnamon toggle --sanitize-special-chars --insert-method type
-speed-of-cinnamon toggle --keep-recording-artifacts --insert-method none
-```
-
-The applet menu can export and import its current settings to:
-
-```text
-~/.local/share/speed-of-cinnamon/settings-export.json
-```
-
-This export includes personal context, vocabulary, command templates, hotkeys, recording retention, and the local alarm
-store. Treat it as a private backup. Machine-local `cli-path` is intentionally not exported.
-
-The applet's `Voice model` menu can download, select, and remove whisper.cpp catalog models, or switch back to
-`Automatic ASR backend` without opening Cinnamon settings. Models are stored under:
-
-```text
-~/.local/share/speed-of-cinnamon/models/whisper.cpp/
-```
-
-Downloads use the upstream whisper.cpp ggml model files from Hugging Face and verify their SHA-1 checksums before the
-model is activated. If `whisper-cli` is installed, Automatic transcription can use a verified downloaded model even when
-the `whisper.cpp model` setting is empty. Removing a model from the applet clears the explicit whisper.cpp selection
-when that model was active. `Automatic ASR backend` clears the explicit whisper.cpp model path and returns the
-transcriber setting to `Automatic`.
-
-The applet's `Text model` menu can disable polishing, use the custom command backend, select a model returned by a local
-Ollama `/api/tags` endpoint, or select a model returned by a local OpenAI-compatible `/v1/models` endpoint. If the
-selected local server is not running, the menu stays usable and shows the local connection message instead of blocking
-recording.
-
-The applet's `Alarms` menu lists locally configured repeating alarms, can check them immediately, and can copy starter
-CLI commands. The applet also runs a small periodic check and emits due alarms with Cinnamon notifications. Alarm state
-is stored locally under:
-
-```text
-~/.local/share/speed-of-cinnamon/alarms.json
-```
-
-`--days` accepts `daily`, `weekdays`, `weekends`, or comma-separated day codes such as `mon,wed,fri`. `--urgency` can
-be `silent`, `normal`, or `critical`; silent alarms are still marked due but do not notify.
+For Fedora RPM installs, the package requires `python3-pywhispercpp`, which provides the `pwcpp` whisper.cpp-compatible
+CLI. Local source installs only warn when no ASR backend is present because they do not run a system package manager.
 
 For backend-only testing without touching the focused application:
 
@@ -259,105 +74,85 @@ For backend-only testing without touching the focused application:
 speed-of-cinnamon toggle --insert-method none --transcriber command --transcriber-command "printf 'test'"
 ```
 
+## Documentation
+
+- [User Guide](docs/user-guide.md): applet workflow, output modes, history, models, alarms, cleanup, and backups.
+- [CLI Reference](docs/cli-reference.md): command examples grouped by setup, recording, models, alarms, and maintenance.
+- [Architecture](docs/architecture.md): Cinnamon-native design, backend boundary, command hardening, privacy, and limits.
+- [Development](docs/development.md): tests, coverage, release archives, RPMs, CI, and release publishing.
+- [Fedora Cinnamon Runbook](docs/fedora-cinnamon-runbook.md): operational Fedora setup and troubleshooting runbook.
+- [Man pages](docs/man/): installable `speed-of-cinnamon(1)` and `speed-of-cinnamon-alarms(1)`.
+- [Wiki source](docs/wiki/): source pages published to the GitHub wiki.
+
+## Common Commands
+
+```bash
+speed-of-cinnamon doctor --json
+speed-of-cinnamon setup --applet --settings-json '{"transcriber":"auto","insert-method":"clipboard-paste"}' --json
+speed-of-cinnamon diagnostics --save --json
+speed-of-cinnamon list-inputs --json
+speed-of-cinnamon models --json
+speed-of-cinnamon text-models --json
+speed-of-cinnamon history --limit 5 --json
+speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 25 --dry-run --json
+speed-of-cinnamon settings-export --settings-json '{"language":"de","append-space":true}' --json
+speed-of-cinnamon alarms add --time 09:00 --name "Standup" --days weekdays --json
+```
+
+Custom transcriber and post-process templates are executed as command argument lists, not through a shell. Optional
+`&&` command chaining is supported for sensible multi-step local commands. Shell operators and redirections such as
+`|`, `||`, `&`, `>`, and `2>` are rejected.
+
 ## Development
 
 ```bash
 make check
 ```
 
-The checks run Python unit tests, compile Python files, validate Cinnamon JSON metadata/settings, verify project
-authorship metadata, and run a backend doctor smoke check. CI runs the same checks plus `shellcheck`.
+The check target runs Python unit tests, compiles Python files, validates Cinnamon JSON metadata/settings, verifies
+project authorship metadata, and runs a backend doctor smoke check.
 
-For a live backend check in a Cinnamon session:
+Coverage is generated separately so normal local checks do not require the coverage package:
 
 ```bash
-make smoke-backend
+python -m pip install coverage
+make coverage
 ```
 
-This records short audio samples, uses harmless dummy transcriber commands, disables insertion, and verifies manual stop,
-auto-expired recording finalization, and cancel/discard behavior.
+This writes `reports/lcov.info`. GitHub Actions uploads that file through `qltysh/qlty-action/coverage@v2` when the
+repository secret `QLTY_COVERAGE_TOKEN` is available.
 
-To build and verify a release archive:
+To verify the source release archive:
 
 ```bash
 make dist-check
 ```
 
-This writes `dist/speed-of-cinnamon-<version>.tar.gz`, verifies its checksum file, extracts it, runs `make check`, and
-installs the package into a temporary home directory to prove the shipped applet and backend wrapper are complete.
-
-To build a noarch RPM from the verified source archive:
+To build and verify the experimental Fedora noarch RPM:
 
 ```bash
 make rpm
 make rpm-check
 ```
 
-The RPM installs the backend command to `/usr/bin/speed-of-cinnamon` and the Cinnamon applet under
-`/usr/share/cinnamon/applets/speed-of-cinnamon@H234598/`. `make rpm-check` extracts the built RPM, verifies the payload
-paths and metadata, then starts the packaged `/usr/bin/speed-of-cinnamon` wrapper against the extracted Python package.
-
-GitHub Actions publishes two artifacts for successful runs:
+Successful GitHub Actions runs upload:
 
 - `speed-of-cinnamon-source-<commit>` with the source archive and `.sha256`.
 - `speed-of-cinnamon-rpm-<commit>` with the noarch RPM and source RPM.
 
-Pushing a version tag that matches `pyproject.toml`, for example `v0.1.0`, runs the release workflow. It repeats the
-normal checks, verifies the source archive and RPM payload, then publishes a GitHub Release with the source archive,
-checksum, Fedora noarch RPM, and source RPM:
+Release publishing is documented in [Development](docs/development.md).
 
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-The same workflow can be run manually with `dry_run=true` to validate the release path without publishing.
-
-## Architecture
+## Runtime Paths
 
 ```text
-Cinnamon keybinding / panel click
-  -> files/speed-of-cinnamon@H234598/applet.js
-  -> ~/.local/bin/speed-of-cinnamon or /usr/bin/speed-of-cinnamon
-  -> Python backend:
-       recorder.py      pw-record / parecord / arecord and pactl source discovery
-       transcriber.py   ASR preset resolver and command runners
-       personalization.py context/vocabulary prompt and environment helpers
-       postprocessor.py optional command, Ollama, or OpenAI-compatible local text polishing
-       alarms.py        local repeating alarm store and due-alarm scheduler
-       settings_export.py portable settings snapshot helpers
-       cli.py           transcript history and state commands
-       output.py        xclip / xdotool for standalone CLI output
-       state.py         JSON state for applet status
+Applet:      ~/.local/share/cinnamon/applets/speed-of-cinnamon@H234598/
+Backend:     ~/.local/bin/speed-of-cinnamon or /usr/bin/speed-of-cinnamon
+State:       ~/.local/state/speed-of-cinnamon/state.json
+Transcripts: ~/.local/state/speed-of-cinnamon/transcripts/
+Recordings:  ~/.cache/speed-of-cinnamon/recordings/
+Models:      ~/.local/share/speed-of-cinnamon/models/whisper.cpp/
+Alarms:      ~/.local/share/speed-of-cinnamon/alarms.json
 ```
 
-The applet asks the backend to return text without inserting it, then handles the selected output mode itself. Normal
-clipboard output goes through Cinnamon's `St.Clipboard`; the applet menu exposes the output mode, remembers the last
-focused normal window, restores that window before paste or direct typing, can reinsert the last transcript with the
-current output mode, exposes quick text-output toggles, shows a copyable shortcut reference, and opens guide/folder
-actions through GJS/Gio's default-app launcher. It uses `xdotool` only for
-the X11 paste or direct-typing keystrokes when they are available. Without `xdotool`, dictation still completes as a
-Cinnamon clipboard copy. This keeps desktop integration in Cinnamon where it belongs and keeps ASR replaceable. The
-Speed of Sound JVM/GTK portal stack is intentionally not reused because its central integration point is the part that
-does not fit this goal.
-
-The doctor command accepts the applet settings as JSON and evaluates the configured pipeline, not only installed
-binaries. The applet passes `--applet`, which tells the doctor to evaluate Cinnamon's own clipboard path. A missing ASR
-backend is reported as not ready, while a missing `xdotool` with applet clipboard-paste mode is a warning because the
-applet can still copy through Cinnamon's clipboard.
-
-Diagnostics accepts the same settings flags and embeds only the derived doctor status, not the private settings or
-command template contents.
-
-The `Replace accents before output` setting is an optional compatibility fallback for direct typing. It maps common
-diacritics to ASCII before output while leaving the saved transcript unchanged.
-
-Desktop notifications are emitted by the Cinnamon applet through Cinnamon's `Main.notify`/`Main.criticalNotify` APIs,
-not by the backend. This keeps normal CLI runs quiet and avoids depending on the XDG portal notification path. The alarm
-checker follows the same rule: the backend only reports due alarms, while the applet decides whether to show a normal or
-critical Cinnamon notification.
-
-When a live applet recording reaches `Maximum recording length`, the backend preserves the audio as `recorded` until it
-is transcribed, and the applet starts transcription once it observes that state. Disable `Transcribe automatically at
-the time limit` to keep the preserved recording at `RDY` until the next shortcut press. After successful
-transcription, the temporary WAV/log files are deleted unless `Keep recording files after transcription` is enabled.
+Temporary recording files are deleted after successful transcription by default. Enable `Keep recording files` only when
+debugging recorder or ASR behavior.

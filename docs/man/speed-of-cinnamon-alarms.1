@@ -1,0 +1,97 @@
+.TH SPEED-OF-CINNAMON-ALARMS 1 "June 2026" "speed-of-cinnamon 0.1.0" "User Commands"
+.SH NAME
+speed-of-cinnamon alarms \- manage Cinnamon-local repeating alarms
+.SH SYNOPSIS
+.B speed-of-cinnamon alarms
+.RI COMMAND
+.RI [ OPTIONS ]
+.SH DESCRIPTION
+Speed of Cinnamon alarms are local repeating reminders for the Cinnamon applet.
+Alarm definitions are stored in a per-user JSON file. The backend checks which
+alarms are due, and the applet decides whether to show Cinnamon notifications.
+No portal notification service or remote desktop service is involved.
+.SH COMMANDS
+.TP
+.B list
+List configured alarms and scheduler metadata.
+.TP
+.B add
+Create a repeating alarm.
+.TP
+.B check
+Return alarms due at the current time.
+.TP
+.B enable
+Enable an alarm by id.
+.TP
+.B disable
+Disable an alarm by id.
+.TP
+.B remove
+Remove an alarm by id.
+.SH OPTIONS
+.TP
+.BI --time " HH:MM"
+Alarm time in local 24-hour format. Required for
+.BR add .
+.TP
+.BI --name " TEXT"
+Human-readable alarm name.
+.TP
+.BI --days " DAYS"
+Repeat rule. Accepted values are
+.BR daily ,
+.BR weekdays ,
+.BR weekends ,
+or comma-separated day codes such as
+.BR mon,wed,fri .
+.TP
+.BI --urgency " LEVEL"
+Notification urgency:
+.BR silent ,
+.BR normal ,
+or
+.BR critical .
+Silent alarms are still marked due but do not notify.
+.TP
+.B --disabled
+Create an alarm in the disabled state.
+.TP
+.B --mark
+With
+.BR check ,
+mark due alarms so they are not returned repeatedly on every refresh.
+.TP
+.BI --catch-up-minutes " MINUTES"
+With
+.BR check ,
+include alarms that became due shortly before the current check.
+.TP
+.B --json
+Print machine-readable JSON.
+.SH EXAMPLES
+.PP
+Create a weekday alarm:
+.PP
+.EX
+speed-of-cinnamon alarms add --time 09:00 --name "Standup" --days weekdays --json
+.EE
+.PP
+Check and mark due alarms:
+.PP
+.EX
+speed-of-cinnamon alarms check --mark --json
+.EE
+.PP
+Disable and remove an alarm:
+.PP
+.EX
+speed-of-cinnamon alarms disable alarm-0900 --json
+speed-of-cinnamon alarms remove alarm-0900 --json
+.EE
+.SH FILES
+.TP
+.I ~/.local/share/speed-of-cinnamon/alarms.json
+Per-user alarm store.
+.SH SEE ALSO
+.BR speed-of-cinnamon (1)

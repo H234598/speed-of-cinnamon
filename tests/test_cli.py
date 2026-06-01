@@ -28,6 +28,26 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         mocked_insert.assert_called_once_with("Grusse", "none", 8)
 
+    def test_insert_text_rejects_overlong_text(self) -> None:
+        with redirect_stdout(io.StringIO()) as capture:
+            code = cli.run([
+                "insert-text",
+                "x" * (cli.MAX_TRANSCRIBER_TEXT_CHARS + 10),
+                "--insert-method",
+                "none",
+                "--json",
+            ])
+        payload = json.loads(capture.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("text is too large", payload["error"])
+
+    def test_insert_text_rejects_null_bytes(self) -> None:
+        with redirect_stdout(io.StringIO()) as capture:
+            code = cli.run(["insert-text", "hello\x00", "--insert-method", "none", "--json"])
+        payload = json.loads(capture.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("contains invalid null byte", payload["error"])
+
     def test_transcribe_file_with_command_template(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "input.wav"
@@ -77,6 +97,29 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["transcript"], "raw|PipeWire")
 
+    def test_transcribe_file_rejects_transcript_write_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            with (
+                mock.patch("speed_of_cinnamon.cli.os.replace", side_effect=OSError("disk full")),
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf hello",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("failed to write transcript file", payload["error"])
+
     @mock.patch("speed_of_cinnamon.cli.list_input_sources")
     def test_list_inputs_outputs_sources(self, mocked_sources: mock.Mock) -> None:
         mocked_sources.return_value = [
@@ -124,6 +167,58 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["url"], "http://localhost:11434")
         self.assertEqual(payload["models"][0]["name"], "llama3.2:3b")
         mocked_list.assert_called_once_with("http://localhost:11434")
+
+    @mock.patch("speed_of_cinnamon.cli.list_ollama_models")
+    def test_text_models_rejects_overlong_ollama_url(self, mocked_list: mock.Mock) -> None:
+        long_url = "http://localhost:11434/" + ("x" * (cli.MAX_URL_CHARS + 10))
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["text-models", "--ollama-url", long_url, "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("ollama url is too large", payload["error"])
+        mocked_list.assert_not_called()
+
+    def test_text_models_rejects_null_ollama_url(self) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["text-models", "--ollama-url", "http://localhost:11434\x00", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("contains invalid null byte", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models")
+    def test_text_models_rejects_overlong_openai_url(self, mocked_list: mock.Mock) -> None:
+        long_url = "http://127.0.0.1:8000/" + ("x" * (cli.MAX_URL_CHARS + 10))
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run([
+                "text-models",
+                "--backend",
+                "openai-compatible",
+                "--openai-compatible-url",
+                long_url,
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("openai-compatible url is too large", payload["error"])
+        mocked_list.assert_not_called()
+
+    def test_text_models_rejects_null_openai_url(self) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run([
+                "text-models",
+                "--backend",
+                "openai-compatible",
+                "--openai-compatible-url",
+                "http://127.0.0.1:8000\x00",
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("contains invalid null byte", payload["error"])
 
     @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models")
     def test_text_models_lists_openai_compatible_local_models(self, mocked_list: mock.Mock) -> None:
@@ -248,6 +343,28 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["transcripts"][0]["text"], "newer text with more words")
         self.assertEqual(payload["transcripts"][0]["preview"], "newer text with more words")
 
+    def test_history_skips_empty_transcripts_when_filling_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            newest_empty = transcript_dir / "newest-empty.txt"
+            older = transcript_dir / "older.txt"
+            middle = transcript_dir / "middle.txt"
+            newest_empty.write_text("\n", encoding="utf-8")
+            older.write_text("older\n", encoding="utf-8")
+            middle.write_text("middle text\n", encoding="utf-8")
+            os.utime(newest_empty, (300, 300))
+            os.utime(older, (100, 100))
+            os.utime(middle, (200, 200))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["history", "--limit", "2", "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(len(payload["transcripts"]), 2)
+        self.assertEqual(payload["transcripts"][0]["name"], "middle.txt")
+        self.assertEqual(payload["transcripts"][1]["name"], "older.txt")
+
     def test_history_limit_zero_returns_no_transcripts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
@@ -259,6 +376,20 @@ class CliTest(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 0)
         self.assertEqual(payload["transcripts"], [])
+
+    def test_history_limits_text_read_to_prevent_large_reads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            (transcript_dir / "huge.txt").write_text("x" * 5000, encoding="utf-8")
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["history", "--limit", "1", "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(len(payload["transcripts"]), 1)
+        self.assertEqual(payload["transcripts"][0]["name"], "huge.txt")
+        self.assertLessEqual(len(payload["transcripts"][0]["text"]), 4000)
 
     def test_cleanup_prunes_old_transcripts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -427,6 +558,406 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("hidden-context-token", encoded)
         self.assertNotIn("hidden-vocabulary-token", encoded)
 
+    def test_diagnostics_save_rejects_atomic_write_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "diagnostics.json"
+            state_file = Path(tmp) / "state.json"
+            StateStore(state_file).write(RecordingState(status="done", transcript="private words"))
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.os.replace", side_effect=OSError("disk full")),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "diagnostics",
+                    "--state-file",
+                    str(state_file),
+                    "--output",
+                    str(output),
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("failed to write JSON output", payload["error"])
+
+    def test_diagnostics_rejects_overlong_output_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["diagnostics", "--output", "x" * (cli.MAX_PATH_CHARS + 10), "--save", "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("too large", payload["error"])
+
+    def test_diagnostics_rejects_large_settings_json(self) -> None:
+        long_json = json.dumps({"payload": "x" * (cli.MAX_SETTINGS_JSON_CHARS + 10)})
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["diagnostics", "--settings-json", long_json, "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("settings JSON is too large", payload["error"])
+
+    def test_diagnostics_rejects_non_json_output_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            output = Path(tmp) / "diagnostics.txt"
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["diagnostics", "--save", "--output", str(output), "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("must end with .json", payload["error"])
+
+    def test_diagnostics_rejects_null_state_file_path(self) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["diagnostics", "--state-file", "state\x00.json", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("contains invalid null byte", payload["error"])
+
+    def test_diagnostics_rejects_null_output_path(self) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["diagnostics", "--output", "output\x00.json", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("contains invalid null byte", payload["error"])
+
+    def test_settings_export_rejects_overlong_output_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "settings-export",
+                    "--settings-json",
+                    '{"language":"en"}',
+                    "--output",
+                    "x" * (cli.MAX_PATH_CHARS + 10),
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("too large", payload["error"])
+
+    def test_settings_export_rejects_non_object_settings_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "settings-export",
+                    "--settings-json",
+                    "[\"language\", \"de\"]",
+                    "--output",
+                    str(Path(tmp) / "settings.json"),
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("settings JSON must be an object", payload["error"])
+
+    def test_settings_export_rejects_invalid_settings_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "settings-export",
+                    "--settings-json",
+                    "{\"language\": \"de\"",
+                    "--output",
+                    str(Path(tmp) / "settings.json"),
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("settings JSON could not be parsed", payload["error"])
+
+    def test_settings_export_rejects_non_json_output_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "settings-export",
+                    "--settings-json",
+                    '{"language":"en"}',
+                    "--output",
+                    str(Path(tmp) / "settings.txt"),
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("must end with .json", payload["error"])
+
+    def test_settings_import_rejects_overlong_input_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["settings-import", "--input", "x" * (cli.MAX_PATH_CHARS + 10), "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("too large", payload["error"])
+
+    def test_settings_import_rejects_non_json_input_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["settings-import", "--input", str(Path(tmp) / "settings.txt"), "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("must end with .json", payload["error"])
+
+    def test_settings_export_rejects_null_output_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "settings-export",
+                    "--settings-json",
+                    '{"language":"en"}',
+                    "--output",
+                    "settings\x00.json",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("contains invalid null byte", payload["error"])
+
+    def test_settings_import_rejects_null_input_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["settings-import", "--input", "settings\x00.json", "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("contains invalid null byte", payload["error"])
+
+    def test_transcribe_file_rejects_invalid_audio_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    "x" * (cli.MAX_PATH_CHARS + 10) + ".wav",
+                    "--json",
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf transcript",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("audio file path is too long", payload["error"])
+
+    def test_transcribe_file_rejects_missing_audio_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            missing = Path(tmp) / "missing.wav"
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(missing),
+                    "--json",
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf transcript",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("audio file is missing or empty", payload["error"])
+
+    def test_transcribe_file_rejects_directory_as_audio_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp)
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--json",
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf transcript",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("audio path is not a regular file", payload["error"])
+
+    def test_transcribe_file_rejects_null_audio_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    "x\x00.wav",
+                    "--json",
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf transcript",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("contains invalid null byte", payload["error"])
+
+    def test_transcribe_file_rejects_null_transcriber_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--json",
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf hi\x00",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("contains invalid null byte", payload["error"])
+
+    def test_transcribe_file_rejects_overlong_personal_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--json",
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf transcript",
+                    "--personal-context",
+                    "x" * (cli.MAX_TRANSCRIBER_TEXT_CHARS + 10),
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("personal context is too large", payload["error"])
+
+    def test_stop_rejects_overlong_personal_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "processing.wav"
+            audio.write_bytes(b"audio")
+            state_file = Path(tmp) / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio)))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "stop",
+                    "--state-file",
+                    str(state_file),
+                    "--insert-method",
+                    "none",
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf transcript",
+                    "--personal-context",
+                    "x" * (cli.MAX_TRANSCRIBER_TEXT_CHARS + 10),
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+        self.assertEqual(code, 1)
+        self.assertIn("personal context is too large", payload["error"])
+        self.assertEqual(final_state.status, "processing")
+
+    def test_stop_rejects_invalid_state_audio_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path="x\x00.wav"))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "stop",
+                    "--state-file",
+                    str(state_file),
+                    "--insert-method",
+                    "none",
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf transcript",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+        self.assertEqual(code, 1)
+        self.assertIn("recording audio path is invalid", payload["error"])
+        self.assertEqual(final_state.status, "error")
+
+    def test_remove_file_rejects_null_path(self) -> None:
+        self.assertFalse(cli.remove_file("x\x00.wav", suffix=".wav"))
+
+    def test_stop_with_invalid_pid_type_is_hardened(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "processing.wav"
+            audio.write_bytes(b"audio")
+            state_file = Path(tmp) / "state.json"
+            state = StateStore(state_file)
+            state.write(
+                RecordingState(
+                    status="recording",
+                    pid="not-an-int",  # type: ignore[arg-type]
+                    audio_path=str(audio),
+                )
+            )
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "stop",
+                    "--state-file",
+                    str(state_file),
+                    "--insert-method",
+                    "none",
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf transcript",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "done")
+        self.assertEqual(payload["transcript"], "transcript")
+
+    def test_toggle_rejects_null_personal_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "processing.wav"
+            audio.write_bytes(b"audio")
+            state_file = Path(tmp) / "state.json"
+            StateStore(state_file).write(RecordingState(status="recording", pid=999999999, audio_path=str(audio)))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "toggle",
+                    "--state-file",
+                    str(state_file),
+                    "--insert-method",
+                    "none",
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf transcript",
+                    "--post-process-prompt",
+                    "ctx\x00",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("contains invalid null byte", payload["error"])
+
     @mock.patch("speed_of_cinnamon.cli.command_start")
     def test_toggle_starts_when_idle(self, mocked_start: mock.Mock) -> None:
         mocked_start.return_value = {"status": "recording"}
@@ -498,15 +1029,17 @@ class CliTest(unittest.TestCase):
     def test_finalize_discards_recording_artifacts_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            audio = tmp_path / "recording.wav"
-            log = tmp_path / "recording.log"
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
             audio.write_bytes(b"audio")
             log.write_text("recorder log", encoding="utf-8")
             state_file = tmp_path / "state.json"
             store = StateStore(state_file)
             store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
             stdout = io.StringIO()
-            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
                 code = cli.run([
                     "stop",
                     "--state-file",
@@ -536,15 +1069,17 @@ class CliTest(unittest.TestCase):
     def test_finalize_can_keep_recording_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            audio = tmp_path / "recording.wav"
-            log = tmp_path / "recording.log"
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
             audio.write_bytes(b"audio")
             log.write_text("recorder log", encoding="utf-8")
             state_file = tmp_path / "state.json"
             store = StateStore(state_file)
             store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
             stdout = io.StringIO()
-            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
                 code = cli.run([
                     "stop",
                     "--state-file",
@@ -571,6 +1106,30 @@ class CliTest(unittest.TestCase):
         self.assertTrue(log_exists)
         self.assertEqual(final_state.audio_path, str(audio))
         self.assertEqual(final_state.log_path, str(log))
+
+    def test_cancel_does_not_delete_artifacts_outside_recordings_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            audio = tmp_path / "outside.wav"
+            log = tmp_path / "outside.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="recording", pid=999999999, audio_path=str(audio), log_path=str(log)))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            audio_exists = audio.exists()
+            log_exists = log.exists()
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "idle")
+        self.assertEqual(payload["message"], "recording discarded")
+        self.assertFalse(payload["audio_deleted"])
+        self.assertFalse(payload["log_deleted"])
+        self.assertTrue(audio_exists)
+        self.assertTrue(log_exists)
 
     def test_start_does_not_overwrite_expired_recording(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -610,15 +1169,17 @@ class CliTest(unittest.TestCase):
     def test_cancel_recorded_discards_files_and_resets_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            audio = tmp_path / "recorded.wav"
-            log = tmp_path / "recorded.log"
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recorded.wav"
+            log = recordings_root / "recorded.log"
             audio.write_bytes(b"audio")
             log.write_text("log", encoding="utf-8")
             state_file = tmp_path / "state.json"
             store = StateStore(state_file)
             store.write(RecordingState(status="recorded", audio_path=str(audio), log_path=str(log)))
             stdout = io.StringIO()
-            with redirect_stdout(stdout):
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
                 code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
             payload = json.loads(stdout.getvalue())
             final_state = store.read()
@@ -659,6 +1220,43 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(final_state.status, "error")
         self.assertIn("missing or empty", final_state.error)
+
+    def test_finalize_rejects_transcript_write_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), mock.patch(
+                "speed_of_cinnamon.cli._write_text_atomic",
+                side_effect=RuntimeError("failed to write transcript file: /tmp/transcript.txt"),
+            ), redirect_stdout(stdout):
+                code = cli.run([
+                    "stop",
+                    "--state-file",
+                    str(state_file),
+                    "--insert-method",
+                    "none",
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf finalize-transcript",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+        self.assertEqual(code, 1)
+        self.assertEqual(final_state.status, "error")
+        self.assertIn("failed to write transcript file", payload["error"])
+        self.assertIn("failed to write transcript file", final_state.error)
+
 
 
 if __name__ == "__main__":

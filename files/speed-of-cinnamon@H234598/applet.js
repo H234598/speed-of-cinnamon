@@ -17,6 +17,15 @@ const SYSTEM_CLI = "/usr/bin/speed-of-cinnamon";
 const RUNBOOK_URL = "https://gist.github.com/H234598/b95129e13ac0b09c9777edd41aeedfa0";
 const PASTE_FOCUS_DELAY_MS = 120;
 const ALARM_CHECK_SECONDS = 60;
+const MAX_CLI_ARG_BYTES = 4096;
+const MAX_CLI_ARG_COUNT = 128;
+const MAX_CLI_COMMAND_BYTES = 32768;
+const MAX_TEXT_INSERT_CHARS = 120000;
+const MAX_TYPE_COMMAND_CHARS = 4000;
+const MAX_SPAWN_JSON_BYTES = 262144;
+const CLI_COMMAND_TIMEOUT_MS = 300000;
+const STATUS_COMMAND_TIMEOUT_MS = 10000;
+const DOCTOR_COMMAND_TIMEOUT_MS = 20000;
 const PANEL_STATUS_CLASSES = [
   "speed-of-cinnamon-recording",
   "speed-of-cinnamon-processing",
@@ -130,6 +139,8 @@ MyApplet.prototype = {
     this.lastTranscript = "";
     this.lastMessage = "";
     this.isCommandRunning = false;
+    this._statusCommandRunning = false;
+    this._doctorCommandRunning = false;
     this.notificationSessionActive = false;
     this.lastNotificationKey = "";
     this.autoTranscribeRecordingKey = "";
@@ -632,6 +643,9 @@ MyApplet.prototype = {
   _cliCommand: function() {
     let configured = String(this.cliPath || "").trim();
     if (configured !== "") {
+      if (configured.indexOf("~/") === 0) {
+        configured = GLib.build_filenamev([GLib.get_home_dir(), configured.substring(2)]);
+      }
       return configured;
     }
     if (GLib.file_test(DEFAULT_CLI, GLib.FileTest.IS_EXECUTABLE)) {
@@ -1064,7 +1078,17 @@ MyApplet.prototype = {
   },
 
   _refreshStatus: function() {
-    this._spawnJson(this._statusArgs(), (payload) => this._applyPayload(payload));
+    if (this._statusCommandRunning) {
+      return;
+    }
+    this._statusCommandRunning = true;
+    this._spawnJson(this._statusArgs(), (payload) => {
+      try {
+        this._applyPayload(payload);
+      } finally {
+        this._statusCommandRunning = false;
+      }
+    }, { timeoutMs: STATUS_COMMAND_TIMEOUT_MS });
   },
 
   _cancelRecording: function() {
@@ -1081,13 +1105,21 @@ MyApplet.prototype = {
   },
 
   _runDoctor: function(startupCheck) {
+    if (this._doctorCommandRunning) {
+      return;
+    }
+    this._doctorCommandRunning = true;
     this._spawnJson(this._doctorArgs(), (payload) => {
-      if (payload.configured) {
-        this._applyDoctorPayload(payload, Boolean(startupCheck));
-        return;
+      try {
+        if (payload.configured) {
+          this._applyDoctorPayload(payload, Boolean(startupCheck));
+          return;
+        }
+        this._applyLegacyDoctorPayload(payload, Boolean(startupCheck));
+      } finally {
+        this._doctorCommandRunning = false;
       }
-      this._applyLegacyDoctorPayload(payload, Boolean(startupCheck));
-    });
+    }, { timeoutMs: DOCTOR_COMMAND_TIMEOUT_MS });
   },
 
   _applyDoctorPayload: function(payload, startupCheck) {
@@ -1826,19 +1858,114 @@ MyApplet.prototype = {
     return applied;
   },
 
-  _spawnJson: function(args, callback) {
+  _coerceSpawnArgs: function(args) {
+    if (!Array.isArray(args)) {
+      throw new Error("Backend command arguments are invalid");
+    }
+    if (args.length <= 0) {
+      throw new Error("Backend command arguments are empty");
+    }
+    if (args.length > MAX_CLI_ARG_COUNT) {
+      throw new Error("Too many backend command arguments");
+    }
+    if (String(args[0] || "").trim() === "") {
+      throw new Error("Backend command is empty");
+    }
+    let normalized = [];
+    let totalBytes = 0;
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === null || args[i] === undefined) {
+        throw new Error("Backend command argument is missing");
+      }
+      let value = String(args[i]);
+      if (i === 0) {
+        value = value.trim();
+      }
+      if (value.indexOf("\u0000") >= 0) {
+        throw new Error("Backend command argument contains invalid bytes");
+      }
+      if (value.length > MAX_CLI_ARG_BYTES) {
+        throw new Error("Backend command argument is too large");
+      }
+      totalBytes += value.length;
+      normalized.push(value);
+    }
+    if (totalBytes > MAX_CLI_COMMAND_BYTES) {
+      throw new Error("Backend command is too large");
+    }
+    if (!this._isAllowedCliCommand(normalized[0])) {
+      throw new Error("Backend command is not executable");
+    }
+    return normalized;
+  },
+
+  _isAllowedCliCommand: function(command) {
+    let value = String(command || "").trim();
+    if (value === "") {
+      return false;
+    }
+    if (value.indexOf("/") >= 0) {
+      return GLib.file_test(value, GLib.FileTest.IS_EXECUTABLE);
+    }
+    return GLib.find_program_in_path(value) !== null;
+  },
+
+  _parseSpawnOutput: function(stdout) {
+    let output = String(stdout || "");
+    if (output.length > MAX_SPAWN_JSON_BYTES) {
+      return { status: "error", error: "Backend response is too large" };
+    }
     try {
-      Util.spawn_async(args, (stdout) => {
-        let payload;
-        try {
-          payload = JSON.parse(stdout || "{}");
-        } catch (err) {
-          payload = { status: "error", error: "Invalid backend response: " + err };
+      let parsed = JSON.parse(output || "{}");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { status: "error", error: "Invalid backend response: expected JSON object" };
+      }
+      return parsed;
+    } catch (err) {
+      return { status: "error", error: "Invalid backend response: " + err };
+    }
+  },
+
+  _spawnJson: function(args, callback, options) {
+    options = options || {};
+    let timeoutId = 0;
+    let done = false;
+    let normalizedArgs;
+    let callbackFn = typeof callback === "function" ? callback : function() {};
+
+    const finalize = function(payload) {
+      if (done) {
+        return;
+      }
+      done = true;
+      if (timeoutId) {
+        Mainloop.source_remove(timeoutId);
+        timeoutId = 0;
+      }
+      try {
+        callbackFn(payload || {});
+      } catch (err) {
+        global.logError(err);
+      }
+    };
+
+    try {
+      normalizedArgs = this._coerceSpawnArgs(args);
+      let timeoutMs = Number(options.timeoutMs || CLI_COMMAND_TIMEOUT_MS);
+      if (timeoutMs > 0) {
+        timeoutId = Mainloop.timeout_add(Math.max(250, timeoutMs), () => {
+          finalize({ status: "error", error: "Backend command timed out" });
+          return false;
+        });
+      }
+      Util.spawn_async(normalizedArgs, (stdout) => {
+        if (done) {
+          return;
         }
-        callback(payload);
+        finalize(this._parseSpawnOutput(stdout));
       });
     } catch (err) {
-      callback({ status: "error", error: String(err) });
+      finalize({ status: "error", error: String(err) });
     }
   },
 
@@ -2036,14 +2163,36 @@ MyApplet.prototype = {
 
   _typeTextAfterFocus: function(text) {
     let delay = Math.max(0, Math.floor(Number(this.typingDelayMs || 0)));
-    this._spawnKeyboardAfterFocus(["xdotool", "type", "--clearmodifiers", "--delay", String(delay), text]);
+    let typedText = this._coerceTypeText(text);
+    if (typedText === null) {
+      return false;
+    }
+    this._spawnKeyboardAfterFocus(["xdotool", "type", "--clearmodifiers", "--delay", String(delay), typedText]);
+    return true;
+  },
+
+  _coerceTypeText: function(text) {
+    let value = String(text || "");
+    if (value.indexOf("\u0000") >= 0) {
+      value = value.replace(/\u0000/g, "");
+    }
+    if (value.length > MAX_TYPE_COMMAND_CHARS) {
+      this._setStatus("error", _("Text too long for keyboard typing"), this.lastTranscript);
+      return null;
+    }
+    return value;
   },
 
   _spawnKeyboardAfterFocus: function(args) {
     this._clearPasteTimer();
     this.pasteTimer = Mainloop.timeout_add(PASTE_FOCUS_DELAY_MS, () => {
       this.pasteTimer = 0;
-      Util.spawn(args);
+      try {
+        Util.spawn(this._coerceSpawnArgs(args));
+      } catch (err) {
+        global.logError(err);
+        this._setStatus("error", _("Keyboard insert failed") + ": " + String(err), this.lastTranscript);
+      }
       return false;
     });
   },
@@ -2062,8 +2211,9 @@ MyApplet.prototype = {
     if (method === "type") {
       if (GLib.find_program_in_path("xdotool")) {
         let restored = this._restoreTargetWindowForPaste();
-        this._typeTextAfterFocus(text);
-        this._setStatus("done", restored ? _("Typed into target window") : _("Typed text"), transcript);
+        if (this._typeTextAfterFocus(text)) {
+          this._setStatus("done", restored ? _("Typed into target window") : _("Typed text"), transcript);
+        }
       } else {
         this._setStatus("error", _("Install xdotool for direct typing"), transcript);
       }
@@ -2087,6 +2237,13 @@ MyApplet.prototype = {
     let text = transcript || "";
     if (this.sanitizeSpecialChars) {
       text = this._sanitizeSpecialChars(text);
+    }
+    text = String(text || "");
+    if (text.indexOf("\u0000") >= 0) {
+      text = text.replace(/\u0000/g, "");
+    }
+    if (text.length > MAX_TEXT_INSERT_CHARS) {
+      text = text.slice(0, MAX_TEXT_INSERT_CHARS);
     }
     if (this.appendSpace && text && !/\s$/.test(text)) {
       text += " ";

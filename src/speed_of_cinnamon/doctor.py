@@ -41,7 +41,11 @@ def run_checks() -> list[Check]:
         command_check("whisper", "python3-openai-whisper or pipx/pip whisper"),
         command_check("whisper-cli", "whisper.cpp"),
         command_check("whisper.cpp", "whisper.cpp"),
+        command_check("pwcpp", "python3-pywhispercpp"),
     ]
+
+
+MAX_SETTINGS_JSON_CHARS = 250_000
 
 
 def _ok(checks: Mapping[str, Check], name: str) -> bool:
@@ -95,12 +99,24 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
     whisper_model = _setting(settings, "whisper-model")
     local_model = whisper_model or default_whisper_cpp_model_path()
     whisper_ok = _ok(checks, "whisper")
-    whisper_cpp_ok = _ok(checks, "whisper-cli") or _ok(checks, "whisper.cpp")
-    model_ok = bool(local_model and Path(local_model).expanduser().exists())
+    whisper_cpp_ok = _ok(checks, "whisper-cli") or _ok(checks, "whisper.cpp") or _ok(checks, "pwcpp")
+    local_model_is_invalid = bool(local_model and "\x00" in local_model)
+    model_ok = False
+    if local_model and not local_model_is_invalid:
+        try:
+            model_ok = bool(Path(local_model).expanduser().exists())
+        except ValueError:
+            return {
+                "ok": False,
+                "value": "auto",
+                "detail": f"whisper.cpp model path is invalid: {local_model}",
+            }
 
     if transcriber in {"", "auto"}:
         if command_template:
             return {"ok": True, "value": "auto", "resolved": "command", "detail": "custom command configured"}
+        if local_model_is_invalid:
+            return {"ok": False, "value": "auto", "detail": f"whisper.cpp model path is invalid: {local_model}"}
         if whisper_ok:
             return {"ok": True, "value": "auto", "resolved": "whisper", "detail": "whisper command available"}
         if local_model and whisper_cpp_ok and model_ok:
@@ -132,6 +148,8 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
     if transcriber in {"whisper-cpp", "whisper.cpp"}:
         if not whisper_cpp_ok:
             return {"ok": False, "value": "whisper-cpp", "detail": "whisper.cpp command is missing"}
+        if local_model_is_invalid:
+            return {"ok": False, "value": "whisper-cpp", "detail": f"whisper.cpp model path is invalid: {local_model}"}
         if not local_model:
             return {"ok": False, "value": "whisper-cpp", "detail": "whisper.cpp model path is empty"}
         return {
@@ -295,6 +313,10 @@ def report(settings: Mapping[str, object] | None = None, applet: bool = False) -
 def parse_settings_json(value: str) -> dict[str, object]:
     if not value:
         return {}
+    if "\x00" in value:
+        raise ValueError("settings JSON contains invalid null byte")
+    if len(value) > MAX_SETTINGS_JSON_CHARS:
+        raise ValueError(f"settings JSON is too large (max {MAX_SETTINGS_JSON_CHARS} characters)")
     parsed = json.loads(value)
     if not isinstance(parsed, dict):
         raise ValueError("settings JSON must be an object")

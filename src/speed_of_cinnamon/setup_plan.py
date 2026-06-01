@@ -95,9 +95,13 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
                 "asr-backend",
                 "Install or configure a local ASR backend",
                 detail.rstrip(".")
-                + ". Install a whisper command, install whisper.cpp plus whisper-cli, or configure a custom command. "
+                + ". Install a whisper command, install a whisper.cpp CLI such as pwcpp, or configure a custom command. "
                 "Then use the applet's Voice model menu or download a starter model.",
-                ["speed-of-cinnamon models --json", "speed-of-cinnamon download-model tiny.en --json"],
+                [
+                    "sudo dnf install -y python3-pywhispercpp",
+                    "speed-of-cinnamon models --json",
+                    "speed-of-cinnamon download-model tiny.en --json",
+                ],
             )
 
     output = _section(doctor_payload, "output")

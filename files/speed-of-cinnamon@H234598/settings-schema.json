@@ -243,13 +243,13 @@
   "transcriber-command": {
     "type": "entry",
     "description": "Transcriber command template",
-    "tooltip": "Used by the Custom command transcriber, or by Automatic when filled. Template placeholders: {audio}, {language}, {text}, {output_dir}, {output_base}, {context}, {vocabulary}, {prompt}. The command must print the transcript or write it to {text}.",
+    "tooltip": "Used by the Custom command transcriber, or by Automatic when filled. The template is executed as arguments (no shell expansion), with direct support for `&&`-chained commands only. Placeholders: {audio}, {language}, {text}, {output_dir}, {output_base}, {context}, {vocabulary}, {prompt}. The command must print the transcript or write it to {text}.",
     "default": ""
   },
   "post-process-backend": {
     "type": "combobox",
     "description": "Text polishing",
-    "tooltip": "Optional local cleanup after ASR. Command runs a custom shell command. Ollama and OpenAI-compatible options target local servers and do not require cloud credentials.",
+    "tooltip": "Optional local cleanup after ASR. Command runs a custom command template. Ollama and OpenAI-compatible options target local servers and do not require cloud credentials.",
     "options": {
       "Disabled": "none",
       "Custom command": "command",
@@ -261,7 +261,7 @@
   "post-process-command": {
     "type": "entry",
     "description": "Post-process command",
-    "tooltip": "Used when Text polishing is Custom command. It receives the transcript on stdin and must print the final text. Template placeholders: {text}, {language}, {context}, {vocabulary}, {prompt}.",
+    "tooltip": "Used when Text polishing is Custom command. It receives the transcript on stdin and must print the final text. The template is executed as arguments (no shell expansion), with direct support for `&&`-chained commands only. Placeholders: {text}, {language}, {context}, {vocabulary}, {prompt}.",
     "default": ""
   },
   "ollama-url": {

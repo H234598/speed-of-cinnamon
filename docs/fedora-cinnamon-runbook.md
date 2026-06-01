@@ -2,6 +2,14 @@
 
 Repository: <https://github.com/H234598/speed-of-cinnamon>
 
+Related docs:
+
+- [User Guide](user-guide.md) for normal applet usage.
+- [CLI Reference](cli-reference.md) for command examples.
+- [Architecture](architecture.md) for the Cinnamon-native design boundary.
+- [Development](development.md) for checks, coverage, archives, RPMs, CI, and releases.
+- [Man pages](man/) for installed command-line reference.
+
 ## Scope
 
 Speed of Cinnamon is a Cinnamon-native voice typing applet plus local Python backend. It intentionally does not use the
@@ -39,7 +47,8 @@ The RPM installs the backend command into `/usr/bin/speed-of-cinnamon` and the C
 `/usr/share/cinnamon/applets/speed-of-cinnamon@H234598/`. It is intended for Fedora-style system installation; the
 per-user `make install-local` path remains the fastest development install. The RPM check extracts the built package,
 verifies package metadata and installed paths, and runs the packaged `/usr/bin/speed-of-cinnamon` wrapper against the
-extracted Python package.
+extracted Python package. Both install paths include `speed-of-cinnamon(1)` and `speed-of-cinnamon-alarms(1)` man
+pages.
 
 Successful GitHub Actions runs upload two downloadable artifacts: `speed-of-cinnamon-source-<commit>` with the source
 archive and checksum, and `speed-of-cinnamon-rpm-<commit>` with the noarch RPM and source RPM.
@@ -246,9 +255,9 @@ Downloaded files are saved below:
 ```
 
 Each download is written through a temporary file, verified against the upstream SHA-1, and then moved into place. Once
-`whisper-cli` is installed, Automatic transcription can use a verified downloaded model even if the applet's
-`whisper.cpp model` setting is empty. Selecting a downloaded model from the applet sets the transcriber to
-`whisper.cpp` and stores the model path explicitly. Removing the active model from the applet, or choosing
+`whisper-cli`, `whisper.cpp`, or Fedora's `pwcpp` is installed, Automatic transcription can use a verified downloaded
+model even if the applet's `whisper.cpp model` setting is empty. Selecting a downloaded model from the applet sets the
+transcriber to `whisper.cpp` and stores the model path explicitly. Removing the active model from the applet, or choosing
 `Automatic ASR backend`, clears that explicit selection and returns the transcriber setting to `Automatic`.
 
 ## Notifications
@@ -275,6 +284,8 @@ disabled for normal Cinnamon clipboard output unless a target application cannot
 
 ```bash
 make check
+python -m pip install coverage
+make coverage
 make smoke-backend
 speed-of-cinnamon doctor --json
 speed-of-cinnamon doctor \
@@ -286,6 +297,9 @@ speed-of-cinnamon doctor \
 The backend smoke records short audio samples through `pw-record`, uses harmless dummy transcribers, disables insertion,
 and verifies manual stop, cancel/discard, and the preserved-audio path used when a recording expires at its maximum
 length.
+
+`make coverage` writes `reports/lcov.info`. GitHub Actions uploads that file to QLTY when the
+`QLTY_COVERAGE_TOKEN` Actions secret is configured; pull requests without the secret still skip the upload cleanly.
 
 The doctor report is configuration-aware. The Cinnamon applet passes its current settings plus `--applet`, so the report
 can distinguish between the selected recorder, the selected ASR backend, and the selected output mode. Missing ASR is a
@@ -373,10 +387,11 @@ The same value can be stored in the applet's `Input device` setting or selected 
 
 Choose one transcriber in the applet settings:
 
-- `Automatic`: uses a custom command when configured, otherwise the installed `whisper` command, otherwise whisper.cpp
-  when a model path is set.
+- `Automatic`: uses a custom command when configured, otherwise the installed `whisper` command, otherwise a
+  whisper.cpp-compatible CLI when a model path is set.
 - `OpenAI Whisper command`: runs `whisper` and writes the transcript into the runtime transcript directory.
-- `whisper.cpp`: runs `whisper-cli`; set `whisper.cpp model` to a local model file such as `ggml-base.bin`.
+- `whisper.cpp`: runs `whisper-cli`, `whisper.cpp`, or Fedora's `pwcpp`; set `whisper.cpp model` to a local model file
+  such as `ggml-base.bin`.
 - `Custom command`: runs `Transcriber command template`.
 
 Custom template placeholders:
@@ -390,6 +405,7 @@ Examples:
 ```text
 whisper {audio} --language {language} --output_format txt --output_dir {output_dir}
 whisper-cli -m ~/.local/share/whisper/models/ggml-base.bin -f {audio} -l {language} -otxt -of {output_base} && cat {text}
+pwcpp -m ~/.local/share/whisper/models/ggml-base.bin --language {language} -otxt {audio} && cat {audio}.txt
 ```
 
 Equivalent CLI examples:

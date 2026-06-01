@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -140,6 +141,26 @@ class DoctorTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["configured"]["transcriber"]["resolved"], "whisper-cpp")
 
+    def test_auto_asr_accepts_fedora_pwcpp(self) -> None:
+        tools = {"python3", "pw-record", "pwcpp"}
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "ggml-tiny.en.bin"
+            model.write_bytes(b"model")
+            settings = {
+                "recorder": "auto",
+                "transcriber": "auto",
+                "insert-method": "none",
+            }
+            with (
+                mock.patch("speed_of_cinnamon.doctor.default_whisper_cpp_model_path", return_value=str(model)),
+                mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)),
+            ):
+                payload = doctor.report(settings)
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["checks"][-1]["ok"])
+        self.assertEqual(payload["checks"][-1]["name"], "pwcpp")
+        self.assertEqual(payload["configured"]["transcriber"]["resolved"], "whisper-cpp")
+
     def test_ollama_postprocessor_requires_model(self) -> None:
         tools = {"python3", "pw-record"}
         settings = {
@@ -201,6 +222,31 @@ class DoctorTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["configured"]["postprocessor"]["value"], "openai-compatible")
         self.assertIn("vLLM", payload["configured"]["postprocessor"]["detail"])
+
+    def test_report_rejects_invalid_whisper_model_path(self) -> None:
+        tools = {"python3", "pw-record", "whisper-cli"}
+        settings = {
+            "recorder": "auto",
+            "transcriber": "whisper-cpp",
+            "whisper-model": "x\x00",
+            "insert-method": "none",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
+            payload = doctor.report(settings)
+        self.assertFalse(payload["configured"]["transcriber"]["ok"])
+        self.assertIn("invalid", payload["configured"]["transcriber"]["detail"])
+
+    def test_parse_settings_json_rejects_null_byte(self) -> None:
+        with self.assertRaisesRegex(ValueError, "contains invalid null byte"):
+            doctor.parse_settings_json('{\"language\":\"en\x00\"}')
+
+    def test_parse_settings_json_rejects_large_payload(self) -> None:
+        with self.assertRaisesRegex(ValueError, "settings JSON is too large"):
+            doctor.parse_settings_json(json.dumps({"payload": "x" * (doctor.MAX_SETTINGS_JSON_CHARS + 1)}))
+
+    def test_parse_settings_json_rejects_non_object_root(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must be an object"):
+            doctor.parse_settings_json("[\"en\"]")
 
 
 if __name__ == "__main__":

@@ -1,14 +1,229 @@
 from __future__ import annotations
 
+import json
 import hashlib
 import os
+import tempfile
 import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 from .paths import models_dir
 
 HUGGING_FACE_BASE_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
+MAX_MODEL_DOWNLOAD_BYTES = 1_200_000_000
+MAX_MODEL_DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+MODEL_SIZE_SLACK_BYTES = 32 * 1024 * 1024
+_MODEL_CHECKSUM_CACHE_FILE = "model_checksums.json"
+_model_checksum_cache: dict[str, dict[str, int | str]] = {}
+_model_checksum_cache_loaded = False
+
+
+def _model_checksum_cache_path() -> Path:
+    return models_dir() / _MODEL_CHECKSUM_CACHE_FILE
+
+
+def _load_model_checksum_cache() -> None:
+    global _model_checksum_cache_loaded
+    if _model_checksum_cache_loaded:
+        return
+    _model_checksum_cache_loaded = True
+
+    cache_path = _model_checksum_cache_path()
+    if not cache_path.exists():
+        return
+
+    try:
+        with cache_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        try:
+            cache_path.unlink()
+        except OSError:
+            pass
+        return
+
+    if not isinstance(payload, dict):
+        try:
+            cache_path.unlink()
+        except OSError:
+            pass
+        return
+
+    for key, raw_entry in payload.items():
+        if not isinstance(key, str) or not isinstance(raw_entry, dict):
+            continue
+        checksum = raw_entry.get("checksum")
+        size = raw_entry.get("size")
+        mtime_ns = raw_entry.get("mtime_ns")
+        if isinstance(checksum, str) and isinstance(size, int) and isinstance(mtime_ns, int):
+            _model_checksum_cache[key] = {"checksum": checksum, "size": size, "mtime_ns": mtime_ns}
+
+    _prune_model_checksum_cache()
+
+
+def _prune_model_checksum_cache() -> None:
+    removed = False
+    for key, cached in list(_model_checksum_cache.items()):
+        if not isinstance(key, str) or not isinstance(cached, dict):
+            _model_checksum_cache.pop(key, None)
+            removed = True
+            continue
+        size = cached.get("size")
+        mtime_ns = cached.get("mtime_ns")
+        if not isinstance(size, int) or not isinstance(mtime_ns, int):
+            _model_checksum_cache.pop(key, None)
+            removed = True
+            continue
+        try:
+            path = Path(key)
+        except (TypeError, ValueError):
+            _model_checksum_cache.pop(key, None)
+            removed = True
+            continue
+        try:
+            if not path.exists() or not path.is_file():
+                _model_checksum_cache.pop(key, None)
+                removed = True
+                continue
+        except OSError:
+            _model_checksum_cache.pop(key, None)
+            removed = True
+            continue
+    if removed:
+        _write_model_checksum_cache()
+
+
+def _write_model_checksum_cache() -> None:
+    cache_path = _model_checksum_cache_path()
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", delete=False, dir=cache_path.parent, encoding="utf-8") as handle:
+            json.dump(_model_checksum_cache, handle)
+            tmp_path = Path(handle.name)
+        try:
+            os.replace(tmp_path, cache_path)
+            try:
+                cache_path.chmod(0o600)
+            except OSError:
+                pass
+        except OSError:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+            return
+    except OSError:
+        return
+
+
+def _set_model_checksum_cache(path: Path, checksum: str, stat: os.stat_result) -> None:
+    _model_checksum_cache[str(path)] = {
+        "checksum": checksum,
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+    }
+    _write_model_checksum_cache()
+
+
+def _clear_model_checksum_cache(path: Path) -> None:
+    if _model_checksum_cache.pop(str(path), None) is not None:
+        _write_model_checksum_cache()
+
+
+def _cached_or_computed_sha1(path: Path) -> str:
+    _load_model_checksum_cache()
+    info = path.stat()
+    key = str(path)
+    cached = _model_checksum_cache.get(key)
+    if (
+        isinstance(cached, dict)
+        and cached.get("size") == info.st_size
+        and cached.get("mtime_ns") == info.st_mtime_ns
+    ):
+        checksum = cached.get("checksum")
+        if isinstance(checksum, str):
+            return checksum
+
+    digest = hashlib.sha1()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+
+    checksum = digest.hexdigest()
+    _set_model_checksum_cache(path, checksum, info)
+    return checksum
+
+
+def _parse_model_size_bytes(value: str) -> int | None:
+    stripped = value.strip().lower().replace(" ", "")
+    unit_map = {
+        "kib": 1024,
+        "kb": 1000,
+        "mib": 1024 ** 2,
+        "mb": 1000 ** 2,
+        "gib": 1024 ** 3,
+        "gb": 1000 ** 3,
+    }
+    for suffix, factor in unit_map.items():
+        if stripped.endswith(suffix):
+            try:
+                number = float(stripped[: -len(suffix)])
+            except ValueError as exc:
+                raise ModelError(f"invalid model size for {value!r}: {exc}") from exc
+            return int(number * factor)
+    return None
+
+
+def _download_size_limit(model: ModelSpec) -> int:
+    expected = _parse_model_size_bytes(model.size)
+    if expected is None:
+        return MAX_MODEL_DOWNLOAD_BYTES
+    return min(MAX_MODEL_DOWNLOAD_BYTES, expected + max(MODEL_SIZE_SLACK_BYTES, int(expected * 0.2)))
+
+
+def _parse_content_length(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _read_content_length(response: Any) -> int | None:
+    value: str | None
+
+    headers = getattr(response, "headers", None)
+    if headers is not None:
+        getter = getattr(headers, "get", None)
+        if callable(getter):
+            value = getter("Content-Length")
+            parsed = _parse_content_length(value)
+            if parsed is not None:
+                return parsed
+
+    info = getattr(response, "info", None)
+    if callable(info):
+        headers = info()
+        if headers is not None:
+            getter = getattr(headers, "get", None)
+            if callable(getter):
+                value = getter("Content-Length")
+                parsed = _parse_content_length(value)
+                if parsed is not None:
+                    return parsed
+
+    getheader = getattr(response, "getheader", None)
+    if callable(getheader):
+        value = getheader("Content-Length")
+        parsed = _parse_content_length(value)
+        if parsed is not None:
+            return parsed
+
+    return None
 
 
 class ModelError(RuntimeError):
@@ -98,11 +313,7 @@ def model_path(model: ModelSpec) -> Path:
 
 
 def sha1_file(path: Path) -> str:
-    digest = hashlib.sha1()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return _cached_or_computed_sha1(path)
 
 
 def model_status(model: ModelSpec, verify: bool = False) -> dict[str, object]:
@@ -148,21 +359,42 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
             return {**status, "status": "done", "message": f"model already downloaded: {path}"}
 
     tmp_path = path.with_suffix(path.suffix + ".tmp")
+    size_limit = _download_size_limit(model)
     try:
         with (
             urllib.request.urlopen(model.url, timeout=30) as response,
             tmp_path.open("wb") as output,
         ):
+            content_length = _read_content_length(response)
+            if content_length is not None and content_length > size_limit:
+                raise ModelError(
+                    f"downloaded model too large for {model.name}: {content_length} > {size_limit}"
+                )
+
+            downloaded = 0
             while True:
-                chunk = response.read(1024 * 1024)
+                chunk = response.read(MAX_MODEL_DOWNLOAD_CHUNK_BYTES)
                 if not chunk:
                     break
+                downloaded += len(chunk)
+                if downloaded > size_limit:
+                    raise ModelError(f"downloaded model too large for {model.name}: {downloaded} > {size_limit}")
                 output.write(chunk)
+            if content_length is not None and downloaded != content_length:
+                raise ModelError(
+                    f"downloaded model size mismatch for {model.name}: {downloaded} != {content_length}"
+                )
         checksum = sha1_file(tmp_path)
         if checksum != model.sha1:
             raise ModelError(f"downloaded checksum mismatch for {model.name}: {checksum}")
-        os.replace(tmp_path, path)
+        try:
+            os.replace(tmp_path, path)
+            _clear_model_checksum_cache(tmp_path)
+            _set_model_checksum_cache(path, checksum, path.stat())
+        except OSError as exc:
+            raise ModelError(f"failed to persist downloaded model file: {path}") from exc
     except Exception:
+        _clear_model_checksum_cache(tmp_path)
         try:
             tmp_path.unlink()
         except FileNotFoundError:
@@ -175,6 +407,8 @@ def remove_model(name: str) -> dict[str, object]:
     model = resolve_model(name)
     path = model_path(model)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
+    _clear_model_checksum_cache(path)
+    _clear_model_checksum_cache(tmp_path)
     removed = False
     removed_tmp = False
     try:

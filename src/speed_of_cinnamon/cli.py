@@ -6,6 +6,7 @@ import os
 import platform
 import sys
 import time
+import tempfile
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,15 +43,79 @@ from .postprocessor import (
     post_process_text,
 )
 from .recorder import choose_recorder, list_input_sources, start_recorder, stop_process
+from .recorder import RecorderError, validate_recording_path
 from .settings_export import read_export, write_export
 from .setup_plan import build_setup_plan
 from .state import RecordingState, StateStore, now_iso, process_is_alive
 from .text_utils import sanitize_special_chars
-from .transcriber import transcribe
+from .transcriber import MAX_AUDIO_PATH_CHARS, validate_audio_file, transcribe
 
 RECORDER_START_GRACE_SECONDS = 0.2
 DEFAULT_KEEP_TRANSCRIPTS = 100
 DEFAULT_KEEP_RECORDINGS = 25
+MAX_LOG_EXCERPT_CHARS = 2000
+MAX_TRANSCRIPT_HISTORY_TEXT_CHARS = 4_000
+MAX_PATH_CHARS = 240
+MAX_TRANSCRIBER_TEXT_CHARS = 65_535
+MAX_SETTINGS_JSON_CHARS = 250_000
+MAX_SETTINGS_FILE_BYTES = 1_000_000
+MAX_DIAGNOSTICS_JSON_BYTES = 1_000_000
+MAX_URL_CHARS = 2_048
+
+
+def _assert_text_limit(value: str, *, field_name: str, max_chars: int) -> str:
+    if len(value) > max_chars:
+        if field_name == "audio file path":
+            raise RuntimeError(f"{field_name} is too long (max {max_chars} characters)")
+        raise RuntimeError(f"{field_name} is too large (max {max_chars} characters)")
+    return value
+
+
+def _assert_clean_text(value: str, *, field_name: str, max_chars: int) -> str:
+    if "\x00" in value:
+        raise RuntimeError(f"{field_name} contains invalid null byte")
+    return _assert_text_limit(value, field_name=field_name, max_chars=max_chars)
+
+
+def _validate_text_model_url(url: str, *, field_name: str) -> str:
+    return _assert_clean_text(url, field_name=field_name, max_chars=MAX_URL_CHARS).rstrip("/")
+
+
+def _validate_pipeline_text_args(
+    args: argparse.Namespace,
+    *,
+    language: str,
+) -> str:
+    language = _assert_clean_text(language, field_name="language", max_chars=MAX_PATH_CHARS)
+    _assert_clean_text(args.personal_context, field_name="personal context", max_chars=MAX_TRANSCRIBER_TEXT_CHARS)
+    _assert_clean_text(args.vocabulary, field_name="vocabulary", max_chars=MAX_TRANSCRIBER_TEXT_CHARS)
+    _assert_clean_text(args.transcriber_command, field_name="transcriber command", max_chars=MAX_TRANSCRIBER_TEXT_CHARS)
+    _assert_clean_text(args.post_process_command, field_name="post-process command", max_chars=MAX_TRANSCRIBER_TEXT_CHARS)
+    _assert_clean_text(args.whisper_model, field_name="whisper model", max_chars=MAX_PATH_CHARS)
+    _assert_clean_text(args.post_process_prompt, field_name="post-process prompt", max_chars=MAX_TRANSCRIBER_TEXT_CHARS)
+    _assert_clean_text(args.ollama_model, field_name="ollama model", max_chars=MAX_PATH_CHARS)
+    _assert_clean_text(args.openai_compatible_model, field_name="openai-compatible model", max_chars=MAX_PATH_CHARS)
+    _validate_text_model_url(args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url")
+    _validate_text_model_url(args.openai_compatible_url or DEFAULT_OPENAI_COMPATIBLE_URL, field_name="openai-compatible url")
+    return language
+
+
+def read_file_tail(path: Path, max_chars: int) -> str:
+    if max_chars <= 0:
+        return ""
+    max_chars = max(0, min(max_chars, MAX_TRANSCRIPT_HISTORY_TEXT_CHARS))
+    max_bytes = max_chars * 4
+    with path.open("rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        if size <= max_bytes:
+            handle.seek(0)
+        else:
+            handle.seek(size - max_bytes)
+        text = handle.read().decode("utf-8", errors="replace")
+    if len(text) > max_chars:
+        text = text[-max_chars:]
+    return text
 
 
 def timestamp() -> str:
@@ -78,17 +143,20 @@ def prepare_output_text(text: str, append_space: bool, sanitize: bool) -> str:
 
 
 def build_store(args: argparse.Namespace) -> StateStore:
-    return StateStore(Path(args.state_file).expanduser())
+    state_path = normalized_path(args.state_file)
+    if not state_path:
+        raise RuntimeError("state file path is required")
+    return StateStore(state_path)
 
 
 def read_log_excerpt(path: Path | None, max_chars: int = 2000) -> str:
     if not path or not path.exists():
         return ""
     try:
-        text = path.read_text(encoding="utf-8", errors="replace").strip()
+        text = read_file_tail(path, min(max_chars, MAX_LOG_EXCERPT_CHARS))
     except OSError:
         return ""
-    return text[-max_chars:]
+    return text[-max_chars:].strip()
 
 
 def transcript_preview(text: str, max_chars: int = 80) -> str:
@@ -105,11 +173,21 @@ def read_transcript_history(limit: int = 10) -> list[dict[str, object]]:
     if not directory.exists():
         return []
 
-    entries: list[dict[str, object]] = []
-    for path in sorted(directory.glob("*.txt"), key=lambda item: item.stat().st_mtime, reverse=True):
+    candidates: list[tuple[float, Path]] = []
+    for path in directory.glob("*.txt"):
         try:
-            text = path.read_text(encoding="utf-8", errors="replace").strip()
-            modified_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        candidates.append((mtime, path))
+
+    candidates = sorted(candidates, reverse=True)
+
+    entries: list[dict[str, object]] = []
+    for mtime, path in candidates:
+        try:
+            text = read_file_tail(path, MAX_TRANSCRIPT_HISTORY_TEXT_CHARS).strip()
+            modified_at = datetime.fromtimestamp(mtime, timezone.utc).isoformat()
         except OSError:
             continue
         if not text:
@@ -131,16 +209,114 @@ def read_transcript_history(limit: int = 10) -> list[dict[str, object]]:
 def normalized_path(path_value: str | None) -> Path | None:
     if not path_value:
         return None
-    return Path(path_value).expanduser().resolve(strict=False)
+    return _coerce_path(path_value, field_name="path", resolve=True)
+
+
+def _assert_json_payload_size(payload: dict[str, object], *, max_bytes: int) -> None:
+    rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    if len(rendered.encode("utf-8")) > max_bytes:
+        raise RuntimeError(f"output JSON is too large (max {max_bytes} bytes)")
+
+
+def _write_json_atomic(path: Path, payload: dict[str, object], *, max_bytes: int) -> None:
+    content = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    if len(content.encode("utf-8")) > max_bytes:
+        raise RuntimeError(f"output JSON is too large (max {max_bytes} bytes)")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
+        handle.write(content)
+        tmp_path = Path(handle.name)
+    try:
+        os.replace(tmp_path, path)
+    except OSError as exc:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise RuntimeError(f"failed to write JSON output: {path}") from exc
+
+
+def _write_text_atomic(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
+        handle.write(text)
+        tmp_path = Path(handle.name)
+    try:
+        os.replace(tmp_path, path)
+    except OSError as exc:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise RuntimeError(f"failed to write transcript file: {path}") from exc
+
+
+def _require_json_path(path_value: str, *, field_name: str, default: Path | None = None) -> Path:
+    if path_value:
+        path = _coerce_path(path_value, field_name=field_name, resolve=True)
+    elif default is not None:
+        path = default
+    else:
+        raise RuntimeError(f"{field_name} is required")
+    if path.suffix.lower() != ".json":
+        raise RuntimeError(f"{field_name} must end with .json")
+    return path
+
+
+def _parse_cli_settings_json(raw: str) -> dict[str, object]:
+    _assert_clean_text(raw, field_name="settings JSON", max_chars=MAX_SETTINGS_JSON_CHARS)
+    if len(raw) > MAX_SETTINGS_JSON_CHARS:
+        raise RuntimeError(f"settings JSON is too large (max {MAX_SETTINGS_JSON_CHARS} characters)")
+    try:
+        return parse_settings_json(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"settings JSON could not be parsed: {exc}") from exc
+
+
+def _coerce_path(
+    path_value: str,
+    *,
+    field_name: str,
+    resolve: bool = False,
+    max_chars: int = MAX_PATH_CHARS,
+) -> Path:
+    _assert_clean_text(path_value, field_name=field_name, max_chars=max_chars)
+    path = Path(path_value).expanduser()
+    return path.resolve(strict=False) if resolve else path
 
 
 def active_artifact_paths(state: RecordingState) -> set[Path]:
     paths: set[Path] = set()
-    for value in (state.audio_path, state.log_path, state.transcript_path):
-        path = normalized_path(value)
-        if path:
-            paths.add(path)
+    audio_path = _safe_recording_artifact_path(state.audio_path, suffix=".wav")
+    log_path = _safe_recording_artifact_path(state.log_path, suffix=".log")
+    if audio_path:
+        paths.add(audio_path)
+    if log_path:
+        paths.add(log_path)
+    path = normalized_path(state.transcript_path)
+    if path:
+        paths.add(path)
     return paths
+
+
+def _safe_recording_artifact_path(
+    value: str | None,
+    *,
+    suffix: str,
+    require_recordings_dir: bool = True,
+) -> Path | None:
+    if not value:
+        return None
+    try:
+        return validate_recording_path(Path(value), suffix=suffix, require_recordings_dir=require_recordings_dir)
+    except (RecorderError, ValueError, OSError):
+        return None
+
+
+def _is_recording_process_alive(pid: object) -> bool:
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    return process_is_alive(pid)
 
 
 def sorted_files(paths: list[Path]) -> list[Path]:
@@ -261,14 +437,17 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
     store = build_store(args)
     current = store.read()
     if current.status == "recording":
-        if process_is_alive(current.pid):
+        current_audio_path = _safe_recording_artifact_path(
+            current.audio_path, suffix=".wav", require_recordings_dir=False
+        )
+        if _is_recording_process_alive(current.pid):
             return {
                 "status": "recording",
                 "message": "already recording",
                 "pid": current.pid,
                 "language": current.language,
             }
-        if current.audio_path and Path(current.audio_path).exists() and Path(current.audio_path).stat().st_size > 0:
+        if current_audio_path and current_audio_path.exists() and current_audio_path.stat().st_size > 0:
             recorded = store.update(status="recorded", stopped_at=current.stopped_at or now_iso())
             return {
                 "status": "recorded",
@@ -276,11 +455,27 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
                 "audio_path": recorded.audio_path,
                 "language": recorded.language,
             }
+        if current.audio_path and not current_audio_path:
+            store.update(
+                status="error",
+                stopped_at=current.stopped_at or now_iso(),
+                error="recording state references an invalid artifact path",
+            )
+            return {
+                "status": "error",
+                "message": "recording state references an invalid artifact path",
+            }
         store.update(status="error", stopped_at=current.stopped_at or now_iso(), error="recording exited before audio was saved")
+        return {
+            "status": "error",
+            "message": "recording exited before audio was saved",
+        }
 
     stamp = timestamp()
     audio_path = recordings_dir() / f"{stamp}.wav"
     log_path = recordings_dir() / f"{stamp}.log"
+    audio_path = validate_recording_path(audio_path, suffix=".wav", require_recordings_dir=True)
+    log_path = validate_recording_path(log_path, suffix=".log", require_recordings_dir=True)
     command = choose_recorder(args.recorder, audio_path, args.max_seconds, args.input_device)
     proc = start_recorder(command, log_path)
     time.sleep(RECORDER_START_GRACE_SECONDS)
@@ -314,10 +509,15 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
 def finalize_recording(args: argparse.Namespace, store: StateStore, state: RecordingState) -> dict[str, object]:
     if not state.audio_path:
         raise RuntimeError("no recording is available")
-    audio_path = Path(state.audio_path)
-    text_path = transcript_dir() / f"{audio_path.stem}.txt"
-    language = state.language or args.language or "en"
+    audio_path = _safe_recording_artifact_path(state.audio_path, suffix=".wav", require_recordings_dir=False)
+    if not audio_path:
+        store.update(status="error", stopped_at=state.stopped_at or now_iso(), error="recording audio path is invalid")
+        raise RuntimeError("recording audio path is invalid")
+    chosen_language = state.language or args.language or "en"
+    language = _validate_pipeline_text_args(args, language=chosen_language)
     try:
+        audio_path = validate_audio_file(audio_path)
+        text_path = transcript_dir() / f"{audio_path.stem}.txt"
         text = transcribe(
             audio_path=audio_path,
             language=language,
@@ -341,7 +541,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             args.openai_compatible_model,
             args.openai_compatible_url,
         )
-        text_path.write_text(text.strip() + "\n", encoding="utf-8")
+        _write_text_atomic(text_path, text.strip() + "\n")
         text_to_insert = prepare_output_text(text, args.append_space, args.sanitize_special_chars)
         inserted = insert_text(text_to_insert, args.insert_method, args.typing_delay_ms)
     except Exception as exc:
@@ -353,8 +553,8 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
     done_audio_path = state.audio_path
     done_log_path = state.log_path
     if not keep_recording_artifacts:
-        audio_deleted = remove_file(state.audio_path)
-        log_deleted = remove_file(state.log_path)
+        audio_deleted = remove_file(state.audio_path, suffix=".wav")
+        log_deleted = remove_file(state.log_path, suffix=".log")
         done_audio_path = None
         done_log_path = None
     done = store.update(
@@ -380,10 +580,20 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
     }
 
 
-def remove_file(path_value: str | None) -> bool:
+def remove_file(path_value: str | None, *, suffix: str | None = None) -> bool:
     if not path_value:
         return False
-    path = Path(path_value)
+    try:
+        path_value = _assert_clean_text(path_value, field_name="path", max_chars=MAX_PATH_CHARS)
+    except RuntimeError:
+        return False
+    if suffix:
+        try:
+            path = validate_recording_path(Path(path_value), suffix=suffix, require_recordings_dir=True)
+        except (RecorderError, ValueError, OSError):
+            return False
+    else:
+        path = Path(path_value)
     try:
         path.unlink()
     except FileNotFoundError:
@@ -402,7 +612,7 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
             return finalize_recording(args, store, state)
         return {"status": state.status, "message": "not recording"}
 
-    if process_is_alive(state.pid):
+    if _is_recording_process_alive(state.pid):
         stop_process(int(state.pid))
     state = store.update(status="processing", stopped_at=now_iso())
     return finalize_recording(args, store, state)
@@ -412,12 +622,12 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     store = build_store(args)
     state = store.read()
-    if state.status == "recording" and process_is_alive(state.pid):
+    if state.status == "recording" and _is_recording_process_alive(state.pid):
         stop_process(int(state.pid))
 
     discarded_audio_path = state.audio_path
-    audio_deleted = remove_file(state.audio_path)
-    log_deleted = remove_file(state.log_path)
+    audio_deleted = remove_file(state.audio_path, suffix=".wav")
+    log_deleted = remove_file(state.log_path, suffix=".log")
     store.write(
         RecordingState(
             status="idle",
@@ -443,7 +653,7 @@ def command_toggle(args: argparse.Namespace) -> dict[str, object]:
     store = build_store(args)
     state = store.read()
     if state.status == "recording":
-        if process_is_alive(state.pid):
+        if _is_recording_process_alive(state.pid):
             return command_stop(args)
         if state.audio_path:
             store.update(status="processing", stopped_at=state.stopped_at or now_iso())
@@ -454,24 +664,20 @@ def command_toggle(args: argparse.Namespace) -> dict[str, object]:
 def command_status(args: argparse.Namespace) -> dict[str, object]:
     state = build_store(args).read()
     payload = asdict(state)
-    if state.status == "recording" and not process_is_alive(state.pid):
+    if state.status == "recording" and not _is_recording_process_alive(state.pid):
         payload["status"] = "recorded"
         payload["message"] = "recording process has exited; run stop to transcribe"
     return payload
 
 
 def command_doctor(args: argparse.Namespace) -> dict[str, object]:
-    return doctor_report(
-        parse_settings_json(getattr(args, "settings_json", "")),
-        applet=getattr(args, "applet", False),
-    )
+    settings = _parse_cli_settings_json(getattr(args, "settings_json", ""))
+    return doctor_report(settings, applet=getattr(args, "applet", False))
 
 
 def command_setup(args: argparse.Namespace) -> dict[str, object]:
-    doctor_payload = doctor_report(
-        parse_settings_json(getattr(args, "settings_json", "")),
-        applet=getattr(args, "applet", False),
-    )
+    settings = _parse_cli_settings_json(getattr(args, "settings_json", ""))
+    doctor_payload = doctor_report(settings, applet=getattr(args, "applet", False))
     return {
         "status": "done",
         "doctor": doctor_payload,
@@ -506,18 +712,19 @@ def command_models(args: argparse.Namespace) -> dict[str, object]:
 def command_text_models(args: argparse.Namespace) -> dict[str, object]:
     backend = (args.backend or "ollama").strip().lower().replace("_", "-")
     if backend in {"openai-compatible", "openai", "local-openai"}:
-        url = (args.openai_compatible_url or DEFAULT_OPENAI_COMPATIBLE_URL).rstrip("/")
+        url = _validate_text_model_url(args.openai_compatible_url or DEFAULT_OPENAI_COMPATIBLE_URL, field_name="openai-compatible url")
         return {
             "status": "done",
             "backend": "openai-compatible",
             "url": url,
             **list_openai_compatible_models(url),
         }
+    url = _validate_text_model_url(args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url")
     return {
         "status": "done",
         "backend": "ollama",
-        "url": (args.ollama_url or DEFAULT_OLLAMA_URL).rstrip("/"),
-        **list_ollama_models(args.ollama_url),
+        "url": url,
+        **list_ollama_models(url),
     }
 
 
@@ -582,12 +789,15 @@ def command_diagnostics(args: argparse.Namespace) -> dict[str, object]:
     payload = build_diagnostics_payload(args)
     output = str(getattr(args, "output", "") or "").strip()
     if output or getattr(args, "save", False):
-        path = Path(output).expanduser() if output else diagnostics_dir() / f"diagnostics-{timestamp()}.json"
+        path = (
+            _require_json_path(output, field_name="diagnostics output")
+            if output
+            else diagnostics_dir() / f"diagnostics-{timestamp()}.json"
+        )
+        _assert_json_payload_size(payload, max_bytes=MAX_DIAGNOSTICS_JSON_BYTES)
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_suffix(path.suffix + ".tmp")
         payload["saved_path"] = str(path)
-        tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        os.replace(tmp_path, path)
+        _write_json_atomic(path, payload, max_bytes=MAX_DIAGNOSTICS_JSON_BYTES)
         payload["message"] = f"diagnostics saved to {path}"
     return payload
 
@@ -630,8 +840,9 @@ def command_alarms_check(args: argparse.Namespace) -> dict[str, object]:
 
 
 def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
+    settings_json = getattr(args, "settings_json", "")
+    settings = _parse_cli_settings_json(settings_json)
     ensure_runtime_dirs()
-    settings = parse_settings_json(getattr(args, "settings_json", ""))
     applet = getattr(args, "applet", False)
     alarm_payload = list_alarm_payload()
     alarm_entries = alarm_payload.get("alarms", [])
@@ -662,6 +873,9 @@ def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
     state_payload = asdict(build_store(args).read())
     state_payload["transcript_length"] = len(str(state_payload.get("transcript") or ""))
     state_payload.pop("transcript", None)
+    state_file_path = normalized_path(args.state_file)
+    if state_file_path is None:
+        state_file_path = _coerce_path(str(args.state_file), field_name="state file")
     return {
         "status": "done",
         "message": "diagnostics collected",
@@ -682,7 +896,7 @@ def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
         },
         "paths": {
             "state_dir": str(state_dir()),
-            "state_file": str(Path(args.state_file).expanduser()),
+            "state_file": str(state_file_path),
             "transcript_dir": str(transcript_dir()),
             "recordings_dir": str(recordings_dir()),
             "diagnostics_dir": str(diagnostics_dir()),
@@ -702,14 +916,11 @@ def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
 
 def command_settings_export(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
-    path = Path(args.output).expanduser() if args.output else default_settings_export_file()
-    try:
-        settings = json.loads(args.settings_json or "{}")
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"settings JSON could not be parsed: {exc}") from exc
-    if not isinstance(settings, dict):
-        raise RuntimeError("settings JSON must be an object")
+    settings = _parse_cli_settings_json(args.settings_json)
+    path = _require_json_path(args.output, field_name="settings export output", default=default_settings_export_file())
     payload = write_export(path, settings, load_alarm_store())
+    if path.stat().st_size > MAX_SETTINGS_FILE_BYTES:
+        raise RuntimeError(f"settings export file is too large (max {MAX_SETTINGS_FILE_BYTES} bytes)")
     return {
         "status": "done",
         "message": f"settings exported to {path}",
@@ -721,7 +932,9 @@ def command_settings_export(args: argparse.Namespace) -> dict[str, object]:
 
 def command_settings_import(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
-    path = Path(args.input).expanduser() if args.input else default_settings_export_file()
+    path = _require_json_path(args.input, field_name="settings import input", default=default_settings_export_file())
+    if path.stat().st_size > MAX_SETTINGS_FILE_BYTES:
+        raise RuntimeError(f"settings export file is too large (max {MAX_SETTINGS_FILE_BYTES} bytes)")
     payload = read_export(path)
     save_alarm_store(payload["alarms"])
     return {
@@ -736,18 +949,22 @@ def command_settings_import(args: argparse.Namespace) -> dict[str, object]:
 
 
 def command_insert_text(args: argparse.Namespace) -> dict[str, object]:
-    text = sanitize_special_chars(args.text) if args.sanitize_special_chars else args.text
+    text = _assert_clean_text(args.text, field_name="text", max_chars=MAX_TRANSCRIBER_TEXT_CHARS)
+    if args.sanitize_special_chars:
+        text = sanitize_special_chars(text)
     inserted = insert_text(text, args.insert_method, args.typing_delay_ms)
     return {"status": "done", "inserted": inserted}
 
 
 def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
-    audio_path = Path(args.audio_path).expanduser()
+    audio_path = _coerce_path(args.audio_path, field_name="audio file path", max_chars=MAX_AUDIO_PATH_CHARS)
+    language = _validate_pipeline_text_args(args, language=args.language)
+    audio_path = validate_audio_file(audio_path)
     text_path = transcript_dir() / f"{audio_path.stem}.txt"
     text = transcribe(
         audio_path=audio_path,
-        language=args.language,
+        language=language,
         text_path=text_path,
         command_template=args.transcriber_command,
         backend=args.transcriber,
@@ -768,7 +985,7 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         args.openai_compatible_model,
         args.openai_compatible_url,
     )
-    text_path.write_text(text.strip() + "\n", encoding="utf-8")
+    _write_text_atomic(text_path, text.strip() + "\n")
     return {"status": "done", "transcript": text, "transcript_path": str(text_path)}
 
 

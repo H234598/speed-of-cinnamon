@@ -42,6 +42,7 @@ class SetupPlanTest(unittest.TestCase):
         plan = build_setup_plan(payload)
         self.assertFalse(plan["ready"])
         self.assertEqual(plan["steps"][0]["id"], "asr-backend")
+        self.assertIn("sudo dnf install -y python3-pywhispercpp", plan["commands"])
         self.assertIn("speed-of-cinnamon models --json", plan["commands"])
         self.assertIn("speed-of-cinnamon download-model tiny.en --json", plan["commands"])
         self.assertIn("Install or configure", plan["text"])

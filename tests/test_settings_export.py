@@ -2,12 +2,34 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
-from speed_of_cinnamon.settings_export import SettingsExportError, build_export, read_export, write_export
+from speed_of_cinnamon.settings_export import (
+    MAX_SETTINGS_EXPORT_BYTES,
+    SettingsExportError,
+    build_export,
+    read_export,
+    write_export,
+)
 
 
 class SettingsExportTest(unittest.TestCase):
+    def test_write_export_rejects_null_byte_path(self) -> None:
+        with self.assertRaisesRegex(SettingsExportError, "invalid null byte"):
+            write_export(Path("settings\x00.json"), {"language": "en"})
+
+    def test_read_export_rejects_null_byte_path(self) -> None:
+        with self.assertRaisesRegex(SettingsExportError, "invalid null byte"):
+            read_export(Path("settings\x00.json"))
+
+    def test_read_export_rejects_oversized_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text("x" * (MAX_SETTINGS_EXPORT_BYTES + 1), encoding="utf-8")
+            with self.assertRaisesRegex(SettingsExportError, "settings export is too large"):
+                read_export(path)
+
     def test_build_export_keeps_only_supported_settings(self) -> None:
         payload = build_export({
             "primary-language-keybinding": "<Super><Alt>z::",
@@ -90,6 +112,14 @@ class SettingsExportTest(unittest.TestCase):
             path.write_text('{"app":"other","version":1,"settings":{}}\n', encoding="utf-8")
             with self.assertRaisesRegex(SettingsExportError, "different app"):
                 read_export(path)
+
+    @mock.patch("speed_of_cinnamon.settings_export.os.replace", side_effect=OSError("disk full"))
+    def test_write_export_raises_when_atomic_replace_fails(self, mocked_replace: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+                write_export(path, {"language": "en"})
+        mocked_replace.assert_called_once()
 
 
 if __name__ == "__main__":

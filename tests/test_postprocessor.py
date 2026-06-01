@@ -9,11 +9,14 @@ from speed_of_cinnamon.postprocessor import (
     PostProcessError,
     build_ollama_prompt,
     build_openai_compatible_messages,
+    post_process_text,
+    MAX_POSTPROCESS_JSON_BYTES,
+    MAX_POSTPROCESS_URL_CHARS,
     list_ollama_models,
     list_openai_compatible_models,
-    post_process_text,
     render_postprocess_template,
 )
+from speed_of_cinnamon.command_chain import CommandChainError
 
 
 class FakeResponse:
@@ -30,8 +33,8 @@ class FakeResponse:
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
         return None
 
-    def read(self) -> bytes:
-        return self.buffer.read()
+    def read(self, size: int = -1) -> bytes:
+        return self.buffer.read(size)
 
 
 class PostProcessorTest(unittest.TestCase):
@@ -41,6 +44,13 @@ class PostProcessorTest(unittest.TestCase):
     def test_command_receives_text_on_stdin(self) -> None:
         command = "python3 -c 'import sys; print(sys.stdin.read().upper())'"
         self.assertEqual(post_process_text("hello cinnamon", "en", command), "HELLO CINNAMON")
+
+    def test_post_process_chain_passes_output_between_segments(self) -> None:
+        command = (
+            "python3 -c 'import sys; print(sys.stdin.read().strip().upper())' && "
+            "python3 -c 'import sys; print(sys.stdin.read().strip())'"
+        )
+        self.assertEqual(post_process_text("hello", "en", command), "HELLO")
 
     def test_template_quotes_text_language_and_prompt(self) -> None:
         rendered = render_postprocess_template(
@@ -62,9 +72,61 @@ class PostProcessorTest(unittest.TestCase):
             "hello|PipeWire",
         )
 
+    def test_post_process_command_rejects_unsupported_shell_operators(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "unsupported shell operator"):
+            post_process_text("hello", "en", "python3 -c 'print(1)' | python3 -c 'print(2)'")
+
+    def test_post_process_command_rejects_invalid_syntax(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "invalid post-process command"):
+            post_process_text("hello", "en", "python3 -c 'unterminated")
+
+    def test_post_process_command_reports_missing_binary(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "command not found"):
+            post_process_text("hello", "en", "/definitely/missing/command")
+
+    def test_post_process_reports_empty_chain(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.postprocessor.run_command_chain",
+            side_effect=CommandChainError("post-process command chain is empty"),
+        ):
+            with self.assertRaisesRegex(PostProcessError, "command chain is empty"):
+                post_process_text("hello", "en", "cmd")
+
+    def test_post_process_reports_invalid_chain_limits(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.postprocessor.run_command_chain",
+            side_effect=CommandChainError("max_input_chars must be non-negative"),
+        ):
+            with self.assertRaisesRegex(PostProcessError, "max_input_chars must be non-negative"):
+                post_process_text("hello", "en", "cmd")
+
     def test_empty_output_is_an_error(self) -> None:
         with self.assertRaisesRegex(PostProcessError, "without output"):
             post_process_text("hello", "en", "true")
+
+    def test_post_process_command_rejects_oversized_output(self) -> None:
+        with mock.patch("speed_of_cinnamon.postprocessor.MAX_COMMAND_OUTPUT_CHARS", 4):
+            with self.assertRaisesRegex(PostProcessError, "too large"):
+                post_process_text("hello", "en", "python3 -c 'print(\"toolong\")'")
+
+    def test_post_process_command_rejects_oversized_input_text(self) -> None:
+        with mock.patch("speed_of_cinnamon.postprocessor.MAX_POSTPROCESS_TEXT_CHARS", 4):
+            with self.assertRaisesRegex(PostProcessError, "input text is too large"):
+                post_process_text("hello", "en", "printf keep")
+
+    def test_post_process_command_rejects_oversized_remote_response(self) -> None:
+        giant = "{" + '"x":' + '"' * (MAX_POSTPROCESS_JSON_BYTES + 1) + "}"
+        with mock.patch(
+            "speed_of_cinnamon.postprocessor.urllib.request.urlopen",
+            return_value=FakeResponse(giant),
+        ):
+            with self.assertRaisesRegex(PostProcessError, "too large"):
+                post_process_text(
+                    "hello",
+                    "en",
+                    backend="ollama",
+                    ollama_model="llama3.2:3b",
+                )
 
     def test_disabled_backend_returns_original_text(self) -> None:
         self.assertEqual(post_process_text("hello", "en", backend="none"), "hello")
@@ -126,6 +188,30 @@ class PostProcessorTest(unittest.TestCase):
         self.assertIn("PipeWire", messages[0]["content"])
         self.assertEqual(messages[1]["role"], "user")
         self.assertIn("hallo cinnamon", messages[1]["content"])
+
+    def test_openai_url_rejects_null_byte(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "openai-compatible url contains invalid null byte"):
+            post_process_text(
+                "hello",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="local",
+                openai_compatible_url="http://127.0.0.1:8000\x00",
+            )
+
+    def test_ollama_url_rejects_oversize(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.postprocessor.MAX_POSTPROCESS_URL_CHARS",
+            4,
+        ):
+            with self.assertRaisesRegex(PostProcessError, "ollama url is too large"):
+                post_process_text(
+                    "hello",
+                    "en",
+                    backend="ollama",
+                    ollama_model="llama3.2:3b",
+                    ollama_url="http://127.0.0.1",
+                )
 
     def test_openai_compatible_backend_calls_chat_completions_endpoint(self) -> None:
         requests = []

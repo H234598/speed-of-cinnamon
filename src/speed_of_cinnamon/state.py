@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +11,9 @@ from typing import Any
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+MAX_STATE_FILE_BYTES = 1_000_000
 
 
 @dataclass
@@ -33,11 +37,18 @@ class RecordingState:
 
 class StateStore:
     def __init__(self, path: Path):
+        if "\x00" in str(path):
+            raise RuntimeError("state file path contains invalid null byte")
         self.path = path
 
     def read(self) -> RecordingState:
         if not self.path.exists():
             return RecordingState()
+        try:
+            if self.path.stat().st_size > MAX_STATE_FILE_BYTES:
+                return RecordingState(error="state file is too large")
+        except OSError:
+            return RecordingState(error="state file could not be read")
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -47,9 +58,17 @@ class StateStore:
     def write(self, state: RecordingState) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         state.updated_at = now_iso()
-        tmp_path = self.path.with_suffix(self.path.suffix + ".tmp")
-        tmp_path.write_text(json.dumps(asdict(state), indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        os.replace(tmp_path, self.path)
+        with tempfile.NamedTemporaryFile("w", delete=False, dir=self.path.parent, encoding="utf-8") as handle:
+            handle.write(json.dumps(asdict(state), indent=2, sort_keys=True) + "\n")
+            tmp_path = Path(handle.name)
+        try:
+            os.replace(tmp_path, self.path)
+        except OSError as exc:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise RuntimeError(f"failed to persist state: {self.path}") from exc
 
     def update(self, **values: Any) -> RecordingState:
         state = self.read()

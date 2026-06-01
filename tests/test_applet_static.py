@@ -236,6 +236,95 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.actor.add_style_class_name(this._panelStyleClassForStatus(status))", source)
         self.assertIn("this._applyPanelStyle(this.status)", source)
 
+    def test_status_refresh_deduplicates_overlapping_cli_calls(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("this._statusCommandRunning = false;", source)
+        self.assertIn("_refreshStatus: function() {", source)
+        self.assertIn("if (this._statusCommandRunning) {", source)
+        self.assertIn("this._statusCommandRunning = true;", source)
+        self.assertIn("try {", source)
+        self.assertIn("} finally {", source)
+        self.assertIn("this._statusCommandRunning = false;", source)
+
+    def test_status_checks_use_spawn_json_timeout(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("const STATUS_COMMAND_TIMEOUT_MS = 10000;", source)
+        self.assertIn("_refreshStatus: function() {", source)
+        self.assertIn("}, { timeoutMs: STATUS_COMMAND_TIMEOUT_MS });", source)
+        self.assertIn("_spawnJson: function(args, callback, options) {", source)
+        self.assertIn("timeoutMs = Number(options.timeoutMs || CLI_COMMAND_TIMEOUT_MS);", source)
+        self.assertIn("if (timeoutMs > 0) {", source)
+
+    def test_doctor_checks_use_spawn_json_timeout(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("const DOCTOR_COMMAND_TIMEOUT_MS = 20000;", source)
+        self.assertIn("_runDoctor: function(startupCheck) {", source)
+        self.assertIn("}, { timeoutMs: DOCTOR_COMMAND_TIMEOUT_MS });", source)
+
+    def test_cli_command_expands_home_directory_shortcut(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("configured.indexOf(\"~/\") === 0", source)
+        self.assertIn("GLib.build_filenamev([GLib.get_home_dir(), configured.substring(2)]);", source)
+
+    def test_spawn_json_hardens_arguments_and_output(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("const MAX_CLI_ARG_BYTES = 4096;", source)
+        self.assertIn("const MAX_CLI_ARG_COUNT = 128;", source)
+        self.assertIn("const MAX_CLI_COMMAND_BYTES = 32768;", source)
+        self.assertIn("const MAX_TEXT_INSERT_CHARS = 120000;", source)
+        self.assertIn("const MAX_TYPE_COMMAND_CHARS = 4000;", source)
+        self.assertIn("const MAX_SPAWN_JSON_BYTES = 262144;", source)
+        self.assertIn("const CLI_COMMAND_TIMEOUT_MS = 300000;", source)
+        self.assertIn("_coerceSpawnArgs: function(args) {", source)
+        self.assertIn("if (!Array.isArray(args)) {", source)
+        self.assertIn("if (args[i] === null || args[i] === undefined) {", source)
+        self.assertIn('throw new Error("Backend command argument is missing");', source)
+        self.assertIn("if (i === 0) {", source)
+        self.assertIn("value = value.trim();", source)
+        self.assertIn("if (value.indexOf(\"\\u0000\") >= 0) {", source)
+        self.assertIn("if (value.length > MAX_CLI_ARG_BYTES) {", source)
+        self.assertIn("let totalBytes = 0;", source)
+        self.assertIn("totalBytes += value.length;", source)
+        self.assertIn("if (totalBytes > MAX_CLI_COMMAND_BYTES) {", source)
+        self.assertIn("if (String(args[0] || \"\").trim() === \"\") {", source)
+        self.assertIn("_isAllowedCliCommand: function(command) {", source)
+        self.assertIn("_parseSpawnOutput: function(stdout) {", source)
+        self.assertIn("if (output.length > MAX_SPAWN_JSON_BYTES) {", source)
+        self.assertIn("if (!parsed || typeof parsed !== \"object\" || Array.isArray(parsed)) {", source)
+        self.assertIn("let callbackFn = typeof callback === \"function\" ? callback : function() {};", source)
+        self.assertIn("let done = false;", source)
+        self.assertIn("if (done) {", source)
+        self.assertIn("callbackFn(payload || {});", source)
+        self.assertIn("if (args.length > MAX_CLI_ARG_COUNT) {", source)
+        self.assertIn("Mainloop.timeout_add(Math.max(250, timeoutMs)", source)
+        self.assertIn("finalize({ status: \"error\", error: \"Backend command timed out\" });", source)
+
+    def test_text_output_is_hardened_before_keyboard_typing(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("_coerceTypeText: function(text) {", source)
+        self.assertIn('if (value.indexOf("\\u0000") >= 0) {', source)
+        self.assertIn("value = value.replace(/\\u0000/g, \"\");", source)
+        self.assertIn('if (value.length > MAX_TYPE_COMMAND_CHARS) {', source)
+        self.assertIn("Text too long for keyboard typing", source)
+        self.assertIn("_spawnKeyboardAfterFocus: function(args) {", source)
+        self.assertIn("Util.spawn(this._coerceSpawnArgs(args));", source)
+
+    def test_doctor_check_deduplicates_overlapping_cli_calls(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("this._doctorCommandRunning = false;", source)
+        self.assertIn("_runDoctor: function(startupCheck) {", source)
+        self.assertIn("if (this._doctorCommandRunning) {", source)
+        self.assertIn("this._doctorCommandRunning = true;", source)
+        self.assertIn("} finally {", source)
+        self.assertIn("this._doctorCommandRunning = false;", source)
+
     def test_applet_restores_target_window_before_clipboard_paste(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
@@ -323,9 +412,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (payload.status === \"done\" && payload.transcript)", source)
         self.assertIn('if (method === "none")', source)
         self.assertIn('if (method === "type")', source)
-        self.assertIn('this._typeTextAfterFocus(text);', source)
-        self.assertIn('Util.spawn(args);', source)
-        self.assertIn('["xdotool", "type", "--clearmodifiers", "--delay", String(delay), text]', source)
+        self.assertIn("if (this._typeTextAfterFocus(text)) {", source)
+        self.assertIn("Util.spawn(this._coerceSpawnArgs(args));", source)
+        self.assertIn('["xdotool", "type", "--clearmodifiers", "--delay", String(delay), typedText]', source)
         self.assertIn('["xdotool", "key", "--clearmodifiers", "ctrl+v"]', source)
 
     def test_history_entries_can_be_copied_or_inserted(self) -> None:

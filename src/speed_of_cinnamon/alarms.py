@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,12 @@ DAY_LABELS = {
 }
 URGENCIES = {"silent", "normal", "critical"}
 DEFAULT_CATCH_UP_MINUTES = 15
+MAX_ALARM_STORE_BYTES = 1_000_000
+
+
+def _assert_clean_path(path: Path, *, field_name: str) -> None:
+    if "\x00" in str(path):
+        raise RuntimeError(f"{field_name} contains invalid null byte")
 
 
 def now_local() -> datetime:
@@ -100,11 +108,19 @@ def empty_store() -> dict[str, Any]:
 
 def load_alarm_store(path: Path | None = None) -> dict[str, Any]:
     store_path = path or alarms_file()
+    _assert_clean_path(store_path, field_name="alarm store path")
     if not store_path.exists():
         return empty_store()
     try:
+        if store_path.stat().st_size > MAX_ALARM_STORE_BYTES:
+            raise RuntimeError(f"alarm store is too large: {store_path}")
+    except OSError as exc:
+        raise RuntimeError(f"alarm store could not be read: {store_path}") from exc
+    try:
         raw = json.loads(store_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+    except (OSError, json.JSONDecodeError) as exc:
+        if isinstance(exc, OSError):
+            raise RuntimeError(f"alarm store could not be read: {store_path}") from exc
         raise RuntimeError(f"alarm store could not be parsed: {exc}") from exc
     if not isinstance(raw, dict):
         raise RuntimeError("alarm store must be a JSON object")
@@ -120,15 +136,24 @@ def load_alarm_store(path: Path | None = None) -> dict[str, Any]:
 
 def save_alarm_store(store: dict[str, Any], path: Path | None = None) -> None:
     store_path = path or alarms_file()
+    _assert_clean_path(store_path, field_name="alarm store path")
     store_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "version": STORE_VERSION,
         "alarms": [normalize_alarm(alarm) for alarm in store.get("alarms", []) if isinstance(alarm, dict)],
         "last_checked_at": str(store.get("last_checked_at") or ""),
     }
-    tmp_path = store_path.with_suffix(store_path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    tmp_path.replace(store_path)
+    with tempfile.NamedTemporaryFile("w", delete=False, dir=store_path.parent, encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        tmp_path = Path(handle.name)
+    try:
+        os.replace(tmp_path, store_path)
+    except OSError as exc:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise RuntimeError(f"failed to persist alarm store: {store_path}") from exc
 
 
 def normalize_alarm(alarm: dict[str, Any]) -> dict[str, Any]:
