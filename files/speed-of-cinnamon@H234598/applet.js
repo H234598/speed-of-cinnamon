@@ -205,6 +205,15 @@ MyApplet.prototype = {
     this.secondaryLanguageItem.connect("activate", () => this._startWithLanguage(this._secondaryLanguage()));
     this.menu.addMenuItem(this.secondaryLanguageItem);
 
+    this.shortcutItem = new PopupMenu.PopupSubMenuMenuItem(_("Keyboard shortcuts"));
+    this.shortcutItem.menu.connect("open-state-changed", (menu, open) => {
+      if (open) {
+        this._populateShortcutMenu();
+      }
+    });
+    this.menu.addMenuItem(this.shortcutItem);
+    this._populateShortcutMenu();
+
     this.outputMethodItem = new PopupMenu.PopupSubMenuMenuItem(_("Output: Clipboard and paste"));
     this.menu.addMenuItem(this.outputMethodItem);
     this._populateOutputMethodMenu();
@@ -339,6 +348,7 @@ MyApplet.prototype = {
 
   _onHotkeyChanged: function() {
     this._registerHotkeys();
+    this._populateShortcutMenu();
   },
 
   _onOutputSettingsChanged: function() {
@@ -608,6 +618,53 @@ MyApplet.prototype = {
       this._updatePanel();
     }
     this._toggleRecording();
+  },
+
+  _formatKeybinding: function(binding) {
+    let value = String(binding || "").trim();
+    if (value === "") {
+      return _("not set");
+    }
+    return value.replace(/::$/, "");
+  },
+
+  _shortcutRows: function() {
+    return [
+      [_("Start or stop dictation"), this._formatKeybinding(this.toggleKeybinding)],
+      [_("Start primary language"), this._formatKeybinding(this.primaryLanguageKeybinding)],
+      [_("Start secondary language"), this._formatKeybinding(this.secondaryLanguageKeybinding)],
+      [_("Cancel recording"), _("Applet menu only")],
+      [_("Switch language"), _("Applet menu only")]
+    ];
+  },
+
+  _populateShortcutMenu: function() {
+    if (!this.shortcutItem) {
+      return;
+    }
+    this.shortcutItem.menu.removeAll();
+    for (let row of this._shortcutRows()) {
+      let item = new PopupMenu.PopupMenuItem(row[0] + ": " + row[1]);
+      item.setSensitive(false);
+      this.shortcutItem.menu.addMenuItem(item);
+    }
+    this.shortcutItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    let copy = new PopupMenu.PopupIconMenuItem(_("Copy shortcut reference"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
+    copy.connect("activate", () => this._copyShortcutReference());
+    this.shortcutItem.menu.addMenuItem(copy);
+  },
+
+  _shortcutReferenceText: function() {
+    let lines = [_("Speed of Cinnamon keyboard shortcuts")];
+    for (let row of this._shortcutRows()) {
+      lines.push(row[0] + ": " + row[1]);
+    }
+    return lines.join("\n");
+  },
+
+  _copyShortcutReference: function() {
+    this.clipboard.set_text(St.ClipboardType.CLIPBOARD, this._shortcutReferenceText());
+    this._setStatus("done", _("Copied shortcut reference"), this.lastTranscript);
   },
 
   _toggleRecording: function() {

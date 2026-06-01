@@ -58,6 +58,11 @@ On first load, the applet runs a lightweight setup check against its current Cin
 window. Guide and folder actions are launched through Cinnamon's GJS/Gio default-app API, not an `xdg-open` shell
 command.
 
+Use `Keyboard shortcuts` in the applet menu as the live shortcut reference. It shows the configured Cinnamon global
+toggle, optional primary/secondary language shortcuts, and applet-only actions such as cancel or language switching.
+`Copy shortcut reference` copies the current bindings through Cinnamon's clipboard, which is useful for setup notes or
+support reports.
+
 The same setup plan is available from the CLI:
 
 ```bash

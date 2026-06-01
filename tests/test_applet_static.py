@@ -56,6 +56,20 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._startWithLanguage(this._secondaryLanguage())', source)
         self.assertIn('this._hasActiveRecordingState()', source)
 
+    def test_applet_exposes_shortcut_reference_menu(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn('this.shortcutItem = new PopupMenu.PopupSubMenuMenuItem(_("Keyboard shortcuts"))', source)
+        self.assertIn("_populateShortcutMenu: function()", source)
+        self.assertIn("_shortcutRows: function()", source)
+        self.assertIn("_formatKeybinding: function(binding)", source)
+        self.assertIn("_shortcutReferenceText: function()", source)
+        self.assertIn("_copyShortcutReference: function()", source)
+        self.assertIn('new PopupMenu.PopupIconMenuItem(_("Copy shortcut reference"), "edit-copy-symbolic"', source)
+        self.assertIn("this.clipboard.set_text(St.ClipboardType.CLIPBOARD, this._shortcutReferenceText())", source)
+        self.assertIn('this._setStatus("done", _("Copied shortcut reference"), this.lastTranscript)', source)
+        self.assertIn("this._populateShortcutMenu();", source)
+
     def test_recording_artifact_retention_is_optional(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))

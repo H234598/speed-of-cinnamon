@@ -19,6 +19,7 @@ path.
 - Copyable or saveable diagnostics bundle for support reports without transcript contents.
 - Cinnamon global hotkey via `Main.keybindingManager`; default is `Super+Z`, with optional dedicated shortcuts for
   starting dictation in the primary or secondary language.
+- Applet shortcut reference menu showing the active Cinnamon hotkeys, with a copy action for setup/support notes.
 - Cinnamon desktop notifications for completion and failures, with optional recording-state notifications.
 - Primary/secondary recognition languages with quick switching and language-specific start actions from the applet menu.
 - PipeWire/PulseAudio/ALSA recording through `pw-record`, `parecord`, or `arecord`.
@@ -141,6 +142,10 @@ On startup, the applet runs a lightweight doctor check against its current Cinna
 the configured pipeline needs setup, usually because no ASR backend or local voice model is available yet. Use the
 applet menu's `Copy setup plan`, `Open applet settings`, `Open setup guide`, `Run doctor`, and `Voice model` actions to
 finish setup without leaving Cinnamon's applet workflow.
+
+The applet menu also includes `Keyboard shortcuts`, a live reference for the configured Cinnamon hotkeys. It lists the
+main toggle, optional primary/secondary language shortcuts, and applet-only actions, and can copy that reference through
+Cinnamon's clipboard for setup notes or issue reports.
 
 ## CLI
 
@@ -283,7 +288,8 @@ Cinnamon keybinding / panel click
 The applet asks the backend to return text without inserting it, then handles the selected output mode itself. Normal
 clipboard output goes through Cinnamon's `St.Clipboard`; the applet menu exposes the output mode, remembers the last
 focused normal window, restores that window before paste or direct typing, can reinsert the last transcript with the
-current output mode, and opens guide/folder actions through GJS/Gio's default-app launcher. It uses `xdotool` only for
+current output mode, shows a copyable shortcut reference, and opens guide/folder actions through GJS/Gio's default-app
+launcher. It uses `xdotool` only for
 the X11 paste or direct-typing keystrokes when they are available. Without `xdotool`, dictation still completes as a
 Cinnamon clipboard copy. This keeps desktop integration in Cinnamon where it belongs and keeps ASR replaceable. The
 Speed of Sound JVM/GTK portal stack is intentionally not reused because its central integration point is the part that
