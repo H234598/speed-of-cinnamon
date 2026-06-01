@@ -13,7 +13,17 @@ from pathlib import Path
 from . import __version__
 from .doctor import report as doctor_report
 from .output import insert_text
-from .paths import APP_ID, APP_NAME, default_settings_export_file, default_state_file, ensure_runtime_dirs, recordings_dir, state_dir, transcript_dir
+from .paths import (
+    APP_ID,
+    APP_NAME,
+    default_settings_export_file,
+    default_state_file,
+    diagnostics_dir,
+    ensure_runtime_dirs,
+    recordings_dir,
+    state_dir,
+    transcript_dir,
+)
 from .postprocessor import post_process_text
 from .recorder import choose_recorder, list_input_sources, start_recorder, stop_process
 from .settings_export import read_export, write_export
@@ -473,6 +483,20 @@ def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
 
 
 def command_diagnostics(args: argparse.Namespace) -> dict[str, object]:
+    payload = build_diagnostics_payload(args)
+    output = str(getattr(args, "output", "") or "").strip()
+    if output or getattr(args, "save", False):
+        path = Path(output).expanduser() if output else diagnostics_dir() / f"diagnostics-{timestamp()}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        payload["saved_path"] = str(path)
+        tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(tmp_path, path)
+        payload["message"] = f"diagnostics saved to {path}"
+    return payload
+
+
+def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     source_payload: dict[str, object]
     try:
@@ -522,6 +546,7 @@ def command_diagnostics(args: argparse.Namespace) -> dict[str, object]:
             "state_file": str(Path(args.state_file).expanduser()),
             "transcript_dir": str(transcript_dir()),
             "recordings_dir": str(recordings_dir()),
+            "diagnostics_dir": str(diagnostics_dir()),
         },
         "state": state_payload,
         "doctor": doctor_report(),
@@ -654,6 +679,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     diagnostics = subparsers.add_parser("diagnostics")
     add_common_options(diagnostics)
+    diagnostics.add_argument("--save", action="store_true")
+    diagnostics.add_argument("--output", default="")
     diagnostics.set_defaults(handler=command_diagnostics)
 
     settings_export = subparsers.add_parser("settings-export")

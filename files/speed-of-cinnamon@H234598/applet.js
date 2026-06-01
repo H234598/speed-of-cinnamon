@@ -178,6 +178,10 @@ MyApplet.prototype = {
     diagnostics.connect("activate", () => this._copyDiagnostics());
     this.menu.addMenuItem(diagnostics);
 
+    let saveDiagnostics = new PopupMenu.PopupIconMenuItem(_("Save diagnostics"), "document-save-symbolic", St.IconType.SYMBOLIC);
+    saveDiagnostics.connect("activate", () => this._saveDiagnostics());
+    this.menu.addMenuItem(saveDiagnostics);
+
     this.inputSourceItem = new PopupMenu.PopupSubMenuMenuItem(_("Input source"));
     this.inputSourceItem.menu.connect("open-state-changed", (menu, open) => {
       if (open) {
@@ -282,6 +286,10 @@ MyApplet.prototype = {
 
   _diagnosticsArgs: function() {
     return [this.cliPath || DEFAULT_CLI, "diagnostics", "--json"];
+  },
+
+  _diagnosticsSaveArgs: function() {
+    return [this.cliPath || DEFAULT_CLI, "diagnostics", "--save", "--json"];
   },
 
   _cancelArgs: function() {
@@ -412,6 +420,20 @@ MyApplet.prototype = {
       }
       this.clipboard.set_text(St.ClipboardType.CLIPBOARD, JSON.stringify(payload, null, 2));
       this._setStatus("done", _("Copied diagnostics"), this.lastTranscript);
+    });
+  },
+
+  _saveDiagnostics: function() {
+    this._spawnJson(this._diagnosticsSaveArgs(), (payload) => {
+      if (payload.error) {
+        this._setStatus("error", payload.error, this.lastTranscript);
+        return;
+      }
+      let path = payload.saved_path || "";
+      if (path) {
+        this.clipboard.set_text(St.ClipboardType.CLIPBOARD, path);
+      }
+      this._setStatus("done", _("Saved diagnostics: ") + path, this.lastTranscript);
     });
   },
 

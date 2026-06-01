@@ -147,10 +147,17 @@ For support reports, run:
 
 ```bash
 speed-of-cinnamon diagnostics --json
+speed-of-cinnamon diagnostics --save --json
 ```
 
-The Cinnamon applet also has `Copy diagnostics`. The bundle includes app/runtime paths, desktop/session details,
-doctor checks, input-source metadata, and state. It intentionally omits transcript contents.
+The Cinnamon applet also has `Copy diagnostics` and `Save diagnostics`. Saved reports are written under:
+
+```text
+~/.local/state/speed-of-cinnamon/diagnostics/
+```
+
+The bundle includes app/runtime paths, desktop/session details, doctor checks, input-source metadata, and state. It
+intentionally omits transcript contents.
 
 ## Dependencies
 

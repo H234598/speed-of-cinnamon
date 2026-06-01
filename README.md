@@ -12,7 +12,7 @@ path.
 
 - Cinnamon panel applet with microphone icon, concise status label, status menu, transcript preview, and a doctor check.
 - Live recording progress in the panel tooltip and menu, with a compact elapsed-time panel label.
-- Copyable diagnostics bundle for support reports without transcript contents.
+- Copyable or saveable diagnostics bundle for support reports without transcript contents.
 - Cinnamon global hotkey via `Main.keybindingManager`; default is `Super+Z`.
 - Cinnamon desktop notifications for completion and failures, with optional recording-state notifications.
 - Primary/secondary recognition languages with quick switching from the applet menu.
@@ -115,6 +115,7 @@ The backend command is installed to:
 ```bash
 speed-of-cinnamon doctor --json
 speed-of-cinnamon diagnostics --json
+speed-of-cinnamon diagnostics --save --json
 speed-of-cinnamon list-inputs --json
 speed-of-cinnamon history --limit 5 --json
 speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 25 --dry-run --json

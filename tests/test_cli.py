@@ -280,6 +280,33 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("preview", encoded)
         self.assertNotIn('"text"', encoded)
 
+    @mock.patch("speed_of_cinnamon.cli.list_input_sources")
+    def test_diagnostics_save_writes_private_report(self, mocked_sources: mock.Mock) -> None:
+        mocked_sources.return_value = [
+            InputSource(id="1", name="alsa_input.test", description="Test Mic", default=True)
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "diagnostics.json"
+            state_file = Path(tmp) / "state.json"
+            StateStore(state_file).write(RecordingState(status="done", transcript="private words"))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "diagnostics",
+                    "--state-file",
+                    str(state_file),
+                    "--output",
+                    str(output),
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+            saved = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["saved_path"], str(output))
+        self.assertEqual(saved["saved_path"], str(output))
+        self.assertEqual(saved["state"]["transcript_length"], len("private words"))
+        self.assertNotIn("private words", json.dumps(saved))
+
     @mock.patch("speed_of_cinnamon.cli.command_start")
     def test_toggle_starts_when_idle(self, mocked_start: mock.Mock) -> None:
         mocked_start.return_value = {"status": "recording"}

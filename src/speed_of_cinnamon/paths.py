@@ -40,6 +40,10 @@ def transcript_dir() -> Path:
     return state_dir() / "transcripts"
 
 
+def diagnostics_dir() -> Path:
+    return state_dir() / "diagnostics"
+
+
 def default_state_file() -> Path:
     return state_dir() / "state.json"
 
@@ -53,3 +57,4 @@ def ensure_runtime_dirs() -> None:
     state_dir().mkdir(parents=True, exist_ok=True)
     recordings_dir().mkdir(parents=True, exist_ok=True)
     transcript_dir().mkdir(parents=True, exist_ok=True)
+    diagnostics_dir().mkdir(parents=True, exist_ok=True)
