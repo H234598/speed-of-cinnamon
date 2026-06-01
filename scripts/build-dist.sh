@@ -54,7 +54,7 @@ ${package}
 Contains:
 - Cinnamon applet files under files/speed-of-cinnamon@H234598/
 - Python backend under src/speed_of_cinnamon/
-- local install/uninstall/dependency scripts under scripts/
+- local build, verify, install, uninstall, and dependency scripts under scripts/
 - tests, CI workflow, README, license, and Fedora Cinnamon runbook
 EOF
 

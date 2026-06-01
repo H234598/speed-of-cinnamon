@@ -11,6 +11,8 @@ class CiStaticTest(unittest.TestCase):
     def test_ci_uploads_release_and_rpm_artifacts(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
+        self.assertIn("sudo apt-get update && sudo apt-get install -y cpio rpm shellcheck", workflow)
+        self.assertIn("run: make rpm-check", workflow)
         self.assertIn("uses: actions/upload-artifact@v7.0.1", workflow)
         self.assertIn("name: speed-of-cinnamon-source-${{ github.sha }}", workflow)
         self.assertIn("dist/speed-of-cinnamon-*.tar.gz", workflow)

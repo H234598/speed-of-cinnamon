@@ -220,10 +220,12 @@ To build a noarch RPM from the verified source archive:
 
 ```bash
 make rpm
+make rpm-check
 ```
 
 The RPM installs the backend command to `/usr/bin/speed-of-cinnamon` and the Cinnamon applet under
-`/usr/share/cinnamon/applets/speed-of-cinnamon@H234598/`.
+`/usr/share/cinnamon/applets/speed-of-cinnamon@H234598/`. `make rpm-check` extracts the built RPM, verifies the payload
+paths and metadata, then starts the packaged `/usr/bin/speed-of-cinnamon` wrapper against the extracted Python package.
 
 GitHub Actions publishes two artifacts for successful runs:
 

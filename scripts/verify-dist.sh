@@ -29,8 +29,10 @@ for path in \
   files/speed-of-cinnamon@H234598/metadata.json \
   files/speed-of-cinnamon@H234598/settings-schema.json \
   scripts/install-local.sh \
+  scripts/verify-rpm.sh \
   src/speed_of_cinnamon/cli.py \
   src/speed_of_cinnamon/setup_plan.py \
+  tests/test_ci_static.py \
   tests/test_cli.py
 do
   if [[ ! -e "${package_dir}/${path}" ]]; then

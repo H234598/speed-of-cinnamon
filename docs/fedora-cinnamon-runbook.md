@@ -32,11 +32,14 @@ An experimental noarch RPM can also be built locally:
 
 ```bash
 make rpm
+make rpm-check
 ```
 
 The RPM installs the backend command into `/usr/bin/speed-of-cinnamon` and the Cinnamon applet into
 `/usr/share/cinnamon/applets/speed-of-cinnamon@H234598/`. It is intended for Fedora-style system installation; the
-per-user `make install-local` path remains the fastest development install.
+per-user `make install-local` path remains the fastest development install. The RPM check extracts the built package,
+verifies package metadata and installed paths, and runs the packaged `/usr/bin/speed-of-cinnamon` wrapper against the
+extracted Python package.
 
 Successful GitHub Actions runs upload two downloadable artifacts: `speed-of-cinnamon-source-<commit>` with the source
 archive and checksum, and `speed-of-cinnamon-rpm-<commit>` with the noarch RPM and source RPM.
