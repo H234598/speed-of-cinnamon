@@ -86,8 +86,8 @@ Leave the applet's `Backend command` setting empty for normal installs. The appl
 from `~/.local/bin`, then the RPM/system backend from `/usr/bin`, then `speed-of-cinnamon` from `PATH`.
 
 Recording files are temporary runtime artifacts. By default, Speed of Cinnamon deletes the WAV file and recorder log
-after a successful transcription. Enable `Keep recording files after transcription` only when you need those files for
-debugging a recorder or ASR problem.
+after a successful transcription. Use the applet's `Recording options` submenu to enable `Keep recording files` only
+when you need those files for debugging a recorder or ASR problem.
 
 ## Transcript History
 
@@ -324,6 +324,9 @@ not the current one.
 Use the `Duration` submenu for common maximum recording lengths. This updates the same `Maximum recording length`
 setting that is passed to the backend as `--max-seconds`; changing it while a recording is active affects the next
 recording, not the current one.
+
+Use `Recording options` to toggle `Auto-transcribe at time limit` and `Keep recording files` without opening Cinnamon
+settings. The artifact toggle is disabled by default so successful recordings remove temporary WAV/log files.
 
 The default PipeWire/Pulse input is used when `Input device` is empty. In the Cinnamon applet, open `Input source` and
 select either `System default` or a concrete source. For scripts or manual settings, inspect the source names:

@@ -162,8 +162,8 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "language", "language", this._onLanguageSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "secondary-language", "secondaryLanguage", this._onLanguageSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "max-seconds", "maxSeconds", this._onRecordingLimitSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "auto-transcribe-timeout", "autoTranscribeTimeout", null, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "keep-recording-artifacts", "keepRecordingArtifacts", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "auto-transcribe-timeout", "autoTranscribeTimeout", this._onRecordingOptionsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "keep-recording-artifacts", "keepRecordingArtifacts", this._onRecordingOptionsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "recorder", "recorder", this._onRecorderSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "input-device", "inputDevice", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "insert-method", "insertMethod", this._onOutputSettingsChanged, null);
@@ -232,6 +232,15 @@ MyApplet.prototype = {
     });
     this.menu.addMenuItem(this.recordingLimitItem);
     this._populateRecordingLimitMenu();
+
+    this.recordingOptionsItem = new PopupMenu.PopupSubMenuMenuItem(_("Recording options"));
+    this.recordingOptionsItem.menu.connect("open-state-changed", (menu, open) => {
+      if (open) {
+        this._populateRecordingOptionsMenu();
+      }
+    });
+    this.menu.addMenuItem(this.recordingOptionsItem);
+    this._populateRecordingOptionsMenu();
 
     this.shortcutItem = new PopupMenu.PopupSubMenuMenuItem(_("Keyboard shortcuts"));
     this.shortcutItem.menu.connect("open-state-changed", (menu, open) => {
@@ -408,6 +417,11 @@ MyApplet.prototype = {
   _onRecordingLimitSettingsChanged: function() {
     this.maxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
     this._populateRecordingLimitMenu();
+    this._updatePanel();
+  },
+
+  _onRecordingOptionsChanged: function() {
+    this._populateRecordingOptionsMenu();
     this._updatePanel();
   },
 
@@ -665,6 +679,48 @@ MyApplet.prototype = {
       return;
     }
     this._setStatus("ready", _("Duration: ") + label, this.lastTranscript);
+  },
+
+  _populateRecordingOptionsMenu: function() {
+    if (!this.recordingOptionsItem) {
+      return;
+    }
+    this.recordingOptionsItem.menu.removeAll();
+
+    let autoTranscribe = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.autoTranscribeTimeout), _("Auto-transcribe at time limit")));
+    autoTranscribe.connect("activate", () => this._toggleAutoTranscribeTimeout());
+    this.recordingOptionsItem.menu.addMenuItem(autoTranscribe);
+
+    let keepArtifacts = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.keepRecordingArtifacts), _("Keep recording files")));
+    keepArtifacts.connect("activate", () => this._toggleKeepRecordingArtifacts());
+    this.recordingOptionsItem.menu.addMenuItem(keepArtifacts);
+  },
+
+  _setRecordingOptionStatus: function(message) {
+    if (this._hasActiveRecordingState()) {
+      this.lastMessage = message;
+      this._updatePanel();
+      return;
+    }
+    this._setStatus("ready", message, this.lastTranscript);
+  },
+
+  _toggleAutoTranscribeTimeout: function() {
+    this.autoTranscribeTimeout = !Boolean(this.autoTranscribeTimeout);
+    this.settings.setValue("auto-transcribe-timeout", this.autoTranscribeTimeout);
+    this._populateRecordingOptionsMenu();
+    this._setRecordingOptionStatus(
+      this.autoTranscribeTimeout ? _("Auto-transcribe at time limit enabled") : _("Auto-transcribe at time limit disabled")
+    );
+  },
+
+  _toggleKeepRecordingArtifacts: function() {
+    this.keepRecordingArtifacts = !Boolean(this.keepRecordingArtifacts);
+    this.settings.setValue("keep-recording-artifacts", this.keepRecordingArtifacts);
+    this._populateRecordingOptionsMenu();
+    this._setRecordingOptionStatus(
+      this.keepRecordingArtifacts ? _("Recording files will be kept") : _("Recording files will be discarded")
+    );
   },
 
   _populateOutputMethodMenu: function() {
@@ -1437,6 +1493,7 @@ MyApplet.prototype = {
     this._populateRecorderMenu();
     this.maxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
     this._populateRecordingLimitMenu();
+    this._populateRecordingOptionsMenu();
     this.insertMethod = this._normalizeOutputMethod(this.insertMethod);
     this._populateOutputMethodMenu();
     this._registerHotkeys();

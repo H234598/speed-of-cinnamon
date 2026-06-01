@@ -132,6 +132,25 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('["keep-recording-artifacts", "keepRecordingArtifacts"]', source)
         self.assertIn('args.push("--keep-recording-artifacts");', source)
 
+    def test_applet_exposes_recording_options_submenu(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
+
+        self.assertTrue(schema["auto-transcribe-timeout"]["default"])
+        self.assertFalse(schema["keep-recording-artifacts"]["default"])
+        self.assertIn('this.recordingOptionsItem = new PopupMenu.PopupSubMenuMenuItem(_("Recording options"))', source)
+        self.assertIn("_populateRecordingOptionsMenu: function()", source)
+        self.assertIn("_toggleAutoTranscribeTimeout: function()", source)
+        self.assertIn("_toggleKeepRecordingArtifacts: function()", source)
+        self.assertIn("_setRecordingOptionStatus: function(message)", source)
+        self.assertIn('this.settings.bindProperty(Settings.BindingDirection.IN, "auto-transcribe-timeout", "autoTranscribeTimeout", this._onRecordingOptionsChanged, null)', source)
+        self.assertIn('this.settings.bindProperty(Settings.BindingDirection.IN, "keep-recording-artifacts", "keepRecordingArtifacts", this._onRecordingOptionsChanged, null)', source)
+        self.assertIn('this.settings.setValue("auto-transcribe-timeout", this.autoTranscribeTimeout)', source)
+        self.assertIn('this.settings.setValue("keep-recording-artifacts", this.keepRecordingArtifacts)', source)
+        self.assertIn('_("Auto-transcribe at time limit")', source)
+        self.assertIn('_("Keep recording files")', source)
+        self.assertIn('this._populateRecordingOptionsMenu();', source)
+
     def test_panel_status_style_classes_are_applied(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         stylesheet = (APPLET_DIR / "stylesheet.css").read_text(encoding="utf-8")
