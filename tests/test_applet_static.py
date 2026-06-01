@@ -145,6 +145,20 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('"--insert-method", "none"', source)
         self.assertNotIn("_usesCinnamonClipboard", source)
 
+    def test_applet_exposes_quick_text_output_options(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn('this.textOptionsItem = new PopupMenu.PopupSubMenuMenuItem(_("Text options"))', source)
+        self.assertIn("_populateTextOptionsMenu: function()", source)
+        self.assertIn("_toggleAppendSpace: function()", source)
+        self.assertIn("_toggleSanitizeSpecialChars: function()", source)
+        self.assertIn('this.settings.setValue("append-space", this.appendSpace)', source)
+        self.assertIn('this.settings.setValue("sanitize-special-chars", this.sanitizeSpecialChars)', source)
+        self.assertIn('this.settings.bindProperty(Settings.BindingDirection.IN, "append-space", "appendSpace", this._onTextOutputSettingsChanged, null)', source)
+        self.assertIn('this.settings.bindProperty(Settings.BindingDirection.IN, "sanitize-special-chars", "sanitizeSpecialChars", this._onTextOutputSettingsChanged, null)', source)
+        self.assertIn('_("Append trailing space")', source)
+        self.assertIn('_("Replace accents before output")', source)
+
     def test_applet_can_reinsert_last_transcript_with_current_output_mode(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

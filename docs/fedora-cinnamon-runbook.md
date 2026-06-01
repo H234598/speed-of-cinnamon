@@ -112,6 +112,10 @@ Use the applet's `Output` submenu to switch the active insertion mode without op
 text without inserting it; the applet then applies the selected mode itself. Clipboard modes keep the copy step inside
 Cinnamon's `St.Clipboard`; only automatic paste and direct typing need `xdotool` on X11.
 
+Use `Text options` in the applet menu to toggle `Append trailing space` and `Replace accents before output` without
+opening Cinnamon settings. The toggles update the same `append-space` and `sanitize-special-chars` values used by the
+CLI flags, so the applet's copy, paste, direct typing, last-transcript, and history insertion paths stay consistent.
+
 ## Target Window
 
 When dictation is started through the global shortcut or from the panel menu, the applet remembers Cinnamon's currently

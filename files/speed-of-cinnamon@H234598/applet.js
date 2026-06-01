@@ -154,9 +154,9 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "recorder", "recorder", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "input-device", "inputDevice", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "insert-method", "insertMethod", this._onOutputSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "append-space", "appendSpace", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "append-space", "appendSpace", this._onTextOutputSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "typing-delay-ms", "typingDelayMs", null, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "sanitize-special-chars", "sanitizeSpecialChars", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "sanitize-special-chars", "sanitizeSpecialChars", this._onTextOutputSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "cli-path", "cliPath", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "transcriber", "transcriber", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "whisper-model", "whisperModel", null, null);
@@ -217,6 +217,15 @@ MyApplet.prototype = {
     this.outputMethodItem = new PopupMenu.PopupSubMenuMenuItem(_("Output: Clipboard and paste"));
     this.menu.addMenuItem(this.outputMethodItem);
     this._populateOutputMethodMenu();
+
+    this.textOptionsItem = new PopupMenu.PopupSubMenuMenuItem(_("Text options"));
+    this.textOptionsItem.menu.connect("open-state-changed", (menu, open) => {
+      if (open) {
+        this._populateTextOptionsMenu();
+      }
+    });
+    this.menu.addMenuItem(this.textOptionsItem);
+    this._populateTextOptionsMenu();
 
     this.transcriptItem = new PopupMenu.PopupMenuItem(_("No transcript yet"));
     this.transcriptItem.setSensitive(false);
@@ -354,6 +363,11 @@ MyApplet.prototype = {
   _onOutputSettingsChanged: function() {
     this.insertMethod = this._normalizeOutputMethod(this.insertMethod);
     this._populateOutputMethodMenu();
+    this._updatePanel();
+  },
+
+  _onTextOutputSettingsChanged: function() {
+    this._populateTextOptionsMenu();
     this._updatePanel();
   },
 
@@ -557,6 +571,49 @@ MyApplet.prototype = {
       return;
     }
     this._setStatus("ready", message, this.lastTranscript);
+  },
+
+  _optionLabel: function(enabled, label) {
+    return (enabled ? "[x] " : "[ ] ") + label;
+  },
+
+  _populateTextOptionsMenu: function() {
+    if (!this.textOptionsItem) {
+      return;
+    }
+    this.textOptionsItem.menu.removeAll();
+    let append = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.appendSpace), _("Append trailing space")));
+    append.connect("activate", () => this._toggleAppendSpace());
+    this.textOptionsItem.menu.addMenuItem(append);
+
+    let sanitize = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.sanitizeSpecialChars), _("Replace accents before output")));
+    sanitize.connect("activate", () => this._toggleSanitizeSpecialChars());
+    this.textOptionsItem.menu.addMenuItem(sanitize);
+  },
+
+  _setTextOptionStatus: function(message) {
+    if (this.status === "recording" || this.status === "processing") {
+      this.lastMessage = message;
+      this._updatePanel();
+      return;
+    }
+    this._setStatus("ready", message, this.lastTranscript);
+  },
+
+  _toggleAppendSpace: function() {
+    this.appendSpace = !Boolean(this.appendSpace);
+    this.settings.setValue("append-space", this.appendSpace);
+    this._populateTextOptionsMenu();
+    this._setTextOptionStatus(this.appendSpace ? _("Append trailing space enabled") : _("Append trailing space disabled"));
+  },
+
+  _toggleSanitizeSpecialChars: function() {
+    this.sanitizeSpecialChars = !Boolean(this.sanitizeSpecialChars);
+    this.settings.setValue("sanitize-special-chars", this.sanitizeSpecialChars);
+    this._populateTextOptionsMenu();
+    this._setTextOptionStatus(
+      this.sanitizeSpecialChars ? _("Accent replacement enabled") : _("Accent replacement disabled")
+    );
   },
 
   _normalizeLanguage: function(value, fallback) {

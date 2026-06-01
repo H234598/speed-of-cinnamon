@@ -33,6 +33,7 @@ path.
   vLLM, llama.cpp, or LM Studio, with applet selection of discovered local models.
 - Cinnamon clipboard output through the applet, optional `xdotool` paste/direct typing, clipboard-only, or no insertion.
 - Quick output-mode switcher in the applet for clipboard+paste, clipboard-only, direct typing, or no insertion.
+- Quick text-output options in the applet for trailing spaces and accent replacement.
 - Target-window restore before Cinnamon clipboard paste, so panel-triggered dictation can return focus to the last
   normal application window.
 - Optional accent/special-character fallback for direct typing compatibility on X11.
@@ -146,6 +147,9 @@ finish setup without leaving Cinnamon's applet workflow.
 The applet menu also includes `Keyboard shortcuts`, a live reference for the configured Cinnamon hotkeys. It lists the
 main toggle, optional primary/secondary language shortcuts, and applet-only actions, and can copy that reference through
 Cinnamon's clipboard for setup notes or issue reports.
+
+Use the `Text options` applet submenu to toggle trailing spaces and accent replacement without opening Cinnamon
+settings. Those values are the same settings used by normal applet output and the backend CLI flags.
 
 ## CLI
 
@@ -288,8 +292,8 @@ Cinnamon keybinding / panel click
 The applet asks the backend to return text without inserting it, then handles the selected output mode itself. Normal
 clipboard output goes through Cinnamon's `St.Clipboard`; the applet menu exposes the output mode, remembers the last
 focused normal window, restores that window before paste or direct typing, can reinsert the last transcript with the
-current output mode, shows a copyable shortcut reference, and opens guide/folder actions through GJS/Gio's default-app
-launcher. It uses `xdotool` only for
+current output mode, exposes quick text-output toggles, shows a copyable shortcut reference, and opens guide/folder
+actions through GJS/Gio's default-app launcher. It uses `xdotool` only for
 the X11 paste or direct-typing keystrokes when they are available. Without `xdotool`, dictation still completes as a
 Cinnamon clipboard copy. This keeps desktop integration in Cinnamon where it belongs and keeps ASR replaceable. The
 Speed of Sound JVM/GTK portal stack is intentionally not reused because its central integration point is the part that
