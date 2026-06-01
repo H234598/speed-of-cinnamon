@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from speed_of_cinnamon import cli
-from speed_of_cinnamon.recorder import InputSource
+from speed_of_cinnamon.recorder import InputSource, RecorderCommand
 from speed_of_cinnamon.state import RecordingState, StateStore
 
 
@@ -507,6 +507,7 @@ class CliTest(unittest.TestCase):
             stdout = io.StringIO()
             with (
                 mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.choose_recorder", return_value=RecorderCommand("test-recorder", [])),
                 mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=proc),
                 redirect_stdout(stdout),
             ):
