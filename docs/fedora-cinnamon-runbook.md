@@ -29,6 +29,17 @@ Transcripts: ~/.local/state/speed-of-cinnamon/transcripts/
 Recordings:  ~/.cache/speed-of-cinnamon/recordings/
 ```
 
+## Transcript History
+
+Each completed transcription is saved as a text file under the transcript directory. Inspect the recent history with:
+
+```bash
+speed-of-cinnamon history --limit 5 --json
+```
+
+The Cinnamon applet exposes the same recent entries under `Recent transcripts`; selecting one copies it through
+Cinnamon's clipboard API.
+
 ## Validation
 
 ```bash

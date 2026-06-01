@@ -104,6 +104,15 @@ MyApplet.prototype = {
     this.copyLastItem.connect("activate", () => this._copyLastTranscript());
     this.menu.addMenuItem(this.copyLastItem);
 
+    this.historyItem = new PopupMenu.PopupSubMenuMenuItem(_("Recent transcripts"));
+    this.historyItem.menu.connect("open-state-changed", (menu, open) => {
+      if (open) {
+        this._refreshHistory();
+      }
+    });
+    this.menu.addMenuItem(this.historyItem);
+    this._populateHistoryMenu([]);
+
     this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
     let statusNow = new PopupMenu.PopupIconMenuItem(_("Refresh status"), "view-refresh-symbolic", St.IconType.SYMBOLIC);
@@ -193,6 +202,10 @@ MyApplet.prototype = {
     return [this.cliPath || DEFAULT_CLI, "cancel", "--json"];
   },
 
+  _historyArgs: function() {
+    return [this.cliPath || DEFAULT_CLI, "history", "--limit", "5", "--json"];
+  },
+
   _listInputsArgs: function() {
     return [this.cliPath || DEFAULT_CLI, "list-inputs", "--json"];
   },
@@ -272,6 +285,17 @@ MyApplet.prototype = {
         }
       }
       this._setStatus("ready", _("Default input: ") + (selected.description || selected.name), this.lastTranscript);
+    });
+  },
+
+  _refreshHistory: function() {
+    this._spawnJson(this._historyArgs(), (payload) => {
+      if (payload.error) {
+        this._populateHistoryMenu([]);
+        this._setStatus("error", payload.error, this.lastTranscript);
+        return;
+      }
+      this._populateHistoryMenu(payload.transcripts || []);
     });
   },
 
@@ -355,6 +379,32 @@ MyApplet.prototype = {
     }
     this.clipboard.set_text(St.ClipboardType.CLIPBOARD, this._preparedTranscriptText(this.lastTranscript));
     this._setStatus("done", _("Copied last transcript"), this.lastTranscript);
+  },
+
+  _populateHistoryMenu: function(transcripts) {
+    if (!this.historyItem) {
+      return;
+    }
+    this.historyItem.menu.removeAll();
+    if (!transcripts || transcripts.length === 0) {
+      let empty = new PopupMenu.PopupMenuItem(_("No transcripts yet"));
+      empty.setSensitive(false);
+      this.historyItem.menu.addMenuItem(empty);
+      return;
+    }
+    for (let transcript of transcripts) {
+      let item = new PopupMenu.PopupMenuItem(transcript.preview || transcript.name || _("Transcript"));
+      item.connect("activate", () => this._copyHistoryTranscript(transcript.text || ""));
+      this.historyItem.menu.addMenuItem(item);
+    }
+  },
+
+  _copyHistoryTranscript: function(text) {
+    if (!text) {
+      return;
+    }
+    this.clipboard.set_text(St.ClipboardType.CLIPBOARD, this._preparedTranscriptText(text));
+    this._setStatus("done", _("Copied transcript"), text);
   },
 
   _setStatus: function(status, message, transcript) {

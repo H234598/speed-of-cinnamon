@@ -63,6 +63,38 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["sources"][0]["name"], "alsa_input.usb-mic.analog-stereo")
         self.assertTrue(payload["sources"][0]["default"])
 
+    def test_history_lists_recent_transcripts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            older = transcript_dir / "older.txt"
+            newer = transcript_dir / "newer.txt"
+            older.write_text("older text\n", encoding="utf-8")
+            newer.write_text("newer text with more words\n", encoding="utf-8")
+            os.utime(older, (100, 100))
+            os.utime(newer, (200, 200))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["history", "--limit", "1", "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(len(payload["transcripts"]), 1)
+        self.assertEqual(payload["transcripts"][0]["name"], "newer.txt")
+        self.assertEqual(payload["transcripts"][0]["text"], "newer text with more words")
+        self.assertEqual(payload["transcripts"][0]["preview"], "newer text with more words")
+
+    def test_history_limit_zero_returns_no_transcripts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            (transcript_dir / "entry.txt").write_text("text\n", encoding="utf-8")
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["history", "--limit", "0", "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["transcripts"], [])
+
     @mock.patch("speed_of_cinnamon.cli.command_start")
     def test_toggle_starts_when_idle(self, mocked_start: mock.Mock) -> None:
         mocked_start.return_value = {"status": "recording"}

@@ -52,6 +52,43 @@ def read_log_excerpt(path: Path | None, max_chars: int = 2000) -> str:
     return text[-max_chars:]
 
 
+def transcript_preview(text: str, max_chars: int = 80) -> str:
+    clean = " ".join(text.split())
+    if len(clean) <= max_chars:
+        return clean
+    return clean[: max_chars - 3] + "..."
+
+
+def read_transcript_history(limit: int = 10) -> list[dict[str, object]]:
+    if limit <= 0:
+        return []
+    directory = transcript_dir()
+    if not directory.exists():
+        return []
+
+    entries: list[dict[str, object]] = []
+    for path in sorted(directory.glob("*.txt"), key=lambda item: item.stat().st_mtime, reverse=True):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace").strip()
+            modified_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+        except OSError:
+            continue
+        if not text:
+            continue
+        entries.append(
+            {
+                "path": str(path),
+                "name": path.name,
+                "modified_at": modified_at,
+                "preview": transcript_preview(text),
+                "text": text,
+            }
+        )
+        if len(entries) >= limit:
+            break
+    return entries
+
+
 def command_start(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     store = build_store(args)
@@ -240,6 +277,11 @@ def command_list_inputs(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def command_history(args: argparse.Namespace) -> dict[str, object]:
+    ensure_runtime_dirs()
+    return {"status": "done", "transcripts": read_transcript_history(max(args.limit, 0))}
+
+
 def command_insert_text(args: argparse.Namespace) -> dict[str, object]:
     inserted = insert_text(args.text, args.insert_method, args.typing_delay_ms)
     return {"status": "done", "inserted": inserted}
@@ -311,6 +353,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(list_inputs)
     list_inputs.add_argument("--include-monitors", action="store_true")
     list_inputs.set_defaults(handler=command_list_inputs)
+
+    history = subparsers.add_parser("history")
+    add_common_options(history)
+    history.add_argument("--limit", type=int, default=10)
+    history.set_defaults(handler=command_history)
 
     insert = subparsers.add_parser("insert-text")
     add_common_options(insert)
