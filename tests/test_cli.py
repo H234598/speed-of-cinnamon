@@ -96,6 +96,17 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["sources"][0]["name"], "alsa_input.usb-mic.analog-stereo")
         self.assertTrue(payload["sources"][0]["default"])
 
+    def test_models_lists_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["models", "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertGreater(len(payload["models"]), 0)
+        self.assertEqual(payload["models"][0]["name"], "tiny.en")
+        self.assertFalse(payload["models"][0]["downloaded"])
+
     def test_settings_export_import_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             export_path = Path(tmp) / "settings.json"
@@ -274,6 +285,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["app"]["id"], "speed-of-cinnamon")
         self.assertEqual(payload["inputs"]["sources"][0]["name"], "alsa_input.test")
+        self.assertIn("models", payload)
         self.assertIn("recent_transcripts", payload)
         self.assertEqual(payload["state"]["transcript_length"], len("secret dictated words"))
         self.assertNotIn("secret dictated words", encoded)

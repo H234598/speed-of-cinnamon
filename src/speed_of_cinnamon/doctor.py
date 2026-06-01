@@ -7,6 +7,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Mapping
 
+from .models import default_whisper_cpp_model_path
+
 
 @dataclass(frozen=True)
 class Check:
@@ -91,19 +93,25 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
     transcriber = _setting(settings, "transcriber", "auto").lower().replace("_", "-")
     command_template = _setting(settings, "transcriber-command")
     whisper_model = _setting(settings, "whisper-model")
+    local_model = whisper_model or default_whisper_cpp_model_path()
     whisper_ok = _ok(checks, "whisper")
     whisper_cpp_ok = _ok(checks, "whisper-cli") or _ok(checks, "whisper.cpp")
-    model_ok = bool(whisper_model and Path(whisper_model).expanduser().exists())
+    model_ok = bool(local_model and Path(local_model).expanduser().exists())
 
     if transcriber in {"", "auto"}:
         if command_template:
             return {"ok": True, "value": "auto", "resolved": "command", "detail": "custom command configured"}
         if whisper_ok:
             return {"ok": True, "value": "auto", "resolved": "whisper", "detail": "whisper command available"}
-        if whisper_model and whisper_cpp_ok and model_ok:
-            return {"ok": True, "value": "auto", "resolved": "whisper-cpp", "detail": "whisper.cpp command and model available"}
-        if whisper_model and whisper_cpp_ok:
-            return {"ok": False, "value": "auto", "detail": f"whisper.cpp model not found: {whisper_model}"}
+        if local_model and whisper_cpp_ok and model_ok:
+            return {
+                "ok": True,
+                "value": "auto",
+                "resolved": "whisper-cpp",
+                "detail": "whisper.cpp command and model available",
+            }
+        if local_model and whisper_cpp_ok:
+            return {"ok": False, "value": "auto", "detail": f"whisper.cpp model not found: {local_model}"}
         return {
             "ok": False,
             "value": "auto",
@@ -124,12 +132,16 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
     if transcriber in {"whisper-cpp", "whisper.cpp"}:
         if not whisper_cpp_ok:
             return {"ok": False, "value": "whisper-cpp", "detail": "whisper.cpp command is missing"}
-        if not whisper_model:
+        if not local_model:
             return {"ok": False, "value": "whisper-cpp", "detail": "whisper.cpp model path is empty"}
         return {
             "ok": model_ok,
             "value": "whisper-cpp",
-            "detail": "whisper.cpp command and model available" if model_ok else f"whisper.cpp model not found: {whisper_model}",
+            "detail": (
+                "whisper.cpp command and model available"
+                if model_ok
+                else f"whisper.cpp model not found: {local_model}"
+            ),
         }
     return {"ok": False, "value": transcriber, "detail": f"unknown transcriber: {transcriber}"}
 

@@ -17,7 +17,11 @@ class DoctorTest(unittest.TestCase):
     def test_default_pipeline_reports_missing_asr(self) -> None:
         tools = {"python3", "pw-record", "pactl", "xdotool"}
         env = {"XDG_CURRENT_DESKTOP": "X-Cinnamon", "XDG_SESSION_TYPE": "x11", "DESKTOP_SESSION": "cinnamon"}
-        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)), mock.patch.dict(os.environ, env):
+        with (
+            mock.patch("speed_of_cinnamon.doctor.default_whisper_cpp_model_path", return_value=""),
+            mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)),
+            mock.patch.dict(os.environ, env),
+        ):
             payload = doctor.report({"recorder": "auto", "transcriber": "auto", "insert-method": "clipboard-paste"})
         self.assertFalse(payload["ok"])
         self.assertTrue(payload["desktop"]["cinnamon"])
@@ -100,6 +104,24 @@ class DoctorTest(unittest.TestCase):
                 payload = doctor.report(settings)
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["configured"]["transcriber"]["value"], "whisper-cpp")
+
+    def test_auto_asr_can_use_downloaded_whisper_cpp_model(self) -> None:
+        tools = {"python3", "pw-record", "whisper-cli"}
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "ggml-tiny.en.bin"
+            model.write_bytes(b"model")
+            settings = {
+                "recorder": "auto",
+                "transcriber": "auto",
+                "insert-method": "none",
+            }
+            with (
+                mock.patch("speed_of_cinnamon.doctor.default_whisper_cpp_model_path", return_value=str(model)),
+                mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)),
+            ):
+                payload = doctor.report(settings)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["configured"]["transcriber"]["resolved"], "whisper-cpp")
 
 
 if __name__ == "__main__":

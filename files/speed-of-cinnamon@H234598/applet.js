@@ -191,6 +191,15 @@ MyApplet.prototype = {
     this.menu.addMenuItem(this.inputSourceItem);
     this._populateInputSourceMenu([]);
 
+    this.modelItem = new PopupMenu.PopupSubMenuMenuItem(_("Voice model"));
+    this.modelItem.menu.connect("open-state-changed", (menu, open) => {
+      if (open) {
+        this._refreshModelMenu();
+      }
+    });
+    this.menu.addMenuItem(this.modelItem);
+    this._populateModelMenu([]);
+
     let transcripts = new PopupMenu.PopupIconMenuItem(_("Open transcripts"), "folder-documents-symbolic", St.IconType.SYMBOLIC);
     transcripts.connect("activate", () => {
       Util.spawn(["xdg-open", GLib.build_filenamev([GLib.get_user_state_dir(), "speed-of-cinnamon", "transcripts"])]);
@@ -306,6 +315,14 @@ MyApplet.prototype = {
 
   _listInputsArgs: function() {
     return [this.cliPath || DEFAULT_CLI, "list-inputs", "--json"];
+  },
+
+  _modelsArgs: function() {
+    return [this.cliPath || DEFAULT_CLI, "models", "--json"];
+  },
+
+  _downloadModelArgs: function(model) {
+    return [this.cliPath || DEFAULT_CLI, "download-model", String(model || "tiny.en"), "--json"];
   },
 
   _settingsExportArgs: function() {
@@ -529,6 +546,100 @@ MyApplet.prototype = {
       return;
     }
     this._setStatus("ready", message, this.lastTranscript);
+  },
+
+  _refreshModelMenu: function() {
+    if (!this.modelItem) {
+      return;
+    }
+    this._populateModelMenu([], _("Loading voice models..."));
+    this._spawnJson(this._modelsArgs(), (payload) => {
+      if (payload.error) {
+        this._populateModelMenu([], payload.error);
+        this._setStatus("error", payload.error, this.lastTranscript);
+        return;
+      }
+      this._populateModelMenu(payload.models || []);
+    });
+  },
+
+  _populateModelMenu: function(models, message) {
+    if (!this.modelItem) {
+      return;
+    }
+    this.modelItem.menu.removeAll();
+
+    let download = new PopupMenu.PopupIconMenuItem(_("Download starter model"), "folder-download-symbolic", St.IconType.SYMBOLIC);
+    download.connect("activate", () => this._downloadStarterModel());
+    this.modelItem.menu.addMenuItem(download);
+
+    let openFolder = new PopupMenu.PopupIconMenuItem(_("Open model folder"), "folder-symbolic", St.IconType.SYMBOLIC);
+    openFolder.connect("activate", () => {
+      Util.spawn(["xdg-open", GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon", "models", "whisper.cpp"])]);
+    });
+    this.modelItem.menu.addMenuItem(openFolder);
+
+    this.modelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+    if (message) {
+      let messageItem = new PopupMenu.PopupMenuItem(message);
+      messageItem.setSensitive(false);
+      this.modelItem.menu.addMenuItem(messageItem);
+      return;
+    }
+    if (!models || models.length === 0) {
+      let empty = new PopupMenu.PopupMenuItem(_("No models in catalog"));
+      empty.setSensitive(false);
+      this.modelItem.menu.addMenuItem(empty);
+      return;
+    }
+    for (let model of models) {
+      let name = String(model.name || "");
+      if (name === "") {
+        continue;
+      }
+      let downloaded = Boolean(model.downloaded);
+      let current = downloaded && this.whisperModel && String(model.path || "") === String(this.whisperModel);
+      let label = (current ? "[x] " : downloaded ? "[ ] " : "[ ] ") + name + " (" + String(model.size || "?") + ")";
+      if (!downloaded) {
+        label += _(" - not downloaded");
+      }
+      let item = new PopupMenu.PopupMenuItem(label);
+      item.setSensitive(downloaded);
+      item.connect("activate", () => this._selectVoiceModel(model));
+      this.modelItem.menu.addMenuItem(item);
+    }
+  },
+
+  _downloadStarterModel: function() {
+    if (this.isCommandRunning) {
+      return;
+    }
+    this.isCommandRunning = true;
+    this._setStatus("processing", _("Downloading tiny.en model..."), this.lastTranscript);
+    this._spawnJson(this._downloadModelArgs("tiny.en"), (payload) => {
+      this.isCommandRunning = false;
+      if (payload.error) {
+        this._setStatus("error", payload.error, this.lastTranscript);
+        this._refreshModelMenu();
+        return;
+      }
+      this._selectVoiceModel(payload);
+      this._refreshModelMenu();
+    });
+  },
+
+  _selectVoiceModel: function(model) {
+    let path = String(model.path || "");
+    let name = String(model.name || "whisper.cpp");
+    if (path === "") {
+      return;
+    }
+    this.transcriber = "whisper-cpp";
+    this.whisperModel = path;
+    this.settings.setValue("transcriber", this.transcriber);
+    this.settings.setValue("whisper-model", this.whisperModel);
+    this._setStatus("ready", _("Voice model: ") + name, this.lastTranscript);
   },
 
   _refreshHistory: function() {

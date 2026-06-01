@@ -6,6 +6,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from .models import default_whisper_cpp_model_path
 from .personalization import build_personalization_prompt, command_environment, normalize_context, normalize_vocabulary
 
 
@@ -161,12 +162,13 @@ def normalize_backend(value: str) -> str:
 
 def resolve_transcriber(config: TranscriberConfig) -> str:
     backend = normalize_backend(config.backend)
+    local_model = config.whisper_model.strip() or default_whisper_cpp_model_path()
     if backend == "auto":
         if config.command_template.strip():
             return "command"
         if shutil.which("whisper"):
             return "whisper"
-        if config.whisper_model.strip() and resolve_whisper_cpp_command():
+        if local_model and resolve_whisper_cpp_command():
             return "whisper-cpp"
         raise TranscriptionError(
             "no transcriber available; install 'whisper', configure whisper.cpp with a model, "
@@ -210,7 +212,12 @@ def transcribe(
     elif resolved_backend == "whisper":
         text = transcribe_with_openai_whisper(audio_path, language, text_path)
     elif resolved_backend == "whisper-cpp":
-        text = transcribe_with_whisper_cpp(audio_path, language, text_path, whisper_model)
+        text = transcribe_with_whisper_cpp(
+            audio_path,
+            language,
+            text_path,
+            whisper_model or default_whisper_cpp_model_path(),
+        )
     else:
         raise TranscriptionError(f"unknown transcriber backend: {resolved_backend}")
     text_path.write_text(text.strip() + "\n", encoding="utf-8")

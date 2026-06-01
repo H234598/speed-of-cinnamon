@@ -69,7 +69,10 @@ class TranscriberTest(unittest.TestCase):
 
     def test_auto_uses_whisper_command_when_installed(self) -> None:
         config = TranscriberConfig()
-        with mock.patch("speed_of_cinnamon.transcriber.shutil.which", side_effect=lambda name: "/usr/bin/whisper" if name == "whisper" else None):
+        with (
+            mock.patch("speed_of_cinnamon.transcriber.default_whisper_cpp_model_path", return_value=""),
+            mock.patch("speed_of_cinnamon.transcriber.shutil.which", side_effect=lambda name: "/usr/bin/whisper" if name == "whisper" else None),
+        ):
             self.assertEqual(resolve_transcriber(config), "whisper")
 
     def test_auto_uses_whisper_cpp_when_model_is_configured(self) -> None:
@@ -77,11 +80,27 @@ class TranscriberTest(unittest.TestCase):
             return "/usr/bin/whisper-cli" if command == "whisper-cli" else None
 
         config = TranscriberConfig(whisper_model="/models/ggml-base.bin")
-        with mock.patch("speed_of_cinnamon.transcriber.shutil.which", side_effect=which):
+        with (
+            mock.patch("speed_of_cinnamon.transcriber.default_whisper_cpp_model_path", return_value=""),
+            mock.patch("speed_of_cinnamon.transcriber.shutil.which", side_effect=which),
+        ):
             self.assertEqual(resolve_transcriber(config), "whisper-cpp")
 
+    def test_auto_uses_downloaded_whisper_cpp_model(self) -> None:
+        def which(command: str) -> str | None:
+            return "/usr/bin/whisper-cli" if command == "whisper-cli" else None
+
+        with (
+            mock.patch("speed_of_cinnamon.transcriber.default_whisper_cpp_model_path", return_value="/models/ggml-tiny.en.bin"),
+            mock.patch("speed_of_cinnamon.transcriber.shutil.which", side_effect=which),
+        ):
+            self.assertEqual(resolve_transcriber(TranscriberConfig()), "whisper-cpp")
+
     def test_auto_reports_missing_transcriber(self) -> None:
-        with mock.patch("speed_of_cinnamon.transcriber.shutil.which", return_value=None):
+        with (
+            mock.patch("speed_of_cinnamon.transcriber.default_whisper_cpp_model_path", return_value=""),
+            mock.patch("speed_of_cinnamon.transcriber.shutil.which", return_value=None),
+        ):
             with self.assertRaisesRegex(TranscriptionError, "no transcriber available"):
                 resolve_transcriber(TranscriberConfig())
 
@@ -97,6 +116,7 @@ class TranscriberTest(unittest.TestCase):
             audio = Path(tmp) / "sample.wav"
             audio.write_bytes(b"audio")
             with (
+                mock.patch("speed_of_cinnamon.transcriber.default_whisper_cpp_model_path", return_value=""),
                 mock.patch("speed_of_cinnamon.transcriber.resolve_whisper_cpp_command", return_value="whisper-cli"),
                 self.assertRaisesRegex(TranscriptionError, "model path is required"),
             ):

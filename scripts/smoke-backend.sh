@@ -4,6 +4,7 @@ set -euo pipefail
 backend="${1:-${HOME}/.local/bin/speed-of-cinnamon}"
 
 "${backend}" doctor --json
+"${backend}" models --json
 "${backend}" start \
   --max-seconds 1 \
   --insert-method none \

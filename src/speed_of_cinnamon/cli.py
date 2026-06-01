@@ -12,6 +12,7 @@ from pathlib import Path
 
 from . import __version__
 from .doctor import parse_settings_json, report as doctor_report
+from .models import download_model, list_models
 from .output import insert_text
 from .paths import (
     APP_ID,
@@ -438,6 +439,16 @@ def command_list_inputs(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def command_models(args: argparse.Namespace) -> dict[str, object]:
+    ensure_runtime_dirs()
+    return {"status": "done", "models": list_models()}
+
+
+def command_download_model(args: argparse.Namespace) -> dict[str, object]:
+    ensure_runtime_dirs()
+    return download_model(args.model, args.force)
+
+
 def command_history(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     return {"status": "done", "transcripts": read_transcript_history(max(args.limit, 0))}
@@ -556,6 +567,7 @@ def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
         "state": state_payload,
         "doctor": doctor_report(settings, applet=applet),
         "inputs": source_payload,
+        "models": list_models(),
         "recent_transcripts": transcript_entries,
     }
 
@@ -675,6 +687,16 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(list_inputs)
     list_inputs.add_argument("--include-monitors", action="store_true")
     list_inputs.set_defaults(handler=command_list_inputs)
+
+    models = subparsers.add_parser("models")
+    add_common_options(models)
+    models.set_defaults(handler=command_models)
+
+    download_model_parser = subparsers.add_parser("download-model")
+    add_common_options(download_model_parser)
+    download_model_parser.add_argument("model")
+    download_model_parser.add_argument("--force", action="store_true")
+    download_model_parser.set_defaults(handler=command_download_model)
 
     history = subparsers.add_parser("history")
     add_common_options(history)

@@ -21,6 +21,7 @@ path.
 - Optional microphone/source selection from the applet menu or by PipeWire/Pulse source name, with a `list-inputs`
   helper.
 - ASR presets for Automatic, OpenAI Whisper command, whisper.cpp with a model path, or a custom command template.
+- Local whisper.cpp model catalog with checksum-verified downloads into the user's XDG data directory.
 - Personal context and custom vocabulary fields for local ASR/post-process command wrappers.
 - Optional post-process command for local text cleanup or LLM polishing.
 - Cinnamon clipboard output through the applet, optional `xdotool` paste/direct typing, clipboard-only, or no insertion.
@@ -121,6 +122,8 @@ speed-of-cinnamon diagnostics --json
 speed-of-cinnamon diagnostics --save --json
 speed-of-cinnamon diagnostics --applet --settings-json '{"transcriber":"command","transcriber-command":"printf ok"}' --json
 speed-of-cinnamon list-inputs --json
+speed-of-cinnamon models --json
+speed-of-cinnamon download-model tiny.en --json
 speed-of-cinnamon history --limit 5 --json
 speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 25 --dry-run --json
 speed-of-cinnamon settings-export --settings-json '{"language":"de","append-space":true}' --json
@@ -145,6 +148,17 @@ The applet menu can export and import its current settings to:
 
 This export includes personal context, vocabulary, command templates, and the hotkey. Treat it as a private backup.
 Machine-local `cli-path` is intentionally not exported.
+
+The applet's `Voice model` menu can download a starter whisper.cpp model and select any downloaded catalog model. Models
+are stored under:
+
+```text
+~/.local/share/speed-of-cinnamon/models/whisper.cpp/
+```
+
+Downloads use the upstream whisper.cpp ggml model files from Hugging Face and verify their SHA-1 checksums before the
+model is activated. If `whisper-cli` is installed, Automatic transcription can use a verified downloaded model even when
+the `whisper.cpp model` setting is empty.
 
 For backend-only testing without touching the focused application:
 

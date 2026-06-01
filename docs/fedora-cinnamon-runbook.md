@@ -27,6 +27,7 @@ Backend:     ~/.local/bin/speed-of-cinnamon
 State:       ~/.local/state/speed-of-cinnamon/state.json
 Transcripts: ~/.local/state/speed-of-cinnamon/transcripts/
 Recordings:  ~/.cache/speed-of-cinnamon/recordings/
+Models:      ~/.local/share/speed-of-cinnamon/models/whisper.cpp/
 ```
 
 ## Transcript History
@@ -110,6 +111,28 @@ SPEED_OF_CINNAMON_PROMPT
 
 The built-in `diagnostics` output does not include these values.
 
+## Voice Models
+
+The applet's `Voice model` menu exposes a small whisper.cpp catalog. Use `Download starter model` for `tiny.en`, or
+inspect/download models from the CLI:
+
+```bash
+speed-of-cinnamon models --json
+speed-of-cinnamon download-model tiny.en --json
+speed-of-cinnamon download-model base --json
+```
+
+Downloaded files are saved below:
+
+```text
+~/.local/share/speed-of-cinnamon/models/whisper.cpp/
+```
+
+Each download is written through a temporary file, verified against the upstream SHA-1, and then moved into place. Once
+`whisper-cli` is installed, Automatic transcription can use a verified downloaded model even if the applet's
+`whisper.cpp model` setting is empty. Selecting a downloaded model from the applet sets the transcriber to
+`whisper.cpp` and stores the model path explicitly.
+
 ## Notifications
 
 The Cinnamon applet can notify when dictation completes or fails. Completion and error notifications are enabled by
@@ -172,7 +195,8 @@ The Cinnamon applet also has `Copy diagnostics` and `Save diagnostics`. Saved re
 The bundle includes app/runtime paths, desktop/session details, doctor checks, input-source metadata, and state. When
 the applet creates the bundle, it passes the current settings to the doctor so the readiness section reflects the
 configured pipeline. The report intentionally omits transcript contents and does not include private command templates
-or personalization text.
+or personalization text. It includes non-private model catalog status so support reports can tell whether local
+whisper.cpp models are present.
 
 ## Dependencies
 
