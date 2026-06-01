@@ -106,6 +106,7 @@ class CliTest(unittest.TestCase):
                     "--settings-json",
                     json.dumps({
                         "language": "de",
+                        "auto-transcribe-timeout": False,
                         "notify-complete": False,
                         "sanitize-special-chars": True,
                         "cli-path": "/tmp/local",
@@ -123,6 +124,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(import_code, 0)
         self.assertEqual(export_payload["path"], str(export_path))
         self.assertEqual(import_payload["settings"]["language"], "de")
+        self.assertFalse(import_payload["settings"]["auto-transcribe-timeout"])
         self.assertFalse(import_payload["settings"]["notify-complete"])
         self.assertTrue(import_payload["settings"]["sanitize-special-chars"])
         self.assertNotIn("cli-path", import_payload["settings"])

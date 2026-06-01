@@ -133,8 +133,8 @@ make smoke-backend
 ```
 
 The backend smoke records short audio samples through `pw-record`, uses harmless dummy transcribers, disables insertion,
-and verifies manual stop, cancel/discard, and the path where a recording expires at its maximum length before the next
-shortcut.
+and verifies manual stop, cancel/discard, and the preserved-audio path used when a recording expires at its maximum
+length.
 
 ## Diagnostics
 
@@ -237,9 +237,10 @@ backend stores and inserts the post-processed text.
 
 ## Timeout Behavior
 
-If a recording reaches the configured maximum length, the backend preserves the audio and reports `recorded`. The next
-toggle/shortcut transcribes that existing recording instead of starting a new one. The applet polls while recording so the
-panel state can move from `REC` to `RDY` after the recorder exits.
+If a recording reaches the configured maximum length, the backend preserves the audio and reports `recorded`. The
+Cinnamon applet polls while recording; by default, it immediately starts transcription once it sees that `recorded`
+state. Disable `Transcribe automatically at the time limit` in the applet settings to keep the recording at `RDY` and
+transcribe it on the next shortcut press instead.
 
 Use `speed-of-cinnamon cancel` or the applet's `Cancel recording` menu item to discard the current recording without
 transcription. This stops a live recorder process when needed and removes the temporary audio/log files.

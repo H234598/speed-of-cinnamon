@@ -27,7 +27,8 @@ path.
 - Applet and CLI action to cancel and discard a current recording.
 - Applet and CLI cleanup for old transcript/history files and cached recordings.
 - Applet and CLI settings export/import for portable Cinnamon backups.
-- Recordings that hit the configured maximum length are preserved and transcribed on the next shortcut press.
+- Applet recordings that hit the configured maximum length are transcribed automatically, with a setting to keep the
+  old "ready, then transcribe on next shortcut" behavior.
 - Per-user runtime state under `~/.local/state/speed-of-cinnamon/` and temporary recordings under
   `~/.cache/speed-of-cinnamon/`.
 - Local install and uninstall scripts, Python unit tests, shell checks, and GitHub Actions CI.
@@ -189,3 +190,7 @@ diacritics to ASCII before output while leaving the saved transcript unchanged.
 
 Desktop notifications are emitted by the Cinnamon applet through Cinnamon's `Main.notify`/`Main.criticalNotify` APIs,
 not by the backend. This keeps normal CLI runs quiet and avoids depending on the XDG portal notification path.
+
+When a live applet recording reaches `Maximum recording length`, the backend preserves the audio as `recorded` and the
+applet starts transcription once it observes that state. Disable `Transcribe automatically at the time limit` to keep
+the preserved recording at `RDY` until the next shortcut press.

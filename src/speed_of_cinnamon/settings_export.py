@@ -17,6 +17,7 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "language": (str, "en"),
     "secondary-language": (str, "de"),
     "max-seconds": (int, 30),
+    "auto-transcribe-timeout": (bool, True),
     "recorder": (str, "auto"),
     "input-device": (str, ""),
     "personal-context": (str, ""),

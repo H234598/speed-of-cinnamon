@@ -16,6 +16,7 @@ const EXPORTABLE_SETTINGS = [
   ["language", "language"],
   ["secondary-language", "secondaryLanguage"],
   ["max-seconds", "maxSeconds"],
+  ["auto-transcribe-timeout", "autoTranscribeTimeout"],
   ["recorder", "recorder"],
   ["input-device", "inputDevice"],
   ["personal-context", "personalContext"],
@@ -56,6 +57,7 @@ MyApplet.prototype = {
     this.secondaryLanguage = "de";
     this.activeLanguage = "en";
     this.maxSeconds = 30;
+    this.autoTranscribeTimeout = true;
     this.recorder = "auto";
     this.inputDevice = "";
     this.insertMethod = "clipboard-paste";
@@ -78,6 +80,7 @@ MyApplet.prototype = {
     this.isCommandRunning = false;
     this.notificationSessionActive = false;
     this.lastNotificationKey = "";
+    this.autoTranscribeRecordingKey = "";
     this.clipboard = St.Clipboard.get_default();
     this.statusTimer = 0;
 
@@ -99,6 +102,7 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "language", "language", this._onLanguageSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "secondary-language", "secondaryLanguage", this._onLanguageSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "max-seconds", "maxSeconds", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "auto-transcribe-timeout", "autoTranscribeTimeout", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "recorder", "recorder", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "input-device", "inputDevice", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "insert-method", "insertMethod", null, null);
@@ -343,6 +347,7 @@ MyApplet.prototype = {
     }
     this.notificationSessionActive = true;
     this.lastNotificationKey = "";
+    this.autoTranscribeRecordingKey = "";
     this.isCommandRunning = true;
     this._setStatus("processing", _("Working..."), "");
     this._spawnJson(this._baseArgs("toggle"), (payload) => {
@@ -360,6 +365,7 @@ MyApplet.prototype = {
       return;
     }
     this.isCommandRunning = true;
+    this.autoTranscribeRecordingKey = "";
     this._setStatus("processing", _("Cancelling..."), this.lastTranscript);
     this._spawnJson(this._cancelArgs(), (payload) => {
       this.isCommandRunning = false;
@@ -531,6 +537,27 @@ MyApplet.prototype = {
     let message = payload.message || status;
     let transcript = payload.transcript || this.lastTranscript || "";
     this._setStatus(status, message, transcript);
+    this._maybeAutoTranscribeRecorded(payload);
+  },
+
+  _maybeAutoTranscribeRecorded: function(payload) {
+    if (!this.autoTranscribeTimeout || !this.notificationSessionActive || this.isCommandRunning) {
+      return;
+    }
+    if ((payload.status || "") !== "recorded") {
+      return;
+    }
+    let recordingKey = String(payload.audio_path || payload.audio || "recorded");
+    if (this.autoTranscribeRecordingKey === recordingKey) {
+      return;
+    }
+    this.autoTranscribeRecordingKey = recordingKey;
+    this.isCommandRunning = true;
+    this._setStatus("processing", _("Transcribing timed-out recording..."), this.lastTranscript);
+    this._spawnJson(this._baseArgs("stop"), (nextPayload) => {
+      this.isCommandRunning = false;
+      this._applyPayload(nextPayload);
+    });
   },
 
   _clearStatusTimer: function() {

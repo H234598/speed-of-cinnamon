@@ -12,6 +12,7 @@ class SettingsExportTest(unittest.TestCase):
         payload = build_export({
             "language": "de",
             "append-space": False,
+            "auto-transcribe-timeout": "false",
             "sanitize-special-chars": "true",
             "typing-delay-ms": "12",
             "cli-path": "/tmp/not-portable",
@@ -21,6 +22,7 @@ class SettingsExportTest(unittest.TestCase):
         self.assertEqual(payload["app"], "speed-of-cinnamon")
         self.assertEqual(settings["language"], "de")
         self.assertFalse(settings["append-space"])
+        self.assertFalse(settings["auto-transcribe-timeout"])
         self.assertTrue(settings["sanitize-special-chars"])
         self.assertEqual(settings["typing-delay-ms"], 12)
         self.assertNotIn("cli-path", settings)
@@ -29,8 +31,13 @@ class SettingsExportTest(unittest.TestCase):
     def test_write_and_read_export_round_trips_normalized_settings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
-            write_export(path, {"notify-complete": "false", "personal-context": "Project words"})
+            write_export(path, {
+                "auto-transcribe-timeout": False,
+                "notify-complete": "false",
+                "personal-context": "Project words",
+            })
             payload = read_export(path)
+        self.assertFalse(payload["settings"]["auto-transcribe-timeout"])
         self.assertFalse(payload["settings"]["notify-complete"])
         self.assertEqual(payload["settings"]["personal-context"], "Project words")
 

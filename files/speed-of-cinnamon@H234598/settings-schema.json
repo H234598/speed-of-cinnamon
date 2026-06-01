@@ -15,7 +15,7 @@
     "recording-section": {
       "type": "section",
       "title": "Recording",
-      "keys": ["language", "secondary-language", "max-seconds", "recorder", "input-device"]
+      "keys": ["language", "secondary-language", "max-seconds", "auto-transcribe-timeout", "recorder", "input-device"]
     },
     "personalization-section": {
       "type": "section",
@@ -82,6 +82,12 @@
     "step": 5,
     "units": "s",
     "default": 30
+  },
+  "auto-transcribe-timeout": {
+    "type": "switch",
+    "description": "Transcribe automatically at the time limit",
+    "tooltip": "When a live applet recording reaches the maximum length, start transcription without requiring another shortcut press.",
+    "default": true
   },
   "recorder": {
     "type": "combobox",
