@@ -5,7 +5,7 @@
     "main-page": {
       "type": "page",
       "title": "Speed of Cinnamon",
-      "sections": ["activation-section", "recording-section", "personalization-section", "output-section", "backend-section"]
+      "sections": ["activation-section", "recording-section", "personalization-section", "notification-section", "output-section", "backend-section"]
     },
     "activation-section": {
       "type": "section",
@@ -21,6 +21,11 @@
       "type": "section",
       "title": "Personalization",
       "keys": ["personal-context", "vocabulary"]
+    },
+    "notification-section": {
+      "type": "section",
+      "title": "Notifications",
+      "keys": ["notify-recording", "notify-complete", "notify-error"]
     },
     "output-section": {
       "type": "section",
@@ -108,6 +113,21 @@
     "tooltip": "Optional terms, one per line. Available as {vocabulary}, {prompt}, and SPEED_OF_CINNAMON_VOCABULARY.",
     "height": 120,
     "default": ""
+  },
+  "notify-recording": {
+    "type": "switch",
+    "description": "Notify when recording starts or reaches the time limit",
+    "default": false
+  },
+  "notify-complete": {
+    "type": "switch",
+    "description": "Notify when dictation is ready",
+    "default": true
+  },
+  "notify-error": {
+    "type": "switch",
+    "description": "Notify on dictation errors",
+    "default": true
   },
   "insert-method": {
     "type": "combobox",

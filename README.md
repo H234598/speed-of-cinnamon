@@ -13,6 +13,7 @@ path.
 - Cinnamon panel applet with microphone icon, concise status label, status menu, transcript preview, and a doctor check.
 - Copyable diagnostics bundle for support reports without transcript contents.
 - Cinnamon global hotkey via `Main.keybindingManager`; default is `Super+Z`.
+- Cinnamon desktop notifications for completion and failures, with optional recording-state notifications.
 - Primary/secondary recognition languages with quick switching from the applet menu.
 - PipeWire/PulseAudio/ALSA recording through `pw-record`, `parecord`, or `arecord`.
 - Optional microphone/source selection by PipeWire/Pulse source name, with a `list-inputs` helper.
@@ -167,3 +168,6 @@ The applet handles the normal clipboard path through Cinnamon's `St.Clipboard`, 
 paste keystroke when it is available. Without `xdotool`, dictation still completes as a Cinnamon clipboard copy. This
 keeps desktop integration in Cinnamon where it belongs and keeps ASR replaceable. The Speed of Sound JVM/GTK portal
 stack is intentionally not reused because its central integration point is the part that does not fit this goal.
+
+Desktop notifications are emitted by the Cinnamon applet through Cinnamon's `Main.notify`/`Main.criticalNotify` APIs,
+not by the backend. This keeps normal CLI runs quiet and avoids depending on the XDG portal notification path.

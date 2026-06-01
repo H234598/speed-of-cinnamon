@@ -85,6 +85,14 @@ SPEED_OF_CINNAMON_PROMPT
 
 The built-in `diagnostics` output does not include these values.
 
+## Notifications
+
+The Cinnamon applet can notify when dictation completes or fails. Completion and error notifications are enabled by
+default; recording-start and time-limit notifications can be enabled separately in the applet settings.
+
+Notifications are sent through Cinnamon's own `Main.notify` and `Main.criticalNotify` APIs. The backend does not emit
+notifications by itself, so CLI smoke tests and scripted runs stay quiet.
+
 ## Validation
 
 ```bash

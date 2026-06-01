@@ -46,10 +46,15 @@ MyApplet.prototype = {
     this.postProcessCommand = "";
     this.personalContext = "";
     this.vocabulary = "";
+    this.notifyRecording = false;
+    this.notifyComplete = true;
+    this.notifyError = true;
     this.status = "idle";
     this.lastTranscript = "";
     this.lastMessage = "";
     this.isCommandRunning = false;
+    this.notificationSessionActive = false;
+    this.lastNotificationKey = "";
     this.clipboard = St.Clipboard.get_default();
     this.statusTimer = 0;
 
@@ -83,6 +88,9 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-command", "postProcessCommand", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "personal-context", "personalContext", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "vocabulary", "vocabulary", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "notify-recording", "notifyRecording", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "notify-complete", "notifyComplete", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "notify-error", "notifyError", null, null);
   },
 
   _buildMenu: function() {
@@ -290,6 +298,8 @@ MyApplet.prototype = {
     if (this.isCommandRunning) {
       return;
     }
+    this.notificationSessionActive = true;
+    this.lastNotificationKey = "";
     this.isCommandRunning = true;
     this._setStatus("processing", _("Working..."), "");
     this._spawnJson(this._baseArgs("toggle"), (payload) => {
@@ -509,6 +519,7 @@ MyApplet.prototype = {
   },
 
   _setStatus: function(status, message, transcript) {
+    let previousStatus = this.status;
     this.status = status;
     this.lastMessage = message || "";
     if (transcript) {
@@ -521,7 +532,63 @@ MyApplet.prototype = {
       this.cancelItem.setSensitive(this.status === "recording" || this.status === "recorded");
     }
     this._updatePanel();
+    this._maybeNotify(previousStatus, this.status, this.lastMessage);
     this._scheduleStatusPoll();
+  },
+
+  _maybeNotify: function(previousStatus, status, message) {
+    if (!this.notificationSessionActive || status === "processing") {
+      return;
+    }
+    let key = status + "\n" + String(message || "");
+    if (key === this.lastNotificationKey) {
+      return;
+    }
+    if (status === "recording") {
+      if (this.notifyRecording) {
+        this._notify(_("Speed of Cinnamon"), _("Recording started: ") + this._currentLanguage(), false);
+        this.lastNotificationKey = key;
+      }
+      return;
+    }
+    if (status === "recorded") {
+      if (this.notifyRecording) {
+        this._notify(_("Speed of Cinnamon"), message || _("Recording ready to transcribe"), false);
+        this.lastNotificationKey = key;
+      }
+      return;
+    }
+    if (status === "done") {
+      if (this.notifyComplete) {
+        this._notify(_("Speed of Cinnamon"), message || _("Transcript ready"), false);
+        this.lastNotificationKey = key;
+      }
+      this.notificationSessionActive = false;
+      return;
+    }
+    if (status === "error") {
+      if (this.notifyError) {
+        this._notify(_("Speed of Cinnamon"), message || _("Dictation failed"), true);
+        this.lastNotificationKey = key;
+      }
+      this.notificationSessionActive = false;
+      return;
+    }
+    if (status === "idle" && previousStatus !== "idle") {
+      this.notificationSessionActive = false;
+    }
+  },
+
+  _notify: function(title, body, critical) {
+    try {
+      if (critical && Main.criticalNotify) {
+        Main.criticalNotify(title, body);
+      } else if (Main.notify) {
+        Main.notify(title, body);
+      }
+    } catch (err) {
+      global.logError(err);
+    }
   },
 
   _shortTranscript: function() {
