@@ -29,6 +29,7 @@ for path in \
   files/speed-of-cinnamon@H234598/metadata.json \
   files/speed-of-cinnamon@H234598/settings-schema.json \
   scripts/install-local.sh \
+  scripts/verify-authorship.sh \
   scripts/verify-rpm.sh \
   src/speed_of_cinnamon/cli.py \
   src/speed_of_cinnamon/setup_plan.py \

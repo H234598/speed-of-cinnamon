@@ -39,6 +39,7 @@ path.
   `~/.cache/speed-of-cinnamon/`.
 - Local install and uninstall scripts, reproducible source release archives, Python unit tests, shell checks, and GitHub
   Actions CI.
+- CI authorship guard for the GitHub owner, commit identities, applet metadata, Python metadata, and RPM metadata.
 - CI uploads source archive, checksum, noarch RPM, and source RPM artifacts for each successful workflow run.
 - Experimental noarch RPM build for Fedora-style system installation.
 
@@ -195,8 +196,8 @@ speed-of-cinnamon toggle --insert-method none --transcriber command --transcribe
 make check
 ```
 
-The checks run Python unit tests, compile Python files, validate Cinnamon JSON metadata/settings, and run a backend
-doctor smoke check. CI runs the same checks plus `shellcheck`.
+The checks run Python unit tests, compile Python files, validate Cinnamon JSON metadata/settings, verify project
+authorship metadata, and run a backend doctor smoke check. CI runs the same checks plus `shellcheck`.
 
 For a live backend check in a Cinnamon session:
 
