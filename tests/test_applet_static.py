@@ -110,3 +110,22 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._openFolder(GLib.build_filenamev([GLib.get_user_state_dir(), "speed-of-cinnamon", "transcripts"])', source)
         self.assertIn('this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon", "models", "whisper.cpp"])', source)
         self.assertNotIn('Util.spawn(["xdg-open"', source)
+
+    def test_applet_exposes_quick_output_method_menu(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            set(schema["insert-method"]["options"].values()),
+            {"clipboard-paste", "clipboard", "type", "none"},
+        )
+        self.assertIn('const OUTPUT_METHODS = [', source)
+        self.assertIn('this.outputMethodItem = new PopupMenu.PopupSubMenuMenuItem(_("Output: Clipboard and paste"))', source)
+        self.assertIn("this._populateOutputMethodMenu();", source)
+        self.assertIn('_outputMethodLabel: function(method)', source)
+        self.assertIn('_normalizeOutputMethod: function(method)', source)
+        self.assertIn('_selectOutputMethod: function(method)', source)
+        self.assertIn('this.settings.setValue("insert-method", this.insertMethod)', source)
+        self.assertIn('this.settings.bindProperty(Settings.BindingDirection.IN, "insert-method", "insertMethod", this._onOutputSettingsChanged, null)', source)
+        self.assertIn('this.outputMethodItem.label.text = _("Output: ") + this._outputMethodLabel(this._normalizeOutputMethod(this.insertMethod))', source)
+        self.assertIn('let backendInsertMethod = this._usesCinnamonClipboard() ? "none" : this._normalizeOutputMethod(this.insertMethod);', source)

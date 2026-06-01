@@ -95,6 +95,13 @@ speed-of-cinnamon history --limit 5 --json
 The Cinnamon applet exposes the same recent entries under `Recent transcripts`; selecting one copies it through
 Cinnamon's clipboard API.
 
+## Output Modes
+
+Use the applet's `Output` submenu to switch the active insertion mode without opening Cinnamon settings. The choices are
+`Clipboard and paste`, `Clipboard only`, `Direct typing`, and `Do not insert`; the selected value is stored in the same
+`insert-method` setting used by the backend CLI. Clipboard modes keep the copy step inside Cinnamon's `St.Clipboard`;
+only automatic paste and direct typing need `xdotool` on X11.
+
 ## Target Window
 
 When dictation is started through the global shortcut or from the panel menu, the applet remembers Cinnamon's currently

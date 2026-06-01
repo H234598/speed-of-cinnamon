@@ -24,6 +24,12 @@ const PANEL_STATUS_CLASSES = [
   "speed-of-cinnamon-error",
   "speed-of-cinnamon-setup"
 ];
+const OUTPUT_METHODS = [
+  "clipboard-paste",
+  "clipboard",
+  "type",
+  "none"
+];
 const EXPORTABLE_SETTINGS = [
   ["toggle-keybinding", "toggleKeybinding"],
   ["primary-language-keybinding", "primaryLanguageKeybinding"],
@@ -147,7 +153,7 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "keep-recording-artifacts", "keepRecordingArtifacts", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "recorder", "recorder", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "input-device", "inputDevice", null, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "insert-method", "insertMethod", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "insert-method", "insertMethod", this._onOutputSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "append-space", "appendSpace", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "typing-delay-ms", "typingDelayMs", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "sanitize-special-chars", "sanitizeSpecialChars", null, null);
@@ -198,6 +204,10 @@ MyApplet.prototype = {
     this.secondaryLanguageItem = new PopupMenu.PopupIconMenuItem(_("Start secondary language"), "media-record-symbolic", St.IconType.SYMBOLIC);
     this.secondaryLanguageItem.connect("activate", () => this._startWithLanguage(this._secondaryLanguage()));
     this.menu.addMenuItem(this.secondaryLanguageItem);
+
+    this.outputMethodItem = new PopupMenu.PopupSubMenuMenuItem(_("Output: Clipboard and paste"));
+    this.menu.addMenuItem(this.outputMethodItem);
+    this._populateOutputMethodMenu();
 
     this.transcriptItem = new PopupMenu.PopupMenuItem(_("No transcript yet"));
     this.transcriptItem.setSensitive(false);
@@ -326,6 +336,12 @@ MyApplet.prototype = {
     this._registerHotkeys();
   },
 
+  _onOutputSettingsChanged: function() {
+    this.insertMethod = this._normalizeOutputMethod(this.insertMethod);
+    this._populateOutputMethodMenu();
+    this._updatePanel();
+  },
+
   on_applet_clicked: function() {
     this._rememberFocusedWindow();
     this.menu.toggle();
@@ -345,7 +361,7 @@ MyApplet.prototype = {
   },
 
   _baseArgs: function(command) {
-    let backendInsertMethod = this._usesCinnamonClipboard() ? "none" : String(this.insertMethod || "clipboard-paste");
+    let backendInsertMethod = this._usesCinnamonClipboard() ? "none" : this._normalizeOutputMethod(this.insertMethod);
     let args = [
       this._cliCommand(),
       command,
@@ -491,7 +507,47 @@ MyApplet.prototype = {
   },
 
   _usesCinnamonClipboard: function() {
-    return this.insertMethod === "clipboard" || this.insertMethod === "clipboard-paste";
+    let method = this._normalizeOutputMethod(this.insertMethod);
+    return method === "clipboard" || method === "clipboard-paste";
+  },
+
+  _outputMethodLabel: function(method) {
+    if (method === "clipboard") return _("Clipboard only");
+    if (method === "type") return _("Direct typing");
+    if (method === "none") return _("Do not insert");
+    return _("Clipboard and paste");
+  },
+
+  _normalizeOutputMethod: function(method) {
+    let value = String(method || "").trim();
+    return OUTPUT_METHODS.indexOf(value) >= 0 ? value : "clipboard-paste";
+  },
+
+  _populateOutputMethodMenu: function() {
+    if (!this.outputMethodItem) {
+      return;
+    }
+    this.outputMethodItem.menu.removeAll();
+    let current = this._normalizeOutputMethod(this.insertMethod);
+    for (let method of OUTPUT_METHODS) {
+      let label = (current === method ? "[x] " : "[ ] ") + this._outputMethodLabel(method);
+      let item = new PopupMenu.PopupMenuItem(label);
+      item.connect("activate", () => this._selectOutputMethod(method));
+      this.outputMethodItem.menu.addMenuItem(item);
+    }
+  },
+
+  _selectOutputMethod: function(method) {
+    this.insertMethod = this._normalizeOutputMethod(method);
+    this.settings.setValue("insert-method", this.insertMethod);
+    this._populateOutputMethodMenu();
+    let message = _("Output: ") + this._outputMethodLabel(this.insertMethod);
+    if (this.status === "recording" || this.status === "processing") {
+      this.lastMessage = message;
+      this._updatePanel();
+      return;
+    }
+    this._setStatus("ready", message, this.lastTranscript);
   },
 
   _normalizeLanguage: function(value, fallback) {
@@ -1094,6 +1150,8 @@ MyApplet.prototype = {
       applied++;
     }
     this._syncActiveLanguage();
+    this.insertMethod = this._normalizeOutputMethod(this.insertMethod);
+    this._populateOutputMethodMenu();
     this._registerHotkeys();
     this._updatePanel();
     return applied;
@@ -1547,6 +1605,9 @@ MyApplet.prototype = {
     }
     if (this.secondaryLanguageItem) {
       this.secondaryLanguageItem.label.text = _("Start secondary: ") + this._secondaryLanguage();
+    }
+    if (this.outputMethodItem) {
+      this.outputMethodItem.label.text = _("Output: ") + this._outputMethodLabel(this._normalizeOutputMethod(this.insertMethod));
     }
     if (this.transcriptItem) {
       this.transcriptItem.label.text = this._shortTranscript();
