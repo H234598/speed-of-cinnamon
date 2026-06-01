@@ -40,6 +40,12 @@ speed-of-cinnamon history --limit 5 --json
 The Cinnamon applet exposes the same recent entries under `Recent transcripts`; selecting one copies it through
 Cinnamon's clipboard API.
 
+## Language Switching
+
+Configure `Primary recognition language` and `Secondary recognition language` in the applet settings. The `Language`
+menu item switches the active runtime language for future recordings. The shortcut and panel action then pass that
+active language to the backend as `--language`.
+
 ## Validation
 
 ```bash

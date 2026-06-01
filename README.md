@@ -12,6 +12,7 @@ path.
 
 - Cinnamon panel applet with microphone icon, concise status label, status menu, transcript preview, and a doctor check.
 - Cinnamon global hotkey via `Main.keybindingManager`; default is `Super+Z`.
+- Primary/secondary recognition languages with quick switching from the applet menu.
 - PipeWire/PulseAudio/ALSA recording through `pw-record`, `parecord`, or `arecord`.
 - Optional microphone/source selection by PipeWire/Pulse source name, with a `list-inputs` helper.
 - ASR presets for Automatic, OpenAI Whisper command, whisper.cpp with a model path, or a custom command template.

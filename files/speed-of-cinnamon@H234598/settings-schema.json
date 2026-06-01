@@ -15,7 +15,7 @@
     "recording-section": {
       "type": "section",
       "title": "Recording",
-      "keys": ["language", "max-seconds", "recorder", "input-device"]
+      "keys": ["language", "secondary-language", "max-seconds", "recorder", "input-device"]
     },
     "output-section": {
       "type": "section",
@@ -40,7 +40,7 @@
   },
   "language": {
     "type": "combobox",
-    "description": "Recognition language",
+    "description": "Primary recognition language",
     "options": {
       "English": "en",
       "German": "de",
@@ -50,6 +50,19 @@
       "Dutch": "nl"
     },
     "default": "en"
+  },
+  "secondary-language": {
+    "type": "combobox",
+    "description": "Secondary recognition language",
+    "options": {
+      "English": "en",
+      "German": "de",
+      "Spanish": "es",
+      "French": "fr",
+      "Italian": "it",
+      "Dutch": "nl"
+    },
+    "default": "de"
   },
   "max-seconds": {
     "type": "spinbutton",

@@ -31,6 +31,8 @@ MyApplet.prototype = {
     this.toggleKeybinding = "<Super>z::";
     this.showPanelLabel = true;
     this.language = "en";
+    this.secondaryLanguage = "de";
+    this.activeLanguage = "en";
     this.maxSeconds = 30;
     this.recorder = "auto";
     this.inputDevice = "";
@@ -55,6 +57,7 @@ MyApplet.prototype = {
 
     this.settings = new Settings.AppletSettings(this, UUID, instanceId);
     this._bindSettings();
+    this._syncActiveLanguage();
     this._buildMenu();
     this._registerHotkey();
     this._refreshStatus();
@@ -63,7 +66,8 @@ MyApplet.prototype = {
   _bindSettings: function() {
     this.settings.bindProperty(Settings.BindingDirection.IN, "toggle-keybinding", "toggleKeybinding", this._onHotkeyChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "show-panel-label", "showPanelLabel", this._updatePanel, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "language", "language", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "language", "language", this._onLanguageSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "secondary-language", "secondaryLanguage", this._onLanguageSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "max-seconds", "maxSeconds", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "recorder", "recorder", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "input-device", "inputDevice", null, null);
@@ -94,6 +98,10 @@ MyApplet.prototype = {
     this.statusItem = new PopupMenu.PopupMenuItem(_("Status: idle"));
     this.statusItem.setSensitive(false);
     this.menu.addMenuItem(this.statusItem);
+
+    this.languageItem = new PopupMenu.PopupIconMenuItem(_("Language: en"), "preferences-desktop-locale-symbolic", St.IconType.SYMBOLIC);
+    this.languageItem.connect("activate", () => this._switchLanguage());
+    this.menu.addMenuItem(this.languageItem);
 
     this.transcriptItem = new PopupMenu.PopupMenuItem(_("No transcript yet"));
     this.transcriptItem.setSensitive(false);
@@ -165,7 +173,7 @@ MyApplet.prototype = {
       this.cliPath || DEFAULT_CLI,
       command,
       "--json",
-      "--language", String(this.language || "en"),
+      "--language", String(this._currentLanguage()),
       "--max-seconds", String(this.maxSeconds || 30),
       "--recorder", String(this.recorder || "auto"),
       "--transcriber", String(this.transcriber || "auto"),
@@ -212,6 +220,44 @@ MyApplet.prototype = {
 
   _usesCinnamonClipboard: function() {
     return this.insertMethod === "clipboard" || this.insertMethod === "clipboard-paste";
+  },
+
+  _normalizeLanguage: function(value, fallback) {
+    let language = String(value || "").trim();
+    return language === "" ? fallback : language;
+  },
+
+  _currentLanguage: function() {
+    return this._normalizeLanguage(this.activeLanguage, this._normalizeLanguage(this.language, "en"));
+  },
+
+  _primaryLanguage: function() {
+    return this._normalizeLanguage(this.language, "en");
+  },
+
+  _secondaryLanguage: function() {
+    return this._normalizeLanguage(this.secondaryLanguage, this._primaryLanguage());
+  },
+
+  _syncActiveLanguage: function() {
+    let primary = this._primaryLanguage();
+    let secondary = this._secondaryLanguage();
+    let current = this._currentLanguage();
+    if (current !== primary && current !== secondary) {
+      this.activeLanguage = primary;
+    }
+  },
+
+  _onLanguageSettingsChanged: function() {
+    this._syncActiveLanguage();
+    this._updatePanel();
+  },
+
+  _switchLanguage: function() {
+    let primary = this._primaryLanguage();
+    let secondary = this._secondaryLanguage();
+    this.activeLanguage = this._currentLanguage() === primary ? secondary : primary;
+    this._setStatus("ready", _("Language: ") + this._currentLanguage(), this.lastTranscript);
   },
 
   _toggleRecording: function() {
@@ -459,6 +505,9 @@ MyApplet.prototype = {
     this.set_applet_tooltip(tooltip + "\n" + this._shortTranscript());
     if (this.statusItem) {
       this.statusItem.label.text = _("Status: ") + (this.status || "idle");
+    }
+    if (this.languageItem) {
+      this.languageItem.label.text = _("Language: ") + this._currentLanguage();
     }
     if (this.transcriptItem) {
       this.transcriptItem.label.text = this._shortTranscript();
