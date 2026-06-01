@@ -21,5 +21,23 @@ jobs:
         run: make dist-check
       - name: Build RPM package
         run: make rpm
+      - name: Upload source release archive
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: speed-of-cinnamon-source-${{ github.sha }}
+          path: |
+            dist/speed-of-cinnamon-*.tar.gz
+            dist/speed-of-cinnamon-*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload Fedora RPM packages
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: speed-of-cinnamon-rpm-${{ github.sha }}
+          path: |
+            dist/rpmbuild/RPMS/**/*.rpm
+            dist/rpmbuild/SRPMS/**/*.rpm
+          if-no-files-found: error
+          retention-days: 30
       - name: Shellcheck scripts
         run: shellcheck scripts/*.sh

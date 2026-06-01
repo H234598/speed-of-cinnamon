@@ -38,6 +38,9 @@ The RPM installs the backend command into `/usr/bin/speed-of-cinnamon` and the C
 `/usr/share/cinnamon/applets/speed-of-cinnamon@H234598/`. It is intended for Fedora-style system installation; the
 per-user `make install-local` path remains the fastest development install.
 
+Successful GitHub Actions runs upload two downloadable artifacts: `speed-of-cinnamon-source-<commit>` with the source
+archive and checksum, and `speed-of-cinnamon-rpm-<commit>` with the noarch RPM and source RPM.
+
 On first load, the applet runs a lightweight setup check against its current Cinnamon settings. If the panel shows
 `SET`, open the applet menu and use `Copy setup plan`, `Run doctor`, `Open applet settings`, `Open setup guide`, and
 `Voice model` to finish the local pipeline setup. The startup check does not use portals and does not open a separate

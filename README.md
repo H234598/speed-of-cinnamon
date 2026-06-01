@@ -39,6 +39,7 @@ path.
   `~/.cache/speed-of-cinnamon/`.
 - Local install and uninstall scripts, reproducible source release archives, Python unit tests, shell checks, and GitHub
   Actions CI.
+- CI uploads source archive, checksum, noarch RPM, and source RPM artifacts for each successful workflow run.
 - Experimental noarch RPM build for Fedora-style system installation.
 
 ## Fedora Cinnamon Dependencies
@@ -223,6 +224,11 @@ make rpm
 
 The RPM installs the backend command to `/usr/bin/speed-of-cinnamon` and the Cinnamon applet under
 `/usr/share/cinnamon/applets/speed-of-cinnamon@H234598/`.
+
+GitHub Actions publishes two artifacts for successful runs:
+
+- `speed-of-cinnamon-source-<commit>` with the source archive and `.sha256`.
+- `speed-of-cinnamon-rpm-<commit>` with the noarch RPM and source RPM.
 
 ## Architecture
 
