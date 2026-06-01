@@ -107,6 +107,17 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["models"][0]["name"], "tiny.en")
         self.assertFalse(payload["models"][0]["downloaded"])
 
+    @mock.patch("speed_of_cinnamon.cli.remove_model")
+    def test_remove_model_command(self, mocked_remove: mock.Mock) -> None:
+        mocked_remove.return_value = {"status": "done", "removed": True, "name": "tiny.en"}
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["remove-model", "tiny.en", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["removed"])
+        mocked_remove.assert_called_once_with("tiny.en")
+
     def test_settings_export_import_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             export_path = Path(tmp) / "settings.json"

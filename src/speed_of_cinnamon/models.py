@@ -169,3 +169,29 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
             pass
         raise
     return {**model_status(model, verify=True), "status": "done", "message": f"model downloaded: {path}"}
+
+
+def remove_model(name: str) -> dict[str, object]:
+    model = resolve_model(name)
+    path = model_path(model)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    removed = False
+    removed_tmp = False
+    try:
+        path.unlink()
+        removed = True
+    except FileNotFoundError:
+        pass
+    try:
+        tmp_path.unlink()
+        removed_tmp = True
+    except FileNotFoundError:
+        pass
+    return {
+        **asdict(model),
+        "status": "done",
+        "message": f"model removed: {path}" if removed else f"model was not downloaded: {path}",
+        "path": str(path),
+        "removed": removed,
+        "removed_tmp": removed_tmp,
+    }

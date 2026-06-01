@@ -124,6 +124,7 @@ speed-of-cinnamon diagnostics --applet --settings-json '{"transcriber":"command"
 speed-of-cinnamon list-inputs --json
 speed-of-cinnamon models --json
 speed-of-cinnamon download-model tiny.en --json
+speed-of-cinnamon remove-model tiny.en --json
 speed-of-cinnamon history --limit 5 --json
 speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 25 --dry-run --json
 speed-of-cinnamon settings-export --settings-json '{"language":"de","append-space":true}' --json
@@ -149,8 +150,7 @@ The applet menu can export and import its current settings to:
 This export includes personal context, vocabulary, command templates, and the hotkey. Treat it as a private backup.
 Machine-local `cli-path` is intentionally not exported.
 
-The applet's `Voice model` menu can download a starter whisper.cpp model and select any downloaded catalog model. Models
-are stored under:
+The applet's `Voice model` menu can download, select, and remove whisper.cpp catalog models. Models are stored under:
 
 ```text
 ~/.local/share/speed-of-cinnamon/models/whisper.cpp/
@@ -158,7 +158,8 @@ are stored under:
 
 Downloads use the upstream whisper.cpp ggml model files from Hugging Face and verify their SHA-1 checksums before the
 model is activated. If `whisper-cli` is installed, Automatic transcription can use a verified downloaded model even when
-the `whisper.cpp model` setting is empty.
+the `whisper.cpp model` setting is empty. Removing a model from the applet clears the explicit whisper.cpp selection
+when that model was active.
 
 For backend-only testing without touching the focused application:
 

@@ -55,6 +55,34 @@ class ModelsTest(unittest.TestCase):
         self.assertEqual(payload["checksum"], spec.sha1)
         self.assertIn("already downloaded", second_payload["message"])
 
+    def test_remove_model_deletes_catalog_file_and_tmp_file(self) -> None:
+        spec = models.ModelSpec(
+            name="test",
+            filename="ggml-test.bin",
+            size="1 KiB",
+            sha1="not-used",
+            description="test model",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+        ):
+            path = models.model_path(spec)
+            tmp_path = path.with_suffix(path.suffix + ".tmp")
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"model")
+            tmp_path.write_bytes(b"partial")
+            payload = models.remove_model("test")
+            missing_payload = models.remove_model("test")
+            path_exists = path.exists()
+            tmp_exists = tmp_path.exists()
+        self.assertTrue(payload["removed"])
+        self.assertTrue(payload["removed_tmp"])
+        self.assertFalse(path_exists)
+        self.assertFalse(tmp_exists)
+        self.assertFalse(missing_payload["removed"])
+
     def test_default_model_path_uses_only_verified_catalog_files(self) -> None:
         good_data = b"good model"
         spec = models.ModelSpec(

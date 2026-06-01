@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import __version__
 from .doctor import parse_settings_json, report as doctor_report
-from .models import download_model, list_models
+from .models import download_model, list_models, remove_model
 from .output import insert_text
 from .paths import (
     APP_ID,
@@ -449,6 +449,11 @@ def command_download_model(args: argparse.Namespace) -> dict[str, object]:
     return download_model(args.model, args.force)
 
 
+def command_remove_model(args: argparse.Namespace) -> dict[str, object]:
+    ensure_runtime_dirs()
+    return remove_model(args.model)
+
+
 def command_history(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     return {"status": "done", "transcripts": read_transcript_history(max(args.limit, 0))}
@@ -697,6 +702,11 @@ def build_parser() -> argparse.ArgumentParser:
     download_model_parser.add_argument("model")
     download_model_parser.add_argument("--force", action="store_true")
     download_model_parser.set_defaults(handler=command_download_model)
+
+    remove_model_parser = subparsers.add_parser("remove-model")
+    add_common_options(remove_model_parser)
+    remove_model_parser.add_argument("model")
+    remove_model_parser.set_defaults(handler=command_remove_model)
 
     history = subparsers.add_parser("history")
     add_common_options(history)

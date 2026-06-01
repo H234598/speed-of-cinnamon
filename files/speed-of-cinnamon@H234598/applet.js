@@ -325,6 +325,10 @@ MyApplet.prototype = {
     return [this.cliPath || DEFAULT_CLI, "download-model", String(model || "tiny.en"), "--json"];
   },
 
+  _removeModelArgs: function(model) {
+    return [this.cliPath || DEFAULT_CLI, "remove-model", String(model || "tiny.en"), "--json"];
+  },
+
   _settingsExportArgs: function() {
     return [this.cliPath || DEFAULT_CLI, "settings-export", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--json"];
   },
@@ -594,30 +598,57 @@ MyApplet.prototype = {
       return;
     }
     for (let model of models) {
-      let name = String(model.name || "");
-      if (name === "") {
-        continue;
-      }
-      let downloaded = Boolean(model.downloaded);
-      let current = downloaded && this.whisperModel && String(model.path || "") === String(this.whisperModel);
-      let label = (current ? "[x] " : downloaded ? "[ ] " : "[ ] ") + name + " (" + String(model.size || "?") + ")";
-      if (!downloaded) {
-        label += _(" - not downloaded");
-      }
-      let item = new PopupMenu.PopupMenuItem(label);
-      item.setSensitive(downloaded);
-      item.connect("activate", () => this._selectVoiceModel(model));
-      this.modelItem.menu.addMenuItem(item);
+      this._addModelMenuEntry(model);
     }
   },
 
+  _addModelMenuEntry: function(model) {
+    let name = String(model.name || "");
+    if (name === "") {
+      return;
+    }
+    let downloaded = Boolean(model.downloaded);
+    let current = downloaded && this.whisperModel && String(model.path || "") === String(this.whisperModel);
+    let label = (current ? "[x] " : "[ ] ") + name + " (" + String(model.size || "?") + ")";
+    if (!downloaded) {
+      label += _(" - not downloaded");
+    }
+    let entry = new PopupMenu.PopupSubMenuMenuItem(label);
+    this.modelItem.menu.addMenuItem(entry);
+
+    let description = new PopupMenu.PopupMenuItem(String(model.description || ""));
+    description.setSensitive(false);
+    entry.menu.addMenuItem(description);
+
+    if (downloaded) {
+      let useItem = new PopupMenu.PopupIconMenuItem(_("Use this model"), "emblem-ok-symbolic", St.IconType.SYMBOLIC);
+      useItem.setSensitive(!current);
+      useItem.connect("activate", () => this._selectVoiceModel(model));
+      entry.menu.addMenuItem(useItem);
+
+      let removeItem = new PopupMenu.PopupIconMenuItem(_("Remove model"), "edit-delete-symbolic", St.IconType.SYMBOLIC);
+      removeItem.connect("activate", () => this._removeVoiceModel(model));
+      entry.menu.addMenuItem(removeItem);
+      return;
+    }
+
+    let downloadItem = new PopupMenu.PopupIconMenuItem(_("Download model"), "folder-download-symbolic", St.IconType.SYMBOLIC);
+    downloadItem.connect("activate", () => this._downloadVoiceModel(model));
+    entry.menu.addMenuItem(downloadItem);
+  },
+
   _downloadStarterModel: function() {
+    this._downloadVoiceModel({ name: "tiny.en" });
+  },
+
+  _downloadVoiceModel: function(model) {
     if (this.isCommandRunning) {
       return;
     }
+    let name = String(model.name || "tiny.en");
     this.isCommandRunning = true;
-    this._setStatus("processing", _("Downloading tiny.en model..."), this.lastTranscript);
-    this._spawnJson(this._downloadModelArgs("tiny.en"), (payload) => {
+    this._setStatus("processing", _("Downloading model: ") + name, this.lastTranscript);
+    this._spawnJson(this._downloadModelArgs(name), (payload) => {
       this.isCommandRunning = false;
       if (payload.error) {
         this._setStatus("error", payload.error, this.lastTranscript);
@@ -625,6 +656,35 @@ MyApplet.prototype = {
         return;
       }
       this._selectVoiceModel(payload);
+      this._refreshModelMenu();
+    });
+  },
+
+  _removeVoiceModel: function(model) {
+    if (this.isCommandRunning) {
+      return;
+    }
+    let name = String(model.name || "");
+    let path = String(model.path || "");
+    if (name === "") {
+      return;
+    }
+    this.isCommandRunning = true;
+    this._setStatus("processing", _("Removing model: ") + name, this.lastTranscript);
+    this._spawnJson(this._removeModelArgs(name), (payload) => {
+      this.isCommandRunning = false;
+      if (payload.error) {
+        this._setStatus("error", payload.error, this.lastTranscript);
+        this._refreshModelMenu();
+        return;
+      }
+      if (path !== "" && path === String(this.whisperModel || "")) {
+        this.transcriber = "auto";
+        this.whisperModel = "";
+        this.settings.setValue("transcriber", this.transcriber);
+        this.settings.setValue("whisper-model", this.whisperModel);
+      }
+      this._setStatus("done", payload.message || _("Removed model: ") + name, this.lastTranscript);
       this._refreshModelMenu();
     });
   },

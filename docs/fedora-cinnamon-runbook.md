@@ -113,13 +113,14 @@ The built-in `diagnostics` output does not include these values.
 
 ## Voice Models
 
-The applet's `Voice model` menu exposes a small whisper.cpp catalog. Use `Download starter model` for `tiny.en`, or
-inspect/download models from the CLI:
+The applet's `Voice model` menu exposes a small whisper.cpp catalog. Use `Download starter model` for `tiny.en`, or open
+each catalog model to download, select, or remove it. The same actions are available from the CLI:
 
 ```bash
 speed-of-cinnamon models --json
 speed-of-cinnamon download-model tiny.en --json
 speed-of-cinnamon download-model base --json
+speed-of-cinnamon remove-model tiny.en --json
 ```
 
 Downloaded files are saved below:
@@ -131,7 +132,8 @@ Downloaded files are saved below:
 Each download is written through a temporary file, verified against the upstream SHA-1, and then moved into place. Once
 `whisper-cli` is installed, Automatic transcription can use a verified downloaded model even if the applet's
 `whisper.cpp model` setting is empty. Selecting a downloaded model from the applet sets the transcriber to
-`whisper.cpp` and stores the model path explicitly.
+`whisper.cpp` and stores the model path explicitly. Removing the active model from the applet clears that explicit
+selection and returns the transcriber setting to `Automatic`.
 
 ## Notifications
 
