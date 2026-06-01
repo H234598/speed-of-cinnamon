@@ -1265,6 +1265,11 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="speed-of-cinnamon")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"speed-of-cinnamon {__version__}",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     for name, handler in [("start", command_start), ("stop", command_stop), ("toggle", command_toggle)]:

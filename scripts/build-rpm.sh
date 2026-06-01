@@ -8,13 +8,42 @@ if ! command -v rpmbuild >/dev/null 2>&1; then
   printf 'rpmbuild not found. Install rpm-build on Fedora.\n' >&2
   exit 1
 fi
-python_bin="$(command -v python3)"
 
+python_bin="$(command -v python3)"
 tarball="$("${repo_dir}/scripts/build-dist.sh")"
 topdir="${repo_dir}/dist/rpmbuild"
+spec_source="${repo_dir}/packaging/speed-of-cinnamon.spec"
+spec_file="${topdir}/SPECS/speed-of-cinnamon.spec"
+
 rm -rf "${topdir}"
-mkdir -p "${topdir}/"{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+mkdir -p "${topdir}"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
 cp "${tarball}" "${topdir}/SOURCES/"
+
+version="$(
+  "${python_bin}" - "${repo_dir}" <<'PY'
+import sys
+from pathlib import Path
+import tomllib
+
+repo_dir = Path(sys.argv[1])
+data = tomllib.loads((repo_dir / "pyproject.toml").read_text(encoding="utf-8"))
+print(data["project"]["version"])
+PY
+)"
+
+cp "${spec_source}" "${spec_file}"
+${python_bin} - <<'PY' "${spec_file}" "${version}"
+from pathlib import Path
+import re
+import sys
+
+spec_path = Path(sys.argv[1])
+version = sys.argv[2]
+text = spec_path.read_text(encoding="utf-8")
+text = re.sub(r"^Version:\s*.*$", f"Version:        {version}", text, flags=re.M)
+text = re.sub(r"^Release:\s*.*$", "Release:        1%{?dist}", text, flags=re.M)
+spec_path.write_text(text, encoding="utf-8")
+PY
 
 rpmbuild \
   --nodeps \
@@ -22,6 +51,6 @@ rpmbuild \
   --define "_sourcedir ${topdir}/SOURCES" \
   --define "_specdir ${repo_dir}/packaging" \
   --define "__python3 ${python_bin}" \
-  -ba "${repo_dir}/packaging/speed-of-cinnamon.spec"
+  -ba "${spec_file}"
 
 find "${topdir}/RPMS" "${topdir}/SRPMS" -type f \( -name '*.rpm' -o -name '*.src.rpm' \) -print | sort
