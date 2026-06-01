@@ -70,6 +70,25 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("startSecondary.connect(\"activate\", () => this._startWithLanguage(secondary))", source)
         self.assertIn("this._populateLanguageMenu();", source)
 
+    def test_applet_exposes_recorder_submenu(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            set(schema["recorder"]["options"].values()),
+            {"auto", "pw-record", "parecord", "arecord"},
+        )
+        self.assertIn("const RECORDER_METHODS = [", source)
+        self.assertIn('this.recorderItem = new PopupMenu.PopupSubMenuMenuItem(_("Recorder: Automatic"))', source)
+        self.assertIn("_populateRecorderMenu: function()", source)
+        self.assertIn("_normalizeRecorder: function(method)", source)
+        self.assertIn("_recorderLabel: function(method)", source)
+        self.assertIn("_selectRecorder: function(method)", source)
+        self.assertIn('this.settings.bindProperty(Settings.BindingDirection.IN, "recorder", "recorder", this._onRecorderSettingsChanged, null)', source)
+        self.assertIn('this.settings.setValue("recorder", this.recorder)', source)
+        self.assertIn('this.recorderItem.label.text = _("Recorder: ") + this._recorderLabel(this._normalizeRecorder(this.recorder))', source)
+        self.assertIn('this.lastMessage = _("Recorder for next recording: ") + label', source)
+
     def test_applet_exposes_shortcut_reference_menu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

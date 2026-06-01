@@ -30,6 +30,12 @@ const OUTPUT_METHODS = [
   "type",
   "none"
 ];
+const RECORDER_METHODS = [
+  "auto",
+  "pw-record",
+  "parecord",
+  "arecord"
+];
 const EXPORTABLE_SETTINGS = [
   ["toggle-keybinding", "toggleKeybinding"],
   ["primary-language-keybinding", "primaryLanguageKeybinding"],
@@ -151,7 +157,7 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "max-seconds", "maxSeconds", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "auto-transcribe-timeout", "autoTranscribeTimeout", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "keep-recording-artifacts", "keepRecordingArtifacts", null, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "recorder", "recorder", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "recorder", "recorder", this._onRecorderSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "input-device", "inputDevice", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "insert-method", "insertMethod", this._onOutputSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "append-space", "appendSpace", this._onTextOutputSettingsChanged, null);
@@ -201,6 +207,15 @@ MyApplet.prototype = {
     });
     this.menu.addMenuItem(this.languageItem);
     this._populateLanguageMenu();
+
+    this.recorderItem = new PopupMenu.PopupSubMenuMenuItem(_("Recorder: Automatic"));
+    this.recorderItem.menu.connect("open-state-changed", (menu, open) => {
+      if (open) {
+        this._populateRecorderMenu();
+      }
+    });
+    this.menu.addMenuItem(this.recorderItem);
+    this._populateRecorderMenu();
 
     this.shortcutItem = new PopupMenu.PopupSubMenuMenuItem(_("Keyboard shortcuts"));
     this.shortcutItem.menu.connect("open-state-changed", (menu, open) => {
@@ -365,6 +380,12 @@ MyApplet.prototype = {
 
   _onTextOutputSettingsChanged: function() {
     this._populateTextOptionsMenu();
+    this._updatePanel();
+  },
+
+  _onRecorderSettingsChanged: function() {
+    this.recorder = this._normalizeRecorder(this.recorder);
+    this._populateRecorderMenu();
     this._updatePanel();
   },
 
@@ -541,6 +562,45 @@ MyApplet.prototype = {
   _normalizeOutputMethod: function(method) {
     let value = String(method || "").trim();
     return OUTPUT_METHODS.indexOf(value) >= 0 ? value : "clipboard-paste";
+  },
+
+  _recorderLabel: function(method) {
+    if (method === "pw-record") return _("PipeWire pw-record");
+    if (method === "parecord") return _("PulseAudio parecord");
+    if (method === "arecord") return _("ALSA arecord");
+    return _("Automatic");
+  },
+
+  _normalizeRecorder: function(method) {
+    let value = String(method || "").trim();
+    return RECORDER_METHODS.indexOf(value) >= 0 ? value : "auto";
+  },
+
+  _populateRecorderMenu: function() {
+    if (!this.recorderItem) {
+      return;
+    }
+    this.recorderItem.menu.removeAll();
+    let current = this._normalizeRecorder(this.recorder);
+    for (let method of RECORDER_METHODS) {
+      let label = (current === method ? "[x] " : "[ ] ") + this._recorderLabel(method);
+      let item = new PopupMenu.PopupMenuItem(label);
+      item.connect("activate", () => this._selectRecorder(method));
+      this.recorderItem.menu.addMenuItem(item);
+    }
+  },
+
+  _selectRecorder: function(method) {
+    this.recorder = this._normalizeRecorder(method);
+    this.settings.setValue("recorder", this.recorder);
+    this._populateRecorderMenu();
+    let label = this._recorderLabel(this.recorder);
+    if (this._hasActiveRecordingState()) {
+      this.lastMessage = _("Recorder for next recording: ") + label;
+      this._updatePanel();
+      return;
+    }
+    this._setStatus("ready", _("Recorder: ") + label, this.lastTranscript);
   },
 
   _populateOutputMethodMenu: function() {
@@ -1309,6 +1369,8 @@ MyApplet.prototype = {
       applied++;
     }
     this._syncActiveLanguage();
+    this.recorder = this._normalizeRecorder(this.recorder);
+    this._populateRecorderMenu();
     this.insertMethod = this._normalizeOutputMethod(this.insertMethod);
     this._populateOutputMethodMenu();
     this._registerHotkeys();
@@ -1812,6 +1874,9 @@ MyApplet.prototype = {
     }
     if (this.languageItem) {
       this.languageItem.label.text = _("Language: ") + this._currentLanguage();
+    }
+    if (this.recorderItem) {
+      this.recorderItem.label.text = _("Recorder: ") + this._recorderLabel(this._normalizeRecorder(this.recorder));
     }
     if (this.outputMethodItem) {
       this.outputMethodItem.label.text = _("Output: ") + this._outputMethodLabel(this._normalizeOutputMethod(this.insertMethod));
