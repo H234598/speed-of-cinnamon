@@ -81,8 +81,11 @@ MyApplet.prototype = {
     this.notificationSessionActive = false;
     this.lastNotificationKey = "";
     this.autoTranscribeRecordingKey = "";
+    this.recordingStartedAtMs = 0;
+    this.recordingMaxSeconds = 0;
     this.clipboard = St.Clipboard.get_default();
     this.statusTimer = 0;
+    this.displayTimer = 0;
 
     this.set_applet_icon_path(this.metadata.path + "/icon.svg");
     this.set_applet_label("");
@@ -222,6 +225,7 @@ MyApplet.prototype = {
 
   on_applet_removed_from_panel: function() {
     this._clearStatusTimer();
+    this._clearDisplayTimer();
     Main.keybindingManager.removeHotKey(this._hotkeyName());
     if (this.settings) {
       this.settings.finalize();
@@ -353,6 +357,8 @@ MyApplet.prototype = {
     this.notificationSessionActive = true;
     this.lastNotificationKey = "";
     this.autoTranscribeRecordingKey = "";
+    this.recordingStartedAtMs = 0;
+    this.recordingMaxSeconds = Number(this.maxSeconds || 30);
     this.isCommandRunning = true;
     this._setStatus("processing", _("Working..."), "");
     this._spawnJson(this._baseArgs("toggle"), (payload) => {
@@ -573,6 +579,8 @@ MyApplet.prototype = {
   },
 
   _applyPayload: function(payload) {
+    let status = payload.status || (payload.error ? "error" : "idle");
+    this._updateRecordingTiming(payload, status);
     if (payload.error) {
       this._setStatus("error", payload.error, this.lastTranscript);
       return;
@@ -581,11 +589,34 @@ MyApplet.prototype = {
       this._finishCinnamonClipboardInsert(payload);
       return;
     }
-    let status = payload.status || "idle";
     let message = payload.message || status;
     let transcript = payload.transcript || this.lastTranscript || "";
     this._setStatus(status, message, transcript);
     this._maybeAutoTranscribeRecorded(payload);
+  },
+
+  _updateRecordingTiming: function(payload, status) {
+    if (status !== "recording") {
+      this.recordingStartedAtMs = 0;
+      this.recordingMaxSeconds = 0;
+      return;
+    }
+    let started = this._parseDateMs(payload.started_at);
+    if (started > 0) {
+      this.recordingStartedAtMs = started;
+    } else if (this.recordingStartedAtMs <= 0) {
+      this.recordingStartedAtMs = Date.now();
+    }
+    let maxSeconds = Number(payload.max_seconds || this.maxSeconds || 30);
+    this.recordingMaxSeconds = maxSeconds > 0 ? maxSeconds : 30;
+  },
+
+  _parseDateMs: function(value) {
+    if (!value) {
+      return 0;
+    }
+    let parsed = Date.parse(String(value));
+    return isNaN(parsed) ? 0 : parsed;
   },
 
   _maybeAutoTranscribeRecorded: function(payload) {
@@ -615,6 +646,13 @@ MyApplet.prototype = {
     }
   },
 
+  _clearDisplayTimer: function() {
+    if (this.displayTimer) {
+      Mainloop.source_remove(this.displayTimer);
+      this.displayTimer = 0;
+    }
+  },
+
   _scheduleStatusPoll: function() {
     this._clearStatusTimer();
     if (this.status !== "recording" && this.status !== "processing") {
@@ -623,6 +661,21 @@ MyApplet.prototype = {
     this.statusTimer = Mainloop.timeout_add_seconds(2, () => {
       this.statusTimer = 0;
       this._refreshStatus();
+      return false;
+    });
+  },
+
+  _scheduleDisplayTick: function() {
+    this._clearDisplayTimer();
+    if (this.status !== "recording") {
+      return;
+    }
+    this.displayTimer = Mainloop.timeout_add_seconds(1, () => {
+      this.displayTimer = 0;
+      if (this.status === "recording") {
+        this._updatePanel();
+        this._scheduleDisplayTick();
+      }
       return false;
     });
   },
@@ -720,6 +773,7 @@ MyApplet.prototype = {
     this._updatePanel();
     this._maybeNotify(previousStatus, this.status, this.lastMessage);
     this._scheduleStatusPoll();
+    this._scheduleDisplayTick();
   },
 
   _maybeNotify: function(previousStatus, status, message) {
@@ -785,12 +839,43 @@ MyApplet.prototype = {
     return clean.length > 80 ? clean.slice(0, 77) + "..." : clean;
   },
 
+  _formatSeconds: function(seconds) {
+    let value = Math.max(0, Math.floor(Number(seconds || 0)));
+    if (value < 60) {
+      return String(value) + "s";
+    }
+    let minutes = Math.floor(value / 60);
+    let rest = value % 60;
+    return String(minutes) + ":" + (rest < 10 ? "0" : "") + String(rest);
+  },
+
+  _recordingElapsedSeconds: function() {
+    if (this.recordingStartedAtMs <= 0) {
+      return 0;
+    }
+    let elapsed = Math.floor((Date.now() - this.recordingStartedAtMs) / 1000);
+    return Math.max(0, elapsed);
+  },
+
+  _recordingProgressText: function() {
+    let maxSeconds = Number(this.recordingMaxSeconds || this.maxSeconds || 30);
+    let elapsed = this._recordingElapsedSeconds();
+    if (maxSeconds > 0) {
+      elapsed = Math.min(elapsed, maxSeconds);
+      return this._formatSeconds(elapsed) + " / " + this._formatSeconds(maxSeconds);
+    }
+    return this._formatSeconds(elapsed);
+  },
+
   _updatePanel: function() {
     let label = "";
     let tooltip = "Speed of Cinnamon";
+    let statusText = this.status || "idle";
     if (this.status === "recording") {
-      label = "REC";
-      tooltip = _("Recording...");
+      let progress = this._recordingProgressText();
+      label = "REC " + this._formatSeconds(this._recordingElapsedSeconds());
+      tooltip = _("Recording...") + " " + progress;
+      statusText = "recording " + progress;
       if (this.toggleItem) this.toggleItem.label.text = _("Stop dictation");
     } else if (this.status === "processing") {
       label = "...";
@@ -812,7 +897,7 @@ MyApplet.prototype = {
     this.set_applet_label(this.showPanelLabel ? label : "");
     this.set_applet_tooltip(tooltip + "\n" + this._shortTranscript());
     if (this.statusItem) {
-      this.statusItem.label.text = _("Status: ") + (this.status || "idle");
+      this.statusItem.label.text = _("Status: ") + statusText;
     }
     if (this.languageItem) {
       this.languageItem.label.text = _("Language: ") + this._currentLanguage();

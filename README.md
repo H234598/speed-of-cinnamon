@@ -11,6 +11,7 @@ path.
 ## Features
 
 - Cinnamon panel applet with microphone icon, concise status label, status menu, transcript preview, and a doctor check.
+- Live recording progress in the panel tooltip and menu, with a compact elapsed-time panel label.
 - Copyable diagnostics bundle for support reports without transcript contents.
 - Cinnamon global hotkey via `Main.keybindingManager`; default is `Super+Z`.
 - Cinnamon desktop notifications for completion and failures, with optional recording-state notifications.

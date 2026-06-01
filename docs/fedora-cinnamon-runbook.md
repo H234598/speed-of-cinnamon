@@ -40,6 +40,11 @@ speed-of-cinnamon history --limit 5 --json
 The Cinnamon applet exposes the same recent entries under `Recent transcripts`; selecting one copies it through
 Cinnamon's clipboard API.
 
+## Recording Progress
+
+While recording, the applet keeps the panel label compact (`REC 12s`) and exposes the full elapsed/maximum time in the
+tooltip and status menu. This mirrors Speed of Sound's recording progress without adding a separate Cinnamon window.
+
 ## Cleanup
 
 Old transcript files and cached recordings can be pruned without touching the currently referenced state files:
