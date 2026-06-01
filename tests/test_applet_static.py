@@ -245,6 +245,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon", "models", "whisper.cpp"])', source)
         self.assertNotIn('Util.spawn(["xdg-open"', source)
 
+    def test_applet_copies_setup_commands_without_installing_packages(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn('new PopupMenu.PopupIconMenuItem(_("Copy setup commands"), "utilities-terminal-symbolic"', source)
+        self.assertIn("_setupCommandsText: function(payload)", source)
+        self.assertIn("_copySetupCommands: function()", source)
+        self.assertIn("let commands = payload.commands || [];", source)
+        self.assertIn("if (!Array.isArray(commands))", source)
+        self.assertIn("lines.join(\"\\n\")", source)
+        self.assertIn("this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text)", source)
+        self.assertIn('this._setStatus("ready", _("No setup commands needed"), this.lastTranscript)', source)
+        self.assertIn('this._setStatus("done", _("Copied setup commands"), this.lastTranscript)', source)
+
     def test_applet_exposes_quick_output_method_menu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))

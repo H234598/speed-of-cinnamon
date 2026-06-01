@@ -318,6 +318,10 @@ MyApplet.prototype = {
     setupPlan.connect("activate", () => this._copySetupPlan());
     this.menu.addMenuItem(setupPlan);
 
+    let setupCommands = new PopupMenu.PopupIconMenuItem(_("Copy setup commands"), "utilities-terminal-symbolic", St.IconType.SYMBOLIC);
+    setupCommands.connect("activate", () => this._copySetupCommands());
+    this.menu.addMenuItem(setupCommands);
+
     let diagnostics = new PopupMenu.PopupIconMenuItem(_("Copy diagnostics"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
     diagnostics.connect("activate", () => this._copyDiagnostics());
     this.menu.addMenuItem(diagnostics);
@@ -1129,6 +1133,43 @@ MyApplet.prototype = {
       }
       this.clipboard.set_text(St.ClipboardType.CLIPBOARD, String(payload.text || JSON.stringify(payload, null, 2)));
       this._setStatus("done", _("Copied setup plan"), this.lastTranscript);
+    });
+  },
+
+  _setupCommandsText: function(payload) {
+    let commands = payload.commands || [];
+    if (!Array.isArray(commands)) {
+      return "";
+    }
+
+    let seen = {};
+    let lines = [];
+    for (let i = 0; i < commands.length; i++) {
+      let text = String(commands[i] || "").trim();
+      if (text === "" || seen[text]) {
+        continue;
+      }
+      seen[text] = true;
+      lines.push(text);
+    }
+    return lines.join("\n");
+  },
+
+  _copySetupCommands: function() {
+    this._spawnJson(this._setupArgs(), (payload) => {
+      if (payload.error) {
+        this._setStatus("error", payload.error, this.lastTranscript);
+        return;
+      }
+
+      let text = this._setupCommandsText(payload);
+      if (text === "") {
+        this._setStatus("ready", _("No setup commands needed"), this.lastTranscript);
+        return;
+      }
+
+      this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
+      this._setStatus("done", _("Copied setup commands"), this.lastTranscript);
     });
   },
 

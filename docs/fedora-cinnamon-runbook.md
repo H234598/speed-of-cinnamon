@@ -53,10 +53,11 @@ author/committer identity, applet metadata, Python project metadata, RPM spec me
 markers in tracked text files.
 
 On first load, the applet runs a lightweight setup check against its current Cinnamon settings. If the panel shows
-`SET`, open the applet menu and use `Copy setup plan`, `Run doctor`, `Open applet settings`, `Open setup guide`, and
-`Voice model` to finish the local pipeline setup. The startup check does not use portals and does not open a separate
-window. Guide and folder actions are launched through Cinnamon's GJS/Gio default-app API, not an `xdg-open` shell
-command.
+`SET`, open the applet menu and use `Copy setup plan`, `Copy setup commands`, `Run doctor`, `Open applet settings`,
+`Open setup guide`, and `Voice model` to finish the local pipeline setup. `Copy setup commands` copies only the concrete
+shell commands from the setup plan; it does not run `sudo`, `pkexec`, or a package manager from the applet. The startup
+check does not use portals and does not open a separate window. Guide and folder actions are launched through Cinnamon's
+GJS/Gio default-app API, not an `xdg-open` shell command.
 
 Use `Keyboard shortcuts` in the applet menu as the live shortcut reference. It shows the configured Cinnamon global
 toggle, optional primary/secondary language shortcuts, and applet-only actions such as cancel or language switching.

@@ -145,8 +145,9 @@ per-user development install and the Fedora RPM/system install usable without ed
 
 On startup, the applet runs a lightweight doctor check against its current Cinnamon settings. A `SET` panel label means
 the configured pipeline needs setup, usually because no ASR backend or local voice model is available yet. Use the
-applet menu's `Copy setup plan`, `Open applet settings`, `Open setup guide`, `Run doctor`, and `Voice model` actions to
-finish setup without leaving Cinnamon's applet workflow.
+applet menu's `Copy setup plan`, `Copy setup commands`, `Open applet settings`, `Open setup guide`, `Run doctor`, and
+`Voice model` actions to finish setup without leaving Cinnamon's applet workflow. `Copy setup commands` copies only the
+concrete shell commands from the setup plan; it does not run `sudo`, `pkexec`, or a package manager from the applet.
 
 The applet menu also includes `Keyboard shortcuts`, a live reference for the configured Cinnamon hotkeys. It lists the
 main toggle, optional primary/secondary language shortcuts, and applet-only actions, and can copy that reference through
