@@ -43,6 +43,32 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["transcript"], "TEST")
         self.assertEqual(saved, "TEST")
 
+    def test_transcribe_file_passes_personalization_to_post_process(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            command = "python3 -c \"import os, sys; print(sys.stdin.read().strip() + '|' + os.environ['SPEED_OF_CINNAMON_VOCABULARY'])\""
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf raw",
+                    "--post-process-command",
+                    command,
+                    "--personal-context",
+                    "Use project terms.",
+                    "--vocabulary",
+                    "PipeWire",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["transcript"], "raw|PipeWire")
+
     @mock.patch("speed_of_cinnamon.cli.list_input_sources")
     def test_list_inputs_outputs_sources(self, mocked_sources: mock.Mock) -> None:
         mocked_sources.return_value = [

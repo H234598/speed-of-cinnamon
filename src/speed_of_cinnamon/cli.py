@@ -282,8 +282,16 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             command_template=args.transcriber_command,
             backend=args.transcriber,
             whisper_model=args.whisper_model,
+            personal_context=args.personal_context,
+            vocabulary=args.vocabulary,
         )
-        text = post_process_text(text, args.language or state.language, args.post_process_command)
+        text = post_process_text(
+            text,
+            args.language or state.language,
+            args.post_process_command,
+            args.personal_context,
+            args.vocabulary,
+        )
         text_path.write_text(text.strip() + "\n", encoding="utf-8")
         text_to_insert = append_space_if_needed(text, args.append_space)
         inserted = insert_text(text_to_insert, args.insert_method, args.typing_delay_ms)
@@ -531,8 +539,10 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         command_template=args.transcriber_command,
         backend=args.transcriber,
         whisper_model=args.whisper_model,
+        personal_context=args.personal_context,
+        vocabulary=args.vocabulary,
     )
-    text = post_process_text(text, args.language, args.post_process_command)
+    text = post_process_text(text, args.language, args.post_process_command, args.personal_context, args.vocabulary)
     text_path.write_text(text.strip() + "\n", encoding="utf-8")
     return {"status": "done", "transcript": text, "transcript_path": str(text_path)}
 
@@ -551,6 +561,8 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--transcriber-command", default="")
     parser.add_argument("--whisper-model", default="")
     parser.add_argument("--post-process-command", default="")
+    parser.add_argument("--personal-context", default="")
+    parser.add_argument("--vocabulary", default="")
     parser.add_argument(
         "--insert-method",
         default="clipboard-paste",
@@ -618,6 +630,8 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_file.add_argument("--transcriber-command", default="")
     transcribe_file.add_argument("--whisper-model", default="")
     transcribe_file.add_argument("--post-process-command", default="")
+    transcribe_file.add_argument("--personal-context", default="")
+    transcribe_file.add_argument("--vocabulary", default="")
     transcribe_file.set_defaults(handler=command_transcribe_file)
     return parser
 

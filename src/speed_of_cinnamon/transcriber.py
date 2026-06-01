@@ -6,6 +6,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from .personalization import build_personalization_prompt, command_environment, normalize_context, normalize_vocabulary
+
 
 class TranscriptionError(RuntimeError):
     pass
@@ -22,7 +24,14 @@ def _quote(value: Path | str) -> str:
     return shlex.quote(str(value))
 
 
-def render_command_template(template: str, audio_path: Path, language: str, text_path: Path) -> str:
+def render_command_template(
+    template: str,
+    audio_path: Path,
+    language: str,
+    text_path: Path,
+    personal_context: str = "",
+    vocabulary: str = "",
+) -> str:
     output_base = text_path.with_suffix("")
     replacements = {
         "audio": _quote(audio_path),
@@ -30,6 +39,9 @@ def render_command_template(template: str, audio_path: Path, language: str, text
         "text": _quote(text_path),
         "output_base": _quote(output_base),
         "output_dir": _quote(text_path.parent),
+        "context": _quote(normalize_context(personal_context)),
+        "vocabulary": _quote(normalize_vocabulary(vocabulary)),
+        "prompt": _quote(build_personalization_prompt(personal_context, vocabulary)),
     }
     rendered = template
     for key, value in replacements.items():
@@ -37,9 +49,23 @@ def render_command_template(template: str, audio_path: Path, language: str, text
     return rendered
 
 
-def transcribe_with_template(template: str, audio_path: Path, language: str, text_path: Path) -> str:
-    command = render_command_template(template, audio_path, language, text_path)
-    proc = subprocess.run(command, shell=True, text=True, capture_output=True, timeout=900)
+def transcribe_with_template(
+    template: str,
+    audio_path: Path,
+    language: str,
+    text_path: Path,
+    personal_context: str = "",
+    vocabulary: str = "",
+) -> str:
+    command = render_command_template(template, audio_path, language, text_path, personal_context, vocabulary)
+    proc = subprocess.run(
+        command,
+        shell=True,
+        text=True,
+        capture_output=True,
+        timeout=900,
+        env=command_environment(personal_context, vocabulary),
+    )
     if proc.returncode != 0:
         detail = proc.stderr.strip() or proc.stdout.strip() or f"exit code {proc.returncode}"
         raise TranscriptionError(f"transcriber command failed: {detail}")
@@ -158,6 +184,8 @@ def transcribe(
     command_template: str = "",
     backend: str = "auto",
     whisper_model: str = "",
+    personal_context: str = "",
+    vocabulary: str = "",
 ) -> str:
     if not audio_path.exists() or audio_path.stat().st_size == 0:
         raise TranscriptionError(f"audio file is missing or empty: {audio_path}")
@@ -171,7 +199,14 @@ def transcribe(
     if resolved_backend == "command":
         if not command_template.strip():
             raise TranscriptionError("custom transcriber command is required")
-        text = transcribe_with_template(command_template.strip(), audio_path, language, text_path)
+        text = transcribe_with_template(
+            command_template.strip(),
+            audio_path,
+            language,
+            text_path,
+            personal_context,
+            vocabulary,
+        )
     elif resolved_backend == "whisper":
         text = transcribe_with_openai_whisper(audio_path, language, text_path)
     elif resolved_backend == "whisper-cpp":

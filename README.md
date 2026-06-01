@@ -17,6 +17,7 @@ path.
 - PipeWire/PulseAudio/ALSA recording through `pw-record`, `parecord`, or `arecord`.
 - Optional microphone/source selection by PipeWire/Pulse source name, with a `list-inputs` helper.
 - ASR presets for Automatic, OpenAI Whisper command, whisper.cpp with a model path, or a custom command template.
+- Personal context and custom vocabulary fields for local ASR/post-process command wrappers.
 - Optional post-process command for local text cleanup or LLM polishing.
 - Cinnamon clipboard output through the applet, optional `xdotool` paste/direct typing, clipboard-only, or no insertion.
 - Applet menu action to copy the last transcript again.
@@ -64,8 +65,25 @@ Template placeholders are:
 {audio} {language} {text} {output_dir} {output_base}
 ```
 
+Personalization is local-only and command-driven. Configure `Personal context` and `Custom vocabulary` in the applet
+settings, or pass them through the CLI. Custom transcriber and post-process commands can use these shell-quoted
+placeholders:
+
+```text
+{context} {vocabulary} {prompt}
+```
+
+The same values are exposed as environment variables:
+
+```text
+SPEED_OF_CINNAMON_CONTEXT
+SPEED_OF_CINNAMON_VOCABULARY
+SPEED_OF_CINNAMON_PROMPT
+```
+
 For text cleanup after ASR, configure `Post-process command`. The transcript is passed on stdin, and the command must
-print the final text. `{text}` and `{language}` can also be used as shell-quoted placeholders.
+print the final text. `{text}`, `{language}`, `{context}`, `{vocabulary}`, and `{prompt}` can also be used as
+shell-quoted placeholders.
 
 ## Install Locally
 
@@ -102,6 +120,7 @@ speed-of-cinnamon toggle --language de --transcriber whisper
 speed-of-cinnamon toggle --language de --transcriber whisper-cpp --whisper-model ~/.local/share/whisper/models/ggml-base.bin
 speed-of-cinnamon toggle --language de --transcriber command --transcriber-command "printf 'Hallo Cinnamon'"
 speed-of-cinnamon toggle --post-process-command "python3 -c 'import sys; print(sys.stdin.read().strip().capitalize())'"
+speed-of-cinnamon toggle --personal-context "Use Fedora Cinnamon project terms." --vocabulary "PipeWire"
 ```
 
 For backend-only testing without touching the focused application:
@@ -137,6 +156,7 @@ Cinnamon keybinding / panel click
   -> Python backend:
        recorder.py      pw-record / parecord / arecord and pactl source discovery
        transcriber.py   ASR preset resolver and command runners
+       personalization.py context/vocabulary prompt and environment helpers
        postprocessor.py optional text polishing command
        cli.py           transcript history and state commands
        output.py        xclip / xdotool for standalone CLI output

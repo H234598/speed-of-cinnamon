@@ -58,6 +58,33 @@ Configure `Primary recognition language` and `Secondary recognition language` in
 menu item switches the active runtime language for future recordings. The shortcut and panel action then pass that
 active language to the backend as `--language`.
 
+## Personalization
+
+Speed of Cinnamon keeps personalization simple and local for Cinnamon: configure `Personal context` and `Custom
+vocabulary` in the applet settings, or pass them through CLI flags:
+
+```bash
+speed-of-cinnamon toggle \
+  --personal-context "Use Fedora Cinnamon project terms." \
+  --vocabulary "PipeWire"
+```
+
+Custom transcriber and post-process commands can read the values from placeholders:
+
+```text
+{context} {vocabulary} {prompt}
+```
+
+They are also available as environment variables:
+
+```text
+SPEED_OF_CINNAMON_CONTEXT
+SPEED_OF_CINNAMON_VOCABULARY
+SPEED_OF_CINNAMON_PROMPT
+```
+
+The built-in `diagnostics` output does not include these values.
+
 ## Validation
 
 ```bash

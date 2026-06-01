@@ -18,14 +18,18 @@ from speed_of_cinnamon.transcriber import (
 class TranscriberTest(unittest.TestCase):
     def test_template_quotes_placeholders(self) -> None:
         rendered = render_command_template(
-            "tool --audio {audio} --lang {language} --text {text}",
+            "tool --audio {audio} --lang {language} --text {text} --prompt {prompt}",
             Path("/tmp/with space/audio.wav"),
             "de",
             Path("/tmp/out text.txt"),
+            "Use Cinnamon terms.",
+            "PipeWire",
         )
         self.assertIn("'/tmp/with space/audio.wav'", rendered)
         self.assertIn("--lang de", rendered)
         self.assertIn("'/tmp/out text.txt'", rendered)
+        self.assertIn("Use Cinnamon terms.", rendered)
+        self.assertIn("PipeWire", rendered)
 
     def test_command_stdout_is_saved_as_transcript(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -36,6 +40,21 @@ class TranscriberTest(unittest.TestCase):
             saved = text.read_text(encoding="utf-8").strip()
         self.assertEqual(result, "hello cinnamon")
         self.assertEqual(saved, "hello cinnamon")
+
+    def test_command_receives_personalization_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text = Path(tmp) / "sample.txt"
+            result = transcribe(
+                audio,
+                "en",
+                text,
+                "python3 -c \"import os; print(os.environ['SPEED_OF_CINNAMON_VOCABULARY'])\"",
+                personal_context="Use project terms.",
+                vocabulary="PipeWire\nCinnamon",
+            )
+        self.assertEqual(result, "PipeWire\nCinnamon")
 
     def test_backend_aliases_are_normalized(self) -> None:
         self.assertEqual(normalize_backend("openai-whisper"), "whisper")

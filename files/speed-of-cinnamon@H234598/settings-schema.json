@@ -5,7 +5,7 @@
     "main-page": {
       "type": "page",
       "title": "Speed of Cinnamon",
-      "sections": ["activation-section", "recording-section", "output-section", "backend-section"]
+      "sections": ["activation-section", "recording-section", "personalization-section", "output-section", "backend-section"]
     },
     "activation-section": {
       "type": "section",
@@ -16,6 +16,11 @@
       "type": "section",
       "title": "Recording",
       "keys": ["language", "secondary-language", "max-seconds", "recorder", "input-device"]
+    },
+    "personalization-section": {
+      "type": "section",
+      "title": "Personalization",
+      "keys": ["personal-context", "vocabulary"]
     },
     "output-section": {
       "type": "section",
@@ -90,6 +95,20 @@
     "tooltip": "Optional PipeWire/Pulse source name. Leave empty for the current default. Run 'speed-of-cinnamon list-inputs --json' to inspect available sources.",
     "default": ""
   },
+  "personal-context": {
+    "type": "textview",
+    "description": "Personal context",
+    "tooltip": "Optional local-only context for custom ASR or post-processing commands. Available as {context}, {prompt}, and SPEED_OF_CINNAMON_CONTEXT.",
+    "height": 120,
+    "default": ""
+  },
+  "vocabulary": {
+    "type": "textview",
+    "description": "Custom vocabulary",
+    "tooltip": "Optional terms, one per line. Available as {vocabulary}, {prompt}, and SPEED_OF_CINNAMON_VOCABULARY.",
+    "height": 120,
+    "default": ""
+  },
   "insert-method": {
     "type": "combobox",
     "description": "Insert method",
@@ -141,13 +160,13 @@
   "transcriber-command": {
     "type": "entry",
     "description": "Transcriber command template",
-    "tooltip": "Used by the Custom command transcriber, or by Automatic when filled. Template placeholders: {audio}, {language}, {text}, {output_dir}, {output_base}. The command must print the transcript or write it to {text}.",
+    "tooltip": "Used by the Custom command transcriber, or by Automatic when filled. Template placeholders: {audio}, {language}, {text}, {output_dir}, {output_base}, {context}, {vocabulary}, {prompt}. The command must print the transcript or write it to {text}.",
     "default": ""
   },
   "post-process-command": {
     "type": "entry",
     "description": "Post-process command",
-    "tooltip": "Optional text polishing command. It receives the transcript on stdin and must print the final text. Template placeholders: {text}, {language}.",
+    "tooltip": "Optional text polishing command. It receives the transcript on stdin and must print the final text. Template placeholders: {text}, {language}, {context}, {vocabulary}, {prompt}.",
     "default": ""
   }
 }
