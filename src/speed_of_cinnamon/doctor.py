@@ -268,6 +268,7 @@ def report(settings: Mapping[str, object] | None = None, applet: bool = False) -
     configured = configured_status(settings or {}, by_name, desktop, applet)
     required_ok = (
         by_name["python3"].ok
+        and (not applet or bool(desktop.get("cinnamon")))
         and bool(configured["recorder"]["ok"])
         and bool(configured["transcriber"]["ok"])
         and bool(configured["output"]["ok"])

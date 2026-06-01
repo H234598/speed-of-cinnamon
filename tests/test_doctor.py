@@ -45,6 +45,23 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(payload["configured"]["output"]["paste_ok"])
         self.assertEqual(payload["configured"]["warnings"], ["automatic paste is unavailable; Cinnamon clipboard copy still works"])
 
+    def test_applet_pipeline_requires_cinnamon_session(self) -> None:
+        tools = {"python3", "pw-record", "pactl", "xdotool"}
+        env = {"XDG_CURRENT_DESKTOP": "GNOME", "XDG_SESSION_TYPE": "x11", "DESKTOP_SESSION": "gnome"}
+        settings = {
+            "recorder": "auto",
+            "transcriber": "command",
+            "transcriber-command": "printf ok",
+            "insert-method": "none",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)), mock.patch.dict(os.environ, env):
+            payload = doctor.report(settings, applet=True)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["desktop"]["cinnamon"])
+        self.assertTrue(payload["configured"]["recorder"]["ok"])
+        self.assertTrue(payload["configured"]["transcriber"]["ok"])
+        self.assertTrue(payload["configured"]["output"]["ok"])
+
     def test_cli_clipboard_paste_requires_keyboard_helper(self) -> None:
         tools = {"python3", "pw-record", "pactl", "xsel"}
         env = {"XDG_CURRENT_DESKTOP": "X-Cinnamon", "XDG_SESSION_TYPE": "x11", "DESKTOP_SESSION": "cinnamon"}

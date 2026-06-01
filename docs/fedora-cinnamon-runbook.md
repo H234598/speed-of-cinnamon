@@ -257,6 +257,10 @@ readiness failure because dictation cannot complete without a transcriber. Missi
 `clipboard-paste` mode is only a warning because Cinnamon clipboard copy still works. In pure CLI mode,
 `clipboard-paste` still needs a clipboard helper and a keyboard helper.
 
+When `--applet` is used outside a Cinnamon session, the doctor marks the applet pipeline as not ready and the setup plan
+starts with `Use a Cinnamon session`. This keeps Fedora GNOME, KDE, and other desktop sessions from looking falsely
+ready for a Cinnamon applet workflow.
+
 ## Diagnostics
 
 For support reports, run:

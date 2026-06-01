@@ -46,6 +46,23 @@ class SetupPlanTest(unittest.TestCase):
         self.assertIn("speed-of-cinnamon download-model tiny.en --json", plan["commands"])
         self.assertIn("Install or configure", plan["text"])
 
+    def test_applet_plan_marks_non_cinnamon_session_not_ready(self) -> None:
+        payload = {
+            "ok": False,
+            "configured": {
+                "recorder": {"ok": True},
+                "transcriber": {"ok": True},
+                "output": {"ok": True},
+                "postprocessor": {"ok": True},
+                "warnings": [],
+            },
+            "desktop": {"cinnamon": False},
+        }
+        plan = build_setup_plan(payload)
+        self.assertFalse(plan["ready"])
+        self.assertEqual(plan["steps"][0]["id"], "cinnamon-session")
+        self.assertIn("Use a Cinnamon session", plan["text"])
+
     def test_applet_paste_warning_is_optional(self) -> None:
         payload = {
             "ok": True,
