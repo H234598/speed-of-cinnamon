@@ -105,7 +105,7 @@ import sys
 from pathlib import Path
 
 payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-if payload.get("status") != "done" or not payload.get("ready"):
+if payload.get("status") != "done" or "Speed of Cinnamon setup plan" not in str(payload.get("text", "")):
     raise SystemExit(f"unexpected setup payload: {payload!r}")
 PY
 
