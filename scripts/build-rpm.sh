@@ -8,6 +8,7 @@ if ! command -v rpmbuild >/dev/null 2>&1; then
   printf 'rpmbuild not found. Install rpm-build on Fedora.\n' >&2
   exit 1
 fi
+python_bin="$(command -v python3)"
 
 tarball="$("${repo_dir}/scripts/build-dist.sh")"
 topdir="${repo_dir}/dist/rpmbuild"
@@ -20,6 +21,7 @@ rpmbuild \
   --define "_topdir ${topdir}" \
   --define "_sourcedir ${topdir}/SOURCES" \
   --define "_specdir ${repo_dir}/packaging" \
+  --define "__python3 ${python_bin}" \
   -ba "${repo_dir}/packaging/speed-of-cinnamon.spec"
 
 find "${topdir}/RPMS" "${topdir}/SRPMS" -type f \( -name '*.rpm' -o -name '*.src.rpm' \) -print | sort
