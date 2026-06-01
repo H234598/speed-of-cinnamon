@@ -10,6 +10,27 @@ const Mainloop = imports.mainloop;
 const UUID = "speed-of-cinnamon@H234598";
 const HOTKEY_ID = "speed-of-cinnamon-toggle";
 const DEFAULT_CLI = GLib.build_filenamev([GLib.get_home_dir(), ".local", "bin", "speed-of-cinnamon"]);
+const EXPORTABLE_SETTINGS = [
+  ["toggle-keybinding", "toggleKeybinding"],
+  ["show-panel-label", "showPanelLabel"],
+  ["language", "language"],
+  ["secondary-language", "secondaryLanguage"],
+  ["max-seconds", "maxSeconds"],
+  ["recorder", "recorder"],
+  ["input-device", "inputDevice"],
+  ["personal-context", "personalContext"],
+  ["vocabulary", "vocabulary"],
+  ["notify-recording", "notifyRecording"],
+  ["notify-complete", "notifyComplete"],
+  ["notify-error", "notifyError"],
+  ["insert-method", "insertMethod"],
+  ["append-space", "appendSpace"],
+  ["typing-delay-ms", "typingDelayMs"],
+  ["transcriber", "transcriber"],
+  ["whisper-model", "whisperModel"],
+  ["transcriber-command", "transcriberCommand"],
+  ["post-process-command", "postProcessCommand"]
+];
 
 function _(text) {
   return text;
@@ -160,6 +181,14 @@ MyApplet.prototype = {
     let cleanup = new PopupMenu.PopupIconMenuItem(_("Clean old files"), "edit-clear-symbolic", St.IconType.SYMBOLIC);
     cleanup.connect("activate", () => this._cleanupOldFiles());
     this.menu.addMenuItem(cleanup);
+
+    let exportSettings = new PopupMenu.PopupIconMenuItem(_("Export settings"), "document-save-symbolic", St.IconType.SYMBOLIC);
+    exportSettings.connect("activate", () => this._exportSettings());
+    this.menu.addMenuItem(exportSettings);
+
+    let importSettings = new PopupMenu.PopupIconMenuItem(_("Import settings"), "document-open-symbolic", St.IconType.SYMBOLIC);
+    importSettings.connect("activate", () => this._importSettings());
+    this.menu.addMenuItem(importSettings);
   },
 
   _hotkeyName: function() {
@@ -250,6 +279,14 @@ MyApplet.prototype = {
 
   _listInputsArgs: function() {
     return [this.cliPath || DEFAULT_CLI, "list-inputs", "--json"];
+  },
+
+  _settingsExportArgs: function() {
+    return [this.cliPath || DEFAULT_CLI, "settings-export", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--json"];
+  },
+
+  _settingsImportArgs: function() {
+    return [this.cliPath || DEFAULT_CLI, "settings-import", "--json"];
   },
 
   _usesCinnamonClipboard: function() {
@@ -408,6 +445,55 @@ MyApplet.prototype = {
       this._setStatus("done", _("Cleaned old files: ") + String(deleted), this.lastTranscript);
       this._refreshHistory();
     });
+  },
+
+  _settingsSnapshot: function() {
+    let snapshot = {};
+    for (let item of EXPORTABLE_SETTINGS) {
+      snapshot[item[0]] = this[item[1]];
+    }
+    return snapshot;
+  },
+
+  _exportSettings: function() {
+    this._setStatus("processing", _("Exporting settings..."), this.lastTranscript);
+    this._spawnJson(this._settingsExportArgs(), (payload) => {
+      if (payload.error) {
+        this._setStatus("error", payload.error, this.lastTranscript);
+        return;
+      }
+      this._setStatus("done", _("Exported settings: ") + payload.path, this.lastTranscript);
+    });
+  },
+
+  _importSettings: function() {
+    this._setStatus("processing", _("Importing settings..."), this.lastTranscript);
+    this._spawnJson(this._settingsImportArgs(), (payload) => {
+      if (payload.error) {
+        this._setStatus("error", payload.error, this.lastTranscript);
+        return;
+      }
+      let applied = this._applyImportedSettings(payload.settings || {});
+      this._setStatus("done", _("Imported settings: ") + String(applied), this.lastTranscript);
+    });
+  },
+
+  _applyImportedSettings: function(settings) {
+    let applied = 0;
+    for (let item of EXPORTABLE_SETTINGS) {
+      let key = item[0];
+      let prop = item[1];
+      if (!Object.prototype.hasOwnProperty.call(settings, key)) {
+        continue;
+      }
+      this[prop] = settings[key];
+      this.settings.setValue(key, settings[key]);
+      applied++;
+    }
+    this._syncActiveLanguage();
+    this._registerHotkey();
+    this._updatePanel();
+    return applied;
   },
 
   _spawnJson: function(args, callback) {

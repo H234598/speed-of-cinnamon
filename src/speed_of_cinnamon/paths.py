@@ -24,6 +24,10 @@ def state_dir() -> Path:
     return xdg_state_home() / APP_ID
 
 
+def data_dir() -> Path:
+    return xdg_data_home() / APP_ID
+
+
 def cache_dir() -> Path:
     return xdg_cache_home() / APP_ID
 
@@ -40,8 +44,12 @@ def default_state_file() -> Path:
     return state_dir() / "state.json"
 
 
+def default_settings_export_file() -> Path:
+    return data_dir() / "settings-export.json"
+
+
 def ensure_runtime_dirs() -> None:
+    data_dir().mkdir(parents=True, exist_ok=True)
     state_dir().mkdir(parents=True, exist_ok=True)
     recordings_dir().mkdir(parents=True, exist_ok=True)
     transcript_dir().mkdir(parents=True, exist_ok=True)
-

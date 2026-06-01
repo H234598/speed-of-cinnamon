@@ -52,6 +52,26 @@ speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 25 --json
 The Cinnamon applet exposes the same conservative cleanup as `Clean old files`. Recordings and their companion logs are
 handled as one cache group, and the current `state.json` audio/log/transcript paths are skipped.
 
+## Settings Backup
+
+Use the applet menu actions `Export settings` and `Import settings` to save or restore the portable Cinnamon settings
+snapshot:
+
+```text
+~/.local/share/speed-of-cinnamon/settings-export.json
+```
+
+The same file can be imported from the CLI, and scripts can export an explicit settings object:
+
+```bash
+speed-of-cinnamon settings-export --settings-json '{"language":"de","append-space":true}' --json
+speed-of-cinnamon settings-import --json
+```
+
+The export includes the hotkey, languages, recorder/backend choices, command templates, personalization, output mode,
+and notification settings. It intentionally excludes the machine-local `cli-path`. Because command templates and
+personal context may contain private data, keep the export file private.
+
 ## Language Switching
 
 Configure `Primary recognition language` and `Secondary recognition language` in the applet settings. The `Language`

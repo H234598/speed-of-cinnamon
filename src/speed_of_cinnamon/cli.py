@@ -13,9 +13,10 @@ from pathlib import Path
 from . import __version__
 from .doctor import report as doctor_report
 from .output import insert_text
-from .paths import APP_ID, APP_NAME, default_state_file, ensure_runtime_dirs, recordings_dir, state_dir, transcript_dir
+from .paths import APP_ID, APP_NAME, default_settings_export_file, default_state_file, ensure_runtime_dirs, recordings_dir, state_dir, transcript_dir
 from .postprocessor import post_process_text
 from .recorder import choose_recorder, list_input_sources, start_recorder, stop_process
+from .settings_export import read_export, write_export
 from .state import RecordingState, StateStore, now_iso, process_is_alive
 from .transcriber import transcribe
 
@@ -523,6 +524,38 @@ def command_diagnostics(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def command_settings_export(args: argparse.Namespace) -> dict[str, object]:
+    ensure_runtime_dirs()
+    path = Path(args.output).expanduser() if args.output else default_settings_export_file()
+    try:
+        settings = json.loads(args.settings_json or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"settings JSON could not be parsed: {exc}") from exc
+    if not isinstance(settings, dict):
+        raise RuntimeError("settings JSON must be an object")
+    payload = write_export(path, settings)
+    return {
+        "status": "done",
+        "message": f"settings exported to {path}",
+        "path": str(path),
+        "settings_count": len(payload["settings"]),
+    }
+
+
+def command_settings_import(args: argparse.Namespace) -> dict[str, object]:
+    ensure_runtime_dirs()
+    path = Path(args.input).expanduser() if args.input else default_settings_export_file()
+    payload = read_export(path)
+    return {
+        "status": "done",
+        "message": f"settings imported from {path}",
+        "path": str(path),
+        "settings": payload["settings"],
+        "settings_count": len(payload["settings"]),
+        "export_version": payload["version"],
+    }
+
+
 def command_insert_text(args: argparse.Namespace) -> dict[str, object]:
     inserted = insert_text(args.text, args.insert_method, args.typing_delay_ms)
     return {"status": "done", "inserted": inserted}
@@ -614,6 +647,17 @@ def build_parser() -> argparse.ArgumentParser:
     diagnostics = subparsers.add_parser("diagnostics")
     add_common_options(diagnostics)
     diagnostics.set_defaults(handler=command_diagnostics)
+
+    settings_export = subparsers.add_parser("settings-export")
+    add_common_options(settings_export)
+    settings_export.add_argument("--settings-json", default="{}")
+    settings_export.add_argument("--output", default="")
+    settings_export.set_defaults(handler=command_settings_export)
+
+    settings_import = subparsers.add_parser("settings-import")
+    add_common_options(settings_import)
+    settings_import.add_argument("--input", default="")
+    settings_import.set_defaults(handler=command_settings_import)
 
     insert = subparsers.add_parser("insert-text")
     add_common_options(insert)

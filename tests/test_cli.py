@@ -89,6 +89,31 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["sources"][0]["name"], "alsa_input.usb-mic.analog-stereo")
         self.assertTrue(payload["sources"][0]["default"])
 
+    def test_settings_export_import_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            export_path = Path(tmp) / "settings.json"
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = cli.run([
+                    "settings-export",
+                    "--settings-json",
+                    json.dumps({"language": "de", "notify-complete": False, "cli-path": "/tmp/local"}),
+                    "--output",
+                    str(export_path),
+                    "--json",
+                ])
+            export_payload = json.loads(stdout.getvalue())
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                import_code = cli.run(["settings-import", "--input", str(export_path), "--json"])
+            import_payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(import_code, 0)
+        self.assertEqual(export_payload["path"], str(export_path))
+        self.assertEqual(import_payload["settings"]["language"], "de")
+        self.assertFalse(import_payload["settings"]["notify-complete"])
+        self.assertNotIn("cli-path", import_payload["settings"])
+
     def test_history_lists_recent_transcripts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
