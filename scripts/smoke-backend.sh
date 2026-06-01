@@ -30,3 +30,10 @@ sleep 2
   --transcriber command \
   --transcriber-command "printf speed-of-cinnamon-expired-smoke" \
   --json
+
+"${backend}" start \
+  --max-seconds 10 \
+  --insert-method none \
+  --json
+sleep 1
+"${backend}" cancel --json

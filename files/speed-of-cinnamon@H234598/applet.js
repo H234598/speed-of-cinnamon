@@ -86,6 +86,11 @@ MyApplet.prototype = {
     this.toggleItem.connect("activate", () => this._toggleRecording());
     this.menu.addMenuItem(this.toggleItem);
 
+    this.cancelItem = new PopupMenu.PopupIconMenuItem(_("Cancel recording"), "process-stop-symbolic", St.IconType.SYMBOLIC);
+    this.cancelItem.setSensitive(false);
+    this.cancelItem.connect("activate", () => this._cancelRecording());
+    this.menu.addMenuItem(this.cancelItem);
+
     this.statusItem = new PopupMenu.PopupMenuItem(_("Status: idle"));
     this.statusItem.setSensitive(false);
     this.menu.addMenuItem(this.statusItem);
@@ -184,6 +189,10 @@ MyApplet.prototype = {
     return [this.cliPath || DEFAULT_CLI, "doctor", "--json"];
   },
 
+  _cancelArgs: function() {
+    return [this.cliPath || DEFAULT_CLI, "cancel", "--json"];
+  },
+
   _listInputsArgs: function() {
     return [this.cliPath || DEFAULT_CLI, "list-inputs", "--json"];
   },
@@ -206,6 +215,18 @@ MyApplet.prototype = {
 
   _refreshStatus: function() {
     this._spawnJson(this._statusArgs(), (payload) => this._applyPayload(payload));
+  },
+
+  _cancelRecording: function() {
+    if (this.isCommandRunning) {
+      return;
+    }
+    this.isCommandRunning = true;
+    this._setStatus("processing", _("Cancelling..."), this.lastTranscript);
+    this._spawnJson(this._cancelArgs(), (payload) => {
+      this.isCommandRunning = false;
+      this._applyPayload(payload);
+    });
   },
 
   _runDoctor: function() {
@@ -344,6 +365,9 @@ MyApplet.prototype = {
     }
     if (this.copyLastItem) {
       this.copyLastItem.setSensitive(Boolean(this.lastTranscript));
+    }
+    if (this.cancelItem) {
+      this.cancelItem.setSensitive(this.status === "recording" || this.status === "recorded");
     }
     this._updatePanel();
     this._scheduleStatusPoll();

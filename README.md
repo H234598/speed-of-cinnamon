@@ -18,6 +18,7 @@ path.
 - Optional post-process command for local text cleanup or LLM polishing.
 - Cinnamon clipboard output through the applet, optional `xdotool` paste/direct typing, clipboard-only, or no insertion.
 - Applet menu action to copy the last transcript again.
+- Applet and CLI action to cancel and discard a current recording.
 - Recordings that hit the configured maximum length are preserved and transcribed on the next shortcut press.
 - Per-user runtime state under `~/.local/state/speed-of-cinnamon/` and temporary recordings under
   `~/.cache/speed-of-cinnamon/`.
@@ -89,6 +90,7 @@ speed-of-cinnamon list-inputs --json
 speed-of-cinnamon start --language de
 speed-of-cinnamon start --language de --input-device alsa_input.usb-Creative_Technology_Ltd_Sound_BlasterX_G6_8400614358X-00.analog-stereo
 speed-of-cinnamon stop --language de --insert-method clipboard-paste
+speed-of-cinnamon cancel
 speed-of-cinnamon toggle --language de --transcriber whisper
 speed-of-cinnamon toggle --language de --transcriber whisper-cpp --whisper-model ~/.local/share/whisper/models/ggml-base.bin
 speed-of-cinnamon toggle --language de --transcriber command --transcriber-command "printf 'Hallo Cinnamon'"
@@ -116,8 +118,8 @@ For a live backend check in a Cinnamon session:
 make smoke-backend
 ```
 
-This records short audio samples, uses harmless dummy transcriber commands, disables insertion, and verifies both manual
-stop and auto-expired recording finalization.
+This records short audio samples, uses harmless dummy transcriber commands, disables insertion, and verifies manual stop,
+auto-expired recording finalization, and cancel/discard behavior.
 
 ## Architecture
 

@@ -137,6 +137,19 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
     }
 
 
+def remove_file(path_value: str | None) -> bool:
+    if not path_value:
+        return False
+    path = Path(path_value)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+    return True
+
+
 def command_stop(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     store = build_store(args)
@@ -150,6 +163,37 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
         stop_process(int(state.pid))
     state = store.update(status="processing", stopped_at=now_iso())
     return finalize_recording(args, store, state)
+
+
+def command_cancel(args: argparse.Namespace) -> dict[str, object]:
+    ensure_runtime_dirs()
+    store = build_store(args)
+    state = store.read()
+    if state.status == "recording" and process_is_alive(state.pid):
+        stop_process(int(state.pid))
+
+    discarded_audio_path = state.audio_path
+    audio_deleted = remove_file(state.audio_path)
+    log_deleted = remove_file(state.log_path)
+    store.write(
+        RecordingState(
+            status="idle",
+            stopped_at=now_iso(),
+            language=state.language,
+            recorder=state.recorder,
+            input_device=state.input_device,
+            max_seconds=state.max_seconds,
+        )
+    )
+    if state.status in {"recording", "recorded", "processing"} or discarded_audio_path:
+        return {
+            "status": "idle",
+            "message": "recording discarded",
+            "discarded_audio_path": discarded_audio_path,
+            "audio_deleted": audio_deleted,
+            "log_deleted": log_deleted,
+        }
+    return {"status": "idle", "message": "nothing to cancel"}
 
 
 def command_toggle(args: argparse.Namespace) -> dict[str, object]:
@@ -250,6 +294,10 @@ def build_parser() -> argparse.ArgumentParser:
         add_common_options(child)
         add_pipeline_options(child)
         child.set_defaults(handler=handler)
+
+    cancel = subparsers.add_parser("cancel")
+    add_common_options(cancel)
+    cancel.set_defaults(handler=command_cancel)
 
     status = subparsers.add_parser("status")
     add_common_options(status)

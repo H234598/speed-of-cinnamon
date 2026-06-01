@@ -117,6 +117,46 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["status"], "recorded")
         self.assertEqual(payload["audio_path"], str(audio))
 
+    def test_cancel_recorded_discards_files_and_resets_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            audio = tmp_path / "recorded.wav"
+            log = tmp_path / "recorded.log"
+            audio.write_bytes(b"audio")
+            log.write_text("log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="recorded", audio_path=str(audio), log_path=str(log)))
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "idle")
+        self.assertEqual(payload["message"], "recording discarded")
+        self.assertTrue(payload["audio_deleted"])
+        self.assertTrue(payload["log_deleted"])
+        self.assertFalse(audio.exists())
+        self.assertFalse(log.exists())
+        self.assertEqual(final_state.status, "idle")
+        self.assertIsNone(final_state.audio_path)
+
+    @mock.patch("speed_of_cinnamon.cli.stop_process")
+    @mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=True)
+    def test_cancel_running_recording_stops_process(self, mocked_alive: mock.Mock, mocked_stop: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            audio = tmp_path / "recording.wav"
+            audio.write_bytes(b"audio")
+            state_file = tmp_path / "state.json"
+            StateStore(state_file).write(RecordingState(status="recording", pid=1234, audio_path=str(audio)))
+            with redirect_stdout(io.StringIO()):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+        self.assertEqual(code, 0)
+        mocked_alive.assert_called_once_with(1234)
+        mocked_stop.assert_called_once_with(1234)
+
     def test_finalize_error_is_persisted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
