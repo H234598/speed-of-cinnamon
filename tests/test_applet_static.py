@@ -290,27 +290,49 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("const DOCTOR_COMMAND_TIMEOUT_MS = 20000;", source)
         self.assertIn("_runDoctor: function(startupCheck) {", source)
         self.assertIn("}, { timeoutMs: DOCTOR_COMMAND_TIMEOUT_MS });", source)
-        self.assertIn('this.doctorSummaryItem = new PopupMenu.PopupMenuItem(_("Doctor: not checked"))', source)
+        self.assertIn('this.doctorSummaryItem = this._styleMenuItemLabel(new PopupMenu.PopupMenuItem(_("Doctor: not checked"))', source)
+        self.assertIn('this.diagnosticsMenuItem.menu.addMenuItem(this.doctorSummaryItem)', source)
         self.assertIn('_setDoctorSummary(_("Doctor: checking..."))', source)
+        self.assertIn("_presentDoctorResult: function(message, critical, startupCheck)", source)
+        self.assertIn('this._notify(_("Speed of Cinnamon doctor")', source)
         self.assertIn("_doctorSummary: function(payload)", source)
         self.assertIn('this.doctorSummaryItem.label.text = this.doctorSummaryText || _("Doctor: not checked")', source)
 
     def test_recording_status_shows_microphone_level(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
-        self.assertIn('this.microphoneLevelItem = new PopupMenu.PopupMenuItem(_("Microphone: idle"))', source)
+        self.assertIn('this.microphoneLevelItem = this._styleMenuItemLabel(new PopupMenu.PopupMenuItem(_("Microphone: idle"))', source)
         self.assertIn("this._applyMicrophoneLevel(payload.microphone_level, status);", source)
         self.assertIn("_microphoneLevelText: function()", source)
         self.assertIn("_levelBar: function(percent)", source)
         self.assertIn('this.microphoneLevelItem.label.text = this._microphoneLevelText();', source)
 
+    def test_left_click_menu_uses_compact_top_level_groups(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn('this.recordingMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Recording"))', source)
+        self.assertIn('this.textOutputMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Text and output"))', source)
+        self.assertIn('this.transcriptsMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Transcripts"))', source)
+        self.assertIn('this.toolsMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Tools"))', source)
+        self.assertIn("this.recordingMenuItem.menu.addMenuItem(this.recorderItem);", source)
+        self.assertIn("this.recordingMenuItem.menu.addMenuItem(this.inputSourceItem);", source)
+        self.assertIn("this.recordingMenuItem.menu.addMenuItem(this.modelItem);", source)
+        self.assertIn("this.textOutputMenuItem.menu.addMenuItem(this.outputMethodItem);", source)
+        self.assertIn("this.textOutputMenuItem.menu.addMenuItem(this.textModelItem);", source)
+        self.assertIn("this.transcriptsMenuItem.menu.addMenuItem(this.historyItem);", source)
+        self.assertIn("this.toolsMenuItem.menu.addMenuItem(this.alarmItem);", source)
+        self.assertIn("this.maintenanceMenuItem.menu.addMenuItem(exportSettings);", source)
+
     def test_large_selection_menus_get_more_width_and_trim_long_rows(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         self.assertIn("const Pango = imports.gi.Pango;", source)
-        self.assertIn("const MENU_MIN_WIDTH_EM = 36;", source)
+        self.assertIn("const MENU_MIN_WIDTH_EM = 30;", source)
+        self.assertIn("const MENU_LABEL_WIDTH_EM = 32;", source)
         self.assertIn("const SELECTION_MENU_MIN_WIDTH_EM = 42;", source)
         self.assertIn("_styleWideMenus: function()", source)
+        self.assertIn("this._styleSelectionSubmenu(this.recordingMenuItem);", source)
+        self.assertIn("this._styleSelectionSubmenu(this.toolsMenuItem);", source)
         self.assertIn("this._styleSelectionSubmenu(this.inputSourceItem);", source)
         self.assertIn("this._styleSelectionSubmenu(this.modelItem);", source)
         self.assertIn("this._styleSelectionSubmenu(this.textModelItem);", source)

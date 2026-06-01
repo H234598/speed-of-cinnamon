@@ -48,7 +48,8 @@ const DEFAULT_TYPING_DELAY_MS = 8;
 const CLI_COMMAND_TIMEOUT_MS = 300000;
 const STATUS_COMMAND_TIMEOUT_MS = 10000;
 const DOCTOR_COMMAND_TIMEOUT_MS = 20000;
-const MENU_MIN_WIDTH_EM = 36;
+const MENU_MIN_WIDTH_EM = 30;
+const MENU_LABEL_WIDTH_EM = 32;
 const SELECTION_MENU_MIN_WIDTH_EM = 42;
 const SELECTION_MENU_LABEL_WIDTH_EM = 40;
 const PANEL_STATUS_CLASSES = [
@@ -250,17 +251,16 @@ MyApplet.prototype = {
     this.cancelItem.connect("activate", () => this._cancelRecording());
     this.menu.addMenuItem(this.cancelItem);
 
-    this.statusItem = new PopupMenu.PopupMenuItem(_("Status: idle"));
+    this.statusItem = this._styleMenuItemLabel(new PopupMenu.PopupMenuItem(_("Status: idle")), { maxWidthEm: MENU_LABEL_WIDTH_EM });
     this.statusItem.setSensitive(false);
     this.menu.addMenuItem(this.statusItem);
 
-    this.microphoneLevelItem = new PopupMenu.PopupMenuItem(_("Microphone: idle"));
+    this.microphoneLevelItem = this._styleMenuItemLabel(new PopupMenu.PopupMenuItem(_("Microphone: idle")), { maxWidthEm: MENU_LABEL_WIDTH_EM });
     this.microphoneLevelItem.setSensitive(false);
     this.menu.addMenuItem(this.microphoneLevelItem);
 
-    this.doctorSummaryItem = new PopupMenu.PopupMenuItem(_("Doctor: not checked"));
+    this.doctorSummaryItem = this._styleMenuItemLabel(new PopupMenu.PopupMenuItem(_("Doctor: not checked")), { maxWidthEm: MENU_LABEL_WIDTH_EM, wrap: true });
     this.doctorSummaryItem.setSensitive(false);
-    this.menu.addMenuItem(this.doctorSummaryItem);
 
     this.languageItem = new PopupMenu.PopupSubMenuMenuItem(_("Language: en"));
     this.languageItem.menu.connect("open-state-changed", (menu, open) => {
@@ -271,13 +271,25 @@ MyApplet.prototype = {
     this.menu.addMenuItem(this.languageItem);
     this._populateLanguageMenu();
 
+    this.recordingMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Recording"));
+    this.menu.addMenuItem(this.recordingMenuItem);
+
+    this.textOutputMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Text and output"));
+    this.menu.addMenuItem(this.textOutputMenuItem);
+
+    this.transcriptsMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Transcripts"));
+    this.menu.addMenuItem(this.transcriptsMenuItem);
+
+    this.toolsMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Tools"));
+    this.menu.addMenuItem(this.toolsMenuItem);
+
     this.recorderItem = new PopupMenu.PopupSubMenuMenuItem(_("Recorder: Automatic"));
     this.recorderItem.menu.connect("open-state-changed", (menu, open) => {
       if (open) {
         this._populateRecorderMenu();
       }
     });
-    this.menu.addMenuItem(this.recorderItem);
+    this.recordingMenuItem.menu.addMenuItem(this.recorderItem);
     this._populateRecorderMenu();
 
     this.recordingLimitItem = new PopupMenu.PopupSubMenuMenuItem(_("Duration: 30s"));
@@ -286,7 +298,7 @@ MyApplet.prototype = {
         this._populateRecordingLimitMenu();
       }
     });
-    this.menu.addMenuItem(this.recordingLimitItem);
+    this.recordingMenuItem.menu.addMenuItem(this.recordingLimitItem);
     this._populateRecordingLimitMenu();
 
     this.recordingOptionsItem = new PopupMenu.PopupSubMenuMenuItem(_("Recording options"));
@@ -295,7 +307,7 @@ MyApplet.prototype = {
         this._populateRecordingOptionsMenu();
       }
     });
-    this.menu.addMenuItem(this.recordingOptionsItem);
+    this.recordingMenuItem.menu.addMenuItem(this.recordingOptionsItem);
     this._populateRecordingOptionsMenu();
 
     this.notificationOptionsItem = new PopupMenu.PopupSubMenuMenuItem(_("Notifications"));
@@ -304,7 +316,7 @@ MyApplet.prototype = {
         this._populateNotificationOptionsMenu();
       }
     });
-    this.menu.addMenuItem(this.notificationOptionsItem);
+    this.recordingMenuItem.menu.addMenuItem(this.notificationOptionsItem);
     this._populateNotificationOptionsMenu();
 
     this.alarmItem = new PopupMenu.PopupSubMenuMenuItem(_("Alarms"));
@@ -313,7 +325,7 @@ MyApplet.prototype = {
         this._refreshAlarmMenu();
       }
     });
-    this.menu.addMenuItem(this.alarmItem);
+    this.toolsMenuItem.menu.addMenuItem(this.alarmItem);
     this._populateAlarmMenu([], _("Open menu to load alarms"));
 
     this.shortcutItem = new PopupMenu.PopupSubMenuMenuItem(_("Keyboard shortcuts"));
@@ -322,11 +334,11 @@ MyApplet.prototype = {
         this._populateShortcutMenu();
       }
     });
-    this.menu.addMenuItem(this.shortcutItem);
+    this.toolsMenuItem.menu.addMenuItem(this.shortcutItem);
     this._populateShortcutMenu();
 
     this.outputMethodItem = new PopupMenu.PopupSubMenuMenuItem(_("Output: Clipboard and paste"));
-    this.menu.addMenuItem(this.outputMethodItem);
+    this.textOutputMenuItem.menu.addMenuItem(this.outputMethodItem);
     this._populateOutputMethodMenu();
 
     this.textOptionsItem = new PopupMenu.PopupSubMenuMenuItem(_("Text options"));
@@ -335,22 +347,22 @@ MyApplet.prototype = {
         this._populateTextOptionsMenu();
       }
     });
-    this.menu.addMenuItem(this.textOptionsItem);
+    this.textOutputMenuItem.menu.addMenuItem(this.textOptionsItem);
     this._populateTextOptionsMenu();
 
-    this.transcriptItem = new PopupMenu.PopupMenuItem(_("No transcript yet"));
+    this.transcriptItem = this._styleMenuItemLabel(new PopupMenu.PopupMenuItem(_("No transcript yet")), { maxWidthEm: MENU_LABEL_WIDTH_EM });
     this.transcriptItem.setSensitive(false);
-    this.menu.addMenuItem(this.transcriptItem);
+    this.transcriptsMenuItem.menu.addMenuItem(this.transcriptItem);
 
     this.copyLastItem = new PopupMenu.PopupIconMenuItem(_("Copy last transcript"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
     this.copyLastItem.setSensitive(false);
     this.copyLastItem.connect("activate", () => this._copyLastTranscript());
-    this.menu.addMenuItem(this.copyLastItem);
+    this.transcriptsMenuItem.menu.addMenuItem(this.copyLastItem);
 
     this.insertLastItem = new PopupMenu.PopupIconMenuItem(_("Insert last transcript"), "edit-paste-symbolic", St.IconType.SYMBOLIC);
     this.insertLastItem.setSensitive(false);
     this.insertLastItem.connect("activate", () => this._insertLastTranscript());
-    this.menu.addMenuItem(this.insertLastItem);
+    this.transcriptsMenuItem.menu.addMenuItem(this.insertLastItem);
 
     this.historyItem = new PopupMenu.PopupSubMenuMenuItem(_("Recent transcripts"));
     this.historyItem.menu.connect("open-state-changed", (menu, open) => {
@@ -358,46 +370,48 @@ MyApplet.prototype = {
         this._refreshHistory();
       }
     });
-    this.menu.addMenuItem(this.historyItem);
+    this.transcriptsMenuItem.menu.addMenuItem(this.historyItem);
     this._populateHistoryMenu([]);
-
-    this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
     let statusNow = new PopupMenu.PopupIconMenuItem(_("Refresh status"), "view-refresh-symbolic", St.IconType.SYMBOLIC);
     statusNow.connect("activate", () => this._refreshStatus());
-    this.menu.addMenuItem(statusNow);
+    this.toolsMenuItem.menu.addMenuItem(statusNow);
 
     let restartApplet = new PopupMenu.PopupIconMenuItem(_("Restart applet"), "view-refresh-symbolic", St.IconType.SYMBOLIC);
     restartApplet.connect("activate", () => this._restartApplet());
-    this.menu.addMenuItem(restartApplet);
+    this.toolsMenuItem.menu.addMenuItem(restartApplet);
 
     let doctor = new PopupMenu.PopupIconMenuItem(_("Run doctor"), "dialog-information-symbolic", St.IconType.SYMBOLIC);
     doctor.connect("activate", () => this._runDoctor());
-    this.menu.addMenuItem(doctor);
+    this.toolsMenuItem.menu.addMenuItem(doctor);
 
     let openSettings = new PopupMenu.PopupIconMenuItem(_("Open applet settings"), "preferences-system-symbolic", St.IconType.SYMBOLIC);
     openSettings.connect("activate", () => this._openAppletSettings());
-    this.menu.addMenuItem(openSettings);
+    this.toolsMenuItem.menu.addMenuItem(openSettings);
 
     let openGuide = new PopupMenu.PopupIconMenuItem(_("Open setup guide"), "help-browser-symbolic", St.IconType.SYMBOLIC);
     openGuide.connect("activate", () => this._openSetupGuide());
-    this.menu.addMenuItem(openGuide);
+    this.toolsMenuItem.menu.addMenuItem(openGuide);
+
+    this.diagnosticsMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Diagnostics"));
+    this.toolsMenuItem.menu.addMenuItem(this.diagnosticsMenuItem);
+    this.diagnosticsMenuItem.menu.addMenuItem(this.doctorSummaryItem);
 
     let setupPlan = new PopupMenu.PopupIconMenuItem(_("Copy setup plan"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
     setupPlan.connect("activate", () => this._copySetupPlan());
-    this.menu.addMenuItem(setupPlan);
+    this.diagnosticsMenuItem.menu.addMenuItem(setupPlan);
 
     let setupCommands = new PopupMenu.PopupIconMenuItem(_("Copy setup commands"), "utilities-terminal-symbolic", St.IconType.SYMBOLIC);
     setupCommands.connect("activate", () => this._copySetupCommands());
-    this.menu.addMenuItem(setupCommands);
+    this.diagnosticsMenuItem.menu.addMenuItem(setupCommands);
 
     let diagnostics = new PopupMenu.PopupIconMenuItem(_("Copy diagnostics"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
     diagnostics.connect("activate", () => this._copyDiagnostics());
-    this.menu.addMenuItem(diagnostics);
+    this.diagnosticsMenuItem.menu.addMenuItem(diagnostics);
 
     let saveDiagnostics = new PopupMenu.PopupIconMenuItem(_("Save diagnostics"), "document-save-symbolic", St.IconType.SYMBOLIC);
     saveDiagnostics.connect("activate", () => this._saveDiagnostics());
-    this.menu.addMenuItem(saveDiagnostics);
+    this.diagnosticsMenuItem.menu.addMenuItem(saveDiagnostics);
 
     this.inputSourceItem = new PopupMenu.PopupSubMenuMenuItem(_("Input source"));
     this.inputSourceItem.menu.connect("open-state-changed", (menu, open) => {
@@ -405,7 +419,7 @@ MyApplet.prototype = {
         this._refreshInputSourceMenu();
       }
     });
-    this.menu.addMenuItem(this.inputSourceItem);
+    this.recordingMenuItem.menu.addMenuItem(this.inputSourceItem);
     this._populateInputSourceMenu([], _("Open menu to load input sources"));
 
     this.modelItem = new PopupMenu.PopupSubMenuMenuItem(_("Voice model"));
@@ -414,7 +428,7 @@ MyApplet.prototype = {
         this._refreshModelMenu();
       }
     });
-    this.menu.addMenuItem(this.modelItem);
+    this.recordingMenuItem.menu.addMenuItem(this.modelItem);
     this._populateModelMenu([], _("Open menu to load voice models"));
 
     this.textModelItem = new PopupMenu.PopupSubMenuMenuItem(_("Text model"));
@@ -423,30 +437,33 @@ MyApplet.prototype = {
         this._refreshTextModelMenu();
       }
     });
-    this.menu.addMenuItem(this.textModelItem);
+    this.textOutputMenuItem.menu.addMenuItem(this.textModelItem);
     this._populateTextModelMenu([], _("Open menu to load local text models"));
 
     let transcripts = new PopupMenu.PopupIconMenuItem(_("Open transcripts"), "folder-documents-symbolic", St.IconType.SYMBOLIC);
     transcripts.connect("activate", () => {
       this._openFolder(GLib.build_filenamev([GLib.get_user_state_dir(), "speed-of-cinnamon", "transcripts"]), _("Opened transcripts"));
     });
-    this.menu.addMenuItem(transcripts);
+    this.transcriptsMenuItem.menu.addMenuItem(transcripts);
+
+    this.maintenanceMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Files and settings"));
+    this.toolsMenuItem.menu.addMenuItem(this.maintenanceMenuItem);
 
     let cleanupPreview = new PopupMenu.PopupIconMenuItem(_("Preview cleanup"), "edit-find-symbolic", St.IconType.SYMBOLIC);
     cleanupPreview.connect("activate", () => this._previewCleanup());
-    this.menu.addMenuItem(cleanupPreview);
+    this.maintenanceMenuItem.menu.addMenuItem(cleanupPreview);
 
     let cleanup = new PopupMenu.PopupIconMenuItem(_("Clean old files"), "edit-clear-symbolic", St.IconType.SYMBOLIC);
     cleanup.connect("activate", () => this._cleanupOldFiles());
-    this.menu.addMenuItem(cleanup);
+    this.maintenanceMenuItem.menu.addMenuItem(cleanup);
 
     let exportSettings = new PopupMenu.PopupIconMenuItem(_("Export settings"), "document-save-symbolic", St.IconType.SYMBOLIC);
     exportSettings.connect("activate", () => this._exportSettings());
-    this.menu.addMenuItem(exportSettings);
+    this.maintenanceMenuItem.menu.addMenuItem(exportSettings);
 
     let importSettings = new PopupMenu.PopupIconMenuItem(_("Import settings"), "document-open-symbolic", St.IconType.SYMBOLIC);
     importSettings.connect("activate", () => this._importSettings());
-    this.menu.addMenuItem(importSettings);
+    this.maintenanceMenuItem.menu.addMenuItem(importSettings);
 
     this._styleWideMenus();
   },
@@ -455,6 +472,12 @@ MyApplet.prototype = {
     if (this.menu && this.menu.box && this.menu.box.set_style) {
       this.menu.box.set_style("min-width: " + String(MENU_MIN_WIDTH_EM) + "em;");
     }
+    this._styleSelectionSubmenu(this.recordingMenuItem);
+    this._styleSelectionSubmenu(this.textOutputMenuItem);
+    this._styleSelectionSubmenu(this.transcriptsMenuItem);
+    this._styleSelectionSubmenu(this.toolsMenuItem);
+    this._styleSelectionSubmenu(this.diagnosticsMenuItem);
+    this._styleSelectionSubmenu(this.maintenanceMenuItem);
     this._styleSelectionSubmenu(this.inputSourceItem);
     this._styleSelectionSubmenu(this.modelItem);
     this._styleSelectionSubmenu(this.textModelItem);
@@ -1295,6 +1318,7 @@ MyApplet.prototype = {
           let message = _("Doctor failed: ") + payload.error;
           this._setDoctorSummary(message);
           this._setStatus(startupCheck ? "setup" : "error", message, this.lastTranscript);
+          this._presentDoctorResult(message, true, Boolean(startupCheck));
           return;
         }
         if (payload.configured) {
@@ -1322,14 +1346,18 @@ MyApplet.prototype = {
     if (!payload.ok) {
       let message = _("Setup needed: ") + missing.join("; ");
       this._setStatus(startupCheck ? "setup" : "error", message, this.lastTranscript);
+      this._presentDoctorResult(message, true, Boolean(startupCheck));
       return;
     }
     let warnings = configured.warnings || [];
     if (warnings.length > 0) {
-      this._setStatus("ready", summary + "; " + warnings.join("; "), this.lastTranscript);
+      let message = summary + "; " + warnings.join("; ");
+      this._setStatus("ready", message, this.lastTranscript);
+      this._presentDoctorResult(message, false, Boolean(startupCheck));
       return;
     }
     this._setStatus("ready", summary, this.lastTranscript);
+    this._presentDoctorResult(summary, false, Boolean(startupCheck));
   },
 
   _applyLegacyDoctorPayload: function(payload, startupCheck) {
@@ -1343,11 +1371,20 @@ MyApplet.prototype = {
       let message = _("Doctor: core OK; optional missing: ") + missing.join(", ");
       this._setDoctorSummary(message);
       this._setStatus("ready", message, this.lastTranscript);
+      this._presentDoctorResult(message, false, Boolean(startupCheck));
     } else {
       let message = _("Missing: ") + missing.join(", ");
       this._setDoctorSummary(message);
       this._setStatus(startupCheck ? "setup" : "error", message, this.lastTranscript);
+      this._presentDoctorResult(message, true, Boolean(startupCheck));
     }
+  },
+
+  _presentDoctorResult: function(message, critical, startupCheck) {
+    if (startupCheck) {
+      return;
+    }
+    this._notify(_("Speed of Cinnamon doctor"), String(message || _("Doctor finished")), Boolean(critical));
   },
 
   _setDoctorSummary: function(message) {
