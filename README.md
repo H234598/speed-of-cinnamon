@@ -26,6 +26,7 @@ path.
   helper.
 - ASR presets for Automatic, OpenAI Whisper command, whisper.cpp with a model path, or a custom command template.
 - Local whisper.cpp model catalog with checksum-verified downloads into the user's XDG data directory.
+- Applet voice-model menu for downloading/selecting whisper.cpp models and returning to Automatic ASR without opening settings.
 - Personal context and custom vocabulary fields for local ASR/post-process command wrappers.
 - Optional text polishing through a custom command, a local Ollama model, or a local OpenAI-compatible server such as
   vLLM, llama.cpp, or LM Studio, with applet selection of discovered local models.
@@ -184,7 +185,8 @@ The applet menu can export and import its current settings to:
 This export includes personal context, vocabulary, command templates, hotkeys, and recording retention. Treat it as a
 private backup. Machine-local `cli-path` is intentionally not exported.
 
-The applet's `Voice model` menu can download, select, and remove whisper.cpp catalog models. Models are stored under:
+The applet's `Voice model` menu can download, select, and remove whisper.cpp catalog models, or switch back to
+`Automatic ASR backend` without opening Cinnamon settings. Models are stored under:
 
 ```text
 ~/.local/share/speed-of-cinnamon/models/whisper.cpp/
@@ -193,7 +195,8 @@ The applet's `Voice model` menu can download, select, and remove whisper.cpp cat
 Downloads use the upstream whisper.cpp ggml model files from Hugging Face and verify their SHA-1 checksums before the
 model is activated. If `whisper-cli` is installed, Automatic transcription can use a verified downloaded model even when
 the `whisper.cpp model` setting is empty. Removing a model from the applet clears the explicit whisper.cpp selection
-when that model was active.
+when that model was active. `Automatic ASR backend` clears the explicit whisper.cpp model path and returns the
+transcriber setting to `Automatic`.
 
 The applet's `Text model` menu can disable polishing, use the custom command backend, select a model returned by a local
 Ollama `/api/tags` endpoint, or select a model returned by a local OpenAI-compatible `/v1/models` endpoint. If the

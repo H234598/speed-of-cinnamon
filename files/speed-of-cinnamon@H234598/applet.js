@@ -852,6 +852,11 @@ MyApplet.prototype = {
     }
     this.modelItem.menu.removeAll();
 
+    let autoActive = String(this.transcriber || "auto") === "auto" && String(this.whisperModel || "") === "";
+    let automatic = new PopupMenu.PopupMenuItem((autoActive ? "[x] " : "[ ] ") + _("Automatic ASR backend"));
+    automatic.connect("activate", () => this._selectAutomaticVoiceBackend());
+    this.modelItem.menu.addMenuItem(automatic);
+
     let download = new PopupMenu.PopupIconMenuItem(_("Download starter model"), "folder-download-symbolic", St.IconType.SYMBOLIC);
     download.connect("activate", () => this._downloadStarterModel());
     this.modelItem.menu.addMenuItem(download);
@@ -979,6 +984,15 @@ MyApplet.prototype = {
     this.settings.setValue("transcriber", this.transcriber);
     this.settings.setValue("whisper-model", this.whisperModel);
     this._setStatus("ready", _("Voice model: ") + name, this.lastTranscript);
+  },
+
+  _selectAutomaticVoiceBackend: function() {
+    this.transcriber = "auto";
+    this.whisperModel = "";
+    this.settings.setValue("transcriber", this.transcriber);
+    this.settings.setValue("whisper-model", this.whisperModel);
+    this._refreshModelMenu();
+    this._setStatus("ready", _("Voice backend: automatic"), this.lastTranscript);
   },
 
   _refreshTextModelMenu: function() {
