@@ -4,6 +4,7 @@ import argparse
 import io
 import json
 import os
+import tomllib
 import tempfile
 import unittest
 import wave
@@ -32,6 +33,10 @@ class CliTest(unittest.TestCase):
                 parser.parse_args(["--version"])
         self.assertEqual(exc.exception.code, 0)
         self.assertEqual(stdout.getvalue().strip(), f"speed-of-cinnamon {cli.__version__}")
+
+    def test_version_consistency_between_metadata_and_package(self) -> None:
+        project_version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+        self.assertEqual(project_version, cli.__version__)
 
     def _write_wav(self, path: Path, samples: list[int]) -> None:
         with wave.open(str(path), "wb") as handle:
