@@ -11,6 +11,7 @@ path.
 ## Features
 
 - Cinnamon panel applet with microphone icon, concise status label, status menu, transcript preview, and a doctor check.
+- Copyable diagnostics bundle for support reports without transcript contents.
 - Cinnamon global hotkey via `Main.keybindingManager`; default is `Super+Z`.
 - Primary/secondary recognition languages with quick switching from the applet menu.
 - PipeWire/PulseAudio/ALSA recording through `pw-record`, `parecord`, or `arecord`.
@@ -88,6 +89,7 @@ The backend command is installed to:
 
 ```bash
 speed-of-cinnamon doctor --json
+speed-of-cinnamon diagnostics --json
 speed-of-cinnamon list-inputs --json
 speed-of-cinnamon history --limit 5 --json
 speed-of-cinnamon start --language de

@@ -131,6 +131,10 @@ MyApplet.prototype = {
     doctor.connect("activate", () => this._runDoctor());
     this.menu.addMenuItem(doctor);
 
+    let diagnostics = new PopupMenu.PopupIconMenuItem(_("Copy diagnostics"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
+    diagnostics.connect("activate", () => this._copyDiagnostics());
+    this.menu.addMenuItem(diagnostics);
+
     let inputs = new PopupMenu.PopupIconMenuItem(_("Show input source"), "audio-input-microphone-symbolic", St.IconType.SYMBOLIC);
     inputs.connect("activate", () => this._showInputSource());
     this.menu.addMenuItem(inputs);
@@ -204,6 +208,10 @@ MyApplet.prototype = {
 
   _doctorArgs: function() {
     return [this.cliPath || DEFAULT_CLI, "doctor", "--json"];
+  },
+
+  _diagnosticsArgs: function() {
+    return [this.cliPath || DEFAULT_CLI, "diagnostics", "--json"];
   },
 
   _cancelArgs: function() {
@@ -305,6 +313,17 @@ MyApplet.prototype = {
       } else {
         this._setStatus("error", _("Missing: ") + missing.join(", "), this.lastTranscript);
       }
+    });
+  },
+
+  _copyDiagnostics: function() {
+    this._spawnJson(this._diagnosticsArgs(), (payload) => {
+      if (payload.error) {
+        this._setStatus("error", payload.error, this.lastTranscript);
+        return;
+      }
+      this.clipboard.set_text(St.ClipboardType.CLIPBOARD, JSON.stringify(payload, null, 2));
+      this._setStatus("done", _("Copied diagnostics"), this.lastTranscript);
     });
   },
 

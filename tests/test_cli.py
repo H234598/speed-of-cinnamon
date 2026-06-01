@@ -95,6 +95,31 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["transcripts"], [])
 
+    @mock.patch("speed_of_cinnamon.cli.list_input_sources")
+    def test_diagnostics_omits_transcript_text(self, mocked_sources: mock.Mock) -> None:
+        mocked_sources.return_value = [
+            InputSource(id="1", name="alsa_input.test", description="Test Mic", default=True)
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            (transcript_dir / "secret.txt").write_text("secret dictated words\n", encoding="utf-8")
+            state_file = Path(tmp) / "state.json"
+            StateStore(state_file).write(RecordingState(status="done", transcript="secret dictated words"))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["diagnostics", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+        encoded = json.dumps(payload)
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["app"]["id"], "speed-of-cinnamon")
+        self.assertEqual(payload["inputs"]["sources"][0]["name"], "alsa_input.test")
+        self.assertIn("recent_transcripts", payload)
+        self.assertEqual(payload["state"]["transcript_length"], len("secret dictated words"))
+        self.assertNotIn("secret dictated words", encoded)
+        self.assertNotIn("preview", encoded)
+        self.assertNotIn('"text"', encoded)
+
     @mock.patch("speed_of_cinnamon.cli.command_start")
     def test_toggle_starts_when_idle(self, mocked_start: mock.Mock) -> None:
         mocked_start.return_value = {"status": "recording"}

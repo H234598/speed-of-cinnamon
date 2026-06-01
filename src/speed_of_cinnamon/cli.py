@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import platform
 import sys
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import __version__
 from .doctor import report as doctor_report
 from .output import insert_text
-from .paths import APP_NAME, default_state_file, ensure_runtime_dirs, recordings_dir, transcript_dir
+from .paths import APP_ID, APP_NAME, default_state_file, ensure_runtime_dirs, recordings_dir, state_dir, transcript_dir
 from .postprocessor import post_process_text
 from .recorder import choose_recorder, list_input_sources, start_recorder, stop_process
 from .state import RecordingState, StateStore, now_iso, process_is_alive
@@ -282,6 +285,64 @@ def command_history(args: argparse.Namespace) -> dict[str, object]:
     return {"status": "done", "transcripts": read_transcript_history(max(args.limit, 0))}
 
 
+def command_diagnostics(args: argparse.Namespace) -> dict[str, object]:
+    ensure_runtime_dirs()
+    source_payload: dict[str, object]
+    try:
+        sources = list_input_sources(False)
+        source_payload = {
+            "ok": True,
+            "sources": [
+                {
+                    "name": source.name,
+                    "description": source.description,
+                    "default": source.default,
+                    "state": source.state,
+                }
+                for source in sources
+            ],
+        }
+    except Exception as exc:
+        source_payload = {"ok": False, "error": str(exc)}
+
+    transcript_entries = [
+        {key: entry[key] for key in ("name", "path", "modified_at") if key in entry}
+        for entry in read_transcript_history(5)
+    ]
+    state_payload = asdict(build_store(args).read())
+    state_payload["transcript_length"] = len(str(state_payload.get("transcript") or ""))
+    state_payload.pop("transcript", None)
+    return {
+        "status": "done",
+        "message": "diagnostics collected",
+        "app": {
+            "id": APP_ID,
+            "name": APP_NAME,
+            "version": __version__,
+        },
+        "runtime": {
+            "python": sys.version.split()[0],
+            "platform": platform.platform(),
+            "machine": platform.machine(),
+        },
+        "desktop": {
+            "current_desktop": os.environ.get("XDG_CURRENT_DESKTOP", ""),
+            "session_type": os.environ.get("XDG_SESSION_TYPE", ""),
+            "desktop_session": os.environ.get("DESKTOP_SESSION", ""),
+        },
+        "paths": {
+            "state_dir": str(state_dir()),
+            "state_file": str(Path(args.state_file).expanduser()),
+            "transcript_dir": str(transcript_dir()),
+            "recordings_dir": str(recordings_dir()),
+        },
+        "state": state_payload,
+        "doctor": doctor_report(),
+        "inputs": source_payload,
+        "recent_transcripts": transcript_entries,
+    }
+
+
 def command_insert_text(args: argparse.Namespace) -> dict[str, object]:
     inserted = insert_text(args.text, args.insert_method, args.typing_delay_ms)
     return {"status": "done", "inserted": inserted}
@@ -358,6 +419,10 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(history)
     history.add_argument("--limit", type=int, default=10)
     history.set_defaults(handler=command_history)
+
+    diagnostics = subparsers.add_parser("diagnostics")
+    add_common_options(diagnostics)
+    diagnostics.set_defaults(handler=command_diagnostics)
 
     insert = subparsers.add_parser("insert-text")
     add_common_options(insert)

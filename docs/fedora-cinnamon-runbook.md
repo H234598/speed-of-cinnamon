@@ -58,6 +58,17 @@ The backend smoke records short audio samples through `pw-record`, uses harmless
 and verifies manual stop, cancel/discard, and the path where a recording expires at its maximum length before the next
 shortcut.
 
+## Diagnostics
+
+For support reports, run:
+
+```bash
+speed-of-cinnamon diagnostics --json
+```
+
+The Cinnamon applet also has `Copy diagnostics`. The bundle includes app/runtime paths, desktop/session details,
+doctor checks, input-source metadata, and state. It intentionally omits transcript contents.
+
 ## Dependencies
 
 Required for the intended Fedora Cinnamon X11 path:
