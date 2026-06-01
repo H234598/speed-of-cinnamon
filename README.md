@@ -45,7 +45,7 @@ path.
 - Applet menu action to insert the last transcript again with the current output mode.
 - Applet and CLI transcript history for quickly copying or inserting recent results.
 - Applet and CLI action to cancel and discard a current recording.
-- Applet and CLI cleanup for old transcript/history files and cached recordings.
+- Applet and CLI cleanup preview/removal for old transcript/history files and cached recordings.
 - Applet and CLI settings export/import for portable Cinnamon backups.
 - Applet recordings that hit the configured maximum length are transcribed automatically, with a setting to keep the
   old "ready, then transcribe on next shortcut" behavior.

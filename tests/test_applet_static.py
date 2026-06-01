@@ -322,6 +322,20 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_insertHistoryTranscript: function(text)", source)
         self.assertIn("this._insertTranscriptText(text);", source)
 
+    def test_cleanup_can_be_previewed_before_deleting_files(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn('new PopupMenu.PopupIconMenuItem(_("Preview cleanup"), "edit-find-symbolic"', source)
+        self.assertIn("cleanupPreview.connect(\"activate\", () => this._previewCleanup())", source)
+        self.assertIn("_cleanupPreviewArgs: function()", source)
+        self.assertIn('"--dry-run", "--json"', source)
+        self.assertIn("_cleanupCount: function(payload, dryRun)", source)
+        self.assertIn("payload.would_delete_transcripts", source)
+        self.assertIn("_previewCleanup: function()", source)
+        self.assertIn('this._setStatus("processing", _("Previewing cleanup..."), this.lastTranscript)', source)
+        self.assertIn('this._setStatus("ready", _("Cleanup preview: ") + String(this._cleanupCount(payload, true)), this.lastTranscript)', source)
+        self.assertIn("let deleted = this._cleanupCount(payload, false);", source)
+
     def test_voice_model_menu_can_return_to_automatic_backend(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

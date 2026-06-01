@@ -363,6 +363,10 @@ MyApplet.prototype = {
     });
     this.menu.addMenuItem(transcripts);
 
+    let cleanupPreview = new PopupMenu.PopupIconMenuItem(_("Preview cleanup"), "edit-find-symbolic", St.IconType.SYMBOLIC);
+    cleanupPreview.connect("activate", () => this._previewCleanup());
+    this.menu.addMenuItem(cleanupPreview);
+
     let cleanup = new PopupMenu.PopupIconMenuItem(_("Clean old files"), "edit-clear-symbolic", St.IconType.SYMBOLIC);
     cleanup.connect("activate", () => this._cleanupOldFiles());
     this.menu.addMenuItem(cleanup);
@@ -549,6 +553,10 @@ MyApplet.prototype = {
 
   _cleanupArgs: function() {
     return [this._cliCommand(), "cleanup", "--keep-transcripts", "100", "--keep-recordings", "25", "--json"];
+  },
+
+  _cleanupPreviewArgs: function() {
+    return [this._cliCommand(), "cleanup", "--keep-transcripts", "100", "--keep-recordings", "25", "--dry-run", "--json"];
   },
 
   _listInputsArgs: function() {
@@ -1537,6 +1545,29 @@ MyApplet.prototype = {
     });
   },
 
+  _cleanupCount: function(payload, dryRun) {
+    if (dryRun) {
+      return Number(payload.would_delete_transcripts || 0) + Number(payload.would_delete_recordings || 0) + Number(payload.would_delete_logs || 0);
+    }
+    return Number(payload.deleted_transcripts || 0) + Number(payload.deleted_recordings || 0) + Number(payload.deleted_logs || 0);
+  },
+
+  _previewCleanup: function() {
+    if (this.isCommandRunning) {
+      return;
+    }
+    this.isCommandRunning = true;
+    this._setStatus("processing", _("Previewing cleanup..."), this.lastTranscript);
+    this._spawnJson(this._cleanupPreviewArgs(), (payload) => {
+      this.isCommandRunning = false;
+      if (payload.error) {
+        this._setStatus("error", payload.error, this.lastTranscript);
+        return;
+      }
+      this._setStatus("ready", _("Cleanup preview: ") + String(this._cleanupCount(payload, true)), this.lastTranscript);
+    });
+  },
+
   _cleanupOldFiles: function() {
     if (this.isCommandRunning) {
       return;
@@ -1549,7 +1580,7 @@ MyApplet.prototype = {
         this._setStatus("error", payload.error, this.lastTranscript);
         return;
       }
-      let deleted = Number(payload.deleted_transcripts || 0) + Number(payload.deleted_recordings || 0) + Number(payload.deleted_logs || 0);
+      let deleted = this._cleanupCount(payload, false);
       this._setStatus("done", _("Cleaned old files: ") + String(deleted), this.lastTranscript);
       this._refreshHistory();
     });

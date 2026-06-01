@@ -139,10 +139,10 @@ speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 25 --dry-run 
 speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 25 --json
 ```
 
-The Cinnamon applet exposes the same conservative cleanup as `Clean old files`. Recordings and their companion logs are
-handled as one cache group, and the current `state.json` audio/log/transcript paths are skipped. In normal use,
-successful recordings have already been removed; cleanup is mainly for retained debug artifacts, cancelled runs, and
-older caches.
+The Cinnamon applet exposes the same conservative cleanup as `Preview cleanup` and `Clean old files`. Use the preview
+first to count what would be removed without deleting anything. Recordings and their companion logs are handled as one
+cache group, and the current `state.json` audio/log/transcript paths are skipped. In normal use, successful recordings
+have already been removed; cleanup is mainly for retained debug artifacts, cancelled runs, and older caches.
 
 ## Settings Backup
 
