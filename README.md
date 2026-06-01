@@ -221,8 +221,8 @@ The applet menu can export and import its current settings to:
 ~/.local/share/speed-of-cinnamon/settings-export.json
 ```
 
-This export includes personal context, vocabulary, command templates, hotkeys, and recording retention. Treat it as a
-private backup. Machine-local `cli-path` is intentionally not exported.
+This export includes personal context, vocabulary, command templates, hotkeys, recording retention, and the local alarm
+store. Treat it as a private backup. Machine-local `cli-path` is intentionally not exported.
 
 The applet's `Voice model` menu can download, select, and remove whisper.cpp catalog models, or switch back to
 `Automatic ASR backend` without opening Cinnamon settings. Models are stored under:

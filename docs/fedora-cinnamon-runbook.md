@@ -180,8 +180,9 @@ speed-of-cinnamon settings-import --json
 ```
 
 The export includes the hotkey, languages, recorder/backend choices, command templates, personalization, output mode,
-recording retention, and notification settings. It intentionally excludes the machine-local `cli-path`. Because command
-templates and personal context may contain private data, keep the export file private.
+recording retention, notification settings, and the local alarm store. It intentionally excludes the machine-local
+`cli-path`. Because command templates, personal context, vocabulary, and alarm names may contain private data, keep the
+export file private.
 
 ## Language Switching
 

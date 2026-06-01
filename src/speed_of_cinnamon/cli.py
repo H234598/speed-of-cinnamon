@@ -15,7 +15,9 @@ from .alarms import (
     add_alarm,
     check_due_alarms,
     list_alarm_payload,
+    load_alarm_store,
     remove_alarm,
+    save_alarm_store,
     set_alarm_enabled,
 )
 from .doctor import parse_settings_json, report as doctor_report
@@ -707,12 +709,13 @@ def command_settings_export(args: argparse.Namespace) -> dict[str, object]:
         raise RuntimeError(f"settings JSON could not be parsed: {exc}") from exc
     if not isinstance(settings, dict):
         raise RuntimeError("settings JSON must be an object")
-    payload = write_export(path, settings)
+    payload = write_export(path, settings, load_alarm_store())
     return {
         "status": "done",
         "message": f"settings exported to {path}",
         "path": str(path),
         "settings_count": len(payload["settings"]),
+        "alarms_count": len(payload["alarms"]["alarms"]),
     }
 
 
@@ -720,12 +723,14 @@ def command_settings_import(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     path = Path(args.input).expanduser() if args.input else default_settings_export_file()
     payload = read_export(path)
+    save_alarm_store(payload["alarms"])
     return {
         "status": "done",
         "message": f"settings imported from {path}",
         "path": str(path),
         "settings": payload["settings"],
         "settings_count": len(payload["settings"]),
+        "alarms_count": len(payload["alarms"]["alarms"]),
         "export_version": payload["version"],
     }
 

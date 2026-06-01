@@ -7,9 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .alarms import STORE_VERSION as ALARM_STORE_VERSION
+from .alarms import normalize_alarm
 from .paths import APP_ID
 
-EXPORT_VERSION = 1
+EXPORT_VERSION = 2
 
 EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "toggle-keybinding": (str, "<Super>z::"),
@@ -72,18 +74,32 @@ def normalize_settings(values: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_export(settings: dict[str, Any]) -> dict[str, Any]:
+def normalize_alarm_store(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {"version": ALARM_STORE_VERSION, "alarms": [], "last_checked_at": ""}
+    alarms = value.get("alarms", [])
+    if not isinstance(alarms, list):
+        alarms = []
+    return {
+        "version": ALARM_STORE_VERSION,
+        "alarms": [normalize_alarm(alarm) for alarm in alarms if isinstance(alarm, dict)],
+        "last_checked_at": str(value.get("last_checked_at") or ""),
+    }
+
+
+def build_export(settings: dict[str, Any], alarm_store: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "app": APP_ID,
         "version": EXPORT_VERSION,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "speed_of_cinnamon_version": __version__,
         "settings": normalize_settings(settings),
+        "alarms": normalize_alarm_store(alarm_store or {}),
     }
 
 
-def write_export(path: Path, settings: dict[str, Any]) -> dict[str, Any]:
-    payload = build_export(settings)
+def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = build_export(settings, alarm_store)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -115,4 +131,5 @@ def read_export(path: Path) -> dict[str, Any]:
         "created_at": payload.get("created_at", ""),
         "speed_of_cinnamon_version": payload.get("speed_of_cinnamon_version", ""),
         "settings": normalize_settings(raw_settings),
+        "alarms": normalize_alarm_store(payload.get("alarms", {})),
     }

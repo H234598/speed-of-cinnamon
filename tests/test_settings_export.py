@@ -45,15 +45,44 @@ class SettingsExportTest(unittest.TestCase):
     def test_write_and_read_export_round_trips_normalized_settings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
-            write_export(path, {
-                "auto-transcribe-timeout": False,
-                "notify-complete": "false",
-                "personal-context": "Project words",
-            })
+            write_export(
+                path,
+                {
+                    "auto-transcribe-timeout": False,
+                    "notify-complete": "false",
+                    "personal-context": "Project words",
+                },
+                {
+                    "alarms": [
+                        {
+                            "id": "alarm-0900",
+                            "name": "Standup",
+                            "hour": 9,
+                            "minute": 0,
+                            "days": ["mon", "wed", "fri"],
+                            "enabled": True,
+                            "urgency": "critical",
+                            "last_triggered_at": "2026-06-01T09:00",
+                        }
+                    ],
+                    "last_checked_at": "2026-06-01T09:10",
+                },
+            )
             payload = read_export(path)
         self.assertFalse(payload["settings"]["auto-transcribe-timeout"])
         self.assertFalse(payload["settings"]["notify-complete"])
         self.assertEqual(payload["settings"]["personal-context"], "Project words")
+        self.assertEqual(payload["alarms"]["last_checked_at"], "2026-06-01T09:10")
+        self.assertEqual(payload["alarms"]["alarms"][0]["name"], "Standup")
+        self.assertEqual(payload["alarms"]["alarms"][0]["days"], ["mon", "wed", "fri"])
+
+    def test_read_legacy_export_without_alarms_uses_empty_alarm_store(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text('{"app":"speed-of-cinnamon","version":1,"settings":{"language":"de"}}\n', encoding="utf-8")
+            payload = read_export(path)
+        self.assertEqual(payload["settings"]["language"], "de")
+        self.assertEqual(payload["alarms"], {"version": 1, "alarms": [], "last_checked_at": ""})
 
     def test_read_export_rejects_other_app(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

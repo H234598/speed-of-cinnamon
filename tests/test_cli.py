@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from speed_of_cinnamon import cli
-from speed_of_cinnamon.alarms import add_alarm
+from speed_of_cinnamon.alarms import add_alarm, list_alarm_payload, save_alarm_store
 from speed_of_cinnamon.recorder import InputSource, RecorderCommand
 from speed_of_cinnamon.state import RecordingState, StateStore
 
@@ -191,7 +191,8 @@ class CliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             export_path = Path(tmp) / "settings.json"
             stdout = io.StringIO()
-            with redirect_stdout(stdout):
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                add_alarm("09:00", name="Standup", days="weekdays")
                 code = cli.run([
                     "settings-export",
                     "--settings-json",
@@ -207,18 +208,25 @@ class CliTest(unittest.TestCase):
                     "--json",
                 ])
             export_payload = json.loads(stdout.getvalue())
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}):
+                save_alarm_store({"alarms": [], "last_checked_at": ""})
             stdout = io.StringIO()
-            with redirect_stdout(stdout):
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
                 import_code = cli.run(["settings-import", "--input", str(export_path), "--json"])
             import_payload = json.loads(stdout.getvalue())
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}):
+                alarms = list_alarm_payload()
         self.assertEqual(code, 0)
         self.assertEqual(import_code, 0)
         self.assertEqual(export_payload["path"], str(export_path))
+        self.assertEqual(export_payload["alarms_count"], 1)
+        self.assertEqual(import_payload["alarms_count"], 1)
         self.assertEqual(import_payload["settings"]["language"], "de")
         self.assertFalse(import_payload["settings"]["auto-transcribe-timeout"])
         self.assertFalse(import_payload["settings"]["notify-complete"])
         self.assertTrue(import_payload["settings"]["sanitize-special-chars"])
         self.assertNotIn("cli-path", import_payload["settings"])
+        self.assertEqual(alarms["alarms"][0]["name"], "Standup")
 
     def test_history_lists_recent_transcripts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
