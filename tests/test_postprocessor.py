@@ -8,7 +8,9 @@ from unittest import mock
 from speed_of_cinnamon.postprocessor import (
     PostProcessError,
     build_ollama_prompt,
+    build_openai_compatible_messages,
     list_ollama_models,
+    list_openai_compatible_models,
     post_process_text,
     render_postprocess_template,
 )
@@ -109,6 +111,60 @@ class PostProcessorTest(unittest.TestCase):
         with self.assertRaisesRegex(PostProcessError, "model is required"):
             post_process_text("hello", "en", backend="ollama")
 
+    def test_openai_compatible_messages_include_context_vocabulary_and_text(self) -> None:
+        messages = build_openai_compatible_messages(
+            "hallo cinnamon",
+            "de",
+            "Use project wording.",
+            "PipeWire",
+            "Fix spelling only.",
+        )
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertIn("Fix spelling only.", messages[0]["content"])
+        self.assertIn("Language: de", messages[0]["content"])
+        self.assertIn("Use project wording.", messages[0]["content"])
+        self.assertIn("PipeWire", messages[0]["content"])
+        self.assertEqual(messages[1]["role"], "user")
+        self.assertIn("hallo cinnamon", messages[1]["content"])
+
+    def test_openai_compatible_backend_calls_chat_completions_endpoint(self) -> None:
+        requests = []
+
+        def fake_urlopen(request: object, timeout: int = 0) -> FakeResponse:
+            requests.append((request, timeout))
+            return FakeResponse({"choices": [{"message": {"content": "Hello Cinnamon."}}]})
+
+        with (
+            mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=fake_urlopen),
+            mock.patch.dict("os.environ", {"SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY": "local-key"}),
+        ):
+            result = post_process_text(
+                "hello cinnamon",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="llama.cpp-model",
+                openai_compatible_url="http://127.0.0.1:8000/v1/",
+            )
+        self.assertEqual(result, "Hello Cinnamon.")
+        request, timeout = requests[0]
+        self.assertEqual(timeout, 180)
+        self.assertEqual(request.full_url, "http://127.0.0.1:8000/v1/chat/completions")
+        self.assertEqual(request.headers["Authorization"], "Bearer local-key")
+        body = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(body["model"], "llama.cpp-model")
+        self.assertFalse(body["stream"])
+        self.assertEqual(body["temperature"], 0)
+        self.assertIn("hello cinnamon", body["messages"][1]["content"])
+
+    def test_openai_compatible_backend_requires_model(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "model is required"):
+            post_process_text("hello", "en", backend="openai-compatible")
+
+    def test_openai_compatible_empty_response_is_an_error(self) -> None:
+        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", return_value=FakeResponse({"choices": []})):
+            with self.assertRaisesRegex(PostProcessError, "without choices"):
+                post_process_text("hello", "en", backend="openai-compatible", openai_compatible_model="local-model")
+
     def test_ollama_empty_response_is_an_error(self) -> None:
         with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", return_value=FakeResponse({"response": ""})):
             with self.assertRaisesRegex(PostProcessError, "without output"):
@@ -152,6 +208,28 @@ class PostProcessorTest(unittest.TestCase):
         self.assertFalse(result["available"])
         self.assertEqual(result["models"], [])
         self.assertIn("not reachable", result["message"])
+
+    def test_list_openai_compatible_models_reads_models_endpoint(self) -> None:
+        payload = {
+            "object": "list",
+            "data": [
+                {"id": "local-llama", "object": "model", "owned_by": "llama.cpp"},
+                {"id": "local-mistral", "object": "model", "owned_by": "vllm"},
+            ],
+        }
+        requests = []
+
+        def fake_urlopen(request: object, timeout: int = 0) -> FakeResponse:
+            requests.append((request, timeout))
+            return FakeResponse(payload)
+
+        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=fake_urlopen):
+            result = list_openai_compatible_models("http://127.0.0.1:8000/v1/")
+        self.assertTrue(result["available"])
+        self.assertEqual([model["name"] for model in result["models"]], ["local-llama", "local-mistral"])
+        request, timeout = requests[0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:8000/v1/models")
+        self.assertEqual(timeout, 5)
 
 
 if __name__ == "__main__":

@@ -25,7 +25,13 @@ from .paths import (
     state_dir,
     transcript_dir,
 )
-from .postprocessor import DEFAULT_OLLAMA_URL, list_ollama_models, post_process_text
+from .postprocessor import (
+    DEFAULT_OLLAMA_URL,
+    DEFAULT_OPENAI_COMPATIBLE_URL,
+    list_ollama_models,
+    list_openai_compatible_models,
+    post_process_text,
+)
 from .recorder import choose_recorder, list_input_sources, start_recorder, stop_process
 from .settings_export import read_export, write_export
 from .setup_plan import build_setup_plan
@@ -314,6 +320,8 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             args.ollama_model,
             args.ollama_url,
             args.post_process_prompt,
+            args.openai_compatible_model,
+            args.openai_compatible_url,
         )
         text_path.write_text(text.strip() + "\n", encoding="utf-8")
         text_to_insert = prepare_output_text(text, args.append_space, args.sanitize_special_chars)
@@ -462,6 +470,15 @@ def command_models(args: argparse.Namespace) -> dict[str, object]:
 
 
 def command_text_models(args: argparse.Namespace) -> dict[str, object]:
+    backend = (args.backend or "ollama").strip().lower().replace("_", "-")
+    if backend in {"openai-compatible", "openai", "local-openai"}:
+        url = (args.openai_compatible_url or DEFAULT_OPENAI_COMPATIBLE_URL).rstrip("/")
+        return {
+            "status": "done",
+            "backend": "openai-compatible",
+            "url": url,
+            **list_openai_compatible_models(url),
+        }
     return {
         "status": "done",
         "backend": "ollama",
@@ -665,6 +682,8 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         args.ollama_model,
         args.ollama_url,
         args.post_process_prompt,
+        args.openai_compatible_model,
+        args.openai_compatible_url,
     )
     text_path.write_text(text.strip() + "\n", encoding="utf-8")
     return {"status": "done", "transcript": text, "transcript_path": str(text_path)}
@@ -683,10 +702,12 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--transcriber", default="auto", choices=["auto", "whisper", "whisper-cpp", "command"])
     parser.add_argument("--transcriber-command", default="")
     parser.add_argument("--whisper-model", default="")
-    parser.add_argument("--post-process-backend", default="command", choices=["none", "command", "ollama"])
+    parser.add_argument("--post-process-backend", default="command", choices=["none", "command", "ollama", "openai-compatible"])
     parser.add_argument("--post-process-command", default="")
     parser.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
     parser.add_argument("--ollama-model", default="")
+    parser.add_argument("--openai-compatible-url", default=DEFAULT_OPENAI_COMPATIBLE_URL)
+    parser.add_argument("--openai-compatible-model", default="")
     parser.add_argument("--post-process-prompt", default="")
     parser.add_argument("--personal-context", default="")
     parser.add_argument("--vocabulary", default="")
@@ -749,7 +770,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     text_models = subparsers.add_parser("text-models")
     add_common_options(text_models)
+    text_models.add_argument("--backend", default="ollama", choices=["ollama", "openai-compatible"])
     text_models.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
+    text_models.add_argument("--openai-compatible-url", default=DEFAULT_OPENAI_COMPATIBLE_URL)
     text_models.set_defaults(handler=command_text_models)
 
     download_model_parser = subparsers.add_parser("download-model")
@@ -813,10 +836,12 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_file.add_argument("--transcriber", default="auto", choices=["auto", "whisper", "whisper-cpp", "command"])
     transcribe_file.add_argument("--transcriber-command", default="")
     transcribe_file.add_argument("--whisper-model", default="")
-    transcribe_file.add_argument("--post-process-backend", default="command", choices=["none", "command", "ollama"])
+    transcribe_file.add_argument("--post-process-backend", default="command", choices=["none", "command", "ollama", "openai-compatible"])
     transcribe_file.add_argument("--post-process-command", default="")
     transcribe_file.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
     transcribe_file.add_argument("--ollama-model", default="")
+    transcribe_file.add_argument("--openai-compatible-url", default=DEFAULT_OPENAI_COMPATIBLE_URL)
+    transcribe_file.add_argument("--openai-compatible-model", default="")
     transcribe_file.add_argument("--post-process-prompt", default="")
     transcribe_file.add_argument("--personal-context", default="")
     transcribe_file.add_argument("--vocabulary", default="")

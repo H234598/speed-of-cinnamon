@@ -35,7 +35,7 @@
     "backend-section": {
       "type": "section",
       "title": "Backend",
-      "keys": ["cli-path", "transcriber", "whisper-model", "transcriber-command", "post-process-backend", "post-process-command", "ollama-url", "ollama-model", "post-process-prompt"]
+      "keys": ["cli-path", "transcriber", "whisper-model", "transcriber-command", "post-process-backend", "post-process-command", "ollama-url", "ollama-model", "openai-compatible-url", "openai-compatible-model", "post-process-prompt"]
     }
   },
   "toggle-keybinding": {
@@ -199,11 +199,12 @@
   "post-process-backend": {
     "type": "combobox",
     "description": "Text polishing",
-    "tooltip": "Optional local cleanup after ASR. Command runs a custom shell command. Ollama calls a local Ollama server and does not require cloud credentials.",
+    "tooltip": "Optional local cleanup after ASR. Command runs a custom shell command. Ollama and OpenAI-compatible options target local servers and do not require cloud credentials.",
     "options": {
       "Disabled": "none",
       "Custom command": "command",
-      "Ollama local model": "ollama"
+      "Ollama local model": "ollama",
+      "OpenAI-compatible local server": "openai-compatible"
     },
     "default": "command"
   },
@@ -225,10 +226,22 @@
     "tooltip": "Model name for local Ollama polishing, for example llama3.2:3b or mistral.",
     "default": ""
   },
+  "openai-compatible-url": {
+    "type": "entry",
+    "description": "OpenAI-compatible URL",
+    "tooltip": "Local OpenAI-compatible base URL, for example vLLM or llama.cpp at http://127.0.0.1:8000/v1.",
+    "default": "http://127.0.0.1:8000/v1"
+  },
+  "openai-compatible-model": {
+    "type": "entry",
+    "description": "OpenAI-compatible text model",
+    "tooltip": "Local model name for OpenAI-compatible polishing, for example served by vLLM, llama.cpp, or LM Studio.",
+    "default": ""
+  },
   "post-process-prompt": {
     "type": "textview",
     "description": "Text polishing instruction",
-    "tooltip": "Optional instruction for Ollama polishing. The transcript, language, context, and vocabulary are added automatically.",
+    "tooltip": "Optional instruction for Ollama or OpenAI-compatible polishing. The transcript, language, context, and vocabulary are added automatically.",
     "height": 100,
     "default": ""
   }

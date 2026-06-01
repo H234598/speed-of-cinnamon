@@ -25,3 +25,15 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertIn("~/.local/bin/speed-of-cinnamon", tooltip)
         self.assertIn("/usr/bin/speed-of-cinnamon", tooltip)
+
+    def test_text_polishing_supports_openai_compatible_local_server(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(schema["post-process-backend"]["options"]["OpenAI-compatible local server"], "openai-compatible")
+        self.assertEqual(schema["openai-compatible-url"]["default"], "http://127.0.0.1:8000/v1")
+        self.assertIn('["openai-compatible-url", "openaiCompatibleUrl"]', source)
+        self.assertIn('args.push("--backend", "openai-compatible")', source)
+        self.assertIn('args.push("--openai-compatible-url", this.openaiCompatibleUrl)', source)
+        self.assertIn('args.push("--openai-compatible-model", this.openaiCompatibleModel)', source)
+        self.assertIn('_selectTextModelBackend("openai-compatible"', source)

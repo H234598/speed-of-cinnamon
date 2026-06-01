@@ -331,28 +331,37 @@ speed-of-cinnamon toggle \
 ```
 
 For local LLM tooling, either point the command setting at a wrapper script that reads stdin and prints only the
-polished text, or use the built-in Ollama backend:
+polished text, use the built-in Ollama backend, or use a local OpenAI-compatible chat-completions server such as vLLM,
+llama.cpp, or LM Studio:
 
 ```bash
 speed-of-cinnamon toggle \
   --post-process-backend ollama \
   --ollama-url http://127.0.0.1:11434 \
   --ollama-model llama3.2:3b
+
+speed-of-cinnamon toggle \
+  --post-process-backend openai-compatible \
+  --openai-compatible-url http://127.0.0.1:8000/v1 \
+  --openai-compatible-model local-llama
 ```
 
 The Ollama backend calls `/api/generate` with `stream=false`. It sends the transcript, language, personal context, and
 vocabulary to the local server and expects the polished text in the `response` field. The backend stores and inserts the
-post-processed text.
+post-processed text. The OpenAI-compatible backend calls `/v1/chat/completions` with `stream=false` and the same local
+context. If your local server requires a bearer token, set `SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY` in the
+environment that starts the backend.
 
-To inspect installed local Ollama models from the backend:
+To inspect installed local text models from the backend:
 
 ```bash
 speed-of-cinnamon text-models --json
+speed-of-cinnamon text-models --backend openai-compatible --openai-compatible-url http://127.0.0.1:8000/v1 --json
 ```
 
-The Cinnamon applet exposes the same local list in `Text model`. Selecting an Ollama model switches `Text polishing` to
-`Ollama local model` and stores the chosen model name. If Ollama is not running, the menu reports that local status
-without changing the current dictation pipeline.
+The Cinnamon applet exposes the same local lists in `Text model`. Selecting a local model switches `Text polishing` to
+the matching provider and stores the chosen model name. If the selected local server is not running, the menu reports
+that local status without changing the current dictation pipeline.
 
 ## Current Known Limits
 

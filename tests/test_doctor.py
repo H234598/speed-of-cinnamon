@@ -153,6 +153,38 @@ class DoctorTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["configured"]["postprocessor"]["value"], "ollama")
 
+    def test_openai_compatible_postprocessor_requires_model(self) -> None:
+        tools = {"python3", "pw-record"}
+        settings = {
+            "recorder": "auto",
+            "transcriber": "command",
+            "transcriber-command": "printf ok",
+            "insert-method": "none",
+            "post-process-backend": "openai-compatible",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
+            payload = doctor.report(settings)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["configured"]["postprocessor"]["ok"])
+        self.assertIn("OpenAI-compatible local model", payload["configured"]["postprocessor"]["detail"])
+
+    def test_openai_compatible_postprocessor_is_ready_when_model_is_configured(self) -> None:
+        tools = {"python3", "pw-record"}
+        settings = {
+            "recorder": "auto",
+            "transcriber": "command",
+            "transcriber-command": "printf ok",
+            "insert-method": "none",
+            "post-process-backend": "openai-compatible",
+            "openai-compatible-model": "local-llama",
+            "openai-compatible-url": "http://127.0.0.1:8000/v1",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
+            payload = doctor.report(settings)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["configured"]["postprocessor"]["value"], "openai-compatible")
+        self.assertIn("vLLM", payload["configured"]["postprocessor"]["detail"])
+
 
 if __name__ == "__main__":
     unittest.main()

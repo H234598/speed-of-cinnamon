@@ -37,6 +37,8 @@ const EXPORTABLE_SETTINGS = [
   ["post-process-command", "postProcessCommand"],
   ["ollama-url", "ollamaUrl"],
   ["ollama-model", "ollamaModel"],
+  ["openai-compatible-url", "openaiCompatibleUrl"],
+  ["openai-compatible-model", "openaiCompatibleModel"],
   ["post-process-prompt", "postProcessPrompt"]
 ];
 
@@ -78,6 +80,8 @@ MyApplet.prototype = {
     this.postProcessCommand = "";
     this.ollamaUrl = "http://127.0.0.1:11434";
     this.ollamaModel = "";
+    this.openaiCompatibleUrl = "http://127.0.0.1:8000/v1";
+    this.openaiCompatibleModel = "";
     this.postProcessPrompt = "";
     this.personalContext = "";
     this.vocabulary = "";
@@ -132,6 +136,8 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-command", "postProcessCommand", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "ollama-url", "ollamaUrl", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "ollama-model", "ollamaModel", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-url", "openaiCompatibleUrl", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-model", "openaiCompatibleModel", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-prompt", "postProcessPrompt", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "personal-context", "personalContext", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "vocabulary", "vocabulary", null, null);
@@ -318,6 +324,12 @@ MyApplet.prototype = {
     if (this.ollamaModel && this.ollamaModel.trim() !== "") {
       args.push("--ollama-model", this.ollamaModel);
     }
+    if (this.openaiCompatibleUrl && this.openaiCompatibleUrl.trim() !== "") {
+      args.push("--openai-compatible-url", this.openaiCompatibleUrl);
+    }
+    if (this.openaiCompatibleModel && this.openaiCompatibleModel.trim() !== "") {
+      args.push("--openai-compatible-model", this.openaiCompatibleModel);
+    }
     if (this.postProcessPrompt && this.postProcessPrompt.trim() !== "") {
       args.push("--post-process-prompt", this.postProcessPrompt);
     }
@@ -375,6 +387,15 @@ MyApplet.prototype = {
 
   _textModelsArgs: function() {
     let args = [this._cliCommand(), "text-models", "--json"];
+    let backend = String(this.postProcessBackend || "");
+    if (backend === "openai-compatible") {
+      args.push("--backend", "openai-compatible");
+      if (this.openaiCompatibleUrl && this.openaiCompatibleUrl.trim() !== "") {
+        args.push("--openai-compatible-url", this.openaiCompatibleUrl);
+      }
+      return args;
+    }
+    args.push("--backend", "ollama");
     if (this.ollamaUrl && this.ollamaUrl.trim() !== "") {
       args.push("--ollama-url", this.ollamaUrl);
     }
@@ -816,16 +837,17 @@ MyApplet.prototype = {
         this._populateTextModelMenu([], payload.error);
         return;
       }
-      this._populateTextModelMenu(payload.models || [], payload.available === false ? payload.message : "");
+      this._populateTextModelMenu(payload.models || [], payload.available === false ? payload.message : "", payload.backend || "ollama");
     });
   },
 
-  _populateTextModelMenu: function(models, message) {
+  _populateTextModelMenu: function(models, message, provider) {
     if (!this.textModelItem) {
       return;
     }
     this.textModelItem.menu.removeAll();
     let backend = String(this.postProcessBackend || "command");
+    let activeProvider = String(provider || (backend === "openai-compatible" ? "openai-compatible" : "ollama"));
 
     let disabled = new PopupMenu.PopupMenuItem((backend === "none" ? "[x] " : "[ ] ") + _("Disabled"));
     disabled.connect("activate", () => this._selectTextModelBackend("none", "", _("Text polishing disabled")));
@@ -837,6 +859,16 @@ MyApplet.prototype = {
 
     this.textModelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
+    let ollama = new PopupMenu.PopupMenuItem((backend === "ollama" ? "[x] " : "[ ] ") + _("Ollama local model"));
+    ollama.connect("activate", () => this._selectTextModelBackend("ollama", this.ollamaModel, _("Text polishing: Ollama")));
+    this.textModelItem.menu.addMenuItem(ollama);
+
+    let openaiCompatible = new PopupMenu.PopupMenuItem((backend === "openai-compatible" ? "[x] " : "[ ] ") + _("OpenAI-compatible local server"));
+    openaiCompatible.connect("activate", () => this._selectTextModelBackend("openai-compatible", this.openaiCompatibleModel, _("Text polishing: OpenAI-compatible local server")));
+    this.textModelItem.menu.addMenuItem(openaiCompatible);
+
+    this.textModelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
     if (message) {
       let messageItem = new PopupMenu.PopupMenuItem(message);
       messageItem.setSensitive(false);
@@ -844,29 +876,34 @@ MyApplet.prototype = {
       return;
     }
     if (!models || models.length === 0) {
-      let empty = new PopupMenu.PopupMenuItem(_("No local Ollama models found"));
+      let emptyLabel = activeProvider === "openai-compatible"
+        ? _("No OpenAI-compatible local models found")
+        : _("No local Ollama models found");
+      let empty = new PopupMenu.PopupMenuItem(emptyLabel);
       empty.setSensitive(false);
       this.textModelItem.menu.addMenuItem(empty);
       return;
     }
     for (let model of models) {
-      this._addTextModelMenuEntry(model);
+      this._addTextModelMenuEntry(model, activeProvider);
     }
   },
 
-  _addTextModelMenuEntry: function(model) {
+  _addTextModelMenuEntry: function(model, backend) {
     let name = String(model.name || "");
     if (name === "") {
       return;
     }
-    let current = String(this.postProcessBackend || "") === "ollama" && String(this.ollamaModel || "") === name;
+    let provider = String(backend || "ollama");
+    let currentModel = provider === "openai-compatible" ? String(this.openaiCompatibleModel || "") : String(this.ollamaModel || "");
+    let current = String(this.postProcessBackend || "") === provider && currentModel === name;
     let details = String(model.description || model.size_label || "");
     let label = (current ? "[x] " : "[ ] ") + name;
     if (details !== "") {
       label += " (" + details + ")";
     }
     let item = new PopupMenu.PopupMenuItem(label);
-    item.connect("activate", () => this._selectTextModelBackend("ollama", name, _("Text model: ") + name));
+    item.connect("activate", () => this._selectTextModelBackend(provider, name, _("Text model: ") + name));
     this.textModelItem.menu.addMenuItem(item);
   },
 
@@ -876,6 +913,10 @@ MyApplet.prototype = {
     if (this.postProcessBackend === "ollama") {
       this.ollamaModel = String(model || "");
       this.settings.setValue("ollama-model", this.ollamaModel);
+    }
+    if (this.postProcessBackend === "openai-compatible") {
+      this.openaiCompatibleModel = String(model || "");
+      this.settings.setValue("openai-compatible-model", this.openaiCompatibleModel);
     }
     this._refreshTextModelMenu();
     this._setStatus("ready", message, this.lastTranscript);

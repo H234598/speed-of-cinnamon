@@ -24,8 +24,8 @@ path.
 - ASR presets for Automatic, OpenAI Whisper command, whisper.cpp with a model path, or a custom command template.
 - Local whisper.cpp model catalog with checksum-verified downloads into the user's XDG data directory.
 - Personal context and custom vocabulary fields for local ASR/post-process command wrappers.
-- Optional text polishing through a custom command or a local Ollama model, with applet selection of installed local
-  Ollama models.
+- Optional text polishing through a custom command, a local Ollama model, or a local OpenAI-compatible server such as
+  vLLM, llama.cpp, or LM Studio, with applet selection of discovered local models.
 - Cinnamon clipboard output through the applet, optional `xdotool` paste/direct typing, clipboard-only, or no insertion.
 - Optional accent/special-character fallback for direct typing compatibility on X11.
 - Applet menu action to copy the last transcript again.
@@ -99,7 +99,10 @@ SPEED_OF_CINNAMON_PROMPT
 For text cleanup after ASR, configure `Text polishing`. `Custom command` receives the transcript on stdin and must print
 the final text. `{text}`, `{language}`, `{context}`, `{vocabulary}`, and `{prompt}` can also be used as shell-quoted
 placeholders. `Ollama local model` sends the transcript, language, context, and vocabulary to a local Ollama
-`/api/generate` endpoint and expects the final text in the `response` field.
+`/api/generate` endpoint and expects the final text in the `response` field. `OpenAI-compatible local server` sends a
+chat-completions request to a local `/v1/chat/completions` API such as vLLM, llama.cpp, or LM Studio. If your local
+server requires a bearer token, set `SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY` in the environment that starts the
+backend.
 
 ## Install Locally
 
@@ -141,6 +144,7 @@ speed-of-cinnamon diagnostics --applet --settings-json '{"transcriber":"command"
 speed-of-cinnamon list-inputs --json
 speed-of-cinnamon models --json
 speed-of-cinnamon text-models --json
+speed-of-cinnamon text-models --backend openai-compatible --openai-compatible-url http://127.0.0.1:8000/v1 --json
 speed-of-cinnamon download-model tiny.en --json
 speed-of-cinnamon remove-model tiny.en --json
 speed-of-cinnamon history --limit 5 --json
@@ -156,6 +160,7 @@ speed-of-cinnamon toggle --language de --transcriber whisper-cpp --whisper-model
 speed-of-cinnamon toggle --language de --transcriber command --transcriber-command "printf 'Hallo Cinnamon'"
 speed-of-cinnamon toggle --post-process-command "python3 -c 'import sys; print(sys.stdin.read().strip().capitalize())'"
 speed-of-cinnamon toggle --post-process-backend ollama --ollama-model llama3.2:3b
+speed-of-cinnamon toggle --post-process-backend openai-compatible --openai-compatible-model local-llama --openai-compatible-url http://127.0.0.1:8000/v1
 speed-of-cinnamon toggle --personal-context "Use Fedora Cinnamon project terms." --vocabulary "PipeWire"
 speed-of-cinnamon toggle --sanitize-special-chars --insert-method type
 ```
@@ -180,9 +185,10 @@ model is activated. If `whisper-cli` is installed, Automatic transcription can u
 the `whisper.cpp model` setting is empty. Removing a model from the applet clears the explicit whisper.cpp selection
 when that model was active.
 
-The applet's `Text model` menu can disable polishing, use the custom command backend, or select a model returned by a
-local Ollama `/api/tags` endpoint. If Ollama is not running, the menu stays usable and shows the local connection
-message instead of blocking recording.
+The applet's `Text model` menu can disable polishing, use the custom command backend, select a model returned by a local
+Ollama `/api/tags` endpoint, or select a model returned by a local OpenAI-compatible `/v1/models` endpoint. If the
+selected local server is not running, the menu stays usable and shows the local connection message instead of blocking
+recording.
 
 For backend-only testing without touching the focused application:
 
@@ -254,7 +260,7 @@ Cinnamon keybinding / panel click
        recorder.py      pw-record / parecord / arecord and pactl source discovery
        transcriber.py   ASR preset resolver and command runners
        personalization.py context/vocabulary prompt and environment helpers
-       postprocessor.py optional command or Ollama text polishing
+       postprocessor.py optional command, Ollama, or OpenAI-compatible local text polishing
        settings_export.py portable settings snapshot helpers
        cli.py           transcript history and state commands
        output.py        xclip / xdotool for standalone CLI output

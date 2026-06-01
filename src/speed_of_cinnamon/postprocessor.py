@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 import urllib.request
@@ -13,6 +14,7 @@ class PostProcessError(RuntimeError):
 
 
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
+DEFAULT_OPENAI_COMPATIBLE_URL = "http://127.0.0.1:8000/v1"
 DEFAULT_OLLAMA_PROMPT = (
     "Clean up the transcript for direct insertion. Preserve meaning, language, names, "
     "technical terms, and formatting. Return only the final text."
@@ -66,7 +68,15 @@ def _ollama_endpoint(url: str, path: str) -> str:
     return base + "/" + path.lstrip("/")
 
 
-def _read_ollama_json(request: urllib.request.Request, timeout: int) -> object:
+def _openai_compatible_endpoint(url: str, path: str) -> str:
+    base = (url or DEFAULT_OPENAI_COMPATIBLE_URL).rstrip("/")
+    normalized_path = "/" + path.strip("/")
+    if base.endswith(normalized_path):
+        return base
+    return base + normalized_path
+
+
+def _read_json(request: urllib.request.Request, timeout: int) -> object:
     with urllib.request.urlopen(request, timeout=timeout) as response:
         raw = response.read().decode("utf-8")
     return json.loads(raw)
@@ -117,7 +127,7 @@ def list_ollama_models(url: str = DEFAULT_OLLAMA_URL, timeout: int = 5) -> dict[
     endpoint = _ollama_endpoint(url, "/api/tags")
     request = urllib.request.Request(endpoint, method="GET")
     try:
-        data = _read_ollama_json(request, timeout)
+        data = _read_json(request, timeout)
     except OSError as exc:
         return {
             "available": False,
@@ -149,6 +159,66 @@ def list_ollama_models(url: str = DEFAULT_OLLAMA_URL, timeout: int = 5) -> dict[
         "available": True,
         "models": models,
         "message": "Ollama models loaded" if models else "No local Ollama models found",
+    }
+
+
+def _normalize_openai_compatible_model(model: object) -> dict[str, object] | None:
+    if not isinstance(model, dict):
+        return None
+    name = str(model.get("id") or model.get("name") or "").strip()
+    if not name:
+        return None
+    owned_by = str(model.get("owned_by") or "").strip()
+    return {
+        "name": name,
+        "model": name,
+        "owned_by": owned_by,
+        "description": owned_by,
+    }
+
+
+def list_openai_compatible_models(
+    url: str = DEFAULT_OPENAI_COMPATIBLE_URL,
+    timeout: int = 5,
+) -> dict[str, object]:
+    endpoint = _openai_compatible_endpoint(url, "/models")
+    request = urllib.request.Request(endpoint, method="GET")
+    try:
+        data = _read_json(request, timeout)
+    except OSError as exc:
+        return {
+            "available": False,
+            "models": [],
+            "message": (
+                "OpenAI-compatible local server is not reachable at "
+                f"{(url or DEFAULT_OPENAI_COMPATIBLE_URL).rstrip('/')}: {exc}"
+            ),
+        }
+    except json.JSONDecodeError:
+        return {
+            "available": False,
+            "models": [],
+            "message": "OpenAI-compatible local server returned invalid JSON for model listing",
+        }
+    if not isinstance(data, dict):
+        return {
+            "available": False,
+            "models": [],
+            "message": "OpenAI-compatible model listing must be a JSON object",
+        }
+    raw_models = data.get("data")
+    if not isinstance(raw_models, list):
+        return {
+            "available": True,
+            "models": [],
+            "message": "OpenAI-compatible local server is running but returned no model list",
+        }
+    models = [model for item in raw_models if (model := _normalize_openai_compatible_model(item))]
+    models.sort(key=lambda item: str(item["name"]).lower())
+    return {
+        "available": True,
+        "models": models,
+        "message": "OpenAI-compatible models loaded" if models else "No OpenAI-compatible local models found",
     }
 
 
@@ -195,6 +265,102 @@ def post_process_with_ollama(
     return processed
 
 
+def _openai_compatible_headers() -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    api_key = os.environ.get("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY", "").strip()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+def build_openai_compatible_messages(
+    text: str,
+    language: str,
+    personal_context: str = "",
+    vocabulary: str = "",
+    instruction: str = "",
+) -> list[dict[str, str]]:
+    system_sections = [
+        (instruction or DEFAULT_OLLAMA_PROMPT).strip(),
+        f"Language: {language}",
+    ]
+    personalization = build_personalization_prompt(personal_context, vocabulary)
+    if personalization:
+        system_sections.append(personalization)
+    return [
+        {"role": "system", "content": "\n\n".join(section for section in system_sections if section)},
+        {"role": "user", "content": "Transcript:\n" + text.strip()},
+    ]
+
+
+def _choice_text(choice: object) -> str:
+    if not isinstance(choice, dict):
+        return ""
+    message = choice.get("message")
+    if isinstance(message, dict):
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, dict):
+                    parts.append(str(item.get("text") or item.get("content") or ""))
+                else:
+                    parts.append(str(item))
+            return "".join(parts)
+    return str(choice.get("text") or "")
+
+
+def post_process_with_openai_compatible(
+    text: str,
+    language: str,
+    model: str,
+    url: str = DEFAULT_OPENAI_COMPATIBLE_URL,
+    personal_context: str = "",
+    vocabulary: str = "",
+    prompt: str = "",
+) -> str:
+    model_name = (model or "").strip()
+    if not model_name:
+        raise PostProcessError("OpenAI-compatible model is required")
+    endpoint = _openai_compatible_endpoint(url, "/chat/completions")
+    payload = {
+        "model": model_name,
+        "messages": build_openai_compatible_messages(text, language, personal_context, vocabulary, prompt),
+        "stream": False,
+        "temperature": 0,
+    }
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=_openai_compatible_headers(),
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=180) as response:
+            raw = response.read().decode("utf-8")
+    except OSError as exc:
+        raise PostProcessError(f"OpenAI-compatible request failed: {exc}") from exc
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise PostProcessError("OpenAI-compatible server returned invalid JSON") from exc
+    if not isinstance(data, dict):
+        raise PostProcessError("OpenAI-compatible response must be a JSON object")
+    if data.get("error"):
+        error = data["error"]
+        detail = str(error.get("message") or error) if isinstance(error, dict) else str(error)
+        raise PostProcessError(f"OpenAI-compatible server failed: {detail}")
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise PostProcessError("OpenAI-compatible server completed without choices")
+    processed = _choice_text(choices[0]).strip()
+    if not processed:
+        raise PostProcessError("OpenAI-compatible server completed without output")
+    return processed
+
+
 def post_process_text(
     text: str,
     language: str,
@@ -205,6 +371,8 @@ def post_process_text(
     ollama_model: str = "",
     ollama_url: str = DEFAULT_OLLAMA_URL,
     ollama_prompt: str = "",
+    openai_compatible_model: str = "",
+    openai_compatible_url: str = DEFAULT_OPENAI_COMPATIBLE_URL,
 ) -> str:
     normalized_backend = (backend or "command").strip().lower().replace("_", "-")
     if normalized_backend in {"none", "off", "disabled"}:
@@ -215,6 +383,16 @@ def post_process_text(
             language,
             ollama_model,
             ollama_url,
+            personal_context,
+            vocabulary,
+            ollama_prompt,
+        )
+    if normalized_backend in {"openai-compatible", "openai", "local-openai"}:
+        return post_process_with_openai_compatible(
+            text,
+            language,
+            openai_compatible_model,
+            openai_compatible_url,
             personal_context,
             vocabulary,
             ollama_prompt,

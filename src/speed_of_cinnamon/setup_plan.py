@@ -133,6 +133,14 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
                 detail + " Use the applet's Text model menu, or disable text polishing.",
                 ["speed-of-cinnamon text-models --json"],
             )
+        elif value == "openai-compatible":
+            _add_step(
+                steps,
+                "openai-compatible-text-model",
+                "Select an OpenAI-compatible local text model",
+                detail + " Use the applet's Text model menu, or disable text polishing.",
+                ["speed-of-cinnamon text-models --backend openai-compatible --json"],
+            )
         else:
             _add_step(
                 steps,

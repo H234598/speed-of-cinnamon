@@ -36,6 +36,8 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "post-process-command": (str, ""),
     "ollama-url": (str, "http://127.0.0.1:11434"),
     "ollama-model": (str, ""),
+    "openai-compatible-url": (str, "http://127.0.0.1:8000/v1"),
+    "openai-compatible-model": (str, ""),
     "post-process-prompt": (str, ""),
 }
 

@@ -17,6 +17,8 @@ class SettingsExportTest(unittest.TestCase):
             "typing-delay-ms": "12",
             "post-process-backend": "ollama",
             "ollama-model": "llama3.2:3b",
+            "openai-compatible-url": "http://127.0.0.1:8000/v1",
+            "openai-compatible-model": "local-llama",
             "cli-path": "/tmp/not-portable",
             "unknown": "ignored",
         })
@@ -29,6 +31,8 @@ class SettingsExportTest(unittest.TestCase):
         self.assertEqual(settings["typing-delay-ms"], 12)
         self.assertEqual(settings["post-process-backend"], "ollama")
         self.assertEqual(settings["ollama-model"], "llama3.2:3b")
+        self.assertEqual(settings["openai-compatible-url"], "http://127.0.0.1:8000/v1")
+        self.assertEqual(settings["openai-compatible-model"], "local-llama")
         self.assertNotIn("cli-path", settings)
         self.assertNotIn("unknown", settings)
 

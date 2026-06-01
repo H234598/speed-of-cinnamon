@@ -203,6 +203,8 @@ def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
     command_template = _setting(settings, "post-process-command")
     ollama_model = _setting(settings, "ollama-model")
     ollama_url = _setting(settings, "ollama-url", "http://127.0.0.1:11434")
+    openai_compatible_model = _setting(settings, "openai-compatible-model")
+    openai_compatible_url = _setting(settings, "openai-compatible-url", "http://127.0.0.1:8000/v1")
     if backend in {"", "none", "off", "disabled"}:
         return {"ok": True, "value": "none", "detail": "text polishing disabled"}
     if backend in {"command", "custom"}:
@@ -218,6 +220,21 @@ def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
             "ok": True,
             "value": "ollama",
             "detail": f"Ollama configured at {ollama_url}; ensure the local server is running",
+        }
+    if backend in {"openai-compatible", "openai", "local-openai"}:
+        if not openai_compatible_model:
+            return {
+                "ok": False,
+                "value": "openai-compatible",
+                "detail": "OpenAI-compatible local model is required",
+            }
+        return {
+            "ok": True,
+            "value": "openai-compatible",
+            "detail": (
+                f"OpenAI-compatible local endpoint configured at {openai_compatible_url}; "
+                "ensure vLLM, llama.cpp, LM Studio, or another local server is running"
+            ),
         }
     return {"ok": False, "value": backend, "detail": f"unknown post-process backend: {backend}"}
 
@@ -269,6 +286,7 @@ def report(settings: Mapping[str, object] | None = None, applet: bool = False) -
             "Install xdotool for automatic paste or direct typing on Cinnamon X11.",
             "Install xclip or xsel only if you use the backend CLI clipboard insertion without the applet.",
             "ASR can use Automatic, the 'whisper' command, whisper.cpp plus a model path, or a custom command.",
+            "Text polishing can use a custom command, Ollama, or an OpenAI-compatible local server.",
         ],
     }
 

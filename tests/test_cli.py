@@ -124,6 +124,30 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["models"][0]["name"], "llama3.2:3b")
         mocked_list.assert_called_once_with("http://localhost:11434")
 
+    @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models")
+    def test_text_models_lists_openai_compatible_local_models(self, mocked_list: mock.Mock) -> None:
+        mocked_list.return_value = {
+            "available": True,
+            "models": [{"name": "local-llama"}],
+            "message": "OpenAI-compatible models loaded",
+        }
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run([
+                "text-models",
+                "--backend",
+                "openai-compatible",
+                "--openai-compatible-url",
+                "http://127.0.0.1:8000/v1",
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["backend"], "openai-compatible")
+        self.assertEqual(payload["url"], "http://127.0.0.1:8000/v1")
+        self.assertEqual(payload["models"][0]["name"], "local-llama")
+        mocked_list.assert_called_once_with("http://127.0.0.1:8000/v1")
+
     @mock.patch("speed_of_cinnamon.cli.doctor_report")
     def test_setup_command_outputs_copyable_plan(self, mocked_doctor: mock.Mock) -> None:
         mocked_doctor.return_value = {

@@ -78,6 +78,26 @@ class SetupPlanTest(unittest.TestCase):
         self.assertEqual(plan["steps"][0]["id"], "ollama-text-model")
         self.assertIn("speed-of-cinnamon text-models --json", plan["commands"])
 
+    def test_missing_openai_compatible_model_gets_text_model_step(self) -> None:
+        payload = {
+            "ok": False,
+            "configured": {
+                "recorder": {"ok": True},
+                "transcriber": {"ok": True},
+                "output": {"ok": True},
+                "postprocessor": {
+                    "ok": False,
+                    "value": "openai-compatible",
+                    "detail": "OpenAI-compatible local model is required",
+                },
+                "warnings": [],
+            },
+            "desktop": {"cinnamon": True},
+        }
+        plan = build_setup_plan(payload)
+        self.assertEqual(plan["steps"][0]["id"], "openai-compatible-text-model")
+        self.assertIn("speed-of-cinnamon text-models --backend openai-compatible --json", plan["commands"])
+
 
 if __name__ == "__main__":
     unittest.main()
