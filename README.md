@@ -35,6 +35,7 @@ path.
   normal application window.
 - Optional accent/special-character fallback for direct typing compatibility on X11.
 - Applet menu action to copy the last transcript again.
+- Applet menu action to insert the last transcript again with the current output mode.
 - Applet and CLI transcript history for quickly copying recent results.
 - Applet and CLI action to cancel and discard a current recording.
 - Applet and CLI cleanup for old transcript/history files and cached recordings.
@@ -277,11 +278,12 @@ Cinnamon keybinding / panel click
 ```
 
 The applet handles the normal clipboard path through Cinnamon's `St.Clipboard`, exposes the output mode directly in the
-applet menu, remembers the last focused normal window, restores that window before paste, and opens guide/folder actions
-through GJS/Gio's default-app launcher. It uses `xdotool` only for the X11 paste keystroke when it is available. Without
-`xdotool`, dictation still completes as a Cinnamon clipboard copy. This keeps desktop integration in Cinnamon where it
-belongs and keeps ASR replaceable. The Speed of Sound JVM/GTK portal stack is intentionally not reused because its
-central integration point is the part that does not fit this goal.
+applet menu, remembers the last focused normal window, restores that window before paste, can reinsert the last
+transcript with the current output mode, and opens guide/folder actions through GJS/Gio's default-app launcher. It uses
+`xdotool` only for the X11 paste or direct-typing keystrokes when they are available. Without `xdotool`, dictation still
+completes as a Cinnamon clipboard copy. This keeps desktop integration in Cinnamon where it belongs and keeps ASR
+replaceable. The Speed of Sound JVM/GTK portal stack is intentionally not reused because its central integration point
+is the part that does not fit this goal.
 
 The doctor command accepts the applet settings as JSON and evaluates the configured pipeline, not only installed
 binaries. The applet passes `--applet`, which tells the doctor to evaluate Cinnamon's own clipboard path. A missing ASR

@@ -218,6 +218,11 @@ MyApplet.prototype = {
     this.copyLastItem.connect("activate", () => this._copyLastTranscript());
     this.menu.addMenuItem(this.copyLastItem);
 
+    this.insertLastItem = new PopupMenu.PopupIconMenuItem(_("Insert last transcript"), "edit-paste-symbolic", St.IconType.SYMBOLIC);
+    this.insertLastItem.setSensitive(false);
+    this.insertLastItem.connect("activate", () => this._insertLastTranscript());
+    this.menu.addMenuItem(this.insertLastItem);
+
     this.historyItem = new PopupMenu.PopupSubMenuMenuItem(_("Recent transcripts"));
     this.historyItem.menu.connect("open-state-changed", (menu, open) => {
       if (open) {
@@ -1345,27 +1350,55 @@ MyApplet.prototype = {
   },
 
   _pasteClipboardAfterFocus: function() {
+    this._spawnKeyboardAfterFocus(["xdotool", "key", "--clearmodifiers", "ctrl+v"]);
+  },
+
+  _typeTextAfterFocus: function(text) {
+    let delay = Math.max(0, Math.floor(Number(this.typingDelayMs || 0)));
+    this._spawnKeyboardAfterFocus(["xdotool", "type", "--clearmodifiers", "--delay", String(delay), text]);
+  },
+
+  _spawnKeyboardAfterFocus: function(args) {
     this._clearPasteTimer();
     this.pasteTimer = Mainloop.timeout_add(PASTE_FOCUS_DELAY_MS, () => {
       this.pasteTimer = 0;
-      Util.spawn(["xdotool", "key", "--clearmodifiers", "ctrl+v"]);
+      Util.spawn(args);
       return false;
     });
   },
 
   _finishCinnamonClipboardInsert: function(payload) {
-    let text = this._preparedTranscriptText(payload.transcript);
+    this._insertTranscriptText(payload.transcript);
+  },
+
+  _insertTranscriptText: function(transcript) {
+    let method = this._normalizeOutputMethod(this.insertMethod);
+    let text = this._preparedTranscriptText(transcript);
+    if (method === "none") {
+      this._setStatus("done", _("Insertion disabled"), transcript);
+      return;
+    }
+    if (method === "type") {
+      if (GLib.find_program_in_path("xdotool")) {
+        let restored = this._restoreTargetWindowForPaste();
+        this._typeTextAfterFocus(text);
+        this._setStatus("done", restored ? _("Typed into target window") : _("Typed text"), transcript);
+      } else {
+        this._setStatus("error", _("Install xdotool for direct typing"), transcript);
+      }
+      return;
+    }
     this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
-    if (this.insertMethod === "clipboard") {
-      this._setStatus("done", _("Copied to clipboard"), payload.transcript);
+    if (method === "clipboard") {
+      this._setStatus("done", _("Copied to clipboard"), transcript);
       return;
     }
     if (GLib.find_program_in_path("xdotool")) {
       let restored = this._restoreTargetWindowForPaste();
       this._pasteClipboardAfterFocus();
-      this._setStatus("done", restored ? _("Copied and pasted into target window") : _("Copied and pasted"), payload.transcript);
+      this._setStatus("done", restored ? _("Copied and pasted into target window") : _("Copied and pasted"), transcript);
     } else {
-      this._setStatus("done", _("Copied to clipboard; install xdotool for automatic paste"), payload.transcript);
+      this._setStatus("done", _("Copied to clipboard; install xdotool for automatic paste"), transcript);
     }
   },
 
@@ -1405,6 +1438,14 @@ MyApplet.prototype = {
     this._setStatus("done", _("Copied last transcript"), this.lastTranscript);
   },
 
+  _insertLastTranscript: function() {
+    if (!this.lastTranscript) {
+      this._setStatus(this.status, _("No transcript yet"), this.lastTranscript);
+      return;
+    }
+    this._insertTranscriptText(this.lastTranscript);
+  },
+
   _populateHistoryMenu: function(transcripts) {
     if (!this.historyItem) {
       return;
@@ -1440,6 +1481,9 @@ MyApplet.prototype = {
     }
     if (this.copyLastItem) {
       this.copyLastItem.setSensitive(Boolean(this.lastTranscript));
+    }
+    if (this.insertLastItem) {
+      this.insertLastItem.setSensitive(Boolean(this.lastTranscript));
     }
     if (this.cancelItem) {
       this.cancelItem.setSensitive(this.status === "recording" || this.status === "recorded");

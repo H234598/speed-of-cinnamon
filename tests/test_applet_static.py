@@ -129,3 +129,20 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.settings.bindProperty(Settings.BindingDirection.IN, "insert-method", "insertMethod", this._onOutputSettingsChanged, null)', source)
         self.assertIn('this.outputMethodItem.label.text = _("Output: ") + this._outputMethodLabel(this._normalizeOutputMethod(this.insertMethod))', source)
         self.assertIn('let backendInsertMethod = this._usesCinnamonClipboard() ? "none" : this._normalizeOutputMethod(this.insertMethod);', source)
+
+    def test_applet_can_reinsert_last_transcript_with_current_output_mode(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn('this.insertLastItem = new PopupMenu.PopupIconMenuItem(_("Insert last transcript")', source)
+        self.assertIn("this.insertLastItem.setSensitive(false)", source)
+        self.assertIn("this.insertLastItem.connect(\"activate\", () => this._insertLastTranscript())", source)
+        self.assertIn("this.insertLastItem.setSensitive(Boolean(this.lastTranscript))", source)
+        self.assertIn("_insertLastTranscript: function()", source)
+        self.assertIn("_insertTranscriptText: function(transcript)", source)
+        self.assertIn("this._insertTranscriptText(payload.transcript);", source)
+        self.assertIn('if (method === "none")', source)
+        self.assertIn('if (method === "type")', source)
+        self.assertIn('this._typeTextAfterFocus(text);', source)
+        self.assertIn('Util.spawn(args);', source)
+        self.assertIn('["xdotool", "type", "--clearmodifiers", "--delay", String(delay), text]', source)
+        self.assertIn('["xdotool", "key", "--clearmodifiers", "ctrl+v"]', source)
