@@ -23,6 +23,7 @@ for path in \
   RELEASE-MANIFEST.txt \
   Makefile \
   pyproject.toml \
+  packaging/speed-of-cinnamon.spec \
   docs/fedora-cinnamon-runbook.md \
   files/speed-of-cinnamon@H234598/applet.js \
   files/speed-of-cinnamon@H234598/metadata.json \

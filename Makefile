@@ -1,4 +1,4 @@
-.PHONY: check test lint smoke-doctor smoke-backend dist dist-check install-local uninstall-local
+.PHONY: check test lint smoke-doctor smoke-backend dist dist-check rpm install-local uninstall-local
 
 PYTHON ?= python3
 
@@ -23,6 +23,9 @@ dist:
 
 dist-check:
 	tarball="$$(./scripts/build-dist.sh)" && ./scripts/verify-dist.sh "$$tarball"
+
+rpm:
+	./scripts/build-rpm.sh
 
 install-local:
 	./scripts/install-local.sh

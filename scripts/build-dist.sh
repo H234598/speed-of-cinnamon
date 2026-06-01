@@ -31,6 +31,7 @@ for path in \
   .github \
   docs \
   files \
+  packaging \
   scripts \
   src \
   tests \

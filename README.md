@@ -39,6 +39,7 @@ path.
   `~/.cache/speed-of-cinnamon/`.
 - Local install and uninstall scripts, reproducible source release archives, Python unit tests, shell checks, and GitHub
   Actions CI.
+- Experimental noarch RPM build for Fedora-style system installation.
 
 ## Fedora Cinnamon Dependencies
 
@@ -209,6 +210,15 @@ make dist-check
 
 This writes `dist/speed-of-cinnamon-<version>.tar.gz`, verifies its checksum file, extracts it, runs `make check`, and
 installs the package into a temporary home directory to prove the shipped applet and backend wrapper are complete.
+
+To build a noarch RPM from the verified source archive:
+
+```bash
+make rpm
+```
+
+The RPM installs the backend command to `/usr/bin/speed-of-cinnamon` and the Cinnamon applet under
+`/usr/share/cinnamon/applets/speed-of-cinnamon@H234598/`.
 
 ## Architecture
 

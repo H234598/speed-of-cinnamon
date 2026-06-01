@@ -14,10 +14,12 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install shell tooling
-        run: sudo apt-get update && sudo apt-get install -y shellcheck
+        run: sudo apt-get update && sudo apt-get install -y rpm shellcheck
       - name: Run checks
         run: make check
       - name: Build and verify release archive
         run: make dist-check
+      - name: Build RPM package
+        run: make rpm
       - name: Shellcheck scripts
         run: shellcheck scripts/*.sh
