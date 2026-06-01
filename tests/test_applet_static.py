@@ -89,6 +89,25 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.recorderItem.label.text = _("Recorder: ") + this._recorderLabel(this._normalizeRecorder(this.recorder))', source)
         self.assertIn('this.lastMessage = _("Recorder for next recording: ") + label', source)
 
+    def test_applet_exposes_recording_duration_submenu(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(schema["max-seconds"]["min"], 5)
+        self.assertEqual(schema["max-seconds"]["max"], 300)
+        self.assertIn("const RECORDING_LIMIT_SECONDS = [", source)
+        for seconds in ["15", "30", "60", "120", "300"]:
+            self.assertIn(seconds, source)
+        self.assertIn('this.recordingLimitItem = new PopupMenu.PopupSubMenuMenuItem(_("Duration: 30s"))', source)
+        self.assertIn("_populateRecordingLimitMenu: function()", source)
+        self.assertIn("_normalizeRecordingLimit: function(seconds)", source)
+        self.assertIn("_selectRecordingLimit: function(seconds)", source)
+        self.assertIn('this.settings.bindProperty(Settings.BindingDirection.IN, "max-seconds", "maxSeconds", this._onRecordingLimitSettingsChanged, null)', source)
+        self.assertIn('this.settings.setValue("max-seconds", this.maxSeconds)', source)
+        self.assertIn('"--max-seconds", String(this._normalizeRecordingLimit(this.maxSeconds))', source)
+        self.assertIn('this.recordingLimitItem.label.text = _("Duration: ") + this._formatSeconds(this._normalizeRecordingLimit(this.maxSeconds))', source)
+        self.assertIn('this.lastMessage = _("Duration for next recording: ") + label', source)
+
     def test_applet_exposes_shortcut_reference_menu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

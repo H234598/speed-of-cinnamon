@@ -24,6 +24,7 @@ path.
 - Primary/secondary recognition languages with a Cinnamon submenu for selecting the active language or starting directly
   with either language.
 - PipeWire/PulseAudio/ALSA recording through `pw-record`, `parecord`, or `arecord`, selectable from the applet menu.
+- Applet duration menu for common maximum recording lengths without opening Cinnamon settings.
 - Optional microphone/source selection from the applet menu or by PipeWire/Pulse source name, with a `list-inputs`
   helper.
 - ASR presets for Automatic, OpenAI Whisper command, whisper.cpp with a model path, or a custom command template.
@@ -154,6 +155,9 @@ secondary language, or switch between both without opening Cinnamon settings.
 
 Use the `Recorder` submenu to choose Automatic, PipeWire `pw-record`, PulseAudio `parecord`, or ALSA `arecord` without
 opening Cinnamon settings. The selected recorder is used for the next recording.
+
+Use the `Duration` submenu to choose a common maximum recording length without opening Cinnamon settings. If changed
+while recording, it applies to the next recording.
 
 Use the `Text options` applet submenu to toggle trailing spaces and accent replacement without opening Cinnamon
 settings. Those values are the same settings used by normal applet output and the backend CLI flags.

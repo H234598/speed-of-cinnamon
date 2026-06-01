@@ -321,6 +321,10 @@ Use the applet's `Recorder` submenu to choose `Automatic`, `PipeWire pw-record`,
 `ALSA arecord` without opening Cinnamon settings. Changing this while a recording is active affects the next recording,
 not the current one.
 
+Use the `Duration` submenu for common maximum recording lengths. This updates the same `Maximum recording length`
+setting that is passed to the backend as `--max-seconds`; changing it while a recording is active affects the next
+recording, not the current one.
+
 The default PipeWire/Pulse input is used when `Input device` is empty. In the Cinnamon applet, open `Input source` and
 select either `System default` or a concrete source. For scripts or manual settings, inspect the source names:
 

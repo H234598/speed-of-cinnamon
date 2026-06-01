@@ -36,6 +36,13 @@ const RECORDER_METHODS = [
   "parecord",
   "arecord"
 ];
+const RECORDING_LIMIT_SECONDS = [
+  15,
+  30,
+  60,
+  120,
+  300
+];
 const EXPORTABLE_SETTINGS = [
   ["toggle-keybinding", "toggleKeybinding"],
   ["primary-language-keybinding", "primaryLanguageKeybinding"],
@@ -154,7 +161,7 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "show-panel-label", "showPanelLabel", this._updatePanel, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "language", "language", this._onLanguageSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "secondary-language", "secondaryLanguage", this._onLanguageSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "max-seconds", "maxSeconds", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "max-seconds", "maxSeconds", this._onRecordingLimitSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "auto-transcribe-timeout", "autoTranscribeTimeout", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "keep-recording-artifacts", "keepRecordingArtifacts", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "recorder", "recorder", this._onRecorderSettingsChanged, null);
@@ -216,6 +223,15 @@ MyApplet.prototype = {
     });
     this.menu.addMenuItem(this.recorderItem);
     this._populateRecorderMenu();
+
+    this.recordingLimitItem = new PopupMenu.PopupSubMenuMenuItem(_("Duration: 30s"));
+    this.recordingLimitItem.menu.connect("open-state-changed", (menu, open) => {
+      if (open) {
+        this._populateRecordingLimitMenu();
+      }
+    });
+    this.menu.addMenuItem(this.recordingLimitItem);
+    this._populateRecordingLimitMenu();
 
     this.shortcutItem = new PopupMenu.PopupSubMenuMenuItem(_("Keyboard shortcuts"));
     this.shortcutItem.menu.connect("open-state-changed", (menu, open) => {
@@ -389,6 +405,12 @@ MyApplet.prototype = {
     this._updatePanel();
   },
 
+  _onRecordingLimitSettingsChanged: function() {
+    this.maxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
+    this._populateRecordingLimitMenu();
+    this._updatePanel();
+  },
+
   on_applet_clicked: function() {
     this._rememberFocusedWindow();
     this.menu.toggle();
@@ -413,7 +435,7 @@ MyApplet.prototype = {
       command,
       "--json",
       "--language", String(this._currentLanguage()),
-      "--max-seconds", String(this.maxSeconds || 30),
+      "--max-seconds", String(this._normalizeRecordingLimit(this.maxSeconds)),
       "--recorder", String(this.recorder || "auto"),
       "--transcriber", String(this.transcriber || "auto"),
       "--post-process-backend", String(this.postProcessBackend || "command"),
@@ -601,6 +623,48 @@ MyApplet.prototype = {
       return;
     }
     this._setStatus("ready", _("Recorder: ") + label, this.lastTranscript);
+  },
+
+  _normalizeRecordingLimit: function(seconds) {
+    let value = Math.floor(Number(seconds || 30));
+    if (!isFinite(value)) {
+      value = 30;
+    }
+    return Math.max(5, Math.min(300, value));
+  },
+
+  _populateRecordingLimitMenu: function() {
+    if (!this.recordingLimitItem) {
+      return;
+    }
+    this.recordingLimitItem.menu.removeAll();
+    let current = this._normalizeRecordingLimit(this.maxSeconds);
+    let hasPreset = RECORDING_LIMIT_SECONDS.indexOf(current) >= 0;
+    if (!hasPreset) {
+      let currentItem = new PopupMenu.PopupMenuItem("[x] " + _("Current: ") + this._formatSeconds(current));
+      currentItem.setSensitive(false);
+      this.recordingLimitItem.menu.addMenuItem(currentItem);
+      this.recordingLimitItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    }
+    for (let seconds of RECORDING_LIMIT_SECONDS) {
+      let label = (current === seconds ? "[x] " : "[ ] ") + this._formatSeconds(seconds);
+      let item = new PopupMenu.PopupMenuItem(label);
+      item.connect("activate", () => this._selectRecordingLimit(seconds));
+      this.recordingLimitItem.menu.addMenuItem(item);
+    }
+  },
+
+  _selectRecordingLimit: function(seconds) {
+    this.maxSeconds = this._normalizeRecordingLimit(seconds);
+    this.settings.setValue("max-seconds", this.maxSeconds);
+    this._populateRecordingLimitMenu();
+    let label = this._formatSeconds(this.maxSeconds);
+    if (this._hasActiveRecordingState()) {
+      this.lastMessage = _("Duration for next recording: ") + label;
+      this._updatePanel();
+      return;
+    }
+    this._setStatus("ready", _("Duration: ") + label, this.lastTranscript);
   },
 
   _populateOutputMethodMenu: function() {
@@ -1371,6 +1435,8 @@ MyApplet.prototype = {
     this._syncActiveLanguage();
     this.recorder = this._normalizeRecorder(this.recorder);
     this._populateRecorderMenu();
+    this.maxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
+    this._populateRecordingLimitMenu();
     this.insertMethod = this._normalizeOutputMethod(this.insertMethod);
     this._populateOutputMethodMenu();
     this._registerHotkeys();
@@ -1877,6 +1943,9 @@ MyApplet.prototype = {
     }
     if (this.recorderItem) {
       this.recorderItem.label.text = _("Recorder: ") + this._recorderLabel(this._normalizeRecorder(this.recorder));
+    }
+    if (this.recordingLimitItem) {
+      this.recordingLimitItem.label.text = _("Duration: ") + this._formatSeconds(this._normalizeRecordingLimit(this.maxSeconds));
     }
     if (this.outputMethodItem) {
       this.outputMethodItem.label.text = _("Output: ") + this._outputMethodLabel(this._normalizeOutputMethod(this.insertMethod));
