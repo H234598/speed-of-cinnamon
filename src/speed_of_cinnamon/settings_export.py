@@ -31,8 +31,12 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "typing-delay-ms": (int, 8),
     "transcriber": (str, "auto"),
     "whisper-model": (str, ""),
+    "post-process-backend": (str, "command"),
     "transcriber-command": (str, ""),
     "post-process-command": (str, ""),
+    "ollama-url": (str, "http://127.0.0.1:11434"),
+    "ollama-model": (str, ""),
+    "post-process-prompt": (str, ""),
 }
 
 

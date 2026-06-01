@@ -309,6 +309,10 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             args.post_process_command,
             args.personal_context,
             args.vocabulary,
+            args.post_process_backend,
+            args.ollama_model,
+            args.ollama_url,
+            args.post_process_prompt,
         )
         text_path.write_text(text.strip() + "\n", encoding="utf-8")
         text_to_insert = prepare_output_text(text, args.append_space, args.sanitize_special_chars)
@@ -629,7 +633,17 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         personal_context=args.personal_context,
         vocabulary=args.vocabulary,
     )
-    text = post_process_text(text, args.language, args.post_process_command, args.personal_context, args.vocabulary)
+    text = post_process_text(
+        text,
+        args.language,
+        args.post_process_command,
+        args.personal_context,
+        args.vocabulary,
+        args.post_process_backend,
+        args.ollama_model,
+        args.ollama_url,
+        args.post_process_prompt,
+    )
     text_path.write_text(text.strip() + "\n", encoding="utf-8")
     return {"status": "done", "transcript": text, "transcript_path": str(text_path)}
 
@@ -647,7 +661,11 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--transcriber", default="auto", choices=["auto", "whisper", "whisper-cpp", "command"])
     parser.add_argument("--transcriber-command", default="")
     parser.add_argument("--whisper-model", default="")
+    parser.add_argument("--post-process-backend", default="command", choices=["none", "command", "ollama"])
     parser.add_argument("--post-process-command", default="")
+    parser.add_argument("--ollama-url", default="http://127.0.0.1:11434")
+    parser.add_argument("--ollama-model", default="")
+    parser.add_argument("--post-process-prompt", default="")
     parser.add_argument("--personal-context", default="")
     parser.add_argument("--vocabulary", default="")
     parser.add_argument(
@@ -758,7 +776,11 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_file.add_argument("--transcriber", default="auto", choices=["auto", "whisper", "whisper-cpp", "command"])
     transcribe_file.add_argument("--transcriber-command", default="")
     transcribe_file.add_argument("--whisper-model", default="")
+    transcribe_file.add_argument("--post-process-backend", default="command", choices=["none", "command", "ollama"])
     transcribe_file.add_argument("--post-process-command", default="")
+    transcribe_file.add_argument("--ollama-url", default="http://127.0.0.1:11434")
+    transcribe_file.add_argument("--ollama-model", default="")
+    transcribe_file.add_argument("--post-process-prompt", default="")
     transcribe_file.add_argument("--personal-context", default="")
     transcribe_file.add_argument("--vocabulary", default="")
     transcribe_file.set_defaults(handler=command_transcribe_file)

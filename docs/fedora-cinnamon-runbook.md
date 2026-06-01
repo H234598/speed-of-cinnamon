@@ -271,7 +271,8 @@ speed-of-cinnamon toggle --language de --transcriber command --transcriber-comma
 ## Text Polishing
 
 Speed of Cinnamon supports a small Cinnamon-friendly equivalent of Speed of Sound's optional text-model polishing:
-configure `Post-process command`. The command receives the raw transcript on stdin and must print the final text.
+configure `Text polishing`. The `Custom command` backend receives the raw transcript on stdin and must print the final
+text.
 
 Example:
 
@@ -280,8 +281,19 @@ speed-of-cinnamon toggle \
   --post-process-command "python3 -c 'import sys; print(sys.stdin.read().strip().capitalize())'"
 ```
 
-For local LLM tooling, point this setting at a wrapper script that reads stdin and prints only the polished text. The
-backend stores and inserts the post-processed text.
+For local LLM tooling, either point the command setting at a wrapper script that reads stdin and prints only the
+polished text, or use the built-in Ollama backend:
+
+```bash
+speed-of-cinnamon toggle \
+  --post-process-backend ollama \
+  --ollama-url http://127.0.0.1:11434 \
+  --ollama-model llama3.2:3b
+```
+
+The Ollama backend calls `/api/generate` with `stream=false`. It sends the transcript, language, personal context, and
+vocabulary to the local server and expects the polished text in the `response` field. The backend stores and inserts the
+post-processed text.
 
 ## Current Known Limits
 

@@ -35,7 +35,7 @@
     "backend-section": {
       "type": "section",
       "title": "Backend",
-      "keys": ["cli-path", "transcriber", "whisper-model", "transcriber-command", "post-process-command"]
+      "keys": ["cli-path", "transcriber", "whisper-model", "transcriber-command", "post-process-backend", "post-process-command", "ollama-url", "ollama-model", "post-process-prompt"]
     }
   },
   "toggle-keybinding": {
@@ -196,10 +196,40 @@
     "tooltip": "Used by the Custom command transcriber, or by Automatic when filled. Template placeholders: {audio}, {language}, {text}, {output_dir}, {output_base}, {context}, {vocabulary}, {prompt}. The command must print the transcript or write it to {text}.",
     "default": ""
   },
+  "post-process-backend": {
+    "type": "combobox",
+    "description": "Text polishing",
+    "tooltip": "Optional local cleanup after ASR. Command runs a custom shell command. Ollama calls a local Ollama server and does not require cloud credentials.",
+    "options": {
+      "Disabled": "none",
+      "Custom command": "command",
+      "Ollama local model": "ollama"
+    },
+    "default": "command"
+  },
   "post-process-command": {
     "type": "entry",
     "description": "Post-process command",
-    "tooltip": "Optional text polishing command. It receives the transcript on stdin and must print the final text. Template placeholders: {text}, {language}, {context}, {vocabulary}, {prompt}.",
+    "tooltip": "Used when Text polishing is Custom command. It receives the transcript on stdin and must print the final text. Template placeholders: {text}, {language}, {context}, {vocabulary}, {prompt}.",
+    "default": ""
+  },
+  "ollama-url": {
+    "type": "entry",
+    "description": "Ollama URL",
+    "tooltip": "Local Ollama base URL used when Text polishing is Ollama local model.",
+    "default": "http://127.0.0.1:11434"
+  },
+  "ollama-model": {
+    "type": "entry",
+    "description": "Ollama text model",
+    "tooltip": "Model name for local Ollama polishing, for example llama3.2:3b or mistral.",
+    "default": ""
+  },
+  "post-process-prompt": {
+    "type": "textview",
+    "description": "Text polishing instruction",
+    "tooltip": "Optional instruction for Ollama polishing. The transcript, language, context, and vocabulary are added automatically.",
+    "height": 100,
     "default": ""
   }
 }

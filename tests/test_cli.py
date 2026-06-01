@@ -326,6 +326,11 @@ class CliTest(unittest.TestCase):
                         "transcriber": "command",
                         "transcriber-command": "printf hidden-command-token",
                         "insert-method": "clipboard-paste",
+                        "post-process-backend": "ollama",
+                        "ollama-model": "llama3.2:3b",
+                        "post-process-prompt": "hidden-polish-prompt",
+                        "personal-context": "hidden-context-token",
+                        "vocabulary": "hidden-vocabulary-token",
                     }),
                     "--json",
                 ])
@@ -335,8 +340,12 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["saved_path"], str(output))
         self.assertEqual(saved["saved_path"], str(output))
         self.assertEqual(saved["state"]["transcript_length"], len("private words"))
-        self.assertNotIn("private words", json.dumps(saved))
-        self.assertNotIn("hidden-command-token", json.dumps(saved))
+        encoded = json.dumps(saved)
+        self.assertNotIn("private words", encoded)
+        self.assertNotIn("hidden-command-token", encoded)
+        self.assertNotIn("hidden-polish-prompt", encoded)
+        self.assertNotIn("hidden-context-token", encoded)
+        self.assertNotIn("hidden-vocabulary-token", encoded)
 
     @mock.patch("speed_of_cinnamon.cli.command_start")
     def test_toggle_starts_when_idle(self, mocked_start: mock.Mock) -> None:

@@ -23,7 +23,7 @@ path.
 - ASR presets for Automatic, OpenAI Whisper command, whisper.cpp with a model path, or a custom command template.
 - Local whisper.cpp model catalog with checksum-verified downloads into the user's XDG data directory.
 - Personal context and custom vocabulary fields for local ASR/post-process command wrappers.
-- Optional post-process command for local text cleanup or LLM polishing.
+- Optional text polishing through a custom command or a local Ollama model.
 - Cinnamon clipboard output through the applet, optional `xdotool` paste/direct typing, clipboard-only, or no insertion.
 - Optional accent/special-character fallback for direct typing compatibility on X11.
 - Applet menu action to copy the last transcript again.
@@ -74,9 +74,9 @@ Template placeholders are:
 {audio} {language} {text} {output_dir} {output_base}
 ```
 
-Personalization is local-only and command-driven. Configure `Personal context` and `Custom vocabulary` in the applet
-settings, or pass them through the CLI. Custom transcriber and post-process commands can use these shell-quoted
-placeholders:
+Personalization is local-only. Configure `Personal context` and `Custom vocabulary` in the applet settings, or pass
+them through the CLI. Custom transcriber and custom post-process commands can use these shell-quoted placeholders;
+Ollama text polishing receives the same context and vocabulary in its generated prompt:
 
 ```text
 {context} {vocabulary} {prompt}
@@ -90,9 +90,10 @@ SPEED_OF_CINNAMON_VOCABULARY
 SPEED_OF_CINNAMON_PROMPT
 ```
 
-For text cleanup after ASR, configure `Post-process command`. The transcript is passed on stdin, and the command must
-print the final text. `{text}`, `{language}`, `{context}`, `{vocabulary}`, and `{prompt}` can also be used as
-shell-quoted placeholders.
+For text cleanup after ASR, configure `Text polishing`. `Custom command` receives the transcript on stdin and must print
+the final text. `{text}`, `{language}`, `{context}`, `{vocabulary}`, and `{prompt}` can also be used as shell-quoted
+placeholders. `Ollama local model` sends the transcript, language, context, and vocabulary to a local Ollama
+`/api/generate` endpoint and expects the final text in the `response` field.
 
 ## Install Locally
 
@@ -137,6 +138,7 @@ speed-of-cinnamon toggle --language de --transcriber whisper
 speed-of-cinnamon toggle --language de --transcriber whisper-cpp --whisper-model ~/.local/share/whisper/models/ggml-base.bin
 speed-of-cinnamon toggle --language de --transcriber command --transcriber-command "printf 'Hallo Cinnamon'"
 speed-of-cinnamon toggle --post-process-command "python3 -c 'import sys; print(sys.stdin.read().strip().capitalize())'"
+speed-of-cinnamon toggle --post-process-backend ollama --ollama-model llama3.2:3b
 speed-of-cinnamon toggle --personal-context "Use Fedora Cinnamon project terms." --vocabulary "PipeWire"
 speed-of-cinnamon toggle --sanitize-special-chars --insert-method type
 ```
@@ -195,7 +197,7 @@ Cinnamon keybinding / panel click
        recorder.py      pw-record / parecord / arecord and pactl source discovery
        transcriber.py   ASR preset resolver and command runners
        personalization.py context/vocabulary prompt and environment helpers
-       postprocessor.py optional text polishing command
+       postprocessor.py optional command or Ollama text polishing
        settings_export.py portable settings snapshot helpers
        cli.py           transcript history and state commands
        output.py        xclip / xdotool for standalone CLI output

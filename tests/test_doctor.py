@@ -123,6 +123,36 @@ class DoctorTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["configured"]["transcriber"]["resolved"], "whisper-cpp")
 
+    def test_ollama_postprocessor_requires_model(self) -> None:
+        tools = {"python3", "pw-record"}
+        settings = {
+            "recorder": "auto",
+            "transcriber": "command",
+            "transcriber-command": "printf ok",
+            "insert-method": "none",
+            "post-process-backend": "ollama",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
+            payload = doctor.report(settings)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["configured"]["postprocessor"]["ok"])
+        self.assertIn("Ollama model", payload["configured"]["postprocessor"]["detail"])
+
+    def test_ollama_postprocessor_is_ready_when_model_is_configured(self) -> None:
+        tools = {"python3", "pw-record"}
+        settings = {
+            "recorder": "auto",
+            "transcriber": "command",
+            "transcriber-command": "printf ok",
+            "insert-method": "none",
+            "post-process-backend": "ollama",
+            "ollama-model": "llama3.2:3b",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
+            payload = doctor.report(settings)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["configured"]["postprocessor"]["value"], "ollama")
+
 
 if __name__ == "__main__":
     unittest.main()

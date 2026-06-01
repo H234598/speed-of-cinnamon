@@ -198,6 +198,30 @@ def _output_status(
     return {"ok": False, "value": insert_method, "paste_ok": False, "detail": f"unknown insert method: {insert_method}"}
 
 
+def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
+    backend = _setting(settings, "post-process-backend", "command").lower().replace("_", "-")
+    command_template = _setting(settings, "post-process-command")
+    ollama_model = _setting(settings, "ollama-model")
+    ollama_url = _setting(settings, "ollama-url", "http://127.0.0.1:11434")
+    if backend in {"", "none", "off", "disabled"}:
+        return {"ok": True, "value": "none", "detail": "text polishing disabled"}
+    if backend in {"command", "custom"}:
+        return {
+            "ok": True,
+            "value": "command",
+            "detail": "custom command configured" if command_template else "text polishing disabled",
+        }
+    if backend == "ollama":
+        if not ollama_model:
+            return {"ok": False, "value": "ollama", "detail": "Ollama model is required"}
+        return {
+            "ok": True,
+            "value": "ollama",
+            "detail": f"Ollama configured at {ollama_url}; ensure the local server is running",
+        }
+    return {"ok": False, "value": backend, "detail": f"unknown post-process backend: {backend}"}
+
+
 def configured_status(
     settings: Mapping[str, object],
     checks: Mapping[str, Check],
@@ -207,6 +231,7 @@ def configured_status(
     recorder = _recorder_status(settings, checks)
     transcriber = _transcriber_status(settings, checks)
     output = _output_status(settings, checks, desktop, applet)
+    postprocessor = _postprocessor_status(settings)
     warnings = []
     if applet and output.get("value") == "clipboard-paste" and output.get("ok") and not output.get("paste_ok"):
         warnings.append("automatic paste is unavailable; Cinnamon clipboard copy still works")
@@ -214,6 +239,7 @@ def configured_status(
         "recorder": recorder,
         "transcriber": transcriber,
         "output": output,
+        "postprocessor": postprocessor,
         "warnings": warnings,
     }
 
@@ -228,6 +254,7 @@ def report(settings: Mapping[str, object] | None = None, applet: bool = False) -
         and bool(configured["recorder"]["ok"])
         and bool(configured["transcriber"]["ok"])
         and bool(configured["output"]["ok"])
+        and bool(configured["postprocessor"]["ok"])
     )
     return {
         "ok": required_ok,

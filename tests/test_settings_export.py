@@ -15,6 +15,8 @@ class SettingsExportTest(unittest.TestCase):
             "auto-transcribe-timeout": "false",
             "sanitize-special-chars": "true",
             "typing-delay-ms": "12",
+            "post-process-backend": "ollama",
+            "ollama-model": "llama3.2:3b",
             "cli-path": "/tmp/not-portable",
             "unknown": "ignored",
         })
@@ -25,6 +27,8 @@ class SettingsExportTest(unittest.TestCase):
         self.assertFalse(settings["auto-transcribe-timeout"])
         self.assertTrue(settings["sanitize-special-chars"])
         self.assertEqual(settings["typing-delay-ms"], 12)
+        self.assertEqual(settings["post-process-backend"], "ollama")
+        self.assertEqual(settings["ollama-model"], "llama3.2:3b")
         self.assertNotIn("cli-path", settings)
         self.assertNotIn("unknown", settings)
 

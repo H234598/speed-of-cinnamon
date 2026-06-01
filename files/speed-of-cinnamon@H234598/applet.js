@@ -31,7 +31,11 @@ const EXPORTABLE_SETTINGS = [
   ["transcriber", "transcriber"],
   ["whisper-model", "whisperModel"],
   ["transcriber-command", "transcriberCommand"],
-  ["post-process-command", "postProcessCommand"]
+  ["post-process-backend", "postProcessBackend"],
+  ["post-process-command", "postProcessCommand"],
+  ["ollama-url", "ollamaUrl"],
+  ["ollama-model", "ollamaModel"],
+  ["post-process-prompt", "postProcessPrompt"]
 ];
 
 function _(text) {
@@ -68,7 +72,11 @@ MyApplet.prototype = {
     this.transcriber = "auto";
     this.whisperModel = "";
     this.transcriberCommand = "";
+    this.postProcessBackend = "command";
     this.postProcessCommand = "";
+    this.ollamaUrl = "http://127.0.0.1:11434";
+    this.ollamaModel = "";
+    this.postProcessPrompt = "";
     this.personalContext = "";
     this.vocabulary = "";
     this.notifyRecording = false;
@@ -116,7 +124,11 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "transcriber", "transcriber", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "whisper-model", "whisperModel", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "transcriber-command", "transcriberCommand", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-backend", "postProcessBackend", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-command", "postProcessCommand", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "ollama-url", "ollamaUrl", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "ollama-model", "ollamaModel", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-prompt", "postProcessPrompt", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "personal-context", "personalContext", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "vocabulary", "vocabulary", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "notify-recording", "notifyRecording", null, null);
@@ -255,6 +267,7 @@ MyApplet.prototype = {
       "--max-seconds", String(this.maxSeconds || 30),
       "--recorder", String(this.recorder || "auto"),
       "--transcriber", String(this.transcriber || "auto"),
+      "--post-process-backend", String(this.postProcessBackend || "command"),
       "--insert-method", backendInsertMethod,
       "--typing-delay-ms", String(this.typingDelayMs || 8)
     ];
@@ -272,6 +285,15 @@ MyApplet.prototype = {
     }
     if (this.postProcessCommand && this.postProcessCommand.trim() !== "") {
       args.push("--post-process-command", this.postProcessCommand);
+    }
+    if (this.ollamaUrl && this.ollamaUrl.trim() !== "") {
+      args.push("--ollama-url", this.ollamaUrl);
+    }
+    if (this.ollamaModel && this.ollamaModel.trim() !== "") {
+      args.push("--ollama-model", this.ollamaModel);
+    }
+    if (this.postProcessPrompt && this.postProcessPrompt.trim() !== "") {
+      args.push("--post-process-prompt", this.postProcessPrompt);
     }
     if (this.whisperModel && this.whisperModel.trim() !== "") {
       args.push("--whisper-model", this.whisperModel);
@@ -426,7 +448,7 @@ MyApplet.prototype = {
   _applyDoctorPayload: function(payload) {
     let configured = payload.configured || {};
     let missing = [];
-    for (let name of ["recorder", "transcriber", "output"]) {
+    for (let name of ["recorder", "transcriber", "output", "postprocessor"]) {
       let section = configured[name] || {};
       if (!section.ok) {
         missing.push(name + ": " + (section.detail || "not ready"));
