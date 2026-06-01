@@ -56,6 +56,10 @@ def default_settings_export_file() -> Path:
     return data_dir() / "settings-export.json"
 
 
+def alarms_file() -> Path:
+    return data_dir() / "alarms.json"
+
+
 def ensure_runtime_dirs() -> None:
     data_dir().mkdir(parents=True, exist_ok=True)
     state_dir().mkdir(parents=True, exist_ok=True)

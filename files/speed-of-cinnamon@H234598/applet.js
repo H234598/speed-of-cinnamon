@@ -16,6 +16,7 @@ const DEFAULT_CLI = GLib.build_filenamev([GLib.get_home_dir(), ".local", "bin", 
 const SYSTEM_CLI = "/usr/bin/speed-of-cinnamon";
 const RUNBOOK_URL = "https://gist.github.com/H234598/b95129e13ac0b09c9777edd41aeedfa0";
 const PASTE_FOCUS_DELAY_MS = 120;
+const ALARM_CHECK_SECONDS = 60;
 const PANEL_STATUS_CLASSES = [
   "speed-of-cinnamon-recording",
   "speed-of-cinnamon-processing",
@@ -140,6 +141,7 @@ MyApplet.prototype = {
     this.displayTimer = 0;
     this.setupCheckTimer = 0;
     this.pasteTimer = 0;
+    this.alarmTimer = 0;
 
     this.set_applet_icon_path(this.metadata.path + "/icon.svg");
     this.set_applet_label("");
@@ -152,6 +154,7 @@ MyApplet.prototype = {
     this._registerHotkeys();
     this._refreshStatus();
     this._scheduleSetupCheck();
+    this._scheduleAlarmCheck(5);
   },
 
   _bindSettings: function() {
@@ -250,6 +253,15 @@ MyApplet.prototype = {
     });
     this.menu.addMenuItem(this.notificationOptionsItem);
     this._populateNotificationOptionsMenu();
+
+    this.alarmItem = new PopupMenu.PopupSubMenuMenuItem(_("Alarms"));
+    this.alarmItem.menu.connect("open-state-changed", (menu, open) => {
+      if (open) {
+        this._refreshAlarmMenu();
+      }
+    });
+    this.menu.addMenuItem(this.alarmItem);
+    this._populateAlarmMenu([], _("Open menu to load alarms"));
 
     this.shortcutItem = new PopupMenu.PopupSubMenuMenuItem(_("Keyboard shortcuts"));
     this.shortcutItem.menu.connect("open-state-changed", (menu, open) => {
@@ -457,6 +469,7 @@ MyApplet.prototype = {
     this._clearDisplayTimer();
     this._clearSetupCheckTimer();
     this._clearPasteTimer();
+    this._clearAlarmTimer();
     Main.keybindingManager.removeHotKey(this._hotkeyName(HOTKEY_ID));
     Main.keybindingManager.removeHotKey(this._hotkeyName(PRIMARY_HOTKEY_ID));
     Main.keybindingManager.removeHotKey(this._hotkeyName(SECONDARY_HOTKEY_ID));
@@ -541,6 +554,22 @@ MyApplet.prototype = {
 
   _diagnosticsSaveArgs: function() {
     return [this._cliCommand(), "diagnostics", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--save", "--json"];
+  },
+
+  _alarmListArgs: function() {
+    return [this._cliCommand(), "alarms", "list", "--json"];
+  },
+
+  _alarmCheckArgs: function() {
+    return [this._cliCommand(), "alarms", "check", "--mark", "--json"];
+  },
+
+  _alarmEnableArgs: function(id, enabled) {
+    return [this._cliCommand(), "alarms", enabled ? "enable" : "disable", String(id || ""), "--json"];
+  },
+
+  _alarmRemoveArgs: function(id) {
+    return [this._cliCommand(), "alarms", "remove", String(id || ""), "--json"];
   },
 
   _cancelArgs: function() {
@@ -1206,6 +1235,160 @@ MyApplet.prototype = {
     });
   },
 
+  _setAlarmOptionStatus: function(message) {
+    if (this.status === "recording" || this.status === "processing") {
+      this.lastMessage = message;
+      this._updatePanel();
+      return;
+    }
+    this._setStatus("ready", message, this.lastTranscript);
+  },
+
+  _refreshAlarmMenu: function() {
+    if (!this.alarmItem) {
+      return;
+    }
+    this._populateAlarmMenu([], _("Loading alarms..."));
+    this._spawnJson(this._alarmListArgs(), (payload) => {
+      if (payload.error) {
+        this._populateAlarmMenu([], payload.error);
+        this._setStatus("error", payload.error, this.lastTranscript);
+        return;
+      }
+      this._populateAlarmMenu(payload.alarms || [], payload.summary || "");
+    });
+  },
+
+  _populateAlarmMenu: function(alarms, summary, message) {
+    if (!this.alarmItem) {
+      return;
+    }
+    this.alarmItem.menu.removeAll();
+
+    let summaryText = message || summary || _("No alarms configured");
+    let summaryItem = new PopupMenu.PopupMenuItem(summaryText);
+    summaryItem.setSensitive(false);
+    this.alarmItem.menu.addMenuItem(summaryItem);
+
+    let checkNow = new PopupMenu.PopupIconMenuItem(_("Check alarms now"), "view-refresh-symbolic", St.IconType.SYMBOLIC);
+    checkNow.connect("activate", () => this._checkAlarms(true));
+    this.alarmItem.menu.addMenuItem(checkNow);
+
+    let copyCommands = new PopupMenu.PopupIconMenuItem(_("Copy alarm commands"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
+    copyCommands.connect("activate", () => this._copyAlarmCommands());
+    this.alarmItem.menu.addMenuItem(copyCommands);
+
+    let openFolder = new PopupMenu.PopupIconMenuItem(_("Open alarm store"), "folder-symbolic", St.IconType.SYMBOLIC);
+    openFolder.connect("activate", () => {
+      this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon"]), _("Opened alarm store"));
+    });
+    this.alarmItem.menu.addMenuItem(openFolder);
+
+    this.alarmItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+    if (message) {
+      return;
+    }
+    if (!alarms || alarms.length === 0) {
+      let empty = new PopupMenu.PopupMenuItem(_("No alarms configured"));
+      empty.setSensitive(false);
+      this.alarmItem.menu.addMenuItem(empty);
+      return;
+    }
+    for (let alarm of alarms) {
+      this._addAlarmMenuEntry(alarm);
+    }
+  },
+
+  _addAlarmMenuEntry: function(alarm) {
+    let id = String(alarm.id || "");
+    if (id === "") {
+      return;
+    }
+    let label = (alarm.enabled ? "[x] " : "[ ] ") + String(alarm.label || alarm.time || id);
+    let summary = String(alarm.summary || "");
+    if (summary !== "") {
+      label += " - " + summary;
+    }
+    let entry = new PopupMenu.PopupSubMenuMenuItem(label);
+    this.alarmItem.menu.addMenuItem(entry);
+
+    let details = new PopupMenu.PopupMenuItem(id);
+    details.setSensitive(false);
+    entry.menu.addMenuItem(details);
+
+    let toggle = new PopupMenu.PopupIconMenuItem(alarm.enabled ? _("Disable alarm") : _("Enable alarm"), alarm.enabled ? "media-playback-pause-symbolic" : "media-playback-start-symbolic", St.IconType.SYMBOLIC);
+    toggle.connect("activate", () => this._setAlarmEnabled(id, !alarm.enabled));
+    entry.menu.addMenuItem(toggle);
+
+    let remove = new PopupMenu.PopupIconMenuItem(_("Remove alarm"), "edit-delete-symbolic", St.IconType.SYMBOLIC);
+    remove.connect("activate", () => this._removeAlarm(id));
+    entry.menu.addMenuItem(remove);
+  },
+
+  _copyAlarmCommands: function() {
+    let text = [
+      "speed-of-cinnamon alarms add --time 09:00 --name \"Standup\" --days weekdays --json",
+      "speed-of-cinnamon alarms list --json",
+      "speed-of-cinnamon alarms check --mark --json"
+    ].join("\n");
+    this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
+    this._setStatus("done", _("Copied alarm commands"), this.lastTranscript);
+  },
+
+  _setAlarmEnabled: function(id, enabled) {
+    this._setAlarmOptionStatus(enabled ? _("Enabling alarm...") : _("Disabling alarm..."));
+    this._spawnJson(this._alarmEnableArgs(id, enabled), (payload) => {
+      if (payload.error) {
+        this._setStatus("error", payload.error, this.lastTranscript);
+        return;
+      }
+      this._setAlarmOptionStatus(enabled ? _("Alarm enabled") : _("Alarm disabled"));
+      this._refreshAlarmMenu();
+    });
+  },
+
+  _removeAlarm: function(id) {
+    this._setAlarmOptionStatus(_("Removing alarm..."));
+    this._spawnJson(this._alarmRemoveArgs(id), (payload) => {
+      if (payload.error) {
+        this._setStatus("error", payload.error, this.lastTranscript);
+        return;
+      }
+      this._setAlarmOptionStatus(payload.removed ? _("Alarm removed") : _("Alarm not found"));
+      this._refreshAlarmMenu();
+    });
+  },
+
+  _checkAlarms: function(manual) {
+    this._spawnJson(this._alarmCheckArgs(), (payload) => {
+      if (payload.error) {
+        if (manual) {
+          this._setStatus("error", payload.error, this.lastTranscript);
+        }
+        return;
+      }
+      let due = payload.due || [];
+      for (let alarm of due) {
+        if (alarm.notify === false) {
+          continue;
+        }
+        this._notify(_("Speed of Cinnamon alarm"), alarm.body || alarm.label || _("Alarm due"), Boolean(alarm.critical));
+      }
+      if (due.length > 0) {
+        let first = due[0] || {};
+        if (manual || this.status === "idle" || this.status === "ready" || this.status === "done") {
+          this._setAlarmOptionStatus(_("Alarm: ") + String(first.label || first.time || due.length));
+        }
+      } else if (manual) {
+        this._setAlarmOptionStatus(_("No alarms due"));
+      }
+      if (manual) {
+        this._refreshAlarmMenu();
+      }
+    });
+  },
+
   _refreshInputSourceMenu: function() {
     if (!this.inputSourceItem) {
       return;
@@ -1756,6 +1939,13 @@ MyApplet.prototype = {
     }
   },
 
+  _clearAlarmTimer: function() {
+    if (this.alarmTimer) {
+      Mainloop.source_remove(this.alarmTimer);
+      this.alarmTimer = 0;
+    }
+  },
+
   _scheduleSetupCheck: function() {
     this._clearSetupCheckTimer();
     this.setupCheckTimer = Mainloop.timeout_add_seconds(2, () => {
@@ -1763,6 +1953,16 @@ MyApplet.prototype = {
       if (this.status === "idle") {
         this._runDoctor(true);
       }
+      return false;
+    });
+  },
+
+  _scheduleAlarmCheck: function(delaySeconds) {
+    this._clearAlarmTimer();
+    this.alarmTimer = Mainloop.timeout_add_seconds(Math.max(5, Number(delaySeconds || ALARM_CHECK_SECONDS)), () => {
+      this.alarmTimer = 0;
+      this._checkAlarms(false);
+      this._scheduleAlarmCheck(ALARM_CHECK_SECONDS);
       return false;
     });
   },

@@ -22,6 +22,8 @@ path.
 - Applet shortcut reference menu showing the active Cinnamon hotkeys, with a copy action for setup/support notes.
 - Cinnamon desktop notifications for completion and failures, with optional recording-state notifications and applet
   toggles.
+- Cinnamon-native repeating alarms with local JSON state, CLI management, applet summary/actions, resume catch-up, and
+  Cinnamon notifications without a portal service.
 - Primary/secondary recognition languages with broader ISO-code presets and a Cinnamon submenu for selecting the active
   language or starting directly with either language.
 - PipeWire/PulseAudio/ALSA recording through `pw-record`, `parecord`, or `arecord`, selectable from the applet menu.
@@ -183,6 +185,11 @@ speed-of-cinnamon setup --applet --settings-json '{"transcriber":"auto","insert-
 speed-of-cinnamon diagnostics --json
 speed-of-cinnamon diagnostics --save --json
 speed-of-cinnamon diagnostics --applet --settings-json '{"transcriber":"command","transcriber-command":"printf ok"}' --json
+speed-of-cinnamon alarms add --time 09:00 --name "Standup" --days weekdays --json
+speed-of-cinnamon alarms list --json
+speed-of-cinnamon alarms check --mark --json
+speed-of-cinnamon alarms disable alarm-0900 --json
+speed-of-cinnamon alarms remove alarm-0900 --json
 speed-of-cinnamon list-inputs --json
 speed-of-cinnamon models --json
 speed-of-cinnamon text-models --json
@@ -234,6 +241,17 @@ The applet's `Text model` menu can disable polishing, use the custom command bac
 Ollama `/api/tags` endpoint, or select a model returned by a local OpenAI-compatible `/v1/models` endpoint. If the
 selected local server is not running, the menu stays usable and shows the local connection message instead of blocking
 recording.
+
+The applet's `Alarms` menu lists locally configured repeating alarms, can check them immediately, and can copy starter
+CLI commands. The applet also runs a small periodic check and emits due alarms with Cinnamon notifications. Alarm state
+is stored locally under:
+
+```text
+~/.local/share/speed-of-cinnamon/alarms.json
+```
+
+`--days` accepts `daily`, `weekdays`, `weekends`, or comma-separated day codes such as `mon,wed,fri`. `--urgency` can
+be `silent`, `normal`, or `critical`; silent alarms are still marked due but do not notify.
 
 For backend-only testing without touching the focused application:
 
@@ -306,6 +324,7 @@ Cinnamon keybinding / panel click
        transcriber.py   ASR preset resolver and command runners
        personalization.py context/vocabulary prompt and environment helpers
        postprocessor.py optional command, Ollama, or OpenAI-compatible local text polishing
+       alarms.py        local repeating alarm store and due-alarm scheduler
        settings_export.py portable settings snapshot helpers
        cli.py           transcript history and state commands
        output.py        xclip / xdotool for standalone CLI output
@@ -334,7 +353,9 @@ The `Replace accents before output` setting is an optional compatibility fallbac
 diacritics to ASCII before output while leaving the saved transcript unchanged.
 
 Desktop notifications are emitted by the Cinnamon applet through Cinnamon's `Main.notify`/`Main.criticalNotify` APIs,
-not by the backend. This keeps normal CLI runs quiet and avoids depending on the XDG portal notification path.
+not by the backend. This keeps normal CLI runs quiet and avoids depending on the XDG portal notification path. The alarm
+checker follows the same rule: the backend only reports due alarms, while the applet decides whether to show a normal or
+critical Cinnamon notification.
 
 When a live applet recording reaches `Maximum recording length`, the backend preserves the audio as `recorded` until it
 is transcribed, and the applet starts transcription once it observes that state. Disable `Transcribe automatically at

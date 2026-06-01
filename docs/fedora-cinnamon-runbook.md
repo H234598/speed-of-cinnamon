@@ -81,6 +81,7 @@ State:       ~/.local/state/speed-of-cinnamon/state.json
 Transcripts: ~/.local/state/speed-of-cinnamon/transcripts/
 Recordings:  ~/.cache/speed-of-cinnamon/recordings/
 Models:      ~/.local/share/speed-of-cinnamon/models/whisper.cpp/
+Alarms:      ~/.local/share/speed-of-cinnamon/alarms.json
 ```
 
 Leave the applet's `Backend command` setting empty for normal installs. The applet first uses the per-user backend
@@ -116,6 +117,24 @@ Cinnamon's `St.Clipboard`; only automatic paste and direct typing need `xdotool`
 Use `Text options` in the applet menu to toggle `Append trailing space` and `Replace accents before output` without
 opening Cinnamon settings. The toggles update the same `append-space` and `sanitize-special-chars` values used by the
 CLI flags, so the applet's copy, paste, direct typing, last-transcript, and history insertion paths stay consistent.
+
+## Alarms
+
+Speed of Cinnamon adapts Speed of Sound's alarm idea as a Cinnamon-local helper: alarm definitions live in a JSON file,
+the backend only evaluates due alarms, and the applet emits Cinnamon notifications. There is no portal notification or
+remote-desktop service involved.
+
+```bash
+speed-of-cinnamon alarms add --time 09:00 --name "Standup" --days weekdays --json
+speed-of-cinnamon alarms list --json
+speed-of-cinnamon alarms check --mark --json
+speed-of-cinnamon alarms disable alarm-0900 --json
+speed-of-cinnamon alarms remove alarm-0900 --json
+```
+
+The applet's `Alarms` menu lists configured alarms, can check them immediately, opens the local alarm store folder, and
+copies starter CLI commands. The periodic applet check marks due alarms so they are not repeated on every refresh; a
+short catch-up window covers alarms that became due while the applet was not running.
 
 ## Target Window
 

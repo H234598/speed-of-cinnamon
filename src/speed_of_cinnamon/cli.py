@@ -11,6 +11,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import __version__
+from .alarms import (
+    add_alarm,
+    check_due_alarms,
+    list_alarm_payload,
+    remove_alarm,
+    set_alarm_enabled,
+)
 from .doctor import parse_settings_json, report as doctor_report
 from .models import download_model, list_models, remove_model
 from .output import insert_text
@@ -583,10 +590,51 @@ def command_diagnostics(args: argparse.Namespace) -> dict[str, object]:
     return payload
 
 
+def command_alarms_list(args: argparse.Namespace) -> dict[str, object]:
+    ensure_runtime_dirs()
+    return list_alarm_payload()
+
+
+def command_alarms_add(args: argparse.Namespace) -> dict[str, object]:
+    ensure_runtime_dirs()
+    alarm = add_alarm(
+        args.time,
+        name=args.name,
+        days=args.days,
+        urgency=args.urgency,
+        enabled=not args.disabled,
+    )
+    return {"status": "done", "message": f"alarm added: {alarm['label']} at {alarm['time']}", "alarm": alarm}
+
+
+def command_alarms_remove(args: argparse.Namespace) -> dict[str, object]:
+    ensure_runtime_dirs()
+    return remove_alarm(args.id)
+
+
+def command_alarms_enable(args: argparse.Namespace) -> dict[str, object]:
+    ensure_runtime_dirs()
+    return set_alarm_enabled(args.id, True)
+
+
+def command_alarms_disable(args: argparse.Namespace) -> dict[str, object]:
+    ensure_runtime_dirs()
+    return set_alarm_enabled(args.id, False)
+
+
+def command_alarms_check(args: argparse.Namespace) -> dict[str, object]:
+    ensure_runtime_dirs()
+    return check_due_alarms(mark=args.mark, catch_up_minutes=args.catch_up_minutes)
+
+
 def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     settings = parse_settings_json(getattr(args, "settings_json", ""))
     applet = getattr(args, "applet", False)
+    alarm_payload = list_alarm_payload()
+    alarm_entries = alarm_payload.get("alarms", [])
+    if not isinstance(alarm_entries, list):
+        alarm_entries = []
     source_payload: dict[str, object]
     try:
         sources = list_input_sources(False)
@@ -641,6 +689,11 @@ def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
         "doctor": doctor_report(settings, applet=applet),
         "inputs": source_payload,
         "models": list_models(),
+        "alarms": {
+            "configured": len(alarm_entries),
+            "active": sum(1 for alarm in alarm_entries if isinstance(alarm, dict) and alarm.get("enabled", True)),
+            "last_checked_at": str(alarm_payload.get("last_checked_at") or ""),
+        },
         "recent_transcripts": transcript_entries,
     }
 
@@ -839,6 +892,43 @@ def build_parser() -> argparse.ArgumentParser:
         help="evaluate doctor readiness for the Cinnamon applet path",
     )
     diagnostics.set_defaults(handler=command_diagnostics)
+
+    alarms = subparsers.add_parser("alarms")
+    alarm_subparsers = alarms.add_subparsers(dest="alarm_command", required=True)
+
+    alarms_list = alarm_subparsers.add_parser("list")
+    add_common_options(alarms_list)
+    alarms_list.set_defaults(handler=command_alarms_list)
+
+    alarms_add = alarm_subparsers.add_parser("add")
+    add_common_options(alarms_add)
+    alarms_add.add_argument("--time", required=True, help="local alarm time in HH:MM")
+    alarms_add.add_argument("--name", default="")
+    alarms_add.add_argument("--days", default="daily", help="daily, weekdays, weekends, or comma-separated day codes")
+    alarms_add.add_argument("--urgency", default="normal", choices=["silent", "normal", "critical"])
+    alarms_add.add_argument("--disabled", action="store_true")
+    alarms_add.set_defaults(handler=command_alarms_add)
+
+    alarms_remove = alarm_subparsers.add_parser("remove")
+    add_common_options(alarms_remove)
+    alarms_remove.add_argument("id")
+    alarms_remove.set_defaults(handler=command_alarms_remove)
+
+    alarms_enable = alarm_subparsers.add_parser("enable")
+    add_common_options(alarms_enable)
+    alarms_enable.add_argument("id")
+    alarms_enable.set_defaults(handler=command_alarms_enable)
+
+    alarms_disable = alarm_subparsers.add_parser("disable")
+    add_common_options(alarms_disable)
+    alarms_disable.add_argument("id")
+    alarms_disable.set_defaults(handler=command_alarms_disable)
+
+    alarms_check = alarm_subparsers.add_parser("check")
+    add_common_options(alarms_check)
+    alarms_check.add_argument("--mark", action="store_true", help="persist trigger state for due alarms")
+    alarms_check.add_argument("--catch-up-minutes", type=int, default=15)
+    alarms_check.set_defaults(handler=command_alarms_check)
 
     settings_export = subparsers.add_parser("settings-export")
     add_common_options(settings_export)

@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from speed_of_cinnamon import cli
+from speed_of_cinnamon.alarms import add_alarm
 from speed_of_cinnamon.recorder import InputSource, RecorderCommand
 from speed_of_cinnamon.state import RecordingState, StateStore
 
@@ -357,7 +358,8 @@ class CliTest(unittest.TestCase):
             state_file = Path(tmp) / "state.json"
             StateStore(state_file).write(RecordingState(status="done", transcript="secret dictated words"))
             stdout = io.StringIO()
-            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                add_alarm("09:00", name="private alarm name")
                 code = cli.run(["diagnostics", "--state-file", str(state_file), "--json"])
             payload = json.loads(stdout.getvalue())
         encoded = json.dumps(payload)
@@ -365,9 +367,11 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["app"]["id"], "speed-of-cinnamon")
         self.assertEqual(payload["inputs"]["sources"][0]["name"], "alsa_input.test")
         self.assertIn("models", payload)
+        self.assertEqual(payload["alarms"]["configured"], 1)
         self.assertIn("recent_transcripts", payload)
         self.assertEqual(payload["state"]["transcript_length"], len("secret dictated words"))
         self.assertNotIn("secret dictated words", encoded)
+        self.assertNotIn("private alarm name", encoded)
         self.assertNotIn("preview", encoded)
         self.assertNotIn('"text"', encoded)
 

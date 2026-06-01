@@ -200,6 +200,23 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('_("Dictation complete")', source)
         self.assertIn('_("Dictation errors")', source)
 
+    def test_applet_exposes_cinnamon_alarm_menu_and_timer(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("const ALARM_CHECK_SECONDS = 60;", source)
+        self.assertIn('this.alarmItem = new PopupMenu.PopupSubMenuMenuItem(_("Alarms"))', source)
+        self.assertIn("_refreshAlarmMenu: function()", source)
+        self.assertIn("_populateAlarmMenu: function(alarms, summary, message)", source)
+        self.assertIn("_addAlarmMenuEntry: function(alarm)", source)
+        self.assertIn('new PopupMenu.PopupIconMenuItem(_("Check alarms now"), "view-refresh-symbolic"', source)
+        self.assertIn('new PopupMenu.PopupIconMenuItem(_("Copy alarm commands"), "edit-copy-symbolic"', source)
+        self.assertIn('new PopupMenu.PopupIconMenuItem(_("Open alarm store"), "folder-symbolic"', source)
+        self.assertIn('return [this._cliCommand(), "alarms", "list", "--json"];', source)
+        self.assertIn('return [this._cliCommand(), "alarms", "check", "--mark", "--json"];', source)
+        self.assertIn("_scheduleAlarmCheck(5)", source)
+        self.assertIn("_clearAlarmTimer()", source)
+        self.assertIn("this._notify(_(\"Speed of Cinnamon alarm\")", source)
+
     def test_panel_status_style_classes_are_applied(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         stylesheet = (APPLET_DIR / "stylesheet.css").read_text(encoding="utf-8")
