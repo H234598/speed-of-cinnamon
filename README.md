@@ -233,6 +233,17 @@ GitHub Actions publishes two artifacts for successful runs:
 - `speed-of-cinnamon-source-<commit>` with the source archive and `.sha256`.
 - `speed-of-cinnamon-rpm-<commit>` with the noarch RPM and source RPM.
 
+Pushing a version tag that matches `pyproject.toml`, for example `v0.1.0`, runs the release workflow. It repeats the
+normal checks, verifies the source archive and RPM payload, then publishes a GitHub Release with the source archive,
+checksum, Fedora noarch RPM, and source RPM:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The same workflow can be run manually with `dry_run=true` to validate the release path without publishing.
+
 ## Architecture
 
 ```text

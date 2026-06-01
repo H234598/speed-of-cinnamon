@@ -44,6 +44,10 @@ extracted Python package.
 Successful GitHub Actions runs upload two downloadable artifacts: `speed-of-cinnamon-source-<commit>` with the source
 archive and checksum, and `speed-of-cinnamon-rpm-<commit>` with the noarch RPM and source RPM.
 
+Pushing a version tag that matches `pyproject.toml`, for example `v0.1.0`, runs the release workflow. It repeats the
+normal checks and publishes a GitHub Release with the source archive, checksum, Fedora noarch RPM, and source RPM. The
+same workflow has a manual `dry_run=true` path to validate release automation without publishing.
+
 `make check` also runs `scripts/verify-authorship.sh`. That guard verifies the expected GitHub repo URL, commit
 author/committer identity, applet metadata, Python project metadata, RPM spec metadata, and rejects upstream author
 markers in tracked text files.

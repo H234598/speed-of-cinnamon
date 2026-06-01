@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to validate or publish"
+        required: true
+        type: string
+      dry_run:
+        description: "Validate release without publishing"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install release tooling
+        run: sudo apt-get update && sudo apt-get install -y cpio rpm shellcheck
+      - name: Verify GitHub CLI
+        run: gh --version
+      - name: Verify project
+        run: make check
+      - name: Build and verify source archive
+        run: make dist-check
+      - name: Build RPM package
+        run: make rpm
+      - name: Verify RPM payload
+        run: make rpm-check
+      - name: Shellcheck scripts
+        run: shellcheck scripts/*.sh
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
+          RELEASE_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+        run: |
+          args=()
+          if [[ "${RELEASE_DRY_RUN}" == "true" ]]; then
+            args+=(--dry-run)
+          fi
+          ./scripts/publish-github-release.sh "${args[@]}" "${RELEASE_TAG}"
