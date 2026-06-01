@@ -11,6 +11,7 @@ from pathlib import Path
 from .doctor import report as doctor_report
 from .output import insert_text
 from .paths import APP_NAME, default_state_file, ensure_runtime_dirs, recordings_dir, transcript_dir
+from .postprocessor import post_process_text
 from .recorder import choose_recorder, list_input_sources, start_recorder, stop_process
 from .state import RecordingState, StateStore, now_iso, process_is_alive
 from .transcriber import transcribe
@@ -112,6 +113,8 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             backend=args.transcriber,
             whisper_model=args.whisper_model,
         )
+        text = post_process_text(text, args.language or state.language, args.post_process_command)
+        text_path.write_text(text.strip() + "\n", encoding="utf-8")
         text_to_insert = append_space_if_needed(text, args.append_space)
         inserted = insert_text(text_to_insert, args.insert_method, args.typing_delay_ms)
     except Exception as exc:
@@ -210,6 +213,8 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         backend=args.transcriber,
         whisper_model=args.whisper_model,
     )
+    text = post_process_text(text, args.language, args.post_process_command)
+    text_path.write_text(text.strip() + "\n", encoding="utf-8")
     return {"status": "done", "transcript": text, "transcript_path": str(text_path)}
 
 
@@ -226,6 +231,7 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--transcriber", default="auto", choices=["auto", "whisper", "whisper-cpp", "command"])
     parser.add_argument("--transcriber-command", default="")
     parser.add_argument("--whisper-model", default="")
+    parser.add_argument("--post-process-command", default="")
     parser.add_argument(
         "--insert-method",
         default="clipboard-paste",
@@ -272,6 +278,7 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_file.add_argument("--transcriber", default="auto", choices=["auto", "whisper", "whisper-cpp", "command"])
     transcribe_file.add_argument("--transcriber-command", default="")
     transcribe_file.add_argument("--whisper-model", default="")
+    transcribe_file.add_argument("--post-process-command", default="")
     transcribe_file.set_defaults(handler=command_transcribe_file)
     return parser
 

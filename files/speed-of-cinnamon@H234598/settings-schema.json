@@ -25,7 +25,7 @@
     "backend-section": {
       "type": "section",
       "title": "Backend",
-      "keys": ["cli-path", "transcriber", "whisper-model", "transcriber-command"]
+      "keys": ["cli-path", "transcriber", "whisper-model", "transcriber-command", "post-process-command"]
     }
   },
   "toggle-keybinding": {
@@ -129,6 +129,12 @@
     "type": "entry",
     "description": "Transcriber command template",
     "tooltip": "Used by the Custom command transcriber, or by Automatic when filled. Template placeholders: {audio}, {language}, {text}, {output_dir}, {output_base}. The command must print the transcript or write it to {text}.",
+    "default": ""
+  },
+  "post-process-command": {
+    "type": "entry",
+    "description": "Post-process command",
+    "tooltip": "Optional text polishing command. It receives the transcript on stdin and must print the final text. Template placeholders: {text}, {language}.",
     "default": ""
   }
 }

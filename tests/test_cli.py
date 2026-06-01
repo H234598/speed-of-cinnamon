@@ -24,7 +24,8 @@ class CliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "input.wav"
             audio.write_bytes(b"audio")
-            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(io.StringIO()):
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
                 code = cli.run([
                     "transcribe-file",
                     str(audio),
@@ -32,9 +33,15 @@ class CliTest(unittest.TestCase):
                     "command",
                     "--transcriber-command",
                     "printf test",
+                    "--post-process-command",
+                    "python3 -c 'import sys; print(sys.stdin.read().upper())'",
                     "--json",
                 ])
+            payload = json.loads(stdout.getvalue())
+            saved = Path(payload["transcript_path"]).read_text(encoding="utf-8").strip()
         self.assertEqual(code, 0)
+        self.assertEqual(payload["transcript"], "TEST")
+        self.assertEqual(saved, "TEST")
 
     @mock.patch("speed_of_cinnamon.cli.list_input_sources")
     def test_list_inputs_outputs_sources(self, mocked_sources: mock.Mock) -> None:

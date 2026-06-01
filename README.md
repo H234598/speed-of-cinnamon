@@ -15,6 +15,7 @@ path.
 - PipeWire/PulseAudio/ALSA recording through `pw-record`, `parecord`, or `arecord`.
 - Optional microphone/source selection by PipeWire/Pulse source name, with a `list-inputs` helper.
 - ASR presets for Automatic, OpenAI Whisper command, whisper.cpp with a model path, or a custom command template.
+- Optional post-process command for local text cleanup or LLM polishing.
 - Cinnamon clipboard output through the applet, optional `xdotool` paste/direct typing, clipboard-only, or no insertion.
 - Applet menu action to copy the last transcript again.
 - Recordings that hit the configured maximum length are preserved and transcribed on the next shortcut press.
@@ -58,6 +59,9 @@ Template placeholders are:
 {audio} {language} {text} {output_dir} {output_base}
 ```
 
+For text cleanup after ASR, configure `Post-process command`. The transcript is passed on stdin, and the command must
+print the final text. `{text}` and `{language}` can also be used as shell-quoted placeholders.
+
 ## Install Locally
 
 ```bash
@@ -88,6 +92,7 @@ speed-of-cinnamon stop --language de --insert-method clipboard-paste
 speed-of-cinnamon toggle --language de --transcriber whisper
 speed-of-cinnamon toggle --language de --transcriber whisper-cpp --whisper-model ~/.local/share/whisper/models/ggml-base.bin
 speed-of-cinnamon toggle --language de --transcriber command --transcriber-command "printf 'Hallo Cinnamon'"
+speed-of-cinnamon toggle --post-process-command "python3 -c 'import sys; print(sys.stdin.read().strip().capitalize())'"
 ```
 
 For backend-only testing without touching the focused application:
@@ -123,6 +128,7 @@ Cinnamon keybinding / panel click
   -> Python backend:
        recorder.py      pw-record / parecord / arecord and pactl source discovery
        transcriber.py   ASR preset resolver and command runners
+       postprocessor.py optional text polishing command
        output.py        xclip / xdotool for standalone CLI output
        state.py         JSON state for applet status
 ```

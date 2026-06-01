@@ -106,6 +106,21 @@ speed-of-cinnamon toggle --language de --transcriber whisper-cpp --whisper-model
 speed-of-cinnamon toggle --language de --transcriber command --transcriber-command "printf 'test transcript'"
 ```
 
+## Text Polishing
+
+Speed of Cinnamon supports a small Cinnamon-friendly equivalent of Speed of Sound's optional text-model polishing:
+configure `Post-process command`. The command receives the raw transcript on stdin and must print the final text.
+
+Example:
+
+```bash
+speed-of-cinnamon toggle \
+  --post-process-command "python3 -c 'import sys; print(sys.stdin.read().strip().capitalize())'"
+```
+
+For local LLM tooling, point this setting at a wrapper script that reads stdin and prints only the polished text. The
+backend stores and inserts the post-processed text.
+
 ## Current Known Limits
 
 - The app is intentionally local-first and does not bundle an ASR model.

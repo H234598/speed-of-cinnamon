@@ -41,6 +41,7 @@ MyApplet.prototype = {
     this.transcriber = "auto";
     this.whisperModel = "";
     this.transcriberCommand = "";
+    this.postProcessCommand = "";
     this.status = "idle";
     this.lastTranscript = "";
     this.lastMessage = "";
@@ -73,6 +74,7 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "transcriber", "transcriber", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "whisper-model", "whisperModel", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "transcriber-command", "transcriberCommand", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-command", "postProcessCommand", null, null);
   },
 
   _buildMenu: function() {
@@ -164,6 +166,9 @@ MyApplet.prototype = {
     }
     if (this.transcriberCommand && this.transcriberCommand.trim() !== "") {
       args.push("--transcriber-command", this.transcriberCommand);
+    }
+    if (this.postProcessCommand && this.postProcessCommand.trim() !== "") {
+      args.push("--post-process-command", this.postProcessCommand);
     }
     if (this.whisperModel && this.whisperModel.trim() !== "") {
       args.push("--whisper-model", this.whisperModel);
