@@ -94,6 +94,13 @@ speed-of-cinnamon history --limit 5 --json
 The Cinnamon applet exposes the same recent entries under `Recent transcripts`; selecting one copies it through
 Cinnamon's clipboard API.
 
+## Target Window
+
+When dictation is started through the global shortcut or from the panel menu, the applet remembers Cinnamon's currently
+focused normal window. Before sending the optional `xdotool` paste shortcut, it reactivates that remembered target
+window and waits briefly for focus to settle. This keeps panel-triggered dictation aimed at the application you were
+working in instead of the applet menu itself.
+
 ## Recording Progress
 
 While recording, the applet keeps the panel label compact (`REC 12s`) and exposes the full elapsed/maximum time in the

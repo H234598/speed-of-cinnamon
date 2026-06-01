@@ -14,6 +14,7 @@ const SECONDARY_HOTKEY_ID = "speed-of-cinnamon-secondary-language";
 const DEFAULT_CLI = GLib.build_filenamev([GLib.get_home_dir(), ".local", "bin", "speed-of-cinnamon"]);
 const SYSTEM_CLI = "/usr/bin/speed-of-cinnamon";
 const RUNBOOK_URL = "https://gist.github.com/H234598/b95129e13ac0b09c9777edd41aeedfa0";
+const PASTE_FOCUS_DELAY_MS = 120;
 const PANEL_STATUS_CLASSES = [
   "speed-of-cinnamon-recording",
   "speed-of-cinnamon-processing",
@@ -113,10 +114,12 @@ MyApplet.prototype = {
     this.autoTranscribeRecordingKey = "";
     this.recordingStartedAtMs = 0;
     this.recordingMaxSeconds = 0;
+    this.targetWindow = null;
     this.clipboard = St.Clipboard.get_default();
     this.statusTimer = 0;
     this.displayTimer = 0;
     this.setupCheckTimer = 0;
+    this.pasteTimer = 0;
 
     this.set_applet_icon_path(this.metadata.path + "/icon.svg");
     this.set_applet_label("");
@@ -304,9 +307,18 @@ MyApplet.prototype = {
   },
 
   _registerHotkeys: function() {
-    this._registerHotkey(HOTKEY_ID, this.toggleKeybinding, () => this._toggleRecording());
-    this._registerHotkey(PRIMARY_HOTKEY_ID, this.primaryLanguageKeybinding, () => this._startWithLanguage(this._primaryLanguage()));
-    this._registerHotkey(SECONDARY_HOTKEY_ID, this.secondaryLanguageKeybinding, () => this._startWithLanguage(this._secondaryLanguage()));
+    this._registerHotkey(HOTKEY_ID, this.toggleKeybinding, () => {
+      this._rememberFocusedWindow();
+      this._toggleRecording();
+    });
+    this._registerHotkey(PRIMARY_HOTKEY_ID, this.primaryLanguageKeybinding, () => {
+      this._rememberFocusedWindow();
+      this._startWithLanguage(this._primaryLanguage());
+    });
+    this._registerHotkey(SECONDARY_HOTKEY_ID, this.secondaryLanguageKeybinding, () => {
+      this._rememberFocusedWindow();
+      this._startWithLanguage(this._secondaryLanguage());
+    });
   },
 
   _onHotkeyChanged: function() {
@@ -314,6 +326,7 @@ MyApplet.prototype = {
   },
 
   on_applet_clicked: function() {
+    this._rememberFocusedWindow();
     this.menu.toggle();
   },
 
@@ -321,6 +334,7 @@ MyApplet.prototype = {
     this._clearStatusTimer();
     this._clearDisplayTimer();
     this._clearSetupCheckTimer();
+    this._clearPasteTimer();
     Main.keybindingManager.removeHotKey(this._hotkeyName(HOTKEY_ID));
     Main.keybindingManager.removeHotKey(this._hotkeyName(PRIMARY_HOTKEY_ID));
     Main.keybindingManager.removeHotKey(this._hotkeyName(SECONDARY_HOTKEY_ID));
@@ -1172,6 +1186,13 @@ MyApplet.prototype = {
     }
   },
 
+  _clearPasteTimer: function() {
+    if (this.pasteTimer) {
+      Mainloop.source_remove(this.pasteTimer);
+      this.pasteTimer = 0;
+    }
+  },
+
   _scheduleSetupCheck: function() {
     this._clearSetupCheckTimer();
     this.setupCheckTimer = Mainloop.timeout_add_seconds(2, () => {
@@ -1210,6 +1231,51 @@ MyApplet.prototype = {
     });
   },
 
+  _isUsableTargetWindow: function(window) {
+    if (!window) {
+      return false;
+    }
+    try {
+      if (window.is_skip_taskbar && window.is_skip_taskbar()) {
+        return false;
+      }
+    } catch (err) {
+      return false;
+    }
+    return true;
+  },
+
+  _rememberFocusedWindow: function() {
+    let window = global.display ? global.display.focus_window : null;
+    if (this._isUsableTargetWindow(window)) {
+      this.targetWindow = window;
+      return true;
+    }
+    return false;
+  },
+
+  _restoreTargetWindowForPaste: function() {
+    if (!this._isUsableTargetWindow(this.targetWindow)) {
+      return false;
+    }
+    try {
+      Main.activateWindow(this.targetWindow, global.get_current_time());
+      return true;
+    } catch (err) {
+      global.logError(err);
+      return false;
+    }
+  },
+
+  _pasteClipboardAfterFocus: function() {
+    this._clearPasteTimer();
+    this.pasteTimer = Mainloop.timeout_add(PASTE_FOCUS_DELAY_MS, () => {
+      this.pasteTimer = 0;
+      Util.spawn(["xdotool", "key", "--clearmodifiers", "ctrl+v"]);
+      return false;
+    });
+  },
+
   _finishCinnamonClipboardInsert: function(payload) {
     let text = this._preparedTranscriptText(payload.transcript);
     this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
@@ -1218,8 +1284,9 @@ MyApplet.prototype = {
       return;
     }
     if (GLib.find_program_in_path("xdotool")) {
-      Util.spawn(["xdotool", "key", "--clearmodifiers", "ctrl+v"]);
-      this._setStatus("done", _("Copied and pasted"), payload.transcript);
+      let restored = this._restoreTargetWindowForPaste();
+      this._pasteClipboardAfterFocus();
+      this._setStatus("done", restored ? _("Copied and pasted into target window") : _("Copied and pasted"), payload.transcript);
     } else {
       this._setStatus("done", _("Copied to clipboard; install xdotool for automatic paste"), payload.transcript);
     }

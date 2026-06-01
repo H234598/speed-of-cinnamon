@@ -29,6 +29,8 @@ path.
 - Optional text polishing through a custom command, a local Ollama model, or a local OpenAI-compatible server such as
   vLLM, llama.cpp, or LM Studio, with applet selection of discovered local models.
 - Cinnamon clipboard output through the applet, optional `xdotool` paste/direct typing, clipboard-only, or no insertion.
+- Target-window restore before Cinnamon clipboard paste, so panel-triggered dictation can return focus to the last
+  normal application window.
 - Optional accent/special-character fallback for direct typing compatibility on X11.
 - Applet menu action to copy the last transcript again.
 - Applet and CLI transcript history for quickly copying recent results.
@@ -272,10 +274,11 @@ Cinnamon keybinding / panel click
        state.py         JSON state for applet status
 ```
 
-The applet handles the normal clipboard path through Cinnamon's `St.Clipboard`, then uses `xdotool` only for the X11
-paste keystroke when it is available. Without `xdotool`, dictation still completes as a Cinnamon clipboard copy. This
-keeps desktop integration in Cinnamon where it belongs and keeps ASR replaceable. The Speed of Sound JVM/GTK portal
-stack is intentionally not reused because its central integration point is the part that does not fit this goal.
+The applet handles the normal clipboard path through Cinnamon's `St.Clipboard`, remembers the last focused normal
+window, restores that window before paste, then uses `xdotool` only for the X11 paste keystroke when it is available.
+Without `xdotool`, dictation still completes as a Cinnamon clipboard copy. This keeps desktop integration in Cinnamon
+where it belongs and keeps ASR replaceable. The Speed of Sound JVM/GTK portal stack is intentionally not reused because
+its central integration point is the part that does not fit this goal.
 
 The doctor command accepts the applet settings as JSON and evaluates the configured pipeline, not only installed
 binaries. The applet passes `--applet`, which tells the doctor to evaluate Cinnamon's own clipboard path. A missing ASR

@@ -84,3 +84,16 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.actor.remove_style_class_name(styleClass)", source)
         self.assertIn("this.actor.add_style_class_name(this._panelStyleClassForStatus(status))", source)
         self.assertIn("this._applyPanelStyle(this.status)", source)
+
+    def test_applet_restores_target_window_before_clipboard_paste(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("const PASTE_FOCUS_DELAY_MS = 120;", source)
+        self.assertIn("this.targetWindow = null;", source)
+        self.assertIn("this._rememberFocusedWindow();", source)
+        self.assertIn("global.display ? global.display.focus_window : null", source)
+        self.assertIn("window.is_skip_taskbar && window.is_skip_taskbar()", source)
+        self.assertIn("Main.activateWindow(this.targetWindow, global.get_current_time())", source)
+        self.assertIn("this._restoreTargetWindowForPaste()", source)
+        self.assertIn("this._pasteClipboardAfterFocus();", source)
+        self.assertIn("Copied and pasted into target window", source)
