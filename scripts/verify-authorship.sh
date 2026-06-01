@@ -19,6 +19,7 @@ repo_dir = Path(sys.argv[1])
 expected_name = "H234598"
 expected_email = "54270221+H234598@users.noreply.github.com"
 expected_repo = "github.com/H234598/speed-of-cinnamon"
+legacy_name = "Staff" + "-Control"
 forbidden = re.compile("staff" + r"[-_ ]?" + "control", re.IGNORECASE)
 
 
@@ -79,12 +80,40 @@ def tracked_files() -> list[Path]:
 
 def check_forbidden_names() -> None:
     for path in tracked_files():
+        if path.relative_to(repo_dir).as_posix() == ".mailmap":
+            continue
         try:
             content = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
         if forbidden.search(content):
             fail(f"forbidden upstream author marker found in {path.relative_to(repo_dir)}")
+
+
+def check_mailmap() -> None:
+    mailmap_path = repo_dir / ".mailmap"
+    content = mailmap_path.read_text(encoding="utf-8").splitlines()
+    expected_lines = {
+        "H234598 <54270221+H234598@users.noreply.github.com> <180772946+H234598@users.noreply.github.com>",
+        f"H234598 <54270221+H234598@users.noreply.github.com> {legacy_name} <180772946+{legacy_name}@users.noreply.github.com>",
+        f"H234598 <54270221+H234598@users.noreply.github.com> {legacy_name} <54270221+{legacy_name}@users.noreply.github.com>",
+        f"H234598 <54270221+H234598@users.noreply.github.com> {legacy_name} <54270221+H234598@users.noreply.github.com>",
+    }
+    missing = expected_lines.difference(content)
+    if missing:
+        fail(".mailmap misses legacy GitHub author mappings:\n" + "\n".join(sorted(missing)))
+
+    checks = [
+        f"{legacy_name} <180772946+{legacy_name}@users.noreply.github.com>",
+        f"{legacy_name} <54270221+{legacy_name}@users.noreply.github.com>",
+        f"{legacy_name} <54270221+H234598@users.noreply.github.com>",
+        "H234598 <180772946+H234598@users.noreply.github.com>",
+    ]
+    output = run_git("check-mailmap", *checks).stdout.splitlines()
+    expected = f"{expected_name} <{expected_email}>"
+    for line in output:
+        if line != expected:
+            fail(f"legacy GitHub author mapping resolved to {line!r}, expected {expected!r}")
 
 
 def check_git_identity() -> None:
@@ -122,6 +151,7 @@ def check_git_identity() -> None:
 
 check_project_metadata()
 check_forbidden_names()
+check_mailmap()
 check_git_identity()
 print(f"Verified project authorship for {expected_name} <{expected_email}>")
 PY

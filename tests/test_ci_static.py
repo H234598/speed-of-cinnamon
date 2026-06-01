@@ -33,6 +33,8 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('expected_name = "H234598"', verifier)
         self.assertIn('expected_email = "54270221+H234598@users.noreply.github.com"', verifier)
         self.assertIn('expected_repo = "github.com/H234598/speed-of-cinnamon"', verifier)
+        self.assertIn("check_mailmap()", verifier)
+        self.assertIn("180772946+H234598@users.noreply.github.com", verifier)
 
     def test_tag_release_workflow_publishes_verified_assets(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
