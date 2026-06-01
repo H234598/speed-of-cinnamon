@@ -18,6 +18,7 @@ from .postprocessor import post_process_text
 from .recorder import choose_recorder, list_input_sources, start_recorder, stop_process
 from .settings_export import read_export, write_export
 from .state import RecordingState, StateStore, now_iso, process_is_alive
+from .text_utils import sanitize_special_chars
 from .transcriber import transcribe
 
 RECORDER_START_GRACE_SECONDS = 0.2
@@ -42,6 +43,11 @@ def append_space_if_needed(text: str, append_space: bool) -> str:
     if append_space and text and not text.endswith((" ", "\n", "\t")):
         return text + " "
     return text
+
+
+def prepare_output_text(text: str, append_space: bool, sanitize: bool) -> str:
+    output = sanitize_special_chars(text) if sanitize else text
+    return append_space_if_needed(output, append_space)
 
 
 def build_store(args: argparse.Namespace) -> StateStore:
@@ -294,7 +300,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             args.vocabulary,
         )
         text_path.write_text(text.strip() + "\n", encoding="utf-8")
-        text_to_insert = append_space_if_needed(text, args.append_space)
+        text_to_insert = prepare_output_text(text, args.append_space, args.sanitize_special_chars)
         inserted = insert_text(text_to_insert, args.insert_method, args.typing_delay_ms)
     except Exception as exc:
         store.update(status="error", stopped_at=state.stopped_at or now_iso(), error=str(exc))
@@ -557,7 +563,8 @@ def command_settings_import(args: argparse.Namespace) -> dict[str, object]:
 
 
 def command_insert_text(args: argparse.Namespace) -> dict[str, object]:
-    inserted = insert_text(args.text, args.insert_method, args.typing_delay_ms)
+    text = sanitize_special_chars(args.text) if args.sanitize_special_chars else args.text
+    inserted = insert_text(text, args.insert_method, args.typing_delay_ms)
     return {"status": "done", "inserted": inserted}
 
 
@@ -602,6 +609,7 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
         choices=["clipboard-paste", "clipboard", "type", "none"],
     )
     parser.add_argument("--typing-delay-ms", type=int, default=8)
+    parser.add_argument("--sanitize-special-chars", action="store_true")
     parser.add_argument("--append-space", action="store_true")
 
 
@@ -664,6 +672,7 @@ def build_parser() -> argparse.ArgumentParser:
     insert.add_argument("text")
     insert.add_argument("--insert-method", default="clipboard-paste", choices=["clipboard-paste", "clipboard", "type", "none"])
     insert.add_argument("--typing-delay-ms", type=int, default=8)
+    insert.add_argument("--sanitize-special-chars", action="store_true")
     insert.set_defaults(handler=command_insert_text)
 
     transcribe_file = subparsers.add_parser("transcribe-file")

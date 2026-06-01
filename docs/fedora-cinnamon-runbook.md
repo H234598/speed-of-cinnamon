@@ -113,6 +113,17 @@ default; recording-start and time-limit notifications can be enabled separately 
 Notifications are sent through Cinnamon's own `Main.notify` and `Main.criticalNotify` APIs. The backend does not emit
 notifications by itself, so CLI smoke tests and scripted runs stay quiet.
 
+## Direct Typing Compatibility
+
+For direct typing through `xdotool`, enable `Replace accents before output` in the applet settings or pass:
+
+```bash
+speed-of-cinnamon toggle --sanitize-special-chars --insert-method type
+```
+
+This maps common accented and special characters to ASCII before output. Saved transcripts stay unchanged. Keep this
+disabled for normal Cinnamon clipboard output unless a target application cannot handle accented characters.
+
 ## Validation
 
 ```bash

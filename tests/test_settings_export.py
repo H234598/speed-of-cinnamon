@@ -12,6 +12,7 @@ class SettingsExportTest(unittest.TestCase):
         payload = build_export({
             "language": "de",
             "append-space": False,
+            "sanitize-special-chars": "true",
             "typing-delay-ms": "12",
             "cli-path": "/tmp/not-portable",
             "unknown": "ignored",
@@ -20,6 +21,7 @@ class SettingsExportTest(unittest.TestCase):
         self.assertEqual(payload["app"], "speed-of-cinnamon")
         self.assertEqual(settings["language"], "de")
         self.assertFalse(settings["append-space"])
+        self.assertTrue(settings["sanitize-special-chars"])
         self.assertEqual(settings["typing-delay-ms"], 12)
         self.assertNotIn("cli-path", settings)
         self.assertNotIn("unknown", settings)

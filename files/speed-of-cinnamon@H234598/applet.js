@@ -26,6 +26,7 @@ const EXPORTABLE_SETTINGS = [
   ["insert-method", "insertMethod"],
   ["append-space", "appendSpace"],
   ["typing-delay-ms", "typingDelayMs"],
+  ["sanitize-special-chars", "sanitizeSpecialChars"],
   ["transcriber", "transcriber"],
   ["whisper-model", "whisperModel"],
   ["transcriber-command", "transcriberCommand"],
@@ -60,6 +61,7 @@ MyApplet.prototype = {
     this.insertMethod = "clipboard-paste";
     this.appendSpace = true;
     this.typingDelayMs = 8;
+    this.sanitizeSpecialChars = false;
     this.cliPath = DEFAULT_CLI;
     this.transcriber = "auto";
     this.whisperModel = "";
@@ -102,6 +104,7 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "insert-method", "insertMethod", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "append-space", "appendSpace", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "typing-delay-ms", "typingDelayMs", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "sanitize-special-chars", "sanitizeSpecialChars", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "cli-path", "cliPath", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "transcriber", "transcriber", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "whisper-model", "whisperModel", null, null);
@@ -231,6 +234,9 @@ MyApplet.prototype = {
     ];
     if (this.appendSpace) {
       args.push("--append-space");
+    }
+    if (this.sanitizeSpecialChars) {
+      args.push("--sanitize-special-chars");
     }
     if (this.inputDevice && this.inputDevice.trim() !== "") {
       args.push("--input-device", this.inputDevice);
@@ -563,10 +569,29 @@ MyApplet.prototype = {
 
   _preparedTranscriptText: function(transcript) {
     let text = transcript || "";
+    if (this.sanitizeSpecialChars) {
+      text = this._sanitizeSpecialChars(text);
+    }
     if (this.appendSpace && text && !/\s$/.test(text)) {
       text += " ";
     }
     return text;
+  },
+
+  _sanitizeSpecialChars: function(text) {
+    let map = {
+      "ß": "ss", "ẞ": "SS", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE",
+      "ø": "o", "Ø": "O", "đ": "d", "Đ": "D", "ł": "l", "Ł": "L",
+      "þ": "th", "Þ": "Th", "ð": "d", "Ð": "D", "ñ": "n", "Ñ": "N",
+      "ç": "c", "Ç": "C", "¿": "", "¡": ""
+    };
+    return String(text || "").replace(/[^\u0000-\u007E]/g, (char) => {
+      if (Object.prototype.hasOwnProperty.call(map, char)) {
+        return map[char];
+      }
+      let normalized = char.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+      return /^[\u0000-\u007E]*$/.test(normalized) ? normalized : char;
+    });
   },
 
   _copyLastTranscript: function() {

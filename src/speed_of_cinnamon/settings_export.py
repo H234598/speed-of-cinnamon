@@ -26,6 +26,7 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "notify-error": (bool, True),
     "insert-method": (str, "clipboard-paste"),
     "append-space": (bool, True),
+    "sanitize-special-chars": (bool, False),
     "typing-delay-ms": (int, 8),
     "transcriber": (str, "auto"),
     "whisper-model": (str, ""),

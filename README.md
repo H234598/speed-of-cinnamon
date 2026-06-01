@@ -21,6 +21,7 @@ path.
 - Personal context and custom vocabulary fields for local ASR/post-process command wrappers.
 - Optional post-process command for local text cleanup or LLM polishing.
 - Cinnamon clipboard output through the applet, optional `xdotool` paste/direct typing, clipboard-only, or no insertion.
+- Optional accent/special-character fallback for direct typing compatibility on X11.
 - Applet menu action to copy the last transcript again.
 - Applet and CLI transcript history for quickly copying recent results.
 - Applet and CLI action to cancel and discard a current recording.
@@ -125,6 +126,7 @@ speed-of-cinnamon toggle --language de --transcriber whisper-cpp --whisper-model
 speed-of-cinnamon toggle --language de --transcriber command --transcriber-command "printf 'Hallo Cinnamon'"
 speed-of-cinnamon toggle --post-process-command "python3 -c 'import sys; print(sys.stdin.read().strip().capitalize())'"
 speed-of-cinnamon toggle --personal-context "Use Fedora Cinnamon project terms." --vocabulary "PipeWire"
+speed-of-cinnamon toggle --sanitize-special-chars --insert-method type
 ```
 
 The applet menu can export and import its current settings to:
@@ -181,6 +183,9 @@ The applet handles the normal clipboard path through Cinnamon's `St.Clipboard`, 
 paste keystroke when it is available. Without `xdotool`, dictation still completes as a Cinnamon clipboard copy. This
 keeps desktop integration in Cinnamon where it belongs and keeps ASR replaceable. The Speed of Sound JVM/GTK portal
 stack is intentionally not reused because its central integration point is the part that does not fit this goal.
+
+The `Replace accents before output` setting is an optional compatibility fallback for direct typing. It maps common
+diacritics to ASCII before output while leaving the saved transcript unchanged.
 
 Desktop notifications are emitted by the Cinnamon applet through Cinnamon's `Main.notify`/`Main.criticalNotify` APIs,
 not by the backend. This keeps normal CLI runs quiet and avoids depending on the XDG portal notification path.

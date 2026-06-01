@@ -20,6 +20,13 @@ class CliTest(unittest.TestCase):
             code = cli.run(["insert-text", "hello", "--insert-method", "none", "--json"])
         self.assertEqual(code, 0)
 
+    @mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True)
+    def test_insert_text_can_sanitize_special_chars(self, mocked_insert: mock.Mock) -> None:
+        with redirect_stdout(io.StringIO()):
+            code = cli.run(["insert-text", "Grüße", "--insert-method", "none", "--sanitize-special-chars", "--json"])
+        self.assertEqual(code, 0)
+        mocked_insert.assert_called_once_with("Grusse", "none", 8)
+
     def test_transcribe_file_with_command_template(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "input.wav"
@@ -97,7 +104,12 @@ class CliTest(unittest.TestCase):
                 code = cli.run([
                     "settings-export",
                     "--settings-json",
-                    json.dumps({"language": "de", "notify-complete": False, "cli-path": "/tmp/local"}),
+                    json.dumps({
+                        "language": "de",
+                        "notify-complete": False,
+                        "sanitize-special-chars": True,
+                        "cli-path": "/tmp/local",
+                    }),
                     "--output",
                     str(export_path),
                     "--json",
@@ -112,6 +124,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(export_payload["path"], str(export_path))
         self.assertEqual(import_payload["settings"]["language"], "de")
         self.assertFalse(import_payload["settings"]["notify-complete"])
+        self.assertTrue(import_payload["settings"]["sanitize-special-chars"])
         self.assertNotIn("cli-path", import_payload["settings"])
 
     def test_history_lists_recent_transcripts(self) -> None:
