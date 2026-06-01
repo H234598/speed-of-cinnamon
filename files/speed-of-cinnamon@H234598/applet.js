@@ -281,15 +281,15 @@ MyApplet.prototype = {
   },
 
   _doctorArgs: function() {
-    return [this.cliPath || DEFAULT_CLI, "doctor", "--json"];
+    return [this.cliPath || DEFAULT_CLI, "doctor", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--json"];
   },
 
   _diagnosticsArgs: function() {
-    return [this.cliPath || DEFAULT_CLI, "diagnostics", "--json"];
+    return [this.cliPath || DEFAULT_CLI, "diagnostics", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--json"];
   },
 
   _diagnosticsSaveArgs: function() {
-    return [this.cliPath || DEFAULT_CLI, "diagnostics", "--save", "--json"];
+    return [this.cliPath || DEFAULT_CLI, "diagnostics", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--save", "--json"];
   },
 
   _cancelArgs: function() {
@@ -394,22 +394,47 @@ MyApplet.prototype = {
 
   _runDoctor: function() {
     this._spawnJson(this._doctorArgs(), (payload) => {
-      let missing = [];
-      for (let check of payload.checks || []) {
-        if (!check.ok) {
-          missing.push(check.name);
-        }
+      if (payload.configured) {
+        this._applyDoctorPayload(payload);
+        return;
       }
-      if (payload.ok) {
-        if (missing.length > 0) {
-          this._setStatus("ready", _("Doctor: core OK; optional missing: ") + missing.join(", "), this.lastTranscript);
-        } else {
-          this._setStatus("ready", _("Doctor: all checked helpers found"), this.lastTranscript);
-        }
-      } else {
-        this._setStatus("error", _("Missing: ") + missing.join(", "), this.lastTranscript);
-      }
+      this._applyLegacyDoctorPayload(payload);
     });
+  },
+
+  _applyDoctorPayload: function(payload) {
+    let configured = payload.configured || {};
+    let missing = [];
+    for (let name of ["recorder", "transcriber", "output"]) {
+      let section = configured[name] || {};
+      if (!section.ok) {
+        missing.push(name + ": " + (section.detail || "not ready"));
+      }
+    }
+    if (!payload.ok) {
+      this._setStatus("error", _("Doctor: ") + missing.join("; "), this.lastTranscript);
+      return;
+    }
+    let warnings = configured.warnings || [];
+    if (warnings.length > 0) {
+      this._setStatus("ready", _("Doctor: ready; ") + warnings.join("; "), this.lastTranscript);
+      return;
+    }
+    this._setStatus("ready", _("Doctor: configured pipeline ready"), this.lastTranscript);
+  },
+
+  _applyLegacyDoctorPayload: function(payload) {
+    let missing = [];
+    for (let check of payload.checks || []) {
+      if (!check.ok) {
+        missing.push(check.name);
+      }
+    }
+    if (payload.ok) {
+      this._setStatus("ready", _("Doctor: core OK; optional missing: ") + missing.join(", "), this.lastTranscript);
+    } else {
+      this._setStatus("error", _("Missing: ") + missing.join(", "), this.lastTranscript);
+    }
   },
 
   _copyDiagnostics: function() {

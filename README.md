@@ -11,6 +11,7 @@ path.
 ## Features
 
 - Cinnamon panel applet with microphone icon, concise status label, status menu, transcript preview, and a doctor check.
+- Configuration-aware doctor check for the selected recorder, ASR backend, desktop session, and output mode.
 - Live recording progress in the panel tooltip and menu, with a compact elapsed-time panel label.
 - Copyable or saveable diagnostics bundle for support reports without transcript contents.
 - Cinnamon global hotkey via `Main.keybindingManager`; default is `Super+Z`.
@@ -43,9 +44,10 @@ Required for the intended Cinnamon/X11 path:
 sudo dnf install python3 pipewire-utils pulseaudio-utils xdotool libnotify
 ```
 
-`pulseaudio-utils` provides `pactl` for source discovery and `parecord` as a fallback recorder. The applet uses
-Cinnamon's own clipboard API, so `xclip` is not required for normal panel usage. Install `xclip` or `xsel` only if you
-want to use `speed-of-cinnamon` as a standalone CLI clipboard inserter outside Cinnamon.
+`pulseaudio-utils` provides `pactl` for source discovery and `parecord` as a fallback recorder. Install `alsa-utils`
+only if you want the `arecord` fallback recorder. The applet uses Cinnamon's own clipboard API, so `xclip` is not
+required for normal panel usage. Install `xclip` or `xsel` only if you want to use `speed-of-cinnamon` as a standalone
+CLI clipboard inserter outside Cinnamon.
 If `xdotool` is missing, the applet still copies transcripts through Cinnamon and reports that automatic paste is
 unavailable.
 
@@ -114,8 +116,10 @@ The backend command is installed to:
 
 ```bash
 speed-of-cinnamon doctor --json
+speed-of-cinnamon doctor --applet --settings-json '{"transcriber":"command","transcriber-command":"printf ok","insert-method":"clipboard-paste"}' --json
 speed-of-cinnamon diagnostics --json
 speed-of-cinnamon diagnostics --save --json
+speed-of-cinnamon diagnostics --applet --settings-json '{"transcriber":"command","transcriber-command":"printf ok"}' --json
 speed-of-cinnamon list-inputs --json
 speed-of-cinnamon history --limit 5 --json
 speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 25 --dry-run --json
@@ -187,6 +191,14 @@ The applet handles the normal clipboard path through Cinnamon's `St.Clipboard`, 
 paste keystroke when it is available. Without `xdotool`, dictation still completes as a Cinnamon clipboard copy. This
 keeps desktop integration in Cinnamon where it belongs and keeps ASR replaceable. The Speed of Sound JVM/GTK portal
 stack is intentionally not reused because its central integration point is the part that does not fit this goal.
+
+The doctor command accepts the applet settings as JSON and evaluates the configured pipeline, not only installed
+binaries. The applet passes `--applet`, which tells the doctor to evaluate Cinnamon's own clipboard path. A missing ASR
+backend is reported as not ready, while a missing `xdotool` with applet clipboard-paste mode is a warning because the
+applet can still copy through Cinnamon's clipboard.
+
+Diagnostics accepts the same settings flags and embeds only the derived doctor status, not the private settings or
+command template contents.
 
 The `Replace accents before output` setting is an optional compatibility fallback for direct typing. It maps common
 diacritics to ASCII before output while leaving the saved transcript unchanged.

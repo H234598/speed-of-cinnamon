@@ -297,6 +297,13 @@ class CliTest(unittest.TestCase):
                     str(state_file),
                     "--output",
                     str(output),
+                    "--applet",
+                    "--settings-json",
+                    json.dumps({
+                        "transcriber": "command",
+                        "transcriber-command": "printf hidden-command-token",
+                        "insert-method": "clipboard-paste",
+                    }),
                     "--json",
                 ])
             payload = json.loads(stdout.getvalue())
@@ -306,6 +313,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(saved["saved_path"], str(output))
         self.assertEqual(saved["state"]["transcript_length"], len("private words"))
         self.assertNotIn("private words", json.dumps(saved))
+        self.assertNotIn("hidden-command-token", json.dumps(saved))
 
     @mock.patch("speed_of_cinnamon.cli.command_start")
     def test_toggle_starts_when_idle(self, mocked_start: mock.Mock) -> None:

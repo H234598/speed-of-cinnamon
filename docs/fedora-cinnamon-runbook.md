@@ -135,11 +135,21 @@ disabled for normal Cinnamon clipboard output unless a target application cannot
 make check
 make smoke-backend
 ~/.local/bin/speed-of-cinnamon doctor --json
+~/.local/bin/speed-of-cinnamon doctor \
+  --applet \
+  --settings-json '{"transcriber":"command","transcriber-command":"printf ok","insert-method":"clipboard-paste"}' \
+  --json
 ```
 
 The backend smoke records short audio samples through `pw-record`, uses harmless dummy transcribers, disables insertion,
 and verifies manual stop, cancel/discard, and the preserved-audio path used when a recording expires at its maximum
 length.
+
+The doctor report is configuration-aware. The Cinnamon applet passes its current settings plus `--applet`, so the report
+can distinguish between the selected recorder, the selected ASR backend, and the selected output mode. Missing ASR is a
+readiness failure because dictation cannot complete without a transcriber. Missing `xdotool` in applet
+`clipboard-paste` mode is only a warning because Cinnamon clipboard copy still works. In pure CLI mode,
+`clipboard-paste` still needs a clipboard helper and a keyboard helper.
 
 ## Diagnostics
 
@@ -148,6 +158,9 @@ For support reports, run:
 ```bash
 speed-of-cinnamon diagnostics --json
 speed-of-cinnamon diagnostics --save --json
+speed-of-cinnamon diagnostics --applet \
+  --settings-json '{"transcriber":"command","transcriber-command":"printf ok","insert-method":"clipboard-paste"}' \
+  --json
 ```
 
 The Cinnamon applet also has `Copy diagnostics` and `Save diagnostics`. Saved reports are written under:
@@ -156,8 +169,10 @@ The Cinnamon applet also has `Copy diagnostics` and `Save diagnostics`. Saved re
 ~/.local/state/speed-of-cinnamon/diagnostics/
 ```
 
-The bundle includes app/runtime paths, desktop/session details, doctor checks, input-source metadata, and state. It
-intentionally omits transcript contents.
+The bundle includes app/runtime paths, desktop/session details, doctor checks, input-source metadata, and state. When
+the applet creates the bundle, it passes the current settings to the doctor so the readiness section reflects the
+configured pipeline. The report intentionally omits transcript contents and does not include private command templates
+or personalization text.
 
 ## Dependencies
 
@@ -175,7 +190,8 @@ sudo dnf install -y pulseaudio-utils
 
 `xdotool` is needed only for automatic paste or direct typing. The applet uses Cinnamon's own clipboard API for copying
 the transcript, and falls back to copy-only when automatic paste is not available. `xclip` is optional for standalone CLI
-clipboard insertion outside the applet.
+clipboard insertion outside the applet; `xsel` is supported as another X11 CLI clipboard helper. Install `alsa-utils`
+only if you want the `arecord` fallback recorder.
 
 ## Input Source Selection
 

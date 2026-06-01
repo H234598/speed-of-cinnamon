@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import __version__
-from .doctor import report as doctor_report
+from .doctor import parse_settings_json, report as doctor_report
 from .output import insert_text
 from .paths import (
     APP_ID,
@@ -413,7 +413,10 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
 
 
 def command_doctor(args: argparse.Namespace) -> dict[str, object]:
-    return doctor_report()
+    return doctor_report(
+        parse_settings_json(getattr(args, "settings_json", "")),
+        applet=getattr(args, "applet", False),
+    )
 
 
 def command_list_inputs(args: argparse.Namespace) -> dict[str, object]:
@@ -498,6 +501,8 @@ def command_diagnostics(args: argparse.Namespace) -> dict[str, object]:
 
 def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
+    settings = parse_settings_json(getattr(args, "settings_json", ""))
+    applet = getattr(args, "applet", False)
     source_payload: dict[str, object]
     try:
         sources = list_input_sources(False)
@@ -549,7 +554,7 @@ def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
             "diagnostics_dir": str(diagnostics_dir()),
         },
         "state": state_payload,
-        "doctor": doctor_report(),
+        "doctor": doctor_report(settings, applet=applet),
         "inputs": source_payload,
         "recent_transcripts": transcript_entries,
     }
@@ -658,6 +663,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor = subparsers.add_parser("doctor")
     add_common_options(doctor)
+    doctor.add_argument("--settings-json", default="")
+    doctor.add_argument(
+        "--applet",
+        action="store_true",
+        help="evaluate output readiness for the Cinnamon applet path",
+    )
     doctor.set_defaults(handler=command_doctor)
 
     list_inputs = subparsers.add_parser("list-inputs")
@@ -681,6 +692,12 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(diagnostics)
     diagnostics.add_argument("--save", action="store_true")
     diagnostics.add_argument("--output", default="")
+    diagnostics.add_argument("--settings-json", default="")
+    diagnostics.add_argument(
+        "--applet",
+        action="store_true",
+        help="evaluate doctor readiness for the Cinnamon applet path",
+    )
     diagnostics.set_defaults(handler=command_diagnostics)
 
     settings_export = subparsers.add_parser("settings-export")

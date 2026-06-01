@@ -16,7 +16,10 @@ sudo dnf install -y \
 cat <<'MSG'
 
 Optional standalone CLI clipboard helpers:
-  sudo dnf install -y xclip
+  sudo dnf install -y xclip xsel
+
+Optional ALSA fallback recorder:
+  sudo dnf install -y alsa-utils
 
 Reload Cinnamon after installing the applet if it is already open:
   Alt+F2, r, Enter

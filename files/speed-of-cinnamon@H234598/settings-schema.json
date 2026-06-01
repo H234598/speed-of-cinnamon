@@ -169,7 +169,8 @@
   "cli-path": {
     "type": "entry",
     "description": "Backend command",
-    "default": "/home/teladi/.local/bin/speed-of-cinnamon"
+    "tooltip": "Optional override. Leave empty to use ~/.local/bin/speed-of-cinnamon for the current user.",
+    "default": ""
   },
   "transcriber": {
     "type": "combobox",
