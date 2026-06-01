@@ -124,6 +124,33 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["models"][0]["name"], "llama3.2:3b")
         mocked_list.assert_called_once_with("http://localhost:11434")
 
+    @mock.patch("speed_of_cinnamon.cli.doctor_report")
+    def test_setup_command_outputs_copyable_plan(self, mocked_doctor: mock.Mock) -> None:
+        mocked_doctor.return_value = {
+            "ok": False,
+            "configured": {
+                "recorder": {"ok": True},
+                "transcriber": {
+                    "ok": False,
+                    "value": "auto",
+                    "detail": "install whisper, configure whisper.cpp with a model, or set a custom transcriber command",
+                },
+                "output": {"ok": True},
+                "postprocessor": {"ok": True},
+                "warnings": [],
+            },
+            "desktop": {"cinnamon": True},
+        }
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["setup", "--applet", "--settings-json", '{"transcriber":"auto"}', "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertFalse(payload["ready"])
+        self.assertIn("Speed of Cinnamon setup plan", payload["text"])
+        self.assertEqual(payload["steps"][0]["id"], "asr-backend")
+        mocked_doctor.assert_called_once()
+
     @mock.patch("speed_of_cinnamon.cli.remove_model")
     def test_remove_model_command(self, mocked_remove: mock.Mock) -> None:
         mocked_remove.return_value = {"status": "done", "removed": True, "name": "tiny.en"}

@@ -20,8 +20,17 @@ make install-local
 Then add `Speed of Cinnamon` from Cinnamon's applet settings. If needed, reload Cinnamon with `Alt+F2`, `r`, `Enter`.
 
 On first load, the applet runs a lightweight setup check against its current Cinnamon settings. If the panel shows
-`SET`, open the applet menu and use `Run doctor`, `Open applet settings`, `Open setup guide`, and `Voice model` to
-finish the local pipeline setup. The startup check does not use portals and does not open a separate window.
+`SET`, open the applet menu and use `Copy setup plan`, `Run doctor`, `Open applet settings`, `Open setup guide`, and
+`Voice model` to finish the local pipeline setup. The startup check does not use portals and does not open a separate
+window.
+
+The same setup plan is available from the CLI:
+
+```bash
+speed-of-cinnamon setup --applet \
+  --settings-json '{"transcriber":"auto","insert-method":"clipboard-paste"}' \
+  --json
+```
 
 ## Runtime Paths
 

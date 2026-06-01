@@ -197,6 +197,10 @@ MyApplet.prototype = {
     openGuide.connect("activate", () => this._openSetupGuide());
     this.menu.addMenuItem(openGuide);
 
+    let setupPlan = new PopupMenu.PopupIconMenuItem(_("Copy setup plan"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
+    setupPlan.connect("activate", () => this._copySetupPlan());
+    this.menu.addMenuItem(setupPlan);
+
     let diagnostics = new PopupMenu.PopupIconMenuItem(_("Copy diagnostics"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
     diagnostics.connect("activate", () => this._copyDiagnostics());
     this.menu.addMenuItem(diagnostics);
@@ -334,6 +338,10 @@ MyApplet.prototype = {
 
   _doctorArgs: function() {
     return [this.cliPath || DEFAULT_CLI, "doctor", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--json"];
+  },
+
+  _setupArgs: function() {
+    return [this.cliPath || DEFAULT_CLI, "setup", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshot()), "--json"];
   },
 
   _diagnosticsArgs: function() {
@@ -526,6 +534,17 @@ MyApplet.prototype = {
     }
     Util.spawn(["xdg-open", RUNBOOK_URL]);
     this._setStatus("ready", _("Opened setup guide"), this.lastTranscript);
+  },
+
+  _copySetupPlan: function() {
+    this._spawnJson(this._setupArgs(), (payload) => {
+      if (payload.error) {
+        this._setStatus("error", payload.error, this.lastTranscript);
+        return;
+      }
+      this.clipboard.set_text(St.ClipboardType.CLIPBOARD, String(payload.text || JSON.stringify(payload, null, 2)));
+      this._setStatus("done", _("Copied setup plan"), this.lastTranscript);
+    });
   },
 
   _copyDiagnostics: function() {

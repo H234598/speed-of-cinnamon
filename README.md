@@ -118,14 +118,15 @@ The backend command is installed to:
 
 On startup, the applet runs a lightweight doctor check against its current Cinnamon settings. A `SET` panel label means
 the configured pipeline needs setup, usually because no ASR backend or local voice model is available yet. Use the
-applet menu's `Open applet settings`, `Open setup guide`, `Run doctor`, and `Voice model` actions to finish setup
-without leaving Cinnamon's applet workflow.
+applet menu's `Copy setup plan`, `Open applet settings`, `Open setup guide`, `Run doctor`, and `Voice model` actions to
+finish setup without leaving Cinnamon's applet workflow.
 
 ## CLI
 
 ```bash
 speed-of-cinnamon doctor --json
 speed-of-cinnamon doctor --applet --settings-json '{"transcriber":"command","transcriber-command":"printf ok","insert-method":"clipboard-paste"}' --json
+speed-of-cinnamon setup --applet --settings-json '{"transcriber":"auto","insert-method":"clipboard-paste"}' --json
 speed-of-cinnamon diagnostics --json
 speed-of-cinnamon diagnostics --save --json
 speed-of-cinnamon diagnostics --applet --settings-json '{"transcriber":"command","transcriber-command":"printf ok"}' --json

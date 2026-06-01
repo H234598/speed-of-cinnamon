@@ -28,6 +28,7 @@ from .paths import (
 from .postprocessor import DEFAULT_OLLAMA_URL, list_ollama_models, post_process_text
 from .recorder import choose_recorder, list_input_sources, start_recorder, stop_process
 from .settings_export import read_export, write_export
+from .setup_plan import build_setup_plan
 from .state import RecordingState, StateStore, now_iso, process_is_alive
 from .text_utils import sanitize_special_chars
 from .transcriber import transcribe
@@ -424,6 +425,18 @@ def command_doctor(args: argparse.Namespace) -> dict[str, object]:
     )
 
 
+def command_setup(args: argparse.Namespace) -> dict[str, object]:
+    doctor_payload = doctor_report(
+        parse_settings_json(getattr(args, "settings_json", "")),
+        applet=getattr(args, "applet", False),
+    )
+    return {
+        "status": "done",
+        "doctor": doctor_payload,
+        **build_setup_plan(doctor_payload),
+    }
+
+
 def command_list_inputs(args: argparse.Namespace) -> dict[str, object]:
     sources = list_input_sources(args.include_monitors)
     return {
@@ -714,6 +727,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="evaluate output readiness for the Cinnamon applet path",
     )
     doctor.set_defaults(handler=command_doctor)
+
+    setup = subparsers.add_parser("setup")
+    add_common_options(setup)
+    setup.add_argument("--settings-json", default="")
+    setup.add_argument(
+        "--applet",
+        action="store_true",
+        help="build setup steps for the Cinnamon applet path",
+    )
+    setup.set_defaults(handler=command_setup)
 
     list_inputs = subparsers.add_parser("list-inputs")
     add_common_options(list_inputs)
