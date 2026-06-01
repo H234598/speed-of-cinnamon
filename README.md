@@ -37,7 +37,8 @@ path.
   old "ready, then transcribe on next shortcut" behavior.
 - Per-user runtime state under `~/.local/state/speed-of-cinnamon/` and temporary recordings under
   `~/.cache/speed-of-cinnamon/`.
-- Local install and uninstall scripts, Python unit tests, shell checks, and GitHub Actions CI.
+- Local install and uninstall scripts, reproducible source release archives, Python unit tests, shell checks, and GitHub
+  Actions CI.
 
 ## Fedora Cinnamon Dependencies
 
@@ -199,6 +200,15 @@ make smoke-backend
 
 This records short audio samples, uses harmless dummy transcriber commands, disables insertion, and verifies manual stop,
 auto-expired recording finalization, and cancel/discard behavior.
+
+To build and verify a release archive:
+
+```bash
+make dist-check
+```
+
+This writes `dist/speed-of-cinnamon-<version>.tar.gz`, verifies its checksum file, extracts it, runs `make check`, and
+installs the package into a temporary home directory to prove the shipped applet and backend wrapper are complete.
 
 ## Architecture
 

@@ -1,4 +1,4 @@
-.PHONY: check test lint smoke-doctor smoke-backend install-local uninstall-local
+.PHONY: check test lint smoke-doctor smoke-backend dist dist-check install-local uninstall-local
 
 PYTHON ?= python3
 
@@ -17,6 +17,12 @@ smoke-doctor:
 
 smoke-backend:
 	./scripts/smoke-backend.sh ./scripts/dev-backend.sh
+
+dist:
+	./scripts/build-dist.sh
+
+dist-check:
+	tarball="$$(./scripts/build-dist.sh)" && ./scripts/verify-dist.sh "$$tarball"
 
 install-local:
 	./scripts/install-local.sh

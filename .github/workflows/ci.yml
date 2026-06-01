@@ -17,5 +17,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Run checks
         run: make check
+      - name: Build and verify release archive
+        run: make dist-check
       - name: Shellcheck scripts
         run: shellcheck scripts/*.sh
