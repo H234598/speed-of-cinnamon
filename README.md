@@ -11,6 +11,7 @@ path.
 ## Features
 
 - Cinnamon panel applet with microphone icon, concise status label, status menu, transcript preview, and a doctor check.
+- Status-colored Cinnamon panel indicator for recording, processing, ready, setup, recorded, and error states.
 - Configuration-aware doctor check for the selected recorder, ASR backend, desktop session, and output mode.
 - Startup setup check in the applet, plus direct menu actions for Cinnamon applet settings and the setup runbook.
 - Live recording progress in the panel tooltip and menu, with a compact elapsed-time panel label.

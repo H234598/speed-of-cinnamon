@@ -8,7 +8,21 @@
   font-weight: bold;
 }
 
+.speed-of-cinnamon-recorded {
+  color: #2b6fb6;
+  font-weight: bold;
+}
+
 .speed-of-cinnamon-ready {
   color: #2d7d46;
 }
 
+.speed-of-cinnamon-setup {
+  color: #8a6500;
+  font-weight: bold;
+}
+
+.speed-of-cinnamon-error {
+  color: #b83232;
+  font-weight: bold;
+}

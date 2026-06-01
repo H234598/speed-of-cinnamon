@@ -97,7 +97,8 @@ Cinnamon's clipboard API.
 ## Recording Progress
 
 While recording, the applet keeps the panel label compact (`REC 12s`) and exposes the full elapsed/maximum time in the
-tooltip and status menu. This mirrors Speed of Sound's recording progress without adding a separate Cinnamon window.
+tooltip and status menu. The panel actor also switches Cinnamon CSS status classes for recording, processing, ready,
+setup, recorded, and error states, so the indicator remains scannable even without opening a separate window.
 
 ## Cleanup
 

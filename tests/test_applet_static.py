@@ -65,3 +65,22 @@ class AppletStaticTest(unittest.TestCase):
         self.assertFalse(schema["keep-recording-artifacts"]["default"])
         self.assertIn('["keep-recording-artifacts", "keepRecordingArtifacts"]', source)
         self.assertIn('args.push("--keep-recording-artifacts");', source)
+
+    def test_panel_status_style_classes_are_applied(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        stylesheet = (APPLET_DIR / "stylesheet.css").read_text(encoding="utf-8")
+
+        for status_class in [
+            "speed-of-cinnamon-recording",
+            "speed-of-cinnamon-processing",
+            "speed-of-cinnamon-recorded",
+            "speed-of-cinnamon-ready",
+            "speed-of-cinnamon-setup",
+            "speed-of-cinnamon-error",
+        ]:
+            self.assertIn(status_class, source)
+            self.assertIn(f".{status_class}", stylesheet)
+        self.assertIn("const PANEL_STATUS_CLASSES = [", source)
+        self.assertIn("this.actor.remove_style_class_name(styleClass)", source)
+        self.assertIn("this.actor.add_style_class_name(this._panelStyleClassForStatus(status))", source)
+        self.assertIn("this._applyPanelStyle(this.status)", source)

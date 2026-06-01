@@ -14,6 +14,14 @@ const SECONDARY_HOTKEY_ID = "speed-of-cinnamon-secondary-language";
 const DEFAULT_CLI = GLib.build_filenamev([GLib.get_home_dir(), ".local", "bin", "speed-of-cinnamon"]);
 const SYSTEM_CLI = "/usr/bin/speed-of-cinnamon";
 const RUNBOOK_URL = "https://gist.github.com/H234598/b95129e13ac0b09c9777edd41aeedfa0";
+const PANEL_STATUS_CLASSES = [
+  "speed-of-cinnamon-recording",
+  "speed-of-cinnamon-processing",
+  "speed-of-cinnamon-ready",
+  "speed-of-cinnamon-recorded",
+  "speed-of-cinnamon-error",
+  "speed-of-cinnamon-setup"
+];
 const EXPORTABLE_SETTINGS = [
   ["toggle-keybinding", "toggleKeybinding"],
   ["primary-language-keybinding", "primaryLanguageKeybinding"],
@@ -1389,6 +1397,25 @@ MyApplet.prototype = {
     return this._formatSeconds(elapsed);
   },
 
+  _panelStyleClassForStatus: function(status) {
+    if (status === "recording") return "speed-of-cinnamon-recording";
+    if (status === "processing") return "speed-of-cinnamon-processing";
+    if (status === "recorded") return "speed-of-cinnamon-recorded";
+    if (status === "error") return "speed-of-cinnamon-error";
+    if (status === "setup") return "speed-of-cinnamon-setup";
+    return "speed-of-cinnamon-ready";
+  },
+
+  _applyPanelStyle: function(status) {
+    if (!this.actor || !this.actor.add_style_class_name || !this.actor.remove_style_class_name) {
+      return;
+    }
+    for (let styleClass of PANEL_STATUS_CLASSES) {
+      this.actor.remove_style_class_name(styleClass);
+    }
+    this.actor.add_style_class_name(this._panelStyleClassForStatus(status));
+  },
+
   _updatePanel: function() {
     let label = "";
     let tooltip = "Speed of Cinnamon";
@@ -1420,6 +1447,7 @@ MyApplet.prototype = {
       tooltip = this.lastMessage || _("Ready");
       if (this.toggleItem) this.toggleItem.label.text = _("Start dictation");
     }
+    this._applyPanelStyle(this.status);
     this.set_applet_label(this.showPanelLabel ? label : "");
     this.set_applet_tooltip(tooltip + "\n" + this._shortTranscript());
     if (this.statusItem) {
