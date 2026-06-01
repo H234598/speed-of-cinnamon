@@ -36,6 +36,8 @@ path.
 - Applet and CLI settings export/import for portable Cinnamon backups.
 - Applet recordings that hit the configured maximum length are transcribed automatically, with a setting to keep the
   old "ready, then transcribe on next shortcut" behavior.
+- Temporary recording files are discarded after successful transcription by default, with an opt-in setting to keep
+  them for debugging.
 - Per-user runtime state under `~/.local/state/speed-of-cinnamon/` and temporary recordings under
   `~/.cache/speed-of-cinnamon/`.
 - Local install and uninstall scripts, reproducible source release archives, Python unit tests, shell checks, and GitHub
@@ -164,6 +166,7 @@ speed-of-cinnamon toggle --post-process-backend ollama --ollama-model llama3.2:3
 speed-of-cinnamon toggle --post-process-backend openai-compatible --openai-compatible-model local-llama --openai-compatible-url http://127.0.0.1:8000/v1
 speed-of-cinnamon toggle --personal-context "Use Fedora Cinnamon project terms." --vocabulary "PipeWire"
 speed-of-cinnamon toggle --sanitize-special-chars --insert-method type
+speed-of-cinnamon toggle --keep-recording-artifacts --insert-method none
 ```
 
 The applet menu can export and import its current settings to:
@@ -172,8 +175,8 @@ The applet menu can export and import its current settings to:
 ~/.local/share/speed-of-cinnamon/settings-export.json
 ```
 
-This export includes personal context, vocabulary, command templates, and the hotkey. Treat it as a private backup.
-Machine-local `cli-path` is intentionally not exported.
+This export includes personal context, vocabulary, command templates, hotkeys, and recording retention. Treat it as a
+private backup. Machine-local `cli-path` is intentionally not exported.
 
 The applet's `Voice model` menu can download, select, and remove whisper.cpp catalog models. Models are stored under:
 
@@ -287,6 +290,7 @@ diacritics to ASCII before output while leaving the saved transcript unchanged.
 Desktop notifications are emitted by the Cinnamon applet through Cinnamon's `Main.notify`/`Main.criticalNotify` APIs,
 not by the backend. This keeps normal CLI runs quiet and avoids depending on the XDG portal notification path.
 
-When a live applet recording reaches `Maximum recording length`, the backend preserves the audio as `recorded` and the
-applet starts transcription once it observes that state. Disable `Transcribe automatically at the time limit` to keep
-the preserved recording at `RDY` until the next shortcut press.
+When a live applet recording reaches `Maximum recording length`, the backend preserves the audio as `recorded` until it
+is transcribed, and the applet starts transcription once it observes that state. Disable `Transcribe automatically at
+the time limit` to keep the preserved recording at `RDY` until the next shortcut press. After successful
+transcription, the temporary WAV/log files are deleted unless `Keep recording files after transcription` is enabled.

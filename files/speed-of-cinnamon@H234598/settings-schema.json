@@ -15,7 +15,7 @@
     "recording-section": {
       "type": "section",
       "title": "Recording",
-      "keys": ["language", "secondary-language", "max-seconds", "auto-transcribe-timeout", "recorder", "input-device"]
+      "keys": ["language", "secondary-language", "max-seconds", "auto-transcribe-timeout", "keep-recording-artifacts", "recorder", "input-device"]
     },
     "personalization-section": {
       "type": "section",
@@ -100,6 +100,12 @@
     "description": "Transcribe automatically at the time limit",
     "tooltip": "When a live applet recording reaches the maximum length, start transcription without requiring another shortcut press.",
     "default": true
+  },
+  "keep-recording-artifacts": {
+    "type": "switch",
+    "description": "Keep recording files after transcription",
+    "tooltip": "Disabled by default for privacy. Temporary WAV/log files are still used while recording, then removed after a successful transcription.",
+    "default": false
   },
   "recorder": {
     "type": "combobox",

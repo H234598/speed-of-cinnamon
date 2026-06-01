@@ -15,6 +15,7 @@ class SettingsExportTest(unittest.TestCase):
             "language": "de",
             "append-space": False,
             "auto-transcribe-timeout": "false",
+            "keep-recording-artifacts": "true",
             "sanitize-special-chars": "true",
             "typing-delay-ms": "12",
             "post-process-backend": "ollama",
@@ -31,6 +32,7 @@ class SettingsExportTest(unittest.TestCase):
         self.assertEqual(settings["language"], "de")
         self.assertFalse(settings["append-space"])
         self.assertFalse(settings["auto-transcribe-timeout"])
+        self.assertTrue(settings["keep-recording-artifacts"])
         self.assertTrue(settings["sanitize-special-chars"])
         self.assertEqual(settings["typing-delay-ms"], 12)
         self.assertEqual(settings["post-process-backend"], "ollama")

@@ -55,3 +55,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._startWithLanguage(this._primaryLanguage())', source)
         self.assertIn('this._startWithLanguage(this._secondaryLanguage())', source)
         self.assertIn('this._hasActiveRecordingState()', source)
+
+    def test_recording_artifact_retention_is_optional(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
+
+        recording_keys = schema["layout"]["recording-section"]["keys"]
+        self.assertIn("keep-recording-artifacts", recording_keys)
+        self.assertFalse(schema["keep-recording-artifacts"]["default"])
+        self.assertIn('["keep-recording-artifacts", "keepRecordingArtifacts"]', source)
+        self.assertIn('args.push("--keep-recording-artifacts");', source)

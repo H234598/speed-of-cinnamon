@@ -483,6 +483,83 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["language"], "de")
         self.assertEqual(final_state.language, "de")
 
+    def test_finalize_discards_recording_artifacts_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            audio = tmp_path / "recording.wav"
+            log = tmp_path / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "stop",
+                    "--state-file",
+                    str(state_file),
+                    "--insert-method",
+                    "none",
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf private-transcript",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+            audio_exists = audio.exists()
+            log_exists = log.exists()
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "done")
+        self.assertFalse(payload["recording_artifacts_kept"])
+        self.assertTrue(payload["audio_deleted"])
+        self.assertTrue(payload["log_deleted"])
+        self.assertFalse(audio_exists)
+        self.assertFalse(log_exists)
+        self.assertIsNone(final_state.audio_path)
+        self.assertIsNone(final_state.log_path)
+
+    def test_finalize_can_keep_recording_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            audio = tmp_path / "recording.wav"
+            log = tmp_path / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "stop",
+                    "--state-file",
+                    str(state_file),
+                    "--insert-method",
+                    "none",
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf retained-transcript",
+                    "--keep-recording-artifacts",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+            audio_exists = audio.exists()
+            log_exists = log.exists()
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "done")
+        self.assertTrue(payload["recording_artifacts_kept"])
+        self.assertFalse(payload["audio_deleted"])
+        self.assertFalse(payload["log_deleted"])
+        self.assertTrue(audio_exists)
+        self.assertTrue(log_exists)
+        self.assertEqual(final_state.audio_path, str(audio))
+        self.assertEqual(final_state.log_path, str(log))
+
     def test_start_does_not_overwrite_expired_recording(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

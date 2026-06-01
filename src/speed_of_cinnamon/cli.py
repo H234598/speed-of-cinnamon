@@ -338,9 +338,21 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
     except Exception as exc:
         store.update(status="error", stopped_at=state.stopped_at or now_iso(), error=str(exc))
         raise
+    keep_recording_artifacts = bool(getattr(args, "keep_recording_artifacts", False))
+    audio_deleted = False
+    log_deleted = False
+    done_audio_path = state.audio_path
+    done_log_path = state.log_path
+    if not keep_recording_artifacts:
+        audio_deleted = remove_file(state.audio_path)
+        log_deleted = remove_file(state.log_path)
+        done_audio_path = None
+        done_log_path = None
     done = store.update(
         status="done",
         stopped_at=state.stopped_at or now_iso(),
+        audio_path=done_audio_path,
+        log_path=done_log_path,
         transcript=text,
         transcript_path=str(text_path),
         inserted=inserted,
@@ -353,6 +365,9 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         "transcript_path": str(text_path),
         "inserted": inserted,
         "language": language,
+        "recording_artifacts_kept": keep_recording_artifacts,
+        "audio_deleted": audio_deleted,
+        "log_deleted": log_deleted,
     }
 
 
@@ -729,6 +744,11 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--typing-delay-ms", type=int, default=8)
     parser.add_argument("--sanitize-special-chars", action="store_true")
     parser.add_argument("--append-space", action="store_true")
+    parser.add_argument(
+        "--keep-recording-artifacts",
+        action="store_true",
+        help="keep temporary WAV/log files after successful transcription",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:

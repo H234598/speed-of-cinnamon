@@ -79,6 +79,10 @@ Models:      ~/.local/share/speed-of-cinnamon/models/whisper.cpp/
 Leave the applet's `Backend command` setting empty for normal installs. The applet first uses the per-user backend
 from `~/.local/bin`, then the RPM/system backend from `/usr/bin`, then `speed-of-cinnamon` from `PATH`.
 
+Recording files are temporary runtime artifacts. By default, Speed of Cinnamon deletes the WAV file and recorder log
+after a successful transcription. Enable `Keep recording files after transcription` only when you need those files for
+debugging a recorder or ASR problem.
+
 ## Transcript History
 
 Each completed transcription is saved as a text file under the transcript directory. Inspect the recent history with:
@@ -105,7 +109,9 @@ speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 25 --json
 ```
 
 The Cinnamon applet exposes the same conservative cleanup as `Clean old files`. Recordings and their companion logs are
-handled as one cache group, and the current `state.json` audio/log/transcript paths are skipped.
+handled as one cache group, and the current `state.json` audio/log/transcript paths are skipped. In normal use,
+successful recordings have already been removed; cleanup is mainly for retained debug artifacts, cancelled runs, and
+older caches.
 
 ## Settings Backup
 
@@ -124,8 +130,8 @@ speed-of-cinnamon settings-import --json
 ```
 
 The export includes the hotkey, languages, recorder/backend choices, command templates, personalization, output mode,
-and notification settings. It intentionally excludes the machine-local `cli-path`. Because command templates and
-personal context may contain private data, keep the export file private.
+recording retention, and notification settings. It intentionally excludes the machine-local `cli-path`. Because command
+templates and personal context may contain private data, keep the export file private.
 
 ## Language Switching
 

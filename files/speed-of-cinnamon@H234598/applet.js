@@ -23,6 +23,7 @@ const EXPORTABLE_SETTINGS = [
   ["secondary-language", "secondaryLanguage"],
   ["max-seconds", "maxSeconds"],
   ["auto-transcribe-timeout", "autoTranscribeTimeout"],
+  ["keep-recording-artifacts", "keepRecordingArtifacts"],
   ["recorder", "recorder"],
   ["input-device", "inputDevice"],
   ["personal-context", "personalContext"],
@@ -72,6 +73,7 @@ MyApplet.prototype = {
     this.activeLanguage = "en";
     this.maxSeconds = 30;
     this.autoTranscribeTimeout = true;
+    this.keepRecordingArtifacts = false;
     this.recorder = "auto";
     this.inputDevice = "";
     this.insertMethod = "clipboard-paste";
@@ -130,6 +132,7 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "secondary-language", "secondaryLanguage", this._onLanguageSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "max-seconds", "maxSeconds", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "auto-transcribe-timeout", "autoTranscribeTimeout", null, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "keep-recording-artifacts", "keepRecordingArtifacts", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "recorder", "recorder", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "input-device", "inputDevice", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "insert-method", "insertMethod", null, null);
@@ -337,6 +340,9 @@ MyApplet.prototype = {
     }
     if (this.sanitizeSpecialChars) {
       args.push("--sanitize-special-chars");
+    }
+    if (this.keepRecordingArtifacts) {
+      args.push("--keep-recording-artifacts");
     }
     if (this.inputDevice && this.inputDevice.trim() !== "") {
       args.push("--input-device", this.inputDevice);
