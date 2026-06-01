@@ -10,6 +10,7 @@ const Mainloop = imports.mainloop;
 const UUID = "speed-of-cinnamon@H234598";
 const HOTKEY_ID = "speed-of-cinnamon-toggle";
 const DEFAULT_CLI = GLib.build_filenamev([GLib.get_home_dir(), ".local", "bin", "speed-of-cinnamon"]);
+const RUNBOOK_URL = "https://gist.github.com/H234598/b95129e13ac0b09c9777edd41aeedfa0";
 const EXPORTABLE_SETTINGS = [
   ["toggle-keybinding", "toggleKeybinding"],
   ["show-panel-label", "showPanelLabel"],
@@ -94,6 +95,7 @@ MyApplet.prototype = {
     this.clipboard = St.Clipboard.get_default();
     this.statusTimer = 0;
     this.displayTimer = 0;
+    this.setupCheckTimer = 0;
 
     this.set_applet_icon_path(this.metadata.path + "/icon.svg");
     this.set_applet_label("");
@@ -105,6 +107,7 @@ MyApplet.prototype = {
     this._buildMenu();
     this._registerHotkey();
     this._refreshStatus();
+    this._scheduleSetupCheck();
   },
 
   _bindSettings: function() {
@@ -186,6 +189,14 @@ MyApplet.prototype = {
     doctor.connect("activate", () => this._runDoctor());
     this.menu.addMenuItem(doctor);
 
+    let openSettings = new PopupMenu.PopupIconMenuItem(_("Open applet settings"), "preferences-system-symbolic", St.IconType.SYMBOLIC);
+    openSettings.connect("activate", () => this._openAppletSettings());
+    this.menu.addMenuItem(openSettings);
+
+    let openGuide = new PopupMenu.PopupIconMenuItem(_("Open setup guide"), "help-browser-symbolic", St.IconType.SYMBOLIC);
+    openGuide.connect("activate", () => this._openSetupGuide());
+    this.menu.addMenuItem(openGuide);
+
     let diagnostics = new PopupMenu.PopupIconMenuItem(_("Copy diagnostics"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
     diagnostics.connect("activate", () => this._copyDiagnostics());
     this.menu.addMenuItem(diagnostics);
@@ -260,6 +271,7 @@ MyApplet.prototype = {
   on_applet_removed_from_panel: function() {
     this._clearStatusTimer();
     this._clearDisplayTimer();
+    this._clearSetupCheckTimer();
     Main.keybindingManager.removeHotKey(this._hotkeyName());
     if (this.settings) {
       this.settings.finalize();
@@ -452,17 +464,17 @@ MyApplet.prototype = {
     });
   },
 
-  _runDoctor: function() {
+  _runDoctor: function(startupCheck) {
     this._spawnJson(this._doctorArgs(), (payload) => {
       if (payload.configured) {
-        this._applyDoctorPayload(payload);
+        this._applyDoctorPayload(payload, Boolean(startupCheck));
         return;
       }
-      this._applyLegacyDoctorPayload(payload);
+      this._applyLegacyDoctorPayload(payload, Boolean(startupCheck));
     });
   },
 
-  _applyDoctorPayload: function(payload) {
+  _applyDoctorPayload: function(payload, startupCheck) {
     let configured = payload.configured || {};
     let missing = [];
     for (let name of ["recorder", "transcriber", "output", "postprocessor"]) {
@@ -472,7 +484,8 @@ MyApplet.prototype = {
       }
     }
     if (!payload.ok) {
-      this._setStatus("error", _("Doctor: ") + missing.join("; "), this.lastTranscript);
+      let message = _("Setup needed: ") + missing.join("; ");
+      this._setStatus(startupCheck ? "setup" : "error", message, this.lastTranscript);
       return;
     }
     let warnings = configured.warnings || [];
@@ -483,7 +496,7 @@ MyApplet.prototype = {
     this._setStatus("ready", _("Doctor: configured pipeline ready"), this.lastTranscript);
   },
 
-  _applyLegacyDoctorPayload: function(payload) {
+  _applyLegacyDoctorPayload: function(payload, startupCheck) {
     let missing = [];
     for (let check of payload.checks || []) {
       if (!check.ok) {
@@ -493,8 +506,26 @@ MyApplet.prototype = {
     if (payload.ok) {
       this._setStatus("ready", _("Doctor: core OK; optional missing: ") + missing.join(", "), this.lastTranscript);
     } else {
-      this._setStatus("error", _("Missing: ") + missing.join(", "), this.lastTranscript);
+      this._setStatus(startupCheck ? "setup" : "error", _("Missing: ") + missing.join(", "), this.lastTranscript);
     }
+  },
+
+  _openAppletSettings: function() {
+    if (!GLib.find_program_in_path("cinnamon-settings")) {
+      this._setStatus("error", _("cinnamon-settings command not found"), this.lastTranscript);
+      return;
+    }
+    Util.spawn(["cinnamon-settings", "applets"]);
+    this._setStatus("ready", _("Opened Cinnamon applet settings"), this.lastTranscript);
+  },
+
+  _openSetupGuide: function() {
+    if (!GLib.find_program_in_path("xdg-open")) {
+      this._setStatus("error", _("xdg-open command not found"), this.lastTranscript);
+      return;
+    }
+    Util.spawn(["xdg-open", RUNBOOK_URL]);
+    this._setStatus("ready", _("Opened setup guide"), this.lastTranscript);
   },
 
   _copyDiagnostics: function() {
@@ -985,6 +1016,24 @@ MyApplet.prototype = {
     }
   },
 
+  _clearSetupCheckTimer: function() {
+    if (this.setupCheckTimer) {
+      Mainloop.source_remove(this.setupCheckTimer);
+      this.setupCheckTimer = 0;
+    }
+  },
+
+  _scheduleSetupCheck: function() {
+    this._clearSetupCheckTimer();
+    this.setupCheckTimer = Mainloop.timeout_add_seconds(2, () => {
+      this.setupCheckTimer = 0;
+      if (this.status === "idle") {
+        this._runDoctor(true);
+      }
+      return false;
+    });
+  },
+
   _scheduleStatusPoll: function() {
     this._clearStatusTimer();
     if (this.status !== "recording" && this.status !== "processing") {
@@ -1221,6 +1270,10 @@ MyApplet.prototype = {
       label = "RDY";
       tooltip = this.lastMessage || _("Ready to transcribe");
       if (this.toggleItem) this.toggleItem.label.text = _("Transcribe recording");
+    } else if (this.status === "setup") {
+      label = "SET";
+      tooltip = this.lastMessage || _("Setup needed");
+      if (this.toggleItem) this.toggleItem.label.text = _("Start dictation");
     } else {
       label = "SOC";
       tooltip = this.lastMessage || _("Ready");

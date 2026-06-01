@@ -12,6 +12,7 @@ path.
 
 - Cinnamon panel applet with microphone icon, concise status label, status menu, transcript preview, and a doctor check.
 - Configuration-aware doctor check for the selected recorder, ASR backend, desktop session, and output mode.
+- Startup setup check in the applet, plus direct menu actions for Cinnamon applet settings and the setup runbook.
 - Live recording progress in the panel tooltip and menu, with a compact elapsed-time panel label.
 - Copyable or saveable diagnostics bundle for support reports without transcript contents.
 - Cinnamon global hotkey via `Main.keybindingManager`; default is `Super+Z`.
@@ -114,6 +115,11 @@ The backend command is installed to:
 ```text
 ~/.local/bin/speed-of-cinnamon
 ```
+
+On startup, the applet runs a lightweight doctor check against its current Cinnamon settings. A `SET` panel label means
+the configured pipeline needs setup, usually because no ASR backend or local voice model is available yet. Use the
+applet menu's `Open applet settings`, `Open setup guide`, `Run doctor`, and `Voice model` actions to finish setup
+without leaving Cinnamon's applet workflow.
 
 ## CLI
 
