@@ -277,13 +277,14 @@ Cinnamon keybinding / panel click
        state.py         JSON state for applet status
 ```
 
-The applet handles the normal clipboard path through Cinnamon's `St.Clipboard`, exposes the output mode directly in the
-applet menu, remembers the last focused normal window, restores that window before paste, can reinsert the last
-transcript with the current output mode, and opens guide/folder actions through GJS/Gio's default-app launcher. It uses
-`xdotool` only for the X11 paste or direct-typing keystrokes when they are available. Without `xdotool`, dictation still
-completes as a Cinnamon clipboard copy. This keeps desktop integration in Cinnamon where it belongs and keeps ASR
-replaceable. The Speed of Sound JVM/GTK portal stack is intentionally not reused because its central integration point
-is the part that does not fit this goal.
+The applet asks the backend to return text without inserting it, then handles the selected output mode itself. Normal
+clipboard output goes through Cinnamon's `St.Clipboard`; the applet menu exposes the output mode, remembers the last
+focused normal window, restores that window before paste or direct typing, can reinsert the last transcript with the
+current output mode, and opens guide/folder actions through GJS/Gio's default-app launcher. It uses `xdotool` only for
+the X11 paste or direct-typing keystrokes when they are available. Without `xdotool`, dictation still completes as a
+Cinnamon clipboard copy. This keeps desktop integration in Cinnamon where it belongs and keeps ASR replaceable. The
+Speed of Sound JVM/GTK portal stack is intentionally not reused because its central integration point is the part that
+does not fit this goal.
 
 The doctor command accepts the applet settings as JSON and evaluates the configured pipeline, not only installed
 binaries. The applet passes `--applet`, which tells the doctor to evaluate Cinnamon's own clipboard path. A missing ASR

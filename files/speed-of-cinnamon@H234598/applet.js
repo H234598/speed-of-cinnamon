@@ -366,7 +366,6 @@ MyApplet.prototype = {
   },
 
   _baseArgs: function(command) {
-    let backendInsertMethod = this._usesCinnamonClipboard() ? "none" : this._normalizeOutputMethod(this.insertMethod);
     let args = [
       this._cliCommand(),
       command,
@@ -376,7 +375,7 @@ MyApplet.prototype = {
       "--recorder", String(this.recorder || "auto"),
       "--transcriber", String(this.transcriber || "auto"),
       "--post-process-backend", String(this.postProcessBackend || "command"),
-      "--insert-method", backendInsertMethod,
+      "--insert-method", "none",
       "--typing-delay-ms", String(this.typingDelayMs || 8)
     ];
     if (this.appendSpace) {
@@ -509,11 +508,6 @@ MyApplet.prototype = {
       return SYSTEM_CLI;
     }
     return "speed-of-cinnamon";
-  },
-
-  _usesCinnamonClipboard: function() {
-    let method = this._normalizeOutputMethod(this.insertMethod);
-    return method === "clipboard" || method === "clipboard-paste";
   },
 
   _outputMethodLabel: function(method) {
@@ -1186,8 +1180,8 @@ MyApplet.prototype = {
       this._setStatus("error", payload.error, this.lastTranscript);
       return;
     }
-    if (payload.status === "done" && payload.transcript && this._usesCinnamonClipboard()) {
-      this._finishCinnamonClipboardInsert(payload);
+    if (payload.status === "done" && payload.transcript) {
+      this._finishAppletTextInsert(payload);
       return;
     }
     let message = payload.message || status;
@@ -1367,7 +1361,7 @@ MyApplet.prototype = {
     });
   },
 
-  _finishCinnamonClipboardInsert: function(payload) {
+  _finishAppletTextInsert: function(payload) {
     this._insertTranscriptText(payload.transcript);
   },
 

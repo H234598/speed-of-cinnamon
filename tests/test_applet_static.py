@@ -128,7 +128,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.settings.setValue("insert-method", this.insertMethod)', source)
         self.assertIn('this.settings.bindProperty(Settings.BindingDirection.IN, "insert-method", "insertMethod", this._onOutputSettingsChanged, null)', source)
         self.assertIn('this.outputMethodItem.label.text = _("Output: ") + this._outputMethodLabel(this._normalizeOutputMethod(this.insertMethod))', source)
-        self.assertIn('let backendInsertMethod = this._usesCinnamonClipboard() ? "none" : this._normalizeOutputMethod(this.insertMethod);', source)
+        self.assertIn('"--insert-method", "none"', source)
+        self.assertNotIn("_usesCinnamonClipboard", source)
 
     def test_applet_can_reinsert_last_transcript_with_current_output_mode(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -139,7 +140,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.insertLastItem.setSensitive(Boolean(this.lastTranscript))", source)
         self.assertIn("_insertLastTranscript: function()", source)
         self.assertIn("_insertTranscriptText: function(transcript)", source)
+        self.assertIn("_finishAppletTextInsert: function(payload)", source)
         self.assertIn("this._insertTranscriptText(payload.transcript);", source)
+        self.assertIn("if (payload.status === \"done\" && payload.transcript)", source)
         self.assertIn('if (method === "none")', source)
         self.assertIn('if (method === "type")', source)
         self.assertIn('this._typeTextAfterFocus(text);', source)
