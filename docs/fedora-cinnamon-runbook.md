@@ -295,6 +295,16 @@ The Ollama backend calls `/api/generate` with `stream=false`. It sends the trans
 vocabulary to the local server and expects the polished text in the `response` field. The backend stores and inserts the
 post-processed text.
 
+To inspect installed local Ollama models from the backend:
+
+```bash
+speed-of-cinnamon text-models --json
+```
+
+The Cinnamon applet exposes the same local list in `Text model`. Selecting an Ollama model switches `Text polishing` to
+`Ollama local model` and stores the chosen model name. If Ollama is not running, the menu reports that local status
+without changing the current dictation pipeline.
+
 ## Current Known Limits
 
 - The app is intentionally local-first and does not bundle an ASR model.

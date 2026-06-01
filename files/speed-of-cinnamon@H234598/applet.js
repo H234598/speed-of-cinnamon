@@ -212,6 +212,15 @@ MyApplet.prototype = {
     this.menu.addMenuItem(this.modelItem);
     this._populateModelMenu([]);
 
+    this.textModelItem = new PopupMenu.PopupSubMenuMenuItem(_("Text model"));
+    this.textModelItem.menu.connect("open-state-changed", (menu, open) => {
+      if (open) {
+        this._refreshTextModelMenu();
+      }
+    });
+    this.menu.addMenuItem(this.textModelItem);
+    this._populateTextModelMenu([], _("Open menu to load local text models"));
+
     let transcripts = new PopupMenu.PopupIconMenuItem(_("Open transcripts"), "folder-documents-symbolic", St.IconType.SYMBOLIC);
     transcripts.connect("activate", () => {
       Util.spawn(["xdg-open", GLib.build_filenamev([GLib.get_user_state_dir(), "speed-of-cinnamon", "transcripts"])]);
@@ -341,6 +350,14 @@ MyApplet.prototype = {
 
   _modelsArgs: function() {
     return [this.cliPath || DEFAULT_CLI, "models", "--json"];
+  },
+
+  _textModelsArgs: function() {
+    let args = [this.cliPath || DEFAULT_CLI, "text-models", "--json"];
+    if (this.ollamaUrl && this.ollamaUrl.trim() !== "") {
+      args.push("--ollama-url", this.ollamaUrl);
+    }
+    return args;
   },
 
   _downloadModelArgs: function(model) {
@@ -722,6 +739,81 @@ MyApplet.prototype = {
     this.settings.setValue("transcriber", this.transcriber);
     this.settings.setValue("whisper-model", this.whisperModel);
     this._setStatus("ready", _("Voice model: ") + name, this.lastTranscript);
+  },
+
+  _refreshTextModelMenu: function() {
+    if (!this.textModelItem) {
+      return;
+    }
+    this._populateTextModelMenu([], _("Loading local text models..."));
+    this._spawnJson(this._textModelsArgs(), (payload) => {
+      if (payload.error) {
+        this._populateTextModelMenu([], payload.error);
+        return;
+      }
+      this._populateTextModelMenu(payload.models || [], payload.available === false ? payload.message : "");
+    });
+  },
+
+  _populateTextModelMenu: function(models, message) {
+    if (!this.textModelItem) {
+      return;
+    }
+    this.textModelItem.menu.removeAll();
+    let backend = String(this.postProcessBackend || "command");
+
+    let disabled = new PopupMenu.PopupMenuItem((backend === "none" ? "[x] " : "[ ] ") + _("Disabled"));
+    disabled.connect("activate", () => this._selectTextModelBackend("none", "", _("Text polishing disabled")));
+    this.textModelItem.menu.addMenuItem(disabled);
+
+    let custom = new PopupMenu.PopupMenuItem((backend === "command" || backend === "custom" ? "[x] " : "[ ] ") + _("Custom command"));
+    custom.connect("activate", () => this._selectTextModelBackend("command", "", _("Text polishing: custom command")));
+    this.textModelItem.menu.addMenuItem(custom);
+
+    this.textModelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+    if (message) {
+      let messageItem = new PopupMenu.PopupMenuItem(message);
+      messageItem.setSensitive(false);
+      this.textModelItem.menu.addMenuItem(messageItem);
+      return;
+    }
+    if (!models || models.length === 0) {
+      let empty = new PopupMenu.PopupMenuItem(_("No local Ollama models found"));
+      empty.setSensitive(false);
+      this.textModelItem.menu.addMenuItem(empty);
+      return;
+    }
+    for (let model of models) {
+      this._addTextModelMenuEntry(model);
+    }
+  },
+
+  _addTextModelMenuEntry: function(model) {
+    let name = String(model.name || "");
+    if (name === "") {
+      return;
+    }
+    let current = String(this.postProcessBackend || "") === "ollama" && String(this.ollamaModel || "") === name;
+    let details = String(model.description || model.size_label || "");
+    let label = (current ? "[x] " : "[ ] ") + name;
+    if (details !== "") {
+      label += " (" + details + ")";
+    }
+    let item = new PopupMenu.PopupMenuItem(label);
+    item.connect("activate", () => this._selectTextModelBackend("ollama", name, _("Text model: ") + name));
+    this.textModelItem.menu.addMenuItem(item);
+  },
+
+  _selectTextModelBackend: function(backend, model, message) {
+    this.postProcessBackend = String(backend || "command");
+    this.settings.setValue("post-process-backend", this.postProcessBackend);
+    if (this.postProcessBackend === "ollama") {
+      this.ollamaModel = String(model || "");
+      this.settings.setValue("ollama-model", this.ollamaModel);
+    }
+    this._refreshTextModelMenu();
+    this._setStatus("ready", message, this.lastTranscript);
   },
 
   _refreshHistory: function() {

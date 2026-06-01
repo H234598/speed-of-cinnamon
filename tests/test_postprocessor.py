@@ -8,6 +8,7 @@ from unittest import mock
 from speed_of_cinnamon.postprocessor import (
     PostProcessError,
     build_ollama_prompt,
+    list_ollama_models,
     post_process_text,
     render_postprocess_template,
 )
@@ -112,6 +113,45 @@ class PostProcessorTest(unittest.TestCase):
         with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", return_value=FakeResponse({"response": ""})):
             with self.assertRaisesRegex(PostProcessError, "without output"):
                 post_process_text("hello", "en", backend="ollama", ollama_model="llama3.2:3b")
+
+    def test_list_ollama_models_reads_local_tags(self) -> None:
+        payload = {
+            "models": [
+                {
+                    "name": "llama3.2:3b",
+                    "model": "llama3.2:3b",
+                    "size": 2_016_000_000,
+                    "modified_at": "2026-06-01T09:00:00Z",
+                    "digest": "abc",
+                    "details": {
+                        "family": "llama",
+                        "parameter_size": "3.2B",
+                        "quantization_level": "Q4_K_M",
+                    },
+                }
+            ]
+        }
+        requests = []
+
+        def fake_urlopen(request: object, timeout: int = 0) -> FakeResponse:
+            requests.append((request, timeout))
+            return FakeResponse(payload)
+
+        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=fake_urlopen):
+            result = list_ollama_models("http://127.0.0.1:11434/")
+        self.assertTrue(result["available"])
+        self.assertEqual(result["models"][0]["name"], "llama3.2:3b")
+        self.assertEqual(result["models"][0]["description"], "llama 3.2B Q4_K_M")
+        request, timeout = requests[0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:11434/api/tags")
+        self.assertEqual(timeout, 5)
+
+    def test_list_ollama_models_reports_unavailable_server(self) -> None:
+        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=OSError("offline")):
+            result = list_ollama_models("http://127.0.0.1:11434")
+        self.assertFalse(result["available"])
+        self.assertEqual(result["models"], [])
+        self.assertIn("not reachable", result["message"])
 
 
 if __name__ == "__main__":

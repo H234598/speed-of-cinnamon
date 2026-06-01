@@ -25,7 +25,7 @@ from .paths import (
     state_dir,
     transcript_dir,
 )
-from .postprocessor import post_process_text
+from .postprocessor import DEFAULT_OLLAMA_URL, list_ollama_models, post_process_text
 from .recorder import choose_recorder, list_input_sources, start_recorder, stop_process
 from .settings_export import read_export, write_export
 from .state import RecordingState, StateStore, now_iso, process_is_alive
@@ -448,6 +448,15 @@ def command_models(args: argparse.Namespace) -> dict[str, object]:
     return {"status": "done", "models": list_models()}
 
 
+def command_text_models(args: argparse.Namespace) -> dict[str, object]:
+    return {
+        "status": "done",
+        "backend": "ollama",
+        "url": (args.ollama_url or DEFAULT_OLLAMA_URL).rstrip("/"),
+        **list_ollama_models(args.ollama_url),
+    }
+
+
 def command_download_model(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     return download_model(args.model, args.force)
@@ -663,7 +672,7 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--whisper-model", default="")
     parser.add_argument("--post-process-backend", default="command", choices=["none", "command", "ollama"])
     parser.add_argument("--post-process-command", default="")
-    parser.add_argument("--ollama-url", default="http://127.0.0.1:11434")
+    parser.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
     parser.add_argument("--ollama-model", default="")
     parser.add_argument("--post-process-prompt", default="")
     parser.add_argument("--personal-context", default="")
@@ -714,6 +723,11 @@ def build_parser() -> argparse.ArgumentParser:
     models = subparsers.add_parser("models")
     add_common_options(models)
     models.set_defaults(handler=command_models)
+
+    text_models = subparsers.add_parser("text-models")
+    add_common_options(text_models)
+    text_models.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
+    text_models.set_defaults(handler=command_text_models)
 
     download_model_parser = subparsers.add_parser("download-model")
     add_common_options(download_model_parser)
@@ -778,7 +792,7 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_file.add_argument("--whisper-model", default="")
     transcribe_file.add_argument("--post-process-backend", default="command", choices=["none", "command", "ollama"])
     transcribe_file.add_argument("--post-process-command", default="")
-    transcribe_file.add_argument("--ollama-url", default="http://127.0.0.1:11434")
+    transcribe_file.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
     transcribe_file.add_argument("--ollama-model", default="")
     transcribe_file.add_argument("--post-process-prompt", default="")
     transcribe_file.add_argument("--personal-context", default="")

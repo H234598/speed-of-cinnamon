@@ -107,6 +107,23 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["models"][0]["name"], "tiny.en")
         self.assertFalse(payload["models"][0]["downloaded"])
 
+    @mock.patch("speed_of_cinnamon.cli.list_ollama_models")
+    def test_text_models_lists_local_ollama_models(self, mocked_list: mock.Mock) -> None:
+        mocked_list.return_value = {
+            "available": True,
+            "models": [{"name": "llama3.2:3b"}],
+            "message": "Ollama models loaded",
+        }
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["text-models", "--ollama-url", "http://localhost:11434", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["backend"], "ollama")
+        self.assertEqual(payload["url"], "http://localhost:11434")
+        self.assertEqual(payload["models"][0]["name"], "llama3.2:3b")
+        mocked_list.assert_called_once_with("http://localhost:11434")
+
     @mock.patch("speed_of_cinnamon.cli.remove_model")
     def test_remove_model_command(self, mocked_remove: mock.Mock) -> None:
         mocked_remove.return_value = {"status": "done", "removed": True, "name": "tiny.en"}

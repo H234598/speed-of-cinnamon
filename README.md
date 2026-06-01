@@ -23,7 +23,8 @@ path.
 - ASR presets for Automatic, OpenAI Whisper command, whisper.cpp with a model path, or a custom command template.
 - Local whisper.cpp model catalog with checksum-verified downloads into the user's XDG data directory.
 - Personal context and custom vocabulary fields for local ASR/post-process command wrappers.
-- Optional text polishing through a custom command or a local Ollama model.
+- Optional text polishing through a custom command or a local Ollama model, with applet selection of installed local
+  Ollama models.
 - Cinnamon clipboard output through the applet, optional `xdotool` paste/direct typing, clipboard-only, or no insertion.
 - Optional accent/special-character fallback for direct typing compatibility on X11.
 - Applet menu action to copy the last transcript again.
@@ -124,6 +125,7 @@ speed-of-cinnamon diagnostics --save --json
 speed-of-cinnamon diagnostics --applet --settings-json '{"transcriber":"command","transcriber-command":"printf ok"}' --json
 speed-of-cinnamon list-inputs --json
 speed-of-cinnamon models --json
+speed-of-cinnamon text-models --json
 speed-of-cinnamon download-model tiny.en --json
 speed-of-cinnamon remove-model tiny.en --json
 speed-of-cinnamon history --limit 5 --json
@@ -162,6 +164,10 @@ Downloads use the upstream whisper.cpp ggml model files from Hugging Face and ve
 model is activated. If `whisper-cli` is installed, Automatic transcription can use a verified downloaded model even when
 the `whisper.cpp model` setting is empty. Removing a model from the applet clears the explicit whisper.cpp selection
 when that model was active.
+
+The applet's `Text model` menu can disable polishing, use the custom command backend, or select a model returned by a
+local Ollama `/api/tags` endpoint. If Ollama is not running, the menu stays usable and shows the local connection
+message instead of blocking recording.
 
 For backend-only testing without touching the focused application:
 
