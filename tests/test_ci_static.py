@@ -46,6 +46,22 @@ def _is_safe_env_argument(node: ast.AST | None) -> bool:
     return True
 
 
+def _workflow_block_lines(text: str, header: str) -> list[str]:
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() == header:
+            header_indent = len(line) - len(line.lstrip(" "))
+            start = index + 1
+            end = start
+            while end < len(lines):
+                candidate = lines[end]
+                if candidate and (len(candidate) - len(candidate.lstrip(" ")) <= header_indent):
+                    break
+                end += 1
+            return [candidate for candidate in lines[start:end] if candidate.strip()]
+    raise AssertionError(f"missing workflow block: {header}")
+
+
 class CiStaticTest(unittest.TestCase):
     def test_makefile_has_repo_local_clean_target(self) -> None:
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
@@ -491,6 +507,21 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn("id-token: write", workflow)
 
         self.assertIn("workflows_changed<<WORKFLOWS_CHANGED", workflow)
+
+    def test_pylint_workflow_is_read_only(self) -> None:
+        workflow = (REPO_ROOT / ".github" / "workflows" / "pylint.yml").read_text(encoding="utf-8")
+        top_level_permissions = _workflow_block_lines(workflow, "permissions:")
+        checkout_block = _workflow_block_lines(workflow, "- uses: actions/checkout@v6")
+
+        self.assertEqual(top_level_permissions, ["  contents: read"])
+        self.assertEqual(checkout_block, [
+            "        with:",
+            "          persist-credentials: false",
+        ])
+        self.assertNotIn("permissions:", "\n".join(checkout_block))
+        self.assertNotIn("contents: write", workflow)
+        self.assertNotIn("id-token: write", workflow)
+        self.assertNotIn("pull-requests: write", workflow)
 
     def test_scorecard_workflow_does_not_request_oidc_token(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "scorecard.yml").read_text(encoding="utf-8")

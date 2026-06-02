@@ -279,7 +279,7 @@ def run_command_chain(
             raise CommandChainError(f"{label} command input exceeded {max_input_chars} bytes")
 
         cmd = list(segment)
-        if len(cmd) >= MAX_COMMAND_SEGMENT_TOKENS:
+        if len(cmd) > MAX_COMMAND_SEGMENT_TOKENS:
             raise CommandChainError(f"invalid {label} command: segment is too long")
         if not all(isinstance(item, str) for item in cmd):
             raise CommandChainError(f"{label} command segment contains non-text item")

@@ -90,8 +90,15 @@ class CommandChainTest(unittest.TestCase):
         with self.assertRaisesRegex(CommandChainError, "too many segments"):
             split_command_chain(command)
 
-    def test_split_command_chain_rejects_too_many_tokens_in_segment(self) -> None:
-        command = " ".join(["printf"] + ["a"] * 129)
+    def test_split_command_chain_accepts_max_tokens_in_segment(self) -> None:
+        command = " ".join(["printf"] + ["a"] * (MAX_COMMAND_SEGMENT_TOKENS - 1))
+        self.assertEqual(
+            split_command_chain(command),
+            [["printf"] + ["a"] * (MAX_COMMAND_SEGMENT_TOKENS - 1)],
+        )
+
+    def test_split_command_chain_rejects_max_plus_one_tokens_in_segment(self) -> None:
+        command = " ".join(["printf"] + ["a"] * MAX_COMMAND_SEGMENT_TOKENS)
         with self.assertRaisesRegex(CommandChainError, "segment is too long"):
             split_command_chain(command)
 
@@ -344,14 +351,21 @@ class CommandChainTest(unittest.TestCase):
                 self.assertNotIn("HOME", env)
                 self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", env)
 
-    def test_run_command_chain_rejects_too_many_tokens_in_segment(self) -> None:
-        segment: list[str] = ["cmd"] + ["a"] * (MAX_COMMAND_SEGMENT_TOKENS + 1)
+    def test_run_command_chain_accepts_max_tokens_per_segment(self) -> None:
+        segment: list[str] = ["cmd"] + ["a"] * (MAX_COMMAND_SEGMENT_TOKENS - 1)
+        with mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"):
+            with mock.patch(
+                "speed_of_cinnamon.command_chain.subprocess.run",
+                return_value=subprocess.CompletedProcess(["cmd"], 0, stdout=b"", stderr=b""),
+            ):
+                output = run_command_chain([tuple(segment)], "", label="post-process")
+        self.assertEqual(output, "")
+
+    def test_run_command_chain_rejects_max_plus_one_tokens_in_segment(self) -> None:
+        segment: list[str] = ["cmd"] + ["a"] * MAX_COMMAND_SEGMENT_TOKENS
         with mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"):
             with self.assertRaisesRegex(CommandChainError, "segment is too long"):
                 run_command_chain([tuple(segment)], "", label="post-process")
-
-    def test_run_command_chain_accepts_max_tokens_per_segment(self) -> None:
-        segment: list[str] = ["cmd"] + ["a"] * (MAX_COMMAND_SEGMENT_TOKENS - 2)
         with mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"):
             with mock.patch(
                 "speed_of_cinnamon.command_chain.subprocess.run",
