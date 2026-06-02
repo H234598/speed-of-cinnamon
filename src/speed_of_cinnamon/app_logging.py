@@ -67,7 +67,7 @@ class JsonLogFormatter(logging.Formatter):
         }
         fields = getattr(record, "fields", None)
         if isinstance(fields, dict):
-            for key, value in sorted(fields.items()):
+            for key, value in fields.items():
                 clean_key = sanitize_key(key)
                 if clean_key:
                     payload[clean_key] = sanitize_value(clean_key, value)
