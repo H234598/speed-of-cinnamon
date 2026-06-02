@@ -199,6 +199,9 @@ def run() -> int:
     except NextVersionError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return exc.exit_code
+    except Exception as exc:
+        print(f"error: unexpected error: {exc}", file=sys.stderr)
+        return 1
 
 if __name__ == '__main__':
     raise SystemExit(run())

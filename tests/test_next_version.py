@@ -376,5 +376,10 @@ class NextVersionTest(unittest.TestCase):
             result = next_version.run()
             self.assertEqual(result, 2)
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_run_reports_unexpected_exception(self) -> None:
+        with mock.patch.object(next_version, "main", side_effect=RuntimeError("boom")):
+            result = next_version.run()
+            self.assertEqual(result, 1)
+
+    if __name__ == "__main__":
+        unittest.main()
