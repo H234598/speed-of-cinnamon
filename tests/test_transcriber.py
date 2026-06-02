@@ -507,6 +507,7 @@ class TranscriberTest(unittest.TestCase):
         self.assertEqual(normalize_backend("whisper.cpp"), "whisper-cpp")
         self.assertEqual(normalize_backend("custom"), "command")
         self.assertEqual(normalize_backend("template"), "command")
+        self.assertEqual(normalize_backend("faster-whisper"), "faster-whisper")
         self.assertEqual(normalize_backend(""), "auto")
 
     def test_auto_prefers_custom_command(self) -> None:

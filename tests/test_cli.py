@@ -160,7 +160,7 @@ class CliTest(unittest.TestCase):
             language="en",
             text_path=mock.ANY,
             command_template="",
-            backend="openai",
+            backend="whisper",
             whisper_model="",
             personal_context="",
             vocabulary="",
@@ -187,7 +187,37 @@ class CliTest(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 0)
         self.assertEqual(payload["transcript"], "ok")
-        self.assertEqual(mocked_transcribe.call_args.kwargs["backend"], "template")
+        self.assertEqual(mocked_transcribe.call_args.kwargs["backend"], "command")
+
+    @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="ok")
+    @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
+    def test_transcribe_file_accepts_faster_whisper_alias(self, mocked_validate: mock.Mock, mocked_transcribe: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            mocked_validate.return_value = audio
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--transcriber",
+                    "faster-whisper",
+                    "--json",
+                ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["transcript"], "ok")
+        mocked_transcribe.assert_called_once_with(
+            audio_path=audio,
+            language="en",
+            text_path=mock.ANY,
+            command_template="",
+            backend="faster-whisper",
+            whisper_model="",
+            personal_context="",
+            vocabulary="",
+        )
 
     def test_transcribe_file_passes_personalization_to_post_process(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1959,7 +1989,50 @@ class CliTest(unittest.TestCase):
             language="en",
             text_path=mock.ANY,
             command_template="",
-            backend="openai",
+            backend="whisper",
+            whisper_model="",
+            personal_context="",
+            vocabulary="",
+        )
+
+    @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="ok")
+    def test_toggle_accepts_transcriber_alias_faster_whisper(self, mocked_transcribe: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            audio = tmp_path / "expired.wav"
+            audio.write_bytes(b"audio")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(
+                RecordingState(
+                    status="recording",
+                    pid=123456789,
+                    audio_path=str(audio),
+                    language="en",
+                )
+            )
+            with mock.patch("speed_of_cinnamon.cli.remove_file", return_value=False):
+                stdout = io.StringIO()
+                with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                    code = cli.run([
+                        "toggle",
+                        "--state-file",
+                        str(state_file),
+                        "--insert-method",
+                        "none",
+                        "--transcriber",
+                        "faster-whisper",
+                        "--json",
+                    ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "done")
+        mocked_transcribe.assert_called_once_with(
+            audio_path=audio,
+            language="en",
+            text_path=mock.ANY,
+            command_template="",
+            backend="faster-whisper",
             whisper_model="",
             personal_context="",
             vocabulary="",

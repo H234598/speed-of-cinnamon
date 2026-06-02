@@ -105,6 +105,25 @@ class SetupPlanTest(unittest.TestCase):
         plan = build_setup_plan(payload)
         self.assertEqual(plan["steps"][0]["id"], "asr-backend")
 
+    def test_missing_faster_whisper_alias_transcriber_maps_to_asr_step(self) -> None:
+        payload = {
+            "ok": False,
+            "configured": {
+                "recorder": {"ok": True},
+                "transcriber": {
+                    "ok": False,
+                    "value": "faster-whisper",
+                    "detail": "install whisper, install faster-whisper, configure whisper.cpp with a model, or set a custom transcriber command",
+                },
+                "output": {"ok": True},
+                "postprocessor": {"ok": True},
+                "warnings": [],
+            },
+            "desktop": {"cinnamon": True},
+        }
+        plan = build_setup_plan(payload)
+        self.assertEqual(plan["steps"][0]["id"], "asr-backend")
+
     def test_missing_auto_asr_with_faster_whisper_text_gets_asr_backend_step(self) -> None:
         payload = {
             "ok": False,

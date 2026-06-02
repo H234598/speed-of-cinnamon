@@ -79,7 +79,7 @@ auto, openai, openai-whisper, whisper, whisper-cpp, faster-whisper, command, cus
 Equivalent forms are:
 
 - `openai` and `openai-whisper` => `whisper`
-- `faster-whisper` => `whisper-cpp`
+- `faster-whisper` stays `faster-whisper`
 - `custom` and `template` => `command`
 
 Automatic mode resolves in this order:

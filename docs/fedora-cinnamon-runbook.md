@@ -434,7 +434,7 @@ speed-of-cinnamon toggle --language de --transcriber command --transcriber-comma
 `--transcriber` also accepts normalized aliases for compatibility:
 
 - `openai` and `openai-whisper` resolve to `whisper`
-- `faster-whisper` resolves to `whisper-cpp`
+- `faster-whisper` remains `faster-whisper`
 - `custom` and `template` resolve to `command`
 
 ## Text Polishing

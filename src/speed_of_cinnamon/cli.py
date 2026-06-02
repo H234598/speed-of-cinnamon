@@ -59,7 +59,7 @@ from .settings_export import read_export, write_export
 from .setup_plan import build_setup_plan
 from .state import RecordingState, StateStore, now_iso, process_is_alive
 from .text_utils import sanitize_special_chars
-from .transcriber import MAX_AUDIO_PATH_CHARS, validate_audio_file, transcribe
+from .transcriber import MAX_AUDIO_PATH_CHARS, normalize_backend, validate_audio_file, transcribe
 
 RECORDER_START_GRACE_SECONDS = 0.2
 DEFAULT_KEEP_TRANSCRIPTS = 100
@@ -770,6 +770,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         raise RuntimeError("recording audio path is invalid")
     chosen_language = state.language or args.language or "en"
     language = _validate_pipeline_text_args(args, language=chosen_language)
+    normalized_transcriber = normalize_backend(args.transcriber)
     try:
         audio_path = validate_audio_file(audio_path)
         text_path = transcript_dir() / f"{audio_path.stem}.txt"
@@ -778,7 +779,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             language=language,
             text_path=text_path,
             command_template=args.transcriber_command,
-            backend=args.transcriber,
+            backend=normalized_transcriber,
             whisper_model=args.whisper_model,
             personal_context=args.personal_context,
             vocabulary=args.vocabulary,
@@ -1345,6 +1346,7 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     audio_path = _coerce_path(args.audio_path, field_name="audio file path", max_chars=MAX_AUDIO_PATH_CHARS)
     language = _validate_pipeline_text_args(args, language=args.language)
+    normalized_transcriber = normalize_backend(args.transcriber)
     audio_path = validate_audio_file(audio_path)
     text_path = transcript_dir() / f"{audio_path.stem}.txt"
     text = transcribe(
@@ -1352,7 +1354,7 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         language=language,
         text_path=text_path,
         command_template=args.transcriber_command,
-        backend=args.transcriber,
+        backend=normalized_transcriber,
         whisper_model=args.whisper_model,
         personal_context=args.personal_context,
         vocabulary=args.vocabulary,
