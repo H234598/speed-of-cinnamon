@@ -629,6 +629,14 @@ class NextVersionTest(unittest.TestCase):
             commits_since_tag.assert_called_once_with("v2.0.0")
             add_patches.assert_called_once_with((2, 0, 0), 42)
 
+    def test_main_default_path_invalid_read_current_version(self) -> None:
+        with mock.patch.object(next_version, "parse_args") as parse_args, \
+            mock.patch.object(next_version, "read_current_version", side_effect=next_version.UserInputError("bad")) as read_current_version:
+            parse_args.return_value = mock.Mock(from_tag=None, add_commits=None, feature=False, breaking=False, base=None)
+            with self.assertRaises(next_version.UserInputError):
+                next_version.main()
+            self.assertTrue(read_current_version.called)
+
     def test_run_returns_zero_for_SystemExit_zero(self) -> None:
         with mock.patch.object(next_version, "main", side_effect=SystemExit(0)):
             self.assertEqual(next_version.run(), 0)
