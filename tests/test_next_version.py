@@ -375,6 +375,10 @@ class NextVersionTest(unittest.TestCase):
                 capture_output=True,
             )
 
+    def test_commits_since_tag_rejects_non_string_input(self) -> None:
+        with self.assertRaises(next_version.UserInputError):
+            next_version.commits_since_tag(None)  # type: ignore[arg-type]
+
     def test_tag_exists_checks_normalized_tag(self) -> None:
         with mock.patch.object(
             next_version.subprocess,
