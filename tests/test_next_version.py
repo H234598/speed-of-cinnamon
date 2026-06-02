@@ -289,6 +289,22 @@ class NextVersionTest(unittest.TestCase):
             self.assertFalse(apply_feature.called)
             apply_breaking.assert_called_once_with(1, 2, 3)
 
+    def test_main_falls_back_to_tag_not_existing(self) -> None:
+        with mock.patch.object(next_version, "parse_args") as parse_args, \
+            mock.patch.object(next_version, "read_current_version", return_value=(3, 4, 5)) as read_current_version, \
+            mock.patch.object(next_version, "tag_for_version", return_value="v3.4.5") as tag_for_version, \
+            mock.patch.object(next_version, "tag_exists", return_value=False) as tag_exists, \
+            mock.patch.object(next_version, "commits_since_tag") as commits_since_tag, \
+            mock.patch.object(next_version, "add_patches", return_value=(3, 4, 6)) as add_patches, \
+            mock.patch.object(next_version, "print"):
+            parse_args.return_value = mock.Mock(from_tag=None, add_commits=None, feature=False, breaking=False, base=None)
+            next_version.main()
+            read_current_version.assert_called_once_with()
+            tag_for_version.assert_called_once_with((3, 4, 5))
+            tag_exists.assert_called_once_with("v3.4.5")
+            self.assertFalse(commits_since_tag.called)
+            add_patches.assert_called_once_with((3, 4, 5), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
