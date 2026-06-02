@@ -460,6 +460,8 @@ class NextVersionTest(unittest.TestCase):
             next_version.commits_since_ref(None)  # type: ignore[arg-type]
         with self.assertRaises(next_version.UserInputError):
             next_version.commits_since_ref(123)  # type: ignore[arg-type]
+        with self.assertRaises(next_version.UserInputError):
+            next_version.commits_since_ref(1.0)  # type: ignore[arg-type]
 
     def test_commits_since_tag_normalizes_input(self) -> None:
         with mock.patch.object(
