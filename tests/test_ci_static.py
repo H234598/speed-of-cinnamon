@@ -490,6 +490,12 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn("id-token: write", workflow)
         self.assertIn("publish_results: false", workflow)
 
+    def test_bandit_workflow_does_not_pass_github_token_to_third_party_action(self) -> None:
+        workflow = (REPO_ROOT / ".github" / "workflows" / "bandit.yml").read_text(encoding="utf-8")
+        self.assertIn("security-events: write", workflow)
+        self.assertNotIn("GITHUB_TOKEN:", workflow)
+        self.assertNotIn("secrets.GITHUB_TOKEN", workflow)
+
     def test_workflows_install_pinned_actionlint_release(self) -> None:
         ci_workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         lint_workflow = (REPO_ROOT / ".github" / "workflows" / "super-linter.yml").read_text(encoding="utf-8")
