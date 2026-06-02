@@ -30,6 +30,9 @@ _TOKEN_RE = re.compile(r"(?i)\b(bearer|token|api[_-]?key|secret|password)\b\s*[:
 _BEARER_RE = re.compile(r"(?i)\bbearer\s+[^,\s;]+")
 _OPENAI_KEY_RE = re.compile(r"\b(?:sk|sess)-[A-Za-z0-9_\-]{12,}\b")
 _URL_CREDENTIAL_RE = re.compile(r"([a-z][a-z0-9+.-]*://)([^/@\s:]+):([^/@\s]+)@")
+_SANITIZE_HINT_RE = re.compile(
+    r"(?i)(?:\b(?:bearer|token|api[_-]?key|secret|password)\b\s*[:=]\s*[^,\s;]+|\bbearer\s+[^,\s;]+|\b(?:sk|sess)-[A-Za-z0-9_\-]{12,}\b|[a-z][a-z0-9+.-]*://[^/@\s:]+:[^/@\s]+@)"
+)
 _SENSITIVE_KEYWORDS = (
     "api_key",
     "apikey",
@@ -189,20 +192,13 @@ def sanitize_value(key: str, value: object) -> object:
 def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         return "[invalid]"
-    lowered = value.lower()
     if (
         "\r" not in value
         and "\n" not in value
         and "\x00" not in value
         and ":" not in value
         and "@" not in value
-        and "token" not in lowered
-        and "secret" not in lowered
-        and "password" not in lowered
-        and _TOKEN_RE.search(value) is None
-        and _BEARER_RE.search(value) is None
-        and _OPENAI_KEY_RE.search(value) is None
-        and _URL_CREDENTIAL_RE.search(value) is None
+        and _SANITIZE_HINT_RE.search(value) is None
         and (not HOME_DIR or HOME_DIR == "/" or HOME_DIR not in value)
     ):
         if len(value) > max_chars:
