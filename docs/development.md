@@ -12,8 +12,9 @@ make shell-security-scan
 make security-scan
 ```
 
-`make lint-workflows` runs the workflow YAML parser locally and uses a fallback `actionlint` check when available; CI sets
-`ACTIONLINT_STRICT=true` so `actionlint` (or Docker-based actionlint) is mandatory in workflow lint jobs.
+`make lint-workflows` runs `actionlint` when it is installed and otherwise falls back to YAML parsing for local
+development. CI installs a pinned `actionlint` release before running workflow lint jobs and sets
+`ACTIONLINT_STRICT=true`, so workflow validation fails when `actionlint` is unavailable there.
 
 `make python-security-scan` runs Bandit over `src/speed_of_cinnamon`, and `make shell-security-scan` runs ShellCheck
 over `scripts/*.sh`. `make security-scan` runs both local scans.
@@ -36,12 +37,6 @@ Install `actionlint` locally (recommended):
 
 ```bash
 go install github.com/rhysd/actionlint/cmd/actionlint@latest
-```
-
-Or use Docker instead:
-
-```bash
-docker pull rhysd/actionlint:latest
 ```
 
 Strict mode enforces actionlint availability:
@@ -82,9 +77,9 @@ The coverage target writes:
 reports/lcov.info
 ```
 
-GitHub Actions installs Coverage.py, runs `make coverage`, and uploads `reports/lcov.info` through
-`qltysh/qlty-action/coverage@v2` when `QLTY_COVERAGE_TOKEN` is available as an Actions secret. Pull requests without
-that secret still generate coverage locally in CI, but skip the upload step.
+GitHub Actions installs Coverage.py, runs `make coverage`, installs the QLTY CLI, and uploads `reports/lcov.info` with
+`qlty coverage publish` when `QLTY_COVERAGE_TOKEN` is available as an Actions secret. Pull requests without that secret
+still generate coverage locally in CI, but skip the upload step.
 
 ## Source Archive
 
@@ -201,7 +196,9 @@ git push origin v0.1.0
 
 The release workflow has a dedicated workflow validation job and then runs the normal checks, verifies the source archive and
 all package payloads, and finally publishes a GitHub Release
-with the source archive, checksum, Fedora noarch RPM, generic noarch RPM, their source RPMs, and the Snap package.
+with the source archive, checksum, Fedora noarch RPM, generic noarch RPM, and their source RPMs. Tag-triggered releases
+skip Snap generation by default because the GitHub-hosted release runner does not consistently provide a usable Snap
+build environment. Manual release runs can opt into Snap generation with `build_snap=true`.
 It also has manual inputs:
 
 - `build_snap=false` to skip snap package generation in CI.
@@ -225,10 +222,11 @@ Flag values are validated locally before any artifacts are built:
 To run the manual release workflow from CLI:
 
 ```bash
-gh workflow run release.yml -f tag=v0.1.2 -f build_snap=true
+gh workflow run release.yml -f tag=v0.1.2 -f build_snap=false
 ```
 
-Use `build_snap=false` and/or `build_generic_rpm=false` to skip optional package types.
+Use `build_snap=true` only when the release runner has a working Snap build environment. Use
+`build_generic_rpm=false` to skip the generic RPM profile.
 
 Local release helpers:
 

@@ -121,8 +121,8 @@ python -m pip install coverage
 make coverage
 ```
 
-This writes `reports/lcov.info`. GitHub Actions uploads that file through `qltysh/qlty-action/coverage@v2` when the
-repository secret `QLTY_COVERAGE_TOKEN` is available.
+This writes `reports/lcov.info`. GitHub Actions installs the QLTY CLI and uploads that file with
+`qlty coverage publish` when the repository secret `QLTY_COVERAGE_TOKEN` is available.
 
 To verify the source release archive:
 
@@ -149,17 +149,20 @@ Successful GitHub Actions runs upload:
 For manual release validation/publication, use workflow dispatch:
 
 ```bash
-gh workflow run release.yml -f tag=v0.1.2 -f build_snap=true -f build_generic_rpm=true
+gh workflow run release.yml -f tag=v0.1.2 -f build_snap=false -f build_generic_rpm=true
 gh workflow run release.yml -f tag=v0.1.2 -f build_generic_rpm=false
-gh workflow run release.yml -f tag=v0.1.2 -f build_snap=true -f build_generic_rpm=false -f run_workflow_lint=false
-gh workflow run release.yml -f tag=v0.1.2 -f build_snap=true -f run_workflow_lint=false
+gh workflow run release.yml -f tag=v0.1.2 -f build_snap=false -f build_generic_rpm=false -f run_workflow_lint=false
+gh workflow run release.yml -f tag=v0.1.2 -f build_snap=false -f run_workflow_lint=false
 ```
 
-For real publishing, use:
+For real publishing with the same package set used by tag-triggered releases, use:
 
 ```bash
-gh workflow run release.yml -f tag=v0.1.2 -f build_snap=true
+gh workflow run release.yml -f tag=v0.1.2 -f build_snap=false
 ```
+
+Tag-triggered releases skip Snap generation by default. Use `build_snap=true` only when the release runner has a working
+Snap build environment.
 
 For local release validation, use:
 
