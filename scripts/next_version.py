@@ -21,6 +21,10 @@ def parse_version(value: str) -> tuple[int, int, int]:
         raise ValueError(f"invalid version format: {value}")
     return major, minor, patch
 
+
+def normalize_tag(tag: str) -> str:
+    return tag if tag.startswith("v") else f"v{tag}"
+
 def to_version(major: int, minor: int, patch: int) -> str:
     return f"{major}.{minor}.{patch}"
 
@@ -29,11 +33,7 @@ def commits_since_ref(ref: str) -> int:
     return int(result.stdout.strip())
 
 def commits_since_tag(tag: str) -> int:
-    if tag.startswith("v"):
-        tagref = tag
-    else:
-        tagref = f"v{tag}"
-    return commits_since_ref(tagref)
+    return commits_since_ref(normalize_tag(tag))
 
 def add_patches(base: tuple[int,int,int], patch_steps: int) -> tuple[int,int,int]:
     major, minor, patch = base
@@ -68,6 +68,7 @@ def tag_for_version(version: tuple[int,int,int]) -> str:
     return f"v{to_version(*version)}"
 
 def tag_exists(tag: str) -> bool:
+    tag = normalize_tag(tag)
     rc = subprocess.run(["git", "tag", "-l", tag], text=True, capture_output=True)
     return rc.returncode == 0 and tag in (rc.stdout or "").splitlines()
 
@@ -76,10 +77,16 @@ def ensure_tag_exists(tag: str) -> None:
         raise ValueError(f"release tag {tag} does not exist")
 
 def parse_args() -> argparse.Namespace:
+    def non_negative_int(value: str) -> int:
+        number = int(value)
+        if number < 0:
+            raise argparse.ArgumentTypeError("must be >= 0")
+        return number
+
     p = argparse.ArgumentParser()
     p.add_argument("--base", default=None)
     p.add_argument("--from-tag", default=None, help="Version tag to derive commit count from")
-    p.add_argument("--add-commits", type=int, default=None, help="Explicit commit count")
+    p.add_argument("--add-commits", type=non_negative_int, default=None, help="Explicit commit count")
     p.add_argument("--feature", action="store_true")
     p.add_argument("--breaking", action="store_true")
     return p.parse_args()

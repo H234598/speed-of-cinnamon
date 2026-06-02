@@ -14,6 +14,14 @@ def run_version(*args: str) -> str:
     return result.stdout.strip()
 
 
+def run_version_fail(*args: str) -> int:
+    root = Path(__file__).resolve().parents[1]
+    cmd = [sys.executable, str(root / "scripts" / "next_version.py")]
+    cmd.extend(args)
+    result = subprocess.run(cmd, check=False, text=True, capture_output=True)
+    return result.returncode
+
+
 class NextVersionTest(unittest.TestCase):
     def test_single_commit_keeps_patch(self) -> None:
         self.assertEqual(run_version("--base", "0.1.26", "--add-commits", "1"), "0.1.26")
@@ -44,6 +52,12 @@ class NextVersionTest(unittest.TestCase):
             run_version("--base", "0.1.99", "--breaking"),
             "1.0.0",
         )
+
+    def test_missing_from_tag_fails(self) -> None:
+        self.assertNotEqual(run_version_fail("--from-tag", "v999.999.999"), 0)
+
+    def test_from_tag_without_prefix_is_accepted(self) -> None:
+        self.assertEqual(run_version("--from-tag", "0.1.20", "--add-commits", "0"), "0.1.20")
 
 
 if __name__ == "__main__":
