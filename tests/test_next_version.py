@@ -424,5 +424,14 @@ class NextVersionTest(unittest.TestCase):
             result = next_version.run()
             self.assertEqual(result, 1)
 
+    def test_run_reports_user_input_error(self) -> None:
+        with mock.patch.object(
+            next_version,
+            "main",
+            side_effect=next_version.UserInputError("bad input"),
+        ):
+            result = next_version.run()
+            self.assertEqual(result, 2)
+
     if __name__ == "__main__":
         unittest.main()
