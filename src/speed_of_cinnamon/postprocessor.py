@@ -242,6 +242,19 @@ def _openai_compatible_endpoint(url: str, path: str) -> str:
     return base + normalized_path
 
 
+def _is_openai_api_endpoint(endpoint: str) -> bool:
+    try:
+        parsed = urllib.parse.urlparse(endpoint)
+    except ValueError:
+        return False
+    return (parsed.hostname or "").lower() == "api.openai.com"
+
+
+def _is_flex_service_tier_rejected(detail: str) -> bool:
+    normalized = detail.lower()
+    return "service_tier" in normalized and ("invalid" in normalized or "unsupported" in normalized)
+
+
 def _validate_openai_compatible_http_url(url: str) -> str:
     return _validate_http_url(url, field_name="openai-compatible url")
 
@@ -568,6 +581,7 @@ def post_process_with_openai_compatible(
     vocabulary: str = "",
     prompt: str = "",
     api_key: str = "",
+    flex_processing: bool = True,
 ) -> str:
     if not isinstance(model, str) or isinstance(model, bool):
         raise PostProcessError("openai-compatible model must be text")
@@ -575,6 +589,8 @@ def post_process_with_openai_compatible(
         raise PostProcessError("prompt must be text")
     if not isinstance(api_key, str) or isinstance(api_key, bool):
         raise PostProcessError("api key must be text")
+    if not isinstance(flex_processing, bool):
+        raise PostProcessError("OpenAI-compatible flex processing must be a boolean")
     model_name = _assert_openai_compatible_text(
         str(model or ""),
         field_name="openai-compatible model",
@@ -590,16 +606,23 @@ def post_process_with_openai_compatible(
         "stream": False,
         "temperature": 0,
     }
-    request = urllib.request.Request(
-        endpoint,
-        data=json.dumps(payload).encode("utf-8"),
-        headers=_openai_compatible_headers(api_key),
-        method="POST",
-    )
-    try:
+    use_flex_processing = flex_processing and _is_openai_api_endpoint(endpoint)
+    if use_flex_processing:
+        payload["service_tier"] = "flex"
+
+    def _request_chat_completion(request_payload: dict[str, object]) -> str:
+        request = urllib.request.Request(
+            endpoint,
+            data=json.dumps(request_payload).encode("utf-8"),
+            headers=_openai_compatible_headers(api_key),
+            method="POST",
+        )
         _validate_http_request(request, field_name="openai-compatible post-process request")
         with urllib.request.urlopen(request, timeout=180) as response:  # nosec B310
-            raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
+            return _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
+
+    try:
+        raw = _request_chat_completion(payload)
     except urllib.error.HTTPError as exc:
         try:
             raw_error = _read_response_text(exc, MAX_POSTPROCESS_JSON_BYTES)
@@ -609,7 +632,25 @@ def post_process_with_openai_compatible(
             with suppress(Exception):
                 exc.close()
         detail = _openai_compatible_error_detail(raw_error) or exc.reason or str(exc)
-        raise PostProcessError(f"OpenAI-compatible request failed ({exc.code}) at {endpoint}: {detail}") from exc
+        if use_flex_processing and _is_flex_service_tier_rejected(detail):
+            fallback_payload = dict(payload)
+            fallback_payload.pop("service_tier", None)
+            try:
+                raw = _request_chat_completion(fallback_payload)
+            except urllib.error.HTTPError as fallback_exc:
+                try:
+                    raw_error = _read_response_text(fallback_exc, MAX_POSTPROCESS_JSON_BYTES)
+                except PostProcessError:
+                    raw_error = ""
+                finally:
+                    with suppress(Exception):
+                        fallback_exc.close()
+                fallback_detail = _openai_compatible_error_detail(raw_error) or fallback_exc.reason or str(fallback_exc)
+                raise PostProcessError(f"OpenAI-compatible request failed ({fallback_exc.code}) at {endpoint}: {fallback_detail}") from fallback_exc
+            except OSError as fallback_exc:
+                raise PostProcessError(f"OpenAI-compatible request failed: {fallback_exc}") from fallback_exc
+        else:
+            raise PostProcessError(f"OpenAI-compatible request failed ({exc.code}) at {endpoint}: {detail}") from exc
     except OSError as exc:
         raise PostProcessError(f"OpenAI-compatible request failed: {exc}") from exc
     try:
@@ -645,6 +686,7 @@ def post_process_text(
     openai_compatible_model: str = "",
     openai_compatible_url: str = DEFAULT_OPENAI_COMPATIBLE_URL,
     openai_compatible_api_key: str = "",
+    openai_compatible_flex_processing: bool = True,
 ) -> str:
     if not isinstance(text, str) or isinstance(text, bool):
         raise PostProcessError("text must be text")
@@ -664,6 +706,8 @@ def post_process_text(
         raise PostProcessError("openai-compatible url must be text")
     if not isinstance(openai_compatible_api_key, str) or isinstance(openai_compatible_api_key, bool):
         raise PostProcessError("openai-compatible API key must be text")
+    if not isinstance(openai_compatible_flex_processing, bool):
+        raise PostProcessError("OpenAI-compatible flex processing must be a boolean")
     normalized_backend = (backend or "command").strip().lower().replace("_", "-")
     if normalized_backend in {"none", "off", "disabled"}:
         return text
@@ -689,6 +733,7 @@ def post_process_text(
             vocabulary,
             ollama_prompt,
             openai_compatible_api_key,
+            openai_compatible_flex_processing,
         )
     if normalized_backend not in {"command", "custom"}:
         raise PostProcessError(f"unknown post-process backend: {backend}")

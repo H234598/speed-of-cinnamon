@@ -463,7 +463,84 @@ class PostProcessorTest(unittest.TestCase):
         self.assertEqual(body["model"], "llama.cpp-model")
         self.assertFalse(body["stream"])
         self.assertEqual(body["temperature"], 0)
+        self.assertNotIn("service_tier", body)
         self.assertIn("hello cinnamon", body["messages"][1]["content"])
+
+    def test_openai_compatible_backend_enables_flex_for_openai_api_by_default(self) -> None:
+        requests = []
+
+        def fake_urlopen(request: object, timeout: int = 0) -> FakeResponse:
+            requests.append((request, timeout))
+            return FakeResponse({"choices": [{"message": {"content": "Hello Cinnamon."}}]})
+
+        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=fake_urlopen):
+            result = post_process_text(
+                "hello cinnamon",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="gpt-4o-mini",
+                openai_compatible_url="https://api.openai.com/v1",
+                openai_compatible_api_key="secret",
+            )
+
+        self.assertEqual(result, "Hello Cinnamon.")
+        request, _timeout = requests[0]
+        body = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(body["service_tier"], "flex")
+
+    def test_openai_compatible_backend_can_disable_flex_for_openai_api(self) -> None:
+        requests = []
+
+        def fake_urlopen(request: object, timeout: int = 0) -> FakeResponse:
+            requests.append((request, timeout))
+            return FakeResponse({"choices": [{"message": {"content": "Hello Cinnamon."}}]})
+
+        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=fake_urlopen):
+            result = post_process_text(
+                "hello cinnamon",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="gpt-4o-mini",
+                openai_compatible_url="https://api.openai.com/v1",
+                openai_compatible_api_key="secret",
+                openai_compatible_flex_processing=False,
+            )
+
+        self.assertEqual(result, "Hello Cinnamon.")
+        request, _timeout = requests[0]
+        body = json.loads(request.data.decode("utf-8"))
+        self.assertNotIn("service_tier", body)
+
+    def test_openai_compatible_backend_falls_back_when_flex_is_rejected(self) -> None:
+        requests = []
+
+        def fake_urlopen(request: object, timeout: int = 0) -> FakeResponse:
+            requests.append((request, timeout))
+            if len(requests) == 1:
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    400,
+                    "Bad Request",
+                    {},
+                    io.BytesIO(b'{"error":{"message":"Invalid service_tier argument","type":"invalid_request_error"}}'),
+                )
+            return FakeResponse({"choices": [{"message": {"content": "Hello Cinnamon."}}]})
+
+        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=fake_urlopen):
+            result = post_process_text(
+                "hello cinnamon",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="gpt-4o-mini",
+                openai_compatible_url="https://api.openai.com/v1",
+                openai_compatible_api_key="secret",
+            )
+
+        self.assertEqual(result, "Hello Cinnamon.")
+        first_body = json.loads(requests[0][0].data.decode("utf-8"))
+        second_body = json.loads(requests[1][0].data.decode("utf-8"))
+        self.assertEqual(first_body["service_tier"], "flex")
+        self.assertNotIn("service_tier", second_body)
 
     def test_openai_compatible_backend_uses_explicit_api_key(self) -> None:
         requests = []

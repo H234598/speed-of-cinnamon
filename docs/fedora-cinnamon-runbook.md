@@ -511,13 +511,15 @@ speed-of-cinnamon toggle \
 
 speed-of-cinnamon toggle \
   --post-process-backend openai-compatible \
-  --openai-compatible-url http://127.0.0.1:8000/v1 \
-  --openai-compatible-model local-llama
+  --openai-compatible-url https://api.openai.com/v1 \
+  --openai-compatible-text-model gpt-4o-mini
 ```
 
 The Ollama backend calls `/api/generate` with `stream=false`. It sends the transcript, language, personal context, and
 vocabulary to the local server and expects the polished text in the `response` field. The backend stores and inserts the
 post-processed text. The OpenAI-compatible backend calls `/v1/chat/completions` with `stream=false` and the same context.
+For OpenAI API hosts, Flex processing is enabled by default for speech-to-text and text polishing; use
+`--no-openai-compatible-flex-processing` to disable it. The Flex flag is not sent to local OpenAI-compatible servers.
 If your server requires a bearer token, set `SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY` in the
 environment that starts the backend.
 

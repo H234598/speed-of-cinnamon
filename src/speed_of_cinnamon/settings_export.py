@@ -55,6 +55,7 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "openai-compatible-url": (str, "https://api.openai.com/v1"),
     "openai-compatible-model": (str, "gpt-4o-transcribe"),
     "openai-compatible-text-model": (str, "gpt-4o-mini"),
+    "openai-compatible-flex-processing": (bool, True),
     "post-process-prompt": (str, ""),
 }
 

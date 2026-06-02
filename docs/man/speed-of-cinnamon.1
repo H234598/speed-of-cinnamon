@@ -148,6 +148,12 @@ maps to
 .TP
 .BI --transcriber-command " TEMPLATE"
 Use a custom ASR command template.
+.TP
+.BR --openai-compatible-flex-processing ", " --no-openai-compatible-flex-processing
+Enable or disable OpenAI Flex processing for
+.B api.openai.com
+speech-to-text and text-polishing requests. Enabled by default. The flag is not
+sent to local OpenAI-compatible servers.
 .SH CUSTOM COMMANDS
 Custom transcriber and post-process templates are parsed into command argument
 lists and are not executed through a shell. Limited

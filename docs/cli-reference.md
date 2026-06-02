@@ -156,9 +156,14 @@ OpenAI-compatible API backend:
 ```bash
 speed-of-cinnamon toggle \
   --post-process-backend openai-compatible \
-  --openai-compatible-url http://127.0.0.1:8000/v1 \
-  --openai-compatible-model local-llama
+  --openai-compatible-url https://api.openai.com/v1 \
+  --openai-compatible-text-model gpt-4o-mini
 ```
+
+For OpenAI API calls, Flex processing is enabled by default for speech-to-text
+and text polishing. Disable it with `--no-openai-compatible-flex-processing`.
+The flag is only sent to `api.openai.com`, not to local OpenAI-compatible
+servers.
 
 List local text models:
 
@@ -172,6 +177,17 @@ speed-of-cinnamon text-models \
 
 If the OpenAI-compatible server requires a bearer token, set
 `SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY` in the environment that starts the backend.
+
+OpenAI-compatible speech-to-text:
+
+```bash
+speed-of-cinnamon transcribe-file ~/Downloads/Testaufnahme.flac \
+  --language de \
+  --transcriber openai-compatible \
+  --openai-compatible-url https://api.openai.com/v1 \
+  --openai-compatible-model gpt-4o-transcribe \
+  --json
+```
 
 ## Voice Models
 

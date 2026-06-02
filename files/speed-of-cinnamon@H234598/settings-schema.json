@@ -35,7 +35,7 @@
     "backend-section": {
       "type": "section",
       "title": "Backend",
-      "keys": ["cli-path", "transcriber", "whisper-model", "transcriber-command", "post-process-backend", "post-process-command", "ollama-url", "ollama-model", "openai-compatible-url", "openai-compatible-model", "openai-compatible-text-model", "openai-compatible-api-key", "post-process-prompt"]
+      "keys": ["cli-path", "transcriber", "whisper-model", "transcriber-command", "post-process-backend", "post-process-command", "ollama-url", "ollama-model", "openai-compatible-url", "openai-compatible-model", "openai-compatible-text-model", "openai-compatible-flex-processing", "openai-compatible-api-key", "post-process-prompt"]
     }
   },
   "toggle-keybinding": {
@@ -295,6 +295,12 @@
     "description": "OpenAI-compatible text model",
     "tooltip": "Model name for OpenAI-compatible text polishing. Defaults to gpt-4o-mini. Max 4096 chars.",
     "default": "gpt-4o-mini"
+  },
+  "openai-compatible-flex-processing": {
+    "type": "switch",
+    "description": "OpenAI Flex processing",
+    "tooltip": "Use OpenAI Flex processing for OpenAI API speech-to-text and text polishing requests. This adds service_tier=flex only for api.openai.com calls.",
+    "default": true
   },
   "openai-compatible-api-key": {
     "type": "entry",

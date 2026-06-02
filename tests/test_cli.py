@@ -202,8 +202,47 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["transcript"], "polished")
         self.assertEqual(mocked_transcribe.call_args.kwargs["openai_compatible_model"], "gpt-4o-transcribe")
+        self.assertIs(mocked_transcribe.call_args.kwargs["openai_compatible_flex_processing"], True)
         self.assertEqual(mocked_post_process.call_args.args[9], "gpt-4o-mini")
         self.assertEqual(mocked_post_process.call_args.args[11], "secret")
+        self.assertIs(mocked_post_process.call_args.args[12], True)
+
+    @mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="polished")
+    @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="raw")
+    @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
+    def test_transcribe_file_can_disable_openai_compatible_flex_processing(
+        self,
+        mocked_validate: mock.Mock,
+        mocked_transcribe: mock.Mock,
+        mocked_post_process: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            mocked_validate.return_value = audio
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--transcriber",
+                    "openai-compatible",
+                    "--post-process-backend",
+                    "openai-compatible",
+                    "--openai-compatible-model",
+                    "gpt-4o-transcribe",
+                    "--openai-compatible-text-model",
+                    "gpt-4o-mini",
+                    "--openai-compatible-api-key",
+                    "secret",
+                    "--no-openai-compatible-flex-processing",
+                    "--json",
+                ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["transcript"], "polished")
+        self.assertIs(mocked_transcribe.call_args.kwargs["openai_compatible_flex_processing"], False)
+        self.assertIs(mocked_post_process.call_args.args[12], False)
 
     @mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="polished")
     @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="raw")
@@ -237,8 +276,10 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["transcript"], "polished")
         self.assertEqual(mocked_transcribe.call_args.kwargs["openai_compatible_model"], "gpt-4o-transcribe")
+        self.assertIs(mocked_transcribe.call_args.kwargs["openai_compatible_flex_processing"], True)
         self.assertEqual(mocked_post_process.call_args.args[9], "gpt-4o-mini")
         self.assertEqual(mocked_post_process.call_args.args[11], "secret")
+        self.assertIs(mocked_post_process.call_args.args[12], True)
 
     @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="ok")
     @mock.patch("speed_of_cinnamon.cli.validate_audio_file")

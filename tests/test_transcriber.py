@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import io
 import subprocess
 import tempfile
 import unittest
@@ -712,6 +713,132 @@ class TranscriberTest(unittest.TestCase):
         self.assertIn(b"whisper-large-v3", data)
         self.assertIn(b'name="language"', data)
         self.assertIn(b"de", data)
+        self.assertNotIn(b'name="service_tier"', data)
+
+    def test_openai_compatible_api_adds_flex_for_openai_transcription(self) -> None:
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self, size: int = -1) -> bytes:
+                if getattr(self, "_read", False):
+                    return b""
+                self._read = True
+                return b'{"text":"hello api"}'
+
+        captured: dict[str, object] = {}
+
+        def fake_urlopen(request: object, timeout: int = 0) -> Response:
+            captured["url"] = request.full_url
+            captured["data"] = request.data
+            return Response()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            with mock.patch("speed_of_cinnamon.transcriber.urllib.request.urlopen", side_effect=fake_urlopen):
+                result = transcribe(
+                    audio,
+                    "de",
+                    text_path,
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-transcribe",
+                    openai_compatible_url="https://api.openai.com/v1",
+                    openai_compatible_api_key="secret",
+                )
+        self.assertEqual(result, "hello api")
+        self.assertEqual(captured["url"], "https://api.openai.com/v1/audio/transcriptions")
+        data = captured["data"]
+        self.assertIn(b'name="service_tier"', data)
+        self.assertIn(b"flex", data)
+
+    def test_openai_compatible_api_can_disable_flex_for_openai_transcription(self) -> None:
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self, size: int = -1) -> bytes:
+                if getattr(self, "_read", False):
+                    return b""
+                self._read = True
+                return b'{"text":"hello api"}'
+
+        captured: dict[str, object] = {}
+
+        def fake_urlopen(request: object, timeout: int = 0) -> Response:
+            captured["data"] = request.data
+            return Response()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            with mock.patch("speed_of_cinnamon.transcriber.urllib.request.urlopen", side_effect=fake_urlopen):
+                result = transcribe(
+                    audio,
+                    "de",
+                    text_path,
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-transcribe",
+                    openai_compatible_url="https://api.openai.com/v1",
+                    openai_compatible_api_key="secret",
+                    openai_compatible_flex_processing=False,
+                )
+        self.assertEqual(result, "hello api")
+        self.assertNotIn(b'name="service_tier"', captured["data"])
+
+    def test_openai_compatible_api_falls_back_when_transcription_flex_is_rejected(self) -> None:
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self, size: int = -1) -> bytes:
+                if getattr(self, "_read", False):
+                    return b""
+                self._read = True
+                return b'{"text":"hello fallback"}'
+
+        requests = []
+
+        def fake_urlopen(request: object, timeout: int = 0) -> Response:
+            requests.append(request)
+            if len(requests) == 1:
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    400,
+                    "Bad Request",
+                    {},
+                    io.BytesIO(b'{"error":{"message":"Invalid service_tier argument","type":"invalid_request_error"}}'),
+                )
+            return Response()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            with mock.patch("speed_of_cinnamon.transcriber.urllib.request.urlopen", side_effect=fake_urlopen):
+                result = transcribe(
+                    audio,
+                    "de",
+                    text_path,
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-transcribe",
+                    openai_compatible_url="https://api.openai.com/v1",
+                    openai_compatible_api_key="secret",
+                )
+        self.assertEqual(result, "hello fallback")
+        self.assertIn(b'name="service_tier"', requests[0].data)
+        self.assertNotIn(b'name="service_tier"', requests[1].data)
 
     def test_multipart_form_data_rejects_symlink_audio_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -139,6 +139,7 @@ class SettingsExportTest(unittest.TestCase):
             "openai-compatible-url": "http://127.0.0.1:8000/v1",
             "openai-compatible-model": "local-llama",
             "openai-compatible-text-model": "local-polisher",
+            "openai-compatible-flex-processing": False,
             "cli-path": "/tmp/not-portable",
             "unknown": "ignored",
         })
@@ -157,6 +158,7 @@ class SettingsExportTest(unittest.TestCase):
         self.assertEqual(settings["openai-compatible-url"], "http://127.0.0.1:8000/v1")
         self.assertEqual(settings["openai-compatible-model"], "local-llama")
         self.assertEqual(settings["openai-compatible-text-model"], "local-polisher")
+        self.assertFalse(settings["openai-compatible-flex-processing"])
         self.assertNotIn("cli-path", settings)
         self.assertNotIn("unknown", settings)
 

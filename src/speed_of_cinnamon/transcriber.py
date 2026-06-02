@@ -674,6 +674,19 @@ def _openai_compatible_endpoint(url: str, path: str) -> str:
     return base + normalized_path
 
 
+def _is_openai_api_endpoint(endpoint: str) -> bool:
+    try:
+        parsed = urllib.parse.urlparse(endpoint)
+    except ValueError:
+        return False
+    return (parsed.hostname or "").lower() == "api.openai.com"
+
+
+def _is_flex_service_tier_rejected(detail: str) -> bool:
+    normalized = detail.lower()
+    return "service_tier" in normalized and ("invalid" in normalized or "unsupported" in normalized)
+
+
 def _validate_openai_compatible_api_url(url: str, field_name: str = "OpenAI-compatible API URL") -> str:
     if _contains_escaped_null(url):
         raise TranscriptionError(f"{field_name} contains invalid null byte")
@@ -745,6 +758,7 @@ def transcribe_with_openai_compatible_api(
     model: str,
     url: str,
     api_key: str = "",
+    flex_processing: bool = True,
 ) -> str:
     if _contains_escaped_null(model):
         raise TranscriptionError("OpenAI-compatible speech model contains invalid null byte")
@@ -766,33 +780,40 @@ def transcribe_with_openai_compatible_api(
         field_name="OpenAI-compatible API key",
         max_chars=MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
     ).strip()
+    if not isinstance(flex_processing, bool):
+        raise TranscriptionError("OpenAI-compatible flex processing must be a boolean")
     endpoint = _openai_compatible_endpoint(url, "/audio/transcriptions")
-    if "api.openai.com" in endpoint.lower() and model not in OPENAI_TRANSCRIPTION_MODELS:
+    is_openai_api = _is_openai_api_endpoint(endpoint)
+    if is_openai_api and model not in OPENAI_TRANSCRIPTION_MODELS:
         raise TranscriptionError(
             "OpenAI transcription endpoint requires a speech-to-text model such as "
             "gpt-4o-transcribe, gpt-4o-mini-transcribe, or whisper-1; configured model is "
             f"{model}"
         )
-    body, boundary = _multipart_form_data(
-        {
-            "model": model,
-            "language": language,
-            "response_format": "json",
-        },
-        "file",
-        audio_path,
-    )
-    headers = {
-        "Content-Type": f"multipart/form-data; boundary={boundary}",
-        "Accept": "application/json",
+    fields = {
+        "model": model,
+        "language": language,
+        "response_format": "json",
     }
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-    request = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
-    try:
+    use_flex_processing = flex_processing and is_openai_api
+    if use_flex_processing:
+        fields["service_tier"] = "flex"
+
+    def _request_transcription(request_fields: dict[str, str]) -> str:
+        body, boundary = _multipart_form_data(request_fields, "file", audio_path)
+        headers = {
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Accept": "application/json",
+        }
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        request = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
         _validate_http_request(request, field_name="OpenAI-compatible speech request")
         with urllib.request.urlopen(request, timeout=TRANSCRIBE_COMMAND_TIMEOUT_SECONDS) as response:  # nosec B310
-            raw = _read_response_text(response)
+            return _read_response_text(response)
+
+    try:
+        raw = _request_transcription(fields)
     except urllib.error.HTTPError as exc:
         try:
             raw_error = _read_response_text(exc, MAX_TRANSCRIBER_ERROR_CHARS)
@@ -802,7 +823,27 @@ def transcribe_with_openai_compatible_api(
             with suppress(Exception):
                 exc.close()
         detail = _openai_compatible_error_detail(raw_error) or exc.reason or str(exc)
-        raise TranscriptionError(f"OpenAI-compatible speech API failed ({exc.code}) at {endpoint}: {detail}") from exc
+        if use_flex_processing and _is_flex_service_tier_rejected(detail):
+            fallback_fields = dict(fields)
+            fallback_fields.pop("service_tier", None)
+            try:
+                raw = _request_transcription(fallback_fields)
+            except urllib.error.HTTPError as fallback_exc:
+                try:
+                    raw_error = _read_response_text(fallback_exc, MAX_TRANSCRIBER_ERROR_CHARS)
+                except TranscriptionError:
+                    raw_error = ""
+                finally:
+                    with suppress(Exception):
+                        fallback_exc.close()
+                fallback_detail = _openai_compatible_error_detail(raw_error) or fallback_exc.reason or str(fallback_exc)
+                raise TranscriptionError(
+                    f"OpenAI-compatible speech API failed ({fallback_exc.code}) at {endpoint}: {fallback_detail}"
+                ) from fallback_exc
+            except OSError as fallback_exc:
+                raise TranscriptionError(f"OpenAI-compatible speech API is not reachable at {endpoint}: {fallback_exc}") from fallback_exc
+        else:
+            raise TranscriptionError(f"OpenAI-compatible speech API failed ({exc.code}) at {endpoint}: {detail}") from exc
     except OSError as exc:
         raise TranscriptionError(f"OpenAI-compatible speech API is not reachable at {endpoint}: {exc}") from exc
     try:
@@ -909,6 +950,7 @@ def transcribe(
     openai_compatible_model: str = DEFAULT_OPENAI_COMPATIBLE_MODEL,
     openai_compatible_url: str = DEFAULT_OPENAI_COMPATIBLE_URL,
     openai_compatible_api_key: str = "",
+    openai_compatible_flex_processing: bool = True,
 ) -> str:
     if not isinstance(audio_path, Path):
         raise TranscriptionError("audio path must be a Path")
@@ -938,6 +980,8 @@ def transcribe(
         raise TranscriptionError("OpenAI-compatible API URL must be text")
     if not isinstance(openai_compatible_api_key, str) or isinstance(openai_compatible_api_key, bool):
         raise TranscriptionError("OpenAI-compatible API key must be text")
+    if not isinstance(openai_compatible_flex_processing, bool):
+        raise TranscriptionError("OpenAI-compatible flex processing must be a boolean")
     if _contains_escaped_null(openai_compatible_model):
         raise TranscriptionError("OpenAI-compatible speech model contains invalid null byte")
     if _contains_escaped_null(openai_compatible_api_key):
@@ -1008,6 +1052,7 @@ def transcribe(
             openai_compatible_model,
             openai_compatible_url,
             openai_compatible_api_key,
+            openai_compatible_flex_processing,
         )
     else:
         raise TranscriptionError(f"unknown transcriber backend: {resolved_backend}")

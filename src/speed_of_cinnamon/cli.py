@@ -255,13 +255,14 @@ def _effective_post_process_backend(backend: str, command_template: str) -> str:
     return normalized
 
 
-def _openai_compatible_transcribe_kwargs(args: argparse.Namespace, backend: str) -> dict[str, str]:
+def _openai_compatible_transcribe_kwargs(args: argparse.Namespace, backend: str) -> dict[str, object]:
     if backend != "openai-compatible":
         return {}
     return {
         "openai_compatible_model": getattr(args, "openai_compatible_model", DEFAULT_OPENAI_COMPATIBLE_MODEL),
         "openai_compatible_url": getattr(args, "openai_compatible_url", DEFAULT_OPENAI_COMPATIBLE_URL),
         "openai_compatible_api_key": getattr(args, "openai_compatible_api_key", ""),
+        "openai_compatible_flex_processing": getattr(args, "openai_compatible_flex_processing", True),
     }
 
 
@@ -289,6 +290,10 @@ def _validate_pipeline_text_args(
         getattr(args, "openai_compatible_api_key", ""),
         field_name="openai-compatible API key",
         max_chars=MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
+    )
+    _coerce_bool(
+        getattr(args, "openai_compatible_flex_processing", True),
+        field_name="openai-compatible flex processing",
     )
     _validate_text_model_url(args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url")
     _validate_openai_compatible_http_url(args.openai_compatible_url or DEFAULT_OPENAI_COMPATIBLE_URL, field_name="openai-compatible url")
@@ -1047,6 +1052,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             _openai_compatible_post_process_model(args),
             args.openai_compatible_url,
             getattr(args, "openai_compatible_api_key", ""),
+            getattr(args, "openai_compatible_flex_processing", True),
         )
         _write_text_atomic(text_path, text.strip() + "\n")
         append_space = _coerce_bool(args.append_space, field_name="append_space")
@@ -1700,6 +1706,7 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         _openai_compatible_post_process_model(args),
         args.openai_compatible_url,
         getattr(args, "openai_compatible_api_key", ""),
+        getattr(args, "openai_compatible_flex_processing", True),
     )
     _write_text_atomic(text_path, text.strip() + "\n")
     return {"status": "done", "transcript": text, "transcript_path": str(text_path)}
@@ -1732,6 +1739,12 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--openai-compatible-model", default=DEFAULT_OPENAI_COMPATIBLE_MODEL)
     parser.add_argument("--openai-compatible-text-model", default=DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL)
     parser.add_argument("--openai-compatible-api-key", default="")
+    parser.add_argument(
+        "--openai-compatible-flex-processing",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="use OpenAI flex processing for OpenAI API speech-to-text and text polishing requests; default: enabled",
+    )
     parser.add_argument("--post-process-prompt", default="")
     parser.add_argument("--personal-context", default="")
     parser.add_argument("--vocabulary", default="")
@@ -1935,6 +1948,12 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_file.add_argument("--openai-compatible-model", default=DEFAULT_OPENAI_COMPATIBLE_MODEL)
     transcribe_file.add_argument("--openai-compatible-text-model", default=DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL)
     transcribe_file.add_argument("--openai-compatible-api-key", default="")
+    transcribe_file.add_argument(
+        "--openai-compatible-flex-processing",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="use OpenAI flex processing for OpenAI API speech-to-text and text polishing requests; default: enabled",
+    )
     transcribe_file.add_argument("--post-process-prompt", default="")
     transcribe_file.add_argument("--personal-context", default="")
     transcribe_file.add_argument("--vocabulary", default="")

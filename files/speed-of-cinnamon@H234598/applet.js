@@ -161,6 +161,7 @@ const EXPORTABLE_SETTINGS = [
   ["openai-compatible-url", "openaiCompatibleUrl"],
   ["openai-compatible-model", "openaiCompatibleModel"],
   ["openai-compatible-text-model", "openaiCompatibleTextModel"],
+  ["openai-compatible-flex-processing", "openaiCompatibleFlexProcessing"],
   ["post-process-prompt", "postProcessPrompt"]
 ];
 
@@ -209,6 +210,7 @@ MyApplet.prototype = {
     this.openaiCompatibleUrl = DEFAULT_OPENAI_COMPATIBLE_URL;
     this.openaiCompatibleModel = DEFAULT_OPENAI_COMPATIBLE_MODEL;
     this.openaiCompatibleTextModel = DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL;
+    this.openaiCompatibleFlexProcessing = true;
     this.openaiCompatibleApiKey = "";
     this.postProcessPrompt = "";
     this.personalContext = "";
@@ -284,6 +286,7 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-url", "openaiCompatibleUrl", this._onTextModelSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-model", "openaiCompatibleModel", this._onTextModelSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-text-model", "openaiCompatibleTextModel", this._onTextModelSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-flex-processing", "openaiCompatibleFlexProcessing", this._onOpenAiFlexProcessingSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-api-key", "openaiCompatibleApiKey", this._onVoiceBackendSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-prompt", "postProcessPrompt", this._onTextModelSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "personal-context", "personalContext", null, null);
@@ -440,6 +443,11 @@ MyApplet.prototype = {
     let doctor = new PopupMenu.PopupIconMenuItem(_("Run doctor"), "dialog-information-symbolic", St.IconType.SYMBOLIC);
     doctor.connect("activate", () => this._runDoctor());
     this.toolsMenuItem.menu.addMenuItem(doctor);
+
+    this.openAiFlexProcessingItem = new PopupMenu.PopupMenuItem("");
+    this.openAiFlexProcessingItem.connect("activate", () => this._toggleOpenAiFlexProcessing());
+    this.toolsMenuItem.menu.addMenuItem(this.openAiFlexProcessingItem);
+    this._updateOpenAiFlexProcessingItem();
 
     let openSettings = new PopupMenu.PopupIconMenuItem(_("Open applet settings"), "preferences-system-symbolic", St.IconType.SYMBOLIC);
     openSettings.connect("activate", () => this._openAppletSettings());
@@ -704,6 +712,12 @@ MyApplet.prototype = {
     this._updatePanel();
   },
 
+  _onOpenAiFlexProcessingSettingsChanged: function() {
+    this.openaiCompatibleFlexProcessing = Boolean(this.openaiCompatibleFlexProcessing);
+    this._updateOpenAiFlexProcessingItem();
+    this._updatePanel();
+  },
+
   on_applet_clicked: function() {
     this._rememberFocusedWindow();
     this.menu.toggle();
@@ -787,6 +801,9 @@ MyApplet.prototype = {
     }
     if (safeOpenAiCompatibleApiKey.trim() !== "") {
       args.push("--openai-compatible-api-key", safeOpenAiCompatibleApiKey);
+    }
+    if (!Boolean(this.openaiCompatibleFlexProcessing)) {
+      args.push("--no-openai-compatible-flex-processing");
     }
     if (safePostProcessPrompt.trim() !== "") {
       args.push("--post-process-prompt", safePostProcessPrompt);
@@ -1200,6 +1217,31 @@ MyApplet.prototype = {
     this._setTextOptionStatus(
       this.sanitizeSpecialChars ? _("Accent replacement enabled") : _("Accent replacement disabled")
     );
+  },
+
+  _updateOpenAiFlexProcessingItem: function() {
+    if (!this.openAiFlexProcessingItem) {
+      return;
+    }
+    this.openAiFlexProcessingItem.label.text = this._optionLabel(
+      Boolean(this.openaiCompatibleFlexProcessing),
+      _("OpenAI Flex processing")
+    );
+  },
+
+  _toggleOpenAiFlexProcessing: function() {
+    this.openaiCompatibleFlexProcessing = !Boolean(this.openaiCompatibleFlexProcessing);
+    this.settings.setValue("openai-compatible-flex-processing", this.openaiCompatibleFlexProcessing);
+    this._updateOpenAiFlexProcessingItem();
+    let message = this.openaiCompatibleFlexProcessing
+      ? _("OpenAI Flex processing enabled")
+      : _("OpenAI Flex processing disabled");
+    if (this._hasActiveRecordingState()) {
+      this.lastMessage = message;
+      this._updatePanel();
+      return;
+    }
+    this._setStatus("ready", message, this.lastTranscript);
   },
 
   _normalizeLanguage: function(value, fallback) {
@@ -2967,6 +3009,7 @@ MyApplet.prototype = {
     this._populateRecordingLimitMenu();
     this._populateRecordingOptionsMenu();
     this._populateNotificationOptionsMenu();
+    this._updateOpenAiFlexProcessingItem();
     this.insertMethod = this._normalizeOutputMethod(this.insertMethod);
     this._populateOutputMethodMenu();
     this._registerHotkeys();
