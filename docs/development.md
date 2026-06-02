@@ -246,6 +246,23 @@ make release SNAP_BUILD=0 BUILD_GENERIC_RPM=0
 `make release-dry-run` builds and verifies release assets, then exits after reporting what would be uploaded.
 It is intended for local validation without creating or updating a GitHub Release.
 
+## Version Policy
+
+Current project versioning follows a deterministic step policy:
+
+- `PATCH` increments by one for each merged commit.
+- `MINOR` increments by one after every `100` patch increments.
+- `MAJOR` increments by one after every `100` minor increments.
+- `MAJOR` also increments for breaking changes, independent of patch/minor counts.
+- `MINOR` also increments for added features that are backward compatible.
+
+Example:
+
+- `0.1.20` -> `0.1.21` on the next commit.
+- `0.1.99` -> `0.2.0` after the 100th patch since `0.1.99`.
+- `0.2.99` -> `0.3.0` after the 100th minor since `0.2.0`.
+- `0.3.x` -> `1.0.0` on the next major break.
+
 ## Distribution Verification
 
 `scripts/verify-dist.sh` deliberately checks for important docs and test files in the source archive. When adding a new
