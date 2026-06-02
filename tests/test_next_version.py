@@ -297,6 +297,10 @@ class NextVersionTest(unittest.TestCase):
             next_version._assert_non_negative_int("minor", "3")  # type: ignore[arg-type]
         with self.assertRaises(next_version.UserInputError):
             next_version._assert_non_negative_int("minor", -1)
+        with self.assertRaises(next_version.UserInputError):
+            next_version._assert_non_negative_int("minor", None)  # type: ignore[arg-type]
+        with self.assertRaises(next_version.UserInputError):
+            next_version._assert_non_negative_int("minor", 1.5)  # type: ignore[arg-type]
 
     def test_to_version_rejects_bool_input(self) -> None:
         with self.assertRaises(next_version.UserInputError):
