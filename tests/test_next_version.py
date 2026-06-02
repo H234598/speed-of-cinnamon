@@ -244,6 +244,13 @@ class NextVersionTest(unittest.TestCase):
             with self.assertRaises(next_version.UserInputError):
                 next_version.read_current_version(path)
 
+    def test_read_current_version_non_string_version_value(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir, "pyproject.toml")
+            path.write_text("[project]\nversion = 123\n", encoding="utf-8")
+            with self.assertRaises(next_version.UserInputError):
+                next_version.read_current_version(path)
+
     def test_read_current_version_malformed_toml(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir, "pyproject.toml")
