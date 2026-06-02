@@ -191,6 +191,7 @@ def run() -> int:
     except SystemExit as exc:
         if isinstance(exc.code, int) and exc.code == 0:
             return 0
+        print(f"error: {exc}", file=sys.stderr)
         return 2
     except NextVersionError as exc:
         print(f"error: {exc}", file=sys.stderr)

@@ -350,6 +350,19 @@ class NextVersionTest(unittest.TestCase):
             commits_since_tag.assert_called_once_with("v2.0.0")
             add_patches.assert_called_once_with((2, 0, 0), 42)
 
+    def test_run_returns_zero_for_SystemExit_zero(self) -> None:
+        with mock.patch.object(next_version, "main", side_effect=SystemExit(0)):
+            self.assertEqual(next_version.run(), 0)
+
+    def test_run_reports_systemexit_nonzero(self) -> None:
+        with mock.patch.object(next_version, "main", side_effect=SystemExit(5)):
+            result = next_version.run()
+            self.assertEqual(result, 2)
+
+    def test_run_reports_systemexit_non_int(self) -> None:
+        with mock.patch.object(next_version, "main", side_effect=SystemExit("bad exit")):
+            result = next_version.run()
+            self.assertEqual(result, 2)
 
 if __name__ == "__main__":
     unittest.main()
