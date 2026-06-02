@@ -221,6 +221,13 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual(payload["desktop"]["desktop_session"], "")
         self.assertEqual(payload["desktop"]["session_type"], "x11")
 
+    def test_env_desktop_ignores_non_text_values(self) -> None:
+        with mock.patch("speed_of_cinnamon.doctor.os.environ.get", return_value=123):
+            payload = doctor.report({"recorder": "auto", "transcriber": "auto", "insert-method": "clipboard"})
+        self.assertEqual(payload["desktop"]["current_desktop"], "")
+        self.assertEqual(payload["desktop"]["desktop_session"], "")
+        self.assertEqual(payload["desktop"]["session_type"], "")
+
     def test_auto_asr_reports_missing_configured_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             model = Path(tmp) / "missing.bin"

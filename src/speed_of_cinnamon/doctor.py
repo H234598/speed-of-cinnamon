@@ -103,10 +103,10 @@ def _env_desktop() -> dict[str, object]:
 
 
 def _coerce_desktop_env(name: str) -> str:
-    value = os.environ.get(name)
-    if value is None:
+    if isinstance(name, bool) or not isinstance(name, str):
         return ""
-    if isinstance(value, bool) or not isinstance(value, str):
+    value = os.environ.get(name)
+    if value is None or isinstance(value, bool) or not isinstance(value, str):
         return ""
     normalized = value.strip().lower()
     if _contains_http_header_control_chars(normalized):
