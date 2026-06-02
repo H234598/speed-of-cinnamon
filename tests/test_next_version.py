@@ -114,6 +114,16 @@ class NextVersionTest(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertIn("error:", stderr)
 
+    def test_negative_add_commits_is_rejected(self) -> None:
+        code, stderr = run_version_fail_stdout_stderr("--base", "0.1.20", "--add-commits", "-10")
+        self.assertEqual(code, 2)
+        self.assertIn("error", stderr.lower())
+
+    def test_non_numeric_add_commits_is_rejected(self) -> None:
+        code, stderr = run_version_fail_stdout_stderr("--base", "0.1.20", "--add-commits", "oops")
+        self.assertEqual(code, 2)
+        self.assertIn("error", stderr.lower())
+
     def test_from_tag_without_prefix_is_accepted(self) -> None:
         self.assertEqual(run_version("--from-tag", "0.1.20"), "0.1.20")
 

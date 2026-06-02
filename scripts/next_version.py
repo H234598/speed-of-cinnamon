@@ -153,11 +153,13 @@ def main() -> int:
 def run() -> int:
     try:
         return main()
+    except SystemExit as exc:
+        if isinstance(exc.code, int) and exc.code == 0:
+            return 0
+        return 2
     except NextVersionError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return exc.exit_code
-    except SystemExit as exc:
-        return exc.code if isinstance(exc.code, int) else 1
 
 if __name__ == '__main__':
     raise SystemExit(run())
