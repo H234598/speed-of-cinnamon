@@ -537,6 +537,8 @@ class NextVersionTest(unittest.TestCase):
             next_version.ensure_tag_exists(None)  # type: ignore[arg-type]
         with self.assertRaises(next_version.UserInputError):
             next_version.ensure_tag_exists("")
+        with self.assertRaises(next_version.UserInputError):
+            next_version.ensure_tag_exists("   ")
 
     def test_tag_exists_missing_git_is_git_error(self) -> None:
         with mock.patch.object(
