@@ -444,7 +444,7 @@ def append_space_if_needed(text: str, append_space: bool) -> str:
         raise RuntimeError("text must be text")
     if not isinstance(append_space, bool):
         raise RuntimeError("append_space must be a boolean")
-    if append_space and text and not text.endswith((" ", "\n", "\t")):
+    if append_space and text and text[-1] not in " \n\t":
         return text + " "
     return text
 
