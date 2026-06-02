@@ -288,6 +288,20 @@ class NextVersionTest(unittest.TestCase):
             self.assertEqual(next_version.commits_since_ref("v0.1.20"), 7)
             run.assert_called_once()
 
+    def test_commits_since_ref_trims_ref(self) -> None:
+        with mock.patch.object(
+            next_version.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="8\n", stderr=""),
+        ) as run:
+            self.assertEqual(next_version.commits_since_ref("  0.1.20  "), 8)
+            run.assert_called_once_with(
+                ["git", "rev-list", "--count", "0.1.20..HEAD"],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
     def test_commits_since_ref_missing_git_is_git_error(self) -> None:
         with mock.patch.object(
             next_version.subprocess,

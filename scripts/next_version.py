@@ -77,7 +77,8 @@ def to_version(major: int, minor: int, patch: int) -> str:
 def commits_since_ref(ref: str) -> int:
     if not isinstance(ref, str):
         raise UserInputError("ref must be a non-empty string")
-    if ref.strip() == "":
+    ref = ref.strip()
+    if ref == "":
         raise UserInputError("ref must be a non-empty string")
     try:
         result = subprocess.run(["git", "rev-list", "--count", f"{ref}..HEAD"], check=True, text=True, capture_output=True)
