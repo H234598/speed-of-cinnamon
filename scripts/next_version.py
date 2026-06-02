@@ -30,8 +30,16 @@ def to_version(major: int, minor: int, patch: int) -> str:
     return f"{major}.{minor}.{patch}"
 
 def commits_since_ref(ref: str) -> int:
-    result = subprocess.run(["git", "rev-list", "--count", f"{ref}..HEAD"], check=True, text=True, capture_output=True)
-    return int(result.stdout.strip())
+    try:
+        result = subprocess.run(["git", "rev-list", "--count", f"{ref}..HEAD"], check=True, text=True, capture_output=True)
+    except FileNotFoundError as exc:
+        raise ValueError("git command not available") from exc
+    except subprocess.CalledProcessError as exc:
+        raise ValueError(f"failed to compute commits since {ref}: {exc.stderr.strip()}") from exc
+    try:
+        return int(result.stdout.strip())
+    except ValueError as exc:
+        raise ValueError(f"invalid git commit-count output: {result.stdout!r}") from exc
 
 def commits_since_tag(tag: str) -> int:
     return commits_since_ref(normalize_tag(tag))
