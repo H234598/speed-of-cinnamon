@@ -57,12 +57,12 @@ def parse_version(value: str) -> tuple[int, int, int]:
         major, minor, patch = (int(x) for x in parts)
     except ValueError as exc:
         raise UserInputError(f"invalid version format: {value}") from exc
-    if major < 0 or minor < 0 or patch < 0:
-        raise UserInputError(f"invalid version format: {value}")
-    return major, minor, patch
+    return _assert_version_tuple((major, minor, patch))
 
 
 def normalize_tag(tag: str) -> str:
+    if not isinstance(tag, str) or tag == "":
+        raise UserInputError("tag must be a non-empty string")
     return tag if tag.startswith("v") else f"v{tag}"
 
 def to_version(major: int, minor: int, patch: int) -> str:
