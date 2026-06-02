@@ -487,6 +487,8 @@ class NextVersionTest(unittest.TestCase):
             self.assertFalse(next_version.tag_exists("0.1.20"))
         with self.assertRaises(next_version.UserInputError):
             next_version.tag_exists(None)  # type: ignore[arg-type]
+        with self.assertRaises(next_version.UserInputError):
+            next_version.tag_exists(False)  # type: ignore[arg-type]
 
     def test_ensure_tag_exists_nonexistent_tag(self) -> None:
         with mock.patch.object(
