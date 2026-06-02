@@ -102,7 +102,7 @@ rm -f -- "${dist_dir}/speed-of-cinnamon_${version}_*.snap" "${repo_dir}/speed-of
 
 tmp_output="$(mktemp "${repo_tmp_root}/speed-of-cinnamon-snap-output-XXXXXX")"
 
-( umask 022 && snapcraft --destructive-mode )
+( umask 022 && snapcraft pack --destructive-mode )
 {
   find "${dist_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -type f -print
   find "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -type f -print
