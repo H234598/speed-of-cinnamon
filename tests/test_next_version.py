@@ -228,6 +228,8 @@ class NextVersionTest(unittest.TestCase):
         with self.assertRaises(next_version.UserInputError):
             next_version.normalize_tag("")
         with self.assertRaises(next_version.UserInputError):
+            next_version.normalize_tag("   ")
+        with self.assertRaises(next_version.UserInputError):
             next_version.normalize_tag(None)  # type: ignore[arg-type]
 
     def test_parse_version_rejects_negative_segments(self) -> None:

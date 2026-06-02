@@ -61,7 +61,10 @@ def parse_version(value: str) -> tuple[int, int, int]:
 
 
 def normalize_tag(tag: str) -> str:
-    if not isinstance(tag, str) or tag == "":
+    if not isinstance(tag, str):
+        raise UserInputError("tag must be a non-empty string")
+    tag = tag.strip()
+    if tag == "":
         raise UserInputError("tag must be a non-empty string")
     return tag if tag.startswith("v") else f"v{tag}"
 
