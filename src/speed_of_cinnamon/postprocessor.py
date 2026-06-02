@@ -6,6 +6,7 @@ import shlex
 import urllib.parse
 import urllib.error
 import urllib.request
+from contextlib import suppress
 
 from .command_chain import CommandChainError, DEFAULT_COMMAND_TIMEOUT_SECONDS, MAX_COMMAND_OUTPUT_CHARS, run_command_chain, split_command_chain
 from .personalization import build_personalization_prompt, normalize_context, normalize_vocabulary
@@ -403,10 +404,8 @@ def list_openai_compatible_models(
         except PostProcessError:
             raw_error = ""
         finally:
-            try:
+            with suppress(Exception):
                 exc.close()
-            except Exception:
-                pass
         detail = _openai_compatible_error_detail(raw_error) or exc.reason or str(exc)
         return {
             "available": False,
@@ -607,10 +606,8 @@ def post_process_with_openai_compatible(
         except PostProcessError:
             raw_error = ""
         finally:
-            try:
+            with suppress(Exception):
                 exc.close()
-            except Exception:
-                pass
         detail = _openai_compatible_error_detail(raw_error) or exc.reason or str(exc)
         raise PostProcessError(f"OpenAI-compatible request failed ({exc.code}) at {endpoint}: {detail}") from exc
     except OSError as exc:

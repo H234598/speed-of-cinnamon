@@ -11,6 +11,7 @@ import uuid
 import urllib.parse
 import urllib.error
 import urllib.request
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -798,10 +799,8 @@ def transcribe_with_openai_compatible_api(
         except TranscriptionError:
             raw_error = ""
         finally:
-            try:
+            with suppress(Exception):
                 exc.close()
-            except Exception:
-                pass
         detail = _openai_compatible_error_detail(raw_error) or exc.reason or str(exc)
         raise TranscriptionError(f"OpenAI-compatible speech API failed ({exc.code}) at {endpoint}: {detail}") from exc
     except OSError as exc:
