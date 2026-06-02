@@ -16,6 +16,14 @@ from speed_of_cinnamon import cli
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def _is_command_sequence(node: ast.AST | None) -> bool:
+    if isinstance(node, (ast.List, ast.Tuple)):
+        return True
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"list", "tuple"}:
+        return len(node.args) == 1 and isinstance(node.args[0], (ast.List, ast.Tuple))
+    return False
+
+
 class CiStaticTest(unittest.TestCase):
     def test_makefile_has_repo_local_clean_target(self) -> None:
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
@@ -60,13 +68,6 @@ class CiStaticTest(unittest.TestCase):
 
     def test_runtime_code_does_not_execute_subprocess_with_shell_strings(self) -> None:
         src_root = REPO_ROOT / "src"
-        def _is_command_sequence(node: ast.AST | None) -> bool:
-            if isinstance(node, (ast.List, ast.Tuple)):
-                return True
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"list", "tuple"}:
-                return len(node.args) == 1 and isinstance(node.args[0], (ast.List, ast.Tuple))
-            return False
-
         offenders = []
         for path in src_root.rglob("*.py"):
             if "__pycache__" in path.parts:
@@ -103,6 +104,17 @@ class CiStaticTest(unittest.TestCase):
                     offenders.append(f"{path}: {func.attr} command must be list/tuple")
 
         self.assertFalse(offenders, f"unsafe subprocess usage found: {offenders}")
+
+    def test_command_sequence_validation_accepts_supported_forms(self) -> None:
+        allowed = ["[\"a\", \"b\"]", "(\"a\", \"b\")", "list([\"a\", \"b\"])", "tuple((\"a\", \"b\"))"]
+        blocked = ["command", "tuple('a',)", "list()", "list('ab')", "tuple(command)"]
+
+        for expr in allowed:
+            node = ast.parse(expr, mode="eval").body
+            self.assertTrue(_is_command_sequence(node))
+        for expr in blocked:
+            node = ast.parse(expr, mode="eval").body
+            self.assertFalse(_is_command_sequence(node))
 
     def test_runtime_code_does_not_use_os_environ_get(self) -> None:
         src_root = REPO_ROOT / "src"
