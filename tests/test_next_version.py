@@ -143,6 +143,12 @@ class NextVersionTest(unittest.TestCase):
         self.assertEqual(code, 3)
         self.assertIn("error:", stderr)
 
+    def test_large_add_commits_rolls_many_levels(self) -> None:
+        self.assertEqual(
+            run_version("--base", "0.99.99", "--add-commits", "100000000"),
+            "1001.0.99",
+        )
+
     def test_missing_pyproject_is_user_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             code, stderr = run_version_fail_stdout_stderr("--add-commits", "10", cwd=Path(tmpdir))
