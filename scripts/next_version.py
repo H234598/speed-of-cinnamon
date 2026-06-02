@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-"""Calculate the next version based on commit-counting rules.
-
-Rules:
-- PATCH increments by one per commit.
-- MINOR increments by one every 100 PATCH steps.
-- MAJOR increments by one every 100 MINOR steps.
-- Additional MAJOR increment on breaking changes (independent).
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -15,29 +6,36 @@ import subprocess
 from pathlib import Path
 try:
     import tomllib
-except ModuleNotFoundError:  # pragma: no cover - py<3.11 compatibility fallback
+except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore[import-not-found]
-
 
 def parse_version(value: str) -> tuple[int, int, int]:
     parts = value.strip().lstrip("vV").split(".")
     if len(parts) != 3:
         raise ValueError(f"invalid version format: {value}")
-    major_s, minor_s, patch_s = parts
-    return int(major_s), int(minor_s), int(patch_s)
-
+    try:
+        major, minor, patch = (int(x) for x in parts)
+    except ValueError as exc:
+        raise ValueError(f"invalid version format: {value}") from exc
+    if major < 0 or minor < 0 or patch < 0:
+        raise ValueError(f"invalid version format: {value}")
+    return major, minor, patch
 
 def to_version(major: int, minor: int, patch: int) -> str:
     return f"{major}.{minor}.{patch}"
 
-
-def commits_since_tag(tag: str) -> int:
-    cmd = ["git", "rev-list", "--count", f"{tag}..HEAD"]
-    result = subprocess.run(cmd, check=True, text=True, capture_output=True)
+def commits_since_ref(ref: str) -> int:
+    result = subprocess.run(["git", "rev-list", "--count", f"{ref}..HEAD"], check=True, text=True, capture_output=True)
     return int(result.stdout.strip())
 
+def commits_since_tag(tag: str) -> int:
+    if tag.startswith("v"):
+        tagref = tag
+    else:
+        tagref = f"v{tag}"
+    return commits_since_ref(tagref)
 
-def add_patches(base: tuple[int, int, int], patch_steps: int) -> tuple[int, int, int]:
+def add_patches(base: tuple[int,int,int], patch_steps: int) -> tuple[int,int,int]:
     major, minor, patch = base
     if patch_steps < 0:
         raise ValueError("negative patch steps are not supported")
@@ -46,70 +44,64 @@ def add_patches(base: tuple[int, int, int], patch_steps: int) -> tuple[int, int,
     minor += total_patch // 100
     patch = total_patch % 100
     major += minor // 100
-    minor = minor % 100
+    minor %= 100
     return major, minor, patch
 
-
-def apply_feature_increase(major: int, minor: int, patch: int) -> tuple[int, int, int]:
+def apply_feature_increase(major:int, minor:int, patch:int) -> tuple[int,int,int]:
     minor += 1
     if minor >= 100:
         minor = 0
         major += 1
     return major, minor, patch
 
+def apply_breaking_change(major:int, minor:int, patch:int) -> tuple[int,int,int]:
+    return major+1, 0, 0
 
-def apply_breaking_change(major: int, minor: int, patch: int) -> tuple[int, int, int]:
-    return major + 1, 0, 0
-
-
-def read_current_version(path: Path = Path("pyproject.toml")) -> tuple[int, int, int]:
+def read_current_version(path: Path = Path("pyproject.toml")) -> tuple[int,int,int]:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
-    value = data["project"]["version"]
-    if not isinstance(value, str):
+    val = data["project"]["version"]
+    if not isinstance(val, str):
         raise ValueError("project.version is not a string")
-    return parse_version(value)
+    return parse_version(val)
 
+def tag_for_version(version: tuple[int,int,int]) -> str:
+    return f"v{to_version(*version)}"
+
+def tag_exists(tag: str) -> bool:
+    rc = subprocess.run(["git", "tag", "-l", tag], text=True, capture_output=True)
+    return rc.returncode == 0 and tag in (rc.stdout or "").splitlines()
+
+def ensure_tag_exists(tag: str) -> None:
+    if not tag_exists(tag):
+        raise ValueError(f"release tag {tag} does not exist")
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Print next project version")
-    parser.add_argument("--base", default=None, help="Base version (default: pyproject.toml)")
-    parser.add_argument(
-        "--from-tag",
-        default=None,
-        help="Git tag in form v<major>.<minor>.<patch> to calculate patch steps from",
-    )
-    parser.add_argument(
-        "--add-commits",
-        type=int,
-        default=None,
-        help="Explicit number of patch steps; overrides --from-tag if set",
-    )
-    parser.add_argument("--feature", action="store_true", help="Advance MINOR for a compatible new feature")
-    parser.add_argument("--breaking", action="store_true", help="Apply breaking-change bump")
-    return parser.parse_args()
-
+    p = argparse.ArgumentParser()
+    p.add_argument("--base", default=None)
+    p.add_argument("--from-tag", default=None, help="Version tag to derive commit count from")
+    p.add_argument("--add-commits", type=int, default=None, help="Explicit commit count")
+    p.add_argument("--feature", action="store_true")
+    p.add_argument("--breaking", action="store_true")
+    return p.parse_args()
 
 def main() -> int:
-    args = parse_args()
-    base = parse_version(args.base) if args.base else read_current_version()
-
-    if args.add_commits is not None:
-        commits = args.add_commits
-    elif args.from_tag:
-        commits = commits_since_tag(args.from_tag)
+    a = parse_args()
+    base = parse_version(a.base) if a.base else read_current_version()
+    if a.from_tag is not None:
+        ensure_tag_exists(a.from_tag)
+        commits = commits_since_tag(a.from_tag)
+    elif a.add_commits is not None:
+        commits = a.add_commits
     else:
-        commits = 1
-
+        auto_tag = tag_for_version(base)
+        commits = commits_since_tag(auto_tag) if tag_exists(auto_tag) else 0
     major, minor, patch = add_patches(base, commits)
-
-    if args.feature:
+    if a.feature:
         major, minor, patch = apply_feature_increase(major, minor, patch)
-    if args.breaking:
+    if a.breaking:
         major, minor, patch = apply_breaking_change(major, minor, patch)
-
     print(to_version(major, minor, patch))
     return 0
 
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     raise SystemExit(main())
