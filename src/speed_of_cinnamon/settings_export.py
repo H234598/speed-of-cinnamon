@@ -38,7 +38,7 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "personal-context": (str, ""),
     "vocabulary": (str, ""),
     "notify-recording": (bool, False),
-    "notify-complete": (bool, True),
+    "notify-complete": (bool, False),
     "notify-error": (bool, True),
     "insert-method": (str, "clipboard-paste"),
     "append-space": (bool, True),
@@ -46,13 +46,14 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "typing-delay-ms": (int, DEFAULT_TYPING_DELAY_MS),
     "transcriber": (str, "auto"),
     "whisper-model": (str, ""),
-    "post-process-backend": (str, "command"),
+    "post-process-backend": (str, "none"),
     "transcriber-command": (str, ""),
     "post-process-command": (str, ""),
     "ollama-url": (str, "http://127.0.0.1:11434"),
     "ollama-model": (str, ""),
-    "openai-compatible-url": (str, "http://127.0.0.1:8000/v1"),
-    "openai-compatible-model": (str, ""),
+    "openai-compatible-url": (str, "https://api.openai.com/v1"),
+    "openai-compatible-model": (str, "gpt-4o-transcribe"),
+    "openai-compatible-text-model": (str, ""),
     "post-process-prompt": (str, ""),
 }
 
@@ -66,6 +67,8 @@ def _assert_clean_path(path: Path, *, field_name: str) -> None:
         raise SettingsExportError(f"{field_name} must be a path")
     text = str(path)
     if not text or len(text) > MAX_SETTINGS_EXPORT_PATH_CHARS:
+        raise SettingsExportError(f"{field_name} path is invalid")
+    if len(text.encode("utf-8")) > MAX_SETTINGS_EXPORT_PATH_CHARS:
         raise SettingsExportError(f"{field_name} path is invalid")
     if _contains_escaped_null(text):
         raise SettingsExportError(f"{field_name} contains invalid null byte")
@@ -87,6 +90,8 @@ def _sanitize_text_field(value: object, *, field_name: str) -> str:
     text = text.strip()
     if len(text) > MAX_SETTINGS_TEXT_CHARS:
         raise SettingsExportError(f"{field_name} is too long")
+    if len(text.encode("utf-8")) > MAX_SETTINGS_TEXT_CHARS:
+        raise SettingsExportError(f"{field_name} is too long (max {MAX_SETTINGS_TEXT_CHARS} bytes)")
     return text
 
 

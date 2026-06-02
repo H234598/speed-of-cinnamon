@@ -114,6 +114,7 @@ def _load_model_checksum_cache() -> None:
         if (
             not isinstance(key, str)
             or len(key) > MAX_MODEL_CHECKSUM_PATH_CHARS
+            or len(key.encode("utf-8")) > MAX_MODEL_CHECKSUM_PATH_CHARS
             or _contains_escaped_null(key)
             or not _is_valid_cache_entry(raw_entry)
         ):
@@ -206,6 +207,7 @@ def _set_model_checksum_cache(path: Path, checksum: str, stat: os.stat_result) -
         or stat.st_mtime_ns < 0
         or not isinstance(key, str)
         or len(key) > MAX_MODEL_CHECKSUM_PATH_CHARS
+        or len(key.encode("utf-8")) > MAX_MODEL_CHECKSUM_PATH_CHARS
         or _contains_escaped_null(key)
     ):
         raise ModelError(f"invalid model checksum cache state for {path!r}")

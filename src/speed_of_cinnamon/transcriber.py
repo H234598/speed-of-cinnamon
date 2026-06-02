@@ -5,23 +5,43 @@ import shlex
 import subprocess
 import tempfile
 import io
+import json
 import os
+import uuid
+import urllib.parse
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
 from .models import default_ctranslate2_model_path, default_whisper_cpp_model_path, model_backend_for_path, model_supports_language
 from .command_chain import CommandChainError, MAX_COMMAND_OUTPUT_CHARS, run_command_chain, split_command_chain
 from .personalization import build_personalization_prompt, normalize_context, normalize_vocabulary
+from .postprocessor import (
+    DEFAULT_OPENAI_COMPATIBLE_MODEL,
+    DEFAULT_OPENAI_COMPATIBLE_URL,
+    MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
+    MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
+)
 
 
 TRANSCRIBE_COMMAND_TIMEOUT_SECONDS = 900
 MAX_TRANSCRIBER_ERROR_CHARS = 4096
+MAX_OPENAI_URL_CHARS = 2048
 MAX_AUDIO_FILE_BYTES = 200 * 1024 * 1024
 MAX_AUDIO_PATH_CHARS = 240
 MAX_AUDIO_STEM_CHARS = 120
+MAX_TRANSCRIBER_TEXT_CHARS = 65_535
 ALLOWED_AUDIO_EXTENSIONS = {".wav", ".m4a", ".flac", ".ogg", ".mp3", ".aac", ".webm"}
 MAX_TRANSCRIPT_TEXT_CHARS = 1_000_000
+MAX_TRANSCRIBER_JSON_BYTES = 1_000_000
 PLACEHOLDER_TRANSCRIPTS = {"[speaking in foreign language]"}
+OPENAI_TRANSCRIPTION_MODELS = {
+    "gpt-4o-transcribe",
+    "gpt-4o-mini-transcribe",
+    "gpt-4o-transcribe-diarize",
+    "whisper-1",
+}
 
 
 def _command_path(command: str) -> str:
@@ -114,6 +134,25 @@ def _read_text_file(path: Path) -> str:
     return text
 
 
+def _read_response_text(response: object, max_bytes: int = MAX_TRANSCRIBER_JSON_BYTES) -> str:
+    if not hasattr(response, "read"):
+        raise TranscriptionError("response must be readable")
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = response.read(65536)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise TranscriptionError(f"API response exceeded {max_bytes} bytes")
+        chunks.append(chunk)
+    try:
+        return b"".join(chunks).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise TranscriptionError("API response is not valid UTF-8") from exc
+
+
 def _file_size(file: io.BufferedRandom) -> int:
     if not hasattr(file, "seek") or not hasattr(file, "tell"):
         raise TranscriptionError("file must be a binary file handle")
@@ -121,9 +160,9 @@ def _file_size(file: io.BufferedRandom) -> int:
     return file.tell()
 
 
-def _run_limited_process(command: list[str], *, timeout: int = TRANSCRIBE_COMMAND_TIMEOUT_SECONDS) -> None:
-    if not isinstance(command, list):
-        raise TranscriptionError("transcriber command must be a list")
+def _run_limited_process(command: list[str] | tuple[str, ...], *, timeout: int = TRANSCRIBE_COMMAND_TIMEOUT_SECONDS) -> None:
+    if not isinstance(command, (list, tuple)):
+        raise TranscriptionError("transcriber command must be a list or tuple")
     if not command:
         raise TranscriptionError("empty transcriber command is not allowed")
     if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
@@ -187,9 +226,15 @@ def validate_audio_file(path: Path) -> Path:
     normalized = path.expanduser().resolve(strict=False)
     if len(str(normalized)) > MAX_AUDIO_PATH_CHARS:
         raise TranscriptionError(f"audio file path is too long: {path}")
+    if len(str(normalized).encode("utf-8")) > MAX_AUDIO_PATH_CHARS:
+        raise TranscriptionError(f"audio file path is too long: {path}")
     if len(normalized.name) > MAX_AUDIO_PATH_CHARS:
         raise TranscriptionError(f"audio file name is too long: {path}")
+    if len(normalized.name.encode("utf-8")) > MAX_AUDIO_PATH_CHARS:
+        raise TranscriptionError(f"audio file name is too long: {path}")
     if len(normalized.stem) > MAX_AUDIO_STEM_CHARS:
+        raise TranscriptionError(f"audio file stem is too long: {path}")
+    if len(normalized.stem.encode("utf-8")) > MAX_AUDIO_STEM_CHARS:
         raise TranscriptionError(f"audio file stem is too long: {path}")
     try:
         stat_result = normalized.stat()
@@ -219,6 +264,8 @@ def _assert_text_length(value: str, *, field_name: str, max_chars: int | None = 
         raise TranscriptionError("max_chars must be positive")
     if len(value) > max_chars:
         raise TranscriptionError(f"{field_name} is too large (max {max_chars} characters)")
+    if len(value.encode("utf-8")) > max_chars:
+        raise TranscriptionError(f"{field_name} is too large (max {max_chars} bytes)")
     return value
 
 
@@ -460,6 +507,153 @@ def transcribe_with_faster_whisper(audio_path: Path, language: str, text_path: P
     return text
 
 
+def _openai_compatible_endpoint(url: str, path: str) -> str:
+    base = _validate_openai_compatible_api_url(url).rstrip("/")
+    if not base:
+        raise TranscriptionError("OpenAI-compatible API URL is required")
+    normalized_path = "/" + path.strip("/")
+    if base.endswith(normalized_path):
+        return base
+    return base + normalized_path
+
+
+def _validate_openai_compatible_api_url(url: str, field_name: str = "OpenAI-compatible API URL") -> str:
+    if _contains_escaped_null(url):
+        raise TranscriptionError(f"{field_name} contains invalid null byte")
+    base = _assert_text_length(url, field_name=field_name, max_chars=MAX_OPENAI_URL_CHARS).strip()
+    if not base:
+        raise TranscriptionError(f"{field_name} is required")
+    parsed = urllib.parse.urlparse(base)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise TranscriptionError(f"{field_name} must use http:// or https://")
+    return base
+
+
+def _openai_compatible_error_detail(raw: str) -> str:
+    raw = _assert_text_length(raw or "", field_name="OpenAI-compatible API error", max_chars=MAX_TRANSCRIBER_ERROR_CHARS).strip()
+    if not raw:
+        return ""
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+    if isinstance(payload, dict) and payload.get("error"):
+        error = payload["error"]
+        if isinstance(error, dict):
+            message = str(error.get("message") or "").strip()
+            code = str(error.get("code") or "").strip()
+            error_type = str(error.get("type") or "").strip()
+            parts = [part for part in (message, code, error_type) if part]
+            return " - ".join(parts) if parts else str(error)
+        return str(error)
+    return raw
+
+
+def _multipart_form_data(fields: dict[str, str], file_field: str, file_path: Path) -> tuple[bytes, str]:
+    boundary = "speed-of-cinnamon-" + uuid.uuid4().hex
+    body = bytearray()
+    file_name = file_path.name
+    if "\r" in file_name or "\n" in file_name:
+        raise TranscriptionError("audio file name contains invalid newline")
+    file_name = file_name.replace("\\", "\\\\").replace('"', '\\"')
+    for key, value in fields.items():
+        body.extend(f"--{boundary}\r\n".encode("utf-8"))
+        body.extend(f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("utf-8"))
+        body.extend(value.encode("utf-8"))
+        body.extend(b"\r\n")
+    body.extend(f"--{boundary}\r\n".encode("utf-8"))
+    body.extend(
+        (
+            f'Content-Disposition: form-data; name="{file_field}"; filename="{file_name}"\r\n'
+            "Content-Type: application/octet-stream\r\n\r\n"
+        ).encode("utf-8")
+    )
+    try:
+        body.extend(file_path.read_bytes())
+    except OSError as exc:
+        raise TranscriptionError(f"failed to read audio file for API upload: {file_path}") from exc
+    body.extend(b"\r\n")
+    body.extend(f"--{boundary}--\r\n".encode("utf-8"))
+    return bytes(body), boundary
+
+
+def transcribe_with_openai_compatible_api(
+    audio_path: Path,
+    language: str,
+    text_path: Path,
+    model: str,
+    url: str,
+    api_key: str = "",
+) -> str:
+    if _contains_escaped_null(model):
+        raise TranscriptionError("OpenAI-compatible speech model contains invalid null byte")
+    model = _assert_text_length(
+        model,
+        field_name="OpenAI-compatible speech model",
+        max_chars=MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
+    ).strip()
+    if not model:
+        raise TranscriptionError("OpenAI-compatible speech model is required")
+    if _contains_escaped_null(api_key):
+        raise TranscriptionError("OpenAI-compatible API key contains invalid null byte")
+    api_key = _assert_text_length(
+        api_key,
+        field_name="OpenAI-compatible API key",
+        max_chars=MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
+    ).strip()
+    endpoint = _openai_compatible_endpoint(url, "/audio/transcriptions")
+    if "api.openai.com" in endpoint.lower() and model not in OPENAI_TRANSCRIPTION_MODELS:
+        raise TranscriptionError(
+            "OpenAI transcription endpoint requires a speech-to-text model such as "
+            "gpt-4o-transcribe, gpt-4o-mini-transcribe, or whisper-1; configured model is "
+            f"{model}"
+        )
+    body, boundary = _multipart_form_data(
+        {
+            "model": model,
+            "language": language,
+            "response_format": "json",
+        },
+        "file",
+        audio_path,
+    )
+    headers = {
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "Accept": "application/json",
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    request = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=TRANSCRIBE_COMMAND_TIMEOUT_SECONDS) as response:
+            raw = _read_response_text(response)
+    except urllib.error.HTTPError as exc:
+        try:
+            raw_error = _read_response_text(exc, MAX_TRANSCRIBER_ERROR_CHARS)
+        except TranscriptionError:
+            raw_error = ""
+        detail = _openai_compatible_error_detail(raw_error) or exc.reason or str(exc)
+        raise TranscriptionError(f"OpenAI-compatible speech API failed ({exc.code}) at {endpoint}: {detail}") from exc
+    except OSError as exc:
+        raise TranscriptionError(f"OpenAI-compatible speech API is not reachable at {endpoint}: {exc}") from exc
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise TranscriptionError("OpenAI-compatible speech API returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise TranscriptionError("OpenAI-compatible speech API response must be a JSON object")
+    if payload.get("error"):
+        error = payload["error"]
+        detail = str(error.get("message") or error) if isinstance(error, dict) else str(error)
+        raise TranscriptionError(f"OpenAI-compatible speech API failed at {endpoint}: {detail}")
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        raise TranscriptionError("OpenAI-compatible speech API returned no transcript")
+    _assert_text_length(text, field_name="transcript")
+    _write_text_atomic(text_path, text + "\n")
+    return text
+
+
 def normalize_backend(value: str) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         raise TranscriptionError("backend must be text")
@@ -472,6 +666,9 @@ def normalize_backend(value: str) -> str:
         "ctranslate2": "faster-whisper",
         "ct2": "faster-whisper",
         "faster-whisper": "faster-whisper",
+        "external-api": "openai-compatible",
+        "openai-compatible": "openai-compatible",
+        "openai-compatible-api": "openai-compatible",
         "custom": "command",
         "template": "command",
     }
@@ -526,7 +723,7 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
             "no transcriber available; install 'whisper', install faster-whisper, configure whisper.cpp with a model, "
             "or set a custom transcriber command"
         )
-    if backend not in {"command", "whisper", "whisper-cpp", "faster-whisper"}:
+    if backend not in {"command", "whisper", "whisper-cpp", "faster-whisper", "openai-compatible"}:
         raise TranscriptionError(f"unknown transcriber backend: {config.backend}")
     return backend
 
@@ -540,6 +737,9 @@ def transcribe(
     whisper_model: str = "",
     personal_context: str = "",
     vocabulary: str = "",
+    openai_compatible_model: str = DEFAULT_OPENAI_COMPATIBLE_MODEL,
+    openai_compatible_url: str = DEFAULT_OPENAI_COMPATIBLE_URL,
+    openai_compatible_api_key: str = "",
 ) -> str:
     if not isinstance(audio_path, Path):
         raise TranscriptionError("audio path must be a Path")
@@ -557,6 +757,30 @@ def transcribe(
         raise TranscriptionError("personal context must be text")
     if not isinstance(vocabulary, str) or isinstance(vocabulary, bool):
         raise TranscriptionError("vocabulary must be text")
+    if not isinstance(openai_compatible_model, str) or isinstance(openai_compatible_model, bool):
+        raise TranscriptionError("OpenAI-compatible speech model must be text")
+    if not isinstance(openai_compatible_url, str) or isinstance(openai_compatible_url, bool):
+        raise TranscriptionError("OpenAI-compatible API URL must be text")
+    if not isinstance(openai_compatible_api_key, str) or isinstance(openai_compatible_api_key, bool):
+        raise TranscriptionError("OpenAI-compatible API key must be text")
+    if _contains_escaped_null(openai_compatible_model):
+        raise TranscriptionError("OpenAI-compatible speech model contains invalid null byte")
+    if _contains_escaped_null(openai_compatible_api_key):
+        raise TranscriptionError("OpenAI-compatible API key contains invalid null byte")
+
+    command_template = _assert_text_length(command_template, field_name="command template", max_chars=MAX_TRANSCRIBER_TEXT_CHARS)
+    openai_compatible_model = _assert_text_length(
+        openai_compatible_model,
+        field_name="OpenAI-compatible speech model",
+        max_chars=MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
+    ).strip()
+    openai_compatible_url = _assert_text_length(openai_compatible_url, field_name="OpenAI-compatible API URL", max_chars=MAX_OPENAI_URL_CHARS)
+    openai_compatible_api_key = _assert_text_length(
+        openai_compatible_api_key,
+        field_name="OpenAI-compatible API key",
+        max_chars=MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
+    ).strip()
+
     config = TranscriberConfig(
         backend=backend,
         command_template=command_template,
@@ -590,6 +814,16 @@ def transcribe(
             language,
             text_path,
             whisper_model or default_ctranslate2_model_path(language),
+        )
+    elif resolved_backend == "openai-compatible":
+        openai_compatible_url = _validate_openai_compatible_api_url(openai_compatible_url)
+        text = transcribe_with_openai_compatible_api(
+            audio_path,
+            language,
+            text_path,
+            openai_compatible_model,
+            openai_compatible_url,
+            openai_compatible_api_key,
         )
     else:
         raise TranscriptionError(f"unknown transcriber backend: {resolved_backend}")

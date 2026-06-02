@@ -63,6 +63,9 @@ Compare downloaded catalog voice models on one local audio file.
 .B text-models
 List local Ollama or OpenAI-compatible text models.
 .TP
+.B install-text-model
+Install an Ollama text model.
+.TP
 .B history
 List recent transcript files.
 .TP
@@ -108,6 +111,8 @@ Use
 .BR whisper ,
 .BR whisper-cpp ,
 .BR faster-whisper ,
+.BR openai-compatible ,
+.BR external-api ,
 .BR command ,
 .BR custom ,
 or
@@ -127,6 +132,11 @@ and
 .B openai-whisper
 map to
 .B whisper ;
+.B openai-compatible
+and
+.B external-api
+map to
+.B openai-compatible ;
 .B faster-whisper
 maps to
 .B faster-whisper ;

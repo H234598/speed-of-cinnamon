@@ -333,6 +333,31 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual(payload["configured"]["transcriber"]["value"], "whisper")
         self.assertIn("whisper", payload["configured"]["transcriber"]["detail"])
 
+    def test_external_api_transcriber_requires_model(self) -> None:
+        payload = doctor.report({
+            "recorder": "auto",
+            "transcriber": "openai-compatible",
+            "openai-compatible-model": "",
+            "insert-method": "none",
+        })
+
+        self.assertFalse(payload["configured"]["transcriber"]["ok"])
+        self.assertEqual(payload["configured"]["transcriber"]["value"], "openai-compatible")
+        self.assertIn("speech model is required", payload["configured"]["transcriber"]["detail"])
+
+    def test_external_api_transcriber_is_ready_when_model_is_configured(self) -> None:
+        payload = doctor.report({
+            "recorder": "auto",
+            "transcriber": "external-api",
+            "openai-compatible-model": "whisper-large-v3",
+            "openai-compatible-url": "https://api.example.test/v1",
+            "insert-method": "none",
+        })
+
+        self.assertTrue(payload["configured"]["transcriber"]["ok"])
+        self.assertEqual(payload["configured"]["transcriber"]["value"], "openai-compatible")
+        self.assertIn("https://api.example.test/v1", payload["configured"]["transcriber"]["detail"])
+
     def test_ollama_postprocessor_requires_model(self) -> None:
         tools = {"python3", "pw-record"}
         settings = {
@@ -371,12 +396,13 @@ class DoctorTest(unittest.TestCase):
             "transcriber-command": "printf ok",
             "insert-method": "none",
             "post-process-backend": "openai-compatible",
+            "openai-compatible-model": "",
         }
         with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
             payload = doctor.report(settings)
         self.assertFalse(payload["ok"])
         self.assertFalse(payload["configured"]["postprocessor"]["ok"])
-        self.assertIn("OpenAI-compatible local model", payload["configured"]["postprocessor"]["detail"])
+        self.assertIn("OpenAI-compatible text model", payload["configured"]["postprocessor"]["detail"])
 
     def test_openai_compatible_postprocessor_is_ready_when_model_is_configured(self) -> None:
         tools = {"python3", "pw-record"}
@@ -392,8 +418,25 @@ class DoctorTest(unittest.TestCase):
         with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
             payload = doctor.report(settings)
         self.assertTrue(payload["ok"])
+
+    def test_openai_compatible_postprocessor_uses_separate_text_model_when_configured(self) -> None:
+        tools = {"python3", "pw-record"}
+        settings = {
+            "recorder": "auto",
+            "transcriber": "command",
+            "transcriber-command": "printf ok",
+            "insert-method": "none",
+            "post-process-backend": "openai-compatible",
+            "openai-compatible-model": "",
+            "openai-compatible-text-model": "local-polisher",
+            "openai-compatible-url": "http://127.0.0.1:8000/v1",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
+            payload = doctor.report(settings)
+        self.assertTrue(payload["ok"])
         self.assertEqual(payload["configured"]["postprocessor"]["value"], "openai-compatible")
-        self.assertIn("vLLM", payload["configured"]["postprocessor"]["detail"])
+        self.assertIn("OpenAI-compatible API", payload["configured"]["postprocessor"]["detail"])
+        self.assertNotIn("local", payload["configured"]["postprocessor"]["detail"])
 
     def test_report_rejects_invalid_whisper_model_path(self) -> None:
         tools = {"python3", "pw-record", "whisper-cli"}
@@ -436,6 +479,11 @@ class DoctorTest(unittest.TestCase):
     def test_parse_settings_json_rejects_large_payload(self) -> None:
         with self.assertRaisesRegex(ValueError, "settings JSON is too large"):
             doctor.parse_settings_json(json.dumps({"payload": "x" * (doctor.MAX_SETTINGS_JSON_CHARS + 1)}))
+
+    def test_parse_settings_json_rejects_large_payload_bytes(self) -> None:
+        with mock.patch("speed_of_cinnamon.doctor.MAX_SETTINGS_JSON_CHARS", 4):
+            with self.assertRaisesRegex(ValueError, "settings JSON is too large"):
+                doctor.parse_settings_json('{"payload":"😀"}')
 
     def test_parse_settings_json_rejects_non_text_payload(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be text"):

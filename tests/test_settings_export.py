@@ -64,12 +64,22 @@ class SettingsExportTest(unittest.TestCase):
         with self.assertRaisesRegex(SettingsExportError, "path is invalid"):
             read_export(Path("a" * (MAX_SETTINGS_EXPORT_PATH_CHARS + 1)))
 
+    def test_read_export_rejects_oversized_path_bytes(self) -> None:
+        with mock.patch("speed_of_cinnamon.settings_export.MAX_SETTINGS_EXPORT_PATH_CHARS", 4):
+            with self.assertRaisesRegex(SettingsExportError, "path is invalid"):
+                read_export(Path("é" * 3))
+
     def test_read_export_rejects_oversized_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             path.write_text("x" * (MAX_SETTINGS_EXPORT_BYTES + 1), encoding="utf-8")
             with self.assertRaisesRegex(SettingsExportError, "settings export is too large"):
                 read_export(path)
+
+    def test_sanitize_text_field_rejects_oversized_text_bytes(self) -> None:
+        with mock.patch("speed_of_cinnamon.settings_export.MAX_SETTINGS_TEXT_CHARS", 4):
+            with self.assertRaisesRegex(SettingsExportError, "is too long"):
+                _sanitize_text_field("😀" * 2, field_name="setting value")
 
     def test_write_export_rejects_oversized_path(self) -> None:
         path = Path("a" * (MAX_SETTINGS_EXPORT_PATH_CHARS + 1))
@@ -97,6 +107,7 @@ class SettingsExportTest(unittest.TestCase):
             "ollama-model": "llama3.2:3b",
             "openai-compatible-url": "http://127.0.0.1:8000/v1",
             "openai-compatible-model": "local-llama",
+            "openai-compatible-text-model": "local-polisher",
             "cli-path": "/tmp/not-portable",
             "unknown": "ignored",
         })
@@ -114,6 +125,7 @@ class SettingsExportTest(unittest.TestCase):
         self.assertEqual(settings["ollama-model"], "llama3.2:3b")
         self.assertEqual(settings["openai-compatible-url"], "http://127.0.0.1:8000/v1")
         self.assertEqual(settings["openai-compatible-model"], "local-llama")
+        self.assertEqual(settings["openai-compatible-text-model"], "local-polisher")
         self.assertNotIn("cli-path", settings)
         self.assertNotIn("unknown", settings)
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import unittest
+import urllib.error
 from unittest import mock
 
 from speed_of_cinnamon.postprocessor import (
@@ -14,6 +15,8 @@ from speed_of_cinnamon.postprocessor import (
     _assert_text_length,
     _format_model_size,
     post_process_text,
+    MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
+    MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
     MAX_POSTPROCESS_JSON_BYTES,
     MAX_POSTPROCESS_URL_CHARS,
     list_ollama_models,
@@ -162,6 +165,11 @@ class PostProcessorTest(unittest.TestCase):
             with self.assertRaisesRegex(PostProcessError, "input text is too large"):
                 post_process_text("hello", "en", "printf keep")
 
+    def test_post_process_command_rejects_oversized_text_bytes(self) -> None:
+        with mock.patch("speed_of_cinnamon.postprocessor.MAX_POSTPROCESS_TEXT_CHARS", 4):
+            with self.assertRaisesRegex(PostProcessError, "input text is too large"):
+                post_process_text("😀😀", "en", "cmd")
+
     def test_post_process_command_rejects_oversized_remote_response(self) -> None:
         giant = "{" + '"x":' + '"' * (MAX_POSTPROCESS_JSON_BYTES + 1) + "}"
         with mock.patch(
@@ -237,6 +245,25 @@ class PostProcessorTest(unittest.TestCase):
                 backend="openai-compatible",
                 openai_compatible_model="local",
                 vocabulary="x" * (MAX_VOCABULARY_CHARS + 1),
+            )
+
+    def test_openai_compatible_backend_rejects_oversized_model(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "openai-compatible model is too large"):
+            post_process_text(
+                "hello",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="x" * (MAX_OPENAI_COMPATIBLE_MODEL_CHARS + 1),
+            )
+
+    def test_openai_compatible_backend_rejects_oversized_api_key(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "openai-compatible API key is too large"):
+            post_process_text(
+                "hello",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="local",
+                openai_compatible_api_key="x" * (MAX_OPENAI_COMPATIBLE_API_KEY_CHARS + 1),
             )
 
     def test_ollama_backend_calls_generate_endpoint(self) -> None:
@@ -317,6 +344,16 @@ class PostProcessorTest(unittest.TestCase):
                 openai_compatible_url="http://127.0.0.1:8000/v1\\\\u0000",
             )
 
+    def test_openai_compatible_backend_rejects_non_http_url(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "must use http:// or https://"):
+            post_process_text(
+                "hello",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="local",
+                openai_compatible_url="ftp://127.0.0.1:8000/v1",
+            )
+
     def test_openai_compatible_backend_calls_chat_completions_endpoint(self) -> None:
         requests = []
 
@@ -345,6 +382,44 @@ class PostProcessorTest(unittest.TestCase):
         self.assertFalse(body["stream"])
         self.assertEqual(body["temperature"], 0)
         self.assertIn("hello cinnamon", body["messages"][1]["content"])
+
+    def test_openai_compatible_backend_uses_explicit_api_key(self) -> None:
+        requests = []
+
+        def fake_urlopen(request: object, timeout: int = 0) -> FakeResponse:
+            requests.append((request, timeout))
+            return FakeResponse({"choices": [{"message": {"content": "Hello Cinnamon."}}]})
+
+        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=fake_urlopen):
+            result = post_process_text(
+                "hello cinnamon",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="gpt-4o-mini",
+                openai_compatible_url="https://api.openai.com/v1",
+                openai_compatible_api_key="secret",
+            )
+        self.assertEqual(result, "Hello Cinnamon.")
+        request, _timeout = requests[0]
+        self.assertEqual(request.headers["Authorization"], "Bearer secret")
+
+    def test_openai_compatible_backend_reports_http_error_detail(self) -> None:
+        error = urllib.error.HTTPError(
+            "https://api.openai.com/v1/chat/completions",
+            401,
+            "Unauthorized",
+            {},
+            io.BytesIO(b'{"error":{"message":"missing API key","type":"invalid_request_error"}}'),
+        )
+        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=error):
+            with self.assertRaisesRegex(PostProcessError, r"failed \(401\).*missing API key"):
+                post_process_text(
+                    "hello cinnamon",
+                    "en",
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-mini",
+                    openai_compatible_url="https://api.openai.com/v1",
+                )
 
     def test_openai_compatible_backend_requires_model(self) -> None:
         with self.assertRaisesRegex(PostProcessError, "model is required"):
@@ -443,6 +518,11 @@ class PostProcessorTest(unittest.TestCase):
             "data": [
                 {"id": "local-llama", "object": "model", "owned_by": "llama.cpp"},
                 {"id": "local-mistral", "object": "model", "owned_by": "vllm"},
+                {"id": "gpt-4o-transcribe", "object": "model", "owned_by": "openai"},
+                {"id": "whisper-1", "object": "model", "owned_by": "openai"},
+                {"id": "text-embedding-3-large", "object": "model", "owned_by": "openai"},
+                {"id": "gpt-image-1", "object": "model", "owned_by": "openai"},
+                {"id": "tts-1", "object": "model", "owned_by": "openai"},
             ],
         }
         requests = []
@@ -452,12 +532,82 @@ class PostProcessorTest(unittest.TestCase):
             return FakeResponse(payload)
 
         with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=fake_urlopen):
-            result = list_openai_compatible_models("http://127.0.0.1:8000/v1/")
+            result = list_openai_compatible_models("http://127.0.0.1:8000/v1/", api_key="secret")
         self.assertTrue(result["available"])
         self.assertEqual([model["name"] for model in result["models"]], ["local-llama", "local-mistral"])
         request, timeout = requests[0]
         self.assertEqual(request.full_url, "http://127.0.0.1:8000/v1/models")
+        self.assertEqual(request.headers["Authorization"], "Bearer secret")
         self.assertEqual(timeout, 5)
+
+    def test_list_openai_compatible_models_keeps_text_models_only(self) -> None:
+        payload = {
+            "object": "list",
+            "data": [
+                {"id": "gpt-4o", "object": "model", "owned_by": "openai"},
+                {"id": "gpt-4o-mini", "object": "model", "owned_by": "openai"},
+                {"id": "gpt-5", "object": "model", "owned_by": "openai"},
+                {"id": "o4-mini", "object": "model", "owned_by": "openai"},
+                {"id": "gpt-3.5-turbo-instruct", "object": "model", "owned_by": "openai"},
+                {"id": "gpt-4o-transcribe", "object": "model", "owned_by": "openai"},
+                {"id": "whisper-1", "object": "model", "owned_by": "openai"},
+                {"id": "gpt-4o-audio-preview", "object": "model", "owned_by": "openai"},
+                {"id": "gpt-4o-mini-tts", "object": "model", "owned_by": "openai"},
+                {"id": "text-embedding-3-small", "object": "model", "owned_by": "openai"},
+                {"id": "omni-moderation-latest", "object": "model", "owned_by": "openai"},
+                {"id": "dall-e-3", "object": "model", "owned_by": "openai"},
+                {"id": "gpt-image-1", "object": "model", "owned_by": "openai"},
+                {"id": "local-mistral-instruct", "object": "model", "owned_by": "local"},
+            ],
+        }
+        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", return_value=FakeResponse(payload)):
+            result = list_openai_compatible_models("https://api.openai.com/v1")
+        self.assertEqual(
+            [model["name"] for model in result["models"]],
+            ["gpt-4o", "gpt-4o-mini", "gpt-5", "local-mistral-instruct", "o4-mini"],
+        )
+
+    def test_list_openai_compatible_models_reports_when_only_non_text_models_exist(self) -> None:
+        payload = {
+            "object": "list",
+            "data": [
+                {"id": "gpt-4o-transcribe", "object": "model", "owned_by": "openai"},
+                {"id": "whisper-1", "object": "model", "owned_by": "openai"},
+                {"id": "text-embedding-3-large", "object": "model", "owned_by": "openai"},
+            ],
+        }
+        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", return_value=FakeResponse(payload)):
+            result = list_openai_compatible_models("https://api.openai.com/v1")
+        self.assertTrue(result["available"])
+        self.assertEqual(result["models"], [])
+        self.assertEqual(result["message"], "No OpenAI-compatible text models found")
+
+    def test_list_openai_compatible_models_rejects_non_http_url(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "must use http:// or https://"):
+            list_openai_compatible_models("mailto:admin@localhost")
+
+    def test_list_openai_compatible_models_rejects_oversized_api_key(self) -> None:
+        result = list_openai_compatible_models(
+            "http://127.0.0.1:8000/v1",
+            api_key="x" * (MAX_OPENAI_COMPATIBLE_API_KEY_CHARS + 1),
+        )
+        self.assertFalse(result["available"])
+        self.assertIn("openai-compatible API key is too large", result["message"])
+
+    def test_list_openai_compatible_models_reports_http_error_detail(self) -> None:
+        error = urllib.error.HTTPError(
+            "https://api.openai.com/v1/models",
+            401,
+            "Unauthorized",
+            {},
+            io.BytesIO(b'{"error":{"message":"missing API key","type":"invalid_request_error"}}'),
+        )
+        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=error):
+            result = list_openai_compatible_models("https://api.openai.com/v1")
+        self.assertFalse(result["available"])
+        self.assertIn("failed (401)", result["message"])
+        self.assertIn("missing API key", result["message"])
+        self.assertNotIn("local server", result["message"])
 
 
 if __name__ == "__main__":

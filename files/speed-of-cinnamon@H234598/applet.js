@@ -7,6 +7,7 @@ const Util = imports.misc.util;
 const GLib = imports.gi.GLib;
 const Gio = imports.gi.Gio;
 const Pango = imports.gi.Pango;
+const ByteArray = imports.byteArray;
 const Mainloop = imports.mainloop;
 const Extension = imports.ui.extension;
 
@@ -17,6 +18,9 @@ const SECONDARY_HOTKEY_ID = "speed-of-cinnamon-secondary-language";
 const DEFAULT_CLI = GLib.build_filenamev([GLib.get_home_dir(), ".local", "bin", "speed-of-cinnamon"]);
 const SYSTEM_CLI = "/usr/bin/speed-of-cinnamon";
 const RUNBOOK_URL = "https://gist.github.com/H234598/b95129e13ac0b09c9777edd41aeedfa0";
+const DEFAULT_OPENAI_COMPATIBLE_URL = "https://api.openai.com/v1";
+const DEFAULT_OPENAI_COMPATIBLE_MODEL = "gpt-4o-transcribe";
+const LEGACY_OPENAI_COMPATIBLE_URL = "http://127.0.0.1:8000/v1";
 const PASTE_FOCUS_DELAY_MS = 120;
 const ALARM_CHECK_SECONDS = 60;
 const MAX_CLI_ARG_BYTES = 4096;
@@ -32,6 +36,8 @@ const CLI_TEXT_SETTINGS = {
   "ollama-model": "ollama model",
   "openai-compatible-url": "openai-compatible URL",
   "openai-compatible-model": "openai-compatible model",
+  "openai-compatible-text-model": "openai-compatible text model",
+  "openai-compatible-api-key": "openai-compatible API key",
   "post-process-prompt": "post-process prompt",
   "whisper-model": "whisper model",
   "personal-context": "personal context",
@@ -48,6 +54,9 @@ const DEFAULT_TYPING_DELAY_MS = 8;
 const CLI_COMMAND_TIMEOUT_MS = 300000;
 const STATUS_COMMAND_TIMEOUT_MS = 10000;
 const DOCTOR_COMMAND_TIMEOUT_MS = 20000;
+const BENCHMARK_COMMAND_TIMEOUT_MS = 1800000;
+const OLLAMA_INSTALL_POLL_SECONDS = 5;
+const OLLAMA_INSTALL_MAX_POLLS = 120;
 const MENU_MIN_WIDTH_EM = 30;
 const MENU_LABEL_WIDTH_EM = 32;
 const SELECTION_MENU_MIN_WIDTH_EM = 42;
@@ -56,7 +65,11 @@ const TERMINAL_WINDOW_MARKERS = [
   "alacritty",
   "blackbox",
   "com.mitchellh.ghostty",
+  "com.system76.cosmic-term",
+  "console",
   "cool-retro-term",
+  "cosmic terminal",
+  "cosmic-term",
   "foot",
   "gnome-terminal",
   "guake",
@@ -75,7 +88,9 @@ const TERMINAL_WINDOW_MARKERS = [
   "sakura",
   "tabby",
   "terminator",
+  "termius",
   "tilix",
+  "tty",
   "urxvt",
   "wezterm",
   "xfce4-terminal",
@@ -144,6 +159,7 @@ const EXPORTABLE_SETTINGS = [
   ["ollama-model", "ollamaModel"],
   ["openai-compatible-url", "openaiCompatibleUrl"],
   ["openai-compatible-model", "openaiCompatibleModel"],
+  ["openai-compatible-text-model", "openaiCompatibleTextModel"],
   ["post-process-prompt", "postProcessPrompt"]
 ];
 
@@ -185,17 +201,19 @@ MyApplet.prototype = {
     this.transcriber = "auto";
     this.whisperModel = "";
     this.transcriberCommand = "";
-    this.postProcessBackend = "command";
+    this.postProcessBackend = "none";
     this.postProcessCommand = "";
     this.ollamaUrl = "http://127.0.0.1:11434";
     this.ollamaModel = "";
-    this.openaiCompatibleUrl = "http://127.0.0.1:8000/v1";
-    this.openaiCompatibleModel = "";
+    this.openaiCompatibleUrl = DEFAULT_OPENAI_COMPATIBLE_URL;
+    this.openaiCompatibleModel = DEFAULT_OPENAI_COMPATIBLE_MODEL;
+    this.openaiCompatibleTextModel = "";
+    this.openaiCompatibleApiKey = "";
     this.postProcessPrompt = "";
     this.personalContext = "";
     this.vocabulary = "";
     this.notifyRecording = false;
-    this.notifyComplete = true;
+    this.notifyComplete = false;
     this.notifyError = true;
     this.status = "idle";
     this.lastTranscript = "";
@@ -217,6 +235,10 @@ MyApplet.prototype = {
     this.setupCheckTimer = 0;
     this.pasteTimer = 0;
     this.alarmTimer = 0;
+    this.ollamaInstallWatchTimer = 0;
+    this.ollamaInstallWatchPolls = 0;
+    this.externalApiEnvMonitor = null;
+    this.externalApiEnvApplyTarget = "voice";
 
     this.set_applet_icon_path(this.metadata.path + "/icon.svg");
     this.set_applet_label("");
@@ -224,6 +246,7 @@ MyApplet.prototype = {
 
     this.settings = new Settings.AppletSettings(this, UUID, instanceId);
     this._bindSettings();
+    this._syncExternalApiConfigOnStartup();
     this._syncActiveLanguage();
     this._ensureVoiceModelCompatibleWithPrimaryLanguage(false);
     this._buildMenu();
@@ -259,6 +282,8 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "ollama-model", "ollamaModel", this._onTextModelSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-url", "openaiCompatibleUrl", this._onTextModelSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-model", "openaiCompatibleModel", this._onTextModelSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-text-model", "openaiCompatibleTextModel", this._onTextModelSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-api-key", "openaiCompatibleApiKey", this._onVoiceBackendSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-prompt", "postProcessPrompt", this._onTextModelSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "personal-context", "personalContext", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "vocabulary", "vocabulary", null, null);
@@ -423,6 +448,25 @@ MyApplet.prototype = {
     openGuide.connect("activate", () => this._openSetupGuide());
     this.toolsMenuItem.menu.addMenuItem(openGuide);
 
+    this.installMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Install"));
+    this.toolsMenuItem.menu.addMenuItem(this.installMenuItem);
+
+    let installOllamaRuntime = new PopupMenu.PopupIconMenuItem(_("Install Ollama"), "system-software-install-symbolic", St.IconType.SYMBOLIC);
+    installOllamaRuntime.connect("activate", () => this._installOllamaRuntime());
+    this.installMenuItem.menu.addMenuItem(installOllamaRuntime);
+
+    let uninstallOllamaRuntime = new PopupMenu.PopupIconMenuItem(_("Uninstall Ollama"), "edit-delete-symbolic", St.IconType.SYMBOLIC);
+    uninstallOllamaRuntime.connect("activate", () => this._uninstallOllamaRuntime());
+    this.installMenuItem.menu.addMenuItem(uninstallOllamaRuntime);
+
+    let basicSetup = new PopupMenu.PopupIconMenuItem(_("Basic setup"), "emblem-system-symbolic", St.IconType.SYMBOLIC);
+    basicSetup.connect("activate", () => this._runBasicSetup());
+    this.installMenuItem.menu.addMenuItem(basicSetup);
+
+    let installOllamaModel = new PopupMenu.PopupIconMenuItem(_("Choose Ollama text model"), "view-list-symbolic", St.IconType.SYMBOLIC);
+    installOllamaModel.connect("activate", () => this._chooseOllamaTextModel());
+    this.installMenuItem.menu.addMenuItem(installOllamaModel);
+
     this.diagnosticsMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Diagnostics"));
     this.toolsMenuItem.menu.addMenuItem(this.diagnosticsMenuItem);
     this.diagnosticsMenuItem.menu.addMenuItem(this.doctorSummaryItem);
@@ -442,6 +486,10 @@ MyApplet.prototype = {
     let saveDiagnostics = new PopupMenu.PopupIconMenuItem(_("Save diagnostics"), "document-save-symbolic", St.IconType.SYMBOLIC);
     saveDiagnostics.connect("activate", () => this._saveDiagnostics());
     this.diagnosticsMenuItem.menu.addMenuItem(saveDiagnostics);
+
+    let benchmark = new PopupMenu.PopupIconMenuItem(_("Benchmark downloaded models"), "utilities-system-monitor-symbolic", St.IconType.SYMBOLIC);
+    benchmark.connect("activate", () => this._selectBenchmarkAudioFile());
+    this.diagnosticsMenuItem.menu.addMenuItem(benchmark);
 
     this.inputSourceItem = new PopupMenu.PopupSubMenuMenuItem(_("Input source"));
     this.inputSourceItem.menu.connect("open-state-changed", (menu, open) => {
@@ -506,6 +554,7 @@ MyApplet.prototype = {
     this._styleSelectionSubmenu(this.textOutputMenuItem);
     this._styleSelectionSubmenu(this.transcriptsMenuItem);
     this._styleSelectionSubmenu(this.toolsMenuItem);
+    this._styleSelectionSubmenu(this.installMenuItem);
     this._styleSelectionSubmenu(this.diagnosticsMenuItem);
     this._styleSelectionSubmenu(this.maintenanceMenuItem);
     this._styleSelectionSubmenu(this.inputSourceItem);
@@ -665,6 +714,8 @@ MyApplet.prototype = {
     this._clearSetupCheckTimer();
     this._clearPasteTimer();
     this._clearAlarmTimer();
+    this._clearOllamaInstallWatchTimer();
+    this._clearExternalApiEnvMonitor();
     Main.keybindingManager.removeHotKey(this._hotkeyName(HOTKEY_ID));
     Main.keybindingManager.removeHotKey(this._hotkeyName(PRIMARY_HOTKEY_ID));
     Main.keybindingManager.removeHotKey(this._hotkeyName(SECONDARY_HOTKEY_ID));
@@ -681,6 +732,8 @@ MyApplet.prototype = {
     let safeOllamaModel = this._coerceCliTextArg(this.ollamaModel, "ollama model");
     let safeOpenAiCompatibleUrl = this._coerceCliTextArg(this.openaiCompatibleUrl, "openai-compatible URL");
     let safeOpenAiCompatibleModel = this._coerceCliTextArg(this.openaiCompatibleModel, "openai-compatible model");
+    let safeOpenAiCompatibleTextModel = this._coerceCliTextArg(this.openaiCompatibleTextModel, "openai-compatible text model");
+    let safeOpenAiCompatibleApiKey = this._coerceCliTextArg(this.openaiCompatibleApiKey, "openai-compatible API key");
     let safePostProcessPrompt = this._coerceCliTextArg(this.postProcessPrompt, "post-process prompt");
     let safeWhisperModel = this._coerceCliTextArg(this.whisperModel, "whisper model");
     let safePersonalContext = this._coerceCliTextArg(this.personalContext, "personal context");
@@ -694,7 +747,7 @@ MyApplet.prototype = {
       "--max-seconds", String(this._normalizeRecordingLimit(this.maxSeconds)),
       "--recorder", String(this.recorder || "auto"),
       "--transcriber", String(this.transcriber || "auto"),
-      "--post-process-backend", String(this.postProcessBackend || "command"),
+      "--post-process-backend", String(this.postProcessBackend || "none"),
       "--insert-method", "none",
       "--typing-delay-ms", String(this._normalizeTypingDelayMs(this.typingDelayMs))
     ];
@@ -727,6 +780,12 @@ MyApplet.prototype = {
     }
     if (safeOpenAiCompatibleModel.trim() !== "") {
       args.push("--openai-compatible-model", safeOpenAiCompatibleModel);
+    }
+    if (safeOpenAiCompatibleTextModel.trim() !== "") {
+      args.push("--openai-compatible-text-model", safeOpenAiCompatibleTextModel);
+    }
+    if (safeOpenAiCompatibleApiKey.trim() !== "") {
+      args.push("--openai-compatible-api-key", safeOpenAiCompatibleApiKey);
     }
     if (safePostProcessPrompt.trim() !== "") {
       args.push("--post-process-prompt", safePostProcessPrompt);
@@ -761,6 +820,20 @@ MyApplet.prototype = {
 
   _diagnosticsSaveArgs: function() {
     return [this._cliCommand(), "diagnostics", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshotForCli()), "--save", "--json"];
+  },
+
+  _benchmarkArgs: function(audioPath) {
+    return [this._cliCommand(), "benchmark-models", String(audioPath || ""), "--language", String(this._currentLanguage()), "--json"];
+  },
+
+  _installTextModelArgs: function(model) {
+    let safeOllamaUrl = this._coerceCliTextArg(this.ollamaUrl, "ollama URL");
+    let safeModel = this._coerceCliTextArg(model, "ollama model");
+    let args = [this._cliCommand(), "install-text-model", "--backend", "ollama", "--model", safeModel, "--json"];
+    if (safeOllamaUrl.trim() !== "") {
+      args.push("--ollama-url", safeOllamaUrl);
+    }
+    return args;
   },
 
   _alarmListArgs: function() {
@@ -803,16 +876,20 @@ MyApplet.prototype = {
     return [this._cliCommand(), "models", "--json"];
   },
 
-  _textModelsArgs: function() {
+  _textModelsArgs: function(backendOverride) {
     let safeOllamaUrl = this._coerceCliTextArg(this.ollamaUrl, "ollama URL");
     let safeOpenAiCompatibleUrl = this._coerceCliTextArg(this.openaiCompatibleUrl, "openai-compatible URL");
+    let safeOpenAiCompatibleApiKey = this._coerceCliTextArg(this.openaiCompatibleApiKey, "openai-compatible API key");
 
     let args = [this._cliCommand(), "text-models", "--json"];
-    let backend = String(this.postProcessBackend || "");
+    let backend = String(backendOverride || this.postProcessBackend || "");
     if (backend === "openai-compatible") {
       args.push("--backend", "openai-compatible");
       if (safeOpenAiCompatibleUrl.trim() !== "") {
         args.push("--openai-compatible-url", safeOpenAiCompatibleUrl);
+      }
+      if (safeOpenAiCompatibleApiKey.trim() !== "") {
+        args.push("--openai-compatible-api-key", safeOpenAiCompatibleApiKey);
       }
       return args;
     }
@@ -1476,6 +1553,18 @@ MyApplet.prototype = {
     }
   },
 
+  _openFile: function(path, successMessage) {
+    try {
+      if (!GLib.file_test(path, GLib.FileTest.EXISTS)) {
+        throw new Error("file is not available: " + path);
+      }
+      this._openUri(GLib.filename_to_uri(path, null), successMessage);
+    } catch (err) {
+      global.logError(err);
+      this._setStatus("error", _("Could not open file: ") + err.message, this.lastTranscript);
+    }
+  },
+
   _copySetupPlan: function() {
     this._spawnJson(this._setupArgs(), (payload) => {
       if (payload.error) {
@@ -1547,6 +1636,165 @@ MyApplet.prototype = {
       }
       this._setStatus("done", _("Saved diagnostics: ") + path, this.lastTranscript);
     });
+  },
+
+  _benchmarkAudioFileDialogArgs: function() {
+    return [
+      "zenity",
+      "--file-selection",
+      "--title=Choose benchmark audio file",
+      "--file-filter=Audio files | *.wav *.WAV *.flac *.FLAC *.mp3 *.MP3 *.ogg *.OGG *.oga *.OGA *.opus *.OPUS *.m4a *.M4A *.aac *.AAC *.webm *.WEBM"
+    ];
+  },
+
+  _shellQuote: function(value) {
+    return "'" + String(value || "").replace(/'/g, "'\"'\"'") + "'";
+  },
+
+  _terminalCommandArgs: function(title, command) {
+    let terminalTitle = String(title || "Speed of Cinnamon");
+    if (GLib.find_program_in_path("gnome-terminal")) {
+      return ["gnome-terminal", "--title=" + terminalTitle, "--", "bash", "-lc", command];
+    }
+    if (GLib.find_program_in_path("x-terminal-emulator")) {
+      return ["x-terminal-emulator", "-e", "bash", "-lc", command];
+    }
+    if (GLib.find_program_in_path("xterm")) {
+      return ["xterm", "-T", terminalTitle, "-e", "bash", "-lc", command];
+    }
+    return [];
+  },
+
+  _runTerminalWorkflow: function(title, command, openedMessage) {
+    let terminalArgs = this._terminalCommandArgs(title, command);
+    if (terminalArgs.length === 0) {
+      this._setStatus("error", _("No supported terminal found"), this.lastTranscript);
+      this._notify(_("No supported terminal found"), _("Install gnome-terminal, x-terminal-emulator, or xterm."), true);
+      return false;
+    }
+    try {
+      Util.spawn(this._coerceSpawnArgs(terminalArgs));
+      this._setStatus("processing", openedMessage, this.lastTranscript);
+      return true;
+    } catch (err) {
+      global.logError(err);
+      this._setStatus("error", _("Could not open terminal: ") + String(err), this.lastTranscript);
+      this._notify(_("Could not open terminal"), String(err), true);
+      return false;
+    }
+  },
+
+  _terminalWorkflowScript: function(lines) {
+    let script = [
+      "set -eu",
+      "rc=0",
+      "trap 'rc=$?; printf \"\\nFinished with exit code %s.\\n\" \"$rc\"; read -r -p \"Press Enter to close...\"; exit \"$rc\"' EXIT"
+    ].concat(lines || []);
+    return script.join("; ");
+  },
+
+  _installOllamaRuntimeCommand: function() {
+    return this._terminalWorkflowScript([
+      "echo 'Installing Ollama runtime...'",
+      "if command -v ollama >/dev/null 2>&1; then echo 'Ollama is already installed.'; ollama --version || true; else curl -fsSL https://ollama.com/install.sh | sh; fi",
+      "if command -v systemctl >/dev/null 2>&1; then sudo systemctl enable --now ollama || true; fi",
+      "if command -v ollama >/dev/null 2>&1; then ollama serve >/tmp/speed-of-cinnamon-ollama.log 2>&1 & sleep 2 || true; fi",
+      "curl -fsS http://127.0.0.1:11434/api/tags >/dev/null && echo 'Ollama is reachable on 127.0.0.1:11434.' || { echo 'Ollama installed, but the local API is not reachable yet.'; exit 1; }"
+    ]);
+  },
+
+  _uninstallOllamaRuntimeCommand: function() {
+    return this._terminalWorkflowScript([
+      "echo 'Uninstalling Ollama runtime...'",
+      "if command -v rpm >/dev/null 2>&1 && rpm -q ollama >/dev/null 2>&1; then sudo dnf remove -y ollama; else sudo systemctl disable --now ollama 2>/dev/null || true; sudo rm -f /etc/systemd/system/ollama.service /usr/local/bin/ollama; sudo rm -rf /usr/share/ollama; sudo userdel ollama 2>/dev/null || true; sudo groupdel ollama 2>/dev/null || true; sudo systemctl daemon-reload 2>/dev/null || true; fi",
+      "if command -v ollama >/dev/null 2>&1; then echo 'Ollama command is still present.'; exit 1; fi",
+      "echo 'Ollama runtime removed.'"
+    ]);
+  },
+
+  _basicSetupCommand: function() {
+    let cli = this._shellQuote(this._cliCommand());
+    return this._terminalWorkflowScript([
+      "echo 'Running Speed of Cinnamon basic setup...'",
+      "if command -v dnf >/dev/null 2>&1; then sudo dnf install -y curl zenity xdotool xclip xsel wl-clipboard pipewire-utils pulseaudio-utils alsa-utils python3-pip; fi",
+      "if command -v python3 >/dev/null 2>&1; then python3 -m pip install --user --upgrade faster-whisper; fi",
+      cli + " download-model ct2-base-int8 --json",
+      "echo 'Basic setup finished.'"
+    ]);
+  },
+
+  _installOllamaRuntime: function(openChooserAfterInstall) {
+    let opened = this._runTerminalWorkflow(_("Install Ollama"), this._installOllamaRuntimeCommand(), _("Ollama install terminal opened"));
+    if (opened && openChooserAfterInstall) {
+      this._watchOllamaInstallThenChoose();
+    }
+  },
+
+  _uninstallOllamaRuntime: function() {
+    this._runTerminalWorkflow(_("Uninstall Ollama"), this._uninstallOllamaRuntimeCommand(), _("Ollama uninstall terminal opened"));
+  },
+
+  _runBasicSetup: function() {
+    this._runTerminalWorkflow(_("Speed of Cinnamon basic setup"), this._basicSetupCommand(), _("Basic setup terminal opened"));
+  },
+
+  _benchmarkTerminalArgs: function() {
+    let command = [
+      "audio=$(zenity --file-selection --title='Choose benchmark audio file' --file-filter='Audio files | *.wav *.WAV *.flac *.FLAC *.mp3 *.MP3 *.ogg *.OGG *.oga *.OGA *.opus *.OPUS *.m4a *.M4A *.aac *.AAC *.webm *.WEBM')",
+      "if [ -z \"$audio\" ]; then echo 'Benchmark cancelled.'; read -r -p 'Press Enter to close...'; exit 0; fi",
+      "printf 'Benchmark audio: %s\\n\\n' \"$audio\"",
+      this._shellQuote(this._cliCommand()) + " benchmark-models \"$audio\" --language " + this._shellQuote(this._currentLanguage()) + " --json",
+      "rc=$?",
+      "printf '\\nBenchmark finished with exit code %s.\\n' \"$rc\"",
+      "read -r -p 'Press Enter to close...'",
+      "exit \"$rc\""
+    ].join("; ");
+    return this._terminalCommandArgs("Speed of Cinnamon Benchmark", command);
+  },
+
+  _selectBenchmarkAudioFile: function() {
+    let terminalArgs = this._benchmarkTerminalArgs();
+    if (terminalArgs.length > 0) {
+      try {
+        Util.spawn(this._coerceSpawnArgs(terminalArgs));
+        this._setStatus("processing", _("Benchmark terminal opened"), this.lastTranscript);
+      } catch (err) {
+        global.logError(err);
+        this._setStatus("error", _("Could not open benchmark terminal: ") + String(err), this.lastTranscript);
+      }
+      return;
+    }
+    if (!GLib.find_program_in_path("zenity")) {
+      this._setStatus("error", _("Install zenity to choose a benchmark audio file"), this.lastTranscript);
+      return;
+    }
+    this._setStatus("processing", _("Choose benchmark audio file..."), this.lastTranscript);
+    this._spawnText(this._benchmarkAudioFileDialogArgs(), (output) => {
+      let audioPath = String(output || "").trim();
+      if (audioPath === "") {
+        this._setStatus("ready", _("Benchmark cancelled"), this.lastTranscript);
+        return;
+      }
+      this._benchmarkDownloadedModels(audioPath);
+    }, { timeoutMs: 0 });
+  },
+
+  _benchmarkDownloadedModels: function(audioPath) {
+    this._setStatus("processing", _("Benchmarking downloaded models..."), this.lastTranscript);
+    this._spawnJson(this._benchmarkArgs(audioPath), (payload) => {
+      if (payload.error) {
+        this._setStatus("error", payload.error, this.lastTranscript);
+        return;
+      }
+      let results = Array.isArray(payload.results) ? payload.results : [];
+      this.clipboard.set_text(St.ClipboardType.CLIPBOARD, JSON.stringify(payload, null, 2));
+      let fastest = String(payload.fastest_model || "").trim();
+      let message = String(payload.message || _("Benchmark complete"));
+      if (fastest !== "") {
+        message += "; " + _("fastest: ") + fastest;
+      }
+      this._setStatus("done", message + _("; copied results") + " (" + String(results.length) + ")", this.lastTranscript);
+    }, { timeoutMs: BENCHMARK_COMMAND_TIMEOUT_MS });
   },
 
   _setAlarmOptionStatus: function(message) {
@@ -1794,7 +2042,7 @@ MyApplet.prototype = {
     automatic.connect("activate", () => this._selectAutomaticVoiceBackend());
     this.modelItem.menu.addMenuItem(automatic);
 
-    this.modelItem.menu.addMenuItem(this._selectionInfoItem(_("Active: ") + this._currentLanguage() + _(", primary: ") + this._voiceModelLanguage() + _(", starter: ") + this._starterVoiceModelName()));
+    this.modelItem.menu.addMenuItem(this._selectionInfoItem(_("Active: ") + this._activeVoiceModelSummary()));
 
     let download = this._styleMenuItemLabel(
       new PopupMenu.PopupIconMenuItem(_("Download starter model") + ": " + this._starterVoiceModelName(), "folder-download-symbolic", St.IconType.SYMBOLIC)
@@ -1826,12 +2074,18 @@ MyApplet.prototype = {
     }
     let ct2Menu = new PopupMenu.PopupSubMenuMenuItem(_("CTranslate2"));
     let ggmlMenu = new PopupMenu.PopupSubMenuMenuItem(_("GGML"));
+    let externalMenu = new PopupMenu.PopupSubMenuMenuItem(_("External API"));
     this._styleMenuItemLabel(ct2Menu);
     this._styleMenuItemLabel(ggmlMenu);
+    this._styleMenuItemLabel(externalMenu);
     this._styleSelectionSubmenu(ct2Menu);
     this._styleSelectionSubmenu(ggmlMenu);
+    this._styleSelectionSubmenu(externalMenu);
     this.modelItem.menu.addMenuItem(ct2Menu);
     this.modelItem.menu.addMenuItem(ggmlMenu);
+    this.modelItem.menu.addMenuItem(externalMenu);
+
+    this._populateExternalApiVoiceMenu(externalMenu.menu);
 
     let ct2Count = 0;
     let ggmlCount = 0;
@@ -1850,6 +2104,20 @@ MyApplet.prototype = {
     if (ggmlCount === 0) {
       ggmlMenu.menu.addMenuItem(this._selectionInfoItem(_("No GGML models in catalog")));
     }
+  },
+
+  _populateExternalApiVoiceMenu: function(parentMenu) {
+    let active = String(this.transcriber || "") === "openai-compatible";
+    let model = String(this.openaiCompatibleModel || "").trim();
+    let url = String(this.openaiCompatibleUrl || "").trim();
+    let useItem = new PopupMenu.PopupIconMenuItem((active ? "[x] " : "[ ] ") + _("Use OpenAI-compatible API"), "network-server-symbolic", St.IconType.SYMBOLIC);
+    this._styleMenuItemLabel(useItem);
+    useItem.connect("activate", () => this._openExternalApiEnvEditor("voice"));
+    parentMenu.addMenuItem(useItem);
+
+    parentMenu.addMenuItem(this._selectionInfoItem(_("Endpoint: ") + (url || _("not configured"))));
+    parentMenu.addMenuItem(this._selectionInfoItem(_("Model: ") + (model || _("not configured"))));
+    parentMenu.addMenuItem(this._selectionInfoItem(_("Configure URL, model, and optional API key in applet settings.")));
   },
 
   _addModelMenuEntry: function(model, parentMenu) {
@@ -1940,6 +2208,22 @@ MyApplet.prototype = {
 
   _starterVoiceModelName: function() {
     return "ct2-base-int8";
+  },
+
+  _activeVoiceModelSummary: function() {
+    let backend = String(this.transcriber || "auto");
+    let model = String(this.whisperModel || "").trim();
+    if ((backend === "whisper-cpp" || backend === "faster-whisper") && model !== "") {
+      return GLib.path_get_basename(model);
+    }
+    if (backend === "command") return _("custom command");
+    if (backend === "whisper") return _("Whisper command");
+    if (backend === "openai-compatible") {
+      return _("External API: ") + (String(this.openaiCompatibleModel || "").trim() || _("not configured"));
+    }
+    if (backend === "whisper-cpp") return _("local model file");
+    if (backend === "faster-whisper") return _("local model directory");
+    return this._currentLanguage() + _(", primary: ") + this._voiceModelLanguage() + _(", starter: ") + this._starterVoiceModelName();
   },
 
   _whisperModelSupportsLanguage: function(language) {
@@ -2052,17 +2336,250 @@ MyApplet.prototype = {
     this._setStatus("ready", _("Voice model: automatic"), this.lastTranscript);
   },
 
+  _externalApiEnvPath: function() {
+    return GLib.build_filenamev([GLib.get_user_config_dir(), "speed-of-cinnamon", "external-api.env"]);
+  },
+
+  _externalApiEnvValue: function(value, fallback) {
+    let normalized = String(value || "").trim();
+    if (normalized === LEGACY_OPENAI_COMPATIBLE_URL) {
+      return DEFAULT_OPENAI_COMPATIBLE_URL;
+    }
+    return normalized || String(fallback || "");
+  },
+
+  _externalApiEnvContent: function() {
+    return [
+      "OPENAI_COMPATIBLE_URL=" + this._externalApiEnvValue(this.openaiCompatibleUrl, DEFAULT_OPENAI_COMPATIBLE_URL),
+      "OPENAI_COMPATIBLE_STT_MODEL=" + this._externalApiEnvValue(this.openaiCompatibleModel, DEFAULT_OPENAI_COMPATIBLE_MODEL),
+      "OPENAI_COMPATIBLE_TEXT_MODEL=" + this._externalApiEnvValue(this.openaiCompatibleTextModel, ""),
+      "OPENAI_COMPATIBLE_API_KEY=" + String(this.openaiCompatibleApiKey || "").trim(),
+      ""
+    ].join("\n");
+  },
+
+  _writeExternalApiEnvFile: function() {
+    let path = this._externalApiEnvPath();
+    GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o700);
+    GLib.file_set_contents(path, this._externalApiEnvContent());
+    try {
+      Gio.File.new_for_path(path).set_attribute_uint32("unix::mode", 0o600, Gio.FileQueryInfoFlags.NONE, null);
+    } catch (err) {
+      global.logError(err);
+    }
+  },
+
+  _syncExternalApiConfigOnStartup: function() {
+    let changed = false;
+    if (String(this.openaiCompatibleUrl || "").trim() === LEGACY_OPENAI_COMPATIBLE_URL) {
+      this.openaiCompatibleUrl = DEFAULT_OPENAI_COMPATIBLE_URL;
+      this.settings.setValue("openai-compatible-url", this.openaiCompatibleUrl);
+      changed = true;
+    }
+    if (String(this.openaiCompatibleModel || "").trim() === "") {
+      this.openaiCompatibleModel = DEFAULT_OPENAI_COMPATIBLE_MODEL;
+      this.settings.setValue("openai-compatible-model", this.openaiCompatibleModel);
+      changed = true;
+    }
+    if (GLib.file_test(this._externalApiEnvPath(), GLib.FileTest.EXISTS)) {
+      this._ensureExternalApiEnvFile();
+      this._applyExternalApiEnvFile(false);
+      return;
+    }
+    if (changed) {
+      this._ensureExternalApiEnvFile();
+    }
+  },
+
+  _ensureExternalApiEnvFile: function() {
+    let path = this._externalApiEnvPath();
+    GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o700);
+    if (!GLib.file_test(path, GLib.FileTest.EXISTS)) {
+      GLib.file_set_contents(path, this._externalApiEnvContent());
+      try {
+        Gio.File.new_for_path(path).set_attribute_uint32("unix::mode", 0o600, Gio.FileQueryInfoFlags.NONE, null);
+      } catch (err) {
+        global.logError(err);
+      }
+    } else {
+      this._migrateExternalApiEnvFile(path);
+    }
+    return path;
+  },
+
+  _migrateExternalApiEnvFile: function(path) {
+    let ok;
+    let contents;
+    try {
+      [ok, contents] = GLib.file_get_contents(path);
+    } catch (err) {
+      global.logError(err);
+      return;
+    }
+    if (!ok) {
+      return;
+    }
+    let text = ByteArray.toString(contents);
+    let migrated = text;
+    if (migrated.indexOf("OPENAI_COMPATIBLE_URL=" + LEGACY_OPENAI_COMPATIBLE_URL) >= 0) {
+      migrated = migrated.replace("OPENAI_COMPATIBLE_URL=" + LEGACY_OPENAI_COMPATIBLE_URL, "OPENAI_COMPATIBLE_URL=" + DEFAULT_OPENAI_COMPATIBLE_URL);
+    }
+    if (migrated.indexOf("OPENAI_COMPATIBLE_STT_MODEL=") < 0 && migrated.indexOf("OPENAI_COMPATIBLE_MODEL=") >= 0) {
+      migrated = migrated.replace("OPENAI_COMPATIBLE_MODEL=", "OPENAI_COMPATIBLE_STT_MODEL=");
+    }
+    if (migrated.indexOf("OPENAI_COMPATIBLE_STT_MODEL=") < 0) {
+      let suffix = migrated.lastIndexOf("\n") === migrated.length - 1 ? "" : "\n";
+      migrated += suffix + "OPENAI_COMPATIBLE_STT_MODEL=" + this._externalApiEnvValue(this.openaiCompatibleModel, DEFAULT_OPENAI_COMPATIBLE_MODEL) + "\n";
+    }
+    if (migrated.indexOf("OPENAI_COMPATIBLE_TEXT_MODEL=") < 0) {
+      let suffix = migrated.lastIndexOf("\n") === migrated.length - 1 ? "" : "\n";
+      migrated += suffix + "OPENAI_COMPATIBLE_TEXT_MODEL=" + this._externalApiEnvValue(this.openaiCompatibleTextModel, "") + "\n";
+    }
+    if (migrated !== text) {
+      GLib.file_set_contents(path, migrated);
+    }
+  },
+
+  _parseExternalApiEnvText: function(text) {
+    let values = {};
+    for (let line of String(text || "").split(/\r?\n/)) {
+      let trimmed = line.trim();
+      if (trimmed === "" || trimmed.indexOf("#") === 0) {
+        continue;
+      }
+      let pos = trimmed.indexOf("=");
+      if (pos <= 0) {
+        continue;
+      }
+      let key = trimmed.slice(0, pos).trim();
+      let value = trimmed.slice(pos + 1).trim();
+      if ((value.indexOf('"') === 0 && value.lastIndexOf('"') === value.length - 1) || (value.indexOf("'") === 0 && value.lastIndexOf("'") === value.length - 1)) {
+        value = value.slice(1, -1);
+      }
+      values[key] = value;
+    }
+    return values;
+  },
+
+  _applyExternalApiEnvFile: function(showStatus) {
+    let path = this._externalApiEnvPath();
+    let ok;
+    let contents;
+    try {
+      [ok, contents] = GLib.file_get_contents(path);
+    } catch (err) {
+      global.logError(err);
+      return false;
+    }
+    if (!ok) {
+      return false;
+    }
+    let values = this._parseExternalApiEnvText(ByteArray.toString(contents));
+    let url = this._coerceCliTextArg(this._externalApiEnvValue(values.OPENAI_COMPATIBLE_URL || "", DEFAULT_OPENAI_COMPATIBLE_URL), "openai-compatible URL").trim();
+    let model = this._coerceCliTextArg(this._externalApiEnvValue(values.OPENAI_COMPATIBLE_STT_MODEL || values.OPENAI_COMPATIBLE_MODEL || "", DEFAULT_OPENAI_COMPATIBLE_MODEL), "openai-compatible model").trim();
+    let textModel = this._coerceCliTextArg(values.OPENAI_COMPATIBLE_TEXT_MODEL || "", "openai-compatible text model").trim();
+    let apiKey = this._coerceCliTextArg(values.OPENAI_COMPATIBLE_API_KEY || "", "openai-compatible API key").trim();
+    if (url !== "") {
+      this.openaiCompatibleUrl = url;
+      this.settings.setValue("openai-compatible-url", this.openaiCompatibleUrl);
+    }
+    if (model !== "") {
+      this.openaiCompatibleModel = model;
+      this.settings.setValue("openai-compatible-model", this.openaiCompatibleModel);
+    }
+    this.openaiCompatibleTextModel = textModel;
+    this.settings.setValue("openai-compatible-text-model", this.openaiCompatibleTextModel);
+    this.openaiCompatibleApiKey = apiKey;
+    this.settings.setValue("openai-compatible-api-key", this.openaiCompatibleApiKey);
+    if (showStatus) {
+      this._setStatus("ready", _("External API config loaded: ") + (this.openaiCompatibleModel || _("not configured")), this.lastTranscript);
+    }
+    return true;
+  },
+
+  _clearExternalApiEnvMonitor: function() {
+    if (this.externalApiEnvMonitor) {
+      try {
+        this.externalApiEnvMonitor.cancel();
+      } catch (err) {
+        global.logError(err);
+      }
+      this.externalApiEnvMonitor = null;
+    }
+  },
+
+  _watchExternalApiEnvFile: function(path) {
+    this._clearExternalApiEnvMonitor();
+    try {
+      let file = Gio.File.new_for_path(path);
+      this.externalApiEnvMonitor = file.monitor_file(Gio.FileMonitorFlags.NONE, null);
+      this.externalApiEnvMonitor.connect("changed", (monitor, fileObj, otherFile, eventType) => {
+        if (eventType === Gio.FileMonitorEvent.CHANGES_DONE_HINT || eventType === Gio.FileMonitorEvent.CREATED) {
+          if (this._applyExternalApiEnvFile(true)) {
+            this._applyExternalApiEnvTarget(this.externalApiEnvApplyTarget || "voice");
+          }
+        }
+      });
+    } catch (err) {
+      global.logError(err);
+    }
+  },
+
+  _openExternalApiEnvEditor: function(target) {
+    this.externalApiEnvApplyTarget = target || "voice";
+    let path = this._ensureExternalApiEnvFile();
+    if (this._applyExternalApiEnvFile(false)) {
+      this._applyExternalApiEnvTarget(this.externalApiEnvApplyTarget);
+    }
+    this._watchExternalApiEnvFile(path);
+    this._openFile(path, _("Opened External API .env"));
+  },
+
+  _applyExternalApiEnvTarget: function(target) {
+    if (target === "text") {
+      this.postProcessBackend = "openai-compatible";
+      this.settings.setValue("post-process-backend", this.postProcessBackend);
+      this._refreshTextModelMenuForBackend("openai-compatible");
+      this._setStatus("ready", _("Text polishing: OpenAI-compatible API"), this.lastTranscript);
+      return;
+    }
+    this._selectExternalApiVoiceBackend();
+  },
+
+  _selectExternalApiVoiceBackend: function() {
+    this.transcriber = "openai-compatible";
+    this.whisperModel = "";
+    this.settings.setValue("transcriber", this.transcriber);
+    this.settings.setValue("whisper-model", this.whisperModel);
+    this._refreshModelMenu();
+    let model = String(this.openaiCompatibleModel || "").trim();
+    if (model === "") {
+      this._setStatus("error", _("External API speech model is not configured"), this.lastTranscript);
+      return;
+    }
+    this._setStatus("ready", _("Voice model: External API ") + model, this.lastTranscript);
+  },
+
   _refreshTextModelMenu: function() {
+    this._refreshTextModelMenuForBackend("");
+  },
+
+  _refreshTextModelMenuForBackend: function(backendOverride) {
     if (!this.textModelItem) {
       return;
     }
-    this._populateTextModelMenu([], _("Loading local text models..."));
-    this._spawnJson(this._textModelsArgs(), (payload) => {
+    let backend = String(backendOverride || this.postProcessBackend || "");
+    let provider = backend === "openai-compatible" ? "openai-compatible" : "ollama";
+    let loadingMessage = provider === "openai-compatible"
+      ? _("Loading OpenAI-compatible text models...")
+      : _("Loading local text models...");
+    this._populateTextModelMenu([], loadingMessage, provider);
+    this._spawnJson(this._textModelsArgs(backendOverride), (payload) => {
       if (payload.error) {
-        this._populateTextModelMenu([], payload.error);
+        this._populateTextModelMenu([], payload.error, provider);
         return;
       }
-      this._populateTextModelMenu(payload.models || [], payload.available === false ? payload.message : "", payload.backend || "ollama");
+      this._populateTextModelMenu(payload.models || [], payload.available === false ? payload.message : "", payload.backend || provider);
     });
   },
 
@@ -2071,7 +2588,7 @@ MyApplet.prototype = {
       return;
     }
     this.textModelItem.menu.removeAll();
-    let backend = String(this.postProcessBackend || "command");
+    let backend = String(this.postProcessBackend || "none");
     let activeProvider = String(provider || (backend === "openai-compatible" ? "openai-compatible" : "ollama"));
 
     let disabled = this._selectionMenuItem((backend === "none" ? "[x] " : "[ ] ") + _("Disabled"));
@@ -2085,11 +2602,11 @@ MyApplet.prototype = {
     this.textModelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
     let ollama = this._selectionMenuItem((backend === "ollama" ? "[x] " : "[ ] ") + _("Ollama local model"));
-    ollama.connect("activate", () => this._selectTextModelBackend("ollama", this.ollamaModel, _("Text polishing: Ollama")));
+    ollama.connect("activate", () => this._activateOllamaTextModelFlow());
     this.textModelItem.menu.addMenuItem(ollama);
 
-    let openaiCompatible = this._selectionMenuItem((backend === "openai-compatible" ? "[x] " : "[ ] ") + _("OpenAI-compatible local server"));
-    openaiCompatible.connect("activate", () => this._selectTextModelBackend("openai-compatible", this.openaiCompatibleModel, _("Text polishing: OpenAI-compatible local server")));
+    let openaiCompatible = this._selectionMenuItem((backend === "openai-compatible" ? "[x] " : "[ ] ") + _("OpenAI-compatible API"));
+    openaiCompatible.connect("activate", () => this._openExternalApiEnvEditor("text"));
     this.textModelItem.menu.addMenuItem(openaiCompatible);
 
     this.textModelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -2099,8 +2616,18 @@ MyApplet.prototype = {
       return;
     }
     if (!models || models.length === 0) {
+      let selectedOllamaModel = String(this.ollamaModel || "").trim();
+      if (activeProvider === "ollama" && backend === "ollama" && selectedOllamaModel !== "") {
+        this._addTextModelMenuEntry({
+          name: selectedOllamaModel,
+          model: selectedOllamaModel,
+          description: _("selected")
+        }, "ollama");
+        this.textModelItem.menu.addMenuItem(this._selectionInfoItem(_("Model list is temporarily empty; using selected Ollama model")));
+        return;
+      }
       let emptyLabel = activeProvider === "openai-compatible"
-        ? _("No OpenAI-compatible local models found")
+        ? _("No OpenAI-compatible text models found")
         : _("No local Ollama models found");
       this.textModelItem.menu.addMenuItem(this._selectionInfoItem(emptyLabel));
       return;
@@ -2116,7 +2643,7 @@ MyApplet.prototype = {
       return;
     }
     let provider = String(backend || "ollama");
-    let currentModel = provider === "openai-compatible" ? String(this.openaiCompatibleModel || "") : String(this.ollamaModel || "");
+    let currentModel = provider === "openai-compatible" ? String(this.openaiCompatibleTextModel || this.openaiCompatibleModel || "") : String(this.ollamaModel || "");
     let current = String(this.postProcessBackend || "") === provider && currentModel === name;
     let details = String(model.description || model.size_label || "");
     let label = (current ? "[x] " : "[ ] ") + name;
@@ -2129,18 +2656,166 @@ MyApplet.prototype = {
   },
 
   _selectTextModelBackend: function(backend, model, message) {
-    this.postProcessBackend = String(backend || "command");
+    this.postProcessBackend = String(backend || "none");
     this.settings.setValue("post-process-backend", this.postProcessBackend);
     if (this.postProcessBackend === "ollama") {
       this.ollamaModel = String(model || "");
       this.settings.setValue("ollama-model", this.ollamaModel);
     }
     if (this.postProcessBackend === "openai-compatible") {
-      this.openaiCompatibleModel = String(model || "");
-      this.settings.setValue("openai-compatible-model", this.openaiCompatibleModel);
+      this.openaiCompatibleTextModel = String(model || "");
+      this.settings.setValue("openai-compatible-text-model", this.openaiCompatibleTextModel);
+      this._writeExternalApiEnvFile();
     }
     this._refreshTextModelMenu();
     this._setStatus("ready", message, this.lastTranscript);
+  },
+
+  _activateOllamaTextModelFlow: function() {
+    if (!GLib.find_program_in_path("zenity")) {
+      this._setStatus("error", _("Install zenity to choose an Ollama model"), this.lastTranscript);
+      return;
+    }
+    this._setStatus("processing", _("Checking Ollama..."), this.lastTranscript);
+    this._spawnJson(this._textModelsArgs("ollama"), (payload) => {
+      if (payload.error) {
+        this._setStatus("error", payload.error, this.lastTranscript);
+        this._notify(_("Could not check Ollama"), String(payload.error), true);
+        return;
+      }
+      let models = Array.isArray(payload.models) ? payload.models : [];
+      if (payload.available === false) {
+        this._setStatus("processing", _("Ollama is not installed or not reachable; opening installer..."), this.lastTranscript);
+        this._installOllamaRuntime(true);
+        return;
+      }
+      if (models.length === 0) {
+        this._promptInstallOllamaTextModel();
+        return;
+      }
+      this._promptChooseOllamaTextModel(models);
+    });
+  },
+
+  _ollamaModelPromptArgs: function() {
+    return [
+      "zenity",
+      "--entry",
+      "--title=Install Ollama text model",
+      "--text=Ollama model name",
+      "--entry-text=llama3.2:3b"
+    ];
+  },
+
+  _ollamaModelChoiceArgs: function(models) {
+    let args = [
+      "zenity",
+      "--list",
+      "--title=Choose Ollama text model",
+      "--text=Choose an installed Ollama model or add another one",
+      "--column=Action",
+      "--column=Model",
+      "--hide-column=1",
+      "--print-column=1",
+      "--width=640",
+      "--height=360",
+      "ADD",
+      _("Add another model...")
+    ];
+    for (let model of (models || [])) {
+      let name = this._coerceCliTextArg(model.name || "", "ollama model");
+      if (name.trim() === "") {
+        continue;
+      }
+      let details = String(model.description || model.size_label || "").trim();
+      let label = details ? name + " (" + details + ")" : name;
+      args.push("SELECT:" + name, label);
+    }
+    return args;
+  },
+
+  _chooseOllamaTextModel: function() {
+    if (!GLib.find_program_in_path("zenity")) {
+      this._setStatus("error", _("Install zenity to choose an Ollama model"), this.lastTranscript);
+      return;
+    }
+    this._setStatus("processing", _("Loading Ollama text models..."), this.lastTranscript);
+    this._spawnJson(this._textModelsArgs("ollama"), (payload) => {
+      if (payload.error) {
+        this._setStatus("error", payload.error, this.lastTranscript);
+        this._notify(_("Could not load Ollama models"), String(payload.error), true);
+        return;
+      }
+      let models = Array.isArray(payload.models) ? payload.models : [];
+      if (models.length === 0) {
+        if (payload.available === false && payload.message) {
+          this._setStatus("processing", payload.message + "; " + _("opening installer..."), this.lastTranscript);
+          this._installOllamaRuntime(true);
+          return;
+        }
+        this._promptInstallOllamaTextModel();
+        return;
+      }
+      this._promptChooseOllamaTextModel(models);
+    });
+  },
+
+  _promptChooseOllamaTextModel: function(models) {
+    this._setStatus("processing", _("Choose Ollama text model..."), this.lastTranscript);
+    this._spawnText(this._ollamaModelChoiceArgs(models), (output) => {
+      let choice = String(output || "").trim();
+      if (choice === "") {
+        this._setStatus("ready", _("Ollama model selection cancelled"), this.lastTranscript);
+        return;
+      }
+      if (choice === "ADD") {
+        this._promptInstallOllamaTextModel();
+        return;
+      }
+      if (choice.indexOf("SELECT:") === 0) {
+        let model = choice.slice("SELECT:".length).trim();
+        if (model !== "") {
+          this._selectTextModelBackend("ollama", model, _("Text model: ") + model);
+        }
+      }
+    }, { timeoutMs: 0 });
+  },
+
+  _promptInstallOllamaTextModel: function() {
+    if (!GLib.find_program_in_path("zenity")) {
+      this._setStatus("error", _("Install zenity to enter an Ollama model name"), this.lastTranscript);
+      return;
+    }
+    this._setStatus("processing", _("Choose Ollama text model..."), this.lastTranscript);
+    this._spawnText(this._ollamaModelPromptArgs(), (output) => {
+      let model = String(output || "").trim();
+      if (model === "") {
+        this._setStatus("ready", _("Ollama model installation cancelled"), this.lastTranscript);
+        return;
+      }
+      this._installOllamaTextModel(model);
+    }, { timeoutMs: 0 });
+  },
+
+  _installOllamaTextModel: function(model) {
+    if (this.isCommandRunning) {
+      return;
+    }
+    this.isCommandRunning = true;
+    this._setStatus("processing", _("Installing Ollama model: ") + model, this.lastTranscript);
+    this._spawnJson(this._installTextModelArgs(model), (payload) => {
+      this.isCommandRunning = false;
+      if (payload.error) {
+        this._setStatus("error", payload.error, this.lastTranscript);
+        this._notify(_("Ollama model installation failed"), String(payload.error), true);
+        this._refreshTextModelMenu();
+        return;
+      }
+      let installedModel = String(payload.model || model);
+      let message = payload.message || _("Ollama model installed");
+      this._selectTextModelBackend("ollama", installedModel, message);
+      this._notify(_("Ollama model installed"), installedModel, false);
+    }, { timeoutMs: BENCHMARK_COMMAND_TIMEOUT_MS });
   },
 
   _refreshHistory: function() {
@@ -2205,6 +2880,7 @@ MyApplet.prototype = {
 
   _settingsSnapshotForCli: function() {
     let snapshot = this._settingsSnapshot();
+    snapshot["openai-compatible-api-key"] = this.openaiCompatibleApiKey;
     for (let key in CLI_TEXT_SETTINGS) {
       if (Object.prototype.hasOwnProperty.call(CLI_TEXT_SETTINGS, key) && Object.prototype.hasOwnProperty.call(snapshot, key)) {
         snapshot[key] = this._coerceCliTextArg(snapshot[key], CLI_TEXT_SETTINGS[key]);
@@ -2379,7 +3055,9 @@ MyApplet.prototype = {
 
     try {
       normalizedArgs = this._coerceSpawnArgs(args);
-      let timeoutMs = Number(options.timeoutMs || CLI_COMMAND_TIMEOUT_MS);
+      let timeoutMs = Object.prototype.hasOwnProperty.call(options, "timeoutMs")
+        ? Number(options.timeoutMs)
+        : CLI_COMMAND_TIMEOUT_MS;
       if (timeoutMs > 0) {
         timeoutId = Mainloop.timeout_add(Math.max(250, timeoutMs), () => {
           finalize({ status: "error", error: "Backend command timed out" });
@@ -2394,6 +3072,51 @@ MyApplet.prototype = {
       });
     } catch (err) {
       finalize({ status: "error", error: String(err) });
+    }
+  },
+
+  _spawnText: function(args, callback, options) {
+    options = options || {};
+    let timeoutId = 0;
+    let done = false;
+    let callbackFn = typeof callback === "function" ? callback : function() {};
+
+    const finalize = function(output) {
+      if (done) {
+        return;
+      }
+      done = true;
+      if (timeoutId) {
+        Mainloop.source_remove(timeoutId);
+        timeoutId = 0;
+      }
+      try {
+        callbackFn(String(output || ""));
+      } catch (err) {
+        global.logError(err);
+      }
+    };
+
+    try {
+      let normalizedArgs = this._coerceSpawnArgs(args);
+      let timeoutMs = Object.prototype.hasOwnProperty.call(options, "timeoutMs")
+        ? Number(options.timeoutMs)
+        : CLI_COMMAND_TIMEOUT_MS;
+      if (timeoutMs > 0) {
+        timeoutId = Mainloop.timeout_add(Math.max(250, timeoutMs), () => {
+          finalize("");
+          return false;
+        });
+      }
+      Util.spawn_async(normalizedArgs, (stdout) => {
+        if (done) {
+          return;
+        }
+        finalize(stdout);
+      });
+    } catch (err) {
+      global.logError(err);
+      finalize("");
     }
   },
 
@@ -2519,6 +3242,50 @@ MyApplet.prototype = {
       Mainloop.source_remove(this.alarmTimer);
       this.alarmTimer = 0;
     }
+  },
+
+  _clearOllamaInstallWatchTimer: function() {
+    if (this.ollamaInstallWatchTimer) {
+      Mainloop.source_remove(this.ollamaInstallWatchTimer);
+      this.ollamaInstallWatchTimer = 0;
+    }
+  },
+
+  _watchOllamaInstallThenChoose: function() {
+    this._clearOllamaInstallWatchTimer();
+    this.ollamaInstallWatchPolls = 0;
+    this._setStatus("processing", _("Waiting for Ollama installation..."), this.lastTranscript);
+    this._scheduleOllamaInstallWatchPoll();
+  },
+
+  _scheduleOllamaInstallWatchPoll: function() {
+    this.ollamaInstallWatchTimer = Mainloop.timeout_add_seconds(OLLAMA_INSTALL_POLL_SECONDS, () => {
+      this.ollamaInstallWatchTimer = 0;
+      this.ollamaInstallWatchPolls++;
+      this._spawnJson(this._textModelsArgs("ollama"), (payload) => {
+        if (payload.error) {
+          this._setStatus("error", payload.error, this.lastTranscript);
+          return;
+        }
+        if (payload.available !== false) {
+          let models = Array.isArray(payload.models) ? payload.models : [];
+          this._setStatus("ready", _("Ollama is ready"), this.lastTranscript);
+          if (models.length > 0) {
+            this._promptChooseOllamaTextModel(models);
+          } else {
+            this._promptInstallOllamaTextModel();
+          }
+          return;
+        }
+        if (this.ollamaInstallWatchPolls >= OLLAMA_INSTALL_MAX_POLLS) {
+          this._setStatus("error", _("Ollama installation did not become reachable"), this.lastTranscript);
+          this._notify(_("Ollama is not reachable"), _("Install finished or was cancelled, but 127.0.0.1:11434 is still unavailable."), true);
+          return;
+        }
+        this._scheduleOllamaInstallWatchPoll();
+      }, { timeoutMs: STATUS_COMMAND_TIMEOUT_MS });
+      return false;
+    });
   },
 
   _scheduleSetupCheck: function() {
@@ -2970,17 +3737,20 @@ MyApplet.prototype = {
     }
     if (backend === "command") return _("Voice: custom command");
     if (backend === "whisper") return _("Voice: Whisper command");
+    if (backend === "openai-compatible") {
+      return _("Voice: External API ") + (String(this.openaiCompatibleModel || "").trim() || _("not configured"));
+    }
     if (backend === "whisper-cpp") return _("Voice: local model file");
     if (backend === "faster-whisper") return _("Voice: local model directory");
     return _("Voice: automatic");
   },
 
   _textModelLabel: function() {
-    let backend = String(this.postProcessBackend || "command");
+    let backend = String(this.postProcessBackend || "none");
     if (backend === "none") return _("Text model: disabled");
     if (backend === "ollama") return _("Text model: ") + (String(this.ollamaModel || "").trim() || _("Ollama"));
     if (backend === "openai-compatible") {
-      return _("Text model: ") + (String(this.openaiCompatibleModel || "").trim() || _("OpenAI-compatible"));
+      return _("Text model: ") + (String(this.openaiCompatibleTextModel || this.openaiCompatibleModel || "").trim() || _("OpenAI-compatible"));
     }
     return _("Text model: custom command");
   },
@@ -3022,6 +3792,10 @@ MyApplet.prototype = {
     } else if (this.status === "error") {
       label = "ERR";
       tooltip = this.lastMessage || _("Error");
+      statusText = "error";
+      if (this.lastMessage) {
+        statusText += " - " + this._shortMenuText(this.lastMessage, 140);
+      }
       if (this.toggleItem) this.toggleItem.label.text = _("Start dictation");
     } else if (this.status === "recorded") {
       label = "RDY";

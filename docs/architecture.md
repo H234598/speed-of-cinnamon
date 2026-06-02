@@ -14,7 +14,7 @@ Cinnamon keybinding / panel click
        transcriber.py     ASR preset resolver and command runners
        command_chain.py   shell-free command-template execution with limited && chaining
        personalization.py context/vocabulary prompt and environment helpers
-       postprocessor.py   optional command, Ollama, or OpenAI-compatible local text polishing
+       postprocessor.py   optional command, Ollama, or OpenAI-compatible API text polishing
        alarms.py          local repeating alarm store and due-alarm scheduler
        settings_export.py portable settings snapshot helpers
        cli.py             state commands, cleanup, diagnostics, history, and CLI entry point
@@ -81,7 +81,7 @@ Text polishing is optional and local-first:
 - disabled,
 - custom command,
 - local Ollama `/api/generate`,
-- local OpenAI-compatible `/v1/chat/completions`.
+- OpenAI-compatible API `/v1/chat/completions`.
 
 The backend sends transcript text, language, personal context, and vocabulary to the selected local processor. Response
 size and output text length are bounded. Diagnostics do not include private command templates, context, or vocabulary.

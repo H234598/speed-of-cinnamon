@@ -51,6 +51,8 @@ class StateStore:
         text = str(path)
         if not text or len(text) > MAX_STATE_PATH_CHARS:
             raise RuntimeError("state file path is invalid")
+        if len(text.encode("utf-8")) > MAX_STATE_PATH_CHARS:
+            raise RuntimeError("state file path is invalid")
         if _contains_escaped_null(text):
             raise RuntimeError("state file path contains invalid null byte")
         self.path = path
@@ -66,6 +68,8 @@ class StateStore:
             raise ValueError(f"state {field_name} contains invalid null byte")
         if len(text) > MAX_STATE_STRING_CHARS:
             raise ValueError(f"state {field_name} is too large (max {MAX_STATE_STRING_CHARS} characters)")
+        if len(text.encode("utf-8")) > MAX_STATE_STRING_CHARS:
+            raise ValueError(f"state {field_name} is too large (max {MAX_STATE_STRING_CHARS} bytes)")
         return text
 
     @staticmethod

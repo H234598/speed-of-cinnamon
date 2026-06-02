@@ -3,6 +3,12 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_dir}"
+rpm_tmpdir="${TMPDIR:-/tmp}"
+
+if [ ! -d "${rpm_tmpdir}" ] || [ ! -w "${rpm_tmpdir}" ]; then
+  rpm_tmpdir="${repo_dir}/.tmp"
+fi
+mkdir -p "${rpm_tmpdir}"
 
 if ! command -v rpmbuild >/dev/null 2>&1; then
   printf 'rpmbuild not found. Install rpm-build on Fedora.\n' >&2
@@ -49,6 +55,8 @@ rpmbuild \
   --define "_topdir ${topdir}" \
   --define "_sourcedir ${topdir}/SOURCES" \
   --define "_specdir ${repo_dir}/packaging" \
+  --define "_smp_build_ncpus 1" \
+  --define "_tmppath ${rpm_tmpdir}" \
   --define "__python3 ${python_bin}" \
   -ba "${spec_file}"
 

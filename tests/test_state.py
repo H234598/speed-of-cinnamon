@@ -37,6 +37,11 @@ class StateStoreTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "state file path is invalid"):
             StateStore(Path("a" * (MAX_STATE_PATH_CHARS + 1)))
 
+    def test_state_store_rejects_oversized_path_bytes(self) -> None:
+        with mock.patch("speed_of_cinnamon.state.MAX_STATE_PATH_CHARS", 4):
+            with self.assertRaisesRegex(RuntimeError, "state file path is invalid"):
+                StateStore(Path("é" * 3))
+
     def test_missing_state_defaults_to_idle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state = StateStore(Path(tmp) / "state.json").read()
@@ -120,6 +125,11 @@ class StateStoreTest(unittest.TestCase):
             state.transcript = long_value
             with self.assertRaisesRegex(ValueError, "is too large"):
                 store.update(transcript=long_value)
+
+    def test_sanitize_text_field_rejects_oversized_text_bytes(self) -> None:
+        with mock.patch("speed_of_cinnamon.state.MAX_STATE_STRING_CHARS", 4):
+            with self.assertRaisesRegex(ValueError, "is too large"):
+                StateStore._sanitize_text_field("😀" * 2, field_name="status")
 
     def test_write_sets_private_permissions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

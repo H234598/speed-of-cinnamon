@@ -435,6 +435,7 @@ speed-of-cinnamon toggle --language de --transcriber command --transcriber-comma
 
 - `openai` and `openai-whisper` resolve to `whisper`
 - `faster-whisper` remains `faster-whisper`
+- `openai-compatible` and `external-api` resolve to `openai-compatible`
 - `custom` and `template` resolve to `command`
 
 ## Text Polishing
@@ -451,7 +452,7 @@ speed-of-cinnamon toggle \
 ```
 
 For local LLM tooling, either point the command setting at a wrapper script that reads stdin and prints only the
-polished text, use the built-in Ollama backend, or use a local OpenAI-compatible chat-completions server such as vLLM,
+polished text, use the built-in Ollama backend, or use an OpenAI-compatible API backend such as vLLM,
 llama.cpp, or LM Studio:
 
 ```bash
@@ -468,8 +469,8 @@ speed-of-cinnamon toggle \
 
 The Ollama backend calls `/api/generate` with `stream=false`. It sends the transcript, language, personal context, and
 vocabulary to the local server and expects the polished text in the `response` field. The backend stores and inserts the
-post-processed text. The OpenAI-compatible backend calls `/v1/chat/completions` with `stream=false` and the same local
-context. If your local server requires a bearer token, set `SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY` in the
+post-processed text. The OpenAI-compatible backend calls `/v1/chat/completions` with `stream=false` and the same context.
+If your server requires a bearer token, set `SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY` in the
 environment that starts the backend.
 
 To inspect installed local text models from the backend:

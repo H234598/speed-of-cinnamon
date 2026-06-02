@@ -99,6 +99,13 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
                 "Configure the custom transcriber command",
                 detail,
             )
+        elif value == "openai-compatible":
+            _add_step(
+                steps,
+                "external-api-transcriber",
+                "Configure the External API speech model",
+                detail,
+            )
         elif value in {"whisper-cpp", "faster-whisper", "auto"} and (
             "model not found" in detail.lower() or "model path" in detail.lower()
         ):
@@ -163,7 +170,7 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
             _add_step(
                 steps,
                 "openai-compatible-text-model",
-                "Select an OpenAI-compatible local text model",
+                "Select an OpenAI-compatible text model",
                 detail + " Use the applet's Text model menu, or disable text polishing.",
                 ["speed-of-cinnamon text-models --backend openai-compatible --json"],
             )

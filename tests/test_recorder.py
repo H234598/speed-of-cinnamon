@@ -125,6 +125,11 @@ class RecorderTest(unittest.TestCase):
         with self.assertRaisesRegex(RecorderError, "input device name is too long"):
             normalize_input_device("x" * 300)
 
+    def test_normalize_input_device_rejects_oversized_name_bytes(self) -> None:
+        with mock.patch("speed_of_cinnamon.recorder.MAX_RECORDING_INPUT_DEVICE_CHARS", 4):
+            with self.assertRaisesRegex(RecorderError, "input device name is too long"):
+                normalize_input_device("😀" * 2)
+
     def test_normalize_input_device_rejects_null_byte(self) -> None:
         with self.assertRaisesRegex(RecorderError, "invalid null byte"):
             normalize_input_device("alsa\x00input")
@@ -146,6 +151,23 @@ class RecorderTest(unittest.TestCase):
     def test_validate_recording_path_rejects_escaped_null(self) -> None:
         with self.assertRaisesRegex(RecorderError, "invalid null byte"):
             validate_recording_path(Path("sample\\x00.wav"), suffix=".wav")
+
+    def test_validate_recording_path_rejects_oversized_path_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
+                with self.assertRaisesRegex(RecorderError, "recording artifact path is too long"):
+                    validate_recording_path(Path(tmp) / ("é" * 120 + ".wav"), suffix=".wav")
+
+    def test_validate_recording_path_rejects_oversized_stem_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ("é" * 120 + ".wav")
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.MAX_RECORDING_PATH_CHARS", 10_000),
+                mock.patch("speed_of_cinnamon.recorder.MAX_RECORDING_STEM_CHARS", 120),
+            ):
+                with self.assertRaisesRegex(RecorderError, "recording artifact stem is too long"):
+                    validate_recording_path(path, suffix=".wav")
 
     def test_validate_recording_path_rejects_non_path_type(self) -> None:
         with self.assertRaisesRegex(RecorderError, "path must be a path"):
@@ -269,6 +291,29 @@ class RecorderTest(unittest.TestCase):
         with self.assertRaisesRegex(RecorderError, "invalid pactl command"):
             _run_pactl_command(("pactl", 10), required=True)  # type: ignore[arg-type]
 
+    def test_run_pactl_command_accepts_tuple_command(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0] if args else kwargs["args"]
+            assert isinstance(command, (list, tuple))
+            command_list = list(command)
+            calls.append(command_list)
+            stdout = kwargs["stdout"]
+            stderr = kwargs["stderr"]
+            stdout.write(b"default\n")
+            stderr.write(b"")
+            return subprocess.CompletedProcess(command_list, 0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/pactl"),
+            mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=fake_run),
+        ):
+            result = _run_pactl_command(("pactl", "get-default-source"), required=False)
+
+        self.assertEqual(result, "default")
+        self.assertEqual(calls[0][0], "/usr/bin/pactl")
+
     def test_run_pactl_command_resolves_command_from_which(self) -> None:
         calls: list[list[str]] = []
 
@@ -291,6 +336,23 @@ class RecorderTest(unittest.TestCase):
     def test_run_kill_rejects_bad_command_shape(self) -> None:
         with self.assertRaisesRegex(RecorderError, "invalid kill command"):
             _run_kill(("kill", "-9", 10), check_exit=True)  # type: ignore[arg-type]
+
+    def test_run_kill_accepts_tuple_command(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0] if args else kwargs.get("args")
+            assert isinstance(command, (list, tuple))
+            calls.append(list(command))
+            return subprocess.CompletedProcess(list(command), 0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/kill"),
+            mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=fake_run),
+        ):
+            _run_kill(("kill", "-INT", "1234"), check_exit=False)
+
+        self.assertEqual(calls[0], ["/usr/bin/kill", "-INT", "1234"])
 
     def test_run_kill_rejects_non_bool_check(self) -> None:
         with self.assertRaisesRegex(RecorderError, "invalid kill command"):

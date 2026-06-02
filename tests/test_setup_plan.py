@@ -67,6 +67,26 @@ class SetupPlanTest(unittest.TestCase):
         self.assertEqual(plan["steps"][0]["id"], "custom-transcriber")
         self.assertEqual(plan["steps"][0]["title"], "Configure the custom transcriber command")
 
+    def test_missing_external_api_model_gets_external_api_step(self) -> None:
+        payload = {
+            "ok": False,
+            "configured": {
+                "recorder": {"ok": True},
+                "transcriber": {
+                    "ok": False,
+                    "value": "openai-compatible",
+                    "detail": "OpenAI-compatible speech model is required",
+                },
+                "output": {"ok": True},
+                "postprocessor": {"ok": True},
+                "warnings": [],
+            },
+            "desktop": {"cinnamon": True},
+        }
+        plan = build_setup_plan(payload)
+        self.assertEqual(plan["steps"][0]["id"], "external-api-transcriber")
+        self.assertEqual(plan["steps"][0]["title"], "Configure the External API speech model")
+
     def test_missing_openai_alias_transcriber_maps_to_asr_step(self) -> None:
         payload = {
             "ok": False,
@@ -204,7 +224,7 @@ class SetupPlanTest(unittest.TestCase):
                 "postprocessor": {
                     "ok": False,
                     "value": "openai-compatible",
-                    "detail": "OpenAI-compatible local model is required",
+                    "detail": "OpenAI-compatible text model is required",
                 },
                 "warnings": [],
             },

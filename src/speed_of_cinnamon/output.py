@@ -22,7 +22,11 @@ TERMINAL_WINDOW_MARKERS = (
     "alacritty",
     "blackbox",
     "com.mitchellh.ghostty",
+    "com.system76.cosmic-term",
+    "console",
     "cool-retro-term",
+    "cosmic terminal",
+    "cosmic-term",
     "foot",
     "gnome-terminal",
     "guake",
@@ -41,7 +45,9 @@ TERMINAL_WINDOW_MARKERS = (
     "sakura",
     "tabby",
     "terminator",
+    "termius",
     "tilix",
+    "tty",
     "urxvt",
     "wezterm",
     "xfce4-terminal",
@@ -89,11 +95,14 @@ def _validate_text_input(text: str) -> bytes:
         raise OutputError("command input contains invalid null byte")
     if len(text) > MAX_INPUT_CHARS:
         raise OutputError(f"command input is too large (max {MAX_INPUT_CHARS} characters)")
-    return text.encode("utf-8")
+    encoded = text.encode("utf-8")
+    if len(encoded) > MAX_INPUT_CHARS:
+        raise OutputError(f"command input is too large (max {MAX_INPUT_CHARS} bytes)")
+    return encoded
 
 
 def _run_with_input(
-    argv: list[str],
+    argv: list[str] | tuple[str, ...],
     text: str,
     *,
     timeout: int = MAX_EXEC_TIMEOUT_SECONDS,
@@ -115,6 +124,8 @@ def _run_with_input(
         raise OutputError("max_output_chars must be an integer")
     if max_output_chars < 0:
         raise OutputError("max_output_chars must be non-negative")
+    if max_output_chars > MAX_OUTPUT_CHARS:
+        raise OutputError(f"max_output_chars must not exceed {MAX_OUTPUT_CHARS}")
 
     command = argv[0].strip()
     if not command:
@@ -167,8 +178,24 @@ def _command_path(command: str) -> str:
     return resolved
 
 
-def _run_stdout(argv: list[str], *, timeout: int = MAX_EXEC_TIMEOUT_SECONDS) -> str:
+def _run_stdout(argv: list[str] | tuple[str, ...], *, timeout: int = MAX_EXEC_TIMEOUT_SECONDS) -> str:
+    if not isinstance(argv, (list, tuple)):
+        raise OutputError("argv must be a sequence")
+    if not all(isinstance(item, str) for item in argv):
+        raise OutputError("command arguments must be text")
+    if not argv:
+        raise OutputError("empty command is not allowed")
+    if not isinstance(timeout, int) or isinstance(timeout, bool):
+        raise OutputError("timeout must be an integer")
+    if timeout <= 0:
+        raise OutputError("timeout must be positive")
+
     command = argv[0].strip()
+    if not command:
+        raise OutputError("command is empty")
+    if _contains_escaped_null(command) or any(_contains_escaped_null(arg) for arg in argv[1:]):
+        raise OutputError("command argument contains invalid null byte")
+
     runtime_command = _command_path(command)
     try:
         proc = subprocess.run(
@@ -182,10 +209,19 @@ def _run_stdout(argv: list[str], *, timeout: int = MAX_EXEC_TIMEOUT_SECONDS) -> 
         return ""
     if proc.returncode != 0:
         return ""
+    output = proc.stdout or b""
+    error_output = proc.stderr or b""
+    if len(output) > MAX_OUTPUT_CHARS:
+        return ""
+    if len(error_output) > MAX_OUTPUT_CHARS:
+        return ""
     try:
-        return proc.stdout.decode("utf-8", "replace").strip()
+        text = output.decode("utf-8")
     except UnicodeDecodeError:
         return ""
+    if _contains_escaped_null(text):
+        return ""
+    return text.strip()
 
 
 def _looks_like_terminal(value: str) -> bool:

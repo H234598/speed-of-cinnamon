@@ -74,6 +74,8 @@ def split_command_chain(command: str, label: str = "command") -> list[list[str]]
         raise CommandChainError(f"invalid {label} command: contains invalid null byte")
     if len(command) > MAX_COMMAND_LENGTH_CHARS:
         raise CommandChainError(f"invalid {label} command: command too long")
+    if len(command.encode("utf-8")) > MAX_COMMAND_LENGTH_CHARS:
+        raise CommandChainError(f"invalid {label} command: command too long")
 
     try:
         tokens = shlex.split(command)
@@ -122,6 +124,8 @@ def run_command_chain(
         raise CommandChainError(f"{label} command chain is empty")
     if isinstance(label, bool) or not isinstance(label, str):
         raise CommandChainError("label must be text")
+    if len(segments) > MAX_COMMAND_SEGMENTS:
+        raise CommandChainError(f"{label} command has too many segments")
     if not isinstance(max_output_chars, int) or isinstance(max_output_chars, bool):
         raise CommandChainError("max_output_chars must be an integer")
     if max_output_chars <= 0:
@@ -130,12 +134,10 @@ def run_command_chain(
         raise CommandChainError(f"max_output_chars must not exceed {MAX_COMMAND_OUTPUT_CHARS}")
     if not isinstance(max_input_chars, int) or isinstance(max_input_chars, bool):
         raise CommandChainError("max_input_chars must be an integer")
-    if max_output_chars > MAX_COMMAND_OUTPUT_CHARS:
-        raise CommandChainError(f"max_output_chars must not exceed {MAX_COMMAND_OUTPUT_CHARS}")
-    if max_input_chars < 0:
-        raise CommandChainError("max_input_chars must be non-negative")
     if max_input_chars > MAX_COMMAND_INPUT_CHARS:
         raise CommandChainError(f"max_input_chars must not exceed {MAX_COMMAND_INPUT_CHARS}")
+    if max_input_chars < 0:
+        raise CommandChainError("max_input_chars must be non-negative")
     if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool):
         raise CommandChainError("timeout_seconds must be an integer")
     if timeout_seconds <= 0:
@@ -148,19 +150,24 @@ def run_command_chain(
         raise CommandChainError("vocabulary must be text")
     if _contains_escaped_null(input_text):
         raise CommandChainError("command input contains invalid null byte")
+    try:
+        input_bytes = input_text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise CommandChainError("command input is not valid UTF-8") from exc
 
     try:
         env = command_environment(personal_context, vocabulary)
     except ValueError as exc:
         raise CommandChainError(str(exc)) from exc
     output = input_text
-    input_bytes = output.encode("utf-8")
 
     for segment in segments:
         if len(input_bytes) > max_input_chars:
             raise CommandChainError(f"{label} command input exceeded {max_input_chars} bytes")
 
         cmd = list(segment)
+        if len(cmd) >= MAX_COMMAND_SEGMENT_TOKENS:
+            raise CommandChainError(f"invalid {label} command: segment is too long")
         if not all(isinstance(item, str) for item in cmd):
             raise CommandChainError(f"{label} command segment contains non-text item")
         if not cmd:
@@ -202,7 +209,10 @@ def run_command_chain(
 
                 segment_output = _read_file_head(stdout_file, max_output_chars).strip()
                 output = segment_output
-                input_bytes = output.encode("utf-8")
+                try:
+                    input_bytes = output.encode("utf-8")
+                except UnicodeEncodeError as exc:
+                    raise CommandChainError("command output is not valid UTF-8") from exc
         except FileNotFoundError as exc:
             raise CommandChainError(f"{label} command not found: {executable}") from exc
         except subprocess.TimeoutExpired as exc:

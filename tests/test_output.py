@@ -12,6 +12,7 @@ from speed_of_cinnamon.output import (
     _contains_escaped_null,
     _filesize,
     _read_file_head,
+    _run_stdout,
     _validate_text_input,
     _active_window_paste_key,
     _looks_like_terminal,
@@ -92,6 +93,10 @@ class OutputTest(unittest.TestCase):
         with self.assertRaisesRegex(OutputError, "command arguments must be text"):
             _run_with_input(["echo", 12], "input")  # type: ignore[arg-type]
 
+    def test_run_with_input_rejects_empty_executable(self) -> None:
+        with self.assertRaisesRegex(OutputError, "command is empty"):
+            _run_with_input(["   "], "input")
+
     def test_run_with_input_rejects_non_int_timeout(self) -> None:
         with self.assertRaisesRegex(OutputError, "timeout must be an integer"):
             _run_with_input(["sleep"], "", timeout="1")  # type: ignore[arg-type]
@@ -100,9 +105,23 @@ class OutputTest(unittest.TestCase):
         with self.assertRaisesRegex(OutputError, "max_output_chars must be an integer"):
             _run_with_input(["sleep"], "", max_output_chars=True)  # type: ignore[arg-type]
 
+    def test_run_with_input_rejects_excessive_output_limit(self) -> None:
+        with self.assertRaisesRegex(OutputError, "max_output_chars must not exceed"):
+            _run_with_input(["sleep"], "", max_output_chars=MAX_OUTPUT_CHARS + 1)
+
     def test_run_with_input_rejects_non_text_input(self) -> None:
         with self.assertRaisesRegex(OutputError, "text must be text"):
             _run_with_input(["echo"], 123)  # type: ignore[arg-type]
+
+    def test_run_with_input_accepts_tuple_argv(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/echo"),
+            mock.patch(
+                "speed_of_cinnamon.output.subprocess.run",
+                return_value=subprocess.CompletedProcess(["echo"], 0, stdout=b"", stderr=b""),
+            ),
+        ):
+            self.assertIsNone(_run_with_input(("echo", "x"), "in"))
 
     def test_run_with_input_rejects_command_error_output(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
@@ -121,6 +140,14 @@ class OutputTest(unittest.TestCase):
         with self.assertRaisesRegex(OutputError, "command input is too large"):
             with mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"):
                 _run_with_input(["cmd"], "x" * (1_000_001))
+
+    def test_run_with_input_rejects_oversized_text_bytes(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.output.MAX_INPUT_CHARS", 4),
+            mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"),
+        ):
+            with self.assertRaisesRegex(OutputError, "command input is too large"):
+                _run_with_input(["cmd"], "😀" * 2)
 
     def test_run_with_input_rejects_negative_output_limit(self) -> None:
         with self.assertRaisesRegex(OutputError, "max_output_chars must be non-negative"):
@@ -191,6 +218,105 @@ class OutputTest(unittest.TestCase):
                 with self.assertRaisesRegex(OutputError, "too much output"):
                     _run_with_input(["cmd"], "input")
 
+    def test_run_stdout_rejects_non_sequence_argv(self) -> None:
+        with self.assertRaisesRegex(OutputError, "argv must be a sequence"):
+            _run_stdout("xdotool", timeout=1)  # type: ignore[arg-type]
+
+    def test_run_stdout_rejects_non_text_argv(self) -> None:
+        with self.assertRaisesRegex(OutputError, "command arguments must be text"):
+            _run_stdout(["xdotool", 12], timeout=1)  # type: ignore[arg-type]
+
+    def test_run_stdout_rejects_empty_executable(self) -> None:
+        with self.assertRaisesRegex(OutputError, "command is empty"):
+            _run_stdout(["   "], timeout=1)
+
+    def test_run_stdout_rejects_non_int_timeout(self) -> None:
+        with self.assertRaisesRegex(OutputError, "timeout must be an integer"):
+            _run_stdout(["xdotool"], timeout="1")  # type: ignore[arg-type]
+
+    def test_run_stdout_rejects_bool_timeout(self) -> None:
+        with self.assertRaisesRegex(OutputError, "timeout must be an integer"):
+            _run_stdout(["xdotool"], timeout=True)  # type: ignore[arg-type]
+
+    def test_run_stdout_rejects_non_positive_timeout(self) -> None:
+        with self.assertRaisesRegex(OutputError, "timeout must be positive"):
+            _run_stdout(["xdotool"], timeout=0)
+
+    def test_run_stdout_rejects_null_byte_argument(self) -> None:
+        with self.assertRaisesRegex(OutputError, "command argument contains invalid null byte"):
+            _run_stdout(["xdotool", "bad\x00arg"], timeout=1)
+
+    def test_run_stdout_resolves_command_from_which(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0] if args else kwargs["args"]
+            assert isinstance(command, list)
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        with (
+            unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
+            unittest.mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+        ):
+            _run_stdout(["xdotool", "-h"])
+
+        self.assertEqual(calls[0][0], "/usr/bin/xdotool")
+
+    def test_run_stdout_accepts_tuple_argv(self) -> None:
+        with (
+            unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
+            mock.patch(
+                "speed_of_cinnamon.output.subprocess.run",
+                return_value=subprocess.CompletedProcess(["xdotool"], 0, stdout=b"x", stderr=b""),
+            ),
+        ):
+            self.assertEqual(_run_stdout(("xdotool", "-h")), "x")
+
+    def test_run_stdout_rejects_oversized_stdout(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0] if args else kwargs["args"]
+            assert isinstance(command, list)
+            return subprocess.CompletedProcess(command, 0, stdout=b"x" * (MAX_OUTPUT_CHARS + 1), stderr=b"")
+
+        with (
+            unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
+            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+        ):
+            self.assertEqual(_run_stdout(["xdotool", "--help"]), "")
+
+    def test_run_stdout_rejects_oversized_stderr(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0] if args else kwargs["args"]
+            assert isinstance(command, list)
+            return subprocess.CompletedProcess(command, 0, stdout=b"ok", stderr=b"x" * (MAX_OUTPUT_CHARS + 1))
+
+        with (
+            unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
+            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+        ):
+            self.assertEqual(_run_stdout(["xdotool", "--help"]), "")
+
+    def test_run_stdout_rejects_invalid_utf8_output(self) -> None:
+        with (
+            unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
+            mock.patch(
+                "speed_of_cinnamon.output.subprocess.run",
+                return_value=subprocess.CompletedProcess(["xdotool"], 0, stdout=b"ok\xff", stderr=b""),
+            ),
+        ):
+            self.assertEqual(_run_stdout(["xdotool", "--help"]), "")
+
+    def test_run_stdout_rejects_output_with_null_byte(self) -> None:
+        with (
+            unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
+            mock.patch(
+                "speed_of_cinnamon.output.subprocess.run",
+                return_value=subprocess.CompletedProcess(["xdotool"], 0, stdout=b"abc\x00def", stderr=b""),
+            ),
+        ):
+            self.assertEqual(_run_stdout(["xdotool", "--help"]), "")
+
     def test_read_file_head_rejects_invalid_utf8(self) -> None:
         with tempfile.TemporaryFile() as handle:
             handle.write(b"ok\xff")
@@ -242,6 +368,9 @@ class OutputTest(unittest.TestCase):
 
     def test_terminal_marker_matching_is_conservative(self) -> None:
         self.assertTrue(_looks_like_terminal("org.gnome.Terminal"))
+        self.assertTrue(_looks_like_terminal("Termius"))
+        self.assertTrue(_looks_like_terminal("COSMIC Terminal"))
+        self.assertTrue(_looks_like_terminal("tty"))
         self.assertFalse(_looks_like_terminal("firefox"))
 
     def test_type_text_rejects_null_bytes(self) -> None:

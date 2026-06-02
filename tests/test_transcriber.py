@@ -3,13 +3,18 @@ from __future__ import annotations
 import subprocess
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
 from speed_of_cinnamon.transcriber import (
     TranscriberConfig,
     TranscriptionError,
+    MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
+    MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
     MAX_AUDIO_FILE_BYTES,
+    MAX_AUDIO_PATH_CHARS,
+    MAX_TRANSCRIBER_TEXT_CHARS,
     _read_file_head,
     _read_text_file,
     _assert_text_length,
@@ -202,9 +207,22 @@ class TranscriberTest(unittest.TestCase):
         with self.assertRaisesRegex(TranscriptionError, "audio path must be a Path"):
             validate_audio_file("sample.wav")  # type: ignore[arg-type]
 
+    def test_validate_audio_file_rejects_oversized_path_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ("😀" * ((MAX_AUDIO_PATH_CHARS // 4) + 1))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"audio")
+            with self.assertRaisesRegex(TranscriptionError, "audio file path is too long"):
+                validate_audio_file(path)
+
     def test_assert_text_length_rejects_non_text(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "must be text"):
             _assert_text_length(12, field_name="text")
+
+    def test_assert_text_length_rejects_oversized_text_bytes(self) -> None:
+        with mock.patch("speed_of_cinnamon.transcriber.MAX_TRANSCRIPT_TEXT_CHARS", 4):
+            with self.assertRaisesRegex(TranscriptionError, "is too large"):
+                _assert_text_length("😀😀", field_name="transcript")
 
     def test_contains_escaped_null_rejects_non_text(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "value must be text"):
@@ -265,6 +283,18 @@ class TranscriberTest(unittest.TestCase):
                     "en",
                     Path(tmp) / "sample.txt",
                     "printf 'unterminated",
+                )
+
+    def test_transcribe_rejects_oversized_command_template(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with self.assertRaisesRegex(TranscriptionError, "command template is too large"):
+                transcribe(
+                    audio,
+                    "en",
+                    Path(tmp) / "sample.txt",
+                    "😀" * ((MAX_TRANSCRIBER_TEXT_CHARS // 4) + 1),
                 )
 
     def test_template_rejects_empty_command_chain(self) -> None:
@@ -371,8 +401,31 @@ class TranscriberTest(unittest.TestCase):
         self.assertEqual(calls[0][0], "/usr/bin/whisper")
 
     def test_run_limited_process_rejects_non_list_command(self) -> None:
-        with self.assertRaisesRegex(TranscriptionError, "transcriber command must be a list"):
+        with self.assertRaisesRegex(TranscriptionError, "transcriber command must be a list or tuple"):
             _run_limited_process("whisper", timeout=1)  # type: ignore[arg-type]
+
+    def test_run_limited_process_accepts_tuple_command(self) -> None:
+        calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0] if args else kwargs["args"]
+            stdout_file = kwargs["stdout"]
+            stderr_file = kwargs["stderr"]
+            if not isinstance(command, list):
+                command = list(command)  # type: ignore[assignment]
+            assert isinstance(command, list)
+            calls.append((tuple(command), kwargs))
+            stdout_file.write(b"done")
+            stderr_file.write(b"")
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch("speed_of_cinnamon.transcriber.shutil.which", return_value="/usr/bin/whisper"),
+            mock.patch("speed_of_cinnamon.transcriber.subprocess.run", side_effect=fake_run),
+        ):
+            _run_limited_process(("whisper", "audio"))
+
+        self.assertEqual(calls[0][0], ("/usr/bin/whisper", "audio"))
 
     def test_run_limited_process_rejects_missing_command(self) -> None:
         with mock.patch("speed_of_cinnamon.transcriber.shutil.which", return_value=None):
@@ -504,11 +557,237 @@ class TranscriberTest(unittest.TestCase):
     def test_backend_aliases_are_normalized(self) -> None:
         self.assertEqual(normalize_backend("openai"), "whisper")
         self.assertEqual(normalize_backend("openai-whisper"), "whisper")
+        self.assertEqual(normalize_backend("external-api"), "openai-compatible")
+        self.assertEqual(normalize_backend("openai-compatible-api"), "openai-compatible")
         self.assertEqual(normalize_backend("whisper.cpp"), "whisper-cpp")
         self.assertEqual(normalize_backend("custom"), "command")
         self.assertEqual(normalize_backend("template"), "command")
         self.assertEqual(normalize_backend("faster-whisper"), "faster-whisper")
         self.assertEqual(normalize_backend(""), "auto")
+
+    def test_transcribe_with_openai_compatible_api_posts_audio_and_writes_transcript(self) -> None:
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self, size: int = -1) -> bytes:
+                if getattr(self, "_read", False):
+                    return b""
+                self._read = True
+                return b'{"text":"hello api"}'
+
+        captured: dict[str, object] = {}
+
+        def fake_urlopen(request: object, timeout: int = 0) -> Response:
+            captured["url"] = request.full_url
+            captured["headers"] = dict(request.header_items())
+            captured["data"] = request.data
+            captured["timeout"] = timeout
+            return Response()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            with mock.patch("speed_of_cinnamon.transcriber.urllib.request.urlopen", side_effect=fake_urlopen):
+                result = transcribe(
+                    audio,
+                    "de",
+                    text_path,
+                    backend="openai-compatible",
+                    openai_compatible_model="whisper-large-v3",
+                    openai_compatible_url="http://127.0.0.1:8000/v1",
+                    openai_compatible_api_key="secret",
+                )
+            written = text_path.read_text(encoding="utf-8").strip()
+        self.assertEqual(result, "hello api")
+        self.assertEqual(written, "hello api")
+        self.assertEqual(captured["url"], "http://127.0.0.1:8000/v1/audio/transcriptions")
+        headers = captured["headers"]
+        self.assertEqual(headers["Authorization"], "Bearer secret")
+        self.assertIn("multipart/form-data", headers["Content-type"])
+        data = captured["data"]
+        self.assertIn(b'name="model"', data)
+        self.assertIn(b"whisper-large-v3", data)
+        self.assertIn(b'name="language"', data)
+        self.assertIn(b"de", data)
+
+    def test_openai_compatible_api_requires_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with self.assertRaisesRegex(TranscriptionError, "speech model is required"):
+                transcribe(audio, "en", Path(tmp) / "sample.txt", backend="openai-compatible", openai_compatible_model="")
+
+    def test_openai_compatible_api_rejects_oversized_model_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with self.assertRaisesRegex(TranscriptionError, "OpenAI-compatible speech model is too large"):
+                transcribe(
+                    audio,
+                    "en",
+                    Path(tmp) / "sample.txt",
+                    backend="openai-compatible",
+                    openai_compatible_model="x" * (MAX_OPENAI_COMPATIBLE_MODEL_CHARS + 1),
+                )
+
+    def test_openai_compatible_api_rejects_oversized_api_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with self.assertRaisesRegex(TranscriptionError, "OpenAI-compatible API key is too large"):
+                transcribe(
+                    audio,
+                    "en",
+                    Path(tmp) / "sample.txt",
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-transcribe",
+                    openai_compatible_api_key="x" * (MAX_OPENAI_COMPATIBLE_API_KEY_CHARS + 1),
+                )
+
+    def test_openai_compatible_api_rejects_model_with_null_byte(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with self.assertRaisesRegex(TranscriptionError, "model contains invalid null byte"):
+                transcribe(
+                    audio,
+                    "en",
+                    Path(tmp) / "sample.txt",
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-transcribe\x00",
+                    openai_compatible_url="https://api.openai.com/v1",
+                )
+
+    def test_openai_compatible_api_rejects_api_key_with_null_byte(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with self.assertRaisesRegex(TranscriptionError, "API key contains invalid null byte"):
+                transcribe(
+                    audio,
+                    "en",
+                    Path(tmp) / "sample.txt",
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-transcribe",
+                    openai_compatible_url="https://api.openai.com/v1",
+                    openai_compatible_api_key="secret\x00",
+                )
+
+    def test_openai_compatible_api_reports_http_error_detail_and_endpoint(self) -> None:
+        class ErrorBody:
+            def __init__(self) -> None:
+                self._read = False
+
+            def read(self, size: int = -1) -> bytes:
+                if self._read:
+                    return b""
+                self._read = True
+                return b'{"error":{"message":"missing API key","type":"invalid_request_error"}}'
+
+            def close(self) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            error = urllib.error.HTTPError(
+                "https://api.openai.com/v1/audio/transcriptions",
+                401,
+                "Unauthorized",
+                {},
+                ErrorBody(),
+            )
+            with mock.patch("speed_of_cinnamon.transcriber.urllib.request.urlopen", side_effect=error):
+                with self.assertRaisesRegex(TranscriptionError, "failed \\(401\\).*missing API key.*invalid_request_error"):
+                    transcribe(
+                        audio,
+                        "en",
+                        Path(tmp) / "sample.txt",
+                        backend="openai-compatible",
+                        openai_compatible_model="gpt-4o-transcribe",
+                        openai_compatible_url="https://api.openai.com/v1",
+                    )
+
+    def test_openai_api_rejects_non_transcription_model_before_network(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with mock.patch("speed_of_cinnamon.transcriber.urllib.request.urlopen") as mocked_urlopen:
+                with self.assertRaisesRegex(TranscriptionError, "requires a speech-to-text model.*gpt-5"):
+                    transcribe(
+                        audio,
+                        "en",
+                        Path(tmp) / "sample.txt",
+                        backend="openai-compatible",
+                        openai_compatible_model="gpt-5",
+                        openai_compatible_url="https://api.openai.com/v1",
+                    )
+        mocked_urlopen.assert_not_called()
+
+    def test_openai_compatible_api_rejects_non_http_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with self.assertRaisesRegex(TranscriptionError, "must use http:// or https://"):
+                transcribe(
+                    audio,
+                    "en",
+                    Path(tmp) / "sample.txt",
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-transcribe",
+                    openai_compatible_url="ftp://127.0.0.1:8000/v1",
+                )
+
+    def test_openai_compatible_api_rejects_null_byte_in_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with self.assertRaisesRegex(TranscriptionError, "contains invalid null byte"):
+                transcribe(
+                    audio,
+                    "en",
+                    Path(tmp) / "sample.txt",
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-transcribe",
+                    openai_compatible_url="http://127.0.0.1:8000/v1\x00",
+                )
+
+    def test_openai_compatible_api_rejects_filename_with_newline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "bad\nname.wav"
+            audio.write_bytes(b"audio")
+            with self.assertRaisesRegex(TranscriptionError, "audio file name contains invalid newline"):
+                transcribe(
+                    audio,
+                    "en",
+                    Path(tmp) / "sample.txt",
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-transcribe",
+                    openai_compatible_url="https://api.openai.com/v1",
+                )
+
+    def test_non_openai_backend_ignores_invalid_openai_compatible_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+
+            with mock.patch("speed_of_cinnamon.transcriber.transcribe_with_faster_whisper", return_value="ok transcript"):
+                result = transcribe(
+                    audio,
+                    "en",
+                    text_path,
+                    backend="faster-whisper",
+                    whisper_model="",
+                    openai_compatible_model="gpt-4o-transcribe",
+                    openai_compatible_url="ftp://127.0.0.1:8000/v1",
+                )
+        self.assertEqual(result, "ok transcript")
 
     def test_auto_prefers_custom_command(self) -> None:
         config = TranscriberConfig(command_template="printf custom")

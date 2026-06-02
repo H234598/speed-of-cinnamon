@@ -73,13 +73,14 @@ speed-of-cinnamon toggle \
 `--transcriber` accepts normalized aliases for backward compatibility:
 
 ```text
-auto, openai, openai-whisper, whisper, whisper-cpp, faster-whisper, command, custom, template
+auto, openai, openai-whisper, whisper, whisper-cpp, faster-whisper, openai-compatible, external-api, command, custom, template
 ```
 
 Equivalent forms are:
 
 - `openai` and `openai-whisper` => `whisper`
 - `faster-whisper` stays `faster-whisper`
+- `openai-compatible` and `external-api` => `openai-compatible`
 - `custom` and `template` => `command`
 
 Automatic mode resolves in this order:
@@ -150,7 +151,7 @@ speed-of-cinnamon toggle \
   --ollama-model llama3.2:3b
 ```
 
-OpenAI-compatible local backend:
+OpenAI-compatible API backend:
 
 ```bash
 speed-of-cinnamon toggle \
@@ -175,6 +176,7 @@ If the OpenAI-compatible server requires a bearer token, set
 ## Voice Models
 
 ```bash
+speed-of-cinnamon install-text-model --backend ollama --model llama3.2:3b --json
 speed-of-cinnamon models --json
 speed-of-cinnamon download-model ct2-base-int8 --json
 speed-of-cinnamon download-model ct2-base --json

@@ -4,6 +4,8 @@ import json
 import os
 import shlex
 import subprocess
+import urllib.parse
+import urllib.error
 import urllib.request
 
 from .command_chain import CommandChainError, DEFAULT_COMMAND_TIMEOUT_SECONDS, MAX_COMMAND_OUTPUT_CHARS, run_command_chain, split_command_chain
@@ -15,7 +17,8 @@ class PostProcessError(RuntimeError):
 
 
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
-DEFAULT_OPENAI_COMPATIBLE_URL = "http://127.0.0.1:8000/v1"
+DEFAULT_OPENAI_COMPATIBLE_URL = "https://api.openai.com/v1"
+DEFAULT_OPENAI_COMPATIBLE_MODEL = "gpt-4o-transcribe"
 DEFAULT_OLLAMA_PROMPT = (
     "Clean up the transcript for direct insertion. Preserve meaning, language, names, "
     "technical terms, and formatting. Return only the final text."
@@ -23,6 +26,36 @@ DEFAULT_OLLAMA_PROMPT = (
 MAX_POSTPROCESS_TEXT_CHARS = 1_000_000
 MAX_POSTPROCESS_JSON_BYTES = 1_500_000
 MAX_POSTPROCESS_URL_CHARS = 2_048
+MAX_OPENAI_COMPATIBLE_API_KEY_CHARS = 4_096
+MAX_OPENAI_COMPATIBLE_MODEL_CHARS = 240
+OPENAI_COMPATIBLE_TEXT_MODEL_EXCLUDED_PREFIXES = (
+    "ada-",
+    "babbage-",
+    "curie-",
+    "dall-e-",
+    "davinci-",
+    "gpt-3.5-turbo-instruct",
+    "gpt-image-",
+    "omni-moderation-",
+    "text-davinci-",
+    "text-embedding-",
+    "text-moderation-",
+    "tts-",
+    "whisper-",
+)
+OPENAI_COMPATIBLE_TEXT_MODEL_EXCLUDED_TERMS = (
+    "audio",
+    "computer-use",
+    "embedding",
+    "image",
+    "moderation",
+    "ranker",
+    "realtime",
+    "rerank",
+    "speech",
+    "transcribe",
+    "tts",
+)
 
 
 def _quote(value: str) -> str:
@@ -40,6 +73,8 @@ def _assert_text_length(value: str, *, field_name: str, max_chars: int | None = 
         raise PostProcessError(f"{field_name} max chars must be an integer")
     if len(value) > max_chars:
         raise PostProcessError(f"{field_name} is too large (max {max_chars} characters)")
+    if len(value.encode("utf-8")) > max_chars:
+        raise PostProcessError(f"{field_name} is too large (max {max_chars} bytes)")
     return value
 
 
@@ -59,6 +94,17 @@ def _contains_escaped_null(value: str) -> bool:
         raise PostProcessError("value must be text")
     lowered = (value or "").lower()
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
+
+
+def _assert_openai_compatible_text(
+    value: str,
+    *,
+    field_name: str,
+    max_chars: int,
+) -> str:
+    if _contains_escaped_null(value):
+        raise PostProcessError(f"{field_name} contains invalid null byte")
+    return _assert_text_length(value, field_name=field_name, max_chars=max_chars)
 
 
 def _read_response_text(response: object, max_bytes: int) -> str:
@@ -141,11 +187,25 @@ def _ollama_endpoint(url: str, path: str) -> str:
 
 
 def _openai_compatible_endpoint(url: str, path: str) -> str:
-    base = _assert_clean_url(url, field_name="openai-compatible url").rstrip("/")
+    base = _assert_clean_url(url, field_name="openai-compatible url")
+    base = _validate_openai_compatible_http_url(base).rstrip("/")
     normalized_path = "/" + path.strip("/")
     if base.endswith(normalized_path):
         return base
     return base + normalized_path
+
+
+def _validate_openai_compatible_http_url(url: str) -> str:
+    if not isinstance(url, str) or isinstance(url, bool):
+        raise PostProcessError("openai-compatible url must be text")
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.scheme:
+        raise PostProcessError("openai-compatible url is required")
+    if parsed.scheme not in {"http", "https"}:
+        raise PostProcessError("openai-compatible url must use http:// or https://")
+    if not parsed.netloc:
+        raise PostProcessError("openai-compatible url is required")
+    return url
 
 
 def _read_json(request: urllib.request.Request, timeout: int) -> object:
@@ -154,6 +214,24 @@ def _read_json(request: urllib.request.Request, timeout: int) -> object:
     with urllib.request.urlopen(request, timeout=timeout) as response:
         raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
     return json.loads(raw)
+
+
+def _openai_compatible_error_detail(raw: str) -> str:
+    if not raw:
+        return ""
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw.strip()
+    if not isinstance(payload, dict):
+        return str(payload)
+    error = payload.get("error")
+    if isinstance(error, dict):
+        parts = [str(error.get("message") or "").strip(), str(error.get("type") or "").strip(), str(error.get("code") or "").strip()]
+        return "; ".join(part for part in parts if part)
+    if error:
+        return str(error)
+    return str(payload)
 
 
 def _format_model_size(size: object) -> str:
@@ -252,6 +330,8 @@ def _normalize_openai_compatible_model(model: object) -> dict[str, object] | Non
     name = str(model.get("id") or model.get("name") or "").strip()
     if not name:
         return None
+    if not _openai_compatible_model_supports_text_polishing(name):
+        return None
     owned_by = str(model.get("owned_by") or "").strip()
     return {
         "name": name,
@@ -261,22 +341,40 @@ def _normalize_openai_compatible_model(model: object) -> dict[str, object] | Non
     }
 
 
+def _openai_compatible_model_supports_text_polishing(name: str) -> bool:
+    normalized = str(name or "").strip().lower()
+    if not normalized:
+        return False
+    if normalized.startswith(OPENAI_COMPATIBLE_TEXT_MODEL_EXCLUDED_PREFIXES):
+        return False
+    return not any(term in normalized for term in OPENAI_COMPATIBLE_TEXT_MODEL_EXCLUDED_TERMS)
+
+
 def list_openai_compatible_models(
     url: str = DEFAULT_OPENAI_COMPATIBLE_URL,
     timeout: int = 5,
+    api_key: str = "",
 ) -> dict[str, object]:
     endpoint = _openai_compatible_endpoint(url, "/models")
-    request = urllib.request.Request(endpoint, method="GET")
     try:
+        request = urllib.request.Request(endpoint, headers=_openai_compatible_headers(api_key), method="GET")
         data = _read_json(request, timeout)
+    except urllib.error.HTTPError as exc:
+        try:
+            raw_error = _read_response_text(exc, MAX_POSTPROCESS_JSON_BYTES)
+        except PostProcessError:
+            raw_error = ""
+        detail = _openai_compatible_error_detail(raw_error) or exc.reason or str(exc)
+        return {
+            "available": False,
+            "models": [],
+            "message": f"OpenAI-compatible API failed ({exc.code}) at {endpoint}: {detail}",
+        }
     except OSError as exc:
         return {
             "available": False,
             "models": [],
-            "message": (
-                "OpenAI-compatible local server is not reachable at "
-                f"{(url or DEFAULT_OPENAI_COMPATIBLE_URL).rstrip('/')}: {exc}"
-            ),
+            "message": f"OpenAI-compatible API is not reachable at {(url or DEFAULT_OPENAI_COMPATIBLE_URL).rstrip('/')}: {exc}",
         }
     except PostProcessError as exc:
         return {
@@ -288,7 +386,7 @@ def list_openai_compatible_models(
         return {
             "available": False,
             "models": [],
-            "message": "OpenAI-compatible local server returned invalid JSON for model listing",
+            "message": "OpenAI-compatible API returned invalid JSON for model listing",
         }
     if not isinstance(data, dict):
         return {
@@ -301,14 +399,14 @@ def list_openai_compatible_models(
         return {
             "available": True,
             "models": [],
-            "message": "OpenAI-compatible local server is running but returned no model list",
+            "message": "OpenAI-compatible API returned no model list",
         }
     models = [model for item in raw_models if (model := _normalize_openai_compatible_model(item))]
     models.sort(key=lambda item: str(item["name"]).lower())
     return {
         "available": True,
         "models": models,
-        "message": "OpenAI-compatible models loaded" if models else "No OpenAI-compatible local models found",
+        "message": "OpenAI-compatible models loaded" if models else "No OpenAI-compatible text models found",
     }
 
 
@@ -361,9 +459,10 @@ def post_process_with_ollama(
     return processed
 
 
-def _openai_compatible_headers() -> dict[str, str]:
+def _openai_compatible_headers(api_key: str = "") -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
-    api_key = os.environ.get("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY", "").strip()
+    api_key = (api_key or os.environ.get("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY", "")).strip()
+    api_key = _assert_openai_compatible_text(api_key, field_name="openai-compatible API key", max_chars=MAX_OPENAI_COMPATIBLE_API_KEY_CHARS)
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
@@ -420,12 +519,19 @@ def post_process_with_openai_compatible(
     personal_context: str = "",
     vocabulary: str = "",
     prompt: str = "",
+    api_key: str = "",
 ) -> str:
     if not isinstance(model, str) or isinstance(model, bool):
         raise PostProcessError("openai-compatible model must be text")
     if not isinstance(prompt, str) or isinstance(prompt, bool):
         raise PostProcessError("prompt must be text")
-    model_name = (model or "").strip()
+    if not isinstance(api_key, str) or isinstance(api_key, bool):
+        raise PostProcessError("api key must be text")
+    model_name = _assert_openai_compatible_text(
+        str(model or ""),
+        field_name="openai-compatible model",
+        max_chars=MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
+    ).strip()
     if not model_name:
         raise PostProcessError("OpenAI-compatible model is required")
     _assert_text_length(text, field_name="input text")
@@ -439,12 +545,19 @@ def post_process_with_openai_compatible(
     request = urllib.request.Request(
         endpoint,
         data=json.dumps(payload).encode("utf-8"),
-        headers=_openai_compatible_headers(),
+        headers=_openai_compatible_headers(api_key),
         method="POST",
     )
     try:
         with urllib.request.urlopen(request, timeout=180) as response:
             raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
+    except urllib.error.HTTPError as exc:
+        try:
+            raw_error = _read_response_text(exc, MAX_POSTPROCESS_JSON_BYTES)
+        except PostProcessError:
+            raw_error = ""
+        detail = _openai_compatible_error_detail(raw_error) or exc.reason or str(exc)
+        raise PostProcessError(f"OpenAI-compatible request failed ({exc.code}) at {endpoint}: {detail}") from exc
     except OSError as exc:
         raise PostProcessError(f"OpenAI-compatible request failed: {exc}") from exc
     try:
@@ -479,6 +592,7 @@ def post_process_text(
     ollama_prompt: str = "",
     openai_compatible_model: str = "",
     openai_compatible_url: str = DEFAULT_OPENAI_COMPATIBLE_URL,
+    openai_compatible_api_key: str = "",
 ) -> str:
     if not isinstance(text, str) or isinstance(text, bool):
         raise PostProcessError("text must be text")
@@ -496,6 +610,8 @@ def post_process_text(
         raise PostProcessError("ollama url must be text")
     if not isinstance(openai_compatible_url, str) or isinstance(openai_compatible_url, bool):
         raise PostProcessError("openai-compatible url must be text")
+    if not isinstance(openai_compatible_api_key, str) or isinstance(openai_compatible_api_key, bool):
+        raise PostProcessError("openai-compatible API key must be text")
     normalized_backend = (backend or "command").strip().lower().replace("_", "-")
     if normalized_backend in {"none", "off", "disabled"}:
         return text
@@ -520,6 +636,7 @@ def post_process_text(
             personal_context,
             vocabulary,
             ollama_prompt,
+            openai_compatible_api_key,
         )
     if normalized_backend not in {"command", "custom"}:
         raise PostProcessError(f"unknown post-process backend: {backend}")

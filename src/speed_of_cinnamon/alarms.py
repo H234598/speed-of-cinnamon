@@ -39,6 +39,8 @@ def _assert_clean_path(path: Path, *, field_name: str) -> None:
     text = str(path)
     if not text or len(text) > MAX_ALARM_STORE_PATH_CHARS:
         raise RuntimeError(f"{field_name} path is invalid")
+    if len(text.encode("utf-8")) > MAX_ALARM_STORE_PATH_CHARS:
+        raise RuntimeError(f"{field_name} path is invalid")
     if _contains_escaped_null(text):
         raise RuntimeError(f"{field_name} contains invalid null byte")
 
@@ -61,6 +63,8 @@ def _sanitize_text_field(value: object, *, field_name: str, max_chars: int) -> s
         raise ValueError(f"{field_name} contains invalid null byte")
     if len(text) > max_chars:
         raise ValueError(f"{field_name} is too large (max {max_chars} characters)")
+    if len(text.encode("utf-8")) > max_chars:
+        raise ValueError(f"{field_name} is too large (max {max_chars} bytes)")
     return text
 
 

@@ -113,6 +113,8 @@ def _assert_valid_input_device(value: str) -> None:
         raise RecorderError("recording input device contains invalid null byte")
     if len(value) > MAX_RECORDING_INPUT_DEVICE_CHARS:
         raise RecorderError("recording input device name is too long")
+    if len(value.encode("utf-8")) > MAX_RECORDING_INPUT_DEVICE_CHARS:
+        raise RecorderError(f"recording input device name is too long (max {MAX_RECORDING_INPUT_DEVICE_CHARS} bytes)")
 
 
 def _assert_valid_recording_seconds(seconds: int) -> int:
@@ -191,10 +193,16 @@ def validate_recording_path(path: Path, *, suffix: str, require_recordings_dir: 
     normalized = path.expanduser().resolve(strict=False)
     if len(str(normalized)) > MAX_RECORDING_PATH_CHARS:
         raise RecorderError("recording artifact path is too long")
+    if len(str(normalized).encode("utf-8")) > MAX_RECORDING_PATH_CHARS:
+        raise RecorderError(f"recording artifact path is too long (max {MAX_RECORDING_PATH_CHARS} bytes)")
     if len(normalized.name) > MAX_RECORDING_PATH_CHARS:
+        raise RecorderError("recording artifact file name is too long")
+    if len(normalized.name.encode("utf-8")) > MAX_RECORDING_PATH_CHARS:
         raise RecorderError("recording artifact file name is too long")
     if len(normalized.stem) > MAX_RECORDING_STEM_CHARS:
         raise RecorderError("recording artifact stem is too long")
+    if len(normalized.stem.encode("utf-8")) > MAX_RECORDING_STEM_CHARS:
+        raise RecorderError(f"recording artifact stem is too long (max {MAX_RECORDING_STEM_CHARS} bytes)")
     if normalized.suffix.lower() != suffix.lower():
         raise RecorderError(f"recording artifact must use {suffix} extension")
     if require_recordings_dir:
@@ -294,8 +302,8 @@ def parse_pactl_sources(text: str, default_source: str = "", include_monitors: b
     return sources
 
 
-def _run_pactl_command(command: list[str], *, required: bool) -> str:
-    if not isinstance(command, list) or any(not isinstance(item, str) for item in command) or not isinstance(required, bool):
+def _run_pactl_command(command: list[str] | tuple[str, ...], *, required: bool) -> str:
+    if not isinstance(command, (list, tuple)) or any(not isinstance(item, str) for item in command) or not isinstance(required, bool):
         raise RecorderError("invalid pactl command")
     if not command:
         raise RecorderError("empty pactl command is not allowed")
@@ -343,8 +351,8 @@ def list_input_sources(include_monitors: bool = False) -> list[InputSource]:
     return parse_pactl_sources(proc_output, default_source, include_monitors)
 
 
-def _run_kill(command: list[str], *, check_exit: bool) -> None:
-    if not isinstance(command, list) or any(not isinstance(item, str) for item in command) or not isinstance(check_exit, bool):
+def _run_kill(command: list[str] | tuple[str, ...], *, check_exit: bool) -> None:
+    if not isinstance(command, (list, tuple)) or any(not isinstance(item, str) for item in command) or not isinstance(check_exit, bool):
         raise RecorderError("invalid kill command")
     if not command:
         raise RecorderError("empty kill command is not allowed")

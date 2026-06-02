@@ -7,6 +7,8 @@ from unittest import mock
 
 from speed_of_cinnamon.command_chain import (
     CommandChainError,
+    MAX_COMMAND_SEGMENT_TOKENS,
+    MAX_COMMAND_SEGMENTS,
     MAX_COMMAND_INPUT_CHARS,
     MAX_COMMAND_OUTPUT_CHARS,
     _contains_escaped_null,
@@ -62,6 +64,10 @@ class CommandChainTest(unittest.TestCase):
     def test_split_command_chain_rejects_too_long_command(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "command too long"):
             split_command_chain("x " + ("arg " * 8192))
+
+    def test_split_command_chain_rejects_too_long_command_bytes(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "command too long"):
+            split_command_chain("cmd " + ("😀 " * 2048))
 
     def test_split_command_chain_rejects_too_many_segments(self) -> None:
         command = " && ".join(["printf a"] * 33)
@@ -121,6 +127,43 @@ class CommandChainTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(CommandChainError, "output exceeded"):
                 run_command_chain([("cmd",)], "", label="post-process", max_output_chars=5)
+
+    def test_run_command_chain_rejects_invalid_command_input_utf8(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "input is not valid UTF-8"):
+            run_command_chain([("cmd",)], "\udcff", label="post-process")
+
+    def test_run_command_chain_rejects_invalid_command_output_utf8(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            stdout_file = kwargs["stdout"]
+            stdout_file.write(b"\xff")
+            return subprocess.CompletedProcess(["cmd"], 0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
+            mock.patch("speed_of_cinnamon.command_chain.subprocess.run", side_effect=fake_run),
+        ):
+            with self.assertRaisesRegex(CommandChainError, "not valid UTF-8"):
+                run_command_chain([("cmd",)], "seed", label="post-process")
+
+    def test_run_command_chain_rejects_too_many_segments(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "too many segments"):
+            run_command_chain([("cmd",)] * (MAX_COMMAND_SEGMENTS + 1), "", label="post-process")
+
+    def test_run_command_chain_rejects_too_many_tokens_in_segment(self) -> None:
+        segment: list[str] = ["cmd"] + ["a"] * (MAX_COMMAND_SEGMENT_TOKENS + 1)
+        with mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"):
+            with self.assertRaisesRegex(CommandChainError, "segment is too long"):
+                run_command_chain([tuple(segment)], "", label="post-process")
+
+    def test_run_command_chain_accepts_max_tokens_per_segment(self) -> None:
+        segment: list[str] = ["cmd"] + ["a"] * (MAX_COMMAND_SEGMENT_TOKENS - 2)
+        with mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"):
+            with mock.patch(
+                "speed_of_cinnamon.command_chain.subprocess.run",
+                return_value=subprocess.CompletedProcess(["cmd"], 0, stdout=b"", stderr=b""),
+            ):
+                output = run_command_chain([tuple(segment)], "", label="post-process")
+        self.assertEqual(output, "")
 
     def test_run_command_chain_reports_command_not_found(self) -> None:
         with mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="missing"):

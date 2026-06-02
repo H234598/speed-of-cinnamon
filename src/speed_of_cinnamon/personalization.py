@@ -15,6 +15,8 @@ def normalize_context(value: str = "") -> str:
     normalized = "\n".join(line.rstrip() for line in raw.strip().splitlines()).strip()
     if len(normalized) > MAX_PERSONAL_CONTEXT_CHARS:
         raise ValueError(f"personal context is too large (max {MAX_PERSONAL_CONTEXT_CHARS} characters)")
+    if len(normalized.encode("utf-8")) > MAX_PERSONAL_CONTEXT_CHARS:
+        raise ValueError(f"personal context is too large (max {MAX_PERSONAL_CONTEXT_CHARS} bytes)")
     return normalized
 
 
@@ -26,6 +28,8 @@ def vocabulary_terms(value: str = "") -> list[str]:
         raise ValueError("vocabulary contains invalid null byte")
     if len(raw) > MAX_VOCABULARY_CHARS:
         raise ValueError(f"vocabulary is too large (max {MAX_VOCABULARY_CHARS} characters)")
+    if len(raw.encode("utf-8")) > MAX_VOCABULARY_CHARS:
+        raise ValueError(f"vocabulary is too large (max {MAX_VOCABULARY_CHARS} bytes)")
     terms: list[str] = []
     for line in raw.splitlines():
         term = line.strip()
@@ -43,6 +47,10 @@ def normalize_vocabulary(value: str = "") -> str:
 def build_personalization_prompt(personal_context: str = "", vocabulary: str = "") -> str:
     if len(personal_context) > MAX_PERSONAL_CONTEXT_CHARS:
         raise ValueError(f"personal context is too large (max {MAX_PERSONAL_CONTEXT_CHARS} characters)")
+    if len(personal_context.encode("utf-8")) > MAX_PERSONAL_CONTEXT_CHARS:
+        raise ValueError(f"personal context is too large (max {MAX_PERSONAL_CONTEXT_CHARS} bytes)")
+    if len(vocabulary.encode("utf-8")) > MAX_VOCABULARY_CHARS:
+        raise ValueError(f"vocabulary is too large (max {MAX_VOCABULARY_CHARS} bytes)")
     context = normalize_context(personal_context)
     terms = vocabulary_terms(vocabulary)
     sections: list[str] = []

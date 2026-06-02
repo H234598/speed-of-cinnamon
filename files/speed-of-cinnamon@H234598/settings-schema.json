@@ -35,7 +35,7 @@
     "backend-section": {
       "type": "section",
       "title": "Backend",
-      "keys": ["cli-path", "transcriber", "whisper-model", "transcriber-command", "post-process-backend", "post-process-command", "ollama-url", "ollama-model", "openai-compatible-url", "openai-compatible-model", "post-process-prompt"]
+      "keys": ["cli-path", "transcriber", "whisper-model", "transcriber-command", "post-process-backend", "post-process-command", "ollama-url", "ollama-model", "openai-compatible-url", "openai-compatible-model", "openai-compatible-text-model", "openai-compatible-api-key", "post-process-prompt"]
     }
   },
   "toggle-keybinding": {
@@ -58,7 +58,7 @@
   "show-panel-label": {
     "type": "switch",
     "description": "Show status text in the panel",
-    "default": true
+    "default": false
   },
   "language": {
     "type": "combobox",
@@ -178,7 +178,7 @@
   "notify-complete": {
     "type": "switch",
     "description": "Notify when dictation is ready",
-    "default": true
+    "default": false
   },
   "notify-error": {
     "type": "switch",
@@ -231,6 +231,7 @@
       "OpenAI Whisper command": "whisper",
       "Local model directory": "faster-whisper",
       "Local model file": "whisper-cpp",
+      "OpenAI-compatible external API": "openai-compatible",
       "Custom command": "command"
     },
     "default": "auto"
@@ -250,14 +251,14 @@
   "post-process-backend": {
     "type": "combobox",
     "description": "Text polishing",
-    "tooltip": "Optional local cleanup after ASR. Command runs a custom command template. Ollama and OpenAI-compatible options target local servers and do not require cloud credentials.",
+    "tooltip": "Optional cleanup after ASR. Command runs a custom command template. Ollama uses a local model; OpenAI-compatible API can target compatible endpoints.",
     "options": {
       "Disabled": "none",
       "Custom command": "command",
       "Ollama local model": "ollama",
-      "OpenAI-compatible local server": "openai-compatible"
+      "OpenAI-compatible API": "openai-compatible"
     },
-    "default": "command"
+    "default": "none"
   },
   "post-process-command": {
     "type": "entry",
@@ -279,14 +280,26 @@
   },
   "openai-compatible-url": {
     "type": "entry",
-    "description": "OpenAI-compatible URL",
-    "tooltip": "Local OpenAI-compatible base URL, for example vLLM or llama.cpp at http://127.0.0.1:8000/v1. Max 4096 chars.",
-    "default": "http://127.0.0.1:8000/v1"
+    "description": "OpenAI-compatible API URL",
+    "tooltip": "OpenAI-compatible base URL used for External API speech recognition and OpenAI-compatible text polishing. Defaults to OpenAI. Hosted or self-managed compatible endpoints can also be used. Max 4096 chars.",
+    "default": "https://api.openai.com/v1"
   },
   "openai-compatible-model": {
     "type": "entry",
+    "description": "OpenAI-compatible speech model",
+    "tooltip": "Model name for External API speech recognition. Text polishing can use a separate model. Max 4096 chars.",
+    "default": "gpt-4o-transcribe"
+  },
+  "openai-compatible-text-model": {
+    "type": "entry",
     "description": "OpenAI-compatible text model",
-    "tooltip": "Local model name for OpenAI-compatible polishing, for example served by vLLM, llama.cpp, or LM Studio. Max 4096 chars.",
+    "tooltip": "Optional model name for OpenAI-compatible text polishing. Leave empty to reuse the speech model. Max 4096 chars.",
+    "default": ""
+  },
+  "openai-compatible-api-key": {
+    "type": "entry",
+    "description": "OpenAI-compatible API key",
+    "tooltip": "Optional Bearer token for External API speech recognition and text polishing. Leave empty only for endpoints that do not require authentication. This value is not included in settings export. Max 4096 chars.",
     "default": ""
   },
   "post-process-prompt": {

@@ -48,6 +48,11 @@ class AlarmTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "path is invalid"):
             load_alarm_store(Path("a" * (MAX_ALARM_STORE_PATH_CHARS + 1)))
 
+    def test_load_alarm_store_rejects_oversized_path_bytes(self) -> None:
+        with mock.patch("speed_of_cinnamon.alarms.MAX_ALARM_STORE_PATH_CHARS", 4):
+            with self.assertRaisesRegex(RuntimeError, "path is invalid"):
+                load_alarm_store(Path("é" * 3))
+
     def test_save_alarm_store_rejects_null_byte_path(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "invalid null byte"):
             save_alarm_store({}, Path("alarms\x00.json"))
@@ -55,6 +60,11 @@ class AlarmTest(unittest.TestCase):
     def test_save_alarm_store_rejects_oversized_path(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "path is invalid"):
             save_alarm_store({}, Path("a" * (MAX_ALARM_STORE_PATH_CHARS + 1)))
+
+    def test_save_alarm_store_rejects_oversized_path_bytes(self) -> None:
+        with mock.patch("speed_of_cinnamon.alarms.MAX_ALARM_STORE_PATH_CHARS", 4):
+            with self.assertRaisesRegex(RuntimeError, "path is invalid"):
+                save_alarm_store({}, Path("é" * 3))
 
     def test_load_alarm_store_rejects_oversized_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -98,6 +108,11 @@ class AlarmTest(unittest.TestCase):
         self.assertGreater(len(value), MAX_ALARM_DAYS_CHARS)
         with self.assertRaisesRegex(ValueError, "alarm days is too large"):
             parse_repeat_days(value)
+
+    def test_repeat_day_parser_rejects_oversized_input_bytes(self) -> None:
+        with mock.patch("speed_of_cinnamon.alarms.MAX_ALARM_DAYS_CHARS", 4):
+            with self.assertRaisesRegex(ValueError, "alarm days is too large"):
+                parse_repeat_days("😀" * 2)
 
     def test_alarm_overview_reports_next_active_alarm(self) -> None:
         now = datetime(2026, 6, 1, 8, 0)

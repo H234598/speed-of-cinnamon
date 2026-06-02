@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from speed_of_cinnamon.personalization import (
     build_personalization_prompt,
@@ -29,6 +30,11 @@ class PersonalizationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "personal context is too large"):
             normalize_context("x" * (MAX_PERSONAL_CONTEXT_CHARS + 1))
 
+    def test_context_rejects_oversized_input_bytes(self) -> None:
+        with mock.patch("speed_of_cinnamon.personalization.MAX_PERSONAL_CONTEXT_CHARS", 4):
+            with self.assertRaisesRegex(ValueError, "personal context is too large"):
+                normalize_context("😀" * 2)
+
     def test_vocabulary_accepts_one_term_per_line(self) -> None:
         self.assertEqual(vocabulary_terms("Teladi\n- PipeWire\n\nSpeed of Cinnamon"), ["Teladi", "PipeWire", "Speed of Cinnamon"])
         self.assertEqual(normalize_vocabulary("Teladi\nPipeWire"), "Teladi\nPipeWire")
@@ -44,6 +50,11 @@ class PersonalizationTest(unittest.TestCase):
     def test_vocabulary_rejects_oversized_input(self) -> None:
         with self.assertRaisesRegex(ValueError, "vocabulary is too large"):
             vocabulary_terms("x" * (MAX_VOCABULARY_CHARS + 1))
+
+    def test_vocabulary_rejects_oversized_input_bytes(self) -> None:
+        with mock.patch("speed_of_cinnamon.personalization.MAX_VOCABULARY_CHARS", 4):
+            with self.assertRaisesRegex(ValueError, "vocabulary is too large"):
+                vocabulary_terms("😀" * 2)
 
     def test_prompt_combines_context_and_vocabulary(self) -> None:
         prompt = build_personalization_prompt("Use project terms.", "PipeWire\nCinnamon")
@@ -65,6 +76,14 @@ class PersonalizationTest(unittest.TestCase):
             command_environment("x" * (MAX_PERSONAL_CONTEXT_CHARS + 1), "PipeWire")
         with self.assertRaisesRegex(ValueError, "vocabulary is too large"):
             command_environment("Use terms", "x" * (MAX_VOCABULARY_CHARS + 1))
+
+    def test_command_environment_rejects_oversized_payload_bytes(self) -> None:
+        with mock.patch("speed_of_cinnamon.personalization.MAX_PERSONAL_CONTEXT_CHARS", 4):
+            with self.assertRaisesRegex(ValueError, "personal context is too large"):
+                command_environment("😀" * 2, "PipeWire")
+        with mock.patch("speed_of_cinnamon.personalization.MAX_VOCABULARY_CHARS", 4):
+            with self.assertRaisesRegex(ValueError, "vocabulary is too large"):
+                command_environment("Use terms", "😀" * 2)
 
 
 if __name__ == "__main__":

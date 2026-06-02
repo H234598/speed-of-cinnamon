@@ -169,10 +169,16 @@ The `Text model` menu controls optional text polishing. It can:
 - disable polishing,
 - use the custom command backend,
 - select a model returned by a local Ollama `/api/tags` endpoint,
-- select a model returned by a local OpenAI-compatible `/v1/models` endpoint.
+- select a model returned by an OpenAI-compatible `/v1/models` endpoint.
 
 If the selected local server is not running, the menu stays usable and shows the connection status instead of blocking
 dictation.
+
+Install an Ollama text model directly from the terminal when you need a specific polishing model:
+
+```bash
+speed-of-cinnamon install-text-model --model llama3.2:3b --json
+```
 
 ## Notifications
 

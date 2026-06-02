@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .models import default_ctranslate2_model_path, default_whisper_cpp_model_path, model_backend_for_path, model_supports_language
+from .postprocessor import DEFAULT_OPENAI_COMPATIBLE_MODEL, DEFAULT_OPENAI_COMPATIBLE_URL
 from .transcriber import faster_whisper_available, normalize_backend
 
 
@@ -130,6 +131,8 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
     transcriber = _setting(settings, "transcriber", "auto").lower().replace("_", "-")
     command_template = _setting(settings, "transcriber-command")
     whisper_model = _setting(settings, "whisper-model")
+    openai_compatible_model = _setting(settings, "openai-compatible-model", DEFAULT_OPENAI_COMPATIBLE_MODEL)
+    openai_compatible_url = _setting(settings, "openai-compatible-url", DEFAULT_OPENAI_COMPATIBLE_URL)
     local_model = whisper_model or default_ctranslate2_model_path(language) or default_whisper_cpp_model_path(language)
     whisper_ok = _ok(checks, "whisper")
     whisper_cpp_ok = _ok(checks, "whisper-cli") or _ok(checks, "whisper.cpp") or _ok(checks, "pwcpp")
@@ -227,6 +230,18 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
             "value": "whisper",
             "detail": checks["whisper"].detail if "whisper" in checks else "whisper command missing",
         }
+    if transcriber == "openai-compatible":
+        if not openai_compatible_model:
+            return {
+                "ok": False,
+                "value": "openai-compatible",
+                "detail": "OpenAI-compatible speech model is required",
+            }
+        return {
+            "ok": True,
+            "value": "openai-compatible",
+            "detail": f"OpenAI-compatible speech endpoint configured at {openai_compatible_url}",
+        }
     if transcriber in {"whisper-cpp", "whisper.cpp"}:
         return _model_backend_status("whisper-cpp", "whisper-cpp")
     if transcriber in {"faster-whisper", "ctranslate2", "ct2"}:
@@ -290,12 +305,12 @@ def _output_status(
 
 
 def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
-    backend = _setting(settings, "post-process-backend", "command").lower().replace("_", "-")
+    backend = _setting(settings, "post-process-backend", "none").lower().replace("_", "-")
     command_template = _setting(settings, "post-process-command")
     ollama_model = _setting(settings, "ollama-model")
     ollama_url = _setting(settings, "ollama-url", "http://127.0.0.1:11434")
-    openai_compatible_model = _setting(settings, "openai-compatible-model")
-    openai_compatible_url = _setting(settings, "openai-compatible-url", "http://127.0.0.1:8000/v1")
+    openai_compatible_model = _setting(settings, "openai-compatible-text-model") or _setting(settings, "openai-compatible-model", DEFAULT_OPENAI_COMPATIBLE_MODEL)
+    openai_compatible_url = _setting(settings, "openai-compatible-url", DEFAULT_OPENAI_COMPATIBLE_URL)
     if backend in {"", "none", "off", "disabled"}:
         return {"ok": True, "value": "none", "detail": "text polishing disabled"}
     if backend in {"command", "custom"}:
@@ -317,14 +332,14 @@ def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
             return {
                 "ok": False,
                 "value": "openai-compatible",
-                "detail": "OpenAI-compatible local model is required",
+                "detail": "OpenAI-compatible text model is required",
             }
         return {
             "ok": True,
             "value": "openai-compatible",
             "detail": (
-                f"OpenAI-compatible local endpoint configured at {openai_compatible_url}; "
-                "ensure vLLM, llama.cpp, LM Studio, or another local server is running"
+                f"OpenAI-compatible API configured at {openai_compatible_url}; "
+                "ensure the configured endpoint is reachable"
             ),
         }
     return {"ok": False, "value": backend, "detail": f"unknown post-process backend: {backend}"}
@@ -387,7 +402,7 @@ def report(settings: Mapping[str, object] | None = None, applet: bool = False) -
             "Install xdotool for automatic paste or direct typing on Cinnamon X11.",
             "Install xclip or xsel only if you use the backend CLI clipboard insertion without the applet.",
             "ASR can use Automatic, the 'whisper' command, faster-whisper, whisper.cpp plus a model path, or a custom command.",
-            "Text polishing can use a custom command, Ollama, or an OpenAI-compatible local server.",
+            "Text polishing can use a custom command, Ollama, or an OpenAI-compatible API.",
         ],
     }
 
@@ -408,6 +423,8 @@ def parse_settings_json(value: str) -> dict[str, object]:
         raise ValueError("settings JSON contains invalid null byte")
     if len(value) > MAX_SETTINGS_JSON_CHARS:
         raise ValueError(f"settings JSON is too large (max {MAX_SETTINGS_JSON_CHARS} characters)")
+    if len(value.encode("utf-8")) > MAX_SETTINGS_JSON_CHARS:
+        raise ValueError(f"settings JSON is too large (max {MAX_SETTINGS_JSON_CHARS} bytes)")
     parsed = json.loads(value)
     if not isinstance(parsed, dict):
         raise ValueError("settings JSON must be an object")

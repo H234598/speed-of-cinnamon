@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import platform
+import shutil
+import subprocess
 import sys
 import time
 import tempfile
+import urllib.parse
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,7 +52,10 @@ from .paths import (
 )
 from .postprocessor import (
     DEFAULT_OLLAMA_URL,
+    DEFAULT_OPENAI_COMPATIBLE_MODEL,
     DEFAULT_OPENAI_COMPATIBLE_URL,
+    MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
+    MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
     list_ollama_models,
     list_openai_compatible_models,
     post_process_text,
@@ -80,6 +87,7 @@ MAX_DIAGNOSTICS_JSON_BYTES = 1_000_000
 MAX_URL_CHARS = 2_048
 MAX_ALARM_CATCH_UP_MINUTES = 14_400
 DEFAULT_BENCHMARK_LANGUAGE = "de"
+OLLAMA_PULL_TIMEOUT_SECONDS = 1800
 TRANSCRIBER_CHOICES = [
     "auto",
     "openai",
@@ -87,6 +95,8 @@ TRANSCRIBER_CHOICES = [
     "whisper",
     "whisper-cpp",
     "faster-whisper",
+    "openai-compatible",
+    "external-api",
     "command",
     "custom",
     "template",
@@ -107,6 +117,10 @@ def _assert_text_limit(value: str, *, field_name: str, max_chars: int) -> str:
         if field_name == "audio file path":
             raise RuntimeError(f"{field_name} is too long (max {max_chars} characters)")
         raise RuntimeError(f"{field_name} is too large (max {max_chars} characters)")
+    if len(value.encode("utf-8")) > max_chars:
+        if field_name == "audio file path":
+            raise RuntimeError(f"{field_name} is too long (max {max_chars} bytes)")
+        raise RuntimeError(f"{field_name} is too large (max {max_chars} bytes)")
     return value
 
 
@@ -118,6 +132,45 @@ def _assert_clean_text(value: str, *, field_name: str, max_chars: int) -> str:
 
 def _validate_text_model_url(url: str, *, field_name: str) -> str:
     return _assert_clean_text(url, field_name=field_name, max_chars=MAX_URL_CHARS).rstrip("/")
+
+
+def _validate_openai_compatible_http_url(url: str, field_name: str) -> str:
+    base = _validate_text_model_url(url, field_name=field_name)
+    parsed = urllib.parse.urlparse(base)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError(f"{field_name} must use http:// or https://")
+    return base
+
+
+def _is_local_ollama_url(url: str) -> bool:
+    normalized = (url or DEFAULT_OLLAMA_URL).strip().lower()
+    return (
+        normalized.startswith("http://127.0.0.1:")
+        or normalized.startswith("http://localhost:")
+        or normalized.startswith("http://[::1]:")
+    )
+
+
+def _effective_post_process_backend(backend: str, command_template: str) -> str:
+    normalized = (backend or "none").strip().lower().replace("_", "-")
+    if normalized in {"none", "off", "disabled"} and (command_template or "").strip():
+        return "command"
+    return normalized
+
+
+def _openai_compatible_transcribe_kwargs(args: argparse.Namespace, backend: str) -> dict[str, str]:
+    if backend != "openai-compatible":
+        return {}
+    return {
+        "openai_compatible_model": getattr(args, "openai_compatible_model", DEFAULT_OPENAI_COMPATIBLE_MODEL),
+        "openai_compatible_url": getattr(args, "openai_compatible_url", DEFAULT_OPENAI_COMPATIBLE_URL),
+        "openai_compatible_api_key": getattr(args, "openai_compatible_api_key", ""),
+    }
+
+
+def _openai_compatible_post_process_model(args: argparse.Namespace) -> str:
+    text_model = getattr(args, "openai_compatible_text_model", "")
+    return text_model or getattr(args, "openai_compatible_model", DEFAULT_OPENAI_COMPATIBLE_MODEL)
 
 
 def _validate_pipeline_text_args(
@@ -133,9 +186,15 @@ def _validate_pipeline_text_args(
     _assert_clean_text(args.whisper_model, field_name="whisper model", max_chars=MAX_PATH_CHARS)
     _assert_clean_text(args.post_process_prompt, field_name="post-process prompt", max_chars=MAX_TRANSCRIBER_TEXT_CHARS)
     _assert_clean_text(args.ollama_model, field_name="ollama model", max_chars=MAX_PATH_CHARS)
-    _assert_clean_text(args.openai_compatible_model, field_name="openai-compatible model", max_chars=MAX_PATH_CHARS)
+    _assert_clean_text(args.openai_compatible_model, field_name="openai-compatible model", max_chars=MAX_OPENAI_COMPATIBLE_MODEL_CHARS)
+    _assert_clean_text(getattr(args, "openai_compatible_text_model", ""), field_name="openai-compatible text model", max_chars=MAX_OPENAI_COMPATIBLE_MODEL_CHARS)
+    _assert_clean_text(
+        getattr(args, "openai_compatible_api_key", ""),
+        field_name="openai-compatible API key",
+        max_chars=MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
+    )
     _validate_text_model_url(args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url")
-    _validate_text_model_url(args.openai_compatible_url or DEFAULT_OPENAI_COMPATIBLE_URL, field_name="openai-compatible url")
+    _validate_openai_compatible_http_url(args.openai_compatible_url or DEFAULT_OPENAI_COMPATIBLE_URL, field_name="openai-compatible url")
     return language
 
 
@@ -166,6 +225,27 @@ def read_file_tail(path: Path, max_chars: int) -> str:
         raise ValueError(f"file tail contains invalid null byte: {path}")
     if len(text) > max_chars:
         text = text[-max_chars:]
+    return text
+
+
+def _read_binary_output(file: io.BufferedRandom, max_bytes: int, *, field_name: str) -> str:
+    if not hasattr(file, "seek") or not hasattr(file, "tell") or not hasattr(file, "read"):
+        raise RuntimeError(f"{field_name} must be a binary file handle")
+    if not isinstance(max_bytes, int) or isinstance(max_bytes, bool):
+        raise RuntimeError("max_bytes must be an integer")
+    if max_bytes <= 0:
+        raise RuntimeError("max_bytes must be positive")
+    file.seek(0, os.SEEK_END)
+    size = file.tell()
+    if size > max_bytes:
+        raise RuntimeError(f"{field_name} exceeded {max_bytes} bytes")
+    file.seek(0)
+    try:
+        text = file.read().decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError(f"{field_name} is not valid UTF-8: {exc}") from exc
+    if _contains_escaped_null(text):
+        raise RuntimeError(f"{field_name} contains invalid null byte")
     return text
 
 
@@ -727,11 +807,11 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
     stamp = timestamp()
     audio_path = recordings_dir() / f"{stamp}.wav"
     log_path = recordings_dir() / f"{stamp}.log"
+    max_seconds = _coerce_int(args.max_seconds, field_name="max-seconds", max_value=MAX_RECORDING_SECONDS)
+    command = choose_recorder(args.recorder, audio_path, max_seconds, args.input_device)
     audio_path = validate_recording_path(audio_path, suffix=".wav", require_recordings_dir=True)
     log_path = validate_recording_path(log_path, suffix=".log", require_recordings_dir=True)
     _prepare_private_file(audio_path, field_name="recording audio file")
-    max_seconds = _coerce_int(args.max_seconds, field_name="max-seconds", max_value=MAX_RECORDING_SECONDS)
-    command = choose_recorder(args.recorder, audio_path, max_seconds, args.input_device)
     proc = start_recorder(command, log_path)
     time.sleep(RECORDER_START_GRACE_SECONDS)
     if proc.poll() is not None:
@@ -783,6 +863,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             whisper_model=args.whisper_model,
             personal_context=args.personal_context,
             vocabulary=args.vocabulary,
+            **_openai_compatible_transcribe_kwargs(args, normalized_transcriber),
         )
         text = post_process_text(
             text,
@@ -790,12 +871,13 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             args.post_process_command,
             args.personal_context,
             args.vocabulary,
-            args.post_process_backend,
+            _effective_post_process_backend(args.post_process_backend, args.post_process_command),
             args.ollama_model,
             args.ollama_url,
             args.post_process_prompt,
-            args.openai_compatible_model,
+            _openai_compatible_post_process_model(args),
             args.openai_compatible_url,
+            getattr(args, "openai_compatible_api_key", ""),
         )
         _write_text_atomic(text_path, text.strip() + "\n")
         append_space = _coerce_bool(args.append_space, field_name="append_space")
@@ -992,8 +1074,13 @@ def command_text_models(args: argparse.Namespace) -> dict[str, object]:
     if backend not in {"ollama", "openai-compatible"}:
         raise RuntimeError("text models backend must be ollama or openai-compatible")
     if backend == "openai-compatible":
-        url = _validate_text_model_url(args.openai_compatible_url or DEFAULT_OPENAI_COMPATIBLE_URL, field_name="openai-compatible url")
-        payload = _normalize_text_models_payload(list_openai_compatible_models(url))
+        url = _validate_openai_compatible_http_url(args.openai_compatible_url or DEFAULT_OPENAI_COMPATIBLE_URL, field_name="openai-compatible url")
+        api_key = _assert_clean_text(
+            getattr(args, "openai_compatible_api_key", ""),
+            field_name="openai-compatible API key",
+            max_chars=MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
+        )
+        payload = _normalize_text_models_payload(list_openai_compatible_models(url, api_key=api_key))
         return {
             "status": "done",
             "backend": "openai-compatible",
@@ -1002,11 +1089,63 @@ def command_text_models(args: argparse.Namespace) -> dict[str, object]:
         }
     url = _validate_text_model_url(args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url")
     payload = _normalize_text_models_payload(list_ollama_models(url))
+    if _is_local_ollama_url(url) and not shutil.which("ollama") and payload["available"] is False:
+        return {
+            "status": "done",
+            "backend": "ollama",
+            "url": url,
+            "available": False,
+            "models": [],
+            "message": "Ollama command is not available; install Ollama and start the local server",
+        }
     return {
         "status": "done",
         "backend": "ollama",
         "url": url,
         **payload,
+    }
+
+
+def command_install_text_model(args: argparse.Namespace) -> dict[str, object]:
+    backend = (args.backend or "ollama").strip().lower().replace("_", "-")
+    if backend != "ollama":
+        raise RuntimeError("text model installation currently supports only ollama")
+    model = _assert_clean_text(args.model, field_name="ollama model", max_chars=MAX_PATH_CHARS).strip()
+    if not model:
+        raise RuntimeError("ollama model must not be empty")
+    if model.startswith("-"):
+        raise RuntimeError("ollama model must not start with '-'")
+    url = _validate_text_model_url(args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url")
+    ollama = shutil.which("ollama")
+    if not ollama:
+        raise RuntimeError("ollama command is not available")
+    env = os.environ.copy()
+    if url:
+        env["OLLAMA_HOST"] = url
+    try:
+        with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+            proc = subprocess.run(
+                [ollama, "pull", model],
+                stdout=stdout_file,
+                stderr=stderr_file,
+                timeout=OLLAMA_PULL_TIMEOUT_SECONDS,
+                env=env,
+            )
+            stdout = _read_binary_output(stdout_file, MAX_LOG_EXCERPT_CHARS, field_name="ollama pull stdout")
+            stderr = _read_binary_output(stderr_file, MAX_LOG_EXCERPT_CHARS, field_name="ollama pull stderr")
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"ollama pull timed out after {OLLAMA_PULL_TIMEOUT_SECONDS}s") from exc
+    except OSError as exc:
+        raise RuntimeError(f"failed to run ollama pull: {exc}") from exc
+    if proc.returncode != 0:
+        detail = (stderr or stdout or f"exit code {proc.returncode}").strip()
+        raise RuntimeError(f"ollama pull failed: {detail[:MAX_LOG_EXCERPT_CHARS]}")
+    return {
+        "status": "done",
+        "backend": "ollama",
+        "model": model,
+        "url": url,
+        "message": f"Ollama model installed: {model}",
     }
 
 
@@ -1033,7 +1172,7 @@ def _benchmark_targets(model_names: list[str] | None, language: str) -> list[Mod
             except ModelError as exc:
                 raise RuntimeError(str(exc)) from exc
         return targets
-    return [model for model in CATALOG if model_path(model).is_file() and model_supports_language(model_path(model), language)]
+    return [model for model in CATALOG if bool(model_status(model, verify=False).get("downloaded"))]
 
 
 def _benchmark_model(audio_path: Path, language: str, model: ModelSpec) -> dict[str, object]:
@@ -1068,6 +1207,9 @@ def _benchmark_model(audio_path: Path, language: str, model: ModelSpec) -> dict[
             whisper_model=str(path),
             personal_context="",
             vocabulary="",
+            openai_compatible_model=DEFAULT_OPENAI_COMPATIBLE_MODEL,
+            openai_compatible_url=DEFAULT_OPENAI_COMPATIBLE_URL,
+            openai_compatible_api_key="",
         )
     except Exception as exc:
         result["seconds"] = round(time.perf_counter() - started, 3)
@@ -1358,6 +1500,7 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         whisper_model=args.whisper_model,
         personal_context=args.personal_context,
         vocabulary=args.vocabulary,
+        **_openai_compatible_transcribe_kwargs(args, normalized_transcriber),
     )
     text = post_process_text(
         text,
@@ -1365,12 +1508,13 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         args.post_process_command,
         args.personal_context,
         args.vocabulary,
-        args.post_process_backend,
+        _effective_post_process_backend(args.post_process_backend, args.post_process_command),
         args.ollama_model,
         args.ollama_url,
         args.post_process_prompt,
-        args.openai_compatible_model,
+        _openai_compatible_post_process_model(args),
         args.openai_compatible_url,
+        getattr(args, "openai_compatible_api_key", ""),
     )
     _write_text_atomic(text_path, text.strip() + "\n")
     return {"status": "done", "transcript": text, "transcript_path": str(text_path)}
@@ -1389,12 +1533,14 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--transcriber", default="auto", choices=TRANSCRIBER_CHOICES)
     parser.add_argument("--transcriber-command", default="")
     parser.add_argument("--whisper-model", default="")
-    parser.add_argument("--post-process-backend", default="command", choices=["none", "command", "ollama", "openai-compatible"])
+    parser.add_argument("--post-process-backend", default="none", choices=["none", "command", "ollama", "openai-compatible"])
     parser.add_argument("--post-process-command", default="")
     parser.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
     parser.add_argument("--ollama-model", default="")
     parser.add_argument("--openai-compatible-url", default=DEFAULT_OPENAI_COMPATIBLE_URL)
-    parser.add_argument("--openai-compatible-model", default="")
+    parser.add_argument("--openai-compatible-model", default=DEFAULT_OPENAI_COMPATIBLE_MODEL)
+    parser.add_argument("--openai-compatible-text-model", default="")
+    parser.add_argument("--openai-compatible-api-key", default="")
     parser.add_argument("--post-process-prompt", default="")
     parser.add_argument("--personal-context", default="")
     parser.add_argument("--vocabulary", default="")
@@ -1470,7 +1616,15 @@ def build_parser() -> argparse.ArgumentParser:
     text_models.add_argument("--backend", default="ollama", choices=["ollama", "openai-compatible"])
     text_models.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
     text_models.add_argument("--openai-compatible-url", default=DEFAULT_OPENAI_COMPATIBLE_URL)
+    text_models.add_argument("--openai-compatible-api-key", default="")
     text_models.set_defaults(handler=command_text_models)
+
+    install_text_model = subparsers.add_parser("install-text-model")
+    add_common_options(install_text_model)
+    install_text_model.add_argument("--backend", default="ollama", choices=["ollama"])
+    install_text_model.add_argument("--model", required=True)
+    install_text_model.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
+    install_text_model.set_defaults(handler=command_install_text_model)
 
     download_model_parser = subparsers.add_parser("download-model")
     add_common_options(download_model_parser)
@@ -1582,12 +1736,14 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_file.add_argument("--transcriber", default="auto", choices=TRANSCRIBER_CHOICES)
     transcribe_file.add_argument("--transcriber-command", default="")
     transcribe_file.add_argument("--whisper-model", default="")
-    transcribe_file.add_argument("--post-process-backend", default="command", choices=["none", "command", "ollama", "openai-compatible"])
+    transcribe_file.add_argument("--post-process-backend", default="none", choices=["none", "command", "ollama", "openai-compatible"])
     transcribe_file.add_argument("--post-process-command", default="")
     transcribe_file.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
     transcribe_file.add_argument("--ollama-model", default="")
     transcribe_file.add_argument("--openai-compatible-url", default=DEFAULT_OPENAI_COMPATIBLE_URL)
-    transcribe_file.add_argument("--openai-compatible-model", default="")
+    transcribe_file.add_argument("--openai-compatible-model", default=DEFAULT_OPENAI_COMPATIBLE_MODEL)
+    transcribe_file.add_argument("--openai-compatible-text-model", default="")
+    transcribe_file.add_argument("--openai-compatible-api-key", default="")
     transcribe_file.add_argument("--post-process-prompt", default="")
     transcribe_file.add_argument("--personal-context", default="")
     transcribe_file.add_argument("--vocabulary", default="")

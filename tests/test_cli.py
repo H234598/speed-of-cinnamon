@@ -4,6 +4,7 @@ import argparse
 import io
 import json
 import os
+import subprocess
 import tomllib
 import tempfile
 import unittest
@@ -165,6 +166,43 @@ class CliTest(unittest.TestCase):
             personal_context="",
             vocabulary="",
         )
+
+    @mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="polished")
+    @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="raw")
+    @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
+    def test_transcribe_file_uses_separate_openai_compatible_text_model(
+        self,
+        mocked_validate: mock.Mock,
+        mocked_transcribe: mock.Mock,
+        mocked_post_process: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            mocked_validate.return_value = audio
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--transcriber",
+                    "openai-compatible",
+                    "--post-process-backend",
+                    "openai-compatible",
+                    "--openai-compatible-model",
+                    "gpt-4o-transcribe",
+                    "--openai-compatible-text-model",
+                    "gpt-4o-mini",
+                    "--openai-compatible-api-key",
+                    "secret",
+                    "--json",
+                ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["transcript"], "polished")
+        self.assertEqual(mocked_transcribe.call_args.kwargs["openai_compatible_model"], "gpt-4o-transcribe")
+        self.assertEqual(mocked_post_process.call_args.args[9], "gpt-4o-mini")
+        self.assertEqual(mocked_post_process.call_args.args[11], "secret")
 
     @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="ok")
     @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
@@ -399,7 +437,10 @@ class CliTest(unittest.TestCase):
             "message": "Ollama models loaded",
         }
         stdout = io.StringIO()
-        with redirect_stdout(stdout):
+        with (
+            mock.patch("speed_of_cinnamon.cli.shutil.which", return_value="/usr/bin/ollama"),
+            redirect_stdout(stdout),
+        ):
             code = cli.run(["text-models", "--ollama-url", "http://localhost:11434", "--json"])
         payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 0)
@@ -407,6 +448,25 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["url"], "http://localhost:11434")
         self.assertEqual(payload["models"][0]["name"], "llama3.2:3b")
         mocked_list.assert_called_once_with("http://localhost:11434")
+
+    @mock.patch("speed_of_cinnamon.cli.list_ollama_models")
+    def test_text_models_reports_missing_local_ollama_command(self, mocked_list: mock.Mock) -> None:
+        mocked_list.return_value = {
+            "available": False,
+            "models": [],
+            "message": "Ollama is not reachable at http://127.0.0.1:11434",
+        }
+        stdout = io.StringIO()
+        with (
+            mock.patch("speed_of_cinnamon.cli.shutil.which", return_value=None),
+            redirect_stdout(stdout),
+        ):
+            code = cli.run(["text-models", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertFalse(payload["available"])
+        self.assertIn("Ollama command is not available", payload["message"])
+        mocked_list.assert_called_once_with(cli.DEFAULT_OLLAMA_URL)
 
     @mock.patch("speed_of_cinnamon.cli.list_ollama_models")
     def test_text_models_rejects_overlong_ollama_url(self, mocked_list: mock.Mock) -> None:
@@ -427,6 +487,153 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("contains invalid null byte", payload["error"])
 
+    def test_install_text_model_pulls_ollama_model(self) -> None:
+        completed = mock.Mock(returncode=0, stdout="ok", stderr="")
+        stdout = io.StringIO()
+        with (
+            mock.patch("speed_of_cinnamon.cli.shutil.which", return_value="/usr/bin/ollama"),
+            mock.patch("speed_of_cinnamon.cli.subprocess.run", return_value=completed) as mocked_run,
+            redirect_stdout(stdout),
+        ):
+            code = cli.run([
+                "install-text-model",
+                "--model",
+                "llama3.2:3b",
+                "--ollama-url",
+                "http://localhost:11434",
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "done")
+        self.assertEqual(payload["model"], "llama3.2:3b")
+        mocked_run.assert_called_once()
+        self.assertEqual(mocked_run.call_args.args[0], ["/usr/bin/ollama", "pull", "llama3.2:3b"])
+        self.assertEqual(mocked_run.call_args.kwargs["env"]["OLLAMA_HOST"], "http://localhost:11434")
+
+    def test_install_text_model_rejects_oversized_stdout(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            stdout = kwargs["stdout"]
+            stderr = kwargs["stderr"]
+            if not isinstance(stdout, object) or not isinstance(stderr, object):
+                raise RuntimeError("expected file handles")
+            stdout.write(b"x" * (cli.MAX_LOG_EXCERPT_CHARS + 1))
+            stderr.write(b"")
+            return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
+
+        stdout = io.StringIO()
+        with (
+            mock.patch("speed_of_cinnamon.cli.shutil.which", return_value="/usr/bin/ollama"),
+            mock.patch("speed_of_cinnamon.cli.subprocess.run", side_effect=fake_run),
+            redirect_stdout(stdout),
+        ):
+            code = cli.run([
+                "install-text-model",
+                "--model",
+                "llama3.2:3b",
+                "--ollama-url",
+                "http://localhost:11434",
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("ollama pull stdout exceeded", payload["error"])
+
+    def test_install_text_model_rejects_oversized_stderr(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            stdout = kwargs["stdout"]
+            stderr = kwargs["stderr"]
+            if not isinstance(stdout, object) or not isinstance(stderr, object):
+                raise RuntimeError("expected file handles")
+            stdout.write(b"ok")
+            stderr.write(b"x" * (cli.MAX_LOG_EXCERPT_CHARS + 1))
+            return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
+
+        stdout = io.StringIO()
+        with (
+            mock.patch("speed_of_cinnamon.cli.shutil.which", return_value="/usr/bin/ollama"),
+            mock.patch("speed_of_cinnamon.cli.subprocess.run", side_effect=fake_run),
+            redirect_stdout(stdout),
+        ):
+            code = cli.run([
+                "install-text-model",
+                "--model",
+                "llama3.2:3b",
+                "--ollama-url",
+                "http://localhost:11434",
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("ollama pull stderr exceeded", payload["error"])
+
+    def test_install_text_model_rejects_stdout_utf8_errors(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            stdout = kwargs["stdout"]
+            stderr = kwargs["stderr"]
+            if not isinstance(stdout, object) or not isinstance(stderr, object):
+                raise RuntimeError("expected file handles")
+            stdout.write(b"\xff")
+            stderr.write(b"")
+            return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
+
+        stdout = io.StringIO()
+        with (
+            mock.patch("speed_of_cinnamon.cli.shutil.which", return_value="/usr/bin/ollama"),
+            mock.patch("speed_of_cinnamon.cli.subprocess.run", side_effect=fake_run),
+            redirect_stdout(stdout),
+        ):
+            code = cli.run([
+                "install-text-model",
+                "--model",
+                "llama3.2:3b",
+                "--ollama-url",
+                "http://localhost:11434",
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("ollama pull stdout is not valid UTF-8", payload["error"])
+
+    def test_install_text_model_rejects_stderr_null_bytes(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            stdout = kwargs["stdout"]
+            stderr = kwargs["stderr"]
+            if not isinstance(stdout, object) or not isinstance(stderr, object):
+                raise RuntimeError("expected file handles")
+            stdout.write(b"ok")
+            stderr.write(b"bad\x00")
+            return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
+
+        stdout = io.StringIO()
+        with (
+            mock.patch("speed_of_cinnamon.cli.shutil.which", return_value="/usr/bin/ollama"),
+            mock.patch("speed_of_cinnamon.cli.subprocess.run", side_effect=fake_run),
+            redirect_stdout(stdout),
+        ):
+            code = cli.run([
+                "install-text-model",
+                "--model",
+                "llama3.2:3b",
+                "--ollama-url",
+                "http://localhost:11434",
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("ollama pull stderr contains invalid null byte", payload["error"])
+
+    def test_install_text_model_rejects_missing_ollama_command(self) -> None:
+        stdout = io.StringIO()
+        with (
+            mock.patch("speed_of_cinnamon.cli.shutil.which", return_value=None),
+            redirect_stdout(stdout),
+        ):
+            code = cli.run(["install-text-model", "--model", "llama3.2:3b", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("ollama command is not available", payload["error"])
+
     @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models")
     def test_text_models_rejects_overlong_openai_url(self, mocked_list: mock.Mock) -> None:
         long_url = "http://127.0.0.1:8000/" + ("x" * (cli.MAX_URL_CHARS + 10))
@@ -445,6 +652,24 @@ class CliTest(unittest.TestCase):
         self.assertIn("openai-compatible url is too large", payload["error"])
         mocked_list.assert_not_called()
 
+    @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models")
+    def test_text_models_rejects_overlong_openai_api_key(self, mocked_list: mock.Mock) -> None:
+        long_key = "x" * (cli.MAX_OPENAI_COMPATIBLE_API_KEY_CHARS + 1)
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run([
+                "text-models",
+                "--backend",
+                "openai-compatible",
+                "--openai-compatible-api-key",
+                long_key,
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("openai-compatible API key is too large", payload["error"])
+        mocked_list.assert_not_called()
+
     def test_text_models_rejects_null_openai_url(self) -> None:
         stdout = io.StringIO()
         with redirect_stdout(stdout):
@@ -460,8 +685,23 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("contains invalid null byte", payload["error"])
 
+    def test_text_models_rejects_non_http_openai_url(self) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run([
+                "text-models",
+                "--backend",
+                "openai-compatible",
+                "--openai-compatible-url",
+                "ftp://127.0.0.1:8000/v1",
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("openai-compatible url must use http:// or https://", payload["error"])
+
     @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models")
-    def test_text_models_lists_openai_compatible_local_models(self, mocked_list: mock.Mock) -> None:
+    def test_text_models_lists_openai_compatible_models(self, mocked_list: mock.Mock) -> None:
         mocked_list.return_value = {
             "available": True,
             "models": [{"name": "local-llama"}],
@@ -475,6 +715,8 @@ class CliTest(unittest.TestCase):
                 "openai-compatible",
                 "--openai-compatible-url",
                 "http://127.0.0.1:8000/v1",
+                "--openai-compatible-api-key",
+                "secret",
                 "--json",
             ])
         payload = json.loads(stdout.getvalue())
@@ -482,7 +724,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["backend"], "openai-compatible")
         self.assertEqual(payload["url"], "http://127.0.0.1:8000/v1")
         self.assertEqual(payload["models"][0]["name"], "local-llama")
-        mocked_list.assert_called_once_with("http://127.0.0.1:8000/v1")
+        mocked_list.assert_called_once_with("http://127.0.0.1:8000/v1", api_key="secret")
 
     @mock.patch("speed_of_cinnamon.cli.list_ollama_models", return_value="invalid")
     def test_text_models_rejects_non_object_ollama_payload(self, mocked_list: mock.Mock) -> None:
@@ -1802,6 +2044,110 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("personal context is too large", payload["error"])
 
+    def test_transcribe_file_rejects_overlong_openai_compatible_api_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            long_key = "x" * (cli.MAX_OPENAI_COMPATIBLE_API_KEY_CHARS + 1)
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--json",
+                    "--transcriber",
+                    "openai-compatible",
+                    "--openai-compatible-url",
+                    "http://127.0.0.1:8000/v1",
+                    "--openai-compatible-api-key",
+                    long_key,
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("openai-compatible API key is too large", payload["error"])
+
+    def test_transcribe_file_rejects_overlong_openai_compatible_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            long_model = "x" * (cli.MAX_OPENAI_COMPATIBLE_MODEL_CHARS + 1)
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--json",
+                    "--transcriber",
+                    "openai-compatible",
+                    "--openai-compatible-model",
+                    long_model,
+                    "--openai-compatible-api-key",
+                    "secret",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("openai-compatible model is too large", payload["error"])
+
+    def test_transcribe_file_rejects_overlong_openai_compatible_text_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            long_text_model = "x" * (cli.MAX_OPENAI_COMPATIBLE_MODEL_CHARS + 1)
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--json",
+                    "--transcriber",
+                    "openai-compatible",
+                    "--openai-compatible-model",
+                    "gpt-4o-transcribe",
+                    "--openai-compatible-text-model",
+                    long_text_model,
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("openai-compatible text model is too large", payload["error"])
+
+    def test_transcribe_file_rejects_non_http_openai_compatible_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--json",
+                    "--transcriber",
+                    "openai-compatible",
+                    "--openai-compatible-url",
+                    "ftp://127.0.0.1:8000/v1",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("openai-compatible url must use http:// or https://", payload["error"])
+
+    def test_transcribe_file_rejects_openai_compatible_url_with_null_byte(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--json",
+                    "--transcriber",
+                    "openai-compatible",
+                    "--openai-compatible-url",
+                    "http://127.0.0.1:8000/v1\x00",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("contains invalid null byte", payload["error"])
+
     def test_stop_rejects_overlong_personal_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "processing.wav"
@@ -2551,6 +2897,10 @@ class CliTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "must be text"):
             cli._assert_clean_text(123, field_name="value", max_chars=10)  # type: ignore[arg-type]
 
+    def test_assert_text_limit_rejects_oversized_bytes(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "is too large"):
+            cli._assert_text_limit("😀😀", field_name="value", max_chars=4)
+
     def test_coerce_path_rejects_non_text_value(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "must be text"):
             cli._coerce_path(123, field_name="path")  # type: ignore[arg-type]
@@ -2580,6 +2930,11 @@ class CliTest(unittest.TestCase):
     def test_parse_cli_settings_json_rejects_non_text(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "must be text"):
             cli._parse_cli_settings_json({} )  # type: ignore[arg-type]
+
+    def test_parse_cli_settings_json_rejects_overlong_bytes(self) -> None:
+        raw = json.dumps({"payload": "😀" * ((cli.MAX_SETTINGS_JSON_CHARS // 4) + 1)})
+        with self.assertRaisesRegex(RuntimeError, "too large"):
+            cli._parse_cli_settings_json(raw)
 
     def test_contains_escaped_null_rejects_non_text(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "value must be text"):

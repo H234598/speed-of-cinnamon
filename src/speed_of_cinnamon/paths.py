@@ -25,7 +25,11 @@ def _xdg_path(environment_variable: str, default: Path) -> Path:
     if not isinstance(value, str):
         return default
     normalized = (value or "").strip()
-    if not normalized or len(normalized) > MAX_XDG_PATH_CHARS or _contains_escaped_null(normalized):
+    if not normalized:
+        return default
+    if len(normalized) > MAX_XDG_PATH_CHARS or len(normalized.encode("utf-8")) > MAX_XDG_PATH_CHARS:
+        return default
+    if _contains_escaped_null(normalized):
         return default
     candidate = Path(normalized)
     return candidate if candidate.is_absolute() else default

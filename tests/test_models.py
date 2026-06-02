@@ -219,6 +219,23 @@ class ModelsTest(unittest.TestCase):
             models._load_model_checksum_cache()
             self.assertNotIn(key, models._model_checksum_cache)
 
+    def test_model_checksum_cache_rejects_oversized_path_entries_bytes(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            key = "😀" * ((models.MAX_MODEL_CHECKSUM_PATH_CHARS // 4) + 1)
+            cache_path.write_text(
+                json.dumps({key: {"checksum": "a" * 40, "size": 1, "mtime_ns": 1}}),
+                encoding="utf-8",
+            )
+            models._load_model_checksum_cache()
+            self.assertNotIn(key, models._model_checksum_cache)
+
     def test_model_checksum_cache_rejects_null_byte_paths(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -344,6 +361,17 @@ class ModelsTest(unittest.TestCase):
             mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
         ):
             path = models._model_checksum_cache_path().parent / "a\x00b.bin"
+            with self.assertRaisesRegex(models.ModelError, "invalid model checksum cache state"):
+                models._set_model_checksum_cache(path, "a" * 40, stat)
+
+    def test_set_model_checksum_cache_rejects_oversized_byte_path(self) -> None:
+        stat = os.stat_result((0, 0, 0, 0, 0, 0, 12, 0, 0, 0))
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+        ):
+            key = "😀" * ((models.MAX_MODEL_CHECKSUM_PATH_CHARS // 4) + 1)
+            path = models._model_checksum_cache_path().parent / key
             with self.assertRaisesRegex(models.ModelError, "invalid model checksum cache state"):
                 models._set_model_checksum_cache(path, "a" * 40, stat)
 

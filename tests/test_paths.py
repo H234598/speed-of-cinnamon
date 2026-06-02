@@ -53,6 +53,13 @@ class PathsTest(unittest.TestCase):
         with mock.patch.dict("os.environ", {"XDG_DATA_HOME": "a" * (paths.MAX_XDG_PATH_CHARS + 1)}):
             self.assertEqual(paths.xdg_data_home(), Path.home() / ".local" / "share")
 
+    def test_xdg_data_home_rejects_oversized_value_bytes(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.paths.MAX_XDG_PATH_CHARS", 4),
+            mock.patch.dict("os.environ", {"XDG_DATA_HOME": "é" * 3}),
+        ):
+            self.assertEqual(paths.xdg_data_home(), Path.home() / ".local" / "share")
+
     def test_xdg_state_home_rejects_relative_path(self) -> None:
         with mock.patch.dict("os.environ", {"XDG_STATE_HOME": "relative/state-home"}):
             self.assertEqual(paths.xdg_state_home(), Path.home() / ".local" / "state")
