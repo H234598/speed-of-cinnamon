@@ -208,7 +208,7 @@ class StateStore:
             if key in state_fields:
                 setattr(state, key, value)
         self.write(state)
-        return state
+        return self.read()
 
 
 def process_is_alive(pid: int | None) -> bool:

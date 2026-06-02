@@ -760,6 +760,16 @@ def _download_url_to_file(url: str, tmp_dir: Path, size_limit: int, model_name: 
         with urllib.request.urlopen(url, timeout=30) as response, (  # nosec B310
             output
         ):
+            geturl = getattr(response, "geturl", None)
+            if callable(geturl):
+                final_url = _assert_download_url(
+                    geturl(),
+                    field_name="model download redirect URL",
+                    allowed_hosts=allowed_hosts,
+                    allowed_urls=allowed_urls,
+                )
+                if final_url != url:
+                    url = final_url
             content_length = _read_content_length(response)
             if content_length is not None and content_length > size_limit:
                 raise ModelError(f"downloaded model too large for {model_name}: {content_length} > {size_limit}")

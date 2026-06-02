@@ -41,6 +41,15 @@ class FakeResponseWithLength:
         return self.buffer.read(size)
 
 
+class FakeRedirectResponse(FakeResponseWithLength):
+    def __init__(self, data: bytes, content_length: int, final_url: str) -> None:
+        super().__init__(data, content_length)
+        self._final_url = final_url
+
+    def geturl(self) -> str:
+        return self._final_url
+
+
 class ModelsTest(unittest.TestCase):
     def test_sha1_file_uses_cached_checksum(self) -> None:
         spec = models.ModelSpec(
@@ -564,6 +573,21 @@ class ModelsTest(unittest.TestCase):
                     "test",
                     prefix=".model.",
                 )
+
+    def test_download_url_rejects_redirects_to_unapproved_hosts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(models.ModelError, "host is not allowed"):
+                with mock.patch(
+                    "speed_of_cinnamon.models.urllib.request.urlopen",
+                    return_value=FakeRedirectResponse(b"model", 5, "https://evil.example/model.bin"),
+                ):
+                    models._download_url_to_file(
+                        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
+                        Path(tmp),
+                        1024,
+                        "test",
+                        prefix=".model.",
+                    )
 
     def test_tiny_de_download_requires_exact_catalog_url(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

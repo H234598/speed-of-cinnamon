@@ -55,9 +55,17 @@ class StateStoreTest(unittest.TestCase):
             store = StateStore(Path(tmp) / "state.json")
             state = store.update(status="recording", pid=123, language="de")
             self.assertEqual(state.status, "recording")
+            self.assertNotEqual(state.updated_at, "")
             loaded = store.read()
         self.assertEqual(loaded.pid, 123)
         self.assertEqual(loaded.language, "de")
+
+    def test_update_returns_persisted_timestamp(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = StateStore(Path(tmp) / "state.json")
+            state = store.update(status="recording")
+            self.assertNotEqual(state.updated_at, "")
+            self.assertEqual(state.updated_at, store.read().updated_at)
 
     def test_state_roundtrip_preserves_text_whitespace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
