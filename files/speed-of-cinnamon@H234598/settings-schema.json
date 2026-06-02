@@ -50,7 +50,7 @@
   },
   "about-version": {
     "type": "label",
-    "description": "Version: 0.1.21\nAuthor: H234598\nCinnamon-native voice typing for Fedora Cinnamon."
+    "description": "Version: 0.1.22\nAuthor: H234598\nCinnamon-native voice typing for Fedora Cinnamon."
   },
   "toggle-keybinding": {
     "type": "keybinding",

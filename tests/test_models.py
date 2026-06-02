@@ -919,6 +919,27 @@ class ModelsTest(unittest.TestCase):
         with self.assertRaisesRegex(models.ModelError, "contains invalid control character"):
             models._assert_download_url("https://huggingface.co/example/model\\n.bin")
 
+    def test_assert_download_url_rejects_unapproved_host_when_allowlisted(self) -> None:
+        with self.assertRaisesRegex(models.ModelError, "host is not allowed"):
+            models._assert_download_url("https://example.com/model.bin", allowed_hosts={"huggingface.co"})
+
+    def test_download_model_rejects_catalog_url_outside_huggingface(self) -> None:
+        spec = models.ModelSpec(
+            name="evil-host",
+            filename="ggml-evil-host.bin",
+            size="1 KiB",
+            sha1="not-used",
+            description="evil host",
+            download_url="https://example.com/ggml-evil-host.bin",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+        ):
+            with self.assertRaisesRegex(models.ModelError, "host is not allowed"):
+                models.download_model("evil-host")
+
 
 if __name__ == "__main__":
     unittest.main()

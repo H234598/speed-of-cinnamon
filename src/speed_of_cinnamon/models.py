@@ -365,7 +365,13 @@ def _read_content_length(response: Any) -> int | None:
     return None
 
 
-def _assert_download_url(url: str, *, field_name: str = "model download URL") -> str:
+def _assert_download_url(
+    url: str,
+    *,
+    field_name: str = "model download URL",
+    allowed_hosts: set[str] | None = None,
+    allowed_urls: set[str] | None = None,
+) -> str:
     if not isinstance(url, str) or isinstance(url, bool):
         raise ModelError(f"{field_name} must be text")
     normalized = (url or "").strip()
@@ -380,6 +386,11 @@ def _assert_download_url(url: str, *, field_name: str = "model download URL") ->
         raise ModelError(f"{field_name} must use http:// or https://")
     if not parsed.netloc:
         raise ModelError(f"{field_name} is missing network location")
+    hostname = (parsed.hostname or "").lower()
+    if allowed_urls is not None and normalized not in allowed_urls:
+        raise ModelError(f"{field_name} is not allowed")
+    if allowed_hosts is not None and hostname not in allowed_hosts:
+        raise ModelError(f"{field_name} host is not allowed: {parsed.netloc}")
     return normalized
 
 
@@ -572,6 +583,19 @@ def model_path(model: ModelSpec) -> Path:
     return path
 
 
+def _model_root(model: ModelSpec) -> Path:
+    return ctranslate2_models_dir() if model.model_format == "ctranslate2" else models_dir()
+
+
+def _assert_path_within_model_root(path: Path, root: Path, *, field_name: str = "model path") -> None:
+    if not isinstance(path, Path):
+        raise ModelError(f"{field_name} must be a path")
+    if not isinstance(root, Path):
+        raise ModelError("model root must be a path")
+    if not path.is_relative_to(root):
+        raise ModelError(f"{field_name} is outside the model directory: {path}")
+
+
 def model_download_urls(model: ModelSpec) -> list[tuple[str, str]]:
     filename = _validated_catalog_path_fragment(model.filename, field_name="model filename")
     if model.files:
@@ -719,7 +743,14 @@ def _model_is_verified(model: ModelSpec, path: Path, checksum: str = "") -> bool
 
 def _download_url_to_file(url: str, tmp_dir: Path, size_limit: int, model_name: str, *, prefix: str) -> tuple[Path, int]:
     assert_no_symlink_ancestors(tmp_dir, field_name="model temporary directory")
-    url = _assert_download_url(url, field_name="model download URL")
+    allowed_hosts = {"huggingface.co"}
+    allowed_urls = {TINY_DE_MODEL_URL} if model_name == "tiny-de" else None
+    url = _assert_download_url(
+        url,
+        field_name="model download URL",
+        allowed_hosts=allowed_hosts,
+        allowed_urls=allowed_urls,
+    )
     with tempfile.NamedTemporaryFile("wb", delete=False, dir=tmp_dir, prefix=prefix) as output:
         tmp_path = Path(output.name)
         try:
@@ -749,6 +780,8 @@ def _download_url_to_file(url: str, tmp_dir: Path, size_limit: int, model_name: 
 
 def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict[str, object]:
     assert_no_symlink_ancestors(path, field_name="model path")
+    root = _model_root(model)
+    _assert_path_within_model_root(path, root)
     if path.exists() and not force:
         status = model_status(model, verify=True)
         if status["verified"]:
@@ -759,6 +792,18 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
     size_limit = _download_size_limit(model)
     if model.files and not model.repo_id:
         raise ModelError(f"model catalog entry {model.name} is missing repo_id for multi-file download")
+
+    def _assert_safe_model_directory(target: Path) -> None:
+        assert_no_symlink_ancestors(target, field_name="model path")
+        _assert_path_within_model_root(target, root)
+        if not target.parent.exists() or not target.parent.is_dir():
+            raise ModelError(f"model path parent is not a directory: {target.parent}")
+        if target.exists():
+            if target.is_symlink():
+                raise ModelError(f"model path must not be a symlink: {target}")
+            if not target.is_dir():
+                raise ModelError(f"model path must be a directory: {target}")
+
     try:
         downloaded_total = 0
         for filename, url in model_download_urls(model):
@@ -774,14 +819,22 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
             downloaded_total += downloaded
             try:
                 os.replace(tmp_path, target)
+            except OSError as exc:
+                raise ModelError(f"failed to persist downloaded model file: {target}") from exc
+            try:
                 target.chmod(0o600)
             except OSError:
                 pass
         if downloaded_total > size_limit:
             raise ModelError(f"downloaded model too large for {model.name}: {downloaded_total} > {size_limit}")
+        _assert_safe_model_directory(path)
         if path.exists():
             shutil.rmtree(path)
-        os.replace(tmp_dir, path)
+            _assert_safe_model_directory(path)
+        try:
+            os.replace(tmp_dir, path)
+        except OSError as exc:
+            raise ModelError(f"failed to persist downloaded model directory: {path}") from exc
     except Exception:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
@@ -793,9 +846,11 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
         raise ModelError("force must be a boolean")
     model = resolve_model(name)
     path = model_path(model)
+    root = _model_root(model)
     if model.files:
         return _download_directory_model(model, path, force)
     assert_no_symlink_ancestors(path, field_name="model path")
+    _assert_path_within_model_root(path, root)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and not force:
         status = model_status(model, verify=True)
@@ -840,18 +895,18 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
 def remove_model(name: str) -> dict[str, object]:
     model = resolve_model(name)
     path = model_path(model)
+    root = _model_root(model)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     _clear_model_checksum_cache(path)
     _clear_model_checksum_cache(tmp_path)
     removed = False
     removed_tmp = False
     if path.is_symlink():
-        try:
-            path.unlink()
-            removed = True
-        except FileNotFoundError:
-            pass
+        raise ModelError(f"model path must not be a symlink: {path}")
     elif path.is_dir():
+        _assert_path_within_model_root(path, root)
+        if not path.parent.exists() or not path.parent.is_dir():
+            raise ModelError(f"model path parent is not a directory: {path.parent}")
         shutil.rmtree(path)
         removed = True
     else:
