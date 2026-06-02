@@ -616,6 +616,14 @@ class NextVersionTest(unittest.TestCase):
                 next_version.main()
             self.assertFalse(read_current_version.called)
 
+    def test_main_propagates_commits_since_tag_git_error(self) -> None:
+        with mock.patch.object(next_version, "parse_args") as parse_args, \
+            mock.patch.object(next_version, "commits_since_tag", side_effect=next_version.GitEnvironmentError("boom")) as commits_since_tag:
+            parse_args.return_value = mock.Mock(from_tag="v1.2.3", add_commits=None, feature=False, breaking=False, base=None)
+            with self.assertRaises(next_version.GitEnvironmentError):
+                next_version.main()
+            commits_since_tag.assert_called_once_with("v1.2.3")
+
     def test_main_falls_back_to_tag_not_existing(self) -> None:
         with mock.patch.object(next_version, "parse_args") as parse_args, \
             mock.patch.object(next_version, "read_current_version", return_value=(3, 4, 5)) as read_current_version, \
