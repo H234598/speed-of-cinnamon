@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import tempfile
 import io
+import os
 
 
 class OutputError(RuntimeError):
@@ -90,13 +91,14 @@ def _run_with_input(
         raise OutputError("command is empty")
     if _contains_escaped_null(command) or any(_contains_escaped_null(arg) for arg in argv[1:]):
         raise OutputError("command argument contains invalid null byte")
+    runtime_command = _command_path(command)
 
     input_bytes = _validate_text_input(text)
 
     with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
         try:
             proc = subprocess.run(
-                [command, *argv[1:]],
+                [runtime_command, *argv[1:]],
                 input=input_bytes,
                 text=False,
                 stdout=stdout_file,
@@ -121,6 +123,20 @@ def _run_with_input(
             raise OutputError(f"{command} failed: {detail}")
 
 
+def _command_path(command: str) -> str:
+    if not isinstance(command, str) or isinstance(command, bool):
+        raise OutputError("command must be text")
+    command_name = command.strip()
+    if not command_name:
+        raise OutputError("command is empty")
+    if os.path.sep in command_name or (os.path.altsep and os.path.altsep in command_name):
+        return command_name
+    resolved = shutil.which(command_name)
+    if not resolved:
+        raise OutputError(f"{command_name} is not available")
+    return resolved
+
+
 def set_clipboard(text: str) -> str:
     if not isinstance(text, str) or isinstance(text, bool):
         raise OutputError("text must be text")
@@ -138,10 +154,18 @@ def set_clipboard(text: str) -> str:
 
 def paste_from_clipboard() -> None:
     if shutil.which("xdotool"):
-        _run_with_input(["xdotool", "key", "--clearmodifiers", "ctrl+v"], "", timeout=MAX_PASTE_TIMEOUT_SECONDS)
+        _run_with_input(
+            ["xdotool", "key", "--clearmodifiers", "ctrl+v"],
+            "",
+            timeout=MAX_PASTE_TIMEOUT_SECONDS,
+        )
         return
     if shutil.which("wtype"):
-        _run_with_input(["wtype", "-M", "ctrl", "v", "-m", "ctrl"], "", timeout=MAX_PASTE_TIMEOUT_SECONDS)
+        _run_with_input(
+            ["wtype", "-M", "ctrl", "v", "-m", "ctrl"],
+            "",
+            timeout=MAX_PASTE_TIMEOUT_SECONDS,
+        )
         return
     raise OutputError("no keyboard helper found; install xdotool on Cinnamon X11")
 

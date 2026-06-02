@@ -121,6 +121,15 @@ class StateStoreTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "is too large"):
                 store.update(transcript=long_value)
 
+    def test_write_sets_private_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            state = StateStore(path).read()
+            state.status = "done"
+            StateStore(path).write(state)
+            mode = path.stat().st_mode & 0o777
+            self.assertEqual(mode, 0o600)
+
     def test_sanitize_text_field_rejects_non_text(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be text"):
             StateStore._sanitize_text_field(12, field_name="status")

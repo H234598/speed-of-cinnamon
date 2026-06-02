@@ -422,6 +422,15 @@ class ModelsTest(unittest.TestCase):
         self.assertIn("speed-of-cinnamon/models/whisper.cpp/ggml-tiny.en.bin", payload[0]["path"])
         self.assertFalse(payload[0]["downloaded"])
 
+    def test_catalog_includes_german_tiny_model(self) -> None:
+        spec = models.resolve_model("tiny-de")
+        self.assertEqual(spec.filename, "ggml-tiny-de.bin")
+        self.assertEqual(spec.sha1, "d69d0a00ed0ab978e22faf86c73960cb6ed21b25")
+        self.assertEqual(spec.languages, ("de",))
+        self.assertIn("wabisabisocial/whisper-tiny-german-ggml", spec.url)
+        self.assertTrue(models.model_supports_language("ggml-tiny-de.bin", "de-DE"))
+        self.assertFalse(models.model_supports_language("ggml-tiny-de.bin", "en"))
+
     def test_download_model_writes_verified_file_atomically(self) -> None:
         data = b"tiny model"
         spec = models.ModelSpec(
@@ -443,6 +452,26 @@ class ModelsTest(unittest.TestCase):
         self.assertTrue(payload["verified"])
         self.assertEqual(payload["checksum"], spec.sha1)
         self.assertIn("already downloaded", second_payload["message"])
+
+    def test_download_model_sets_private_permissions(self) -> None:
+        data = b"tiny model"
+        spec = models.ModelSpec(
+            name="test",
+            filename="ggml-test.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(data).hexdigest(),
+            description="test model",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models.urllib.request.urlopen", return_value=FakeResponse(data)),
+        ):
+            models.download_model("test")
+            path = models.model_path(spec)
+            mode = path.stat().st_mode & 0o777
+            self.assertEqual(mode, 0o600)
 
     def test_remove_model_deletes_catalog_file_and_tmp_file(self) -> None:
         spec = models.ModelSpec(
@@ -502,6 +531,7 @@ class ModelsTest(unittest.TestCase):
             size="1 KiB",
             sha1=hashlib.sha1(english_data).hexdigest(),
             description="english only",
+            languages=("en",),
         )
         multilingual = models.ModelSpec(
             name="tiny",

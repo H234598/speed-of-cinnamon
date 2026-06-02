@@ -3,6 +3,7 @@ from __future__ import annotations
 import array
 import io
 import math
+import os
 import shutil
 import subprocess
 import sys
@@ -84,6 +85,20 @@ def _file_size(file: io.BufferedRandom) -> int:
         raise RecorderError("pactl output must be a binary file handle")
     file.seek(0, 2)
     return file.tell()
+
+
+def _command_path(command: str) -> str:
+    if not isinstance(command, str) or isinstance(command, bool):
+        raise RecorderError("command must be text")
+    command_name = command.strip()
+    if not command_name:
+        raise RecorderError("command is empty")
+    if os.path.sep in command_name or (os.path.altsep and os.path.altsep in command_name):
+        return command_name
+    resolved = shutil.which(command_name)
+    if not resolved:
+        raise RecorderError(f"{command_name} is not available")
+    return resolved
 
 
 def _assert_positive_pid(pid: int) -> None:
@@ -289,7 +304,7 @@ def _run_pactl_command(command: list[str], *, required: bool) -> str:
         raise RecorderError("empty pactl executable is not allowed")
     if _contains_escaped_null(pactl) or any(_contains_escaped_null(arg) for arg in command[1:]):
         raise RecorderError("pactl command contains invalid null byte")
-    runtime_command = [pactl, *command[1:]]
+    runtime_command = [_command_path(pactl), *command[1:]]
     try:
         with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
             try:
@@ -338,7 +353,7 @@ def _run_kill(command: list[str], *, check_exit: bool) -> None:
         raise RecorderError("empty kill executable is not allowed")
     if _contains_escaped_null(kill_command) or any(_contains_escaped_null(arg) for arg in command[1:]):
         raise RecorderError("kill command contains invalid null byte")
-    runtime_command = [kill_command, *command[1:]]
+    runtime_command = [_command_path(kill_command), *command[1:]]
     try:
         subprocess.run(
             runtime_command,
@@ -372,7 +387,12 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = log_path.open("ab")
     try:
-        return subprocess.Popen(command.argv, stdout=log_file, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            os.fchmod(log_file.fileno(), 0o600)
+        except OSError:
+            pass
+        runtime_command = [_command_path(command.argv[0]), *command.argv[1:]]
+        return subprocess.Popen(runtime_command, stdout=log_file, stderr=subprocess.STDOUT, start_new_session=True)
     except OSError as exc:
         raise RecorderError(f"failed to start {command.name}: {exc}") from exc
     finally:

@@ -24,6 +24,20 @@ MAX_TRANSCRIPT_TEXT_CHARS = 1_000_000
 PLACEHOLDER_TRANSCRIPTS = {"[speaking in foreign language]"}
 
 
+def _command_path(command: str) -> str:
+    if not isinstance(command, str) or isinstance(command, bool):
+        raise TranscriptionError("command must be text")
+    command_name = command.strip()
+    if not command_name:
+        raise TranscriptionError("empty transcriber executable is not allowed")
+    if os.path.sep in command_name or (os.path.altsep and os.path.altsep in command_name):
+        return command_name
+    resolved = shutil.which(command_name)
+    if not resolved:
+        raise TranscriptionError(f"{command_name} is not available")
+    return resolved
+
+
 def _contains_escaped_null(value: str) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise TranscriptionError("value must be text")
@@ -38,10 +52,18 @@ def _write_text_atomic(path: Path, text: str) -> None:
         raise TranscriptionError("text must be text")
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
+        try:
+            os.fchmod(handle.fileno(), 0o600)
+        except OSError:
+            pass
         handle.write(text)
         tmp_path = Path(handle.name)
     try:
         os.replace(tmp_path, path)
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
     except OSError as exc:
         try:
             os.unlink(tmp_path)
@@ -102,11 +124,12 @@ def _run_limited_process(command: list[str], *, timeout: int = TRANSCRIBE_COMMAN
         raise TranscriptionError("empty transcriber executable is not allowed")
     if _contains_escaped_null(executable) or any(_contains_escaped_null(arg) for arg in command[1:]):
         raise TranscriptionError("command argument contains invalid null byte")
+    runtime_executable = _command_path(executable)
     try:
         with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
             try:
                 proc = subprocess.run(
-                    [executable, *command[1:]],
+                    [runtime_executable, *command[1:]],
                     stdout=stdout_file,
                     stderr=stderr_file,
                     timeout=timeout,

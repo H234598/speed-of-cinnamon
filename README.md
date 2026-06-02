@@ -93,6 +93,7 @@ speed-of-cinnamon setup --applet --settings-json '{"transcriber":"auto","insert-
 speed-of-cinnamon diagnostics --save --json
 speed-of-cinnamon list-inputs --json
 speed-of-cinnamon models --json
+speed-of-cinnamon benchmark-models ~/testaufnahme.wav --language de --models tiny-de tiny base --json
 speed-of-cinnamon text-models --json
 speed-of-cinnamon history --limit 5 --json
 speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 25 --dry-run --json

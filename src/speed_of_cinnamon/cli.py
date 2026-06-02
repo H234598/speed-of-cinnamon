@@ -22,7 +22,17 @@ from .alarms import (
     set_alarm_enabled,
 )
 from .doctor import parse_settings_json, report as doctor_report
-from .models import download_model, list_models, remove_model
+from .models import (
+    CATALOG,
+    ModelError,
+    ModelSpec,
+    download_model,
+    list_models,
+    model_path,
+    model_supports_language,
+    resolve_model,
+    remove_model,
+)
 from .output import insert_text
 from .paths import (
     APP_ID,
@@ -68,6 +78,7 @@ MAX_SETTINGS_FILE_BYTES = 1_000_000
 MAX_DIAGNOSTICS_JSON_BYTES = 1_000_000
 MAX_URL_CHARS = 2_048
 MAX_ALARM_CATCH_UP_MINUTES = 14_400
+DEFAULT_BENCHMARK_LANGUAGE = "de"
 
 
 def _contains_escaped_null(value: str) -> bool:
@@ -273,10 +284,18 @@ def _write_json_atomic(path: Path, payload: dict[str, object], *, max_bytes: int
         raise RuntimeError(f"output JSON is too large (max {max_bytes} bytes)")
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
+        try:
+            os.fchmod(handle.fileno(), 0o600)
+        except OSError:
+            pass
         handle.write(content)
         tmp_path = Path(handle.name)
     try:
         os.replace(tmp_path, path)
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
     except OSError as exc:
         try:
             os.unlink(tmp_path)
@@ -288,10 +307,18 @@ def _write_json_atomic(path: Path, payload: dict[str, object], *, max_bytes: int
 def _write_text_atomic(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
+        try:
+            os.fchmod(handle.fileno(), 0o600)
+        except OSError:
+            pass
         handle.write(text)
         tmp_path = Path(handle.name)
     try:
         os.replace(tmp_path, path)
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
     except OSError as exc:
         try:
             os.unlink(tmp_path)
@@ -962,6 +989,94 @@ def command_remove_model(args: argparse.Namespace) -> dict[str, object]:
     return remove_model(args.model)
 
 
+def _benchmark_targets(model_names: list[str] | None, language: str) -> list[ModelSpec]:
+    if model_names:
+        targets: list[ModelSpec] = []
+        for name in model_names:
+            clean_name = _assert_clean_text(name, field_name="model name", max_chars=MAX_PATH_CHARS).strip()
+            if not clean_name:
+                raise RuntimeError("model name must not be empty")
+            try:
+                targets.append(resolve_model(clean_name))
+            except ModelError as exc:
+                raise RuntimeError(str(exc)) from exc
+        return targets
+    return [model for model in CATALOG if model_path(model).is_file() and model_supports_language(model_path(model), language)]
+
+
+def _benchmark_model(audio_path: Path, language: str, model: ModelSpec) -> dict[str, object]:
+    path = model_path(model)
+    result: dict[str, object] = {
+        "model": model.name,
+        "path": str(path),
+        "downloaded": path.is_file(),
+        "compatible": model_supports_language(path, language),
+        "ok": False,
+        "seconds": None,
+        "transcript": "",
+        "error": "",
+    }
+    if not path.is_file():
+        result["error"] = f"model is not downloaded: {model.name}"
+        return result
+    if not model_supports_language(path, language):
+        result["error"] = f"model does not support language: {language}"
+        return result
+
+    started = time.perf_counter()
+    try:
+        text = transcribe(
+            audio_path=audio_path,
+            language=language,
+            text_path=transcript_dir() / f"{audio_path.stem}-{model.name}.txt",
+            command_template="",
+            backend="whisper-cpp",
+            whisper_model=str(path),
+            personal_context="",
+            vocabulary="",
+        )
+    except Exception as exc:
+        result["seconds"] = round(time.perf_counter() - started, 3)
+        result["error"] = str(exc)
+        return result
+
+    result["ok"] = True
+    result["seconds"] = round(time.perf_counter() - started, 3)
+    result["transcript"] = text.strip()
+    result["characters"] = len(text.strip())
+    result["words"] = len(text.strip().split())
+    return result
+
+
+def command_benchmark_models(args: argparse.Namespace) -> dict[str, object]:
+    ensure_runtime_dirs()
+    audio_path = _coerce_path(args.audio_path, field_name="audio file path", max_chars=MAX_AUDIO_PATH_CHARS)
+    audio_path = validate_audio_file(audio_path)
+    language = _assert_clean_text(args.language or DEFAULT_BENCHMARK_LANGUAGE, field_name="language", max_chars=64).strip()
+    if not language:
+        language = DEFAULT_BENCHMARK_LANGUAGE
+    targets = _benchmark_targets(args.models, language)
+    if not targets:
+        targets = list(CATALOG)
+    results = [_benchmark_model(audio_path, language, model) for model in targets]
+    successes = [result for result in results if result.get("ok") and isinstance(result.get("seconds"), (int, float))]
+    fastest = min(successes, key=lambda result: float(result["seconds"])) if successes else None
+    message = (
+        f"benchmarked {len(successes)} of {len(results)} model(s)"
+        if successes
+        else "no model benchmark completed successfully"
+    )
+    return {
+        "status": "done" if successes else "error",
+        "message": message,
+        **({} if successes else {"error": message}),
+        "audio_path": str(audio_path),
+        "language": language,
+        "fastest_model": fastest["model"] if fastest else "",
+        "results": results,
+    }
+
+
 def command_history(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     limit = _coerce_int(args.limit, field_name="history limit", max_value=MAX_HISTORY_LIMIT)
@@ -1332,6 +1447,18 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(remove_model_parser)
     remove_model_parser.add_argument("model")
     remove_model_parser.set_defaults(handler=command_remove_model)
+
+    benchmark_models = subparsers.add_parser("benchmark-models")
+    add_common_options(benchmark_models)
+    benchmark_models.add_argument("audio_path")
+    benchmark_models.add_argument("--language", default=DEFAULT_BENCHMARK_LANGUAGE)
+    benchmark_models.add_argument(
+        "--models",
+        nargs="+",
+        default=None,
+        help="catalog model names to compare; defaults to downloaded compatible models",
+    )
+    benchmark_models.set_defaults(handler=command_benchmark_models)
 
     history = subparsers.add_parser("history")
     add_common_options(history)

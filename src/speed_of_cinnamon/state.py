@@ -140,10 +140,18 @@ class StateStore:
         if len(rendered.encode("utf-8")) > MAX_STATE_FILE_BYTES:
             raise RuntimeError("state file is too large")
         with tempfile.NamedTemporaryFile("w", delete=False, dir=self.path.parent, encoding="utf-8") as handle:
+            try:
+                os.fchmod(handle.fileno(), 0o600)
+            except OSError:
+                pass
             handle.write(rendered)
             tmp_path = Path(handle.name)
         try:
             os.replace(tmp_path, self.path)
+            try:
+                self.path.chmod(0o600)
+            except OSError:
+                pass
         except OSError as exc:
             try:
                 os.unlink(tmp_path)

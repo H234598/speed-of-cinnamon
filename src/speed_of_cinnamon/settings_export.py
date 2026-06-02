@@ -180,10 +180,18 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
         raise SettingsExportError(f"settings export is too large: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
+        try:
+            os.fchmod(handle.fileno(), 0o600)
+        except OSError:
+            pass
         handle.write(rendered)
         tmp_path = Path(handle.name)
     try:
         os.replace(tmp_path, path)
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
     except OSError as exc:
         try:
             os.unlink(tmp_path)

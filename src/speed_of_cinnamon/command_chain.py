@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import os
 import shlex
 import subprocess
 import tempfile
 import io
+import shutil
 
 from .personalization import command_environment
 
@@ -40,6 +42,20 @@ MAX_COMMAND_SEGMENTS = 32
 MAX_COMMAND_SEGMENT_TOKENS = 128
 MAX_COMMAND_INPUT_CHARS = 1_000_000
 MAX_FILE_READ_FOR_ERROR_CHARS = 4096
+
+
+def _command_path(command: str) -> str:
+    if not isinstance(command, str) or isinstance(command, bool):
+        raise CommandChainError("command must be text")
+    command_name = command.strip()
+    if not command_name:
+        raise CommandChainError("command is empty")
+    if os.path.sep in command_name or (os.path.altsep and os.path.altsep in command_name):
+        return command_name
+    resolved = shutil.which(command_name)
+    if not resolved:
+        raise CommandChainError(f"{command_name} is not available")
+    return resolved
 
 
 def _contains_escaped_null(value: str) -> bool:
@@ -154,10 +170,11 @@ def run_command_chain(
             raise CommandChainError(f"invalid {label} command segment")
         if _contains_escaped_null(executable) or any(_contains_escaped_null(str(arg)) for arg in cmd[1:]):
             raise CommandChainError(f"{label} command contains invalid null byte")
+        runtime_command = _command_path(executable)
         try:
             with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
                 proc = subprocess.run(
-                    [executable, *cmd[1:]],
+                    [runtime_command, *cmd[1:]],
                     input=input_bytes,
                     text=False,
                     stdout=stdout_file,

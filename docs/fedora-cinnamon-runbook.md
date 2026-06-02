@@ -243,13 +243,19 @@ automatic resolver without opening Cinnamon settings. The same model actions are
 
 ```bash
 speed-of-cinnamon models --json
+speed-of-cinnamon download-model tiny-de --json
 speed-of-cinnamon download-model tiny --json
 speed-of-cinnamon download-model base --json
 speed-of-cinnamon remove-model tiny --json
 ```
 
 Avoid `.en` models for German dictation. Whisper can otherwise return placeholder text like
-`[speaking in foreign language]` instead of the spoken words.
+`[speaking in foreign language]` instead of the spoken words. `tiny-de` is a small German-only catalog model. For a fair
+speed and quality check, run each downloaded model against the same local test recording:
+
+```bash
+speed-of-cinnamon benchmark-models ~/testaufnahme.wav --language de --models tiny-de tiny base --json
+```
 
 Downloaded files are saved below:
 

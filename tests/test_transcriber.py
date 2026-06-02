@@ -15,6 +15,7 @@ from speed_of_cinnamon.transcriber import (
     _assert_text_length,
     _contains_escaped_null,
     _quote,
+    _write_text_atomic,
     validate_audio_file,
     _run_limited_process,
     transcribe_with_openai_whisper,
@@ -82,6 +83,13 @@ class TranscriberTest(unittest.TestCase):
                     "printf hello",
                 )
         mocked_replace.assert_called_once()
+
+    def test_write_text_atomic_sets_private_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "transcript.txt"
+            _write_text_atomic(path, "private output")
+            mode = path.stat().st_mode & 0o777
+            self.assertEqual(mode, 0o600)
 
     def test_template_supports_safe_chained_commands(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -343,9 +351,33 @@ class TranscriberTest(unittest.TestCase):
         with self.assertRaisesRegex(TranscriptionError, "empty transcriber executable"):
             _run_limited_process(["  "])
 
+    def test_run_limited_process_resolves_command_from_which(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0] if args else kwargs.get("args")
+            assert isinstance(command, list)
+            calls.append(command)
+            stdout = kwargs["stdout"]
+            stdout.write(b"done")
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch("speed_of_cinnamon.transcriber.shutil.which", return_value="/usr/bin/whisper"),
+            mock.patch("speed_of_cinnamon.transcriber.subprocess.run", side_effect=fake_run),
+        ):
+            _run_limited_process(["whisper", "audio"])
+
+        self.assertEqual(calls[0][0], "/usr/bin/whisper")
+
     def test_run_limited_process_rejects_non_list_command(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "transcriber command must be a list"):
             _run_limited_process("whisper", timeout=1)  # type: ignore[arg-type]
+
+    def test_run_limited_process_rejects_missing_command(self) -> None:
+        with mock.patch("speed_of_cinnamon.transcriber.shutil.which", return_value=None):
+            with self.assertRaisesRegex(TranscriptionError, "is not available"):
+                _run_limited_process(["whisper"])
 
     def test_run_limited_process_rejects_non_text_argument(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "transcriber command items must be text"):
@@ -404,6 +436,7 @@ class TranscriberTest(unittest.TestCase):
             model.write_bytes(b"model")
             with (
                 mock.patch("speed_of_cinnamon.transcriber.resolve_whisper_cpp_command", return_value="pwcpp"),
+                mock.patch("speed_of_cinnamon.transcriber.shutil.which", return_value="/usr/bin/pwcpp"),
                 mock.patch("speed_of_cinnamon.transcriber.subprocess.run", side_effect=fake_run) as mocked_run,
             ):
                 result = transcribe_with_whisper_cpp(audio, "de", text, str(model))
@@ -412,7 +445,7 @@ class TranscriberTest(unittest.TestCase):
             self.assertEqual(text.read_text(encoding="utf-8").strip(), "hallo cinnamon")
             self.assertFalse(generated.exists())
             command = mocked_run.call_args.args[0]
-            self.assertEqual(command, ["pwcpp", "-m", str(model), "--language", "de", "-otxt", str(audio)])
+            self.assertEqual(command, ["/usr/bin/pwcpp", "-m", str(model), "--language", "de", "-otxt", str(audio)])
 
     def test_command_stdout_is_saved_as_transcript(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -12,6 +12,7 @@ from typing import Any
 from .paths import models_dir
 
 HUGGING_FACE_BASE_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
+TINY_DE_MODEL_URL = "https://huggingface.co/wabisabisocial/whisper-tiny-german-ggml/resolve/main/ggml-tiny-de.bin"
 MAX_MODEL_DOWNLOAD_BYTES = 1_200_000_000
 MAX_MODEL_DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 MODEL_SIZE_SLACK_BYTES = 32 * 1024 * 1024
@@ -167,6 +168,10 @@ def _write_model_checksum_cache() -> None:
                 pass
             return
         with tempfile.NamedTemporaryFile("w", delete=False, dir=cache_path.parent, encoding="utf-8") as handle:
+            try:
+                os.fchmod(handle.fileno(), 0o600)
+            except OSError:
+                pass
             handle.write(rendered)
             tmp_path = Path(handle.name)
         try:
@@ -332,9 +337,13 @@ class ModelSpec:
     size: str
     sha1: str
     description: str
+    languages: tuple[str, ...] = ()
+    download_url: str = ""
 
     @property
     def url(self) -> str:
+        if self.download_url:
+            return self.download_url
         return f"{HUGGING_FACE_BASE_URL}/{self.filename}"
 
 
@@ -345,6 +354,7 @@ CATALOG: tuple[ModelSpec, ...] = (
         size="75 MiB",
         sha1="c78c86eb1a8faa21b369bcd33207cc90d64ae9df",
         description="Fast English-only starter model",
+        languages=("en",),
     ),
     ModelSpec(
         name="tiny",
@@ -354,11 +364,21 @@ CATALOG: tuple[ModelSpec, ...] = (
         description="Fast multilingual starter model",
     ),
     ModelSpec(
+        name="tiny-de",
+        filename="ggml-tiny-de.bin",
+        size="74 MiB",
+        sha1="d69d0a00ed0ab978e22faf86c73960cb6ed21b25",
+        description="Fast German-only starter model",
+        languages=("de",),
+        download_url=TINY_DE_MODEL_URL,
+    ),
+    ModelSpec(
         name="base.en",
         filename="ggml-base.en.bin",
         size="142 MiB",
         sha1="137c40403d78fd54d454da0f9bd998f78703390c",
         description="Better English accuracy, still light",
+        languages=("en",),
     ),
     ModelSpec(
         name="base",
@@ -373,6 +393,7 @@ CATALOG: tuple[ModelSpec, ...] = (
         size="466 MiB",
         sha1="db8a495a91d927739e50b3fc1cc4c6b8f6c2d022",
         description="Higher English accuracy, slower",
+        languages=("en",),
     ),
     ModelSpec(
         name="small",
@@ -416,6 +437,16 @@ def is_english_language(language: str) -> bool:
     return normalized in ENGLISH_LANGUAGE_CODES or normalized.startswith("en-")
 
 
+def _language_matches(language: str, allowed: str) -> bool:
+    normalized = (language or "").strip().lower().replace("_", "-")
+    allowed_normalized = (allowed or "").strip().lower().replace("_", "-")
+    if not allowed_normalized:
+        return True
+    if allowed_normalized == "en":
+        return normalized in ENGLISH_LANGUAGE_CODES or normalized.startswith("en-")
+    return normalized == allowed_normalized or normalized.startswith(f"{allowed_normalized}-")
+
+
 def model_name_is_english_only(name: str) -> bool:
     return (name or "").strip().lower().endswith(".en")
 
@@ -430,11 +461,22 @@ def model_path_is_english_only(path: str | Path) -> bool:
     return ".en." in filename or filename.endswith(".en.bin")
 
 
+def _catalog_model_for_path(path: str | Path) -> ModelSpec | None:
+    filename = Path(path).name.lower()
+    for model in CATALOG:
+        if filename == model.filename.lower() or filename == model.name.lower():
+            return model
+    return None
+
+
 def model_supports_language(path: str | Path, language: str) -> bool:
     if not isinstance(path, (str, Path)) or not isinstance(language, str):
         return False
     if _contains_escaped_null(str(path)):
         return False
+    model = _catalog_model_for_path(path)
+    if model is not None and model.languages:
+        return any(_language_matches(language, allowed) for allowed in model.languages)
     return is_english_language(language) or not model_path_is_english_only(path)
 
 
@@ -495,6 +537,10 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
             urllib.request.urlopen(model.url, timeout=30) as response,
             tmp_path.open("wb") as output,
         ):
+            try:
+                os.fchmod(output.fileno(), 0o600)
+            except OSError:
+                pass
             content_length = _read_content_length(response)
             if content_length is not None and content_length > size_limit:
                 raise ModelError(
@@ -519,6 +565,10 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
             raise ModelError(f"downloaded checksum mismatch for {model.name}: {checksum}")
         try:
             os.replace(tmp_path, path)
+            try:
+                path.chmod(0o600)
+            except OSError:
+                pass
             _clear_model_checksum_cache(tmp_path)
             _set_model_checksum_cache(path, checksum, path.stat())
         except OSError as exc:

@@ -247,10 +247,18 @@ def save_alarm_store(store: dict[str, Any], path: Path | None = None) -> None:
     if len(rendered.encode("utf-8")) > MAX_ALARM_STORE_BYTES:
         raise RuntimeError("alarm store is too large")
     with tempfile.NamedTemporaryFile("w", delete=False, dir=store_path.parent, encoding="utf-8") as handle:
+        try:
+            os.fchmod(handle.fileno(), 0o600)
+        except OSError:
+            pass
         handle.write(rendered)
         tmp_path = Path(handle.name)
     try:
         os.replace(tmp_path, store_path)
+        try:
+            store_path.chmod(0o600)
+        except OSError:
+            pass
     except OSError as exc:
         try:
             os.unlink(tmp_path)

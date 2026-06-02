@@ -90,8 +90,12 @@ class CommandChainTest(unittest.TestCase):
                 stdout_file.write(f"{cmd_text}\n".encode("utf-8"))
             return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
 
+        def which(command: str) -> str | None:
+            return {"first": "first", "second": "second"}.get(command)
+
         with (
             mock.patch("speed_of_cinnamon.command_chain.command_environment", return_value={"SPEED_OF_CINNAMON_CONTEXT": "test"}),
+            mock.patch("speed_of_cinnamon.command_chain.shutil.which", side_effect=which),
             mock.patch("speed_of_cinnamon.command_chain.subprocess.run", side_effect=fake_run),
         ):
             output = run_command_chain([
@@ -111,17 +115,32 @@ class CommandChainTest(unittest.TestCase):
             stdout_file.write(b"x" * 10)
             return subprocess.CompletedProcess(["cmd"], 0, stdout=b"", stderr=b"")
 
-        with mock.patch("speed_of_cinnamon.command_chain.subprocess.run", side_effect=fake_run):
+        with (
+            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
+            mock.patch("speed_of_cinnamon.command_chain.subprocess.run", side_effect=fake_run),
+        ):
             with self.assertRaisesRegex(CommandChainError, "output exceeded"):
                 run_command_chain([("cmd",)], "", label="post-process", max_output_chars=5)
 
     def test_run_command_chain_reports_command_not_found(self) -> None:
-        with mock.patch("speed_of_cinnamon.command_chain.subprocess.run", side_effect=FileNotFoundError("missing")):
-            with self.assertRaisesRegex(CommandChainError, "command not found"):
+        with mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="missing"):
+            with mock.patch("speed_of_cinnamon.command_chain.subprocess.run", side_effect=FileNotFoundError("missing")):
+                with self.assertRaisesRegex(CommandChainError, "command not found"):
+                    run_command_chain([("missing",)], "", label="transcriber")
+
+    def test_run_command_chain_rejects_missing_command(self) -> None:
+        with mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value=None):
+            with self.assertRaisesRegex(CommandChainError, "is not available"):
                 run_command_chain([("missing",)], "", label="transcriber")
 
     def test_run_command_chain_reports_timeout(self) -> None:
-        with mock.patch("speed_of_cinnamon.command_chain.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="cmd", timeout=0.01)):
+        with mock.patch(
+            "speed_of_cinnamon.command_chain.shutil.which",
+            return_value="slow",
+        ), mock.patch(
+            "speed_of_cinnamon.command_chain.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="cmd", timeout=0.01),
+        ):
             with self.assertRaisesRegex(CommandChainError, "timed out"):
                 run_command_chain([("slow",)], "", label="post-process", timeout_seconds=1)
 

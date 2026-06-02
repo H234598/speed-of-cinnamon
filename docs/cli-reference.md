@@ -164,14 +164,24 @@ If the OpenAI-compatible server requires a bearer token, set
 
 ```bash
 speed-of-cinnamon models --json
+speed-of-cinnamon download-model tiny-de --json
 speed-of-cinnamon download-model tiny --json
 speed-of-cinnamon download-model base --json
 speed-of-cinnamon remove-model tiny --json
 ```
 
-Use multilingual models such as `tiny`, `base`, or `small` for German and other non-English dictation. The `.en`
-models are English-only and can produce placeholder text such as `[speaking in foreign language]` when the recording
-language is not English.
+Use `tiny-de` for a small German-only test model, or multilingual models such as `tiny`, `base`, or `small` for German
+and other non-English dictation. The `.en` models are English-only and can produce placeholder text such as
+`[speaking in foreign language]` when the recording language is not English.
+
+Compare downloaded catalog models on the same local audio file:
+
+```bash
+speed-of-cinnamon benchmark-models ~/testaufnahme.wav --language de --models tiny-de tiny base --json
+```
+
+Without `--models`, the benchmark uses downloaded catalog models that match the selected language. Missing models are
+reported per entry and are not downloaded automatically.
 
 Downloaded whisper.cpp models are stored below:
 

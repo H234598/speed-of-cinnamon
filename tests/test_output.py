@@ -43,6 +43,23 @@ class OutputTest(unittest.TestCase):
             self.assertEqual(method, "xclip")
             mocked_run.assert_called_once()
 
+    def test_set_clipboard_uses_resolved_xclip_path(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0] if args else kwargs["args"]
+            assert isinstance(command, list)
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xclip"),
+            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+        ):
+            self.assertEqual(set_clipboard("hello"), "xclip")
+
+        self.assertEqual(calls[0][0], "/usr/bin/xclip")
+
     def test_set_clipboard_falls_back_to_xsel(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which") as mocked_which,
@@ -91,22 +108,51 @@ class OutputTest(unittest.TestCase):
             stderr.write(b"boom")
             return subprocess.CompletedProcess(["cmd"], 1, stdout=b"", stderr=b"")
 
-        with mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run):
+        with (
+            mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"),
+            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+        ):
             with self.assertRaisesRegex(OutputError, "failed: boom"):
                 _run_with_input(["cmd"], "input")
 
     def test_run_with_input_rejects_oversized_text(self) -> None:
         with self.assertRaisesRegex(OutputError, "command input is too large"):
-            _run_with_input(["cmd"], "x" * (1_000_001))
+            with mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"):
+                _run_with_input(["cmd"], "x" * (1_000_001))
 
     def test_run_with_input_rejects_negative_output_limit(self) -> None:
         with self.assertRaisesRegex(OutputError, "max_output_chars must be non-negative"):
             _run_with_input(["cmd"], "input", max_output_chars=-1)
 
     def test_run_with_input_rejects_missing_command(self) -> None:
-        with mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=FileNotFoundError("missing")):
+        with mock.patch("speed_of_cinnamon.output.shutil.which", return_value=None):
             with self.assertRaisesRegex(OutputError, "is not available"):
                 _run_with_input(["missing"], "input")
+
+    def test_run_with_input_resolves_command_from_which(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0] if args else kwargs["args"]
+            assert isinstance(command, list)
+            calls.append(command)
+            stdout = kwargs["stdout"]
+            stdout.write(b"ok")
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"),
+            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+        ):
+            _run_with_input(["cmd", "arg"], "input")
+
+        self.assertEqual(calls, [["/usr/bin/cmd", "arg"]])
+
+    def test_run_with_input_rejects_missing_command_when_resolved_path_missing(self) -> None:
+        with mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/missing"):
+            with mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=FileNotFoundError("missing")):
+                with self.assertRaisesRegex(OutputError, "missing is not available"):
+                    _run_with_input(["missing"], "input")
 
     def test_run_with_input_rejects_null_byte_in_command_argument(self) -> None:
         with self.assertRaisesRegex(OutputError, "command argument contains invalid null byte"):
@@ -136,7 +182,10 @@ class OutputTest(unittest.TestCase):
             return subprocess.CompletedProcess(["cmd"], 0, stdout=b"", stderr=b"")
 
         with mock.patch("speed_of_cinnamon.output.MAX_OUTPUT_CHARS", 100):
-            with mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run):
+            with (
+                mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"),
+                mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+            ):
                 with self.assertRaisesRegex(OutputError, "too much output"):
                     _run_with_input(["cmd"], "input")
 

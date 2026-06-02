@@ -178,12 +178,48 @@ class RecorderTest(unittest.TestCase):
         with self.assertRaisesRegex(RecorderError, "invalid recorder log path"):
             start_recorder(command, "/tmp/session.log")  # type: ignore[arg-type]
 
+    def test_start_recorder_resolves_recorder_command(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen") as mocked_popen,
+            ):
+                mocked_process = mock.Mock()
+                mocked_popen.return_value = mocked_process
+                result = start_recorder(command, Path(tmp) / "session.log")
+        self.assertIs(result, mocked_process)
+        self.assertEqual(mocked_popen.call_args.args[0][0], "/usr/bin/true")
+
+    def test_start_recorder_sets_private_log_permissions(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "session.log"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen") as mocked_popen,
+            ):
+                mocked_popen.return_value = mock.Mock()
+                start_recorder(command, log_path)
+            mode = log_path.stat().st_mode & 0o777
+            self.assertEqual(mode, 0o600)
+
     def test_start_recorder_rejects_non_text_argument(self) -> None:
         command = RecorderCommand(name="noop", argv=["true", 1])  # type: ignore[list-item]
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
                 with self.assertRaisesRegex(RecorderError, "arguments must be text"):
                     start_recorder(command, Path(tmp) / "session.log")
+
+    def test_start_recorder_rejects_missing_command(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
+                with mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value=None):
+                    with self.assertRaisesRegex(RecorderError, "true is not available"):
+                        start_recorder(command, Path(tmp) / "session.log")
 
     def test_start_recorder_rejects_empty_executable(self) -> None:
         command = RecorderCommand(name="noop", argv=[""])
@@ -233,6 +269,25 @@ class RecorderTest(unittest.TestCase):
         with self.assertRaisesRegex(RecorderError, "invalid pactl command"):
             _run_pactl_command(("pactl", 10), required=True)  # type: ignore[arg-type]
 
+    def test_run_pactl_command_resolves_command_from_which(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = kwargs["args"]
+            assert isinstance(command, list)
+            calls.append(command)
+            stdout = kwargs["stdout"]
+            stdout.write(b"default\n")
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/pactl"),
+            mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=fake_run),
+        ):
+            _run_pactl_command(["pactl"], required=False)
+
+        self.assertEqual(calls, [["/usr/bin/pactl"]])
+
     def test_run_kill_rejects_bad_command_shape(self) -> None:
         with self.assertRaisesRegex(RecorderError, "invalid kill command"):
             _run_kill(("kill", "-9", 10), check_exit=True)  # type: ignore[arg-type]
@@ -240,6 +295,28 @@ class RecorderTest(unittest.TestCase):
     def test_run_kill_rejects_non_bool_check(self) -> None:
         with self.assertRaisesRegex(RecorderError, "invalid kill command"):
             _run_kill(["kill", "-9", "123"], check_exit="false")  # type: ignore[arg-type]
+
+    def test_run_kill_resolves_command_from_which(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0] if args else kwargs.get("args")
+            assert isinstance(command, list)
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/kill"),
+            mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=fake_run),
+        ):
+            _run_kill(["kill", "-INT", "1234"], check_exit=True)
+
+        self.assertEqual(calls[0][0], "/usr/bin/kill")
+
+    def test_run_kill_rejects_missing_command(self) -> None:
+        with mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value=None):
+            with self.assertRaisesRegex(RecorderError, "kill is not available"):
+                _run_kill(["kill", "-INT", "1234"], check_exit=True)
 
     def test_parse_pactl_sources_rejects_non_text(self) -> None:
         with self.assertRaisesRegex(RecorderError, "invalid pactl source output"):
@@ -275,7 +352,8 @@ class RecorderTest(unittest.TestCase):
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             stdout_file = kwargs["stdout"]
             command = kwargs["args"]
-            if command == ["pactl", "get-default-source"]:
+            executable = command[0] if isinstance(command, list) and command else ""
+            if str(executable).endswith("pactl") and command[1:] == ["get-default-source"]:
                 stdout_file.write(b"default\n")
             else:
                 stdout_file.write(("x" * (1_000_001)).encode("utf-8"))

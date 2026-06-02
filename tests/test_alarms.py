@@ -528,6 +528,13 @@ class AlarmTest(unittest.TestCase):
                 save_alarm_store({}, path)
         mocked_replace.assert_called_once()
 
+    def test_save_alarm_store_sets_private_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            save_alarm_store({}, path)
+            mode = path.stat().st_mode & 0o777
+            self.assertEqual(mode, 0o600)
+
     def test_save_alarm_store_rejects_null_byte_last_checked_at(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"

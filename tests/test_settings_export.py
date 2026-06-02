@@ -299,6 +299,13 @@ class SettingsExportTest(unittest.TestCase):
                 write_export(path, {"language": "en"})
         mocked_replace.assert_called_once()
 
+    def test_write_export_sets_private_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            write_export(path, {"language": "en"})
+            mode = path.stat().st_mode & 0o777
+            self.assertEqual(mode, 0o600)
+
     def test_read_export_rejects_null_byte_setting_value(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"

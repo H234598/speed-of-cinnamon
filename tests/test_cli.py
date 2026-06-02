@@ -25,6 +25,20 @@ from speed_of_cinnamon.state import RecordingState, StateStore
 
 
 class CliTest(unittest.TestCase):
+    def test_write_json_atomic_sets_private_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "payload.json"
+            cli._write_json_atomic(path, {"status": "ok"}, max_bytes=1_000_000)
+            mode = path.stat().st_mode & 0o777
+            self.assertEqual(mode, 0o600)
+
+    def test_write_text_atomic_sets_private_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "note.txt"
+            cli._write_text_atomic(path, "private")
+            mode = path.stat().st_mode & 0o777
+            self.assertEqual(mode, 0o600)
+
     def test_version_option_prints_current_version(self) -> None:
         parser = cli.build_parser()
         stdout = io.StringIO()
@@ -235,6 +249,62 @@ class CliTest(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 1)
         self.assertIn("model payload entry must be an object", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="hallo welt")
+    def test_benchmark_models_reports_runtime_and_text(self, mocked_transcribe: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            model_path = Path(tmp) / "ggml-tiny.bin"
+            self._write_wav(audio, [0, 100, -100])
+            model_path.write_bytes(b"model")
+            stdout = io.StringIO()
+            with (
+                mock.patch("speed_of_cinnamon.cli.model_path", return_value=model_path),
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "benchmark-models",
+                    str(audio),
+                    "--language",
+                    "de",
+                    "--models",
+                    "tiny",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "done")
+        self.assertEqual(payload["fastest_model"], "tiny")
+        self.assertEqual(payload["results"][0]["model"], "tiny")
+        self.assertEqual(payload["results"][0]["transcript"], "hallo welt")
+        self.assertTrue(payload["results"][0]["ok"])
+        mocked_transcribe.assert_called_once()
+        self.assertEqual(mocked_transcribe.call_args.kwargs["backend"], "whisper-cpp")
+        self.assertEqual(mocked_transcribe.call_args.kwargs["whisper_model"], str(model_path))
+
+    def test_benchmark_models_reports_missing_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            model_path = Path(tmp) / "missing.bin"
+            self._write_wav(audio, [0, 100, -100])
+            stdout = io.StringIO()
+            with (
+                mock.patch("speed_of_cinnamon.cli.model_path", return_value=model_path),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "benchmark-models",
+                    str(audio),
+                    "--models",
+                    "tiny",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["results"][0]["model"], "tiny")
+        self.assertIn("not downloaded", payload["results"][0]["error"])
 
     @mock.patch("speed_of_cinnamon.cli.list_ollama_models")
     def test_text_models_lists_local_ollama_models(self, mocked_list: mock.Mock) -> None:

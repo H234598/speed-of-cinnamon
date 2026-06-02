@@ -131,9 +131,19 @@ The `Voice model` menu exposes a small whisper.cpp catalog. It can download, sel
 switch back to `Automatic ASR backend`. The starter model is based on the primary recognition language from Cinnamon
 settings, so a German primary language uses `tiny`, not `tiny.en`.
 
-For German and other non-English dictation, use a multilingual model (`tiny`, `base`, `small`, or
-`large-v3-turbo-q5_0`). The `.en` models are English-only. `tiny` is the fastest starter; `base` and `small` trade more
-latency for accuracy; `large-v3-turbo-q5_0` is much more accurate but can be very slow on CPU.
+For German dictation, `tiny-de` is a small German-only catalog option. Multilingual models (`tiny`, `base`, `small`, or
+`large-v3-turbo-q5_0`) work across German and other non-English languages. The `.en` models are English-only. `tiny` is
+the fastest starter; `base` and `small` trade more latency for accuracy; `large-v3-turbo-q5_0` is much more accurate but
+can be very slow on CPU.
+
+Use the same short local recording to compare model speed and output:
+
+```bash
+speed-of-cinnamon benchmark-models ~/testaufnahme.wav --language de --models tiny-de tiny base --json
+```
+
+The benchmark only uses local downloaded catalog files. It reports missing models, failed runs, elapsed seconds, and the
+raw transcript for each model.
 
 Downloaded files are stored below:
 
