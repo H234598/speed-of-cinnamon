@@ -53,6 +53,10 @@ class CliTest(unittest.TestCase):
     def test_version_consistency_between_metadata_and_package(self) -> None:
         project_version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
         self.assertEqual(project_version, cli.__version__)
+        applet_version = json.loads(
+            Path("files/speed-of-cinnamon@H234598/metadata.json").read_text(encoding="utf-8")
+        )["version"]
+        self.assertEqual(project_version, applet_version)
 
     def _write_wav(self, path: Path, samples: list[int]) -> None:
         with wave.open(str(path), "wb") as handle:
