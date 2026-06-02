@@ -11,8 +11,10 @@ from speed_of_cinnamon.postprocessor import (
     build_ollama_prompt,
     build_openai_compatible_messages,
     _contains_escaped_null,
+    _coerce_environment_text,
     _quote,
     _assert_text_length,
+    _openai_compatible_headers,
     _format_model_size,
     post_process_text,
     MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
@@ -561,6 +563,38 @@ class PostProcessorTest(unittest.TestCase):
         self.assertEqual(result, "Hello Cinnamon.")
         request, _timeout = requests[0]
         self.assertEqual(request.headers["Authorization"], "Bearer secret")
+
+    def test_openai_compatible_headers_ignores_invalid_environment_key(self) -> None:
+        with mock.patch("speed_of_cinnamon.postprocessor.os.environ.get", return_value=123):
+            headers = _openai_compatible_headers()
+        self.assertEqual(headers["Content-Type"], "application/json")
+        self.assertNotIn("Authorization", headers)
+
+    def test_openai_compatible_backend_ignores_invalid_environment_key(self) -> None:
+        requests = []
+
+        def fake_urlopen(request: object, timeout: int = 0) -> FakeResponse:
+            requests.append((request, timeout))
+            return FakeResponse({"choices": [{"message": {"content": "Hello Cinnamon."}}]})
+
+        with mock.patch("speed_of_cinnamon.postprocessor.os.environ.get", return_value=123):
+            with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=fake_urlopen):
+                result = post_process_text(
+                    "hello cinnamon",
+                    "en",
+                    backend="openai-compatible",
+                    openai_compatible_model="llama.cpp-model",
+                    openai_compatible_url="http://127.0.0.1:8000/v1/",
+                )
+        self.assertEqual(result, "Hello Cinnamon.")
+        request, _timeout = requests[0]
+        self.assertNotIn("Authorization", request.headers)
+
+    def test_coerce_environment_text(self) -> None:
+        with mock.patch.dict("speed_of_cinnamon.postprocessor.os.environ", {"OPENAI_COMPATIBLE_TEST_ENV": "secret"}):
+            self.assertEqual(_coerce_environment_text("OPENAI_COMPATIBLE_TEST_ENV"), "secret")
+        with mock.patch("speed_of_cinnamon.postprocessor.os.environ.get", return_value=123):
+            self.assertEqual(_coerce_environment_text("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY"), "")
 
     def test_openai_compatible_backend_reports_http_error_detail(self) -> None:
         error = urllib.error.HTTPError(

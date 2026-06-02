@@ -242,6 +242,15 @@ def _openai_compatible_endpoint(url: str, path: str) -> str:
     return base + normalized_path
 
 
+def _coerce_environment_text(name: str) -> str:
+    if not isinstance(name, str) or isinstance(name, bool):
+        return ""
+    value = os.environ.get(name)
+    if value is None or isinstance(value, bool) or not isinstance(value, str):
+        return ""
+    return value
+
+
 def _is_openai_api_endpoint(endpoint: str) -> bool:
     try:
         parsed = urllib.parse.urlparse(endpoint)
@@ -517,7 +526,10 @@ def post_process_with_ollama(
 
 def _openai_compatible_headers(api_key: str = "") -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
-    api_key = api_key or os.environ.get("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY", "")
+    if not api_key:
+        api_key = _coerce_environment_text("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY")
+    if not isinstance(api_key, str) or isinstance(api_key, bool):
+        raise PostProcessError("openai-compatible API key must be text")
     if _contains_escaped_null(api_key):
         raise PostProcessError("openai-compatible API key contains invalid null byte")
     if _contains_http_header_control_chars(api_key):

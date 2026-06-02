@@ -58,6 +58,26 @@ class CliTest(unittest.TestCase):
         with mock.patch.dict("speed_of_cinnamon.cli.os.environ", {"SPEED_OF_CINNAMON_LOG_LEVEL": "trace"}):
             self.assertEqual(cli._coerce_log_level_from_environment(), cli.DEFAULT_LOG_LEVEL)
 
+    def test_diagnostics_desktop_fields_are_sanitized(self) -> None:
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "XDG_CURRENT_DESKTOP": "X-Cinnamon\n",
+                "XDG_SESSION_TYPE": "x11",
+                "DESKTOP_SESSION": "cinnamon\x00",
+            },
+        ):
+            stdout = io.StringIO()
+            with tempfile.TemporaryDirectory() as tmp:
+                state_file = Path(tmp) / "state.json"
+                with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp, "XDG_DATA_HOME": tmp}, clear=False):
+                    with redirect_stdout(stdout):
+                        cli.run(["diagnostics", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["desktop"]["current_desktop"], "")
+        self.assertEqual(payload["desktop"]["desktop_session"], "")
+        self.assertEqual(payload["desktop"]["session_type"], "x11")
+
     def test_version_consistency_between_metadata_and_package(self) -> None:
         project_version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
         self.assertEqual(project_version, cli.__version__)

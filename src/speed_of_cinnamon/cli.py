@@ -212,6 +212,23 @@ def _coerce_log_level_from_environment() -> str:
     return DEFAULT_LOG_LEVEL
 
 
+def _coerce_desktop_payload() -> dict[str, str]:
+    desktop = doctor._env_desktop()
+    if not isinstance(desktop, dict):
+        return {"current_desktop": "", "session_type": "", "desktop_session": ""}
+
+    def _coerce_text(value: object) -> str:
+        if not isinstance(value, str) or isinstance(value, bool):
+            return ""
+        return value
+
+    return {
+        "current_desktop": _coerce_text(desktop.get("current_desktop")),
+        "session_type": _coerce_text(desktop.get("session_type")),
+        "desktop_session": _coerce_text(desktop.get("desktop_session")),
+    }
+
+
 def _command_path(command: str) -> str:
     if not isinstance(command, str) or isinstance(command, bool):
         raise RuntimeError("command must be text")
@@ -1614,6 +1631,7 @@ def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
     state_file_path = normalized_path(args.state_file)
     if state_file_path is None:
         state_file_path = _coerce_path(str(args.state_file), field_name="state file")
+    desktop = _coerce_desktop_payload()
     return {
         "status": "done",
         "message": "diagnostics collected",
@@ -1628,9 +1646,9 @@ def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
             "machine": platform.machine(),
         },
         "desktop": {
-            "current_desktop": os.environ.get("XDG_CURRENT_DESKTOP", ""),
-            "session_type": os.environ.get("XDG_SESSION_TYPE", ""),
-            "desktop_session": os.environ.get("DESKTOP_SESSION", ""),
+            "current_desktop": str(desktop["current_desktop"]),
+            "session_type": str(desktop["session_type"]),
+            "desktop_session": str(desktop["desktop_session"]),
         },
         "paths": {
             "state_dir": str(state_dir()),
