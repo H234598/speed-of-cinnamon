@@ -40,22 +40,7 @@ _SANITIZE_ESCAPE_TABLE = {
     ord("\x00"): "\\x00",
 }
 _SANITIZE_KEY_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
-_SENSITIVE_KEYWORDS = (
-    "api_key",
-    "apikey",
-    "authorization",
-    "bearer",
-    "command",
-    "context",
-    "key",
-    "password",
-    "prompt",
-    "secret",
-    "text",
-    "token",
-    "transcript",
-    "vocabulary",
-)
+_SENSITIVE_KEY_RE = re.compile(r"(?:api_key|apikey|authorization|bearer|command|context|key|password|prompt|secret|text|token|transcript|vocabulary)")
 
 
 class JsonLogFormatter(logging.Formatter):
@@ -227,7 +212,7 @@ def _is_sensitive_key(key: str) -> bool:
     lowered = key.lower()
     if lowered == "command":
         return False
-    return any(keyword in lowered for keyword in _SENSITIVE_KEYWORDS)
+    return _SENSITIVE_KEY_RE.search(lowered) is not None
 
 
 def _safe_path(path: Path) -> str:
