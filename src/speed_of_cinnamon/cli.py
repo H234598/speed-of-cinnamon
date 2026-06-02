@@ -497,6 +497,14 @@ def transcript_preview(text: str, max_chars: int = 80) -> str:
     return clean[: max_chars - 3] + "..."
 
 
+def _transcript_history_candidates(directory: Path):
+    for path in directory.glob("*.txt"):
+        try:
+            yield path.stat().st_mtime, path
+        except OSError:
+            continue
+
+
 def read_transcript_history(limit: int = 10) -> list[dict[str, object]]:
     if limit <= 0:
         return []
@@ -504,15 +512,7 @@ def read_transcript_history(limit: int = 10) -> list[dict[str, object]]:
     if not directory.exists():
         return []
 
-    candidates: list[tuple[float, Path]] = []
-    for path in directory.glob("*.txt"):
-        try:
-            mtime = path.stat().st_mtime
-        except OSError:
-            continue
-        candidates.append((mtime, path))
-
-    candidates = heapq.nlargest(limit, candidates)
+    candidates = heapq.nlargest(limit, _transcript_history_candidates(directory))
 
     entries: list[dict[str, object]] = []
     for mtime, path in candidates:
@@ -1797,7 +1797,7 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
         "--openai-compatible-flex-processing",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="use OpenAI flex processing for OpenAI API speech-to-text and text polishing requests; default: enabled",
+        help="use OpenAI-compatible flex processing for speech-to-text and text polishing requests; default: enabled",
     )
     parser.add_argument("--post-process-prompt", default="")
     parser.add_argument("--personal-context", default="")
@@ -2006,7 +2006,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--openai-compatible-flex-processing",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="use OpenAI flex processing for OpenAI API speech-to-text and text polishing requests; default: enabled",
+        help="use OpenAI-compatible flex processing for speech-to-text and text polishing requests; default: enabled",
     )
     transcribe_file.add_argument("--post-process-prompt", default="")
     transcribe_file.add_argument("--personal-context", default="")
