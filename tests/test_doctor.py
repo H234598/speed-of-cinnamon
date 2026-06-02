@@ -477,6 +477,25 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(payload["configured"]["transcriber"]["ok"])
         self.assertIn("invalid", payload["configured"]["transcriber"]["detail"])
 
+    def test_report_rejects_symlinked_whisper_model_path(self) -> None:
+        tools = {"python3", "pw-record", "whisper-cli"}
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            real_model_dir = base / "real-model"
+            real_model_dir.mkdir()
+            model_link = base / "model-link"
+            model_link.symlink_to(real_model_dir, target_is_directory=True)
+            settings = {
+                "recorder": "auto",
+                "transcriber": "whisper-cpp",
+                "whisper-model": str(model_link),
+                "insert-method": "none",
+            }
+            with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
+                payload = doctor.report(settings)
+        self.assertFalse(payload["configured"]["transcriber"]["ok"])
+        self.assertIn("voice model path is invalid", payload["configured"]["transcriber"]["detail"])
+
     def test_parse_settings_json_rejects_null_byte(self) -> None:
         with self.assertRaisesRegex(ValueError, "contains invalid null byte"):
             doctor.parse_settings_json('{\"language\":\"en\x00\"}')

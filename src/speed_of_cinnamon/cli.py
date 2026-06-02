@@ -25,6 +25,7 @@ from .alarms import (
     save_alarm_store,
     set_alarm_enabled,
 )
+from .app_logging import DEFAULT_LOG_LEVEL, LOG_LEVELS, configure_logging, log_event
 from .doctor import parse_settings_json, report as doctor_report
 from .models import (
     CATALOG,
@@ -117,6 +118,11 @@ _BASE_ENV_KEYS = {
 _DANGEROUS_ENV_PREFIXES = ("LD_", "PYTHON", "BASH_", "__")
 _DANGEROUS_ENV_KEYS = {
     "ENV",
+    "PWD",
+    "OLDPWD",
+    "CDPATH",
+    "PS4",
+    "BASH_XTRACEFD",
     "SHELLOPTS",
     "PROMPT_COMMAND",
     "IFS",
@@ -1664,6 +1670,12 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
 def add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--state-file", default=str(default_state_file()))
     parser.add_argument("--json", action="store_true", help="print machine-readable JSON")
+    parser.add_argument(
+        "--log-level",
+        default=os.environ.get("SPEED_OF_CINNAMON_LOG_LEVEL", DEFAULT_LOG_LEVEL),
+        choices=LOG_LEVELS,
+        help="write logs at this level; default: error",
+    )
 
 
 def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
@@ -1896,12 +1908,34 @@ def run(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     json_output = False
+    command_name = str(getattr(args, "command", "unknown"))
     try:
+        configure_logging(getattr(args, "log_level", DEFAULT_LOG_LEVEL))
         json_output = _coerce_bool(getattr(args, "json", False), field_name="json")
+        log_event("info", "command_start", command=command_name)
         payload = args.handler(args)
+        status = str(payload.get("status", "ok"))
+        if payload.get("error"):
+            log_event(
+                "error",
+                "command_error",
+                command=command_name,
+                status=status,
+                error_type="payload",
+                error_message=str(payload.get("error", "")),
+            )
+        else:
+            log_event("info", "command_done", command=command_name, status=status)
         print_result(payload, json_output)
         return 0 if not payload.get("error") else 1
     except Exception as exc:
+        log_event(
+            "error",
+            "command_exception",
+            command=command_name,
+            error_type=exc.__class__.__name__,
+            error_message=str(exc),
+        )
         payload = {"status": "error", "error": str(exc)}
         print_result(payload, json_output)
         return 1

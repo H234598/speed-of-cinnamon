@@ -133,6 +133,7 @@ require_one() {
 verify_asset_path() {
   local asset=$1
   local absolute
+  local link_count
 
   if [[ "${asset}" == -* ]]; then
     printf 'asset name may not start with option-like prefix: %s\n' "${asset}" >&2
@@ -154,6 +155,11 @@ verify_asset_path() {
   fi
   if [[ -L "${asset}" ]]; then
     printf 'asset must not be a symlink: %s\n' "${asset}" >&2
+    exit 1
+  fi
+  link_count="$(stat -c '%h' "${asset}")"
+  if [[ "${link_count}" -ne 1 ]]; then
+    printf 'asset must not be hardlinked: %s\n' "${asset}" >&2
     exit 1
   fi
 }

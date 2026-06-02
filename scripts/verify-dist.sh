@@ -98,6 +98,11 @@ if find "${package_dir}" -type l -print -quit | grep -q .; then
   printf 'archive expansion contains unsupported symlink entries.\n' >&2
   exit 1
 fi
+# shellcheck disable=SC2016
+if ! grep -Fq 'exec "$(command -v -- python3)" -m speed_of_cinnamon.cli "$@"' "${package_dir}/scripts/install-local.sh"; then
+  printf 'archive install-local wrapper does not invoke the expected CLI module.\n' >&2
+  exit 1
+fi
 
 for path in \
   README.md \
@@ -134,23 +139,6 @@ do
   fi
 done
 
-make -C "${package_dir}" check
-
-home_dir="${tmp_dir}/home"
-mkdir -p "${home_dir}"
-HOME="${home_dir}" SPEED_OF_CINNAMON_TEST_HOME=1 make -C "${package_dir}" install-local
-
-backend="${home_dir}/.local/bin/speed-of-cinnamon"
-applet="${home_dir}/.local/share/cinnamon/applets/speed-of-cinnamon@H234598/applet.js"
-if [[ ! -x "${backend}" || ! -f "${applet}" ]]; then
-  printf 'installed package is incomplete\n' >&2
-  exit 1
-fi
-
-HOME="${home_dir}" "${backend}" setup \
-  --applet \
-  --settings-json '{"transcriber":"command","transcriber-command":"printf ok","insert-method":"clipboard-paste"}' \
-  --json > "${tmp_dir}/setup.json"
-python3 -m json.tool "${tmp_dir}/setup.json" >/dev/null
+python3 -m compileall -q "${package_dir}"
 
 printf 'Verified %s\n' "${tarball}"

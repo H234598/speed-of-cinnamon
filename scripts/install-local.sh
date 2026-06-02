@@ -42,11 +42,37 @@ for path in \
   "${repo_dir}/docs/man/speed-of-cinnamon.1" \
   "${repo_dir}/docs/man/speed-of-cinnamon-alarms.1"
 do
-  if [[ ! -e "${path}" ]]; then
+  if [[ ! -e "${path}" || -L "${path}" ]]; then
     printf 'missing required source path: %s\n' "${path}" >&2
     exit 1
   fi
 done
+
+reject_unsafe_tree() {
+  local tree="$1"
+  local label="$2"
+  if find "${tree}" \( -type l -o -type f -links +1 \) -print -quit | grep -q .; then
+    printf 'refusing to install unsafe %s: %s\n' "${label}" "${tree}" >&2
+    exit 1
+  fi
+}
+
+reject_unsafe_file() {
+  local path="$1"
+  local label="$2"
+  local link_count
+
+  if [[ ! -f "${path}" || -L "${path}" ]]; then
+    printf 'refusing to install unsafe %s: %s\n' "${label}" "${path}" >&2
+    exit 1
+  fi
+  link_count="$(stat -c '%h' "${path}")"
+  if [[ "${link_count}" -ne 1 ]]; then
+    printf 'refusing to install hardlinked %s: %s\n' "${label}" "${path}" >&2
+    exit 1
+  fi
+}
+
 for target in "${applet_target}" "${app_data}" "${bin_dir}" "${man_dir}"; do
   if [[ -L "${target}" ]]; then
     printf 'refusing to follow symlink during install: %s\n' "${target}" >&2
@@ -56,12 +82,20 @@ done
 
 mkdir -p "$(dirname "${applet_target}")" "${app_data}" "${bin_dir}" "${man_dir}"
 rm -rf "${applet_target}"
+reject_unsafe_tree "${repo_dir}/files/${uuid}" "applet source tree"
 cp -a "${repo_dir}/files/${uuid}" "${applet_target}"
+reject_unsafe_tree "${applet_target}" "applet source tree"
 
 rm -rf "${app_data}/python"
 mkdir -p "${app_data}/python"
+reject_unsafe_tree "${repo_dir}/src/speed_of_cinnamon" "python package source tree"
 cp -a "${repo_dir}/src/speed_of_cinnamon" "${app_data}/python/"
+reject_unsafe_tree "${app_data}/python/speed_of_cinnamon" "python package"
 
+reject_unsafe_file "${repo_dir}/docs/man/speed-of-cinnamon.1" "man page source"
+reject_unsafe_file "${repo_dir}/docs/man/speed-of-cinnamon-alarms.1" "man page source"
+
+rm -f "${bin_dir}/speed-of-cinnamon"
 cat > "${bin_dir}/speed-of-cinnamon" <<'WRAPPER'
 #!/usr/bin/env bash
 set -euo pipefail

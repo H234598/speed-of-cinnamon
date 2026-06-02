@@ -31,6 +31,11 @@ _BASE_ENV_KEYS = {
 _DANGEROUS_ENV_PREFIXES = ("LD_", "PYTHON", "BASH_", "__")
 _DANGEROUS_ENV_KEYS = {
     "ENV",
+    "PWD",
+    "OLDPWD",
+    "CDPATH",
+    "PS4",
+    "BASH_XTRACEFD",
     "SHELLOPTS",
     "PROMPT_COMMAND",
     "IFS",

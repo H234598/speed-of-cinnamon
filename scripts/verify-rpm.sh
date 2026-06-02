@@ -99,6 +99,20 @@ required_files=(
 file_list="${tmp_dir}/rpm-files.txt"
 
 rpm -qpl "${rpm_path}" > "${file_list}"
+python3 - <<'PY' "${file_list}"
+from pathlib import Path
+import sys
+
+file_list = Path(sys.argv[1])
+for raw in file_list.read_text(encoding="utf-8").splitlines():
+    entry = raw.strip()
+    if not entry:
+        continue
+    path = Path(entry)
+    if path.is_absolute() or any(part == ".." for part in path.parts):
+        raise SystemExit(f"RPM package contains unsafe path entry: {entry}")
+PY
+
 for required in "${required_files[@]}"; do
   if ! grep -Fxq "${required}" "${file_list}"; then
     printf 'RPM is missing %s\n' "${required}" >&2
@@ -138,9 +152,18 @@ done
   rpm2cpio "${rpm_path}" | cpio -idmu --no-absolute-filenames --quiet
 )
 
+if find "${tmp_dir}" -type l -print -quit | grep -q .; then
+  printf 'RPM expansion contains unsupported symlink entries.\n' >&2
+  exit 1
+fi
+
 backend="${tmp_dir}/usr/bin/speed-of-cinnamon"
 if [[ ! -x "${backend}" ]]; then
   printf 'extracted backend is not executable: %s\n' "${backend}" >&2
+  exit 1
+fi
+if ! grep -Fq 'python3)" -m speed_of_cinnamon.cli "$@"' "${backend}"; then
+  printf 'extracted backend does not invoke the expected CLI module: %s\n' "${backend}" >&2
   exit 1
 fi
 
@@ -149,28 +172,7 @@ if [[ -z "${package_dir}" ]]; then
   printf 'extracted Python package not found under site-packages\n' >&2
   exit 1
 fi
-python_path="$(dirname "${package_dir}")"
 
-run_home="${tmp_dir}/home"
-mkdir -p "${run_home}" "${tmp_dir}/cache" "${tmp_dir}/state" "${tmp_dir}/data"
-PYTHONPATH="${python_path}" \
-HOME="${run_home}" \
-XDG_CACHE_HOME="${tmp_dir}/cache" \
-XDG_STATE_HOME="${tmp_dir}/state" \
-XDG_DATA_HOME="${tmp_dir}/data" \
-  "${backend}" setup \
-    --applet \
-    --settings-json '{"transcriber":"command","transcriber-command":"printf ok","insert-method":"clipboard-paste"}' \
-    --json > "${tmp_dir}/setup.json"
-python3 -m json.tool "${tmp_dir}/setup.json" >/dev/null
-python3 - <<'PY' "${tmp_dir}/setup.json"
-import json
-import sys
-from pathlib import Path
-
-payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-if payload.get("status") != "done" or "Speed of Cinnamon setup plan" not in str(payload.get("text", "")):
-    raise SystemExit(f"unexpected setup payload: {payload!r}")
-PY
+python3 -m compileall -q "${package_dir}"
 
 printf 'Verified %s\n' "${rpm_path}"

@@ -19,6 +19,22 @@ require_cmd() {
   fi
 }
 
+require_regular_source_file() {
+  local path=$1
+  local label=$2
+  local link_count
+
+  if [[ ! -f "${path}" || -L "${path}" ]]; then
+    printf '%s must be a regular file: %s\n' "${label}" "${path}" >&2
+    exit 1
+  fi
+  link_count="$(stat -c '%h' "${path}")"
+  if [[ "${link_count}" -ne 1 ]]; then
+    printf '%s must not be hardlinked: %s\n' "${label}" "${path}" >&2
+    exit 1
+  fi
+}
+
 for tool in python3 snapcraft mktemp rm mkdir find realpath; do
   require_cmd "${tool}"
 done
@@ -42,6 +58,7 @@ if [[ -L "${snap_dir}/snapcraft.yaml" ]]; then
   printf 'snapcraft manifest must not be a symlink: %s\n' "${snap_dir}/snapcraft.yaml" >&2
   exit 1
 fi
+require_regular_source_file "${snap_dir}/snapcraft.yaml" "snapcraft manifest"
 
 version="$(
   python3 - <<'PY'
@@ -79,7 +96,7 @@ cleanup_tmpdir() {
     rm -f -- "${tmp_output}"
   fi
   if [[ -f "${snapcraft_backup}" ]]; then
-    cp "${snapcraft_backup}" "${snapcraft_file}"
+    mv -f -- "${snapcraft_backup}" "${snapcraft_file}"
     rm -f -- "${snapcraft_backup}"
   fi
 }
@@ -87,6 +104,7 @@ trap cleanup_tmpdir EXIT
 
 python3 - "${snapcraft_file}" "${version}" "${snapcraft_base}" <<'PYCODE'
 import pathlib
+import tempfile
 import sys
 
 path = pathlib.Path(sys.argv[1])
@@ -109,7 +127,10 @@ if not replaced:
     raise SystemExit("snapcraft version field not found")
 if not base_replaced:
     raise SystemExit("snapcraft base field not found")
-path.write_text("\n".join(out) + "\n", encoding="utf-8")
+with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
+    handle.write("\n".join(out) + "\n")
+    tmp_path = pathlib.Path(handle.name)
+tmp_path.replace(path)
 PYCODE
 
 dist_dir="${repo_dir}/dist/snap"

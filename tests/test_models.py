@@ -574,6 +574,33 @@ class ModelsTest(unittest.TestCase):
             mode = path.stat().st_mode & 0o777
             self.assertEqual(mode, 0o600)
 
+    def test_download_model_ignores_preexisting_tmp_symlink_leaf(self) -> None:
+        data = b"tiny model"
+        spec = models.ModelSpec(
+            name="test-tmp-symlink",
+            filename="ggml-test-tmp-symlink.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(data).hexdigest(),
+            description="test model tmp symlink",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models.urllib.request.urlopen", return_value=FakeResponse(data)),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = path.with_suffix(path.suffix + ".tmp")
+            marker = Path(tmp) / "model-download-pwned-marker"
+            tmp_path.symlink_to(marker)
+
+            payload = models.download_model("test-tmp-symlink")
+
+            self.assertEqual(payload["status"], "done")
+            self.assertFalse(marker.exists(), "tmp symlink leaf should not have been followed")
+            self.assertTrue(path.is_file())
+
     def test_remove_model_deletes_catalog_file_and_tmp_file(self) -> None:
         spec = models.ModelSpec(
             name="test",
@@ -601,6 +628,28 @@ class ModelsTest(unittest.TestCase):
         self.assertFalse(path_exists)
         self.assertFalse(tmp_exists)
         self.assertFalse(missing_payload["removed"])
+
+    def test_remove_model_rejects_symlink_leaf_path(self) -> None:
+        spec = models.ModelSpec(
+            name="test-symlink-remove",
+            filename="ggml-test-symlink-remove.bin",
+            size="1 KiB",
+            sha1="not-used",
+            description="test model",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            target = Path(tmp) / "outside-model"
+            target.write_bytes(b"payload")
+            path.symlink_to(target.resolve())
+
+            with self.assertRaisesRegex(RuntimeError, "must not pass through a symlink"):
+                models.remove_model("test-symlink-remove")
 
     def test_default_model_path_uses_only_verified_catalog_files(self) -> None:
         good_data = b"good model"

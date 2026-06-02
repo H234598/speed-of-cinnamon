@@ -158,6 +158,61 @@ class CommandChainTest(unittest.TestCase):
         self.assertNotIn("PYTHONPATH", captured_env)
         self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
+    def test_command_environment_strips_shell_state_variables(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "PWD": "/tmp/evil",
+                "OLDPWD": "/tmp/older",
+                "CDPATH": "/tmp/cd",
+                "PS4": "pwn",
+                "BASH_XTRACEFD": "9",
+            },
+        ):
+            from speed_of_cinnamon.personalization import command_environment
+
+            env = command_environment("ctx", "vocab")
+
+        self.assertNotIn("PWD", env)
+        self.assertNotIn("OLDPWD", env)
+        self.assertNotIn("CDPATH", env)
+        self.assertNotIn("PS4", env)
+        self.assertNotIn("BASH_XTRACEFD", env)
+
+    def test_module_environment_builders_strip_shell_state_variables(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "PWD": "/tmp/evil",
+                "OLDPWD": "/tmp/older",
+                "CDPATH": "/tmp/cd",
+                "PS4": "pwn",
+                "BASH_XTRACEFD": "9",
+            },
+        ):
+            from speed_of_cinnamon.cli import _filtered_environment as cli_filtered_environment
+            from speed_of_cinnamon.command_chain import _filtered_environment as chain_filtered_environment
+            from speed_of_cinnamon.output import _filtered_environment as output_filtered_environment
+            from speed_of_cinnamon.personalization import _filtered_environment as personalization_filtered_environment
+            from speed_of_cinnamon.recorder import _filtered_environment as recorder_filtered_environment
+            from speed_of_cinnamon.transcriber import _filtered_environment as transcriber_filtered_environment
+
+            envs = [
+                cli_filtered_environment(),
+                chain_filtered_environment(),
+                output_filtered_environment(),
+                personalization_filtered_environment(),
+                recorder_filtered_environment(),
+                transcriber_filtered_environment(),
+            ]
+
+        for env in envs:
+            self.assertNotIn("PWD", env)
+            self.assertNotIn("OLDPWD", env)
+            self.assertNotIn("CDPATH", env)
+            self.assertNotIn("PS4", env)
+            self.assertNotIn("BASH_XTRACEFD", env)
+
     def test_command_path_ignores_trusted_path_environment_override(self) -> None:
         captured_path: dict[str, str | None] = {}
 

@@ -14,6 +14,22 @@ require_cmd() {
   fi
 }
 
+require_regular_source_file() {
+  local path=$1
+  local label=$2
+  local link_count
+
+  if [[ ! -f "${path}" || -L "${path}" ]]; then
+    printf '%s must be a regular file: %s\n' "${label}" "${path}" >&2
+    exit 1
+  fi
+  link_count="$(stat -c '%h' "${path}")"
+  if [[ "${link_count}" -ne 1 ]]; then
+    printf '%s must not be hardlinked: %s\n' "${label}" "${path}" >&2
+    exit 1
+  fi
+}
+
 repo_tmp_root="${TMPDIR:-/tmp}"
 if [[ ! "${repo_tmp_root}" == /* ]]; then
   repo_tmp_root="/tmp"
@@ -94,6 +110,8 @@ if [[ ! -f "${spec_source}" ]]; then
   printf 'spec source missing: %s\n' "${spec_source}" >&2
   exit 1
 fi
+require_regular_source_file "${tarball}" "tarball source"
+require_regular_source_file "${spec_source}" "spec source"
 
 rm -rf "${topdir}"
 mkdir -p "${topdir}"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}

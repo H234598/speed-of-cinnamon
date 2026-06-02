@@ -66,6 +66,29 @@ trap cleanup EXIT
 
 mkdir -p "${dist_dir}" "${work_dir}/${package}"
 
+require_unsafe_source() {
+  local path=$1
+  local label=$2
+  local link_count
+
+  if [[ -d "${path}" ]]; then
+    if find "${path}" \( -type l -o -type f -links +1 \) -print -quit | grep -q .; then
+      printf '%s must not contain symlinks or hardlinks: %s\n' "${label}" "${path}" >&2
+      exit 1
+    fi
+    return
+  fi
+  if [[ ! -f "${path}" || -L "${path}" ]]; then
+    printf '%s must be a regular file: %s\n' "${label}" "${path}" >&2
+    exit 1
+  fi
+  link_count="$(stat -c '%h' "${path}")"
+  if [[ "${link_count}" -ne 1 ]]; then
+    printf '%s must not be hardlinked: %s\n' "${label}" "${path}" >&2
+    exit 1
+  fi
+}
+
 for path in \
   .github \
   docs \
@@ -79,6 +102,7 @@ for path in \
   pyproject.toml \
   README.md
 do
+  require_unsafe_source "${repo_dir}/${path}" "distribution source"
   cp -a "${repo_dir}/${path}" "${work_dir}/${package}/"
 done
 

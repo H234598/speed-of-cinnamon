@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
+
+from .path_safety import assert_no_symlink_ancestors
 
 APP_ID = "speed-of-cinnamon"
 APP_NAME = "Speed of Cinnamon"
@@ -32,19 +35,34 @@ def _xdg_path(environment_variable: str, default: Path) -> Path:
     if _contains_escaped_null(normalized):
         return default
     candidate = Path(normalized)
-    return candidate if candidate.is_absolute() else default
+    if not candidate.is_absolute():
+        return default
+    try:
+        assert_no_symlink_ancestors(candidate, field_name=environment_variable)
+    except RuntimeError:
+        return default
+    return candidate
+
+
+def _safe_home_path(*parts: str) -> Path:
+    candidate = Path.home().joinpath(*parts)
+    try:
+        assert_no_symlink_ancestors(candidate, field_name="home path")
+    except RuntimeError:
+        return Path(tempfile.gettempdir()).joinpath(*parts)
+    return candidate
 
 
 def xdg_data_home() -> Path:
-    return _xdg_path("XDG_DATA_HOME", Path.home() / ".local" / "share")
+    return _xdg_path("XDG_DATA_HOME", _safe_home_path(".local", "share"))
 
 
 def xdg_state_home() -> Path:
-    return _xdg_path("XDG_STATE_HOME", Path.home() / ".local" / "state")
+    return _xdg_path("XDG_STATE_HOME", _safe_home_path(".local", "state"))
 
 
 def xdg_cache_home() -> Path:
-    return _xdg_path("XDG_CACHE_HOME", Path.home() / ".cache")
+    return _xdg_path("XDG_CACHE_HOME", _safe_home_path(".cache"))
 
 
 def state_dir() -> Path:
@@ -69,6 +87,10 @@ def transcript_dir() -> Path:
 
 def diagnostics_dir() -> Path:
     return state_dir() / "diagnostics"
+
+
+def logs_dir() -> Path:
+    return state_dir() / "logs"
 
 
 def models_dir() -> Path:
@@ -97,5 +119,6 @@ def ensure_runtime_dirs() -> None:
     recordings_dir().mkdir(parents=True, exist_ok=True)
     transcript_dir().mkdir(parents=True, exist_ok=True)
     diagnostics_dir().mkdir(parents=True, exist_ok=True)
+    logs_dir().mkdir(parents=True, exist_ok=True)
     models_dir().mkdir(parents=True, exist_ok=True)
     ctranslate2_models_dir().mkdir(parents=True, exist_ok=True)

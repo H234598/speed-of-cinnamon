@@ -15,6 +15,22 @@ if [[ ! "${wiki_url}" =~ ^https://github\\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\\
   exit 1
 fi
 
+require_source_file() {
+  local path=$1
+  local label=$2
+  local link_count
+
+  if [[ ! -f "${path}" || -L "${path}" ]]; then
+    printf '%s must be a regular file: %s\n' "${label}" "${path}" >&2
+    exit 1
+  fi
+  link_count="$(stat -c '%h' "${path}")"
+  if [[ "${link_count}" -ne 1 ]]; then
+    printf '%s must not be hardlinked: %s\n' "${label}" "${path}" >&2
+    exit 1
+  fi
+}
+
 work_root="${TMPDIR:-/tmp}"
 if [[ ! "${work_root}" == /* ]]; then
   work_root="/tmp"
@@ -40,6 +56,13 @@ if ! git clone "${wiki_url}" "${work_dir}/wiki"; then
   git -C "${work_dir}/wiki" init -b master
   git -C "${work_dir}/wiki" remote add origin "${wiki_url}"
 fi
+
+require_source_file "${repo_dir}/docs/wiki/Home.md" "wiki source"
+require_source_file "${repo_dir}/docs/user-guide.md" "wiki source"
+require_source_file "${repo_dir}/docs/cli-reference.md" "wiki source"
+require_source_file "${repo_dir}/docs/architecture.md" "wiki source"
+require_source_file "${repo_dir}/docs/development.md" "wiki source"
+require_source_file "${repo_dir}/docs/fedora-cinnamon-runbook.md" "wiki source"
 
 cp "${repo_dir}/docs/wiki/Home.md" "${work_dir}/wiki/Home.md"
 cp "${repo_dir}/docs/user-guide.md" "${work_dir}/wiki/User-Guide.md"

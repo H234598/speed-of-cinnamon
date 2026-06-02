@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 from .models import default_ctranslate2_model_path, default_whisper_cpp_model_path, model_backend_for_path, model_supports_language
 from .postprocessor import DEFAULT_OPENAI_COMPATIBLE_MODEL, DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL, DEFAULT_OPENAI_COMPATIBLE_URL
+from .path_safety import assert_no_symlink_ancestors
 from .transcriber import faster_whisper_available, normalize_backend
 
 
@@ -154,11 +155,12 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
     if local_model and not local_model_is_invalid:
         try:
             local_model_path = Path(local_model).expanduser()
+            assert_no_symlink_ancestors(local_model_path, field_name="voice model path")
             model_backend = model_backend_for_path(local_model_path)
             if local_model_path.is_dir() and not model_backend:
                 model_backend = "faster-whisper"
             model_ok = local_model_path.exists()
-        except (OSError, ValueError):
+        except (OSError, ValueError, RuntimeError):
             return {
                 "ok": False,
                 "value": transcriber or "auto",

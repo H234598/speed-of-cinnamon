@@ -83,6 +83,8 @@ def tracked_files() -> list[Path]:
 
 def check_forbidden_names() -> None:
     for path in tracked_files():
+        if path.is_symlink():
+            continue
         try:
             content = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:

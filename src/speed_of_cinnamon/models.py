@@ -717,33 +717,34 @@ def _model_is_verified(model: ModelSpec, path: Path, checksum: str = "") -> bool
     return bool(model.sha1 and current_checksum == model.sha1)
 
 
-def _download_url_to_file(url: str, tmp_path: Path, size_limit: int, model_name: str) -> int:
-    assert_no_symlink_ancestors(tmp_path, field_name="model temporary file")
+def _download_url_to_file(url: str, tmp_dir: Path, size_limit: int, model_name: str, *, prefix: str) -> tuple[Path, int]:
+    assert_no_symlink_ancestors(tmp_dir, field_name="model temporary directory")
     url = _assert_download_url(url, field_name="model download URL")
-    with (
-        urllib.request.urlopen(url, timeout=30) as response,  # nosec B310
-        tmp_path.open("wb") as output,
-    ):
+    with tempfile.NamedTemporaryFile("wb", delete=False, dir=tmp_dir, prefix=prefix) as output:
+        tmp_path = Path(output.name)
         try:
             os.fchmod(output.fileno(), 0o600)
         except OSError:
             pass
-        content_length = _read_content_length(response)
-        if content_length is not None and content_length > size_limit:
-            raise ModelError(f"downloaded model too large for {model_name}: {content_length} > {size_limit}")
+        with urllib.request.urlopen(url, timeout=30) as response, (  # nosec B310
+            output
+        ):
+            content_length = _read_content_length(response)
+            if content_length is not None and content_length > size_limit:
+                raise ModelError(f"downloaded model too large for {model_name}: {content_length} > {size_limit}")
 
-        downloaded = 0
-        while True:
-            chunk = response.read(MAX_MODEL_DOWNLOAD_CHUNK_BYTES)
-            if not chunk:
-                break
-            downloaded += len(chunk)
-            if downloaded > size_limit:
-                raise ModelError(f"downloaded model too large for {model_name}: {downloaded} > {size_limit}")
-            output.write(chunk)
-        if content_length is not None and downloaded != content_length:
-            raise ModelError(f"downloaded model size mismatch for {model_name}: {downloaded} != {content_length}")
-    return downloaded
+            downloaded = 0
+            while True:
+                chunk = response.read(MAX_MODEL_DOWNLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                downloaded += len(chunk)
+                if downloaded > size_limit:
+                    raise ModelError(f"downloaded model too large for {model_name}: {downloaded} > {size_limit}")
+                output.write(chunk)
+            if content_length is not None and downloaded != content_length:
+                raise ModelError(f"downloaded model size mismatch for {model_name}: {downloaded} != {content_length}")
+    return tmp_path, downloaded
 
 
 def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict[str, object]:
@@ -763,8 +764,16 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
         for filename, url in model_download_urls(model):
             target = tmp_dir / filename
             target.parent.mkdir(parents=True, exist_ok=True)
-            downloaded_total += _download_url_to_file(url, target, size_limit, model.name)
+            tmp_path, downloaded = _download_url_to_file(
+                url,
+                target.parent,
+                size_limit,
+                model.name,
+                prefix=f".{target.name}.",
+            )
+            downloaded_total += downloaded
             try:
+                os.replace(tmp_path, target)
                 target.chmod(0o600)
             except OSError:
                 pass
@@ -793,11 +802,16 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
         if status["verified"]:
             return {**status, "status": "done", "message": f"model already downloaded: {path}"}
 
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    assert_no_symlink_ancestors(tmp_path, field_name="model temporary file")
     size_limit = _download_size_limit(model)
+    tmp_path: Path | None = None
     try:
-        _download_url_to_file(model.url, tmp_path, size_limit, model.name)
+        tmp_path, _ = _download_url_to_file(
+            model.url,
+            path.parent,
+            size_limit,
+            model.name,
+            prefix=f".{path.name}.",
+        )
         checksum = sha1_file(tmp_path)
         if checksum != model.sha1:
             raise ModelError(f"downloaded checksum mismatch for {model.name}: {checksum}")
@@ -812,11 +826,13 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
         except OSError as exc:
             raise ModelError(f"failed to persist downloaded model file: {path}") from exc
     except Exception:
-        _clear_model_checksum_cache(tmp_path)
-        try:
-            tmp_path.unlink()
-        except FileNotFoundError:
-            pass
+        if tmp_path is not None:
+            _clear_model_checksum_cache(tmp_path)
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
+        _clear_model_checksum_cache(path)
         raise
     return {**model_status(model, verify=True), "status": "done", "message": f"model downloaded: {path}"}
 
@@ -829,7 +845,13 @@ def remove_model(name: str) -> dict[str, object]:
     _clear_model_checksum_cache(tmp_path)
     removed = False
     removed_tmp = False
-    if path.is_dir():
+    if path.is_symlink():
+        try:
+            path.unlink()
+            removed = True
+        except FileNotFoundError:
+            pass
+    elif path.is_dir():
         shutil.rmtree(path)
         removed = True
     else:
