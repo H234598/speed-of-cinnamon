@@ -433,6 +433,15 @@ class NextVersionTest(unittest.TestCase):
                 next_version.ensure_tag_exists("0.1.20")
             tag_exists.assert_called_once_with("0.1.20")
 
+    def test_ensure_tag_exists_existing_tag(self) -> None:
+        with mock.patch.object(
+            next_version,
+            "tag_exists",
+            return_value=True,
+        ) as tag_exists:
+            next_version.ensure_tag_exists("0.1.20")
+            tag_exists.assert_called_once_with("0.1.20")
+
     def test_ensure_tag_exists_rejects_non_string_input(self) -> None:
         with self.assertRaises(next_version.UserInputError):
             next_version.ensure_tag_exists(None)  # type: ignore[arg-type]
