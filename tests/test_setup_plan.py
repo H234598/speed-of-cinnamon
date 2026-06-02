@@ -214,6 +214,21 @@ class SetupPlanTest(unittest.TestCase):
         self.assertEqual(plan["steps"][0]["id"], "automatic-paste")
         self.assertTrue(plan["steps"][0]["optional"])
 
+    def test_warnings_filter_empty_and_stringify_values_once(self) -> None:
+        payload = {
+            "ok": True,
+            "configured": {
+                "recorder": {"ok": True},
+                "transcriber": {"ok": True},
+                "output": {"ok": True},
+                "postprocessor": {"ok": True},
+                "warnings": ["", "  ", 0, None, "automatic paste is unavailable"],
+            },
+            "desktop": {"cinnamon": True},
+        }
+        plan = build_setup_plan(payload)
+        self.assertEqual(plan["steps"][0]["id"], "automatic-paste")
+
     def test_missing_ollama_model_gets_text_model_step(self) -> None:
         payload = {
             "ok": False,

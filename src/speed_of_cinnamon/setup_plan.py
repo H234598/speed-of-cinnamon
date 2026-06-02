@@ -28,7 +28,12 @@ def _warnings(payload: Mapping[str, Any]) -> list[str]:
         return []
     if not isinstance(warnings, list):
         raise RuntimeError("warnings must be a list")
-    return [str(item) for item in warnings if str(item).strip()]
+    filtered: list[str] = []
+    for item in warnings:
+        warning = str(item).strip()
+        if warning:
+            filtered.append(warning)
+    return filtered
 
 
 def _coerce_plan_bool(payload: Mapping[str, Any], key: str) -> bool:
