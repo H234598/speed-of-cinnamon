@@ -348,6 +348,8 @@ class NextVersionTest(unittest.TestCase):
         with self.assertRaises(next_version.UserInputError):
             next_version.apply_breaking_change(1, 2.0, 3)
         with self.assertRaises(next_version.UserInputError):
+            next_version.apply_breaking_change(1.0, 2, 3)  # type: ignore[arg-type]
+        with self.assertRaises(next_version.UserInputError):
             next_version.apply_breaking_change(True, 0, 0)  # type: ignore[arg-type]
 
     def test_normalize_tag_rejects_empty_or_non_string(self) -> None:
