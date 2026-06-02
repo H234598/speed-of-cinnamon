@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import importlib.util
 import unittest
 import os
 import tempfile
@@ -38,6 +39,18 @@ def run_version_fail(*args: str) -> int:
 def run_version_fail_stdout_stderr(*args: str, path: str | None = None, cwd: Path | None = None) -> tuple[int, str]:
     result = _run_version(*args, expect_ok=False, path=path, cwd=cwd)
     return result.returncode, (result.stderr or "")
+
+
+def load_next_version_module() -> object:
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location("next_version", root / "scripts" / "next_version.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec is not None and spec.loader is not None
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+    return module
+
+
+next_version = load_next_version_module()
 
 
 class NextVersionTest(unittest.TestCase):
@@ -175,6 +188,22 @@ class NextVersionTest(unittest.TestCase):
             code, stderr = run_version_fail_stdout_stderr("--add-commits", "10", cwd=Path(tmpdir))
             self.assertEqual(code, 2)
             self.assertIn("error:", stderr)
+
+    def test_add_patches_core_increment_steps(self) -> None:
+        self.assertEqual(next_version.add_patches((0, 1, 99), 100), (0, 2, 99))
+
+    def test_add_patches_rolls_to_major(self) -> None:
+        self.assertEqual(next_version.add_patches((0, 99, 99), 100), (1, 0, 99))
+
+    def test_apply_feature_increase_wraps_minor(self) -> None:
+        self.assertEqual(next_version.apply_feature_increase(1, 99, 5), (2, 0, 5))
+
+    def test_apply_breaking_change_resets_minor_and_patch(self) -> None:
+        self.assertEqual(next_version.apply_breaking_change(9, 99, 99), (10, 0, 0))
+
+    def test_parse_version_rejects_negative_segments(self) -> None:
+        with self.assertRaises(next_version.UserInputError):
+            next_version.parse_version("1.-2.3")
 
 
 if __name__ == "__main__":
