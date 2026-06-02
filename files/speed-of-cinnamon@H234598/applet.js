@@ -3597,6 +3597,9 @@ MyApplet.prototype = {
 
   _preparedTranscriptText: function(transcript) {
     let text = String(transcript || "");
+    if (!this.sanitizeSpecialChars && !this.appendSpace && text.length <= MAX_TEXT_INSERT_CHARS && text.indexOf("\u0000") < 0) {
+      return text;
+    }
     if (this.sanitizeSpecialChars) {
       text = this._sanitizeSpecialChars(text);
     }
