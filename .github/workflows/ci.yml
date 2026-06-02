@@ -25,7 +25,7 @@ jobs:
     outputs:
       workflows_changed: ${{ steps.detect_workflows.outputs.workflows_changed }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -71,7 +71,7 @@ jobs:
     needs: workflow-change-detection
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -102,11 +102,11 @@ jobs:
       BUILD_SNAP: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_snap && '1' || '0') }}
       BUILD_GENERIC_RPM: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_generic_rpm && '1' || '0') }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Install Bandit
@@ -189,7 +189,7 @@ jobs:
         if: env.BUILD_SNAP == '1'
         run: make snap-check
       - name: Upload source release archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@v7
         with:
           name: speed-of-cinnamon-source-${{ github.sha }}
           path: |
@@ -198,7 +198,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Upload Fedora RPM packages
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@v7
         with:
           name: speed-of-cinnamon-rpm-${{ github.sha }}
           path: |
@@ -208,7 +208,7 @@ jobs:
           retention-days: 30
       - name: Upload generic RPM packages
         if: env.BUILD_GENERIC_RPM == '1'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@v7
         with:
           name: speed-of-cinnamon-generic-rpm-${{ github.sha }}
           path: |
@@ -218,7 +218,7 @@ jobs:
           retention-days: 30
       - name: Upload Snap package
         if: env.BUILD_SNAP == '1'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@v7
         with:
           name: speed-of-cinnamon-snap-${{ github.sha }}
           path: |
