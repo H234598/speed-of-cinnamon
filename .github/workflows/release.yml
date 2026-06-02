@@ -52,6 +52,14 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Install actionlint
+        run: |
+          version="1.7.12"
+          archive="actionlint_${version}_linux_amd64.tar.gz"
+          curl -fsSLo "/tmp/${archive}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${version}/${archive}"
+          tar -xzf "/tmp/${archive}" -C /tmp actionlint
+          sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
       - name: Lint GitHub workflows
         run: |
           if [[ "${RUN_WORKFLOW_LINT}" != "true" ]]; then
@@ -74,7 +82,7 @@ jobs:
       - security-scan
     runs-on: ubuntu-24.04
     env:
-      BUILD_SNAP: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_snap && '1' || '0') }}
+      BUILD_SNAP: ${{ github.event_name != 'workflow_dispatch' && '0' || (inputs.build_snap && '1' || '0') }}
       BUILD_GENERIC_RPM: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_generic_rpm && '1' || '0') }}
     steps:
       - uses: actions/checkout@v6
@@ -86,6 +94,7 @@ jobs:
           python-version: "3.12"
       - name: Install release tooling
         run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir bandit
           sudo apt-get update
           sudo apt-get install -y cpio rpm shellcheck
           if [[ "${BUILD_SNAP}" == "1" ]]; then
