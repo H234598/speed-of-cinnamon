@@ -1,4 +1,4 @@
-.TH SPEED-OF-CINNAMON 1 "June 2026" "speed-of-cinnamon 0.1.2" "User Commands"
+.TH SPEED-OF-CINNAMON 1 "June 2026" "speed-of-cinnamon 0.1.16" "User Commands"
 .SH NAME
 speed-of-cinnamon \- Cinnamon-native voice typing backend
 .SH SYNOPSIS
@@ -81,6 +81,10 @@ Read a portable applet settings backup and restore local alarm state.
 .B alarms
 Manage Cinnamon-local repeating alarms. See
 .BR speed-of-cinnamon-alarms (1).
+.TP
+.B insert-text
+Send explicit text through the configured output path without recording or
+transcribing audio.
 .SH COMMON OPTIONS
 .TP
 .B --version
@@ -190,6 +194,12 @@ Test transcription without inserting into the focused application:
 .PP
 .EX
 speed-of-cinnamon toggle --insert-method none --transcriber command --transcriber-command "printf test"
+.EE
+.PP
+Test only the output path:
+.PP
+.EX
+speed-of-cinnamon insert-text "Hallo Terminal" --insert-method clipboard-paste --json
 .EE
 .PP
 Preview cleanup:

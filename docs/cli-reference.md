@@ -238,10 +238,15 @@ Downloads verify SHA-1 checksums before a model is activated.
 ## Output Compatibility
 
 ```bash
+speed-of-cinnamon insert-text "Hallo Terminal" --insert-method clipboard-paste --json
 speed-of-cinnamon toggle --sanitize-special-chars --insert-method type
 ```
 
-This maps common accented and special characters to ASCII before output. Saved transcripts stay unchanged.
+`insert-text` exercises only the output path. It is useful for testing clipboard, terminal paste, direct typing, and
+character sanitizing without recording or transcribing audio.
+
+`--sanitize-special-chars` maps common accented and special characters to ASCII before output. Saved transcripts stay
+unchanged.
 
 ## History And Cleanup
 

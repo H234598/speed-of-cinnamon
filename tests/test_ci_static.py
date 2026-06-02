@@ -10,11 +10,37 @@ import ast
 from pathlib import Path
 import tarfile
 
+from speed_of_cinnamon import cli
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class CiStaticTest(unittest.TestCase):
+    def test_cli_reference_and_manpage_cover_subcommands(self) -> None:
+        parser = cli.build_parser()
+        subcommands: list[str] = []
+        for action in parser._actions:
+            if action.__class__.__name__ == "_SubParsersAction":
+                subcommands = sorted(action.choices)
+                break
+
+        self.assertTrue(subcommands)
+        docs = {
+            "docs/cli-reference.md": (REPO_ROOT / "docs" / "cli-reference.md").read_text(encoding="utf-8"),
+            "docs/man/speed-of-cinnamon.1": (REPO_ROOT / "docs" / "man" / "speed-of-cinnamon.1").read_text(
+                encoding="utf-8"
+            ),
+        }
+        for command in subcommands:
+            if command in {"start", "stop", "toggle", "cancel", "status"}:
+                continue
+            for path, text in docs.items():
+                self.assertIn(command, text, f"{command} missing from {path}")
+
+        project_version = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8").split('version = "')[1].split('"')[0]
+        self.assertIn(f"speed-of-cinnamon {project_version}", docs["docs/man/speed-of-cinnamon.1"])
+
     def test_command_chain_security_tests_are_present(self) -> None:
         command_chain_test = REPO_ROOT / "tests" / "test_command_chain.py"
         self.assertTrue(command_chain_test.exists(), "command chain security tests must exist")
