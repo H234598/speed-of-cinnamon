@@ -260,6 +260,7 @@ class CliTest(unittest.TestCase):
             stdout = io.StringIO()
             with (
                 mock.patch("speed_of_cinnamon.cli.model_path", return_value=model_path),
+                mock.patch("speed_of_cinnamon.cli.model_status", return_value={"downloaded": True}),
                 mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
                 redirect_stdout(stdout),
             ):

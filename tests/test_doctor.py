@@ -169,8 +169,10 @@ class DoctorTest(unittest.TestCase):
                 "transcriber": "auto",
                 "insert-method": "none",
             }
-        with (
+            with (
+                mock.patch("speed_of_cinnamon.doctor.default_ctranslate2_model_path", return_value=""),
                 mock.patch("speed_of_cinnamon.doctor.default_whisper_cpp_model_path", return_value=str(model)),
+                mock.patch("speed_of_cinnamon.doctor.faster_whisper_available", return_value=False),
                 mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)),
             ):
                 payload = doctor.report(settings)
