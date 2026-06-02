@@ -450,6 +450,12 @@ class NextVersionTest(unittest.TestCase):
             self.assertFalse(ensure_tag_exists.called)
             self.assertFalse(read_current_version.called)
 
+    def test_main_rejects_non_int_add_commits(self) -> None:
+        with mock.patch.object(next_version, "parse_args") as parse_args:
+            parse_args.return_value = mock.Mock(from_tag=None, add_commits=True, feature=False, breaking=False, base="0.1.20")
+            with self.assertRaises(next_version.UserInputError):
+                next_version.main()
+
     def test_main_rejects_non_string_base_and_from_tag(self) -> None:
         with mock.patch.object(next_version, "parse_args") as parse_args, \
             mock.patch.object(next_version, "read_current_version") as read_current_version:
