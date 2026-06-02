@@ -1075,6 +1075,10 @@ MyApplet.prototype = {
       item.connect("activate", () => this._selectRecordingLimit(seconds));
       this.recordingLimitItem.menu.addMenuItem(item);
     }
+    this.recordingLimitItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    let custom = new PopupMenu.PopupIconMenuItem((hasPreset ? "[ ] " : "[x] ") + _("Custom seconds..."), "document-edit-symbolic", St.IconType.SYMBOLIC);
+    custom.connect("activate", () => this._promptCustomRecordingLimit());
+    this.recordingLimitItem.menu.addMenuItem(custom);
   },
 
   _selectRecordingLimit: function(seconds) {
@@ -1088,6 +1092,51 @@ MyApplet.prototype = {
       return;
     }
     this._setStatus("ready", _("Duration: ") + label, this.lastTranscript);
+  },
+
+  _customRecordingLimitPromptArgs: function() {
+    let current = String(this._normalizeRecordingLimit(this.maxSeconds));
+    return [
+      "zenity",
+      "--entry",
+      "--title=Duration",
+      "--text=Enter maximum recording length in seconds (0 disables the limit).",
+      "--entry-text=" + current
+    ];
+  },
+
+  _promptCustomRecordingLimit: function() {
+    if (!GLib.find_program_in_path("zenity")) {
+      this.lastMessage = _("Install zenity to enter a custom duration.");
+      this._setStatus("ready", this.lastMessage, this.lastTranscript);
+      return;
+    }
+    this._spawnText(this._customRecordingLimitPromptArgs(), (output) => {
+      let seconds = this._parseCustomRecordingLimit(output);
+      if (seconds === null) {
+        return;
+      }
+      this._selectRecordingLimit(seconds);
+    });
+  },
+
+  _parseCustomRecordingLimit: function(value) {
+    let text = String(value === undefined || value === null ? "" : value).trim();
+    if (text === "") {
+      return null;
+    }
+    if (!/^[0-9]+$/.test(text)) {
+      this.lastMessage = _("Duration must be whole seconds.");
+      this._setStatus("ready", this.lastMessage, this.lastTranscript);
+      return null;
+    }
+    let seconds = Math.floor(Number(text));
+    if (!isFinite(seconds) || seconds < MIN_RECORDING_SECONDS || seconds > MAX_RECORDING_SECONDS) {
+      this.lastMessage = _("Duration must be between 0 and 3600 seconds.");
+      this._setStatus("ready", this.lastMessage, this.lastTranscript);
+      return null;
+    }
+    return seconds;
   },
 
   _populateRecordingOptionsMenu: function() {
@@ -3425,7 +3474,7 @@ MyApplet.prototype = {
       this._setStatus("error", payload.error, this.lastTranscript);
       return;
     }
-    if (payload.status === "done" && payload.transcript) {
+    if (payload.status === "done" && (payload.transcript || this.autoRelistenPending)) {
       this._finishAppletTextInsert(payload);
       return;
     }
@@ -3754,6 +3803,7 @@ MyApplet.prototype = {
     let shouldRelisten = this.autoRelistenPending;
     this.autoRelistenPending = false;
     if (this._insertTranscriptText(payload.transcript) && shouldRelisten) {
+      this.notificationSessionActive = true;
       this._restartRelistenRecording();
     }
   },
@@ -3763,6 +3813,7 @@ MyApplet.prototype = {
     this.autoRelistenPending = false;
     this._setStatus("done", payload.message || _("Silent recording skipped"), this.lastTranscript);
     if (shouldRelisten) {
+      this.notificationSessionActive = true;
       this._restartRelistenRecording();
     }
   },
