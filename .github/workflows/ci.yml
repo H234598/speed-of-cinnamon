@@ -168,7 +168,10 @@ jobs:
       - name: Upload coverage to QLTY
         if: ${{ env.QLTY_COVERAGE_TOKEN != '' }}
         run: |
-          curl -fsSL https://qlty.sh | sh
+          qlty_installer="${RUNNER_TEMP:-/tmp}/qlty-install.sh"
+          curl -fsSLo "${qlty_installer}" https://qlty.sh
+          gh attestation verify "${qlty_installer}" --owner qltysh
+          sh "${qlty_installer}"
           "${HOME}/.qlty/bin/qlty" coverage publish reports/lcov.info
       - name: Build and verify release archive
         run: make dist-check
