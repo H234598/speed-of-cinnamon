@@ -128,7 +128,7 @@ application.
 ## Voice Models
 
 The `Voice model` menu exposes a local voice model catalog split into `CTranslate2` and `GGML`. It can download, select,
-and remove catalog models, or switch back to `Automatic ASR backend`. Selecting a model chooses the matching backend
+and remove catalog models, or switch back to `Automatic voice model`. Selecting a model chooses the matching local engine
 automatically.
 
 For German dictation, `ct2-base` and GGML `base` are the practical first comparison. `ct2-small-de` is a German

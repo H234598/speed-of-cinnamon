@@ -237,8 +237,8 @@ The built-in `diagnostics` output does not include these values.
 ## Voice Models
 
 The applet's `Voice model` menu exposes a local model catalog split into `CTranslate2` and `GGML`. Open each catalog
-model to download, select, or remove it. Selecting a model stores the path and chooses the matching backend
-automatically. Use `Automatic ASR backend` to clear an explicit selection and return to the normal resolver. The same
+model to download, select, or remove it. Selecting a model stores the path and chooses the matching local engine
+automatically. Use `Automatic voice model` to clear an explicit selection and return to the normal resolver. The same
 model actions are available from the CLI:
 
 ```bash
@@ -271,7 +271,7 @@ Downloaded files are saved below:
 
 Each download is written through a temporary file or directory and then moved into place. GGML files are checked against
 SHA-1; CTranslate2 directories are checked for the required model files. Removing the active model from the applet, or
-choosing `Automatic ASR backend`, clears that explicit selection and returns the transcriber setting to `Automatic`.
+choosing `Automatic voice model`, clears that explicit selection and returns speech recognition to `Automatic`.
 
 ## Notifications
 

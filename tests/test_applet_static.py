@@ -575,9 +575,9 @@ class AppletStaticTest(unittest.TestCase):
     def test_voice_model_menu_can_return_to_automatic_backend(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
-        self.assertIn('_("Automatic ASR backend")', source)
+        self.assertIn('_("Automatic voice model")', source)
         self.assertIn("_selectAutomaticVoiceBackend: function()", source)
         self.assertIn('this.settings.setValue("transcriber", this.transcriber)', source)
         self.assertIn('this.settings.setValue("whisper-model", this.whisperModel)', source)
-        self.assertIn('this._setStatus("ready", _("Voice backend: automatic"), this.lastTranscript)', source)
+        self.assertIn('this._setStatus("ready", _("Voice model: automatic"), this.lastTranscript)', source)
         self.assertIn("this._refreshModelMenu();", source)

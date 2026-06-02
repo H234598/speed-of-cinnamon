@@ -1760,7 +1760,7 @@ MyApplet.prototype = {
     this.modelItem.menu.removeAll();
 
     let autoActive = String(this.transcriber || "auto") === "auto" && String(this.whisperModel || "") === "";
-    let automatic = this._selectionMenuItem((autoActive ? "[x] " : "[ ] ") + _("Automatic ASR backend"));
+    let automatic = this._selectionMenuItem((autoActive ? "[x] " : "[ ] ") + _("Automatic voice model"));
     automatic.connect("activate", () => this._selectAutomaticVoiceBackend());
     this.modelItem.menu.addMenuItem(automatic);
 
@@ -2019,7 +2019,7 @@ MyApplet.prototype = {
     this.settings.setValue("transcriber", this.transcriber);
     this.settings.setValue("whisper-model", this.whisperModel);
     this._refreshModelMenu();
-    this._setStatus("ready", _("Voice backend: automatic"), this.lastTranscript);
+    this._setStatus("ready", _("Voice model: automatic"), this.lastTranscript);
   },
 
   _refreshTextModelMenu: function() {
@@ -2910,9 +2910,9 @@ MyApplet.prototype = {
       return _("Voice: ") + GLib.path_get_basename(model);
     }
     if (backend === "command") return _("Voice: custom command");
-    if (backend === "whisper") return _("Voice: whisper");
-    if (backend === "whisper-cpp") return _("Voice: whisper.cpp");
-    if (backend === "faster-whisper") return _("Voice: CTranslate2");
+    if (backend === "whisper") return _("Voice: Whisper command");
+    if (backend === "whisper-cpp") return _("Voice: local model file");
+    if (backend === "faster-whisper") return _("Voice: local model directory");
     return _("Voice: automatic");
   },
 
