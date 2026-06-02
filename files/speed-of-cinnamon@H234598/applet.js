@@ -3614,8 +3614,9 @@ MyApplet.prototype = {
 
   _sanitizeSpecialChars: function(text) {
     return String(text || "").replace(NON_ASCII_RE, (char) => {
-      if (Object.prototype.hasOwnProperty.call(SANITIZE_SPECIAL_CHAR_MAP, char)) {
-        return SANITIZE_SPECIAL_CHAR_MAP[char];
+      let replacement = SANITIZE_SPECIAL_CHAR_MAP[char];
+      if (replacement !== undefined) {
+        return replacement;
       }
       let normalized = char.normalize("NFKD").replace(COMBINING_MARKS_RE, "");
       return ASCII_ONLY_RE.test(normalized) ? normalized : char;
