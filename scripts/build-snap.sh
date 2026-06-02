@@ -139,7 +139,10 @@ if [[ -L "${dist_dir}" ]]; then
   printf 'dist snap directory must not be a symlink: %s\n' "${dist_dir}" >&2
   exit 1
 fi
-rm -f -- "${dist_dir}/speed-of-cinnamon_${version}"_*.snap "${repo_dir}/speed-of-cinnamon_${version}"_*.snap
+if find "${dist_dir}" "${repo_dir}" -maxdepth 1 -type f -name "speed-of-cinnamon_${version}_*.snap" -print -quit | grep -q .; then
+  printf 'refusing to overwrite existing snap artifact for version %s\n' "${version}" >&2
+  exit 1
+fi
 
 tmp_output="$(mktemp "${repo_tmp_root}/speed-of-cinnamon-snap-output-XXXXXX")"
 
