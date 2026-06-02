@@ -118,6 +118,11 @@ class NextVersionTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("error", stderr.lower())
 
+    def test_whitespace_add_commits_is_rejected(self) -> None:
+        code, stderr = run_version_fail_stdout_stderr("--base", "0.1.20", "--add-commits", "   ")
+        self.assertEqual(code, 2)
+        self.assertIn("error", stderr.lower())
+
     def test_parse_version_variants_are_accepted(self) -> None:
         for version in [
             "0.1.20",

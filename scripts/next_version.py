@@ -160,6 +160,9 @@ def ensure_tag_exists(tag: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     def non_negative_int(value: str) -> int:
+        value = value.strip()
+        if value == "":
+            raise argparse.ArgumentTypeError("must be >= 0")
         number = int(value)
         if number < 0:
             raise argparse.ArgumentTypeError("must be >= 0")
