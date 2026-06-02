@@ -94,6 +94,26 @@ jobs:
                 exit 1
               fi
             fi
+            snapcraft_base=""
+            for candidate in core24 core22; do
+              if snap list "${candidate}" >/dev/null 2>&1; then
+                snapcraft_base="${candidate}"
+                break
+              fi
+            done
+            if [[ -z "${snapcraft_base}" ]]; then
+              for candidate in core24 core22; do
+                if sudo snap install "${candidate}" --channel=latest/stable; then
+                  snapcraft_base="${candidate}"
+                  break
+                fi
+              done
+            fi
+            if [[ -z "${snapcraft_base}" ]]; then
+              printf 'Failed to install a compatible snap base (tried core24, core22).\n' >&2
+              exit 1
+            fi
+            echo "SNAPCRAFT_BASE=${snapcraft_base}" >> "${GITHUB_ENV}"
           else
             printf 'Skipping snap toolchain bootstrap (build_snap=false).\n'
           fi

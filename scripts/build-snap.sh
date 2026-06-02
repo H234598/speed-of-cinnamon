@@ -5,6 +5,11 @@ IFS=$'\n\t'
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_dir}"
+snapcraft_base="${SNAPCRAFT_BASE:-core22}"
+if [[ ! "${snapcraft_base}" =~ ^[a-z][a-z0-9-]*$ ]]; then
+  printf 'invalid SNAPCRAFT_BASE value: %s\n' "${snapcraft_base}" >&2
+  exit 1
+fi
 
 require_cmd() {
   local tool=$1
@@ -64,23 +69,30 @@ cleanup_tmpdir() {
 }
 trap cleanup_tmpdir EXIT
 
-python3 - "${snapcraft_file}" "${version}" <<'PYCODE'
+python3 - "${snapcraft_file}" "${version}" "${snapcraft_base}" <<'PYCODE'
 import pathlib
 import sys
 
 path = pathlib.Path(sys.argv[1])
 version = sys.argv[2]
+base = sys.argv[3]
 text = path.read_text(encoding="utf-8")
 out = []
 replaced = False
+base_replaced = False
 for line in text.splitlines():
     if line.startswith("version:"):
         out.append(f"version: \"{version}\"")
         replaced = True
+    elif line.startswith("base:"):
+        out.append(f"base: {base}")
+        base_replaced = True
     else:
         out.append(line)
 if not replaced:
     raise SystemExit("snapcraft version field not found")
+if not base_replaced:
+    raise SystemExit("snapcraft base field not found")
 path.write_text("\n".join(out) + "\n", encoding="utf-8")
 PYCODE
 
