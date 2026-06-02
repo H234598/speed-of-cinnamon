@@ -288,6 +288,12 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("failed to clone wiki repository", publish_script)
         self.assertNotIn("git -C \"${work_dir}/wiki\" init", publish_script)
 
+    def test_frogbot_pr_scan_does_not_use_pull_request_target(self) -> None:
+        workflow = (REPO_ROOT / ".github" / "workflows" / "frogbot-scan-pr.yml").read_text(encoding="utf-8")
+        self.assertIn("pull_request:", workflow)
+        self.assertNotIn("pull_request_target:", workflow)
+        self.assertIn("ref: ${{ github.event.pull_request.head.sha }}", workflow)
+
     def test_authorship_guard_is_part_of_check_target(self) -> None:
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
         verifier = (REPO_ROOT / "scripts" / "verify-authorship.sh").read_text(encoding="utf-8")
