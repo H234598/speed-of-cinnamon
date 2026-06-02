@@ -128,12 +128,17 @@ def build_personalization_prompt(personal_context: str = "", vocabulary: str = "
 
 def command_environment(personal_context: str = "", vocabulary: str = "") -> dict[str, str]:
     context = normalize_context(personal_context)
-    normalized_vocabulary = normalize_vocabulary(vocabulary)
-    prompt = build_personalization_prompt(personal_context, vocabulary)
+    terms = vocabulary_terms(vocabulary)
+    prompt_sections: list[str] = []
+    if context:
+        prompt_sections.append("Context:\n" + context)
+    if terms:
+        prompt_sections.append("Vocabulary:\n" + "\n".join(f"- {term}" for term in terms))
+    prompt = "\n\n".join(prompt_sections)
 
     env = _filtered_environment()
     env["SPEED_OF_CINNAMON_CONTEXT"] = context
-    env["SPEED_OF_CINNAMON_VOCABULARY"] = normalized_vocabulary
+    env["SPEED_OF_CINNAMON_VOCABULARY"] = "\n".join(terms)
     env["SPEED_OF_CINNAMON_PROMPT"] = prompt
     return env
 

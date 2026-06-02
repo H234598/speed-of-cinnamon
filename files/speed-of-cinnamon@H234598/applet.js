@@ -156,6 +156,7 @@ const EXPORTABLE_SETTINGS = [
   ["secondary-language", "secondaryLanguage"],
   ["max-seconds", "maxSeconds"],
   ["auto-transcribe-timeout", "autoTranscribeTimeout"],
+  ["auto-relisten", "autoRelisten"],
   ["keep-recording-artifacts", "keepRecordingArtifacts"],
   ["recorder", "recorder"],
   ["input-device", "inputDevice"],
@@ -210,6 +211,7 @@ MyApplet.prototype = {
     this.activeLanguageExplicit = false;
     this.maxSeconds = DEFAULT_RECORDING_SECONDS;
     this.autoTranscribeTimeout = true;
+    this.autoRelisten = false;
     this.keepRecordingArtifacts = false;
     this.recorder = "auto";
     this.inputDevice = "";
@@ -248,6 +250,7 @@ MyApplet.prototype = {
     this.notificationSessionActive = false;
     this.lastNotificationKey = "";
     this.autoTranscribeRecordingKey = "";
+    this.autoRelistenPending = false;
     this.recordingStartedAtMs = 0;
     this.recordingMaxSeconds = 0;
     this.targetWindow = null;
@@ -287,6 +290,7 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "secondary-language", "secondaryLanguage", this._onLanguageSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "max-seconds", "maxSeconds", this._onRecordingLimitSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "auto-transcribe-timeout", "autoTranscribeTimeout", this._onRecordingOptionsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "auto-relisten", "autoRelisten", this._onRecordingOptionsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "keep-recording-artifacts", "keepRecordingArtifacts", this._onRecordingOptionsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "recorder", "recorder", this._onRecorderSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "input-device", "inputDevice", this._onInputSourceSettingsChanged, null);
@@ -1093,6 +1097,10 @@ MyApplet.prototype = {
     autoTranscribe.connect("activate", () => this._toggleAutoTranscribeTimeout());
     this.recordingOptionsItem.menu.addMenuItem(autoTranscribe);
 
+    let autoRelisten = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.autoRelisten), _("Auto Relisten")));
+    autoRelisten.connect("activate", () => this._toggleAutoRelisten());
+    this.recordingOptionsItem.menu.addMenuItem(autoRelisten);
+
     let keepArtifacts = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.keepRecordingArtifacts), _("Keep recording files")));
     keepArtifacts.connect("activate", () => this._toggleKeepRecordingArtifacts());
     this.recordingOptionsItem.menu.addMenuItem(keepArtifacts);
@@ -1113,6 +1121,15 @@ MyApplet.prototype = {
     this._populateRecordingOptionsMenu();
     this._setRecordingOptionStatus(
       this.autoTranscribeTimeout ? _("Auto-transcribe at time limit enabled") : _("Auto-transcribe at time limit disabled")
+    );
+  },
+
+  _toggleAutoRelisten: function() {
+    this.autoRelisten = !Boolean(this.autoRelisten);
+    this.settings.setValue("auto-relisten", this.autoRelisten);
+    this._populateRecordingOptionsMenu();
+    this._setRecordingOptionStatus(
+      this.autoRelisten ? _("Auto Relisten enabled") : _("Auto Relisten disabled")
     );
   },
 
@@ -1566,6 +1583,7 @@ MyApplet.prototype = {
     this.notificationSessionActive = true;
     this.lastNotificationKey = "";
     this.autoTranscribeRecordingKey = "";
+    this.autoRelistenPending = false;
     this.recordingStartedAtMs = 0;
     this.recordingMaxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
     this.isCommandRunning = true;
@@ -1606,6 +1624,7 @@ MyApplet.prototype = {
     }
     this.isCommandRunning = true;
     this.autoTranscribeRecordingKey = "";
+    this.autoRelistenPending = false;
     this._setStatus("processing", _("Cancelling..."), this.lastTranscript);
     this._spawnJson(this._cancelArgs(), (payload) => {
       this.isCommandRunning = false;
@@ -3399,6 +3418,7 @@ MyApplet.prototype = {
     this._updateRecordingTiming(payload, status);
     this._applyMicrophoneLevel(payload.microphone_level, status);
     if (payload.error) {
+      this.autoRelistenPending = false;
       this._setStatus("error", payload.error, this.lastTranscript);
       return;
     }
@@ -3406,6 +3426,7 @@ MyApplet.prototype = {
       this._finishAppletTextInsert(payload);
       return;
     }
+    this.autoRelistenPending = false;
     let message = payload.message || status;
     let transcript = payload.transcript || this.lastTranscript || "";
     this._setStatus(status, message, transcript);
@@ -3463,7 +3484,7 @@ MyApplet.prototype = {
   },
 
   _maybeAutoTranscribeRecorded: function(payload) {
-    if (!this.autoTranscribeTimeout || !this.notificationSessionActive || this.isCommandRunning) {
+    if ((!this.autoTranscribeTimeout && !this.autoRelisten) || !this.notificationSessionActive || this.isCommandRunning) {
       return;
     }
     if ((payload.status || "") !== "recorded") {
@@ -3474,6 +3495,7 @@ MyApplet.prototype = {
       return;
     }
     this.autoTranscribeRecordingKey = recordingKey;
+    this.autoRelistenPending = Boolean(this.autoRelisten);
     this.isCommandRunning = true;
     this._setStatus("processing", _("Transcribing timed-out recording..."), this.lastTranscript);
     this._spawnJson(this._baseArgs("stop"), (nextPayload) => {
@@ -3722,7 +3744,11 @@ MyApplet.prototype = {
   },
 
   _finishAppletTextInsert: function(payload) {
-    this._insertTranscriptText(payload.transcript);
+    let shouldRelisten = this.autoRelistenPending;
+    this.autoRelistenPending = false;
+    if (this._insertTranscriptText(payload.transcript) && shouldRelisten) {
+      this._restartRelistenRecording();
+    }
   },
 
   _insertTranscriptText: function(transcript) {
@@ -3732,31 +3758,59 @@ MyApplet.prototype = {
     let text = this._preparedTranscriptText(transcript, submitWithReturn);
     if (method === "none") {
       this._setStatus("done", _("Insertion disabled"), transcript);
-      return;
+      return true;
     }
     if (method === "type") {
       if (GLib.find_program_in_path("xdotool")) {
         let restored = this._restoreTargetWindowForPaste();
         if (this._typeTextAfterFocus(text)) {
           this._setStatus("done", restored ? _("Typed into target window") : _("Typed text"), transcript);
+          return true;
         }
       } else {
         this._setStatus("error", _("Install xdotool for direct typing"), transcript);
       }
-      return;
+      return false;
     }
     this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
     if (method === "clipboard") {
       this._setStatus("done", _("Copied to clipboard"), transcript);
-      return;
+      return true;
     }
     if (GLib.find_program_in_path("xdotool")) {
       let restored = this._restoreTargetWindowForPaste();
       this._pasteClipboardAfterFocus(submitWithReturn);
       this._setStatus("done", restored ? _("Copied and pasted into target window") : _("Copied and pasted"), transcript);
+      return true;
     } else {
       this._setStatus("done", _("Copied to clipboard; install xdotool for automatic paste"), transcript);
+      return true;
     }
+  },
+
+  _restartRelistenRecording: function() {
+    if (!this.notificationSessionActive || this.isCommandRunning) {
+      return;
+    }
+    if (!this.autoRelisten) {
+      return;
+    }
+    if (!this._ensureVoiceModelCompatibleWithCurrentLanguage(true)) {
+      return;
+    }
+    this.isCommandRunning = true;
+    this.recordingStartedAtMs = 0;
+    this.recordingMaxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
+    this._setStatus("processing", _("Starting next recording..."), this.lastTranscript);
+    this._spawnJson(this._baseArgs("start"), (payload) => {
+      this.isCommandRunning = false;
+      if (payload.error) {
+        this.autoRelistenPending = false;
+        this._setStatus("error", payload.error, this.lastTranscript);
+        return;
+      }
+      this._applyPayload(payload);
+    });
   },
 
   _preparedTranscriptText: function(transcript, suppressAutoPasteEnter) {
@@ -3986,8 +4040,9 @@ MyApplet.prototype = {
 
   _recordingOptionsLabel: function() {
     let timeout = this.autoTranscribeTimeout ? _("auto stop") : _("manual stop");
+    let relisten = this.autoRelisten ? _("relisten") : _("no relisten");
     let artifacts = this.keepRecordingArtifacts ? _("keep files") : _("discard files");
-    return _("Recording: ") + timeout + ", " + artifacts;
+    return _("Recording: ") + timeout + ", " + relisten + ", " + artifacts;
   },
 
   _notificationOptionsLabel: function() {

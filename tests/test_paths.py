@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from speed_of_cinnamon import path_safety
 from speed_of_cinnamon import paths
 
 
@@ -47,6 +48,10 @@ class PathsTest(unittest.TestCase):
                 self.assertEqual(paths.xdg_data_home(), Path("/tmp") / ".local" / "share")
                 self.assertEqual(paths.xdg_state_home(), Path("/tmp") / ".local" / "state")
                 self.assertEqual(paths.xdg_cache_home(), Path("/tmp") / ".cache")
+
+    def test_path_safety_rejects_non_path_inputs_before_path_methods(self) -> None:
+        with self.assertRaises(RuntimeError):
+            path_safety.assert_no_symlink_ancestors("not-a-path", field_name="input")
 
 
 if __name__ == "__main__":
