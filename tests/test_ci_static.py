@@ -60,6 +60,13 @@ class CiStaticTest(unittest.TestCase):
 
     def test_runtime_code_does_not_execute_subprocess_with_shell_strings(self) -> None:
         src_root = REPO_ROOT / "src"
+        def _is_command_sequence(node: ast.AST | None) -> bool:
+            if isinstance(node, (ast.List, ast.Tuple)):
+                return True
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"list", "tuple"}:
+                return len(node.args) == 1 and isinstance(node.args[0], (ast.List, ast.Tuple))
+            return False
+
         offenders = []
         for path in src_root.rglob("*.py"):
             if "__pycache__" in path.parts:
@@ -92,7 +99,7 @@ class CiStaticTest(unittest.TestCase):
                     offenders.append(f"{path}: {func.attr} first arg is string constant")
                 elif isinstance(command, ast.JoinedStr):
                     offenders.append(f"{path}: {func.attr} first arg is f-string")
-                elif not isinstance(command, (ast.List, ast.Tuple)):
+                elif not _is_command_sequence(command):
                     offenders.append(f"{path}: {func.attr} command must be list/tuple")
 
         self.assertFalse(offenders, f"unsafe subprocess usage found: {offenders}")
