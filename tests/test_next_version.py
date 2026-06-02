@@ -219,6 +219,18 @@ class NextVersionTest(unittest.TestCase):
         with self.assertRaises(next_version.UserInputError):
             next_version.read_current_version("pyproject.toml")  # type: ignore[arg-type]
 
+    def test_read_current_version_file_not_found(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(next_version.UserInputError):
+                next_version.read_current_version(Path(tmpdir) / "missing.toml")
+
+    def test_read_current_version_missing_version_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir, "pyproject.toml")
+            path.write_text("[tool]\nname=\"x\"\n", encoding="utf-8")
+            with self.assertRaises(next_version.UserInputError):
+                next_version.read_current_version(path)
+
     def test_pyproject_missing_version_is_user_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             Path(tmpdir, "pyproject.toml").write_text("[project]\nname=\"x\"\n", encoding="utf-8")
