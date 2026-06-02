@@ -179,8 +179,15 @@ def main() -> int:
     a = parse_args()
     base_raw = a.base.strip() if isinstance(a.base, str) else a.base
     from_tag_raw = a.from_tag.strip() if isinstance(a.from_tag, str) else a.from_tag
-    base = parse_version(base_raw) if base_raw else read_current_version()
-    if a.from_tag is not None:
+    if a.base is not None:
+        if not base_raw:
+            raise UserInputError("base must be a non-empty version")
+        base = parse_version(base_raw)
+    else:
+        base = read_current_version()
+    if from_tag_raw is not None and a.from_tag is not None:
+        if not from_tag_raw:
+            raise UserInputError("from-tag must be a non-empty version")
         ensure_tag_exists(from_tag_raw)
         commits = commits_since_tag(from_tag_raw)
     elif a.add_commits is not None:

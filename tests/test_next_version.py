@@ -131,6 +131,11 @@ class NextVersionTest(unittest.TestCase):
     def test_base_with_whitespace_is_accepted(self) -> None:
         self.assertEqual(run_version("--base", "  0.1.20  ", "--add-commits", "0"), "0.1.20")
 
+    def test_base_with_only_whitespace_is_rejected(self) -> None:
+        code, stderr = run_version_fail_stdout_stderr("--base", "   ", "--add-commits", "0")
+        self.assertEqual(code, 2)
+        self.assertIn("error", stderr.lower())
+
     def test_parse_version_invalid_values_are_rejected(self) -> None:
         for version in [
             "",
@@ -152,6 +157,11 @@ class NextVersionTest(unittest.TestCase):
 
     def test_from_tag_with_whitespace_is_accepted(self) -> None:
         self.assertEqual(run_version("--from-tag", "  0.1.20  "), "0.1.20")
+
+    def test_from_tag_with_only_whitespace_is_rejected(self) -> None:
+        code, stderr = run_version_fail_stdout_stderr("--from-tag", "   ")
+        self.assertEqual(code, 2)
+        self.assertIn("error", stderr.lower())
 
     def test_feature_and_breaking_are_mutually_exclusive(self) -> None:
         code, stderr = run_version_fail_stdout_stderr("--base", "0.1.20", "--feature", "--breaking")
