@@ -85,7 +85,12 @@ class NextVersionTest(unittest.TestCase):
         self.assertIn("error:", stderr)
 
     def test_from_tag_without_prefix_is_accepted(self) -> None:
-        self.assertEqual(run_version("--from-tag", "0.1.20", "--add-commits", "0"), "0.1.20")
+        self.assertEqual(run_version("--from-tag", "0.1.20"), "0.1.20")
+
+    def test_feature_and_breaking_are_mutually_exclusive(self) -> None:
+        code, stderr = run_version_fail_stdout_stderr("--base", "0.1.20", "--feature", "--breaking")
+        self.assertNotEqual(code, 0)
+        self.assertIn("error:", stderr)
 
 
 if __name__ == "__main__":

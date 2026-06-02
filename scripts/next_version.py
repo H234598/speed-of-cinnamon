@@ -97,8 +97,9 @@ def parse_args() -> argparse.Namespace:
     increments = p.add_mutually_exclusive_group()
     increments.add_argument("--from-tag", default=None, help="Version tag to derive commit count from")
     increments.add_argument("--add-commits", type=non_negative_int, default=None, help="Explicit commit count")
-    p.add_argument("--feature", action="store_true")
-    p.add_argument("--breaking", action="store_true")
+    kind = p.add_mutually_exclusive_group()
+    kind.add_argument("--feature", action="store_true")
+    kind.add_argument("--breaking", action="store_true")
     return p.parse_args()
 
 def main() -> int:
