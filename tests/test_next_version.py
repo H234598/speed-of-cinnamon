@@ -104,6 +104,32 @@ class NextVersionTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("error", stderr.lower())
 
+    def test_parse_version_variants_are_accepted(self) -> None:
+        for version in [
+            "0.1.20",
+            "v0.1.20",
+            "V0.1.20",
+            " 0.1.20 ",
+        ]:
+            with self.subTest(version=version):
+                self.assertEqual(run_version("--base", version, "--add-commits", "0"), "0.1.20")
+
+    def test_parse_version_invalid_values_are_rejected(self) -> None:
+        for version in [
+            "",
+            "1",
+            "1.2",
+            "1.2.3.4",
+            "bad",
+            "-1.2.3",
+            "1.-2.3",
+            "1.2.x",
+        ]:
+            with self.subTest(version=version):
+                code, stderr = run_version_fail_stdout_stderr("--base", version, "--add-commits", "0")
+                self.assertEqual(code, 2)
+                self.assertIn("error", stderr.lower())
+
     def test_from_tag_without_prefix_is_accepted(self) -> None:
         self.assertEqual(run_version("--from-tag", "0.1.20"), "0.1.20")
 
