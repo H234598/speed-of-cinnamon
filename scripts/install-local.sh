@@ -30,7 +30,7 @@ if [[ ! -d "${HOME}" ]]; then
   printf 'HOME must be an existing directory: %s\n' "${HOME}" >&2
   exit 1
 fi
-for tool in cp install mkdir rm command; do
+for tool in cp install mkdir mktemp mv rm rmdir command; do
   if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found.\n' "${tool}" >&2
     exit 1
@@ -80,17 +80,64 @@ for target in "${applet_target}" "${app_data}" "${bin_dir}" "${man_dir}"; do
   fi
 done
 
-mkdir -p "$(dirname "${applet_target}")" "${app_data}" "${bin_dir}" "${man_dir}"
-rm -rf "${applet_target}"
-reject_unsafe_tree "${repo_dir}/files/${uuid}" "applet source tree"
-cp -a "${repo_dir}/files/${uuid}" "${applet_target}"
-reject_unsafe_tree "${applet_target}" "applet source tree"
+install_tree_staged() {
+  local source_tree="$1"
+  local target_tree="$2"
+  local label="$3"
+  local parent="${target_tree%/*}"
+  local name="${target_tree##*/}"
+  local stage_root
+  local staged_tree
+  local backup_tree=""
 
-rm -rf "${app_data}/python"
-mkdir -p "${app_data}/python"
-reject_unsafe_tree "${repo_dir}/src/speed_of_cinnamon" "python package source tree"
-cp -a "${repo_dir}/src/speed_of_cinnamon" "${app_data}/python/"
-reject_unsafe_tree "${app_data}/python/speed_of_cinnamon" "python package"
+  if [[ -z "${parent}" || "${parent}" == "${target_tree}" ]]; then
+    printf 'invalid install target for %s: %s\n' "${label}" "${target_tree}" >&2
+    exit 1
+  fi
+  if [[ -L "${parent}" || -L "${target_tree}" ]]; then
+    printf 'refusing to follow symlink during install: %s\n' "${target_tree}" >&2
+    exit 1
+  fi
+  mkdir -p "${parent}"
+  reject_unsafe_tree "${source_tree}" "${label} source tree"
+
+  stage_root="$(mktemp -d "${parent}/.${name}.install.XXXXXX")"
+  staged_tree="${stage_root}/${name}"
+  if ! cp -a "${source_tree}" "${staged_tree}"; then
+    rm -rf -- "${stage_root}"
+    printf 'failed to stage %s install: %s\n' "${label}" "${target_tree}" >&2
+    exit 1
+  fi
+  reject_unsafe_tree "${staged_tree}" "${label}"
+
+  if [[ -e "${target_tree}" ]]; then
+    backup_tree="$(mktemp -d "${parent}/.${name}.backup.XXXXXX")"
+    rmdir -- "${backup_tree}"
+    if ! mv -T -- "${target_tree}" "${backup_tree}"; then
+      rm -rf -- "${stage_root}" "${backup_tree}"
+      printf 'failed to preserve existing %s install: %s\n' "${label}" "${target_tree}" >&2
+      exit 1
+    fi
+  fi
+
+  if ! mv -T -- "${staged_tree}" "${target_tree}"; then
+    if [[ -n "${backup_tree}" && -e "${backup_tree}" && ! -e "${target_tree}" ]]; then
+      mv -T -- "${backup_tree}" "${target_tree}" || true
+    fi
+    rm -rf -- "${stage_root}"
+    printf 'failed to activate staged %s install: %s\n' "${label}" "${target_tree}" >&2
+    exit 1
+  fi
+
+  rm -rf -- "${stage_root}"
+  if [[ -n "${backup_tree}" ]]; then
+    rm -rf -- "${backup_tree}"
+  fi
+}
+
+mkdir -p "$(dirname "${applet_target}")" "${app_data}" "${app_data}/python" "${bin_dir}" "${man_dir}"
+install_tree_staged "${repo_dir}/files/${uuid}" "${applet_target}" "applet"
+install_tree_staged "${repo_dir}/src/speed_of_cinnamon" "${app_data}/python/speed_of_cinnamon" "python package"
 
 reject_unsafe_file "${repo_dir}/docs/man/speed-of-cinnamon.1" "man page source"
 reject_unsafe_file "${repo_dir}/docs/man/speed-of-cinnamon-alarms.1" "man page source"

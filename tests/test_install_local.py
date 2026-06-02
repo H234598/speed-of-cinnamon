@@ -75,6 +75,20 @@ class InstallLocalTest(unittest.TestCase):
         (repo_root / "src" / "speed_of_cinnamon" / "cli.py").symlink_to(payload)
         return repo_root
 
+    def _copy_installable_minimal_repo(self, destination: Path) -> Path:
+        repo_root = destination / "repo"
+        (repo_root / "scripts").mkdir(parents=True)
+        (repo_root / "docs" / "man").mkdir(parents=True)
+        (repo_root / "files" / "speed-of-cinnamon@H234598").mkdir(parents=True)
+        (repo_root / "src" / "speed_of_cinnamon").mkdir(parents=True)
+        (repo_root / "files" / "speed-of-cinnamon@H234598" / "metadata.json").write_text("{}", encoding="utf-8")
+        (repo_root / "src" / "speed_of_cinnamon" / "__init__.py").write_text("", encoding="utf-8")
+        (repo_root / "src" / "speed_of_cinnamon" / "cli.py").write_text("", encoding="utf-8")
+        (repo_root / "docs" / "man" / "speed-of-cinnamon.1").write_text("man page\n", encoding="utf-8")
+        (repo_root / "docs" / "man" / "speed-of-cinnamon-alarms.1").write_text("man page\n", encoding="utf-8")
+        shutil.copy2(REPO_ROOT / "scripts" / "install-local.sh", repo_root / "scripts" / "install-local.sh")
+        return repo_root
+
     def test_install_local_refuses_symlinked_python_package(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -104,6 +118,24 @@ class InstallLocalTest(unittest.TestCase):
             self.assertTrue(
                 (home / ".local" / "share" / "speed-of-cinnamon" / "python" / "speed_of_cinnamon" / "cli.py").exists()
             )
+
+    def test_install_local_preserves_existing_applet_when_staging_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo_root = self._copy_installable_minimal_repo(tmp_path)
+            home = tmp_path / "home"
+            home.mkdir()
+            applet_target = home / ".local" / "share" / "cinnamon" / "applets" / "speed-of-cinnamon@H234598"
+            applet_target.mkdir(parents=True)
+            marker = applet_target / "existing.txt"
+            marker.write_text("old install\n", encoding="utf-8")
+            (repo_root / "files" / "speed-of-cinnamon@H234598" / "bad-link").symlink_to(tmp_path / "payload")
+
+            result = self._run_install_local(repo_root, home)
+
+            self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+            self.assertTrue(marker.exists())
+            self.assertEqual(marker.read_text(encoding="utf-8"), "old install\n")
 
     def test_installed_wrapper_uses_install_path_not_runtime_home(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
