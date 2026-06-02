@@ -50,6 +50,8 @@ def _assert_version_tuple(value: tuple[int, int, int]) -> tuple[int, int, int]:
 
 
 def parse_version(value: str) -> tuple[int, int, int]:
+    if not isinstance(value, str):
+        raise UserInputError("invalid version format: value must be a string")
     parts = value.strip().lstrip("vV").split(".")
     if len(parts) != 3:
         raise UserInputError(f"invalid version format: {value}")

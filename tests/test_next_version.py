@@ -167,6 +167,10 @@ class NextVersionTest(unittest.TestCase):
                 self.assertEqual(code, 2)
                 self.assertIn("error", stderr.lower())
 
+    def test_parse_version_rejects_non_string(self) -> None:
+        with self.assertRaises(next_version.UserInputError):
+            next_version.parse_version(None)  # type: ignore[arg-type]
+
     def test_from_tag_without_prefix_is_accepted(self) -> None:
         self.assertEqual(run_version("--from-tag", "0.1.20"), "0.1.20")
 
