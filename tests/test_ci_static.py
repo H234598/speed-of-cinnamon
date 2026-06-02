@@ -369,6 +369,10 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("RPM expansion contains unsupported symlink entries.", rpm_verifier)
         self.assertIn("RPM expansion contains unsupported hardlink entries.", rpm_verifier)
         self.assertIn("python3 -m compileall -q", rpm_verifier)
+        build_rpm = (REPO_ROOT / "scripts" / "build-rpm.sh").read_text(encoding="utf-8")
+        self.assertIn('py_auto_byte_compile 0', build_rpm)
+        self.assertIn('__brp_python_bytecompile %{nil}', build_rpm)
+        self.assertIn('__brp_python_hardlink %{nil}', build_rpm)
         self.assertIn("speed-of-cinnamon.wiki.git", wiki_publisher)
         self.assertIn("User-Guide.md", wiki_publisher)
 

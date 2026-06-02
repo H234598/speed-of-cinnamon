@@ -1475,31 +1475,30 @@ class CliTest(unittest.TestCase):
         self.assertIn(str(active_audio), payload["skipped_active_paths"])
         self.assertIn(str(active_log), payload["skipped_active_paths"])
 
-    def test_cleanup_defaults_to_keeping_twenty_recording_groups(self) -> None:
+    def test_cleanup_defaults_to_keeping_twenty_recording_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
             recordings.mkdir(parents=True)
             for index in range(21):
                 audio = recordings / f"recording-{index:02d}.wav"
-                log = recordings / f"recording-{index:02d}.log"
                 audio.write_bytes(b"audio")
-                log.write_text("log", encoding="utf-8")
                 recent = int(cli.time.time())
                 os.utime(audio, (recent + index, recent + index))
-                os.utime(log, (recent + index, recent + index))
 
             stdout = io.StringIO()
             with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
                 code = cli.run(["cleanup", "--keep-transcripts", "0", "--json"])
             payload = json.loads(stdout.getvalue())
             oldest_audio_exists = (recordings / "recording-00.wav").exists()
-            oldest_log_exists = (recordings / "recording-00.log").exists()
+            newest_audio_exists = (recordings / "recording-20.wav").exists()
+            remaining_recordings = len(list(recordings.glob("*.wav")))
         self.assertEqual(code, 0)
         self.assertEqual(payload["keep_recordings"], 20)
         self.assertEqual(payload["deleted_recordings"], 1)
-        self.assertEqual(payload["deleted_logs"], 1)
+        self.assertEqual(payload["deleted_logs"], 0)
         self.assertFalse(oldest_audio_exists)
-        self.assertFalse(oldest_log_exists)
+        self.assertTrue(newest_audio_exists)
+        self.assertEqual(remaining_recordings, 20)
 
     def test_cleanup_prunes_recording_groups_older_than_one_week(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -87,6 +87,7 @@ RECORDER_START_GRACE_SECONDS = 0.2
 DEFAULT_KEEP_TRANSCRIPTS = 100
 DEFAULT_KEEP_RECORDINGS = 20
 DEFAULT_RECORDING_MAX_AGE_DAYS = 7
+MAX_TEMP_RECORDING_FILES = 20
 MAX_LOG_EXCERPT_CHARS = 2000
 MAX_TRANSCRIPT_HISTORY_TEXT_CHARS = 4_000
 MAX_HISTORY_LIMIT = 1_000
@@ -932,6 +933,38 @@ def recording_groups() -> list[dict[str, object]]:
     return sorted(groups.values(), key=lambda group: (float(group["mtime"]), str(group["stem"])), reverse=True)
 
 
+def recording_artifact_files() -> list[Path]:
+    directory = recordings_dir()
+    if not directory.exists():
+        return []
+    files: list[Path] = []
+    for path in directory.iterdir():
+        if path.suffix not in {".wav", ".log"}:
+            continue
+        try:
+            file_stat = path.stat()
+        except OSError:
+            continue
+        if stat_module.S_ISREG(file_stat.st_mode):
+            files.append(path)
+    return files
+
+
+def _add_recording_artifact_counts(paths: list[str], recording_result: dict[str, object], prefix: str) -> None:
+    recording_key = f"{prefix}_recordings"
+    log_key = f"{prefix}_logs"
+    recording_count = _coerce_int(recording_result[recording_key], field_name=recording_key)
+    log_count = _coerce_int(recording_result[log_key], field_name=log_key)
+    for path_text in paths:
+        suffix = Path(path_text).suffix
+        if suffix == ".wav":
+            recording_count += 1
+        elif suffix == ".log":
+            log_count += 1
+    recording_result[recording_key] = recording_count
+    recording_result[log_key] = log_count
+
+
 def prune_recording_groups(
     keep: int,
     active_paths: set[Path],
@@ -973,7 +1006,7 @@ def prune_recording_groups(
                     deleted_logs += 1
             else:
                 failed_paths.append(str(path))
-    return {
+    result: dict[str, object] = {
         "planned_recordings": planned_recordings,
         "planned_logs": planned_logs,
         "planned_paths": planned_paths,
@@ -983,6 +1016,32 @@ def prune_recording_groups(
         "failed_paths": failed_paths,
         "skipped_active_paths": skipped_active_paths,
     }
+    handled_paths = {
+        Path(path).resolve(strict=False)
+        for path in planned_paths + deleted_paths + failed_paths
+    }
+    remaining_artifacts = [
+        path
+        for path in recording_artifact_files()
+        if path.resolve(strict=False) not in handled_paths
+    ]
+    file_cap_result = prune_files_by_mtime(
+        remaining_artifacts,
+        MAX_TEMP_RECORDING_FILES,
+        active_paths,
+        dry_run,
+    )
+    cap_planned = list(file_cap_result["planned_paths"])
+    cap_deleted = list(file_cap_result["deleted_paths"])
+    cap_failed = list(file_cap_result["failed_paths"])
+    cap_skipped = list(file_cap_result["skipped_active_paths"])
+    planned_paths.extend(cap_planned)
+    deleted_paths.extend(cap_deleted)
+    failed_paths.extend(cap_failed)
+    skipped_active_paths.extend(path for path in cap_skipped if path not in skipped_active_paths)
+    _add_recording_artifact_counts(cap_planned, result, "planned")
+    _add_recording_artifact_counts(cap_deleted, result, "deleted")
+    return result
 
 
 def command_start(args: argparse.Namespace) -> dict[str, object]:

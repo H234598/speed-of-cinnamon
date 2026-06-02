@@ -99,7 +99,7 @@ speed-of-cinnamon models --json
 speed-of-cinnamon benchmark-models ~/testaufnahme.wav --language de --models ct2-base-int8 ct2-base ct2-small-de ct2-tiny-de ct2-small tiny-de tiny base --json
 speed-of-cinnamon text-models --json
 speed-of-cinnamon history --limit 5 --json
-speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 25 --dry-run --json
+speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 20 --dry-run --json
 speed-of-cinnamon settings-export --settings-json '{"language":"de","append-space":true}' --json
 speed-of-cinnamon alarms add --time 09:00 --name "Standup" --days weekdays --json
 ```

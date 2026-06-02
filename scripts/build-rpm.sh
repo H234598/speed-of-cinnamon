@@ -159,6 +159,9 @@ rpmbuild \
   --define "_smp_build_ncpus 1" \
   --define "_tmppath ${rpmbuild_tmpdir}" \
   --define "__python3 ${python_bin}" \
+  --define "py_auto_byte_compile 0" \
+  --define "__brp_python_bytecompile %{nil}" \
+  --define "__brp_python_hardlink %{nil}" \
   -ba "${spec_file}"
 
 backup_topdir=""

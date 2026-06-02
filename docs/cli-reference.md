@@ -252,8 +252,8 @@ unchanged.
 
 ```bash
 speed-of-cinnamon history --limit 5 --json
-speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 25 --dry-run --json
-speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 25 --json
+speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 20 --dry-run --json
+speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 20 --json
 ```
 
 Cleanup skips the currently referenced state paths. Use the dry run before deleting.

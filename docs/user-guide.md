@@ -213,7 +213,7 @@ skipping the currently referenced state paths. Recordings and their companion lo
 The matching CLI dry run is:
 
 ```bash
-speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 25 --dry-run --json
+speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 20 --dry-run --json
 ```
 
 ## Settings Backup
