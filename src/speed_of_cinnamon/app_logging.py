@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import tempfile
+import string
 from itertools import islice
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -47,6 +48,7 @@ _SANITIZE_ESCAPE_TABLE = {
 }
 _SANITIZE_KEY_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
 _SENSITIVE_KEY_RE = re.compile(r"(?:api_key|apikey|authorization|bearer|command|context|key|password|prompt|secret|text|token|transcript|vocabulary)")
+_SANITIZE_KEY_SAFE_CHARS = frozenset(string.ascii_lowercase + string.digits + "_.-")
 
 
 class JsonLogFormatter(logging.Formatter):
@@ -171,7 +173,10 @@ def maintain_logs(base_dir: Path | None = None, *, today: date | None = None) ->
 def sanitize_key(key: object) -> str:
     if isinstance(key, bool) or not isinstance(key, str):
         return ""
-    safe = _SANITIZE_KEY_RE.sub("_", key.strip().lower())
+    safe = key.strip().lower()
+    if safe.isascii() and all(ch in _SANITIZE_KEY_SAFE_CHARS for ch in safe):
+        return safe[:64]
+    safe = _SANITIZE_KEY_RE.sub("_", safe)
     return safe[:64]
 
 
