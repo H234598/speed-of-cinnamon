@@ -30,6 +30,12 @@ const MAX_CLI_COMMAND_BYTES = 32768;
 const MAX_TEXT_INSERT_CHARS = 120000;
 const MAX_SETTING_TEXT_CHARS = 4096;
 const NUL_RE = /\u0000/g;
+const SANITIZE_SPECIAL_CHAR_MAP = {
+  "ß": "ss", "ẞ": "SS", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE",
+  "ø": "o", "Ø": "O", "đ": "d", "Đ": "D", "ł": "l", "Ł": "L",
+  "þ": "th", "Þ": "Th", "ð": "d", "Ð": "D", "ñ": "n", "Ñ": "N",
+  "ç": "c", "Ç": "C", "¿": "", "¡": ""
+};
 const CLI_TEXT_SETTINGS = {
   "input-device": "input device",
   "transcriber-command": "transcriber command",
@@ -3604,15 +3610,9 @@ MyApplet.prototype = {
   },
 
   _sanitizeSpecialChars: function(text) {
-    let map = {
-      "ß": "ss", "ẞ": "SS", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE",
-      "ø": "o", "Ø": "O", "đ": "d", "Đ": "D", "ł": "l", "Ł": "L",
-      "þ": "th", "Þ": "Th", "ð": "d", "Ð": "D", "ñ": "n", "Ñ": "N",
-      "ç": "c", "Ç": "C", "¿": "", "¡": ""
-    };
     return String(text || "").replace(/[^\u0000-\u007E]/g, (char) => {
-      if (Object.prototype.hasOwnProperty.call(map, char)) {
-        return map[char];
+      if (Object.prototype.hasOwnProperty.call(SANITIZE_SPECIAL_CHAR_MAP, char)) {
+        return SANITIZE_SPECIAL_CHAR_MAP[char];
       }
       let normalized = char.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
       return /^[\u0000-\u007E]*$/.test(normalized) ? normalized : char;
