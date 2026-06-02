@@ -322,6 +322,14 @@ if [[ -z "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]]; then
 fi
 
 if gh release view "${tag}" --repo "${repo}" >/dev/null 2>&1; then
+  existing_assets="$(gh release view "${tag}" --repo "${repo}" --json assets --jq '.assets[].name')"
+  for asset_ref in "${upload_refs[@]}"; do
+    asset_name="$(basename "${asset_ref}")"
+    if grep -Fxq -- "${asset_name}" <<<"${existing_assets}"; then
+      printf 'release asset already exists; delete it explicitly before publishing: %s\n' "${asset_name}" >&2
+      exit 1
+    fi
+  done
   gh release edit "${tag}" \
     --repo "${repo}" \
     --title "Speed of Cinnamon ${tag}" \

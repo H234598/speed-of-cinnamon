@@ -783,6 +783,33 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("ollama command is not available", payload["error"])
 
+    def test_install_text_model_reports_ollama_pull_timeout(self) -> None:
+        stdout = io.StringIO()
+        with (
+            mock.patch("speed_of_cinnamon.cli.shutil.which", return_value="/usr/bin/ollama"),
+            mock.patch(
+                "speed_of_cinnamon.cli.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(cmd=["/usr/bin/ollama", "pull"], timeout=1),
+            ),
+            redirect_stdout(stdout),
+        ):
+            code = cli.run(["install-text-model", "--model", "llama3.2:3b", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("ollama pull timed out", payload["error"])
+
+    def test_install_text_model_reports_ollama_pull_oserror(self) -> None:
+        stdout = io.StringIO()
+        with (
+            mock.patch("speed_of_cinnamon.cli.shutil.which", return_value="/usr/bin/ollama"),
+            mock.patch("speed_of_cinnamon.cli.subprocess.run", side_effect=OSError("boom")),
+            redirect_stdout(stdout),
+        ):
+            code = cli.run(["install-text-model", "--model", "llama3.2:3b", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("failed to run ollama pull: boom", payload["error"])
+
     @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models")
     def test_text_models_rejects_overlong_openai_url(self, mocked_list: mock.Mock) -> None:
         long_url = "http://127.0.0.1:8000/" + ("x" * (cli.MAX_URL_CHARS + 10))
@@ -1277,6 +1304,24 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["transcripts"][0]["name"], "middle.txt")
         self.assertEqual(payload["transcripts"][1]["name"], "older.txt")
 
+    def test_history_skips_corrupt_transcripts_when_filling_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            corrupt = transcript_dir / "corrupt.txt"
+            valid = transcript_dir / "valid.txt"
+            corrupt.write_bytes(b"\xff")
+            valid.write_text("valid transcript\n", encoding="utf-8")
+            os.utime(corrupt, (300, 300))
+            os.utime(valid, (200, 200))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["history", "--limit", "1", "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(len(payload["transcripts"]), 1)
+        self.assertEqual(payload["transcripts"][0]["name"], "valid.txt")
+
     def test_history_limit_zero_returns_no_transcripts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
@@ -1415,6 +1460,18 @@ class CliTest(unittest.TestCase):
         self.assertTrue(active_log_exists)
         self.assertIn(str(active_audio), payload["skipped_active_paths"])
         self.assertIn(str(active_log), payload["skipped_active_paths"])
+
+    def test_recording_groups_ignores_non_regular_recording_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            (recordings / "real.wav").write_bytes(b"audio")
+            (recordings / "fake.wav").mkdir()
+            (recordings / "fake.log").mkdir()
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
+                groups = cli.recording_groups()
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["stem"], "real")
 
     def test_cleanup_dry_run_does_not_delete_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3241,6 +3298,10 @@ class CliTest(unittest.TestCase):
             path.write_text("ok", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "max_chars must be at most"):
                 cli.read_log_excerpt(path, cli.MAX_LOG_EXCERPT_CHARS + 1)
+
+    def test_read_log_excerpt_ignores_invalid_file_tail(self) -> None:
+        with mock.patch("speed_of_cinnamon.cli.read_file_tail", side_effect=ValueError("bad utf-8")):
+            self.assertEqual(cli.read_log_excerpt(Path("/tmp/bad.log")), "")
 
     def test_coerce_int_rejects_bool(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "must be an integer"):

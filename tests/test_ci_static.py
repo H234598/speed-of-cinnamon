@@ -272,6 +272,19 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("contents: read", security_workflow)
         self.assertNotIn("contents: write", security_workflow)
 
+    def test_release_publish_does_not_clobber_existing_assets(self) -> None:
+        publish_script = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
+        self.assertIn("gh release upload", publish_script)
+        self.assertNotIn("--clobber", publish_script)
+        self.assertIn("--json assets", publish_script)
+        self.assertIn(".assets[].name", publish_script)
+        self.assertIn("release asset already exists", publish_script)
+
+    def test_wiki_publish_does_not_bootstrap_after_clone_failure(self) -> None:
+        publish_script = (REPO_ROOT / "scripts" / "publish-wiki.sh").read_text(encoding="utf-8")
+        self.assertIn("failed to clone wiki repository", publish_script)
+        self.assertNotIn("git -C \"${work_dir}/wiki\" init", publish_script)
+
     def test_authorship_guard_is_part_of_check_target(self) -> None:
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
         verifier = (REPO_ROOT / "scripts" / "verify-authorship.sh").read_text(encoding="utf-8")

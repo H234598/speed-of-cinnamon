@@ -7,6 +7,7 @@ from unittest import mock
 from pathlib import Path
 
 from speed_of_cinnamon.state import (
+    MAX_STATE_INT,
     MAX_STATE_FILE_BYTES,
     MAX_STATE_STRING_CHARS,
     MAX_STATE_PATH_CHARS,
@@ -58,6 +59,14 @@ class StateStoreTest(unittest.TestCase):
         self.assertEqual(loaded.pid, 123)
         self.assertEqual(loaded.language, "de")
 
+    def test_state_roundtrip_preserves_text_whitespace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = StateStore(Path(tmp) / "state.json")
+            store.write(RecordingState(transcript="  hello  ", audio_path=" /tmp/audio.wav "))
+            loaded = store.read()
+        self.assertEqual(loaded.transcript, "  hello  ")
+        self.assertEqual(loaded.audio_path, " /tmp/audio.wav ")
+
     @mock.patch("speed_of_cinnamon.state.os.replace", side_effect=OSError("disk full"))
     def test_write_raises_runtime_error_when_atomic_replace_fails(self, mocked_replace: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -66,6 +75,12 @@ class StateStoreTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "failed to persist state:"):
                 store.write(store.read())
         mocked_replace.assert_called_once()
+
+    def test_write_does_not_mutate_input_state_timestamp(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = RecordingState(updated_at="original")
+            StateStore(Path(tmp) / "state.json").write(state)
+        self.assertEqual(state.updated_at, "original")
 
     def test_read_rejects_oversized_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -224,6 +239,34 @@ class StateStoreTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
             path.write_text('{"max_seconds": 12.5}', encoding="utf-8")
+            state = StateStore(path).read()
+        self.assertEqual(state.error, "state file could not be read")
+
+    def test_read_rejects_negative_pid_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('{"pid": -1}', encoding="utf-8")
+            state = StateStore(path).read()
+        self.assertEqual(state.error, "state file could not be read")
+
+    def test_read_rejects_negative_max_seconds_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('{"max_seconds": -5}', encoding="utf-8")
+            state = StateStore(path).read()
+        self.assertEqual(state.error, "state file could not be read")
+
+    def test_read_rejects_oversized_pid_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text(f'{{"pid": {MAX_STATE_INT + 1}}}', encoding="utf-8")
+            state = StateStore(path).read()
+        self.assertEqual(state.error, "state file could not be read")
+
+    def test_read_rejects_oversized_max_seconds_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text(f'{{"max_seconds": {MAX_STATE_INT + 1}}}', encoding="utf-8")
             state = StateStore(path).read()
         self.assertEqual(state.error, "state file could not be read")
 

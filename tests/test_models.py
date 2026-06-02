@@ -554,6 +554,51 @@ class ModelsTest(unittest.TestCase):
             with self.assertRaisesRegex(models.ModelError, "missing repo_id"):
                 models.download_model("ct2-bad")
 
+    def test_download_url_rejects_non_huggingface_hosts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(models.ModelError, "host is not allowed"):
+                models._download_url_to_file(
+                    "https://example.com/model.bin",
+                    Path(tmp),
+                    1024,
+                    "test",
+                    prefix=".model.",
+                )
+
+    def test_tiny_de_download_requires_exact_catalog_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(models.ModelError, "not allowed"):
+                models._download_url_to_file(
+                    "https://huggingface.co/other/model/resolve/main/ggml-tiny-de.bin",
+                    Path(tmp),
+                    1024,
+                    "tiny-de",
+                    prefix=".model.",
+                )
+
+    def test_download_model_raises_when_multifile_replace_fails(self) -> None:
+        data = b"small model file"
+        spec = models.ModelSpec(
+            name="ct2-replace-fails",
+            filename="ct2-replace-fails",
+            size="2 KiB",
+            sha1="",
+            description="ct2 replace failure",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-replace-fails",
+            files=("config.json",),
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models.urllib.request.urlopen", return_value=FakeResponse(data)),
+            mock.patch("speed_of_cinnamon.models.os.replace", side_effect=OSError("boom")),
+        ):
+            with self.assertRaisesRegex(models.ModelError, "failed to persist downloaded model file"):
+                models.download_model("ct2-replace-fails")
+
     def test_download_model_sets_private_permissions(self) -> None:
         data = b"tiny model"
         spec = models.ModelSpec(

@@ -17,6 +17,7 @@ def now_iso() -> str:
 MAX_STATE_FILE_BYTES = 1_000_000
 MAX_STATE_STRING_CHARS = 1_000_000
 MAX_STATE_PATH_CHARS = 4_096
+MAX_STATE_INT = 2_147_483_647
 
 
 def _contains_escaped_null(value: str) -> bool:
@@ -95,7 +96,13 @@ class StateStore:
         return value
 
     @staticmethod
-    def _coerce_state_int(value: Any, *, field_name: str, min_value: int | None = None) -> int:
+    def _coerce_state_int(
+        value: Any,
+        *,
+        field_name: str,
+        min_value: int | None = None,
+        max_value: int | None = None,
+    ) -> int:
         if isinstance(value, bool):
             raise ValueError(f"{field_name} must be an integer")
         if isinstance(value, float):
@@ -114,6 +121,8 @@ class StateStore:
             raise ValueError(f"{field_name} must be an integer")
         if min_value is not None and parsed < min_value:
             raise ValueError(f"{field_name} must be at least {min_value}")
+        if max_value is not None and parsed > max_value:
+            raise ValueError(f"{field_name} must be at most {max_value}")
         return parsed
 
     @staticmethod
@@ -127,9 +136,19 @@ class StateStore:
             if field_name in {"status", "audio_path", "log_path", "started_at", "stopped_at", "language", "recorder", "input_device", "transcript", "transcript_path", "error", "updated_at"}:
                 normalized[field_name] = StateStore._sanitize_text_field(value, field_name=field_name)
             elif field_name == "pid":
-                normalized[field_name] = StateStore._coerce_state_int(value, field_name="state pid", min_value=1) if value is not None else None
+                normalized[field_name] = StateStore._coerce_state_int(
+                    value,
+                    field_name="state pid",
+                    min_value=1,
+                    max_value=MAX_STATE_INT,
+                ) if value is not None else None
             elif field_name == "max_seconds":
-                normalized[field_name] = StateStore._coerce_state_int(value, field_name="state max_seconds", min_value=0)
+                normalized[field_name] = StateStore._coerce_state_int(
+                    value,
+                    field_name="state max_seconds",
+                    min_value=0,
+                    max_value=MAX_STATE_INT,
+                )
             elif field_name == "inserted":
                 normalized[field_name] = StateStore._coerce_boolean(value)
         return normalized
@@ -156,10 +175,9 @@ class StateStore:
 
     def write(self, state: RecordingState) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        state.updated_at = now_iso()
         payload = asdict(state)
+        payload["updated_at"] = now_iso()
         normalized_payload = StateStore._normalize_state_data(payload)
-        normalized_payload["updated_at"] = now_iso()
         rendered = json.dumps(normalized_payload, indent=2, sort_keys=True) + "\n"
         if len(rendered.encode("utf-8")) > MAX_STATE_FILE_BYTES:
             raise RuntimeError("state file is too large")
