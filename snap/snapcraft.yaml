@@ -1,13 +1,19 @@
 name: speed-of-cinnamon
 base: core22
 version: git
+title: Speed of Cinnamon
 summary: Cinnamon-native voice typing helper
 description: |
   Speed of Cinnamon is a Cinnamon-native voice typing applet and backend.
   This build captures the Python source and command entrypoint as a snap.
+contact: "mailto:54270221+H234598@users.noreply.github.com"
 license: MIT
 grade: stable
 confinement: strict
+website: https://github.com/H234598/speed-of-cinnamon
+source-code: https://github.com/H234598/speed-of-cinnamon
+issues: https://github.com/H234598/speed-of-cinnamon/issues
+donation: https://github.com/sponsors/H234598
 
 parts:
   app:
