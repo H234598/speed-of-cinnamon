@@ -149,6 +149,27 @@ class NextVersionTest(unittest.TestCase):
             self.assertEqual(code, 2)
             self.assertIn("error:", stderr)
 
+    def test_malformed_pyproject_is_user_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "pyproject.toml").write_text("not a valid toml", encoding="utf-8")
+            code, stderr = run_version_fail_stdout_stderr("--add-commits", "10", cwd=Path(tmpdir))
+            self.assertEqual(code, 2)
+            self.assertIn("error:", stderr)
+
+    def test_pyproject_missing_version_is_user_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "pyproject.toml").write_text("[project]\nname=\"x\"\n", encoding="utf-8")
+            code, stderr = run_version_fail_stdout_stderr("--add-commits", "10", cwd=Path(tmpdir))
+            self.assertEqual(code, 2)
+            self.assertIn("error:", stderr)
+
+    def test_pyproject_empty_project_section_is_user_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+            code, stderr = run_version_fail_stdout_stderr("--add-commits", "10", cwd=Path(tmpdir))
+            self.assertEqual(code, 2)
+            self.assertIn("error:", stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
