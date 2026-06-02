@@ -85,8 +85,10 @@ class CiStaticTest(unittest.TestCase):
                     continue
 
                 for kw in node.keywords:
-                    if kw.arg == "shell" and isinstance(kw.value, ast.Constant) and kw.value.value:
-                        offenders.append(f"{path}: {func.attr} with shell=True")
+                    if kw.arg == "shell":
+                        if not (isinstance(kw.value, ast.Constant) and kw.value.value is False):
+                            offenders.append(f"{path}: {func.attr} with unsupported shell value")
+                        continue
 
                 command = None
                 if node.args:
