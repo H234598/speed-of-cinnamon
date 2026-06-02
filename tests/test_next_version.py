@@ -305,6 +305,21 @@ class NextVersionTest(unittest.TestCase):
             self.assertFalse(commits_since_tag.called)
             add_patches.assert_called_once_with((3, 4, 5), 0)
 
+    def test_main_uses_auto_tag_when_tag_exists(self) -> None:
+        with mock.patch.object(next_version, "parse_args") as parse_args, \
+            mock.patch.object(next_version, "read_current_version", return_value=(2, 0, 0)) as read_current_version, \
+            mock.patch.object(next_version, "tag_for_version", return_value="v2.0.0") as tag_for_version, \
+            mock.patch.object(next_version, "tag_exists", return_value=True) as tag_exists, \
+            mock.patch.object(next_version, "commits_since_tag", return_value=42) as commits_since_tag, \
+            mock.patch.object(next_version, "add_patches", return_value=(2, 1, 0)) as add_patches, \
+            mock.patch.object(next_version, "print"):
+            parse_args.return_value = mock.Mock(from_tag=None, add_commits=None, feature=False, breaking=False, base=None)
+            next_version.main()
+            read_current_version.assert_called_once_with()
+            tag_exists.assert_called_once_with("v2.0.0")
+            commits_since_tag.assert_called_once_with("v2.0.0")
+            add_patches.assert_called_once_with((2, 0, 0), 42)
+
 
 if __name__ == "__main__":
     unittest.main()
