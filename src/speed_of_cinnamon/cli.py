@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import heapq
 import io
 import json
 import os
@@ -509,7 +510,7 @@ def read_transcript_history(limit: int = 10) -> list[dict[str, object]]:
             continue
         candidates.append((mtime, path))
 
-    candidates = sorted(candidates, reverse=True)
+    candidates = heapq.nlargest(limit, candidates)
 
     entries: list[dict[str, object]] = []
     for mtime, path in candidates:
