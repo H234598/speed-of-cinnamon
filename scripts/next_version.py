@@ -185,6 +185,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     a = parse_args()
+    if a.base is not None and not isinstance(a.base, str):
+        raise UserInputError("base must be a valid version string")
+    if a.from_tag is not None and not isinstance(a.from_tag, str):
+        raise UserInputError("from-tag must be a valid version string")
     base_raw = a.base.strip() if isinstance(a.base, str) else a.base
     from_tag_raw = a.from_tag.strip() if isinstance(a.from_tag, str) else a.from_tag
     if a.base is not None:

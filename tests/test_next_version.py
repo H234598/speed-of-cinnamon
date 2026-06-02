@@ -446,6 +446,21 @@ class NextVersionTest(unittest.TestCase):
             self.assertFalse(ensure_tag_exists.called)
             self.assertFalse(read_current_version.called)
 
+    def test_main_rejects_non_string_base_and_from_tag(self) -> None:
+        with mock.patch.object(next_version, "parse_args") as parse_args, \
+            mock.patch.object(next_version, "read_current_version") as read_current_version:
+            parse_args.return_value = mock.Mock(from_tag="0.1.20", add_commits=0, feature=False, breaking=False, base=True)
+            with self.assertRaises(next_version.UserInputError):
+                next_version.main()
+            self.assertFalse(read_current_version.called)
+
+        with mock.patch.object(next_version, "parse_args") as parse_args, \
+            mock.patch.object(next_version, "read_current_version") as read_current_version:
+            parse_args.return_value = mock.Mock(from_tag=123, add_commits=0, feature=False, breaking=False, base=None)
+            with self.assertRaises(next_version.UserInputError):
+                next_version.main()
+            self.assertFalse(read_current_version.called)
+
     def test_main_falls_back_to_tag_not_existing(self) -> None:
         with mock.patch.object(next_version, "parse_args") as parse_args, \
             mock.patch.object(next_version, "read_current_version", return_value=(3, 4, 5)) as read_current_version, \
