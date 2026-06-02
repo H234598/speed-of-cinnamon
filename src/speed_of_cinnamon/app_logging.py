@@ -193,6 +193,11 @@ def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
         "\r" not in value
         and "\n" not in value
         and "\x00" not in value
+        and ":" not in value
+        and "@" not in value
+        and "token" not in value.lower()
+        and "secret" not in value.lower()
+        and "password" not in value.lower()
         and _TOKEN_RE.search(value) is None
         and _BEARER_RE.search(value) is None
         and _OPENAI_KEY_RE.search(value) is None
