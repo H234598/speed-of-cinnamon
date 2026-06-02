@@ -131,6 +131,10 @@ def apply_breaking_change(major:int, minor:int, patch:int) -> tuple[int,int,int]
     return major+1, 0, 0
 
 def read_current_version(path: Path = Path("pyproject.toml")) -> tuple[int,int,int]:
+    if not isinstance(path, Path):
+        raise UserInputError("path must be a pathlib.Path")
+    if str(path) == "":
+        raise UserInputError("path must not be empty")
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
