@@ -61,6 +61,10 @@ class CommandChainTest(unittest.TestCase):
         with self.assertRaisesRegex(CommandChainError, "invalid command command: contains invalid null byte"):
             split_command_chain("printf hello\\\\x00world")
 
+    def test_split_command_chain_rejects_control_characters(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "contains control characters"):
+            split_command_chain("printf hello\nworld")
+
     def test_split_command_chain_rejects_too_long_command(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "command too long"):
             split_command_chain("x " + ("arg " * 8192))
@@ -251,6 +255,14 @@ class CommandChainTest(unittest.TestCase):
     def test_run_command_chain_rejects_escaped_null_in_command_segment(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "command contains invalid null byte"):
             run_command_chain([("cmd\\\\x00",)], "", label="post-process")
+
+    def test_run_command_chain_rejects_control_chars_in_command_segment(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "command contains invalid control character"):
+            run_command_chain([("cmd\nname",)], "", label="post-process")
+
+    def test_run_command_chain_rejects_control_chars_in_command_argument(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "command contains invalid control character"):
+            run_command_chain([("cmd", "arg\rvalue")], "", label="post-process")
 
     def test_run_command_chain_rejects_too_large_input(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "input exceeded"):

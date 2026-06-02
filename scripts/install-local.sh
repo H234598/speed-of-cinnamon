@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
+IFS=$'\n\t'
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 uuid="speed-of-cinnamon@H234598"
@@ -7,6 +9,27 @@ app_data="${HOME}/.local/share/speed-of-cinnamon"
 bin_dir="${HOME}/.local/bin"
 applet_target="${HOME}/.local/share/cinnamon/applets/${uuid}"
 man_dir="${HOME}/.local/share/man/man1"
+if [[ -z "${HOME:-}" ]]; then
+  printf 'HOME must be set.\n' >&2
+  exit 1
+fi
+for tool in cp install mkdir rm command; do
+  if ! command -v "${tool}" >/dev/null 2>&1; then
+    printf '%s not found.\n' "${tool}" >&2
+    exit 1
+  fi
+done
+for path in \
+  "${repo_dir}/files/${uuid}" \
+  "${repo_dir}/src/speed_of_cinnamon" \
+  "${repo_dir}/docs/man/speed-of-cinnamon.1" \
+  "${repo_dir}/docs/man/speed-of-cinnamon-alarms.1"
+do
+  if [[ ! -e "${path}" ]]; then
+    printf 'missing required source path: %s\n' "${path}" >&2
+    exit 1
+  fi
+done
 
 mkdir -p "$(dirname "${applet_target}")" "${app_data}" "${bin_dir}" "${man_dir}"
 rm -rf "${applet_target}"
@@ -20,7 +43,7 @@ cat > "${bin_dir}/speed-of-cinnamon" <<'WRAPPER'
 #!/usr/bin/env bash
 set -euo pipefail
 export PYTHONPATH="${HOME}/.local/share/speed-of-cinnamon/python${PYTHONPATH:+:${PYTHONPATH}}"
-exec python3 -m speed_of_cinnamon.cli "$@"
+exec "$(command -v python3)" -m speed_of_cinnamon.cli "$@"
 WRAPPER
 chmod +x "${bin_dir}/speed-of-cinnamon"
 

@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
+IFS=$'\n\t'
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_dir}"
+
+for tool in python3 tar sha256sum mktemp cp find rm git; do
+  if ! command -v "${tool}" >/dev/null 2>&1; then
+    printf '%s not found.\n' "${tool}" >&2
+    exit 1
+  fi
+done
 
 name="$(
   python3 - <<'PY'
@@ -20,10 +29,30 @@ from pathlib import Path
 print(tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])
 PY
 )"
+if [[ ! "${name}" == "speed-of-cinnamon" ]]; then
+  printf 'unexpected package name: %s\n' "${name}" >&2
+  exit 1
+fi
+if [[ -z "${version}" || ! "${version}" =~ ^[0-9]+(\.[0-9]+){0,2}([0-9A-Za-z.+-]*)?$ ]]; then
+  printf 'invalid project version: %s\n' "${version}" >&2
+  exit 1
+fi
+
 package="${name}-${version}"
 dist_dir="${repo_dir}/dist"
-work_dir="$(mktemp -d)"
-trap 'rm -rf "${work_dir}"' EXIT
+work_root="${TMPDIR:-/tmp}"
+if [[ ! "${work_root}" == /* ]]; then
+  work_root="/tmp"
+fi
+if [[ ! -d "${work_root}" || ! -w "${work_root}" ]]; then
+  work_root="${repo_dir}/.tmp"
+fi
+mkdir -p "${work_root}"
+work_dir="$(mktemp -d "${work_root}/speed-of-cinnamon-build-dist-XXXXXX")"
+cleanup() {
+  rm -rf -- "${work_dir}"
+}
+trap cleanup EXIT
 
 mkdir -p "${dist_dir}" "${work_dir}/${package}"
 

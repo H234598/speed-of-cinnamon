@@ -1,15 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
+IFS=$'\n\t'
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 wiki_url="${WIKI_URL:-https://github.com/H234598/speed-of-cinnamon.wiki.git}"
-work_dir="$(mktemp -d)"
-trap 'rm -rf "${work_dir}"' EXIT
 
 if ! command -v git >/dev/null 2>&1; then
   printf 'git not found.\n' >&2
   exit 1
 fi
+if [[ ! "${wiki_url}" =~ ^https://github\\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\\.wiki\\.git$ ]]; then
+  printf 'Invalid wiki URL: %s\n' "${wiki_url}" >&2
+  exit 1
+fi
+
+work_root="${TMPDIR:-/tmp}"
+if [[ ! "${work_root}" == /* ]]; then
+  work_root="/tmp"
+fi
+if [[ ! -d "${work_root}" || ! -w "${work_root}" ]]; then
+  work_root="${repo_dir}/.tmp"
+fi
+mkdir -p "${work_root}"
+work_dir="$(mktemp -d "${work_root}/speed-of-cinnamon-publish-wiki-XXXXXX")"
+cleanup() {
+  rm -rf -- "${work_dir}"
+}
+trap cleanup EXIT
 
 if ! git clone "${wiki_url}" "${work_dir}/wiki"; then
   mkdir -p "${work_dir}/wiki"

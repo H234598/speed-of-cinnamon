@@ -130,17 +130,53 @@ To verify the source release archive:
 make dist-check
 ```
 
-To build and verify the experimental Fedora noarch RPM:
+To build and verify RPMs:
 
 ```bash
 make rpm
 make rpm-check
+make rpm-generic
+make rpm-generic-check
 ```
 
 Successful GitHub Actions runs upload:
 
 - `speed-of-cinnamon-source-<commit>` with the source archive and `.sha256`.
-- `speed-of-cinnamon-rpm-<commit>` with the noarch RPM and source RPM.
+- `speed-of-cinnamon-rpm-<commit>` with the Fedora noarch RPM and source RPM.
+- `speed-of-cinnamon-generic-rpm-<commit>` with the generic noarch RPM and source RPM.
+- `speed-of-cinnamon-snap-<commit>` with the Snap package.
+
+For manual release validation/publication, use workflow dispatch:
+
+```bash
+gh workflow run release.yml -f tag=v0.1.2 -f dry_run=true -f build_snap=true -f build_generic_rpm=true
+gh workflow run release.yml -f tag=v0.1.2 -f dry_run=true -f build_generic_rpm=false
+gh workflow run release.yml -f tag=v0.1.2 -f dry_run=true -f build_snap=true -f build_generic_rpm=false -f run_workflow_lint=false
+gh workflow run release.yml -f tag=v0.1.2 -f dry_run=true -f build_snap=true -f run_workflow_lint=false
+```
+
+For real publishing, use:
+
+```bash
+gh workflow run release.yml -f tag=v0.1.2 -f dry_run=false -f build_snap=true
+```
+
+For local validation without publishing to GitHub:
+
+```bash
+make release-dry-run SNAP_BUILD=0 BUILD_GENERIC_RPM=0
+```
+
+To publish locally from a machine without snap support and without generic RPMs in the release set:
+
+```bash
+make release SNAP_BUILD=0 BUILD_GENERIC_RPM=0
+```
+
+Flag values are validated locally:
+
+- `SNAP_BUILD=0|1`
+- `BUILD_GENERIC_RPM=0|1`
 
 Release publishing is documented in [Development](docs/development.md).
 

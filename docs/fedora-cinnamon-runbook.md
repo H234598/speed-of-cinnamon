@@ -50,12 +50,66 @@ verifies package metadata and installed paths, and runs the packaged `/usr/bin/s
 extracted Python package. Both install paths include `speed-of-cinnamon(1)` and `speed-of-cinnamon-alarms(1)` man
 pages.
 
-Successful GitHub Actions runs upload two downloadable artifacts: `speed-of-cinnamon-source-<commit>` with the source
-archive and checksum, and `speed-of-cinnamon-rpm-<commit>` with the noarch RPM and source RPM.
+Successful GitHub Actions runs upload the following artifacts: `speed-of-cinnamon-source-<commit>` with the source
+archive and checksum, plus `speed-of-cinnamon-rpm-<commit>` with the Fedora noarch RPM and source RPM,
+`speed-of-cinnamon-generic-rpm-<commit>` with the generic noarch RPM and source RPM, and
+`speed-of-cinnamon-snap-<commit>` with the Snap package.
 
-Pushing a version tag that matches `pyproject.toml`, for example `v0.1.0`, runs the release workflow. It repeats the
-normal checks and publishes a GitHub Release with the source archive, checksum, Fedora noarch RPM, and source RPM. The
-same workflow has a manual `dry_run=true` path to validate release automation without publishing.
+Pushing a version tag that matches `pyproject.toml`, for example `v0.1.0`, runs the release workflow. It validates workflow
+YAML in a dedicated lint step, then repeats the normal checks and publishes a GitHub Release with the source archive,
+checksum, Fedora noarch RPM, generic noarch RPM, their source RPMs, and the Snap package. The same workflow has a manual
+`dry_run=true` path to validate release automation without
+publishing.
+
+To trigger the workflow manually:
+
+```bash
+gh workflow run release.yml -f tag=v0.1.2 -f dry_run=true -f build_snap=true
+```
+
+Set `build_snap=false` to run a release dry-run without rebuilding the snap package.
+Set `build_generic_rpm=false` to skip the generic RPM profile in the same way.
+
+To skip the workflow-lint preflight on a manual release run:
+
+```bash
+gh workflow run release.yml -f tag=v0.1.2 -f dry_run=true -f build_snap=true -f run_workflow_lint=false
+```
+
+For a release run that also skips snap creation (validation-only), run:
+
+```bash
+gh workflow run release.yml -f tag=v0.1.2 -f dry_run=true -f build_snap=false
+```
+
+For a validation-only run that skips both optional package types:
+
+```bash
+gh workflow run release.yml -f tag=v0.1.2 -f dry_run=true -f build_snap=false -f build_generic_rpm=false
+```
+
+For a real publish run:
+
+```bash
+gh workflow run release.yml -f tag=v0.1.2 -f dry_run=false -f build_snap=true
+```
+
+For local validation-only release checks without publishing, keep everything local and skip optional package builds as needed:
+
+```bash
+make release-dry-run SNAP_BUILD=0 BUILD_GENERIC_RPM=0
+```
+
+For a local publish run with the same reduced package set:
+
+```bash
+make release SNAP_BUILD=0 BUILD_GENERIC_RPM=0
+```
+
+Local flag values are validated before release steps run:
+
+- `SNAP_BUILD=0` or `SNAP_BUILD=1`
+- `BUILD_GENERIC_RPM=0` or `BUILD_GENERIC_RPM=1`
 
 `make check` also runs `scripts/verify-authorship.sh`. That guard verifies the expected GitHub repo URL, commit
 author/committer identity, applet metadata, Python project metadata, RPM spec metadata, and rejects upstream author

@@ -6,7 +6,11 @@ This document covers local checks, coverage, release archives, RPMs, and CI beha
 
 ```bash
 make check
+make lint-workflows
 ```
+
+`make lint-workflows` runs the workflow YAML parser locally and uses a fallback `actionlint` check when available; CI sets
+`ACTIONLINT_STRICT=true` so `actionlint` (or Docker-based actionlint) is mandatory in workflow lint jobs.
 
 `make check` runs:
 
@@ -18,6 +22,32 @@ make check
 
 The authorship guard checks the expected GitHub repo URL, commit author/committer identity, applet metadata, Python
 project metadata, RPM spec metadata, and forbidden upstream author markers in tracked text files.
+
+## Workflow linting (`actionlint`)
+
+Install `actionlint` locally (recommended):
+
+```bash
+go install github.com/rhysd/actionlint/cmd/actionlint@latest
+```
+
+Or use Docker instead:
+
+```bash
+docker pull rhysd/actionlint:latest
+```
+
+Strict mode enforces actionlint availability:
+
+```bash
+ACTIONLINT_STRICT=true ./scripts/lint-workflows.sh
+```
+
+Default local mode keeps a YAML fallback when actionlint is unavailable:
+
+```bash
+./scripts/lint-workflows.sh
+```
 
 ## Backend Smoke
 
@@ -113,9 +143,12 @@ names, commits only when content changed, and pushes to the wiki `master` branch
 
 ## CI
 
-GitHub Actions runs on push, pull request, and manual dispatch. The CI job:
+GitHub Actions runs on push, pull request, and manual dispatch. CI has a dedicated workflow validation job and then the main checks job:
 
-- checks out full history,
+- `workflow-lint`: runs workflow validation (`make lint-workflows`) as a separate, build-free job (on pull requests this job runs only if workflow files changed),
+- `check`: performs package/build checks after linting has passed.
+
+- `check` checks out full history,
 - installs Python 3.12,
 - installs shell/RPM tooling,
 - installs Coverage.py,
@@ -124,13 +157,25 @@ GitHub Actions runs on push, pull request, and manual dispatch. The CI job:
 - uploads coverage to QLTY when the secret exists,
 - verifies the source archive,
 - builds and verifies the RPM,
-- uploads source and RPM artifacts,
+- builds and verifies the generic RPM,
+- builds snap package,
+- uploads source, RPM, generic RPM and snap artifacts,
 - runs `shellcheck`.
+
+When dispatching CI manually, use `build_snap=false` to skip snap-toolchain/bootstrap and snap artifact creation.
+Use `build_generic_rpm=false` to skip generic RPM generation and upload when only core packages are desired.
+
+```bash
+gh workflow run ci.yml -f build_snap=false
+gh workflow run ci.yml -f build_generic_rpm=false
+```
 
 Successful runs upload:
 
 - `speed-of-cinnamon-source-<commit>` with the source archive and `.sha256`,
-- `speed-of-cinnamon-rpm-<commit>` with the noarch RPM and source RPM.
+- `speed-of-cinnamon-rpm-<commit>` with the Fedora noarch RPM and source RPM,
+- `speed-of-cinnamon-generic-rpm-<commit>` with the generic noarch RPM and source RPM,
+- `speed-of-cinnamon-snap-<commit>` with the Snap package.
 
 ## Release Publishing
 
@@ -141,15 +186,54 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The workflow repeats the normal checks, verifies the source archive and RPM payload, then publishes a GitHub Release
-with the source archive, checksum, Fedora noarch RPM, and source RPM. It also has a manual `dry_run=true` path to
-validate release automation without publishing.
+The release workflow has a dedicated workflow validation job and then runs the normal checks, verifies the source archive and
+all package payloads, and finally publishes a GitHub Release
+with the source archive, checksum, Fedora noarch RPM, generic noarch RPM, their source RPMs, and the Snap package.
+It also has manual inputs:
+
+- `dry_run=true` to validate release automation without publishing.
+- `build_snap=false` to skip snap package generation in CI.
+- `build_generic_rpm=false` to skip generic RPM generation.
+- `run_workflow_lint=false` to skip workflow validation step.
+
+For environments without `snapcraft`, run `make release-dry-run SNAP_BUILD=0` locally.
+To skip local generic RPM generation, use `make release-dry-run BUILD_GENERIC_RPM=0`.
+To combine both optional skips:
+
+```bash
+make release-dry-run SNAP_BUILD=0 BUILD_GENERIC_RPM=0
+```
+
+Flag values are validated locally before any artifacts are built:
+
+- `SNAP_BUILD`: `0` or `1`
+- `BUILD_GENERIC_RPM`: `0` or `1`
+
+To run the manual release workflow from CLI:
+
+```bash
+gh workflow run release.yml -f tag=v0.1.2 -f dry_run=true -f build_snap=true
+```
+
+Use `build_snap=false` and/or `build_generic_rpm=false` to skip optional package types.
+
+To publish a real release (no dry-run), use:
+
+```bash
+gh workflow run release.yml -f tag=v0.1.2 -f dry_run=false -f build_snap=true
+```
 
 Local release helpers:
 
 ```bash
 make release-dry-run
 make release
+```
+
+For local real release attempts with fewer artifacts, you can also skip snap or generic RPM:
+
+```bash
+make release SNAP_BUILD=0 BUILD_GENERIC_RPM=0
 ```
 
 `make release-dry-run` builds and verifies release assets, then shows the exact release publishing path without creating

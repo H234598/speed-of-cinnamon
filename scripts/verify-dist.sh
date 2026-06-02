@@ -1,18 +1,55 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
+IFS=$'\n\t'
 
 if [[ $# -ne 1 ]]; then
   printf 'usage: %s dist/speed-of-cinnamon-VERSION.tar.gz\n' "$0" >&2
   exit 2
 fi
 
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if ! command -v realpath >/dev/null 2>&1; then
+  printf 'realpath not found.\n' >&2
+  exit 1
+fi
+
 tarball="$(realpath "$1")"
-tmp_dir="$(mktemp -d)"
-trap 'rm -rf "${tmp_dir}"' EXIT
+if [[ ! -f "${tarball}" || ! "${tarball}" == *.tar.gz ]]; then
+  printf 'archive missing or invalid: %s\n' "${tarball}" >&2
+  exit 1
+fi
+
+tmp_root="${TMPDIR:-/tmp}"
+if [[ ! "${tmp_root}" == /* ]]; then
+  tmp_root="/tmp"
+fi
+if [[ ! -d "${tmp_root}" || ! -w "${tmp_root}" ]]; then
+  tmp_root="${repo_dir}/.tmp"
+fi
+mkdir -p "${tmp_root}"
+
+tmp_dir="$(mktemp -d "${tmp_root}/speed-of-cinnamon-dist-verify-XXXXXX")"
+cleanup_tmpdir() {
+  rm -rf -- "${tmp_dir}"
+}
+trap cleanup_tmpdir EXIT
 
 tar -xzf "${tarball}" -C "${tmp_dir}"
-package_dir="$(find "${tmp_dir}" -mindepth 1 -maxdepth 1 -type d | sort | head -n 1)"
-if [[ -z "${package_dir}" ]]; then
+
+package_dirs=()
+while IFS= read -r -d '' path; do
+  package_dirs+=("${path}")
+done < <(find "${tmp_dir}" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
+
+if [[ ${#package_dirs[@]} -ne 1 ]]; then
+  printf 'archive should contain exactly one top-level directory, found %d\n' "${#package_dirs[@]}" >&2
+  exit 1
+fi
+
+package_dir="${package_dirs[0]}"
+if [[ -z "${package_dir}" || ! -d "${package_dir}" ]]; then
   printf 'archive did not contain a package directory: %s\n' "${tarball}" >&2
   exit 1
 fi

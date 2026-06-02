@@ -50,6 +50,8 @@ def _command_path(command: str) -> str:
     command_name = command.strip()
     if not command_name:
         raise CommandChainError("command is empty")
+    if _contains_command_control_chars(command_name):
+        raise CommandChainError("command contains invalid control character")
     if os.path.sep in command_name or (os.path.altsep and os.path.altsep in command_name):
         return command_name
     resolved = shutil.which(command_name)
@@ -65,11 +67,19 @@ def _contains_escaped_null(value: str) -> bool:
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
 
 
+def _contains_command_control_chars(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise CommandChainError("value must be text")
+    return "\r" in value or "\n" in value
+
+
 def split_command_chain(command: str, label: str = "command") -> list[list[str]]:
     if isinstance(command, bool) or not isinstance(command, str):
         raise CommandChainError("command must be text")
     if isinstance(label, bool) or not isinstance(label, str):
         raise CommandChainError("label must be text")
+    if _contains_command_control_chars(command):
+        raise CommandChainError(f"invalid {label} command: contains control characters")
     if _contains_escaped_null(command):
         raise CommandChainError(f"invalid {label} command: contains invalid null byte")
     if len(command) > MAX_COMMAND_LENGTH_CHARS:
@@ -177,6 +187,8 @@ def run_command_chain(
             raise CommandChainError(f"invalid {label} command segment")
         if _contains_escaped_null(executable) or any(_contains_escaped_null(str(arg)) for arg in cmd[1:]):
             raise CommandChainError(f"{label} command contains invalid null byte")
+        if _contains_command_control_chars(executable) or any(_contains_command_control_chars(str(arg)) for arg in cmd[1:]):
+            raise CommandChainError(f"{label} command contains invalid control character")
         runtime_command = _command_path(executable)
         try:
             with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:

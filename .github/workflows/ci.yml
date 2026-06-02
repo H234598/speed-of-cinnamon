@@ -4,13 +4,76 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      build_snap:
+        description: "Build snap package"
+        required: false
+        default: true
+        type: boolean
+      build_generic_rpm:
+        description: "Build generic RPM package"
+        required: false
+        default: true
+        type: boolean
 
 jobs:
+  workflow-change-detection:
+    runs-on: ubuntu-latest
+    outputs:
+      workflows_changed: ${{ steps.detect_workflows.outputs.workflows_changed }}
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Detect workflow file changes
+        id: detect_workflows
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            echo "workflows_changed=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if [[ -z "${base}" || "${base}" == 0000000000000000000000000000000000000000 ]]; then
+            echo "workflows_changed=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if git diff --name-only "${base}" "${head}" -- .github/workflows/ | grep -qE '\.ya?ml$'; then
+            echo "workflows_changed=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "workflows_changed=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+  workflow-lint:
+    needs: workflow-change-detection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Lint GitHub workflows
+        run: |
+          if [[ "${WORKFLOWS_CHANGED}" != "true" ]]; then
+            echo 'No workflow file changes detected for pull_request; skipping workflow lint.'
+            exit 0
+          fi
+
+          make lint-workflows
+        env:
+          WORKFLOWS_CHANGED: ${{ github.event_name != 'pull_request' || needs.workflow-change-detection.outputs.workflows_changed == 'true' }}
+          ACTIONLINT_STRICT: "true"
+
   check:
+    needs: workflow-lint
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       QLTY_COVERAGE_TOKEN: ${{ secrets.QLTY_COVERAGE_TOKEN }}
+      BUILD_SNAP: ${{ github.event_name != 'workflow_dispatch' || inputs.build_snap }}
+      BUILD_GENERIC_RPM: ${{ github.event_name != 'workflow_dispatch' || inputs.build_generic_rpm }}
     steps:
       - uses: actions/checkout@v6.0.2
         with:
@@ -19,7 +82,21 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install shell tooling
-        run: sudo apt-get update && sudo apt-get install -y cpio rpm shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cpio rpm shellcheck
+          if [[ "${BUILD_SNAP}" == "true" ]]; then
+            if ! command -v snapcraft >/dev/null 2>&1; then
+              if command -v snap >/dev/null 2>&1; then
+                sudo snap install snapcraft --classic
+              else
+                printf 'snap is missing; cannot install snapcraft. Install snapd or set build_snap to false.\n' >&2
+                exit 1
+              fi
+            fi
+          else
+            printf 'Skipping snap toolchain bootstrap (build_snap=false).\n'
+          fi
       - name: Install Python coverage tooling
         run: python -m pip install coverage
       - name: Run checks
@@ -38,6 +115,22 @@ jobs:
         run: make rpm
       - name: Verify RPM payload
         run: make rpm-check
+      - name: Build generic RPM package
+        run: |
+          if [[ "${BUILD_GENERIC_RPM}" == "true" ]]; then
+            make rpm-generic
+          else
+            printf 'Skipping generic RPM package build (build_generic_rpm=false).\n'
+          fi
+      - name: Verify generic RPM payload
+        if: env.BUILD_GENERIC_RPM == 'true'
+        run: make rpm-generic-check
+      - name: Build Snap package
+        run: |
+          if [[ "${BUILD_SNAP}" == "true" ]]; then
+            make snap
+          fi
+        if: env.BUILD_SNAP == 'true'
       - name: Upload source release archive
         uses: actions/upload-artifact@v7.0.1
         with:
@@ -54,6 +147,25 @@ jobs:
           path: |
             dist/rpmbuild/RPMS/**/*.rpm
             dist/rpmbuild/SRPMS/**/*.rpm
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload generic RPM packages
+        if: env.BUILD_GENERIC_RPM == 'true'
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: speed-of-cinnamon-generic-rpm-${{ github.sha }}
+          path: |
+            dist/rpmbuild-generic/RPMS/**/*.rpm
+            dist/rpmbuild-generic/SRPMS/**/*.rpm
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload Snap package
+        if: env.BUILD_SNAP == 'true'
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: speed-of-cinnamon-snap-${{ github.sha }}
+          path: |
+            dist/snap/*.snap
           if-no-files-found: error
           retention-days: 30
       - name: Shellcheck scripts

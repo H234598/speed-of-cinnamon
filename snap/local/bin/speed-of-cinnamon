@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+if [ -n "${SNAP:-}" ]; then
+  SNAP_ROOT="${SNAP}"
+else
+  SNAP_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
+fi
+export PYTHONPATH="${SNAP_ROOT}/src"
+exec python3 "${SNAP_ROOT}/src/speed_of_cinnamon/cli.py" "$@"

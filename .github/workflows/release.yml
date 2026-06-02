@@ -10,6 +10,21 @@ on:
         description: "Release tag to validate or publish"
         required: true
         type: string
+      run_workflow_lint:
+        description: "Run GitHub workflow lint before publishing"
+        required: false
+        default: true
+        type: boolean
+      build_snap:
+        description: "Build snap package"
+        required: false
+        default: true
+        type: boolean
+      build_generic_rpm:
+        description: "Build generic RPM package"
+        required: false
+        default: true
+        type: boolean
       dry_run:
         description: "Validate release without publishing"
         required: true
@@ -20,12 +35,34 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ (github.ref_type == 'tag' && github.ref_name) || (github.event_name == 'workflow_dispatch' && inputs.tag) || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
-  publish:
+  workflow-lint:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Lint GitHub workflows
+        run: |
+          if [[ "${RUN_WORKFLOW_LINT}" != "true" ]]; then
+            echo 'Skipping workflow lint (run_workflow_lint=false).'
+            exit 0
+          fi
+
+          make lint-workflows
+        env:
+          RUN_WORKFLOW_LINT: ${{ github.event_name != 'workflow_dispatch' || inputs.run_workflow_lint }}
+          ACTIONLINT_STRICT: "true"
+
+  publish:
+    needs: workflow-lint
+    runs-on: ubuntu-latest
+    env:
+      BUILD_SNAP: ${{ github.event_name != 'workflow_dispatch' || inputs.build_snap }}
+      BUILD_GENERIC_RPM: ${{ github.event_name != 'workflow_dispatch' || inputs.build_generic_rpm }}
     steps:
       - uses: actions/checkout@v6.0.2
         with:
@@ -34,9 +71,43 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install release tooling
-        run: sudo apt-get update && sudo apt-get install -y cpio rpm shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cpio rpm shellcheck
+          if [[ "${BUILD_SNAP}" == "true" ]]; then
+            if ! command -v snapcraft >/dev/null 2>&1; then
+              if command -v snap >/dev/null 2>&1; then
+                sudo snap install snapcraft --classic
+              else
+                printf 'snap is missing; cannot install snapcraft. Install snapd or set build_snap to false.\n' >&2
+                exit 1
+              fi
+            fi
+          else
+            printf 'Skipping snap toolchain bootstrap (build_snap=false).\n'
+          fi
       - name: Verify GitHub CLI
         run: gh --version
+      - name: Resolve release tag
+        id: release_tag
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.tag }}"
+            if [[ -z "${tag}" ]]; then
+              printf 'workflow_dispatch requires tag input.\n' >&2
+              exit 1
+            fi
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+
+          if [[ ! "${tag}" =~ ^v[0-9]+(\.[0-9]+){0,2}([0-9A-Za-z.+-]*)?$ ]]; then
+            printf 'invalid release tag in workflow: %s\n' "${tag}" >&2
+            exit 1
+          fi
+
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "Resolved release tag: ${tag}"
       - name: Verify project
         run: make check
       - name: Build and verify source archive
@@ -45,16 +116,76 @@ jobs:
         run: make rpm
       - name: Verify RPM payload
         run: make rpm-check
+      - name: Build generic RPM package
+        run: |
+          if [[ "${BUILD_GENERIC_RPM}" == "true" ]]; then
+            make rpm-generic
+          else
+            printf 'Skipping generic RPM package build (build_generic_rpm=false).\n'
+          fi
+      - name: Verify generic RPM payload
+        if: env.BUILD_GENERIC_RPM == 'true'
+        run: make rpm-generic-check
+      - name: Build Snap package
+        run: |
+          if [[ "${BUILD_SNAP}" == "true" ]]; then
+            make snap
+          else
+            make SNAP_BUILD=0 snap
+          fi
       - name: Shellcheck scripts
         run: shellcheck scripts/*.sh
+      - name: Upload source release archive
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: speed-of-cinnamon-source-${{ github.sha }}
+          path: |
+            dist/speed-of-cinnamon-*.tar.gz
+            dist/speed-of-cinnamon-*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload Fedora RPM packages
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: speed-of-cinnamon-rpm-${{ github.sha }}
+          path: |
+            dist/rpmbuild/RPMS/**/*.rpm
+            dist/rpmbuild/SRPMS/**/*.rpm
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload generic RPM packages
+        if: env.BUILD_GENERIC_RPM == 'true'
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: speed-of-cinnamon-generic-rpm-${{ github.sha }}
+          path: |
+            dist/rpmbuild-generic/RPMS/**/*.rpm
+            dist/rpmbuild-generic/SRPMS/**/*.rpm
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload Snap package
+        if: env.BUILD_SNAP == 'true'
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: speed-of-cinnamon-snap-${{ github.sha }}
+          path: |
+            dist/snap/*.snap
+          if-no-files-found: error
+          retention-days: 30
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
+          RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
           RELEASE_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
         run: |
           args=()
           if [[ "${RELEASE_DRY_RUN}" == "true" ]]; then
             args+=(--dry-run)
+          fi
+          if [[ "${BUILD_SNAP}" != "true" ]]; then
+            args+=(--skip-snap)
+          fi
+          if [[ "${BUILD_GENERIC_RPM}" != "true" ]]; then
+            args+=(--skip-generic-rpm)
           fi
           ./scripts/publish-github-release.sh "${args[@]}" "${RELEASE_TAG}"

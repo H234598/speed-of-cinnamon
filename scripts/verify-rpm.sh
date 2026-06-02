@@ -1,35 +1,65 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
+IFS=$'\n\t'
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_dir}"
 
 if [[ $# -gt 1 ]]; then
-  printf 'usage: %s [dist/rpmbuild/RPMS/noarch/speed-of-cinnamon-*.rpm]\n' "$0" >&2
+  printf 'usage: %s [dist/rpmbuild*/RPMS/noarch/speed-of-cinnamon-*.rpm]\n' "$0" >&2
   exit 2
 fi
 
-for tool in rpm rpm2cpio cpio python3; do
+for tool in rpm rpm2cpio cpio python3 realpath; do
   if ! command -v "${tool}" >/dev/null 2>&1; then
     printf '%s not found. Install rpm and cpio tooling.\n' "${tool}" >&2
     exit 1
   fi
 done
 
+rpm_candidates=()
 if [[ $# -eq 1 ]]; then
-  rpm_path="$1"
+  rpm_path="$(realpath "${1}")"
 else
-  rpm_path="$(find "${repo_dir}/dist/rpmbuild/RPMS" -type f -name 'speed-of-cinnamon-*.noarch.rpm' 2>/dev/null | sort | tail -n 1 || true)"
+  rpm_candidates=(
+    "${repo_dir}"/dist/rpmbuild/RPMS/noarch/speed-of-cinnamon-*.noarch.rpm
+  )
+  shopt -s nullglob
+  filtered_rpms=()
+  for candidate in "${rpm_candidates[@]}"; do
+    if [[ -f "${candidate}" ]]; then
+      filtered_rpms+=("${candidate}")
+    fi
+  done
+  shopt -u nullglob
+  if [[ ${#filtered_rpms[@]} -ne 1 ]]; then
+    printf 'expected exactly one RPM package, found %d\n' "${#filtered_rpms[@]}" >&2
+    exit 1
+  fi
+  rpm_path="${filtered_rpms[0]}"
 fi
 
-if [[ -z "${rpm_path}" || ! -f "${rpm_path}" ]]; then
-  printf 'RPM package not found. Run make rpm first.\n' >&2
+if [[ ! -f "${rpm_path}" || ! ( "${rpm_path}" == "${repo_dir}/dist/rpmbuild/"*".rpm" || "${rpm_path}" == "${repo_dir}/dist/rpmbuild-generic/"*".rpm" ) ]]; then
+  printf 'RPM package not found: %s\n' "${rpm_path}" >&2
   exit 1
 fi
 rpm_path="$(realpath "${rpm_path}")"
 
-tmp_dir="$(mktemp -d)"
-trap 'rm -rf "${tmp_dir}"' EXIT
+tmp_root="${TMPDIR:-/tmp}"
+if [[ ! "${tmp_root}" == /* ]]; then
+  tmp_root="/tmp"
+fi
+if [[ ! -d "${tmp_root}" || ! -w "${tmp_root}" ]]; then
+  tmp_root="${repo_dir}/.tmp"
+fi
+mkdir -p "${tmp_root}"
+
+tmp_dir="$(mktemp -d "${tmp_root}/speed-of-cinnamon-rpm-verify-XXXXXX")"
+cleanup_tmpdir() {
+  rm -rf -- "${tmp_dir}"
+}
+trap cleanup_tmpdir EXIT
 
 metadata_file="${tmp_dir}/rpm-metadata.txt"
 rpm -qp --qf 'name=%{NAME}\nversion=%{VERSION}\narch=%{ARCH}\npackager=%{PACKAGER}\nvendor=%{VENDOR}\nurl=%{URL}\n' "${rpm_path}" > "${metadata_file}"
