@@ -262,7 +262,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('_windowTitleMatchesAutoPaste: function()', source)
         self.assertIn('this._windowProbeValue(this.targetWindow, "get_title")', source)
         self.assertIn('for (let marker of markers)', source)
-        self.assertIn('if (autoPasteEnter && text && text[text.length - 1] !== "\\n")', source)
+        self.assertIn('marker.toLowerCase()', source)
+        self.assertIn('submitWithReturn', source)
+        self.assertIn('String(this._windowProbeValue(this.targetWindow, "get_title") || "").toLowerCase()', source)
+        self.assertIn('this._pasteClipboardAfterFocus(submitWithReturn)', source)
+        self.assertIn('this._preparedTranscriptText(transcript, submitWithReturn)', source)
 
     def test_typing_delay_has_backend_limits(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -674,7 +678,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("window.is_skip_taskbar && window.is_skip_taskbar()", source)
         self.assertIn("Main.activateWindow(this.targetWindow, global.get_current_time())", source)
         self.assertIn("this._restoreTargetWindowForPaste()", source)
-        self.assertIn("this._pasteClipboardAfterFocus();", source)
+        self.assertIn('this._pasteClipboardAfterFocus(submitWithReturn)', source)
         self.assertIn("Copied and pasted into target window", source)
 
     def test_applet_uses_gio_for_desktop_links_and_folders(self) -> None:
@@ -757,6 +761,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_isTerminalTargetWindow: function()", source)
         self.assertIn('let pasteKey = this._isTerminalTargetWindow() ? "ctrl+shift+v" : "ctrl+v";', source)
         self.assertIn('["xdotool", "key", "--clearmodifiers", pasteKey]', source)
+        self.assertIn('if (sendEnter) {', source)
+        self.assertIn('args.push("Return");', source)
 
     def test_history_entries_can_be_copied_or_inserted(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

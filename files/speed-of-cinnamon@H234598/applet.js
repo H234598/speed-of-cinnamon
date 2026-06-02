@@ -1374,7 +1374,7 @@ MyApplet.prototype = {
     if (markers.length === 0 || !this._isUsableTargetWindow(this.targetWindow)) {
       return false;
     }
-    let title = this._windowProbeValue(this.targetWindow, "get_title");
+    let title = String(this._windowProbeValue(this.targetWindow, "get_title") || "").toLowerCase();
     for (let marker of markers) {
       if (title.indexOf(marker.toLowerCase()) >= 0) {
         return true;
@@ -3676,9 +3676,13 @@ MyApplet.prototype = {
     return false;
   },
 
-  _pasteClipboardAfterFocus: function() {
+  _pasteClipboardAfterFocus: function(sendEnter) {
     let pasteKey = this._isTerminalTargetWindow() ? "ctrl+shift+v" : "ctrl+v";
-    this._spawnKeyboardAfterFocus(["xdotool", "key", "--clearmodifiers", pasteKey]);
+    let args = ["xdotool", "key", "--clearmodifiers", pasteKey];
+    if (sendEnter) {
+      args.push("Return");
+    }
+    this._spawnKeyboardAfterFocus(args);
   },
 
   _typeTextAfterFocus: function(text) {
@@ -3723,7 +3727,9 @@ MyApplet.prototype = {
 
   _insertTranscriptText: function(transcript) {
     let method = this._normalizeOutputMethod(this.insertMethod);
-    let text = this._preparedTranscriptText(transcript);
+    let autoPasteEnter = this._windowTitleMatchesAutoPaste();
+    let submitWithReturn = autoPasteEnter && method === "clipboard-paste" && GLib.find_program_in_path("xdotool");
+    let text = this._preparedTranscriptText(transcript, submitWithReturn);
     if (method === "none") {
       this._setStatus("done", _("Insertion disabled"), transcript);
       return;
@@ -3746,14 +3752,14 @@ MyApplet.prototype = {
     }
     if (GLib.find_program_in_path("xdotool")) {
       let restored = this._restoreTargetWindowForPaste();
-      this._pasteClipboardAfterFocus();
+      this._pasteClipboardAfterFocus(submitWithReturn);
       this._setStatus("done", restored ? _("Copied and pasted into target window") : _("Copied and pasted"), transcript);
     } else {
       this._setStatus("done", _("Copied to clipboard; install xdotool for automatic paste"), transcript);
     }
   },
 
-  _preparedTranscriptText: function(transcript) {
+  _preparedTranscriptText: function(transcript, suppressAutoPasteEnter) {
     let text = String(transcript || "");
     let autoPasteEnter = this._windowTitleMatchesAutoPaste();
     if (!this.sanitizeSpecialChars && !this.appendSpace && !autoPasteEnter && text.length <= MAX_TEXT_INSERT_CHARS && text.indexOf("\u0000") < 0) {
@@ -3771,7 +3777,7 @@ MyApplet.prototype = {
     if (this.appendSpace && text && !" \t\n\r\f\v".includes(text[text.length - 1])) {
       text += " ";
     }
-    if (autoPasteEnter && text && text[text.length - 1] !== "\n") {
+    if (autoPasteEnter && !suppressAutoPasteEnter && text && text[text.length - 1] !== "\n") {
       text += "\n";
     }
     return text;
