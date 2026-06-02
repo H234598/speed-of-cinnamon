@@ -219,6 +219,27 @@ class OutputTest(unittest.TestCase):
         self.assertEqual(captured_env["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/run/user/1000/bus")
         self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
+    def test_run_with_input_skips_non_text_environment_values(self) -> None:
+        captured_env: dict[str, str] = {}
+
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            env = kwargs.get("env")
+            if isinstance(env, dict):
+                captured_env.update(env)
+            stdout = kwargs["stdout"]
+            stdout.write(b"ok")
+            return subprocess.CompletedProcess(["echo"], 0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch("speed_of_cinnamon.output.os.environ.__getitem__", return_value=123),
+            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+        ):
+            _run_with_input(["echo"], "hello")
+
+        self.assertNotIn("HOME", captured_env)
+        self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", captured_env)
+        self.assertIn("PATH", captured_env)
+
     def test_run_with_input_rejects_missing_command_when_resolved_path_missing(self) -> None:
         with mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/missing"):
             with mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=FileNotFoundError("missing")):
