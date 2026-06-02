@@ -128,6 +128,9 @@ class NextVersionTest(unittest.TestCase):
             with self.subTest(version=version):
                 self.assertEqual(run_version("--base", version, "--add-commits", "0"), "0.1.20")
 
+    def test_base_with_whitespace_is_accepted(self) -> None:
+        self.assertEqual(run_version("--base", "  0.1.20  ", "--add-commits", "0"), "0.1.20")
+
     def test_parse_version_invalid_values_are_rejected(self) -> None:
         for version in [
             "",

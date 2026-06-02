@@ -177,10 +177,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     a = parse_args()
-    base = parse_version(a.base) if a.base else read_current_version()
+    base_raw = a.base.strip() if isinstance(a.base, str) else a.base
+    from_tag_raw = a.from_tag.strip() if isinstance(a.from_tag, str) else a.from_tag
+    base = parse_version(base_raw) if base_raw else read_current_version()
     if a.from_tag is not None:
-        ensure_tag_exists(a.from_tag)
-        commits = commits_since_tag(a.from_tag)
+        ensure_tag_exists(from_tag_raw)
+        commits = commits_since_tag(from_tag_raw)
     elif a.add_commits is not None:
         commits = a.add_commits
     else:
