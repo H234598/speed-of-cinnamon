@@ -66,6 +66,7 @@ target = pathlib.Path(sys.argv[2])
 target.mkdir(parents=True, exist_ok=True)
 
 with tarfile.open(tarball, "r:gz") as archive:
+    package_root = None
     for member in archive.getmembers():
         if not (member.isfile() or member.isdir()):
             raise SystemExit(f"dist archive contains unsupported entry type: {member.name}")
@@ -75,6 +76,13 @@ with tarfile.open(tarball, "r:gz") as archive:
             raise SystemExit(f"dist archive path escapes target: {member.name}")
         if member.issym() or member.islnk():
             raise SystemExit(f"dist archive contains unsupported link entry: {member.name}")
+        root = member.name.split("/", 1)[0]
+        if not root:
+            raise SystemExit(f"dist archive contains an empty path entry: {member.name}")
+        if package_root is None:
+            package_root = root
+        elif root != package_root:
+            raise SystemExit(f"dist archive contains multiple top-level entries: {member.name}")
         archive.extract(member, target)
 PY
 

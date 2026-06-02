@@ -361,6 +361,9 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("member.issym()", dist_verifier)
         self.assertIn("member.islnk()", dist_verifier)
         self.assertIn("raise SystemExit(f\"dist archive contains unsupported link entry", dist_verifier)
+        self.assertIn("package_root = None", dist_verifier)
+        self.assertIn("dist archive contains multiple top-level entries", dist_verifier)
+        self.assertIn("dist archive contains an empty path entry", dist_verifier)
 
     def test_dev_backend_path_does_not_append_env_pythonpath(self) -> None:
         dev_backend = (REPO_ROOT / "scripts" / "dev-backend.sh").read_text(encoding="utf-8")

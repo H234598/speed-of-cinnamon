@@ -343,6 +343,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._restartRelistenRecording();', source)
         self.assertIn('(!this.autoTranscribeTimeout && !this.autoRelisten)', source)
         self.assertIn('if (!this.autoRelisten) {', source)
+        self.assertIn('this.autoTranscribeRecordingKey = "";', source)
         self.assertIn('_recordingOptionsLabel: function()', source)
         self.assertIn('_("relisten")', source)
 

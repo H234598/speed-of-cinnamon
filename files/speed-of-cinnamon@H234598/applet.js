@@ -3799,6 +3799,7 @@ MyApplet.prototype = {
       return;
     }
     this.isCommandRunning = true;
+    this.autoTranscribeRecordingKey = "";
     this.recordingStartedAtMs = 0;
     this.recordingMaxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
     this._setStatus("processing", _("Starting next recording..."), this.lastTranscript);
