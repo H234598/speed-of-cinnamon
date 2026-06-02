@@ -234,6 +234,18 @@ class NextVersionTest(unittest.TestCase):
             next_version.add_patches((0, 1, 2, 3), 10)  # type: ignore[arg-type]
         with self.assertRaises(next_version.UserInputError):
             next_version.add_patches(("0", 1, 2), 10)  # type: ignore[arg-type]
+        with self.assertRaises(next_version.UserInputError):
+            next_version.add_patches((0, 1, 2), True)  # type: ignore[arg-type]
+
+    def test_apply_feature_increase_rejects_invalid_inputs(self) -> None:
+        with self.assertRaises(next_version.UserInputError):
+            next_version.apply_feature_increase(-1, 0, 0)
+        with self.assertRaises(next_version.UserInputError):
+            next_version.apply_feature_increase(1, -1, 0)
+        with self.assertRaises(next_version.UserInputError):
+            next_version.apply_feature_increase(1, 1, -1)
+        with self.assertRaises(next_version.UserInputError):
+            next_version.apply_feature_increase(True, 1, 1)  # type: ignore[arg-type]
 
     def test_apply_feature_increase_wraps_minor(self) -> None:
         self.assertEqual(next_version.apply_feature_increase(1, 99, 5), (2, 0, 5))
