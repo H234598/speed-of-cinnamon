@@ -453,6 +453,61 @@ class ModelsTest(unittest.TestCase):
         self.assertEqual(payload["checksum"], spec.sha1)
         self.assertIn("already downloaded", second_payload["message"])
 
+    def test_download_model_downloads_multifile_ctranslate2_model(self) -> None:
+        data = b"small model file"
+        spec = models.ModelSpec(
+            name="ct2-test",
+            filename="ct2-test",
+            size="2 KiB",
+            sha1="",
+            description="ct2 test",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-test",
+            files=("config.json", "model.bin", "tokenizer.json"),
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models.urllib.request.urlopen", side_effect=[
+                FakeResponse(data),
+                FakeResponse(data),
+                FakeResponse(data),
+            ]),
+        ):
+            payload = models.download_model("ct2-test")
+            second_payload = models.download_model("ct2-test")
+            path = models.model_path(spec)
+            self.assertTrue(path.is_dir())
+            self.assertTrue((path / "config.json").is_file())
+            self.assertTrue((path / "model.bin").is_file())
+            self.assertTrue((path / "tokenizer.json").is_file())
+            self.assertEqual((path / "config.json").stat().st_mode & 0o777, 0o600)
+        self.assertEqual(payload["status"], "done")
+        self.assertEqual(payload["downloaded"], True)
+        self.assertTrue(payload["verified"])
+        self.assertIn("already downloaded", second_payload["message"])
+
+    def test_download_model_rejects_multifile_catalog_without_repo_id(self) -> None:
+        spec = models.ModelSpec(
+            name="ct2-bad",
+            filename="ct2-bad",
+            size="2 KiB",
+            sha1="",
+            description="ct2 bad",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            files=("config.json", "model.bin"),
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+        ):
+            with self.assertRaisesRegex(models.ModelError, "missing repo_id"):
+                models.download_model("ct2-bad")
+
     def test_download_model_sets_private_permissions(self) -> None:
         data = b"tiny model"
         spec = models.ModelSpec(

@@ -524,12 +524,15 @@ class TranscriberTest(unittest.TestCase):
         def which(command: str) -> str | None:
             return "/usr/bin/whisper-cli" if command == "whisper-cli" else None
 
-        config = TranscriberConfig(whisper_model="/models/ggml-base.bin")
-        with (
-            mock.patch("speed_of_cinnamon.transcriber.default_whisper_cpp_model_path", return_value=""),
-            mock.patch("speed_of_cinnamon.transcriber.shutil.which", side_effect=which),
-        ):
-            self.assertEqual(resolve_transcriber(config), "whisper-cpp")
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "ggml-base.bin"
+            model.write_bytes(b"model")
+            config = TranscriberConfig(whisper_model=str(model))
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.default_whisper_cpp_model_path", return_value=""),
+                mock.patch("speed_of_cinnamon.transcriber.shutil.which", side_effect=which),
+            ):
+                self.assertEqual(resolve_transcriber(config), "whisper-cpp")
 
     def test_auto_uses_downloaded_whisper_cpp_model(self) -> None:
         def which(command: str) -> str | None:
@@ -559,6 +562,68 @@ class TranscriberTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(TranscriptionError, "no transcriber available"):
                 resolve_transcriber(TranscriberConfig())
+
+    def test_configured_missing_model_does_not_fall_back_to_whisper(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "missing.bin"
+            with mock.patch("speed_of_cinnamon.transcriber.shutil.which", return_value="/usr/bin/whisper"):
+                with self.assertRaisesRegex(TranscriptionError, "path is missing"):
+                    resolve_transcriber(TranscriberConfig(whisper_model=str(model)))
+
+    def test_configured_faster_whisper_model_requires_existing_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "ct2" / "config.json"
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.model_backend_for_path", return_value="faster-whisper"),
+                mock.patch("speed_of_cinnamon.transcriber.resolve_whisper_cpp_command", return_value=""),
+                mock.patch("speed_of_cinnamon.transcriber.faster_whisper_available", return_value=False),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "path is missing"):
+                    resolve_transcriber(TranscriberConfig(whisper_model=str(model)))
+
+    def test_auto_infers_faster_whisper_for_configured_directory_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "custom-ct2-model"
+            model.mkdir()
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.model_backend_for_path", return_value=""),
+                mock.patch("speed_of_cinnamon.transcriber.faster_whisper_available", return_value=True),
+                mock.patch("speed_of_cinnamon.transcriber.resolve_whisper_cpp_command", return_value="/usr/bin/whisper-cli"),
+            ):
+                self.assertEqual(resolve_transcriber(TranscriberConfig(whisper_model=str(model))), "faster-whisper")
+
+    def test_configured_directory_model_requires_faster_whisper_module(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "custom-ct2-model"
+            model.mkdir()
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.model_backend_for_path", return_value=""),
+                mock.patch("speed_of_cinnamon.transcriber.faster_whisper_available", return_value=False),
+                mock.patch("speed_of_cinnamon.transcriber.resolve_whisper_cpp_command", return_value="/usr/bin/whisper-cli"),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "requires faster-whisper"):
+                    resolve_transcriber(TranscriberConfig(whisper_model=str(model)))
+
+    def test_configured_missing_directory_model_reports_missing_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "missing-ct2-model"
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.model_backend_for_path", return_value=""),
+                mock.patch("speed_of_cinnamon.transcriber.faster_whisper_available", return_value=True),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "path is missing"):
+                    resolve_transcriber(TranscriberConfig(whisper_model=str(model)))
+
+    def test_configured_custom_model_requires_whisper_cpp(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "custom.bin"
+            model.write_bytes(b"model")
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.resolve_whisper_cpp_command", return_value=""),
+                mock.patch("speed_of_cinnamon.transcriber.faster_whisper_available", return_value=False),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "requires whisper.cpp"):
+                    resolve_transcriber(TranscriberConfig(whisper_model=str(model)))
 
     def test_resolve_transcriber_rejects_null_byte_model(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "whisper model contains invalid null byte"):

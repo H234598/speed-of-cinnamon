@@ -164,29 +164,41 @@ If the OpenAI-compatible server requires a bearer token, set
 
 ```bash
 speed-of-cinnamon models --json
+speed-of-cinnamon download-model ct2-base --json
+speed-of-cinnamon download-model ct2-small-de --json
+speed-of-cinnamon download-model ct2-tiny-de --json
+speed-of-cinnamon download-model ct2-small --json
 speed-of-cinnamon download-model tiny-de --json
 speed-of-cinnamon download-model tiny --json
 speed-of-cinnamon download-model base --json
 speed-of-cinnamon remove-model tiny --json
 ```
 
-Use `tiny-de` for a small German-only test model, or multilingual models such as `tiny`, `base`, or `small` for German
-and other non-English dictation. The `.en` models are English-only and can produce placeholder text such as
-`[speaking in foreign language]` when the recording language is not English.
+The catalog contains GGML models for whisper.cpp and CTranslate2 models for faster-whisper. Selecting a model chooses
+the matching backend automatically. Install faster-whisper before using CTranslate2 models:
+
+```bash
+python3 -m pip install --user faster-whisper
+```
+
+Use `ct2-base` or GGML `base` for the first German comparison, `ct2-small-de` for a German small model, and `tiny-de` or
+`ct2-tiny-de` only when speed matters more than accuracy. The `.en` models are English-only and can produce placeholder
+text such as `[speaking in foreign language]` when the recording language is not English.
 
 Compare downloaded catalog models on the same local audio file:
 
 ```bash
-speed-of-cinnamon benchmark-models ~/testaufnahme.wav --language de --models tiny-de tiny base --json
+speed-of-cinnamon benchmark-models ~/testaufnahme.wav --language de --models ct2-base ct2-small-de ct2-tiny-de ct2-small tiny-de tiny base --json
 ```
 
 Without `--models`, the benchmark uses downloaded catalog models that match the selected language. Missing models are
 reported per entry and are not downloaded automatically.
 
-Downloaded whisper.cpp models are stored below:
+Downloaded models are stored below:
 
 ```text
 ~/.local/share/speed-of-cinnamon/models/whisper.cpp/
+~/.local/share/speed-of-cinnamon/models/ctranslate2/
 ```
 
 Downloads verify SHA-1 checksums before a model is activated.

@@ -7,7 +7,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from .models import default_whisper_cpp_model_path, model_supports_language
+from .models import default_ctranslate2_model_path, default_whisper_cpp_model_path, model_backend_for_path, model_supports_language
+from .transcriber import faster_whisper_available
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,7 @@ def command_check(name: str, package_hint: str = "") -> Check:
 
 
 def run_checks() -> list[Check]:
+    faster_available = faster_whisper_available()
     return [
         command_check("python3", "python3"),
         command_check("pw-record", "pipewire-utils"),
@@ -42,6 +44,11 @@ def run_checks() -> list[Check]:
         command_check("whisper-cli", "whisper.cpp"),
         command_check("whisper.cpp", "whisper.cpp"),
         command_check("pwcpp", "python3-pywhispercpp"),
+        Check(
+            "faster-whisper",
+            faster_available,
+            "python module available" if faster_available else " missing; install faster-whisper",
+        ),
     ]
 
 
@@ -123,62 +130,89 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
     transcriber = _setting(settings, "transcriber", "auto").lower().replace("_", "-")
     command_template = _setting(settings, "transcriber-command")
     whisper_model = _setting(settings, "whisper-model")
-    if whisper_model:
-        local_model = whisper_model
-        fallback_model = ""
-    else:
-        local_model = default_whisper_cpp_model_path(language)
-        fallback_model = "" if local_model else default_whisper_cpp_model_path(language)
-    incompatible_default_model = bool(
-        not whisper_model and not local_model and fallback_model and not model_supports_language(fallback_model, language)
-    )
+    local_model = whisper_model or default_ctranslate2_model_path(language) or default_whisper_cpp_model_path(language)
     whisper_ok = _ok(checks, "whisper")
     whisper_cpp_ok = _ok(checks, "whisper-cli") or _ok(checks, "whisper.cpp") or _ok(checks, "pwcpp")
+    faster_whisper_ok = _ok(checks, "faster-whisper")
+
+    model_backend = ""
     local_model_is_invalid = bool(local_model and _contains_escaped_null(local_model))
-    local_model_language_ok = bool(not local_model or model_supports_language(local_model, language))
-    model_ok = False
     if local_model and not local_model_is_invalid:
         try:
-            model_ok = bool(Path(local_model).expanduser().exists())
-        except ValueError:
+            local_model_path = Path(local_model).expanduser()
+            model_backend = model_backend_for_path(local_model_path)
+            if local_model_path.is_dir() and not model_backend:
+                model_backend = "faster-whisper"
+            model_ok = local_model_path.exists()
+        except (OSError, ValueError):
             return {
                 "ok": False,
-                "value": "auto",
-                "detail": f"whisper.cpp model path is invalid: {local_model}",
+                "value": transcriber or "auto",
+                "detail": f"voice model path is invalid: {local_model}",
             }
+    else:
+        local_model_path = None
+        model_ok = False
+
+    local_model_language_ok = bool(not local_model or model_supports_language(local_model, language))
+
+    def _model_problem(value: str, *, explicit_backend: str = "") -> dict[str, object] | None:
+        if local_model_is_invalid:
+            return {"ok": False, "value": value, "detail": f"voice model path is invalid: {local_model}"}
+        if local_model and not local_model_language_ok:
+            if explicit_backend == "whisper-cpp":
+                return {
+                    "ok": False,
+                    "value": value,
+                    "detail": f"English-only whisper.cpp model does not support language {language}; use a multilingual model",
+                }
+            return {
+                "ok": False,
+                "value": value,
+                "detail": f"voice model does not support language {language}; use a compatible model",
+            }
+        if local_model and not model_ok:
+            return {"ok": False, "value": value, "detail": f"voice model not found: {local_model}"}
+        return None
+
+    def _model_backend_status(value: str, expected_backend: str = "") -> dict[str, object]:
+        problem = _model_problem(value, explicit_backend=expected_backend)
+        if problem is not None:
+            return problem
+        if not local_model:
+            return {"ok": False, "value": value, "detail": "voice model path is empty"}
+        backend = expected_backend or model_backend or "whisper-cpp"
+        if backend == "faster-whisper":
+            if not faster_whisper_ok:
+                return {"ok": False, "value": value, "detail": "faster-whisper is missing"}
+            return {
+                "ok": True,
+                "value": value,
+                "resolved": "faster-whisper",
+                "detail": "CTranslate2 model and faster-whisper available",
+            }
+        if not whisper_cpp_ok:
+            return {"ok": False, "value": value, "detail": "whisper.cpp command is missing"}
+        return {
+            "ok": True,
+            "value": value,
+            "resolved": "whisper-cpp",
+            "detail": "whisper.cpp command and model available",
+        }
 
     if transcriber in {"", "auto"}:
         if command_template:
             return {"ok": True, "value": "auto", "resolved": "command", "detail": "custom command configured"}
-        if local_model_is_invalid:
-            return {"ok": False, "value": "auto", "detail": f"whisper.cpp model path is invalid: {local_model}"}
-        if local_model and not local_model_language_ok:
-            return {
-                "ok": False,
-                "value": "auto",
-                "detail": f"English-only whisper.cpp model does not support language {language}; use a multilingual model",
-            }
+        if whisper_model and local_model:
+            return _model_backend_status("auto")
         if whisper_ok:
             return {"ok": True, "value": "auto", "resolved": "whisper", "detail": "whisper command available"}
-        if incompatible_default_model:
-            return {
-                "ok": False,
-                "value": "auto",
-                "detail": f"English-only whisper.cpp model does not support language {language}; download a multilingual model",
-            }
-        if local_model and whisper_cpp_ok and model_ok:
-            return {
-                "ok": True,
-                "value": "auto",
-                "resolved": "whisper-cpp",
-                "detail": "whisper.cpp command and model available",
-            }
-        if local_model and whisper_cpp_ok:
-            return {"ok": False, "value": "auto", "detail": f"whisper.cpp model not found: {local_model}"}
+        if local_model:
+            return _model_backend_status("auto")
         return {
             "ok": False,
             "value": "auto",
-            "detail": "install whisper, configure whisper.cpp with a model, or set a custom transcriber command",
+            "detail": "install whisper, install faster-whisper, configure whisper.cpp with a model, or set a custom transcriber command",
         }
     if transcriber == "command":
         return {
@@ -193,27 +227,9 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
             "detail": checks["whisper"].detail if "whisper" in checks else "whisper command missing",
         }
     if transcriber in {"whisper-cpp", "whisper.cpp"}:
-        if not whisper_cpp_ok:
-            return {"ok": False, "value": "whisper-cpp", "detail": "whisper.cpp command is missing"}
-        if local_model_is_invalid:
-            return {"ok": False, "value": "whisper-cpp", "detail": f"whisper.cpp model path is invalid: {local_model}"}
-        if local_model and not local_model_language_ok:
-            return {
-                "ok": False,
-                "value": "whisper-cpp",
-                "detail": f"English-only whisper.cpp model does not support language {language}; use a multilingual model",
-            }
-        if not local_model:
-            return {"ok": False, "value": "whisper-cpp", "detail": "whisper.cpp model path is empty"}
-        return {
-            "ok": model_ok,
-            "value": "whisper-cpp",
-            "detail": (
-                "whisper.cpp command and model available"
-                if model_ok
-                else f"whisper.cpp model not found: {local_model}"
-            ),
-        }
+        return _model_backend_status("whisper-cpp", "whisper-cpp")
+    if transcriber in {"faster-whisper", "ctranslate2", "ct2"}:
+        return _model_backend_status("faster-whisper", "faster-whisper")
     return {"ok": False, "value": transcriber, "detail": f"unknown transcriber: {transcriber}"}
 
 
@@ -369,7 +385,7 @@ def report(settings: Mapping[str, object] | None = None, applet: bool = False) -
             "Install pactl/pulseaudio-utils for input source discovery.",
             "Install xdotool for automatic paste or direct typing on Cinnamon X11.",
             "Install xclip or xsel only if you use the backend CLI clipboard insertion without the applet.",
-            "ASR can use Automatic, the 'whisper' command, whisper.cpp plus a model path, or a custom command.",
+            "ASR can use Automatic, the 'whisper' command, faster-whisper, whisper.cpp plus a model path, or a custom command.",
             "Text polishing can use a custom command, Ollama, or an OpenAI-compatible local server.",
         ],
     }

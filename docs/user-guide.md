@@ -127,19 +127,24 @@ application.
 
 ## Voice Models
 
-The `Voice model` menu exposes a small whisper.cpp catalog. It can download, select, and remove catalog models, or
-switch back to `Automatic ASR backend`. The starter model is based on the primary recognition language from Cinnamon
-settings, so a German primary language uses `tiny`, not `tiny.en`.
+The `Voice model` menu exposes a local voice model catalog split into `CTranslate2` and `GGML`. It can download, select,
+and remove catalog models, or switch back to `Automatic ASR backend`. Selecting a model chooses the matching backend
+automatically.
 
-For German dictation, `tiny-de` is a small German-only catalog option. Multilingual models (`tiny`, `base`, `small`, or
-`large-v3-turbo-q5_0`) work across German and other non-English languages. The `.en` models are English-only. `tiny` is
-the fastest starter; `base` and `small` trade more latency for accuracy; `large-v3-turbo-q5_0` is much more accurate but
-can be very slow on CPU.
+For German dictation, `ct2-base` and GGML `base` are the practical first comparison. `ct2-small-de` is a German
+CTranslate2 small model, while `ct2-tiny-de` and GGML `tiny-de` prioritize speed. The `.en` models are English-only.
+GGML `large-v3-turbo-q5_0` is much more accurate on some recordings but can be very slow on CPU.
+
+CTranslate2 models require faster-whisper:
+
+```bash
+python3 -m pip install --user faster-whisper
+```
 
 Use the same short local recording to compare model speed and output:
 
 ```bash
-speed-of-cinnamon benchmark-models ~/testaufnahme.wav --language de --models tiny-de tiny base --json
+speed-of-cinnamon benchmark-models ~/testaufnahme.wav --language de --models ct2-base ct2-small-de ct2-tiny-de ct2-small tiny-de tiny base --json
 ```
 
 The benchmark only uses local downloaded catalog files. It reports missing models, failed runs, elapsed seconds, and the
@@ -149,11 +154,12 @@ Downloaded files are stored below:
 
 ```text
 ~/.local/share/speed-of-cinnamon/models/whisper.cpp/
+~/.local/share/speed-of-cinnamon/models/ctranslate2/
 ```
 
-Downloads use upstream whisper.cpp ggml model files and verify SHA-1 checksums before activation. If `whisper-cli`,
-`whisper.cpp`, or Fedora's `pwcpp` is installed, Automatic transcription can use a verified downloaded model even when
-the explicit `whisper.cpp model` setting is empty.
+GGML downloads verify SHA-1 checksums before activation. CTranslate2 downloads verify the required model files are
+present. If faster-whisper, `whisper-cli`, `whisper.cpp`, or Fedora's `pwcpp` is installed, Automatic transcription can
+use a downloaded model even when the explicit voice model setting is empty.
 
 ## Text Models
 

@@ -71,6 +71,10 @@ def models_dir() -> Path:
     return data_dir() / "models" / "whisper.cpp"
 
 
+def ctranslate2_models_dir() -> Path:
+    return data_dir() / "models" / "ctranslate2"
+
+
 def default_state_file() -> Path:
     return state_dir() / "state.json"
 
@@ -90,3 +94,4 @@ def ensure_runtime_dirs() -> None:
     transcript_dir().mkdir(parents=True, exist_ok=True)
     diagnostics_dir().mkdir(parents=True, exist_ok=True)
     models_dir().mkdir(parents=True, exist_ok=True)
+    ctranslate2_models_dir().mkdir(parents=True, exist_ok=True)

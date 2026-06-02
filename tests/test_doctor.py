@@ -19,6 +19,7 @@ class DoctorTest(unittest.TestCase):
         tools = {"python3", "pw-record", "pactl", "xdotool"}
         env = {"XDG_CURRENT_DESKTOP": "X-Cinnamon", "XDG_SESSION_TYPE": "x11", "DESKTOP_SESSION": "cinnamon"}
         with (
+            mock.patch("speed_of_cinnamon.doctor.default_ctranslate2_model_path", return_value=""),
             mock.patch("speed_of_cinnamon.doctor.default_whisper_cpp_model_path", return_value=""),
             mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)),
             mock.patch.dict(os.environ, env),
@@ -168,15 +169,85 @@ class DoctorTest(unittest.TestCase):
                 "transcriber": "auto",
                 "insert-method": "none",
             }
-            with (
+        with (
                 mock.patch("speed_of_cinnamon.doctor.default_whisper_cpp_model_path", return_value=str(model)),
                 mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)),
             ):
                 payload = doctor.report(settings)
         self.assertTrue(payload["ok"])
-        self.assertTrue(payload["checks"][-1]["ok"])
-        self.assertEqual(payload["checks"][-1]["name"], "pwcpp")
+        check_names = [check["name"] for check in payload["checks"]]
+        self.assertIn("pwcpp", check_names)
+        self.assertTrue(next((check["ok"] for check in payload["checks"] if check["name"] == "pwcpp"), False))
         self.assertEqual(payload["configured"]["transcriber"]["resolved"], "whisper-cpp")
+
+    def test_auto_asr_accepts_downloaded_ctranslate2_directory_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "ct2-model"
+            model.mkdir()
+            settings = {
+                "recorder": "auto",
+                "transcriber": "auto",
+                "whisper-model": str(model),
+                "insert-method": "none",
+            }
+            with (
+                mock.patch("speed_of_cinnamon.doctor.faster_whisper_available", return_value=True),
+                mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from({"python3", "pw-record"})),
+            ):
+                payload = doctor.report(settings)
+        self.assertTrue(payload["configured"]["transcriber"]["ok"])
+        self.assertEqual(payload["configured"]["transcriber"]["resolved"], "faster-whisper")
+
+    def test_auto_asr_reports_missing_configured_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "missing.bin"
+            settings = {
+                "recorder": "auto",
+                "transcriber": "auto",
+                "whisper-model": str(model),
+                "insert-method": "none",
+            }
+            with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from({"python3", "pw-record"})):
+                payload = doctor.report(settings)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["configured"]["transcriber"]["ok"])
+        self.assertIn("voice model not found", payload["configured"]["transcriber"]["detail"])
+
+    def test_auto_asr_reports_missing_faster_whisper_for_directory_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "ct2-missing-module"
+            model.mkdir()
+            settings = {
+                "recorder": "auto",
+                "transcriber": "auto",
+                "whisper-model": str(model),
+                "insert-method": "none",
+            }
+            with (
+                mock.patch("speed_of_cinnamon.doctor.faster_whisper_available", return_value=False),
+                mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from({"python3", "pw-record"})),
+            ):
+                payload = doctor.report(settings)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["configured"]["transcriber"]["ok"])
+        self.assertIn("faster-whisper is missing", payload["configured"]["transcriber"]["detail"])
+
+    def test_auto_prefers_configured_model_over_whisper_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "ct2-model"
+            model.mkdir()
+            settings = {
+                "recorder": "auto",
+                "transcriber": "auto",
+                "whisper-model": str(model),
+                "insert-method": "none",
+            }
+            with (
+                mock.patch("speed_of_cinnamon.doctor.faster_whisper_available", return_value=True),
+                mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from({"python3", "pw-record", "whisper", "whisper-cli"})),
+            ):
+                payload = doctor.report(settings)
+        self.assertEqual(payload["configured"]["transcriber"]["resolved"], "faster-whisper")
 
     def test_ollama_postprocessor_requires_model(self) -> None:
         tools = {"python3", "pw-record"}

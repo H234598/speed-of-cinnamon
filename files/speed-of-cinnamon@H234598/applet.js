@@ -1772,11 +1772,17 @@ MyApplet.prototype = {
     download.connect("activate", () => this._downloadStarterModel());
     this.modelItem.menu.addMenuItem(download);
 
-    let openFolder = new PopupMenu.PopupIconMenuItem(_("Open model folder"), "folder-symbolic", St.IconType.SYMBOLIC);
+    let openFolder = new PopupMenu.PopupIconMenuItem(_("Open GGML model folder"), "folder-symbolic", St.IconType.SYMBOLIC);
     openFolder.connect("activate", () => {
       this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon", "models", "whisper.cpp"]), _("Opened model folder"));
     });
     this.modelItem.menu.addMenuItem(openFolder);
+
+    let openCt2Folder = new PopupMenu.PopupIconMenuItem(_("Open CTranslate2 model folder"), "folder-symbolic", St.IconType.SYMBOLIC);
+    openCt2Folder.connect("activate", () => {
+      this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon", "models", "ctranslate2"]), _("Opened model folder"));
+    });
+    this.modelItem.menu.addMenuItem(openCt2Folder);
 
     this.modelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
@@ -1788,12 +1794,35 @@ MyApplet.prototype = {
       this.modelItem.menu.addMenuItem(this._selectionInfoItem(_("No models in catalog")));
       return;
     }
+    let ct2Menu = new PopupMenu.PopupSubMenuMenuItem(_("CTranslate2"));
+    let ggmlMenu = new PopupMenu.PopupSubMenuMenuItem(_("GGML"));
+    this._styleMenuItemLabel(ct2Menu);
+    this._styleMenuItemLabel(ggmlMenu);
+    this._styleSelectionSubmenu(ct2Menu);
+    this._styleSelectionSubmenu(ggmlMenu);
+    this.modelItem.menu.addMenuItem(ct2Menu);
+    this.modelItem.menu.addMenuItem(ggmlMenu);
+
+    let ct2Count = 0;
+    let ggmlCount = 0;
     for (let model of models) {
-      this._addModelMenuEntry(model);
+      if (String(model.model_format || "") === "ctranslate2" || String(model.backend || "") === "faster-whisper") {
+        this._addModelMenuEntry(model, ct2Menu.menu);
+        ct2Count++;
+      } else {
+        this._addModelMenuEntry(model, ggmlMenu.menu);
+        ggmlCount++;
+      }
+    }
+    if (ct2Count === 0) {
+      ct2Menu.menu.addMenuItem(this._selectionInfoItem(_("No CTranslate2 models in catalog")));
+    }
+    if (ggmlCount === 0) {
+      ggmlMenu.menu.addMenuItem(this._selectionInfoItem(_("No GGML models in catalog")));
     }
   },
 
-  _addModelMenuEntry: function(model) {
+  _addModelMenuEntry: function(model, parentMenu) {
     let name = String(model.name || "");
     if (name === "") {
       return;
@@ -1811,7 +1840,7 @@ MyApplet.prototype = {
     let entry = new PopupMenu.PopupSubMenuMenuItem(label);
     this._styleMenuItemLabel(entry);
     this._styleSelectionSubmenu(entry);
-    this.modelItem.menu.addMenuItem(entry);
+    parentMenu.addMenuItem(entry);
 
     entry.menu.addMenuItem(this._selectionInfoItem(String(model.description || "")));
     if (!compatible) {
@@ -1842,9 +1871,30 @@ MyApplet.prototype = {
   },
 
   _voiceModelSupportsCurrentLanguage: function(model) {
+    let languages = model.languages || [];
+    if (languages.length > 0) {
+      for (let language of languages) {
+        if (this._languageMatches(this._voiceModelLanguage(), language)) {
+          return true;
+        }
+      }
+      return false;
+    }
     let name = String(model.name || "").trim().toLowerCase();
     let filename = String(model.filename || model.path || "").trim().toLowerCase();
     return this._voiceModelSupportsLanguage(name, filename, this._voiceModelLanguage());
+  },
+
+  _languageMatches: function(language, allowed) {
+    let current = String(language || "").trim().toLowerCase().replace("_", "-");
+    let expected = String(allowed || "").trim().toLowerCase().replace("_", "-");
+    if (expected === "") {
+      return true;
+    }
+    if (expected === "en") {
+      return this._isEnglishLanguage(current);
+    }
+    return current === expected || current.indexOf(expected + "-") === 0;
   },
 
   _voiceModelSupportsLanguage: function(name, filename, language) {
@@ -1947,7 +1997,8 @@ MyApplet.prototype = {
 
   _selectVoiceModel: function(model) {
     let path = String(model.path || "");
-    let name = String(model.name || "whisper.cpp");
+    let name = String(model.name || "voice model");
+    let backend = String(model.backend || "whisper-cpp");
     if (path === "") {
       return;
     }
@@ -1955,7 +2006,7 @@ MyApplet.prototype = {
       this._setStatus("error", _("English-only model cannot transcribe primary language: ") + this._voiceModelLanguage(), this.lastTranscript);
       return;
     }
-    this.transcriber = "whisper-cpp";
+    this.transcriber = backend;
     this.whisperModel = path;
     this.settings.setValue("transcriber", this.transcriber);
     this.settings.setValue("whisper-model", this.whisperModel);
@@ -2855,12 +2906,13 @@ MyApplet.prototype = {
   _voiceBackendLabel: function() {
     let backend = String(this.transcriber || "auto");
     let model = String(this.whisperModel || "").trim();
-    if (backend === "whisper-cpp" && model !== "") {
+    if ((backend === "whisper-cpp" || backend === "faster-whisper") && model !== "") {
       return _("Voice: ") + GLib.path_get_basename(model);
     }
     if (backend === "command") return _("Voice: custom command");
     if (backend === "whisper") return _("Voice: whisper");
     if (backend === "whisper-cpp") return _("Voice: whisper.cpp");
+    if (backend === "faster-whisper") return _("Voice: CTranslate2");
     return _("Voice: automatic");
   },
 

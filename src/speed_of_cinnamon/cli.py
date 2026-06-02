@@ -29,6 +29,7 @@ from .models import (
     download_model,
     list_models,
     model_path,
+    model_status,
     model_supports_language,
     resolve_model,
     remove_model,
@@ -325,6 +326,24 @@ def _write_text_atomic(path: Path, text: str) -> None:
         except OSError:
             pass
         raise RuntimeError(f"failed to write transcript file: {path}") from exc
+
+
+def _prepare_private_file(path: Path, *, field_name: str) -> None:
+    if not isinstance(path, Path):
+        raise RuntimeError(f"{field_name} must be a path")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("ab") as handle:
+            try:
+                os.fchmod(handle.fileno(), 0o600)
+            except OSError:
+                pass
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+    except OSError as exc:
+        raise RuntimeError(f"failed to prepare {field_name}: {path}") from exc
 
 
 def _require_json_path(path_value: str, *, field_name: str, default: Path | None = None) -> Path:
@@ -699,6 +718,7 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
     log_path = recordings_dir() / f"{stamp}.log"
     audio_path = validate_recording_path(audio_path, suffix=".wav", require_recordings_dir=True)
     log_path = validate_recording_path(log_path, suffix=".log", require_recordings_dir=True)
+    _prepare_private_file(audio_path, field_name="recording audio file")
     max_seconds = _coerce_int(args.max_seconds, field_name="max-seconds", max_value=MAX_RECORDING_SECONDS)
     command = choose_recorder(args.recorder, audio_path, max_seconds, args.input_device)
     proc = start_recorder(command, log_path)
@@ -1006,17 +1026,19 @@ def _benchmark_targets(model_names: list[str] | None, language: str) -> list[Mod
 
 def _benchmark_model(audio_path: Path, language: str, model: ModelSpec) -> dict[str, object]:
     path = model_path(model)
+    status = model_status(model, verify=True)
+    downloaded = bool(status.get("downloaded"))
     result: dict[str, object] = {
         "model": model.name,
         "path": str(path),
-        "downloaded": path.is_file(),
+        "downloaded": downloaded,
         "compatible": model_supports_language(path, language),
         "ok": False,
         "seconds": None,
         "transcript": "",
         "error": "",
     }
-    if not path.is_file():
+    if not downloaded:
         result["error"] = f"model is not downloaded: {model.name}"
         return result
     if not model_supports_language(path, language):
@@ -1030,7 +1052,7 @@ def _benchmark_model(audio_path: Path, language: str, model: ModelSpec) -> dict[
             language=language,
             text_path=transcript_dir() / f"{audio_path.stem}-{model.name}.txt",
             command_template="",
-            backend="whisper-cpp",
+            backend=model.backend,
             whisper_model=str(path),
             personal_context="",
             vocabulary="",
@@ -1351,7 +1373,7 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-seconds", type=int, default=DEFAULT_MAX_SECONDS)
     parser.add_argument("--recorder", default="auto", choices=["auto", "pw-record", "parecord", "arecord"])
     parser.add_argument("--input-device", default="")
-    parser.add_argument("--transcriber", default="auto", choices=["auto", "whisper", "whisper-cpp", "command"])
+    parser.add_argument("--transcriber", default="auto", choices=["auto", "whisper", "whisper-cpp", "faster-whisper", "command"])
     parser.add_argument("--transcriber-command", default="")
     parser.add_argument("--whisper-model", default="")
     parser.add_argument("--post-process-backend", default="command", choices=["none", "command", "ollama", "openai-compatible"])
@@ -1544,7 +1566,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(transcribe_file)
     transcribe_file.add_argument("audio_path")
     transcribe_file.add_argument("--language", default="en")
-    transcribe_file.add_argument("--transcriber", default="auto", choices=["auto", "whisper", "whisper-cpp", "command"])
+    transcribe_file.add_argument("--transcriber", default="auto", choices=["auto", "whisper", "whisper-cpp", "faster-whisper", "command"])
     transcribe_file.add_argument("--transcriber-command", default="")
     transcribe_file.add_argument("--whisper-model", default="")
     transcribe_file.add_argument("--post-process-backend", default="command", choices=["none", "command", "ollama", "openai-compatible"])

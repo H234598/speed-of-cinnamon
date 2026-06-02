@@ -9,7 +9,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from .models import default_whisper_cpp_model_path, model_supports_language
+from .models import default_ctranslate2_model_path, default_whisper_cpp_model_path, model_backend_for_path, model_supports_language
 from .command_chain import CommandChainError, MAX_COMMAND_OUTPUT_CHARS, run_command_chain, split_command_chain
 from .personalization import build_personalization_prompt, normalize_context, normalize_vocabulary
 
@@ -43,6 +43,17 @@ def _contains_escaped_null(value: str) -> bool:
         raise TranscriptionError("value must be text")
     lowered = (value or "").lower()
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
+
+
+def _model_path_exists(path: str) -> bool:
+    if isinstance(path, bool) or not isinstance(path, str):
+        return False
+    if _contains_escaped_null(path):
+        return False
+    try:
+        return Path(path).expanduser().exists()
+    except (OSError, ValueError):
+        return False
 
 
 def _write_text_atomic(path: Path, text: str) -> None:
@@ -413,6 +424,42 @@ def transcribe_with_whisper_cpp(audio_path: Path, language: str, text_path: Path
     raise TranscriptionError("whisper.cpp completed but did not produce a transcript")
 
 
+def faster_whisper_available() -> bool:
+    try:
+        import faster_whisper  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def transcribe_with_faster_whisper(audio_path: Path, language: str, text_path: Path, model_path: str) -> str:
+    if not model_path.strip():
+        raise TranscriptionError("CTranslate2 model path is required")
+    if not model_supports_language(model_path, language):
+        raise TranscriptionError(
+            f"CTranslate2 model does not support language {language}; use a multilingual model"
+        )
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError as exc:
+        raise TranscriptionError("faster-whisper is not installed") from exc
+
+    try:
+        model = WhisperModel(model_path, device="cpu", compute_type="int8")
+        segments, _info = model.transcribe(
+            str(audio_path),
+            language=language or None,
+            task="transcribe",
+            beam_size=5,
+        )
+        text = " ".join(segment.text.strip() for segment in segments).strip()
+    except Exception as exc:
+        raise TranscriptionError(f"faster-whisper failed: {exc}") from exc
+    _assert_text_length(text, field_name="transcript")
+    _write_text_atomic(text_path, text + "\n")
+    return text
+
+
 def normalize_backend(value: str) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         raise TranscriptionError("backend must be text")
@@ -422,6 +469,9 @@ def normalize_backend(value: str) -> str:
         "openai-whisper": "whisper",
         "whisper-cpp": "whisper-cpp",
         "whisper.cpp": "whisper-cpp",
+        "ctranslate2": "faster-whisper",
+        "ct2": "faster-whisper",
+        "faster-whisper": "faster-whisper",
         "custom": "command",
         "template": "command",
     }
@@ -432,21 +482,51 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
     if not isinstance(config, TranscriberConfig):
         raise TranscriptionError("config must be TranscriberConfig")
     backend = normalize_backend(config.backend)
-    local_model = config.whisper_model.strip() or default_whisper_cpp_model_path(config.language)
+    configured_model = config.whisper_model.strip()
+    has_configured_model = bool(configured_model)
+    configured_model_backend = model_backend_for_path(configured_model) if configured_model else ""
+    configured_model_is_dir = False
+    if configured_model:
+        try:
+            configured_model_path = Path(configured_model).expanduser()
+            configured_model_is_dir = configured_model_path.exists() and configured_model_path.is_dir()
+        except (OSError, ValueError):
+            configured_model_is_dir = False
+    local_model = configured_model or default_ctranslate2_model_path(config.language) or default_whisper_cpp_model_path(config.language)
     if _contains_escaped_null(config.whisper_model or ""):
         raise TranscriptionError("whisper model contains invalid null byte")
     if backend == "auto":
         if config.command_template.strip():
             return "command"
+        if has_configured_model:
+            if not _model_path_exists(configured_model):
+                raise TranscriptionError(f"configured whisper model path is missing: {configured_model}")
+            if configured_model_backend == "faster-whisper" or configured_model_is_dir:
+                if faster_whisper_available():
+                    return "faster-whisper"
+                raise TranscriptionError("configured CTranslate2 model requires faster-whisper")
+            if configured_model_backend == "whisper-cpp":
+                if resolve_whisper_cpp_command():
+                    return "whisper-cpp"
+                raise TranscriptionError("configured whisper model requires whisper.cpp")
+            if resolve_whisper_cpp_command():
+                return "whisper-cpp"
+            raise TranscriptionError("configured model requires whisper.cpp")
+        if configured_model_backend == "faster-whisper" and faster_whisper_available():
+            return "faster-whisper"
+        if configured_model_backend == "whisper-cpp" and resolve_whisper_cpp_command():
+            return "whisper-cpp"
         if shutil.which("whisper"):
             return "whisper"
+        if local_model and model_backend_for_path(local_model) == "faster-whisper" and faster_whisper_available():
+            return "faster-whisper"
         if local_model and resolve_whisper_cpp_command():
             return "whisper-cpp"
         raise TranscriptionError(
-            "no transcriber available; install 'whisper', configure whisper.cpp with a model, "
+            "no transcriber available; install 'whisper', install faster-whisper, configure whisper.cpp with a model, "
             "or set a custom transcriber command"
         )
-    if backend not in {"command", "whisper", "whisper-cpp"}:
+    if backend not in {"command", "whisper", "whisper-cpp", "faster-whisper"}:
         raise TranscriptionError(f"unknown transcriber backend: {config.backend}")
     return backend
 
@@ -503,6 +583,13 @@ def transcribe(
             language,
             text_path,
             whisper_model or default_whisper_cpp_model_path(language),
+        )
+    elif resolved_backend == "faster-whisper":
+        text = transcribe_with_faster_whisper(
+            audio_path,
+            language,
+            text_path,
+            whisper_model or default_ctranslate2_model_path(language),
         )
     else:
         raise TranscriptionError(f"unknown transcriber backend: {resolved_backend}")

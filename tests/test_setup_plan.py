@@ -47,6 +47,27 @@ class SetupPlanTest(unittest.TestCase):
         self.assertIn("speed-of-cinnamon download-model tiny --json", plan["commands"])
         self.assertIn("Install or configure", plan["text"])
 
+    def test_missing_auto_asr_with_faster_whisper_text_gets_asr_backend_step(self) -> None:
+        payload = {
+            "ok": False,
+            "configured": {
+                "recorder": {"ok": True},
+                "transcriber": {
+                    "ok": False,
+                    "value": "auto",
+                    "detail": "install whisper, install faster-whisper, configure whisper.cpp with a model, or set a custom transcriber command",
+                },
+                "output": {"ok": True},
+                "postprocessor": {"ok": True},
+                "warnings": [],
+            },
+            "desktop": {"cinnamon": True},
+        }
+        plan = build_setup_plan(payload)
+        self.assertFalse(plan["ready"])
+        self.assertEqual(plan["steps"][0]["id"], "asr-backend")
+        self.assertIn("python3 -m pip install --user faster-whisper", plan["commands"])
+
     def test_applet_plan_marks_non_cinnamon_session_not_ready(self) -> None:
         payload = {
             "ok": False,

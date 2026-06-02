@@ -41,7 +41,6 @@ spec_path = Path(sys.argv[1])
 version = sys.argv[2]
 text = spec_path.read_text(encoding="utf-8")
 text = re.sub(r"^Version:\s*.*$", f"Version:        {version}", text, flags=re.M)
-text = re.sub(r"^Release:\s*.*$", "Release:        1%{?dist}", text, flags=re.M)
 spec_path.write_text(text, encoding="utf-8")
 PY
 

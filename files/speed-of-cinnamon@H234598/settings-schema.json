@@ -225,10 +225,11 @@
   "transcriber": {
     "type": "combobox",
     "description": "Transcriber",
-    "tooltip": "Automatic uses a custom command when one is configured, then the whisper command when installed, then whisper.cpp when a model path is configured.",
+    "tooltip": "Automatic uses a custom command when one is configured, then the whisper command when installed, then CTranslate2/faster-whisper or whisper.cpp when a matching model path is configured.",
     "options": {
       "Automatic": "auto",
       "OpenAI Whisper command": "whisper",
+      "CTranslate2 / faster-whisper": "faster-whisper",
       "whisper.cpp": "whisper-cpp",
       "Custom command": "command"
     },
@@ -236,8 +237,8 @@
   },
   "whisper-model": {
     "type": "filechooser",
-    "description": "whisper.cpp model",
-    "tooltip": "Model file used when the transcriber is whisper.cpp, for example ggml-base.bin. Max 4096 chars.",
+    "description": "Voice model",
+    "tooltip": "Model file or directory used by the selected local backend. GGML uses files such as ggml-base.bin; CTranslate2 uses model directories. Max 4096 chars.",
     "default": ""
   },
   "transcriber-command": {

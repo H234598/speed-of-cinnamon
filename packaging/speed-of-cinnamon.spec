@@ -1,6 +1,6 @@
 Name:           speed-of-cinnamon
 Version:        0.1.2
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Cinnamon-native voice typing helper for Fedora Cinnamon
 
 License:        MIT
@@ -72,6 +72,10 @@ PYTHONPATH="${PWD}/src" %{__python3} -m unittest discover -s tests
 %{_prefix}/lib/python*/site-packages/speed_of_cinnamon
 
 %changelog
+* Tue Jun 02 2026 H234598 <54270221+H234598@users.noreply.github.com> - 0.1.2-2
+- Add CTranslate2/faster-whisper voice model backend
+- Split the Cinnamon voice model menu into CTranslate2 and GGML groups
+
 * Tue Jun 02 2026 H234598 <54270221+H234598@users.noreply.github.com> - 0.1.2-1
 - Add German tiny whisper.cpp catalog model
 - Add CLI model benchmarking for local test recordings

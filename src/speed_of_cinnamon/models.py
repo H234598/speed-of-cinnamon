@@ -3,16 +3,18 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import shutil
 import tempfile
 import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from .paths import models_dir
+from .paths import ctranslate2_models_dir, models_dir
 
 HUGGING_FACE_BASE_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
 TINY_DE_MODEL_URL = "https://huggingface.co/wabisabisocial/whisper-tiny-german-ggml/resolve/main/ggml-tiny-de.bin"
+HUGGING_FACE_RESOLVE_URL = "https://huggingface.co/{repo}/resolve/main/{filename}"
 MAX_MODEL_DOWNLOAD_BYTES = 1_200_000_000
 MAX_MODEL_DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 MODEL_SIZE_SLACK_BYTES = 32 * 1024 * 1024
@@ -339,11 +341,19 @@ class ModelSpec:
     description: str
     languages: tuple[str, ...] = ()
     download_url: str = ""
+    backend: str = "whisper-cpp"
+    model_format: str = "ggml"
+    repo_id: str = ""
+    files: tuple[str, ...] = ()
 
     @property
     def url(self) -> str:
         if self.download_url:
             return self.download_url
+        if self.repo_id and self.files:
+            return f"https://huggingface.co/{self.repo_id}"
+        if self.repo_id and not self.files:
+            return HUGGING_FACE_RESOLVE_URL.format(repo=self.repo_id, filename=self.filename)
         return f"{HUGGING_FACE_BASE_URL}/{self.filename}"
 
 
@@ -388,6 +398,52 @@ CATALOG: tuple[ModelSpec, ...] = (
         description="Better multilingual accuracy, still light",
     ),
     ModelSpec(
+        name="ct2-base",
+        filename="base",
+        size="141 MiB",
+        sha1="",
+        description="CTranslate2 multilingual base model",
+        backend="faster-whisper",
+        model_format="ctranslate2",
+        repo_id="Systran/faster-whisper-base",
+        files=("config.json", "model.bin", "tokenizer.json", "vocabulary.txt"),
+    ),
+    ModelSpec(
+        name="ct2-tiny-de",
+        filename="tiny-de",
+        size="75 MiB",
+        sha1="",
+        description="CTranslate2 German tiny model",
+        languages=("de",),
+        backend="faster-whisper",
+        model_format="ctranslate2",
+        repo_id="pbechhaus/whisper-tiny-german-ct2",
+        files=("config.json", "model.bin", "preprocessor_config.json", "tokenizer.json", "vocabulary.json"),
+    ),
+    ModelSpec(
+        name="ct2-small-de",
+        filename="small-de",
+        size="462 MiB",
+        sha1="",
+        description="CTranslate2 German small model",
+        languages=("de",),
+        backend="faster-whisper",
+        model_format="ctranslate2",
+        repo_id="mkenfenheuer/whisper-small-cv11-german-ct2",
+        files=("config.json", "model.bin", "tokenizer_config.json", "vocabulary.json"),
+    ),
+    ModelSpec(
+        name="ct2-small",
+        filename="small",
+        size="464 MiB",
+        sha1="",
+        description="CTranslate2 multilingual small model",
+        backend="faster-whisper",
+        model_format="ctranslate2",
+        repo_id="Systran/faster-whisper-small",
+        files=("config.json", "model.bin", "tokenizer.json", "vocabulary.txt"),
+    ),
+    ModelSpec(
         name="small.en",
         filename="ggml-small.en.bin",
         size="466 MiB",
@@ -427,7 +483,18 @@ def resolve_model(name: str) -> ModelSpec:
 
 
 def model_path(model: ModelSpec) -> Path:
+    if model.model_format == "ctranslate2":
+        return ctranslate2_models_dir() / model.filename
     return models_dir() / model.filename
+
+
+def model_download_urls(model: ModelSpec) -> list[tuple[str, str]]:
+    if model.files:
+        return [
+            (filename, HUGGING_FACE_RESOLVE_URL.format(repo=model.repo_id, filename=filename))
+            for filename in model.files
+        ]
+    return [(model.filename, model.url)]
 
 
 def is_english_language(language: str) -> bool:
@@ -462,11 +529,24 @@ def model_path_is_english_only(path: str | Path) -> bool:
 
 
 def _catalog_model_for_path(path: str | Path) -> ModelSpec | None:
-    filename = Path(path).name.lower()
+    try:
+        normalized = Path(path)
+    except (TypeError, ValueError):
+        return None
+    filename = normalized.name.lower()
     for model in CATALOG:
-        if filename == model.filename.lower() or filename == model.name.lower():
+        if (
+            filename == model.filename.lower()
+            or filename == model.name.lower()
+            or str(normalized) == str(model_path(model))
+        ):
             return model
     return None
+
+
+def model_backend_for_path(path: str | Path) -> str:
+    model = _catalog_model_for_path(path)
+    return model.backend if model is not None else ""
 
 
 def model_supports_language(path: str | Path, language: str) -> bool:
@@ -489,13 +569,15 @@ def model_status(model: ModelSpec, verify: bool = False) -> dict[str, object]:
         raise ModelError("verify must be a boolean")
     path = model_path(model)
     exists = path.exists()
-    checksum = sha1_file(path) if verify and exists and path.is_file() else ""
+    downloaded = _model_is_downloaded(model, path)
+    checksum = sha1_file(path) if verify and downloaded and path.is_file() and model.sha1 else ""
     return {
         **asdict(model),
         "url": model.url,
+        "urls": dict(model_download_urls(model)),
         "path": str(path),
-        "downloaded": exists,
-        "verified": bool(exists and checksum == model.sha1) if verify else False,
+        "downloaded": downloaded,
+        "verified": _model_is_verified(model, path, checksum) if verify else False,
         "checksum": checksum,
     }
 
@@ -508,15 +590,98 @@ def downloaded_model_paths(language: str = "") -> list[Path]:
     paths: list[Path] = []
     for model in CATALOG:
         path = model_path(model)
-        if path.exists() and path.is_file() and model_supports_language(path, language) and sha1_file(path) == model.sha1:
+        if _model_is_verified(model, path) and model_supports_language(path, language):
             paths.append(path)
     return paths
 
 
 def default_whisper_cpp_model_path(language: str = "") -> str:
-    for path in downloaded_model_paths(language):
-        return str(path)
+    for model in CATALOG:
+        path = model_path(model)
+        if model.backend == "whisper-cpp" and _model_is_verified(model, path) and model_supports_language(path, language):
+            return str(path)
     return ""
+
+
+def default_ctranslate2_model_path(language: str = "") -> str:
+    for model in CATALOG:
+        path = model_path(model)
+        if model.backend == "faster-whisper" and _model_is_verified(model, path) and model_supports_language(path, language):
+            return str(path)
+    return ""
+
+
+def _model_is_downloaded(model: ModelSpec, path: Path) -> bool:
+    if model.files:
+        return path.is_dir() and all((path / filename).is_file() for filename in model.files)
+    return path.is_file()
+
+
+def _model_is_verified(model: ModelSpec, path: Path, checksum: str = "") -> bool:
+    if not _model_is_downloaded(model, path):
+        return False
+    if model.files:
+        return True
+    current_checksum = checksum or sha1_file(path)
+    return bool(model.sha1 and current_checksum == model.sha1)
+
+
+def _download_url_to_file(url: str, tmp_path: Path, size_limit: int, model_name: str) -> int:
+    with (
+        urllib.request.urlopen(url, timeout=30) as response,
+        tmp_path.open("wb") as output,
+    ):
+        try:
+            os.fchmod(output.fileno(), 0o600)
+        except OSError:
+            pass
+        content_length = _read_content_length(response)
+        if content_length is not None and content_length > size_limit:
+            raise ModelError(f"downloaded model too large for {model_name}: {content_length} > {size_limit}")
+
+        downloaded = 0
+        while True:
+            chunk = response.read(MAX_MODEL_DOWNLOAD_CHUNK_BYTES)
+            if not chunk:
+                break
+            downloaded += len(chunk)
+            if downloaded > size_limit:
+                raise ModelError(f"downloaded model too large for {model_name}: {downloaded} > {size_limit}")
+            output.write(chunk)
+        if content_length is not None and downloaded != content_length:
+            raise ModelError(f"downloaded model size mismatch for {model_name}: {downloaded} != {content_length}")
+    return downloaded
+
+
+def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict[str, object]:
+    if path.exists() and not force:
+        status = model_status(model, verify=True)
+        if status["verified"]:
+            return {**status, "status": "done", "message": f"model already downloaded: {path}"}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_dir = Path(tempfile.mkdtemp(prefix=f".{model.filename}.", dir=path.parent))
+    size_limit = _download_size_limit(model)
+    if model.files and not model.repo_id:
+        raise ModelError(f"model catalog entry {model.name} is missing repo_id for multi-file download")
+    try:
+        downloaded_total = 0
+        for filename, url in model_download_urls(model):
+            target = tmp_dir / filename
+            target.parent.mkdir(parents=True, exist_ok=True)
+            downloaded_total += _download_url_to_file(url, target, size_limit, model.name)
+            try:
+                target.chmod(0o600)
+            except OSError:
+                pass
+        if downloaded_total > size_limit:
+            raise ModelError(f"downloaded model too large for {model.name}: {downloaded_total} > {size_limit}")
+        if path.exists():
+            shutil.rmtree(path)
+        os.replace(tmp_dir, path)
+    except Exception:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
+    return {**model_status(model, verify=True), "status": "done", "message": f"model downloaded: {path}"}
 
 
 def download_model(name: str, force: bool = False) -> dict[str, object]:
@@ -524,6 +689,8 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
         raise ModelError("force must be a boolean")
     model = resolve_model(name)
     path = model_path(model)
+    if model.files:
+        return _download_directory_model(model, path, force)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and not force:
         status = model_status(model, verify=True)
@@ -533,33 +700,7 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     size_limit = _download_size_limit(model)
     try:
-        with (
-            urllib.request.urlopen(model.url, timeout=30) as response,
-            tmp_path.open("wb") as output,
-        ):
-            try:
-                os.fchmod(output.fileno(), 0o600)
-            except OSError:
-                pass
-            content_length = _read_content_length(response)
-            if content_length is not None and content_length > size_limit:
-                raise ModelError(
-                    f"downloaded model too large for {model.name}: {content_length} > {size_limit}"
-                )
-
-            downloaded = 0
-            while True:
-                chunk = response.read(MAX_MODEL_DOWNLOAD_CHUNK_BYTES)
-                if not chunk:
-                    break
-                downloaded += len(chunk)
-                if downloaded > size_limit:
-                    raise ModelError(f"downloaded model too large for {model.name}: {downloaded} > {size_limit}")
-                output.write(chunk)
-            if content_length is not None and downloaded != content_length:
-                raise ModelError(
-                    f"downloaded model size mismatch for {model.name}: {downloaded} != {content_length}"
-                )
+        _download_url_to_file(model.url, tmp_path, size_limit, model.name)
         checksum = sha1_file(tmp_path)
         if checksum != model.sha1:
             raise ModelError(f"downloaded checksum mismatch for {model.name}: {checksum}")
@@ -591,11 +732,15 @@ def remove_model(name: str) -> dict[str, object]:
     _clear_model_checksum_cache(tmp_path)
     removed = False
     removed_tmp = False
-    try:
-        path.unlink()
+    if path.is_dir():
+        shutil.rmtree(path)
         removed = True
-    except FileNotFoundError:
-        pass
+    else:
+        try:
+            path.unlink()
+            removed = True
+        except FileNotFoundError:
+            pass
     try:
         tmp_path.unlink()
         removed_tmp = True

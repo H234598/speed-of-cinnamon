@@ -97,15 +97,15 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
                 "Configure the custom transcriber command",
                 detail,
             )
-        elif value in {"whisper-cpp", "auto"} and (
+        elif value in {"whisper-cpp", "faster-whisper", "auto"} and (
             "model not found" in detail.lower() or "model path" in detail.lower()
         ):
             _add_step(
                 steps,
                 "voice-model",
-                "Download or select a whisper.cpp voice model",
+                "Download or select a voice model",
                 detail,
-                ["speed-of-cinnamon download-model tiny --json"],
+                ["speed-of-cinnamon download-model ct2-base --json"],
             )
         else:
             _add_step(
@@ -113,11 +113,13 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
                 "asr-backend",
                 "Install or configure a local ASR backend",
                 detail.rstrip(".")
-                + ". Install a whisper command, install a whisper.cpp CLI such as pwcpp, or configure a custom command. "
+                + ". Install a whisper command, install faster-whisper, install a whisper.cpp CLI such as pwcpp, or configure a custom command. "
                 "Then use the applet's Voice model menu or download a starter model.",
                 [
+                    "python3 -m pip install --user faster-whisper",
                     "sudo dnf install -y python3-pywhispercpp",
                     "speed-of-cinnamon models --json",
+                    "speed-of-cinnamon download-model ct2-base --json",
                     "speed-of-cinnamon download-model tiny --json",
                 ],
             )

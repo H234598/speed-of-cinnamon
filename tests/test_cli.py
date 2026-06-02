@@ -291,6 +291,7 @@ class CliTest(unittest.TestCase):
             stdout = io.StringIO()
             with (
                 mock.patch("speed_of_cinnamon.cli.model_path", return_value=model_path),
+                mock.patch("speed_of_cinnamon.cli.model_status", return_value={"downloaded": False}),
                 redirect_stdout(stdout),
             ):
                 code = cli.run([
@@ -637,7 +638,7 @@ class CliTest(unittest.TestCase):
                 "transcriber": {
                     "ok": False,
                     "value": "auto",
-                    "detail": "install whisper, configure whisper.cpp with a model, or set a custom transcriber command",
+                    "detail": "install whisper, install faster-whisper, configure whisper.cpp with a model, or set a custom transcriber command",
                 },
                 "output": {"ok": True},
                 "postprocessor": {"ok": True},
@@ -2178,6 +2179,26 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["language"], "en")
         self.assertEqual(state.language, "en")
+
+    def test_start_prepares_audio_artifact_with_private_permissions(self) -> None:
+        proc = mock.Mock()
+        proc.pid = 23456
+        proc.poll.return_value = None
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.choose_recorder", return_value=RecorderCommand("test-recorder", [])),
+                mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=proc),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["start", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            audio_path = Path(payload["audio_path"])
+            mode = audio_path.stat().st_mode & 0o777
+        self.assertEqual(code, 0)
+        self.assertEqual(mode, 0o600)
 
     def test_start_rejects_negative_max_seconds(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

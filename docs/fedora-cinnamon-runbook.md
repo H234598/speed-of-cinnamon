@@ -236,13 +236,18 @@ The built-in `diagnostics` output does not include these values.
 
 ## Voice Models
 
-The applet's `Voice model` menu exposes a small whisper.cpp catalog. Use `Download starter model` for a primary-language
-starter: `tiny.en` for English, `tiny` for German and other non-English dictation. Open each catalog model to download,
-select, or remove it. Use `Automatic ASR backend` to clear an explicit whisper.cpp selection and return to the normal
-automatic resolver without opening Cinnamon settings. The same model actions are available from the CLI:
+The applet's `Voice model` menu exposes a local model catalog split into `CTranslate2` and `GGML`. Open each catalog
+model to download, select, or remove it. Selecting a model stores the path and chooses the matching backend
+automatically. Use `Automatic ASR backend` to clear an explicit selection and return to the normal resolver. The same
+model actions are available from the CLI:
 
 ```bash
 speed-of-cinnamon models --json
+python3 -m pip install --user faster-whisper
+speed-of-cinnamon download-model ct2-base --json
+speed-of-cinnamon download-model ct2-small-de --json
+speed-of-cinnamon download-model ct2-tiny-de --json
+speed-of-cinnamon download-model ct2-small --json
 speed-of-cinnamon download-model tiny-de --json
 speed-of-cinnamon download-model tiny --json
 speed-of-cinnamon download-model base --json
@@ -250,24 +255,23 @@ speed-of-cinnamon remove-model tiny --json
 ```
 
 Avoid `.en` models for German dictation. Whisper can otherwise return placeholder text like
-`[speaking in foreign language]` instead of the spoken words. `tiny-de` is a small German-only catalog model. For a fair
-speed and quality check, run each downloaded model against the same local test recording:
+`[speaking in foreign language]` instead of the spoken words. For a fair speed and quality check, run each downloaded
+model against the same local test recording:
 
 ```bash
-speed-of-cinnamon benchmark-models ~/testaufnahme.wav --language de --models tiny-de tiny base --json
+speed-of-cinnamon benchmark-models ~/testaufnahme.wav --language de --models ct2-base ct2-small-de ct2-tiny-de ct2-small tiny-de tiny base --json
 ```
 
 Downloaded files are saved below:
 
 ```text
 ~/.local/share/speed-of-cinnamon/models/whisper.cpp/
+~/.local/share/speed-of-cinnamon/models/ctranslate2/
 ```
 
-Each download is written through a temporary file, verified against the upstream SHA-1, and then moved into place. Once
-`whisper-cli`, `whisper.cpp`, or Fedora's `pwcpp` is installed, Automatic transcription can use a verified downloaded
-model even if the applet's `whisper.cpp model` setting is empty. Selecting a downloaded model from the applet sets the
-transcriber to `whisper.cpp` and stores the model path explicitly. Removing the active model from the applet, or choosing
-`Automatic ASR backend`, clears that explicit selection and returns the transcriber setting to `Automatic`.
+Each download is written through a temporary file or directory and then moved into place. GGML files are checked against
+SHA-1; CTranslate2 directories are checked for the required model files. Removing the active model from the applet, or
+choosing `Automatic ASR backend`, clears that explicit selection and returns the transcriber setting to `Automatic`.
 
 ## Notifications
 
