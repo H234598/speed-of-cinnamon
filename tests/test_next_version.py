@@ -7,6 +7,7 @@ import unittest
 import os
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 
 def _run_version(*args: str, expect_ok: bool, cwd: Path | None = None, path: str | None = None) -> subprocess.CompletedProcess[str]:
@@ -204,6 +205,42 @@ class NextVersionTest(unittest.TestCase):
     def test_parse_version_rejects_negative_segments(self) -> None:
         with self.assertRaises(next_version.UserInputError):
             next_version.parse_version("1.-2.3")
+
+    def test_commits_since_ref_parses_git_output(self) -> None:
+        with mock.patch.object(
+            next_version.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="7\n", stderr=""),
+        ) as run:
+            self.assertEqual(next_version.commits_since_ref("v0.1.20"), 7)
+            run.assert_called_once()
+
+    def test_commits_since_ref_missing_git_is_git_error(self) -> None:
+        with mock.patch.object(
+            next_version.subprocess,
+            "run",
+            side_effect=FileNotFoundError("git"),
+        ):
+            with self.assertRaises(next_version.GitEnvironmentError):
+                next_version.commits_since_ref("v0.1.20")
+
+    def test_tag_exists_checks_normalized_tag(self) -> None:
+        with mock.patch.object(
+            next_version.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="v0.1.20\n", stderr=""),
+        ) as run:
+            self.assertTrue(next_version.tag_exists("0.1.20"))
+            called_cmd = run.call_args.args[0]
+            self.assertEqual(called_cmd, ["git", "tag", "-l", "v0.1.20"])
+
+    def test_tag_exists_without_tag_is_false(self) -> None:
+        with mock.patch.object(
+            next_version.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="v0.1.19\n", stderr=""),
+        ):
+            self.assertFalse(next_version.tag_exists("0.1.20"))
 
 
 if __name__ == "__main__":
