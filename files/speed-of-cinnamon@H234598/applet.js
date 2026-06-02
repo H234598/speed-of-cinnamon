@@ -3509,10 +3509,13 @@ MyApplet.prototype = {
       this._windowProbeValue(this.targetWindow, "get_wm_class"),
       this._windowProbeValue(this.targetWindow, "get_wm_class_instance"),
       this._windowProbeValue(this.targetWindow, "get_gtk_application_id")
-    ].join("\n");
-    for (let i = 0; i < TERMINAL_WINDOW_MARKERS.length; i++) {
-      if (values.indexOf(TERMINAL_WINDOW_MARKERS[i]) >= 0) {
-        return true;
+    ];
+    for (let i = 0; i < values.length; i++) {
+      let value = values[i];
+      for (let j = 0; j < TERMINAL_WINDOW_MARKERS.length; j++) {
+        if (value.indexOf(TERMINAL_WINDOW_MARKERS[j]) >= 0) {
+          return true;
+        }
       }
     }
     return false;
