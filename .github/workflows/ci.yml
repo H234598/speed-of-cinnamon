@@ -159,7 +159,7 @@ jobs:
         run: make coverage
       - name: Upload coverage to QLTY
         if: ${{ env.QLTY_COVERAGE_TOKEN != '' }}
-        uses: qltysh/qlty-action/coverage@a19242102d17e497f437d7466aa01b528537e899
+        uses: qltysh/qlty-action/coverage@v2.2.0
         with:
           token: ${{ env.QLTY_COVERAGE_TOKEN }}
           files: reports/lcov.info

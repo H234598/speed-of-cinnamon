@@ -11,6 +11,11 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+
+permissions:
+  contents: read
+  statuses: write
+
 jobs:
   run-lint:
     runs-on: ubuntu-latest
@@ -35,5 +40,6 @@ jobs:
           VALIDATE_PYTHON_ISORT: false
           VALIDATE_PYTHON_MYPY: false
           VALIDATE_PYTHON_PYLINT: false
+          VALIDATE_RENOVATE: false
           VALIDATE_YAML_PRETTIER: false
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

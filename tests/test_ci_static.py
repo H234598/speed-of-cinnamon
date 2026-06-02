@@ -111,7 +111,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("run: python -m pip install coverage", workflow)
         self.assertIn("run: make check", workflow)
         self.assertIn("run: make coverage", workflow)
-        self.assertIn("uses: qltysh/qlty-action/coverage@a19242102d17e497f437d7466aa01b528537e899", workflow)
+        self.assertIn("uses: qltysh/qlty-action/coverage@v2.2.0", workflow)
         self.assertIn("if: ${{ env.QLTY_COVERAGE_TOKEN != '' }}", workflow)
         self.assertIn("token: ${{ env.QLTY_COVERAGE_TOKEN }}", workflow)
         self.assertIn("files: reports/lcov.info", workflow)
