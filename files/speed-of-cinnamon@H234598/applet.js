@@ -1270,6 +1270,17 @@ MyApplet.prototype = {
     return this._autoPasteTitleValues(value).join(", ");
   },
 
+  _autoPastePromptArgs: function() {
+    let current = this._normalizeAutoPasteTitle(this.autoPasteWindowTitle) || DEFAULT_AUTO_PASTE_TITLE;
+    return [
+      "zenity",
+      "--entry",
+      "--title=Auto-Paste",
+      "--text=Window title text to match. Empty disables Auto-Paste.",
+      "--entry-text=" + current
+    ];
+  },
+
   _autoPasteEnabled: function() {
     return this._autoPasteTitleValues(this.autoPasteWindowTitle).length > 0;
   },
@@ -1283,8 +1294,14 @@ MyApplet.prototype = {
   },
 
   _configureAutoPaste: function() {
-    this._openAppletSettings();
-    this._setTextOptionStatus(_("Set AutoPaste window title in applet settings. Empty disables it."));
+    if (!GLib.find_program_in_path("zenity")) {
+      this._setTextOptionStatus(_("Install zenity to enter a custom Auto-Paste string"));
+      return;
+    }
+    this._setTextOptionStatus(_("Enter custom Auto-Paste window title text..."));
+    this._spawnText(this._autoPastePromptArgs(), (output) => {
+      this._setAutoPasteTitles(this._autoPasteTitleValues(output));
+    }, { timeoutMs: 0 });
   },
 
   _setAutoPasteTitles: function(values) {

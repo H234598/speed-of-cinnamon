@@ -247,6 +247,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('for (let preset of AUTO_PASTE_TITLE_PRESETS)', source)
         self.assertIn('disabled.connect("activate", () => this._setAutoPasteTitles([]))', source)
         self.assertIn('let custom = new PopupMenu.PopupIconMenuItem(_("Custom string...")', source)
+        self.assertIn("_autoPastePromptArgs: function()", source)
+        self.assertIn('"--entry"', source)
+        self.assertIn('"--title=Auto-Paste"', source)
+        self.assertIn('"--entry-text=" + current', source)
+        self.assertIn('if (!GLib.find_program_in_path("zenity"))', source)
+        self.assertIn('this._spawnText(this._autoPastePromptArgs(), (output) => {', source)
+        self.assertIn('this._setAutoPasteTitles(this._autoPasteTitleValues(output));', source)
         self.assertIn('_autoPasteTitleValues: function(value)', source)
         self.assertIn('raw.split(/[,\\n\\r]+/)', source)
         self.assertIn('_normalizeAutoPasteTitle: function(value)', source)
@@ -256,7 +263,6 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._windowProbeValue(this.targetWindow, "get_title")', source)
         self.assertIn('for (let marker of markers)', source)
         self.assertIn('if (autoPasteEnter && text && text[text.length - 1] !== "\\n")', source)
-        self.assertIn('this._openAppletSettings();', source)
 
     def test_typing_delay_has_backend_limits(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

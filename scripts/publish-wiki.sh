@@ -52,9 +52,8 @@ cleanup() {
 trap cleanup EXIT
 
 if ! git clone "${wiki_url}" "${work_dir}/wiki"; then
-  mkdir -p "${work_dir}/wiki"
-  git -C "${work_dir}/wiki" init -b master
-  git -C "${work_dir}/wiki" remote add origin "${wiki_url}"
+  printf 'failed to clone wiki repository; refusing to initialize a replacement wiki checkout: %s\n' "${wiki_url}" >&2
+  exit 1
 fi
 
 require_source_file "${repo_dir}/docs/wiki/Home.md" "wiki source"

@@ -6,6 +6,7 @@ IFS=$'\n\t'
 usage() {
   printf 'usage: %s [--skip-snap] [--skip-generic-rpm] [--dry-run] [v]VERSION\n' "$0" >&2
   printf ' --dry-run: validate artifacts and report planned upload targets without publishing\n' >&2
+  printf ' existing release assets are never overwritten; delete stale assets explicitly before publishing\n' >&2
 }
 
 skip_snap=false
@@ -334,4 +335,4 @@ else
     --verify-tag
 fi
 
-gh release upload "${tag}" "${upload_refs[@]}" --repo "${repo}" --clobber
+gh release upload "${tag}" "${upload_refs[@]}" --repo "${repo}"

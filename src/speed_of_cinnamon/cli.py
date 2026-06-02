@@ -7,6 +7,7 @@ import json
 import os
 import platform
 import shutil
+import stat as stat_module
 import subprocess  # nosec B404
 import sys
 import time
@@ -488,7 +489,7 @@ def read_log_excerpt(path: Path | None, max_chars: int = 2000) -> str:
         return ""
     try:
         text = read_file_tail(path, max_chars)
-    except OSError:
+    except (OSError, ValueError):
         return ""
     return text.strip()
 
@@ -523,7 +524,7 @@ def read_transcript_history(limit: int = 10) -> list[dict[str, object]]:
     for mtime, path in candidates:
         try:
             text = read_file_tail(path, MAX_TRANSCRIPT_HISTORY_TEXT_CHARS).strip()
-        except OSError:
+        except (OSError, ValueError):
             continue
         if not text:
             continue
@@ -854,11 +855,11 @@ def sorted_files(paths: list[Path]) -> list[Path]:
     entries: list[tuple[float, str, Path]] = []
     for path in paths:
         try:
-            stat = path.stat()
+            file_stat = path.stat()
         except OSError:
             continue
-        if path.is_file():
-            entries.append((stat.st_mtime, path.name, path))
+        if stat_module.S_ISREG(file_stat.st_mode):
+            entries.append((file_stat.st_mtime, path.name, path))
     return [path for _, _, path in sorted(entries, reverse=True)]
 
 
@@ -903,15 +904,17 @@ def recording_groups() -> list[dict[str, object]]:
     directory = recordings_dir()
     if not directory.exists():
         return []
-    for path in list(directory.glob("*.wav")) + list(directory.glob("*.log")):
+    for path in directory.iterdir():
+        if path.suffix not in {".wav", ".log"}:
+            continue
         try:
-            stat = path.stat()
+            file_stat = path.stat()
         except OSError:
             continue
-        if not path.is_file():
+        if not stat_module.S_ISREG(file_stat.st_mode):
             continue
         group = groups.setdefault(path.stem, {"stem": path.stem, "mtime": 0.0, "files": []})
-        group["mtime"] = max(float(group["mtime"]), stat.st_mtime)
+        group["mtime"] = max(float(group["mtime"]), file_stat.st_mtime)
         group_files = group["files"]
         if isinstance(group_files, list):
             group_files.append(path)
@@ -1360,11 +1363,8 @@ def command_install_text_model(args: argparse.Namespace) -> dict[str, object]:
     try:
         ollama = _command_path("ollama")
     except RuntimeError as exc:
-        if str(exc).startswith("command path is not trusted"):
-            raise RuntimeError("ollama command is not available") from exc
-        raise
-    except RuntimeError as exc:
-        if "command is not available" in str(exc):
+        message = str(exc)
+        if message.startswith("command path is not trusted") or "command is not available" in message:
             raise RuntimeError("ollama command is not available") from exc
         raise
     env = _filtered_environment()
