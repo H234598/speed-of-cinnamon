@@ -337,6 +337,10 @@ class NextVersionTest(unittest.TestCase):
         with self.assertRaises(next_version.UserInputError):
             next_version.tag_for_version(("0", 1, 2))  # type: ignore[arg-type]
 
+    def test_tag_for_version_rejects_non_tuple(self) -> None:
+        with self.assertRaises(next_version.UserInputError):
+            next_version.tag_for_version(123)  # type: ignore[arg-type]
+
     def test_parse_version_rejects_negative_segments(self) -> None:
         with self.assertRaises(next_version.UserInputError):
             next_version.parse_version("1.-2.3")
