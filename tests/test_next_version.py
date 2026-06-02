@@ -289,6 +289,8 @@ class NextVersionTest(unittest.TestCase):
             next_version.add_patches((0, 1, 2), True)  # type: ignore[arg-type]
         with self.assertRaises(next_version.UserInputError):
             next_version.add_patches((True, 1, 2), 1)  # type: ignore[arg-type]
+        with self.assertRaises(next_version.UserInputError):
+            next_version.add_patches((0, 1, 2), 1.5)  # type: ignore[arg-type]
 
     def test_assert_non_negative_int_rejects_bool(self) -> None:
         with self.assertRaises(next_version.UserInputError):
