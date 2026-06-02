@@ -33,6 +33,11 @@ _URL_CREDENTIAL_RE = re.compile(r"([a-z][a-z0-9+.-]*://)([^/@\s:]+):([^/@\s]+)@"
 _SANITIZE_HINT_RE = re.compile(
     r"(?i)(?:\b(?:bearer|token|api[_-]?key|secret|password)\b\s*[:=]\s*[^,\s;]+|\bbearer\s+[^,\s;]+|\b(?:sk|sess)-[A-Za-z0-9_\-]{12,}\b|[a-z][a-z0-9+.-]*://[^/@\s:]+:[^/@\s]+@)"
 )
+_SANITIZE_ESCAPE_TABLE = {
+    ord("\r"): "\\r",
+    ord("\n"): "\\n",
+    ord("\x00"): "\\x00",
+}
 _SENSITIVE_KEYWORDS = (
     "api_key",
     "apikey",
@@ -204,7 +209,7 @@ def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
         if len(value) > max_chars:
             return value[:max_chars] + "...[truncated]"
         return value
-    text = value.replace("\r", "\\r").replace("\n", "\\n").replace("\x00", "\\x00")
+    text = value.translate(_SANITIZE_ESCAPE_TABLE)
     text = _TOKEN_RE.sub(lambda match: f"{match.group(1)}=[redacted]", text)
     text = _BEARER_RE.sub("Bearer [redacted]", text)
     text = _OPENAI_KEY_RE.sub("[redacted]", text)
