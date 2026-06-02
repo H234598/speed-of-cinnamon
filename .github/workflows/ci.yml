@@ -167,6 +167,8 @@ jobs:
         run: make coverage
       - name: Upload coverage to QLTY
         if: ${{ env.QLTY_COVERAGE_TOKEN != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           qlty_installer="${RUNNER_TEMP:-/tmp}/qlty-install.sh"
           curl -fsSLo "${qlty_installer}" https://qlty.sh

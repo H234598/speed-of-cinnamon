@@ -241,6 +241,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("sh \"${qlty_installer}\"", workflow)
         self.assertIn('"${HOME}/.qlty/bin/qlty" coverage publish reports/lcov.info', workflow)
         self.assertIn("if: ${{ env.QLTY_COVERAGE_TOKEN != '' }}", workflow)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", workflow)
         self.assertIn("sudo apt-get update", workflow)
         self.assertIn("sudo apt-get install -y cpio rpm shellcheck", workflow)
         self.assertIn("if ! command -v -- snapcraft", workflow)
@@ -275,6 +276,14 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn("echo 'GITHUB_ENV", workflow)
         self.assertNotIn("::set-output", workflow)
         self.assertNotIn("::set-state", workflow)
+
+        codacy_workflow = (REPO_ROOT / ".github" / "workflows" / "codacy.yml").read_text(encoding="utf-8")
+        self.assertIn("runs-on: ubuntu-24.04", codacy_workflow)
+        self.assertIn("python -m pip install --disable-pip-version-check --no-cache-dir 'bandit[sarif]'", codacy_workflow)
+        self.assertIn("python -m bandit -q -r src/speed_of_cinnamon -x tests -f sarif -o results.sarif --exit-zero", codacy_workflow)
+        self.assertIn("uses: github/codeql-action/upload-sarif@v4", codacy_workflow)
+        self.assertNotIn("codacy/codacy-analysis-cli-action", codacy_workflow)
+        self.assertNotIn("ubuntu-latest", codacy_workflow)
 
         self.assertIn("name: Security Scan", security_workflow)
         self.assertIn("workflow_call:", security_workflow)
