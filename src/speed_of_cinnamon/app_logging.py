@@ -353,18 +353,21 @@ def _enforce_total_size_limit(directory: Path) -> None:
     files = [path for path in directory.glob("speed-of-cinnamon-*.log*") if path.is_file()]
     for path in files:
         _assert_regular_unlinked_file(path, field_name="log file")
-    total = sum(path.stat().st_size for path in files)
+    file_info = []
+    for path in files:
+        st = path.stat()
+        file_info.append((st.st_mtime, path.name, st.st_size, path))
+    total = sum(size for _, _, size, _ in file_info)
     if total <= MAX_TOTAL_LOG_BYTES:
         return
     active = _active_log_path(directory)
     candidates = sorted(
-        (path for path in files if path != active),
-        key=lambda item: (item.stat().st_mtime, item.name),
+        (item for item in file_info if item[3] != active),
+        key=lambda item: (item[0], item[1]),
     )
-    for path in candidates:
+    for _, _, size, path in candidates:
         if total <= MAX_TOTAL_LOG_BYTES:
             break
-        size = path.stat().st_size
         path.unlink()
         total -= size
 
