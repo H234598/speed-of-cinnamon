@@ -1,4 +1,4 @@
-.PHONY: check test coverage lint lint-workflows python-security-scan shell-security-scan security-scan verify-authorship smoke-doctor smoke-backend release-dry-run release dist dist-check rpm rpm-check rpm-generic rpm-generic-check snap snap-check release-validate-flags install-local uninstall-local clean
+.PHONY: check test coverage lint lint-workflows python-security-scan shell-security-scan security-scan verify-authorship smoke-doctor smoke-backend release-dry-run release dist dist-check rpm rpm-check rpm-generic rpm-generic-check snap snap-check release-validate-flags install-local uninstall-local clean version-next
 SHELL := /usr/bin/env bash
 
 PYTHON := $(shell command -v python3 2>/dev/null | awk 'NR==1 {print}')
@@ -46,6 +46,9 @@ smoke-doctor:
 
 smoke-backend:
 	./scripts/smoke-backend.sh ./scripts/dev-backend.sh
+
+version-next:
+	@./scripts/next_version.py $(OPTS)
 
 release-dry-run: release-validate-flags dist-check rpm rpm-check
 	@if [ "$(BUILD_GENERIC_RPM)" = "0" ]; then \

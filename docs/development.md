@@ -243,6 +243,18 @@ For local real release attempts with fewer artifacts, you can also skip snap or 
 make release SNAP_BUILD=0 BUILD_GENERIC_RPM=0
 ```
 
+To calculate the next version from commit policy:
+
+```bash
+make version-next
+```
+
+From a specific tag:
+
+```bash
+make version-next OPTS="--from-tag v0.1.26"
+```
+
 `make release-dry-run` builds and verifies release assets, then exits after reporting what would be uploaded.
 It is intended for local validation without creating or updating a GitHub Release.
 
