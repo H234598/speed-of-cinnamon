@@ -80,6 +80,8 @@ def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
                 raise RecorderError("environment keys must be text")
             if not isinstance(value, str) or isinstance(value, bool):
                 raise RecorderError("environment values must be text")
+            if _is_unsafe_env_var(key):
+                raise RecorderError(f"environment key is not allowed: {key}")
             env[key] = value
     env["PATH"] = _TRUSTED_COMMAND_PATH
     for key in list(env):

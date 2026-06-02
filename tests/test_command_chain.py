@@ -320,6 +320,8 @@ class CommandChainTest(unittest.TestCase):
                     validate_env(base={1: "value"})  # type: ignore[dict-key]
                 with self.assertRaisesRegex(RuntimeError, "environment values must be text"):
                     validate_env(base={"key": False})  # type: ignore[arg-type]
+                with self.assertRaisesRegex(RuntimeError, "environment key is not allowed: LD_PRELOAD"):
+                    validate_env(base={"LD_PRELOAD": "x"})
 
     def test_run_command_chain_rejects_too_many_tokens_in_segment(self) -> None:
         segment: list[str] = ["cmd"] + ["a"] * (MAX_COMMAND_SEGMENT_TOKENS + 1)
