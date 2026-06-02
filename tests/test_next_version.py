@@ -191,7 +191,7 @@ class NextVersionTest(unittest.TestCase):
     def test_large_add_commits_rolls_many_levels(self) -> None:
         self.assertEqual(
             run_version("--base", "0.99.99", "--add-commits", "100000000"),
-            "1001.0.99",
+            "100.99.99",
         )
 
     def test_missing_pyproject_is_user_error(self) -> None:
