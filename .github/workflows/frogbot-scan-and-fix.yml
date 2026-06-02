@@ -20,6 +20,7 @@ permissions:
 jobs:
   create-fix-pull-requests:
     runs-on: ubuntu-latest
+    if: ${{ secrets.JF_URL != '' && secrets.JF_ACCESS_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
 

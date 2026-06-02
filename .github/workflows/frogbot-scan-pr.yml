@@ -19,6 +19,7 @@ permissions:
 jobs:
   scan-pull-request:
     runs-on: ubuntu-latest
+    if: ${{ secrets.JF_URL != '' && secrets.JF_ACCESS_TOKEN != '' }}
     # A pull request needs to be approved, before Frogbot scans it. Any GitHub user who is associated with the
     # "frogbot" GitHub environment can approve the pull request to be scanned.
     # Read more here (Install Frogbot Using GitHub Actions): https://docs.jfrog-applications.jfrog.io/jfrog-applications/frogbot/setup-frogbot/setup-frogbot-using-github-actions
