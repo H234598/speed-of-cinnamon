@@ -339,7 +339,7 @@ class CommandChainTest(unittest.TestCase):
         ]
         for validate_env in validators:
             with self.subTest(func=validate_env.__module__):
-                with mock.patch(f"{validate_env.__module__}.os.environ.get", return_value=123):
+                with mock.patch(f"{validate_env.__module__}.os.environ.__getitem__", return_value=123):
                     env = validate_env()
                 self.assertNotIn("HOME", env)
                 self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", env)

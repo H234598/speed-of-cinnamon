@@ -565,7 +565,7 @@ class PostProcessorTest(unittest.TestCase):
         self.assertEqual(request.headers["Authorization"], "Bearer secret")
 
     def test_openai_compatible_headers_ignores_invalid_environment_key(self) -> None:
-        with mock.patch("speed_of_cinnamon.postprocessor.os.environ.get", return_value=123):
+        with mock.patch("speed_of_cinnamon.postprocessor.os.environ.__getitem__", return_value=123):
             headers = _openai_compatible_headers()
         self.assertEqual(headers["Content-Type"], "application/json")
         self.assertNotIn("Authorization", headers)
@@ -577,7 +577,7 @@ class PostProcessorTest(unittest.TestCase):
             requests.append((request, timeout))
             return FakeResponse({"choices": [{"message": {"content": "Hello Cinnamon."}}]})
 
-        with mock.patch("speed_of_cinnamon.postprocessor.os.environ.get", return_value=123):
+        with mock.patch("speed_of_cinnamon.postprocessor.os.environ.__getitem__", return_value=123):
             with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=fake_urlopen):
                 result = post_process_text(
                     "hello cinnamon",
@@ -593,7 +593,7 @@ class PostProcessorTest(unittest.TestCase):
     def test_coerce_environment_text(self) -> None:
         with mock.patch.dict("speed_of_cinnamon.postprocessor.os.environ", {"OPENAI_COMPATIBLE_TEST_ENV": "secret"}):
             self.assertEqual(_coerce_environment_text("OPENAI_COMPATIBLE_TEST_ENV"), "secret")
-        with mock.patch("speed_of_cinnamon.postprocessor.os.environ.get", return_value=123):
+        with mock.patch("speed_of_cinnamon.postprocessor.os.environ.__getitem__", return_value=123):
             self.assertEqual(_coerce_environment_text("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY"), "")
 
     def test_openai_compatible_backend_reports_http_error_detail(self) -> None:
