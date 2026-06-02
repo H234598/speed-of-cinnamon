@@ -399,6 +399,10 @@ class NextVersionTest(unittest.TestCase):
         with self.assertRaises(next_version.UserInputError):
             next_version.tag_exists(None)  # type: ignore[arg-type]
 
+    def test_ensure_tag_exists_rejects_non_string_input(self) -> None:
+        with self.assertRaises(next_version.UserInputError):
+            next_version.ensure_tag_exists(None)  # type: ignore[arg-type]
+
     def test_main_uses_from_tag_when_provided(self) -> None:
         with (
             mock.patch.object(next_version, "parse_args") as parse_args,
