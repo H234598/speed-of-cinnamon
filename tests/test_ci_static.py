@@ -92,6 +92,8 @@ class CiStaticTest(unittest.TestCase):
                     offenders.append(f"{path}: {func.attr} first arg is string constant")
                 elif isinstance(command, ast.JoinedStr):
                     offenders.append(f"{path}: {func.attr} first arg is f-string")
+                elif not isinstance(command, (ast.List, ast.Tuple)):
+                    offenders.append(f"{path}: {func.attr} command must be list/tuple")
 
         self.assertFalse(offenders, f"unsafe subprocess usage found: {offenders}")
 
