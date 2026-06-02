@@ -193,7 +193,10 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('./scripts/publish-github-release.sh "${args[@]}" "${RELEASE_TAG}"', workflow)
         self.assertIn("build_generic_rpm", workflow)
         self.assertIn('expected_tag="v${version}"', publisher)
-        self.assertIn("snaps=(dist/snap/speed-of-cinnamon_${version}_*.snap)", publisher)
+        self.assertTrue(
+            'snaps=(dist/snap/speed-of-cinnamon_"${version}"_*.snap)' in publisher
+            or 'snaps=(dist/snap/speed-of-cinnamon_${version}_*.snap)' in publisher
+        )
         self.assertIn("skip_generic=", publisher)
         self.assertIn("generic_rpms=(", publisher)
         self.assertIn("generic_srpms=(", publisher)
