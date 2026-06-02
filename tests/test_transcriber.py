@@ -726,6 +726,41 @@ class TranscriberTest(unittest.TestCase):
         self.assertIn(b"de", data)
         self.assertNotIn(b'name="service_tier"', data)
 
+    def test_transcribe_with_openai_compatible_api_writes_transcript_once(self) -> None:
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self, size: int = -1) -> bytes:
+                if getattr(self, "_read", False):
+                    return b""
+                self._read = True
+                return b'{"text":"hello api"}'
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            with (
+                mock.patch("speed_of_cinnamon.transcriber._open_http_request", return_value=Response()),
+                mock.patch("speed_of_cinnamon.transcriber._write_text_atomic") as mocked_write,
+            ):
+                result = transcribe(
+                    audio,
+                    "de",
+                    text_path,
+                    backend="openai-compatible",
+                    openai_compatible_model="whisper-large-v3",
+                    openai_compatible_url="http://127.0.0.1:8000/v1",
+                    openai_compatible_api_key="secret",
+                )
+
+        self.assertEqual(result, "hello api")
+        mocked_write.assert_called_once_with(text_path, "hello api\n")
+
     def test_openai_compatible_api_adds_flex_for_openai_transcription(self) -> None:
         class Response:
             def __enter__(self):

@@ -583,7 +583,12 @@ def transcribe_with_template(
     return _assert_text_length(output, field_name="transcript")
 
 
-def transcribe_with_openai_whisper(audio_path: Path, language: str, text_path: Path) -> str:
+def transcribe_with_openai_whisper(
+    audio_path: Path,
+    language: str,
+    text_path: Path,
+    write_transcript: bool = True,
+) -> str:
     try:
         _command_path("whisper")
     except TranscriptionError as exc:
@@ -605,7 +610,8 @@ def transcribe_with_openai_whisper(audio_path: Path, language: str, text_path: P
     if generated.exists():
         text = _read_text_file(generated).strip()
         _assert_text_length(text, field_name="transcript")
-        _write_text_atomic(text_path, text + "\n")
+        if write_transcript:
+            _write_text_atomic(text_path, text + "\n")
         return text
     raise TranscriptionError("whisper completed but did not produce a transcript")
 
@@ -664,7 +670,13 @@ def _whisper_cpp_invocation(
     )
 
 
-def transcribe_with_whisper_cpp(audio_path: Path, language: str, text_path: Path, model_path: str) -> str:
+def transcribe_with_whisper_cpp(
+    audio_path: Path,
+    language: str,
+    text_path: Path,
+    model_path: str,
+    write_transcript: bool = True,
+) -> str:
     if not model_path.strip():
         raise TranscriptionError("whisper.cpp model path is required")
     if not model_supports_language(model_path, language):
@@ -681,7 +693,8 @@ def transcribe_with_whisper_cpp(audio_path: Path, language: str, text_path: Path
         text = _read_text_file(generated_path).strip()
         _assert_text_length(text, field_name="transcript")
         if generated_path != text_path:
-            _write_text_atomic(text_path, text + "\n")
+            if write_transcript:
+                _write_text_atomic(text_path, text + "\n")
             try:
                 generated_path.unlink()
             except OSError:
@@ -698,7 +711,13 @@ def faster_whisper_available() -> bool:
     return True
 
 
-def transcribe_with_faster_whisper(audio_path: Path, language: str, text_path: Path, model_path: str) -> str:
+def transcribe_with_faster_whisper(
+    audio_path: Path,
+    language: str,
+    text_path: Path,
+    model_path: str,
+    write_transcript: bool = True,
+) -> str:
     if not model_path.strip():
         raise TranscriptionError("CTranslate2 model path is required")
     if not model_supports_language(model_path, language):
@@ -722,7 +741,8 @@ def transcribe_with_faster_whisper(audio_path: Path, language: str, text_path: P
     except Exception as exc:
         raise TranscriptionError(f"faster-whisper failed: {exc}") from exc
     _assert_text_length(text, field_name="transcript")
-    _write_text_atomic(text_path, text + "\n")
+    if write_transcript:
+        _write_text_atomic(text_path, text + "\n")
     return text
 
 
@@ -821,6 +841,7 @@ def transcribe_with_openai_compatible_api(
     url: str,
     api_key: str = "",
     flex_processing: bool = True,
+    write_transcript: bool = True,
 ) -> str:
     if _contains_escaped_null(model):
         raise TranscriptionError("OpenAI-compatible speech model contains invalid null byte")
@@ -925,7 +946,8 @@ def transcribe_with_openai_compatible_api(
     if not text:
         raise TranscriptionError("OpenAI-compatible speech API returned no transcript")
     _assert_text_length(text, field_name="transcript")
-    _write_text_atomic(text_path, text + "\n")
+    if write_transcript:
+        _write_text_atomic(text_path, text + "\n")
     return text
 
 
@@ -1068,6 +1090,7 @@ def transcribe(
         field_name="OpenAI-compatible API key",
         max_chars=MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
     ).strip()
+    audio_path = validate_audio_file(audio_path)
 
     config = TranscriberConfig(
         backend=backend,
@@ -1080,7 +1103,6 @@ def transcribe(
         "\r" in audio_path.name or "\n" in audio_path.name
     ):
         raise TranscriptionError("audio file name contains invalid newline")
-    audio_path = validate_audio_file(audio_path)
     if resolved_backend == "command":
         if not command_template.strip():
             raise TranscriptionError("custom transcriber command is required")
@@ -1093,13 +1115,14 @@ def transcribe(
             vocabulary,
         )
     elif resolved_backend == "whisper":
-        text = transcribe_with_openai_whisper(audio_path, language, text_path)
+        text = transcribe_with_openai_whisper(audio_path, language, text_path, write_transcript=False)
     elif resolved_backend == "whisper-cpp":
         text = transcribe_with_whisper_cpp(
             audio_path,
             language,
             text_path,
             whisper_model or default_whisper_cpp_model_path(language),
+            write_transcript=False,
         )
     elif resolved_backend == "faster-whisper":
         text = transcribe_with_faster_whisper(
@@ -1107,6 +1130,7 @@ def transcribe(
             language,
             text_path,
             whisper_model or default_ctranslate2_model_path(language),
+            write_transcript=False,
         )
     elif resolved_backend == "openai-compatible":
         openai_compatible_url = _validate_openai_compatible_api_url(openai_compatible_url)
@@ -1118,6 +1142,7 @@ def transcribe(
             openai_compatible_url,
             openai_compatible_api_key,
             openai_compatible_flex_processing,
+            write_transcript=False,
         )
     else:
         raise TranscriptionError(f"unknown transcriber backend: {resolved_backend}")
