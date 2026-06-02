@@ -237,7 +237,7 @@ class SmokeBackendTest(unittest.TestCase):
                 "  doctor)\n"
                 "    python3 - <<'PY'\n"
                 "import json, os\n"
-                f"open({str(marker)!r}, 'w', encoding='utf-8').write(json.dumps({{k: os.environ.get(k, '') for k in ('XDG_STATE_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME')}}))\n"
+                f"open({str(marker)!r}, 'w', encoding='utf-8').write(json.dumps({{k: (os.environ[k] if k in os.environ else '') for k in ('XDG_STATE_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME')}}))\n"
                 "PY\n"
                 "    printf '{\"status\":\"done\"}\\n'\n"
                 "    ;;\n"
