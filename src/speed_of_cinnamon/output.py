@@ -338,8 +338,10 @@ def _looks_like_terminal(value: str) -> bool:
     return any(marker in normalized for marker in TERMINAL_WINDOW_MARKERS)
 
 
-def _active_window_paste_key() -> str:
-    if not _which("xdotool"):
+def _active_window_paste_key(*, xdotool_available: bool | None = None) -> str:
+    if xdotool_available is None:
+        xdotool_available = bool(_which("xdotool"))
+    if not xdotool_available:
         return "ctrl+v"
     window_id = _run_stdout(["xdotool", "getactivewindow"], timeout=MAX_PASTE_TIMEOUT_SECONDS)
     if not window_id:
@@ -365,7 +367,7 @@ def set_clipboard(text: str) -> str:
 
 def paste_from_clipboard() -> None:
     if _which("xdotool"):
-        paste_key = _active_window_paste_key()
+        paste_key = _active_window_paste_key(xdotool_available=True)
         _run_with_input(
             ["xdotool", "key", "--clearmodifiers", paste_key],
             "",

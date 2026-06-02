@@ -1217,9 +1217,22 @@ class CliTest(unittest.TestCase):
                 text="Hello",
                 insert_method="none",
                 typing_delay_ms=0,
+                append_space=False,
                 sanitize_special_chars="yes",
             ))
         mocked_insert.assert_not_called()
+
+    @mock.patch("speed_of_cinnamon.cli.insert_text")
+    def test_insert_text_command_appends_space_after_sanitizing(self, mocked_insert: mock.Mock) -> None:
+        mocked_insert.return_value = True
+        cli.command_insert_text(argparse.Namespace(
+            text="Grüße",
+            insert_method="clipboard",
+            typing_delay_ms=8,
+            append_space=True,
+            sanitize_special_chars=True,
+        ))
+        mocked_insert.assert_called_once_with("Grusse ", "clipboard", 8)
 
     def test_settings_export_import_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

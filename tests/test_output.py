@@ -409,6 +409,30 @@ class OutputTest(unittest.TestCase):
             with self.assertRaisesRegex(OutputError, "no keyboard helper"):
                 paste_from_clipboard()
 
+    def test_paste_from_clipboard_avoids_duplicate_xdotool_lookup(self) -> None:
+        which_calls: list[str] = []
+
+        def fake_which(command: str, path: str | None = None) -> str | None:
+            which_calls.append(command)
+            return "/usr/bin/xdotool" if command == "xdotool" else None
+
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0] if args else kwargs["args"]
+            assert isinstance(command, list)
+            if "getactivewindow" in command:
+                return subprocess.CompletedProcess(command, 0, stdout=b"123\n", stderr=b"")
+            if "getwindowclassname" in command:
+                return subprocess.CompletedProcess(command, 0, stdout=b"Firefox\n", stderr=b"")
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch("speed_of_cinnamon.output.shutil.which", side_effect=fake_which),
+            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+        ):
+            paste_from_clipboard()
+
+        self.assertEqual(which_calls.count("xdotool"), 1)
+
     def test_active_window_paste_key_uses_shift_for_terminal_class(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             command = args[0] if args else kwargs["args"]

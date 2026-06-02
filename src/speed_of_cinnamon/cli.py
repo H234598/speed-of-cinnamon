@@ -1729,6 +1729,9 @@ def command_insert_text(args: argparse.Namespace) -> dict[str, object]:
     sanitize_special_chars_flag = _coerce_bool(args.sanitize_special_chars, field_name="sanitize_special_chars")
     if sanitize_special_chars_flag:
         text = sanitize_special_chars(text)
+    append_space = _coerce_bool(getattr(args, "append_space", False), field_name="append_space")
+    if append_space and text and text[-1] not in " \t\n\r\f\v":
+        text += " "
     typing_delay_ms = _coerce_int(args.typing_delay_ms, field_name="typing-delay-ms", max_value=MAX_TYPING_DELAY_MS)
     inserted = insert_text(text, args.insert_method, typing_delay_ms)
     return {"status": "done", "inserted": inserted}

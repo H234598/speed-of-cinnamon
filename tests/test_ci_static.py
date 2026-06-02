@@ -351,6 +351,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('exec "$(command -v -- python3)" -m speed_of_cinnamon.cli "$@"', dist_verifier)
         self.assertIn("RPM package contains unsafe path entry", rpm_verifier)
         self.assertIn("RPM expansion contains unsupported symlink entries.", rpm_verifier)
+        self.assertIn("RPM expansion contains unsupported hardlink entries.", rpm_verifier)
         self.assertIn("python3 -m compileall -q", rpm_verifier)
         self.assertIn("speed-of-cinnamon.wiki.git", wiki_publisher)
         self.assertIn("User-Guide.md", wiki_publisher)

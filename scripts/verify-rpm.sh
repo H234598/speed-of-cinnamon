@@ -169,6 +169,10 @@ if find "${tmp_dir}" -type l -print -quit | grep -q .; then
   printf 'RPM expansion contains unsupported symlink entries.\n' >&2
   exit 1
 fi
+if find "${tmp_dir}" -type f -links +1 -print -quit | grep -q .; then
+  printf 'RPM expansion contains unsupported hardlink entries.\n' >&2
+  exit 1
+fi
 
 backend="${tmp_dir}/usr/bin/speed-of-cinnamon"
 if [[ ! -x "${backend}" ]]; then
