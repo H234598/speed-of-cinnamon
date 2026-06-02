@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -117,18 +117,19 @@ class StateStore:
     @staticmethod
     def _normalize_state_data(raw: dict[str, Any]) -> dict[str, Any]:
         normalized: dict[str, Any] = {}
-        for field in RecordingState.__dataclass_fields__:
-            if field not in raw:
+        for state_field in fields(RecordingState):
+            field_name = state_field.name
+            if field_name not in raw:
                 continue
-            value = raw[field]
-            if field in {"status", "audio_path", "log_path", "started_at", "stopped_at", "language", "recorder", "input_device", "transcript", "transcript_path", "error", "updated_at"}:
-                normalized[field] = StateStore._sanitize_text_field(value, field_name=field)
-            elif field == "pid":
-                normalized[field] = StateStore._coerce_state_int(value, field_name="state pid") if value is not None else None
-            elif field == "max_seconds":
-                normalized[field] = StateStore._coerce_state_int(value, field_name="state max_seconds")
-            elif field == "inserted":
-                normalized[field] = StateStore._coerce_boolean(value)
+            value = raw[field_name]
+            if field_name in {"status", "audio_path", "log_path", "started_at", "stopped_at", "language", "recorder", "input_device", "transcript", "transcript_path", "error", "updated_at"}:
+                normalized[field_name] = StateStore._sanitize_text_field(value, field_name=field_name)
+            elif field_name == "pid":
+                normalized[field_name] = StateStore._coerce_state_int(value, field_name="state pid") if value is not None else None
+            elif field_name == "max_seconds":
+                normalized[field_name] = StateStore._coerce_state_int(value, field_name="state max_seconds")
+            elif field_name == "inserted":
+                normalized[field_name] = StateStore._coerce_boolean(value)
         return normalized
 
     def read(self) -> RecordingState:
@@ -182,8 +183,9 @@ class StateStore:
 
     def update(self, **values: Any) -> RecordingState:
         state = self.read()
+        state_fields = {state_field.name for state_field in fields(RecordingState)}
         for key, value in values.items():
-            if key in RecordingState.__dataclass_fields__:
+            if key in state_fields:
                 setattr(state, key, value)
         self.write(state)
         return state

@@ -93,7 +93,7 @@ class OutputTest(unittest.TestCase):
         with self.assertRaisesRegex(OutputError, "command arguments must be text"):
             _run_with_input(["echo", 12], "input")  # type: ignore[arg-type]
 
-    def test_run_with_input_rejects_empty_executable(self) -> None:
+    def test_run_with_input_rejects_blank_executable(self) -> None:
         with self.assertRaisesRegex(OutputError, "command is empty"):
             _run_with_input(["   "], "input")
 
