@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 import unittest
@@ -211,6 +212,20 @@ class TranscriberTest(unittest.TestCase):
     def test_read_text_file_rejects_non_path(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "path must be a Path"):
             _read_text_file("sample.txt")  # type: ignore[arg-type]
+
+    @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
+    def test_read_text_file_uses_secure_open_flags(self, mocked_open: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.txt"
+            path.write_text("generated transcript", encoding="utf-8")
+            text = _read_text_file(path)
+        self.assertEqual(text, "generated transcript")
+        self.assertTrue(
+            any(
+                Path(args[0]) == path and isinstance(args[1], int) and args[1] & os.O_NOFOLLOW
+                for args, _ in mocked_open.call_args_list
+            )
+        )
 
     def test_validate_audio_file_rejects_null_byte_path(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "invalid null byte"):

@@ -199,16 +199,18 @@ def _wav_data_offset(header: bytes) -> int:
 
 def read_recording_level(audio_path: Path) -> RecordingLevel:
     audio_path = validate_recording_path(audio_path, suffix=".wav")
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise RecorderError("secure recording audio file open is not supported on this platform")
     try:
-        size = audio_path.stat().st_size
+        fd = os.open(audio_path, os.O_RDONLY | nofollow_flag)
     except OSError as exc:
         raise RecorderError(f"recording audio file is not readable: {audio_path}") from exc
-
-    if size <= DEFAULT_WAV_DATA_OFFSET:
-        return RecordingLevel(False, 0, 0.0, 0.0, 0, "waiting for audio")
-
     try:
-        with audio_path.open("rb") as handle:
+        with os.fdopen(fd, "rb") as handle:
+            size = os.fstat(handle.fileno()).st_size
+            if size <= DEFAULT_WAV_DATA_OFFSET:
+                return RecordingLevel(False, 0, 0.0, 0.0, 0, "waiting for audio")
             header = handle.read(WAV_HEADER_SCAN_BYTES)
             data_offset = _wav_data_offset(header)
             data_bytes = max(0, size - data_offset)

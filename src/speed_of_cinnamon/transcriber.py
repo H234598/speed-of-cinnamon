@@ -23,7 +23,7 @@ from .postprocessor import (
     MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
     MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
 )
-from .path_safety import assert_no_symlink_ancestors
+from .path_safety import assert_no_symlink_ancestors, read_text_without_following_symlinks
 
 
 TRANSCRIBE_COMMAND_TIMEOUT_SECONDS = 900
@@ -210,7 +210,7 @@ def _read_text_file(path: Path) -> str:
     if not isinstance(path, Path):
         raise TranscriptionError("path must be a Path")
     try:
-        text = path.read_text(encoding="utf-8")
+        text = read_text_without_following_symlinks(path, field_name="generated transcript path")
     except UnicodeDecodeError as exc:
         raise TranscriptionError(f"failed to read generated transcript: {path}") from exc
     except OSError as exc:

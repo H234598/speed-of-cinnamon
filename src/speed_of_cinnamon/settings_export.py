@@ -12,7 +12,7 @@ from .alarms import MAX_ALARM_COUNT, STORE_VERSION as ALARM_STORE_VERSION
 from .alarms import normalize_alarm
 from .paths import APP_ID
 from .recorder import MAX_RECORDING_SECONDS
-from .path_safety import assert_no_symlink_ancestors
+from .path_safety import assert_no_symlink_ancestors, read_text_without_following_symlinks
 
 EXPORT_VERSION = 2
 MAX_SETTINGS_EXPORT_BYTES = 1_000_000
@@ -227,7 +227,7 @@ def read_export(path: Path) -> dict[str, Any]:
     try:
         if path.stat().st_size > MAX_SETTINGS_EXPORT_BYTES:
             raise SettingsExportError(f"settings export is too large: {path}")
-        text = path.read_text(encoding="utf-8")
+        text = read_text_without_following_symlinks(path, field_name="settings export path")
         if _contains_escaped_null(text):
             raise SettingsExportError("settings export contains invalid null byte")
         payload = json.loads(text)

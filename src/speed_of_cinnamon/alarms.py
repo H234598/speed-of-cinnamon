@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .paths import alarms_file
-from .path_safety import assert_no_symlink_ancestors
+from .path_safety import assert_no_symlink_ancestors, read_text_without_following_symlinks
 
 STORE_VERSION = 1
 DAY_CODES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
@@ -206,7 +206,7 @@ def load_alarm_store(path: Path | None = None) -> dict[str, Any]:
     except OSError as exc:
         raise RuntimeError(f"alarm store could not be read: {store_path}") from exc
     try:
-        text = store_path.read_text(encoding="utf-8")
+        text = read_text_without_following_symlinks(store_path, field_name="alarm store path")
     except OSError as exc:
         raise RuntimeError(f"alarm store could not be read: {store_path}") from exc
     except UnicodeDecodeError as exc:

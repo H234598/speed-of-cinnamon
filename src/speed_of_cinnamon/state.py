@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from .path_safety import assert_no_symlink_ancestors
+from .path_safety import assert_no_symlink_ancestors, read_text_without_following_symlinks
 
 
 def now_iso() -> str:
@@ -140,7 +140,7 @@ class StateStore:
         except OSError:
             return RecordingState(error="state file could not be read")
         try:
-            data_text = self.path.read_text(encoding="utf-8")
+            data_text = read_text_without_following_symlinks(self.path, field_name="state file path")
             if _contains_escaped_null(data_text):
                 return RecordingState(error="state file could not be read")
             data = json.loads(data_text)

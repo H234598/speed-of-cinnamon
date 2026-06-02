@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .paths import ctranslate2_models_dir, models_dir
-from .path_safety import assert_no_symlink_ancestors
+from .path_safety import assert_no_symlink_ancestors, read_text_without_following_symlinks
 
 HUGGING_FACE_BASE_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
 TINY_DE_MODEL_URL = "https://huggingface.co/wabisabisocial/whisper-tiny-german-ggml/resolve/main/ggml-tiny-de.bin"
@@ -105,8 +105,7 @@ def _load_model_checksum_cache() -> None:
             except OSError:
                 pass
             return
-        with cache_path.open("r", encoding="utf-8") as handle:
-            text = handle.read()
+        text = read_text_without_following_symlinks(cache_path, field_name="model checksum cache path")
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         try:
             cache_path.unlink()
@@ -252,26 +251,36 @@ def _clear_model_checksum_cache(path: Path) -> None:
 
 def _cached_or_computed_sha1(path: Path) -> str:
     _load_model_checksum_cache()
-    info = path.stat()
-    key = str(path)
-    cached = _model_checksum_cache.get(key)
-    if (
-        isinstance(cached, dict)
-        and cached.get("size") == info.st_size
-        and cached.get("mtime_ns") == info.st_mtime_ns
-    ):
-        checksum = cached.get("checksum")
-        if isinstance(checksum, str):
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise ModelError("secure model file open is not supported on this platform")
+    try:
+        fd = os.open(path, os.O_RDONLY | nofollow_flag)
+    except OSError as exc:
+        raise ModelError(str(exc)) from exc
+    try:
+        with os.fdopen(fd, "rb") as handle:
+            info = os.fstat(handle.fileno())
+            key = str(path)
+            cached = _model_checksum_cache.get(key)
+            if (
+                isinstance(cached, dict)
+                and cached.get("size") == info.st_size
+                and cached.get("mtime_ns") == info.st_mtime_ns
+            ):
+                checksum = cached.get("checksum")
+                if isinstance(checksum, str):
+                    return checksum
+
+            digest = hashlib.sha1(usedforsecurity=False)
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+
+            checksum = digest.hexdigest()
+            _set_model_checksum_cache(path, checksum, info)
             return checksum
-
-    digest = hashlib.sha1(usedforsecurity=False)
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-
-    checksum = digest.hexdigest()
-    _set_model_checksum_cache(path, checksum, info)
-    return checksum
+    except OSError as exc:
+        raise ModelError(str(exc)) from exc
 
 
 def _parse_model_size_bytes(value: str) -> int:

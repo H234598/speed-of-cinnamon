@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from unittest import mock
@@ -31,6 +32,23 @@ class SettingsExportTest(unittest.TestCase):
     def test_read_export_rejects_null_byte_path(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "invalid null byte"):
             read_export(Path("settings\x00.json"))
+
+    @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
+    def test_read_export_uses_secure_open_flags(self, mocked_open: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text('{"app":"speed-of-cinnamon","version":2,"created_at":"","speed_of_cinnamon_version":"",'
+                            '"settings":{"language":"en","max-seconds":30},'
+                            '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}', encoding="utf-8")
+            payload = read_export(path)
+        self.assertEqual(payload["app"], "speed-of-cinnamon")
+        self.assertTrue(mocked_open.called)
+        self.assertTrue(
+            any(
+                Path(args[0]) == path and isinstance(args[1], int) and args[1] & os.O_NOFOLLOW
+                for args, _ in mocked_open.call_args_list
+            )
+        )
 
     def test_read_export_rejects_escaped_null_path(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "invalid null byte"):

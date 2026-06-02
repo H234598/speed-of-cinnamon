@@ -7,6 +7,7 @@ import os
 import tempfile
 import unittest
 from unittest import mock
+from pathlib import Path
 
 from speed_of_cinnamon import models
 
@@ -60,14 +61,31 @@ class ModelsTest(unittest.TestCase):
             path.write_bytes(b"cached model")
             cache_path = models._model_checksum_cache_path()
 
-            with mock.patch.object(models.hashlib, "sha1", wraps=models.hashlib.sha1) as sha1_ctor:
+            with (
+                mock.patch.object(models.hashlib, "sha1", wraps=models.hashlib.sha1) as sha1_ctor,
+                mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open) as mocked_open,
+            ):
                 first = models.sha1_file(path)
+                models._model_checksum_cache_loaded = False
+                models._load_model_checksum_cache()
                 second = models.sha1_file(path)
 
             self.assertEqual(first, second)
             self.assertEqual(first, spec.sha1)
             self.assertEqual(sha1_ctor.call_count, 1)
             self.assertTrue(cache_path.exists())
+            self.assertTrue(
+                any(
+                    Path(args[0]) == path and isinstance(args[1], int) and args[1] & os.O_NOFOLLOW
+                    for args, _ in mocked_open.call_args_list
+                )
+            )
+            self.assertTrue(
+                any(
+                    Path(args[0]) == cache_path and isinstance(args[1], int) and args[1] & os.O_NOFOLLOW
+                    for args, _ in mocked_open.call_args_list
+                )
+            )
             self.assertIn(spec.sha1, cache_path.read_text(encoding="utf-8"))
 
     def test_model_checksum_cache_recovers_from_invalid_json(self) -> None:

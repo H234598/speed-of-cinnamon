@@ -536,8 +536,15 @@ def _prepare_private_file(path: Path, *, field_name: str) -> None:
         raise RuntimeError(f"{field_name} must be a path")
     assert_no_symlink_ancestors(path, field_name=field_name)
     path.parent.mkdir(parents=True, exist_ok=True)
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise RuntimeError(f"secure {field_name} open is not supported on this platform")
     try:
-        with path.open("ab") as handle:
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | nofollow_flag, 0o600)
+    except OSError as exc:
+        raise RuntimeError(f"failed to prepare {field_name}: {path}") from exc
+    try:
+        with os.fdopen(fd, "ab") as handle:
             try:
                 os.fchmod(handle.fileno(), 0o600)
             except OSError:
@@ -547,6 +554,10 @@ def _prepare_private_file(path: Path, *, field_name: str) -> None:
         except OSError:
             pass
     except OSError as exc:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
         raise RuntimeError(f"failed to prepare {field_name}: {path}") from exc
 
 

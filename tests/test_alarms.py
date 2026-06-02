@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -72,6 +73,21 @@ class AlarmTest(unittest.TestCase):
             path.write_text("x" * (MAX_ALARM_STORE_BYTES + 1), encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "alarm store is too large"):
                 load_alarm_store(path)
+
+    @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
+    def test_load_alarm_store_uses_secure_open_flags(self, mocked_open: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            path.write_text('{"version":1,"alarms":[],"last_checked_at":""}', encoding="utf-8")
+            payload = load_alarm_store(path)
+        self.assertEqual(payload["version"], 1)
+        self.assertTrue(mocked_open.called)
+        self.assertTrue(
+            any(
+                Path(args[0]) == path and isinstance(args[1], int) and args[1] & os.O_NOFOLLOW
+                for args, _ in mocked_open.call_args_list
+            )
+        )
 
     def test_repeat_day_parser_supports_common_groups(self) -> None:
         self.assertEqual(parse_repeat_days("daily"), ["mon", "tue", "wed", "thu", "fri", "sat", "sun"])

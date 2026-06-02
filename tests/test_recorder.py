@@ -77,6 +77,21 @@ class RecorderTest(unittest.TestCase):
         self.assertEqual(level.percent, 0)
         self.assertEqual(level.detail, "waiting for audio")
 
+    @mock.patch("speed_of_cinnamon.recorder.os.open", wraps=os.open)
+    def test_read_recording_level_uses_secure_open_flags(self, mocked_open: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            self._write_wav(audio, [0, 1, 2, 3])
+            level = read_recording_level(audio)
+
+        self.assertTrue(level.ok)
+        self.assertTrue(
+            any(
+                Path(args[0]) == audio and isinstance(args[1], int) and args[1] & os.O_NOFOLLOW
+                for args, _ in mocked_open.call_args_list
+            )
+        )
+
     def test_default_input_device_is_normalized_to_empty(self) -> None:
         self.assertEqual(normalize_input_device(""), "")
         self.assertEqual(normalize_input_device("default"), "")

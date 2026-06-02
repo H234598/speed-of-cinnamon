@@ -3035,6 +3035,19 @@ class CliTest(unittest.TestCase):
         self.assertEqual(captured["flags"], os.O_RDONLY | os.O_NOFOLLOW)
         handle.close.assert_called_once()
 
+    @mock.patch("speed_of_cinnamon.cli.os.open", wraps=os.open)
+    def test_prepare_private_file_uses_secure_open_flags(self, mocked_open: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "recording.wav"
+            cli._prepare_private_file(path, field_name="recording audio file")
+
+        self.assertTrue(
+            any(
+                Path(args[0]) == path and isinstance(args[1], int) and args[1] & os.O_NOFOLLOW
+                for args, _ in mocked_open.call_args_list
+            )
+        )
+
     def test_read_file_tail_rejects_escaped_null(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "broken.txt"
