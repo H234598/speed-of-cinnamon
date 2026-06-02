@@ -49,6 +49,10 @@ def _filtered_environment() -> dict[str, str]:
     for key in _BASE_ENV_KEYS:
         value = os.environ.get(key)
         if value is not None:
+            if not isinstance(key, str) or isinstance(key, bool):
+                raise ValueError("environment key must be text")
+            if not isinstance(value, str) or isinstance(value, bool):
+                raise ValueError("environment value must be text")
             env[key] = value
     env["PATH"] = _TRUSTED_COMMAND_PATH
     for key in list(env):

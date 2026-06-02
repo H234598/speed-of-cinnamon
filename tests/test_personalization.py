@@ -95,6 +95,11 @@ class PersonalizationTest(unittest.TestCase):
         self.assertEqual(env["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/run/user/1000/bus")
         self.assertEqual(env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
+    def test_command_environment_rejects_non_text_environment_values(self) -> None:
+        with mock.patch.dict("speed_of_cinnamon.personalization.os.environ", {"HOME": 1}, clear=True):  # type: ignore[dict-item]
+            with self.assertRaisesRegex(ValueError, "environment value must be text"):
+                command_environment("Use project terms.", "PipeWire")
+
     def test_command_environment_rejects_oversized_payload_bytes(self) -> None:
         with mock.patch("speed_of_cinnamon.personalization.MAX_PERSONAL_CONTEXT_CHARS", 4):
             with self.assertRaisesRegex(ValueError, "personal context is too large"):
