@@ -518,11 +518,11 @@ def read_transcript_history(limit: int = 10) -> list[dict[str, object]]:
     for mtime, path in candidates:
         try:
             text = read_file_tail(path, MAX_TRANSCRIPT_HISTORY_TEXT_CHARS).strip()
-            modified_at = datetime.fromtimestamp(mtime, timezone.utc).isoformat()
         except OSError:
             continue
         if not text:
             continue
+        modified_at = datetime.fromtimestamp(mtime, timezone.utc).isoformat()
         entries.append(
             {
                 "path": str(path),
