@@ -211,7 +211,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("speed-of-cinnamon\\.1(\\.gz)?", rpm_verifier)
         self.assertIn("speed-of-cinnamon-alarms\\.1(\\.gz)?", rpm_verifier)
         self.assertIn("docs/man/speed-of-cinnamon.1", install_local)
-        self.assertIn('export PYTHONPATH="${HOME}/.local/share/speed-of-cinnamon/python"', install_local)
+        self.assertIn('printf \'export PYTHONPATH=%q\\n\' "${app_data}/python"', install_local)
         self.assertIn('SPEED_OF_CINNAMON_TEST_HOME:-0', install_local)
         self.assertIn("reject_unsafe_tree()", install_local)
         self.assertIn('find "${tree}" \\( -type l -o -type f -links +1 \\) -print -quit', install_local)

@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -81,6 +82,33 @@ class InstallLocalTest(unittest.TestCase):
             self.assertTrue(
                 (home / ".local" / "share" / "speed-of-cinnamon" / "python" / "speed_of_cinnamon" / "cli.py").exists()
             )
+
+    def test_installed_wrapper_uses_install_path_not_runtime_home(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            project_version = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"][
+                "version"
+            ]
+            install_home = tmp_path / "install-home"
+            runtime_home = tmp_path / "runtime-home"
+            install_home.mkdir()
+            runtime_home.mkdir()
+            result = self._run_install_local(REPO_ROOT, install_home)
+            self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+
+            env = os.environ.copy()
+            env["HOME"] = str(runtime_home)
+            wrapper = install_home / ".local" / "bin" / "speed-of-cinnamon"
+            version_result = subprocess.run(
+                [str(wrapper), "--version"],
+                env=env,
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+
+        self.assertEqual(version_result.returncode, 0, msg=version_result.stdout + version_result.stderr)
+        self.assertIn(f"speed-of-cinnamon {project_version}", version_result.stdout)
 
 
 class SmokeBackendTest(unittest.TestCase):

@@ -96,12 +96,13 @@ reject_unsafe_file "${repo_dir}/docs/man/speed-of-cinnamon.1" "man page source"
 reject_unsafe_file "${repo_dir}/docs/man/speed-of-cinnamon-alarms.1" "man page source"
 
 rm -f "${bin_dir}/speed-of-cinnamon"
-cat > "${bin_dir}/speed-of-cinnamon" <<'WRAPPER'
-#!/usr/bin/env bash
-set -euo pipefail
-export PYTHONPATH="${HOME}/.local/share/speed-of-cinnamon/python"
-exec "$(command -v -- python3)" -m speed_of_cinnamon.cli "$@"
-WRAPPER
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'set -euo pipefail\n'
+  printf 'export PYTHONPATH=%q\n' "${app_data}/python"
+  # shellcheck disable=SC2016
+  printf 'exec "$(command -v -- python3)" -m speed_of_cinnamon.cli "$@"\n'
+} > "${bin_dir}/speed-of-cinnamon"
 chmod +x "${bin_dir}/speed-of-cinnamon"
 
 install -m 0644 "${repo_dir}/docs/man/speed-of-cinnamon.1" "${man_dir}/speed-of-cinnamon.1"
