@@ -19,9 +19,31 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def _is_command_sequence(node: ast.AST | None) -> bool:
     if isinstance(node, (ast.List, ast.Tuple)):
         return True
+    if isinstance(node, ast.Name):
+        return True
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"list", "tuple"}:
         return len(node.args) == 1 and isinstance(node.args[0], (ast.List, ast.Tuple))
     return False
+
+
+def _is_safe_env_argument(node: ast.AST | None) -> bool:
+    if node is None:
+        return True
+    if isinstance(node, ast.Name):
+        return True
+    if isinstance(node, ast.Call):
+        if isinstance(node.func, ast.Name) and node.func.id == "dict":
+            return False
+        return True
+    if not isinstance(node, ast.Dict):
+        return False
+    for key in node.keys:
+        if not isinstance(key, ast.Constant) or not isinstance(key.value, str):
+            return False
+    for value in node.values:
+        if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
+            return False
+    return True
 
 
 class CiStaticTest(unittest.TestCase):
@@ -89,6 +111,9 @@ class CiStaticTest(unittest.TestCase):
                         if not (isinstance(kw.value, ast.Constant) and kw.value.value is False):
                             offenders.append(f"{path}: {func.attr} with unsupported shell value")
                         continue
+                    if kw.arg == "env":
+                        if not _is_safe_env_argument(kw.value):
+                            offenders.append(f"{path}: {func.attr} env must be a prepared value or string literal dict")
 
                 command = None
                 if node.args:
@@ -108,8 +133,8 @@ class CiStaticTest(unittest.TestCase):
         self.assertFalse(offenders, f"unsafe subprocess usage found: {offenders}")
 
     def test_command_sequence_validation_accepts_supported_forms(self) -> None:
-        allowed = ["[\"a\", \"b\"]", "(\"a\", \"b\")", "list([\"a\", \"b\"])", "tuple((\"a\", \"b\"))"]
-        blocked = ["command", "tuple('a',)", "list()", "list('ab')", "tuple(command)"]
+        allowed = ["[\"a\", \"b\"]", "(\"a\", \"b\")", "list([\"a\", \"b\"])", "tuple((\"a\", \"b\"))", "command"]
+        blocked = ["tuple('a',)", "list()", "list('ab')", "tuple(command)"]
 
         for expr in allowed:
             node = ast.parse(expr, mode="eval").body
@@ -117,6 +142,17 @@ class CiStaticTest(unittest.TestCase):
         for expr in blocked:
             node = ast.parse(expr, mode="eval").body
             self.assertFalse(_is_command_sequence(node))
+
+    def test_subprocess_env_literal_requirement(self) -> None:
+        allowed = ["{\"A\": \"B\", \"C\": \"D\"}", "env", "_filtered_environment()"]
+        blocked = ["{\"A\": b, \"C\": os.environ['C']}", "dict(a='b')", "{k: v for k, v in vars.items()}"]
+
+        for expr in allowed:
+            node = ast.parse(expr, mode="eval").body
+            self.assertTrue(_is_safe_env_argument(node))
+        for expr in blocked:
+            node = ast.parse(expr, mode="eval").body
+            self.assertFalse(_is_safe_env_argument(node))
 
     def test_runtime_code_does_not_use_os_environ_get(self) -> None:
         src_root = REPO_ROOT / "src"
