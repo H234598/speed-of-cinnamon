@@ -89,9 +89,9 @@ def _coerce_required_bool(value: object, *, field_name: str) -> bool:
 
 
 def _env_desktop() -> dict[str, object]:
-    current_desktop = os.environ.get("XDG_CURRENT_DESKTOP", "")
-    session_type = os.environ.get("XDG_SESSION_TYPE", "")
-    desktop_session = os.environ.get("DESKTOP_SESSION", "")
+    current_desktop = _coerce_desktop_env("XDG_CURRENT_DESKTOP")
+    session_type = _coerce_desktop_env("XDG_SESSION_TYPE")
+    desktop_session = _coerce_desktop_env("DESKTOP_SESSION")
     desktop_names = ":".join([current_desktop, desktop_session]).lower()
     return {
         "current_desktop": current_desktop,
@@ -100,6 +100,18 @@ def _env_desktop() -> dict[str, object]:
         "cinnamon": "cinnamon" in desktop_names,
         "x11": session_type.lower() == "x11",
     }
+
+
+def _coerce_desktop_env(name: str) -> str:
+    value = os.environ.get(name)
+    if value is None:
+        return ""
+    if isinstance(value, bool) or not isinstance(value, str):
+        return ""
+    normalized = value.strip().lower()
+    if _contains_http_header_control_chars(normalized):
+        return ""
+    return normalized
 
 
 def _setting(settings: Mapping[str, object], key: str, default: str = "") -> str:

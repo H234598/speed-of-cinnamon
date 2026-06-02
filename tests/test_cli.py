@@ -50,6 +50,14 @@ class CliTest(unittest.TestCase):
         self.assertEqual(exc.exception.code, 0)
         self.assertEqual(stdout.getvalue().strip(), f"speed-of-cinnamon {cli.__version__}")
 
+    def test_coerce_log_level_from_environment(self) -> None:
+        with mock.patch.dict("speed_of_cinnamon.cli.os.environ", {"SPEED_OF_CINNAMON_LOG_LEVEL": "INFO"}):
+            self.assertEqual(cli._coerce_log_level_from_environment(), "info")
+        with mock.patch.dict("speed_of_cinnamon.cli.os.environ", {"SPEED_OF_CINNAMON_LOG_LEVEL": "info\n"}):
+            self.assertEqual(cli._coerce_log_level_from_environment(), cli.DEFAULT_LOG_LEVEL)
+        with mock.patch.dict("speed_of_cinnamon.cli.os.environ", {"SPEED_OF_CINNAMON_LOG_LEVEL": "trace"}):
+            self.assertEqual(cli._coerce_log_level_from_environment(), cli.DEFAULT_LOG_LEVEL)
+
     def test_version_consistency_between_metadata_and_package(self) -> None:
         project_version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
         self.assertEqual(project_version, cli.__version__)

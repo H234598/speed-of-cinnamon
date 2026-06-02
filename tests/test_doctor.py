@@ -214,6 +214,13 @@ class DoctorTest(unittest.TestCase):
             if "path" in kwargs:
                 self.assertEqual(kwargs["path"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
+    def test_env_desktop_rejects_control_characters(self) -> None:
+        with mock.patch.dict("speed_of_cinnamon.doctor.os.environ", {"XDG_CURRENT_DESKTOP": "x-cinnamon\n", "XDG_SESSION_TYPE": "x11", "DESKTOP_SESSION": "cinnamon\x00"}):
+            payload = doctor.report({"recorder": "auto", "transcriber": "auto", "insert-method": "clipboard"})
+        self.assertEqual(payload["desktop"]["current_desktop"], "")
+        self.assertEqual(payload["desktop"]["desktop_session"], "")
+        self.assertEqual(payload["desktop"]["session_type"], "x11")
+
     def test_auto_asr_reports_missing_configured_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             model = Path(tmp) / "missing.bin"

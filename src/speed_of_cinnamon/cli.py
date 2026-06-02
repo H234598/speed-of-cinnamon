@@ -200,6 +200,18 @@ def _contains_http_header_control_chars(value: str) -> bool:
     return False
 
 
+def _coerce_log_level_from_environment() -> str:
+    level = os.environ.get("SPEED_OF_CINNAMON_LOG_LEVEL", DEFAULT_LOG_LEVEL)
+    if not isinstance(level, str) or isinstance(level, bool):
+        return DEFAULT_LOG_LEVEL
+    cleaned = level.strip().lower()
+    if not cleaned or _contains_http_header_control_chars(cleaned):
+        return DEFAULT_LOG_LEVEL
+    if cleaned in LOG_LEVELS:
+        return cleaned
+    return DEFAULT_LOG_LEVEL
+
+
 def _command_path(command: str) -> str:
     if not isinstance(command, str) or isinstance(command, bool):
         raise RuntimeError("command must be text")
@@ -1726,7 +1738,7 @@ def add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", action="store_true", help="print machine-readable JSON")
     parser.add_argument(
         "--log-level",
-        default=os.environ.get("SPEED_OF_CINNAMON_LOG_LEVEL", DEFAULT_LOG_LEVEL),
+        default=_coerce_log_level_from_environment(),
         choices=LOG_LEVELS,
         help="write logs at this level; default: error",
     )
