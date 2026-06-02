@@ -103,14 +103,27 @@ python3 - <<'PY' "${file_list}"
 from pathlib import Path
 import sys
 
+ALLOWED_PREFIXES = (
+    "/usr/bin/",
+    "/usr/lib/",
+    "/usr/lib64/",
+    "/usr/share/",
+)
+
 file_list = Path(sys.argv[1])
 for raw in file_list.read_text(encoding="utf-8").splitlines():
     entry = raw.strip()
     if not entry:
         continue
+    if "\x00" in entry or any(ord(char) < 0x20 or ord(char) == 0x7F for char in entry):
+        raise SystemExit(f"RPM package contains unsafe path entry: {entry!r}")
+    if not entry.startswith("/"):
+        raise SystemExit(f"RPM package contains unsafe relative path entry: {entry}")
     path = Path(entry)
-    if path.is_absolute() or any(part == ".." for part in path.parts):
+    if any(part == ".." for part in path.parts):
         raise SystemExit(f"RPM package contains unsafe path entry: {entry}")
+    if not entry.startswith(ALLOWED_PREFIXES):
+        raise SystemExit(f"RPM package contains unexpected path entry: {entry}")
 PY
 
 for required in "${required_files[@]}"; do
@@ -162,7 +175,7 @@ if [[ ! -x "${backend}" ]]; then
   printf 'extracted backend is not executable: %s\n' "${backend}" >&2
   exit 1
 fi
-if ! grep -Fq 'python3)" -m speed_of_cinnamon.cli "$@"' "${backend}"; then
+if ! grep -Fq 'from speed_of_cinnamon.cli import main' "${backend}"; then
   printf 'extracted backend does not invoke the expected CLI module: %s\n' "${backend}" >&2
   exit 1
 fi
