@@ -275,9 +275,11 @@ def _assert_regular_unlinked_file(path: Path, *, field_name: str) -> None:
 def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
     if path.is_symlink():
         raise RuntimeError(f"active log file must not be a symlink: {path}")
-    if path.exists():
-        _assert_regular_unlinked_file(path, field_name="active log file")
-    if not path.exists() or (not force and path.stat().st_size < MAX_DAILY_LOG_BYTES):
+    if not path.exists():
+        return
+    _assert_regular_unlinked_file(path, field_name="active log file")
+    size = path.stat().st_size
+    if not force and size < MAX_DAILY_LOG_BYTES:
         return
     suffix = 1
     while True:

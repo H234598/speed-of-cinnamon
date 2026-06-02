@@ -442,6 +442,7 @@ class OutputTest(unittest.TestCase):
             self.assertEqual(_active_window_paste_key(), "ctrl+v")
 
     def test_terminal_marker_matching_is_conservative(self) -> None:
+        self.assertTrue(_looks_like_terminal("Codex"))
         self.assertTrue(_looks_like_terminal("org.gnome.Terminal"))
         self.assertTrue(_looks_like_terminal("Termius"))
         self.assertTrue(_looks_like_terminal("COSMIC Terminal"))

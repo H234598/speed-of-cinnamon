@@ -61,6 +61,16 @@ class AppLoggingTest(unittest.TestCase):
             for log_file in log_dir.glob("speed-of-cinnamon-*.log"):
                 self.assertLessEqual(log_file.stat().st_size, 256)
 
+
+    def test_rotate_active_if_needed_is_noop_for_missing_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            missing = log_dir / f"speed-of-cinnamon-{date.today().isoformat()}.log"
+
+            app_logging._rotate_active_if_needed(missing)
+
+            self.assertFalse(missing.exists())
+
     def test_configure_logging_rejects_symlinked_active_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

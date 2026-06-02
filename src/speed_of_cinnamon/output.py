@@ -100,6 +100,7 @@ def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
 TERMINAL_WINDOW_MARKERS = (
     "alacritty",
     "blackbox",
+    "codex",
     "com.mitchellh.ghostty",
     "com.system76.cosmic-term",
     "console",
