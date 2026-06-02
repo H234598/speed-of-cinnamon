@@ -242,6 +242,53 @@ class NextVersionTest(unittest.TestCase):
         ):
             self.assertFalse(next_version.tag_exists("0.1.20"))
 
+    def test_main_uses_from_tag_when_provided(self) -> None:
+        with (
+            mock.patch.object(next_version, "parse_args") as parse_args,
+            mock.patch.object(next_version, "ensure_tag_exists") as ensure_tag_exists,
+            mock.patch.object(next_version, "commits_since_tag", return_value=2) as commits_since_tag,
+            mock.patch.object(next_version, "add_patches", return_value=(2, 3, 4)) as add_patches,
+            mock.patch.object(next_version, "print")
+        ):
+            parse_args.return_value = mock.Mock(from_tag="v9.9.9", add_commits=None, feature=False, breaking=False, base=None)
+            next_version.main()
+            ensure_tag_exists.assert_called_once_with("v9.9.9")
+            commits_since_tag.assert_called_once_with("v9.9.9")
+            add_patches.assert_called_once_with((0, 1, 0), 2)
+
+    def test_main_uses_add_commits_when_provided(self) -> None:
+        with mock.patch.object(next_version, "parse_args") as parse_args, \
+            mock.patch.object(next_version, "ensure_tag_exists") as ensure_tag_exists, \
+            mock.patch.object(next_version, "commits_since_tag") as commits_since_tag, \
+            mock.patch.object(next_version, "add_patches", return_value=(2, 3, 4)) as add_patches, \
+            mock.patch.object(next_version, "print"):
+            parse_args.return_value = mock.Mock(from_tag=None, add_commits=77, feature=False, breaking=False, base="1.2.3")
+            next_version.main()
+            self.assertFalse(ensure_tag_exists.called)
+            self.assertFalse(commits_since_tag.called)
+            add_patches.assert_called_once_with((1, 2, 3), 77)
+
+    def test_main_prefers_feature_over_no_change(self) -> None:
+        with mock.patch.object(next_version, "parse_args") as parse_args, \
+            mock.patch.object(next_version, "add_patches", return_value=(1, 2, 3)) as add_patches, \
+            mock.patch.object(next_version, "apply_feature_increase", return_value=(1, 3, 3)) as apply_feature, \
+            mock.patch.object(next_version, "print"):
+            parse_args.return_value = mock.Mock(from_tag=None, add_commits=0, feature=True, breaking=False, base="1.2.0")
+            next_version.main()
+            add_patches.assert_called_once_with((1, 2, 0), 0)
+            apply_feature.assert_called_once_with(1, 2, 3)
+
+    def test_main_breaking_overrides_feature(self) -> None:
+        with mock.patch.object(next_version, "parse_args") as parse_args, \
+            mock.patch.object(next_version, "add_patches", return_value=(1, 2, 3)) as add_patches, \
+            mock.patch.object(next_version, "apply_feature_increase") as apply_feature, \
+            mock.patch.object(next_version, "apply_breaking_change", return_value=(2, 0, 0)) as apply_breaking, \
+            mock.patch.object(next_version, "print"):
+            parse_args.return_value = mock.Mock(from_tag=None, add_commits=0, feature=False, breaking=True, base="1.2.0")
+            next_version.main()
+            self.assertFalse(apply_feature.called)
+            apply_breaking.assert_called_once_with(1, 2, 3)
+
 
 if __name__ == "__main__":
     unittest.main()
