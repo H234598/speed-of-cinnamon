@@ -229,6 +229,14 @@ class NextVersionTest(unittest.TestCase):
             with self.assertRaises(next_version.UserInputError):
                 next_version.read_current_version(Path(tmpdir))
 
+    def test_read_current_version_unreadable_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir, "pyproject.toml")
+            path.write_text("[project]\nname=\"x\"\n", encoding="utf-8")
+            with mock.patch.object(Path, "read_text", side_effect=OSError("unreadable")):
+                with self.assertRaises(next_version.UserInputError):
+                    next_version.read_current_version(path)
+
     def test_read_current_version_missing_version_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir, "pyproject.toml")
