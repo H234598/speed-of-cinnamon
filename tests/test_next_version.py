@@ -327,6 +327,12 @@ class NextVersionTest(unittest.TestCase):
             next_version.apply_feature_increase(True, 1, 1)  # type: ignore[arg-type]
         with self.assertRaises(next_version.UserInputError):
             next_version.apply_feature_increase(1, True, 1)  # type: ignore[arg-type]
+        with self.assertRaises(next_version.UserInputError):
+            next_version.apply_feature_increase(1.5, 1, 1)  # type: ignore[arg-type]
+        with self.assertRaises(next_version.UserInputError):
+            next_version.apply_feature_increase(1, 2.0, 1)  # type: ignore[arg-type]
+        with self.assertRaises(next_version.UserInputError):
+            next_version.apply_feature_increase(1, 2, 1.5)  # type: ignore[arg-type]
 
     def test_apply_feature_increase_wraps_minor(self) -> None:
         self.assertEqual(next_version.apply_feature_increase(1, 99, 5), (2, 0, 5))
