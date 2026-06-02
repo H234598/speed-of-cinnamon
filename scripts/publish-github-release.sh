@@ -95,6 +95,23 @@ generic_rpms=(dist/rpmbuild-generic/RPMS/noarch/speed-of-cinnamon-"${version}"-*
 generic_srpms=(dist/rpmbuild-generic/SRPMS/speed-of-cinnamon-"${version}"-*.src.rpm)
 snaps=(dist/snap/speed-of-cinnamon_${version}_*.snap)
 
+asset_display_name() {
+  local ref=$1
+  printf '%s' "${ref}"
+}
+
+generic_asset_label() {
+  local file=$1
+  local base
+
+  base="$(basename "${file}")"
+  if [[ "${base}" == speed-of-cinnamon-* ]]; then
+    printf 'speed-of-cinnamon-generic-%s' "${base#speed-of-cinnamon-}"
+  else
+    printf 'generic-%s' "${base}"
+  fi
+}
+
 require_one() {
   local label=$1
   shift
@@ -149,6 +166,48 @@ fi
 for asset in "${assets[@]}"; do
   verify_asset_path "${asset}"
 done
+
+staging_dir="${repo_dir}/dist/release-upload"
+upload_refs=("${assets[@]}")
+if [[ "${skip_generic}" != "true" ]]; then
+  rm -rf "${staging_dir}"
+  mkdir -p "${staging_dir}"
+  for generic_asset in "${generic_rpms[@]}" "${generic_srpms[@]}"; do
+    staged_path="${staging_dir}/$(generic_asset_label "${generic_asset}")"
+    cp -f -- "${generic_asset}" "${staged_path}"
+
+    for idx in "${!upload_refs[@]}"; do
+      if [[ "${upload_refs[idx]}" == "${generic_asset}" ]]; then
+        upload_refs[idx]="${staged_path}"
+      fi
+    done
+  done
+fi
+
+for asset in "${upload_refs[@]}"; do
+  verify_asset_path "${asset}"
+done
+
+generic_rpm_label="[not built in this run (build_generic_rpm=false)]"
+generic_src_label="[not built in this run (build_generic_rpm=false)]"
+snap_label="[not built in this run (SNAP_BUILD=0)]"
+for asset_ref in "${upload_refs[@]}"; do
+  case "${asset_ref}" in
+    "${staging_dir}/"*)
+      staged_name="$(basename "${asset_ref}")"
+      if [[ "${staged_name}" == speed-of-cinnamon-generic-*.noarch.rpm ]]; then
+        generic_rpm_label="${staged_name}"
+      elif [[ "${staged_name}" == speed-of-cinnamon-generic-*.src.rpm ]]; then
+        generic_src_label="${staged_name}"
+      fi
+      ;;
+    dist/snap/*)
+      if [[ "${skip_snap}" != "true" ]]; then
+        snap_label="$(basename "${asset_ref}")"
+      fi
+      ;;
+  esac
+done
 repo="${GITHUB_REPOSITORY:-H234598/speed-of-cinnamon}"
 if [[ ! "${repo}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
   printf 'invalid repository value: %s\n' "${repo}" >&2
@@ -170,6 +229,9 @@ fi
 notes_file="$(mktemp "${TMPDIR:-/tmp}/speed-of-cinnamon-release-notes-XXXXXX")"
 cleanup_notes() {
   rm -f -- "${notes_file}"
+  if [[ "${skip_generic}" != "true" ]]; then
+    rm -rf -- "${staging_dir}"
+  fi
 }
 trap cleanup_notes EXIT
 cat > "${notes_file}" <<EOF
@@ -184,14 +246,14 @@ Assets:
 - Source archive SHA-256: ${checksum}
 - Fedora noarch RPM: $(basename "${rpms[0]}")
 - Source RPM: $(basename "${srpms[0]}")
-- Generic noarch RPM: $([ "${skip_generic}" = "true" ] && printf "not built in this run (build_generic_rpm=false)" || basename "${generic_rpms[0]}")
-- Source RPM (generic): $([ "${skip_generic}" = "true" ] && printf "not built in this run (build_generic_rpm=false)" || basename "${generic_srpms[0]}")
-- Snap package: $([ "${skip_snap}" = "true" ] && printf "not built in this run (SNAP_BUILD=0)" || basename "${snaps[0]}")
+- Generic noarch RPM: ${generic_rpm_label}
+- Source RPM (generic): ${generic_src_label}
+- Snap package: ${snap_label}
 EOF
 
 if [[ "${dry_run}" == "true" ]]; then
   printf 'Would publish %s to %s with assets:\n' "${tag}" "${repo}"
-  printf '  %s\n' "${assets[@]}"
+  printf '  %s\n' "${upload_refs[@]}"
   exit 0
 fi
 
@@ -214,4 +276,4 @@ else
     --verify-tag
 fi
 
-gh release upload "${tag}" "${assets[@]}" --repo "${repo}" --clobber
+gh release upload "${tag}" "${upload_refs[@]}" --repo "${repo}" --clobber
