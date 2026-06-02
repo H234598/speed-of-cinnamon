@@ -363,6 +363,8 @@ class NextVersionTest(unittest.TestCase):
             next_version.to_version(-1, 0, 0)
         with self.assertRaises(next_version.UserInputError):
             next_version.to_version(1, "2", 3)  # type: ignore[arg-type]
+        with self.assertRaises(next_version.UserInputError):
+            next_version.to_version(1.2, 0, 0)  # type: ignore[arg-type]
 
     def test_tag_for_version_rejects_invalid_version(self) -> None:
         with self.assertRaises(next_version.UserInputError):
