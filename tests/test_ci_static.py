@@ -192,6 +192,9 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("args+=(--skip-generic-rpm)", workflow)
         self.assertIn('./scripts/publish-github-release.sh "${args[@]}" "${RELEASE_TAG}"', workflow)
         self.assertIn("build_generic_rpm", workflow)
+        self.assertIn("printf 'tag<<TAG", workflow)
+        self.assertIn("printf '%s\\n' \"${tag}\"", workflow)
+        self.assertIn("printf 'TAG\\n'", workflow)
         self.assertIn('expected_tag="v${version}"', publisher)
         self.assertTrue(
             'snaps=(dist/snap/speed-of-cinnamon_"${version}"_*.snap)' in publisher
@@ -209,6 +212,12 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("gh release create", publisher)
         self.assertIn("gh release upload", publisher)
         self.assertIn("--clobber", publisher)
+
+    def test_ci_workflow_is_read_only(self) -> None:
+        workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+        self.assertIn("permissions:", workflow)
+        self.assertIn("contents: read", workflow)
 
     def test_local_release_targets_support_generic_rpm_toggle(self) -> None:
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")

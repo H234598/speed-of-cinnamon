@@ -4,24 +4,25 @@ umask 077
 IFS=$'\n\t'
 
 usage() {
-  printf 'usage: %s [--dry-run] [--skip-snap] [--skip-generic-rpm] [v]VERSION\n' "$0" >&2
+  printf 'usage: %s [--skip-snap] [--skip-generic-rpm] [--dry-run] [v]VERSION\n' "$0" >&2
+  printf ' --dry-run: validate artifacts and report planned upload targets without publishing\n' >&2
 }
 
-dry_run=false
 skip_snap=false
 skip_generic=false
+dry_run=false
 while [[ $# -gt 0 ]]; do
   case "${1:-}" in
-    --dry-run)
-      dry_run=true
-      shift
-      ;;
     --skip-snap)
       skip_snap=true
       shift
       ;;
     --skip-generic-rpm)
       skip_generic=true
+      shift
+      ;;
+    --dry-run)
+      dry_run=true
       shift
       ;;
     --help|-h)
@@ -59,10 +60,9 @@ if [[ ! "${tag}" =~ ^v[0-9]+(\.[0-9]+){0,2}([0-9A-Za-z.+-]*)?$ ]]; then
   exit 1
 fi
 
-if [[ "${dry_run}" == "true" ]]; then
-  required_tools=(git python3 realpath awk)
-else
-  required_tools=(gh git python3 realpath awk)
+required_tools=(git python3 realpath awk)
+if [[ "${dry_run}" == "false" ]]; then
+  required_tools+=(gh)
 fi
 
 for tool in "${required_tools[@]}"; do
@@ -81,7 +81,7 @@ print(tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project
 PY
 )"
 expected_tag="v${version}"
-if [[ "${dry_run}" == "false" && "${tag}" != "${expected_tag}" ]]; then
+if [[ "${tag}" != "${expected_tag}" ]]; then
   printf 'release tag %s does not match pyproject version %s\n' "${tag}" "${expected_tag}" >&2
   exit 1
 fi
@@ -252,8 +252,11 @@ Assets:
 EOF
 
 if [[ "${dry_run}" == "true" ]]; then
-  printf 'Would publish %s to %s with assets:\n' "${tag}" "${repo}"
-  printf '  %s\n' "${upload_refs[@]}"
+  printf 'Dry-run mode enabled. Build and assets validated for tag %s.\n' "${tag}"
+  printf 'Planned assets:\n'
+  for asset in "${upload_refs[@]}"; do
+    printf '  - %s\n' "${asset}"
+  done
   exit 0
 fi
 

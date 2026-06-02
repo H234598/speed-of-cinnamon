@@ -1,4 +1,5 @@
-.PHONY: check test coverage lint lint-workflows verify-authorship smoke-doctor smoke-backend release-dry-run release dist dist-check rpm rpm-check rpm-generic rpm-generic-check snap release-validate-flags install-local uninstall-local
+.PHONY: check test coverage lint lint-workflows verify-authorship smoke-doctor smoke-backend release-dry-run release dist dist-check rpm rpm-check rpm-generic rpm-generic-check snap snap-check release-validate-flags install-local uninstall-local
+SHELL := /usr/bin/env bash
 
 PYTHON ?= python3
 PROJECT_VERSION := $(shell $(PYTHON) -c 'import tomllib, pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])')
@@ -34,15 +35,20 @@ smoke-backend:
 
 release-dry-run: release-validate-flags dist-check rpm rpm-check
 	@if [ "$(BUILD_GENERIC_RPM)" = "0" ]; then \
-	  printf 'Skipping generic RPM generation (BUILD_GENERIC_RPM=0).\n'; \
+		  printf 'Skipping generic RPM generation (BUILD_GENERIC_RPM=0).\n'; \
 	else \
-	  $(MAKE) rpm-generic rpm-generic-check; \
+		  $(MAKE) rpm-generic rpm-generic-check; \
 	fi
 	@$(MAKE) snap
+	@if [ "$(SNAP_BUILD)" = "0" ]; then \
+		  printf 'Skipping snap verification (SNAP_BUILD=0).\n'; \
+	else \
+		  $(MAKE) snap-check; \
+	fi
 	./scripts/publish-github-release.sh --dry-run \
-	  $(if $(filter 0,$(SNAP_BUILD)),--skip-snap) \
-	  $(if $(filter 0,$(BUILD_GENERIC_RPM)),--skip-generic-rpm) \
-	  "v$(PROJECT_VERSION)"
+		$(if $(filter 0,$(SNAP_BUILD)),--skip-snap) \
+		$(if $(filter 0,$(BUILD_GENERIC_RPM)),--skip-generic-rpm) \
+		"v$(PROJECT_VERSION)"
 
 release: release-validate-flags dist-check rpm rpm-check
 	@if [ "$(BUILD_GENERIC_RPM)" = "0" ]; then \
@@ -51,6 +57,11 @@ release: release-validate-flags dist-check rpm rpm-check
 	  $(MAKE) rpm-generic rpm-generic-check; \
 	fi
 	@$(MAKE) snap
+	@if [ "$(SNAP_BUILD)" = "0" ]; then \
+	  printf 'Skipping snap verification (SNAP_BUILD=0).\n'; \
+	else \
+	  $(MAKE) snap-check; \
+	fi
 	./scripts/publish-github-release.sh \
 	  $(if $(filter 0,$(SNAP_BUILD)),--skip-snap) \
 	  $(if $(filter 0,$(BUILD_GENERIC_RPM)),--skip-generic-rpm) \
@@ -79,6 +90,21 @@ snap: release-validate-flags
 	  printf 'Skipping snap build (SNAP_BUILD=0). Set SNAP_BUILD=1 to build snaps.\n'; \
 	else \
 	  ./scripts/build-snap.sh; \
+	fi
+
+snap-check: release-validate-flags
+	@if [ "$(SNAP_BUILD)" = "0" ]; then \
+	  printf 'Skipping snap verification (SNAP_BUILD=0). Set SNAP_BUILD=1 to verify a built snap.\n'; \
+	else \
+	  mapfile -d '' snap_file_list < <(find dist/snap -maxdepth 1 -name 'speed-of-cinnamon_*_*.snap' -type f -print0 | sort -z); \
+	  snap_file_count="$${#snap_file_list[@]}"; \
+	  if [ "$${snap_file_count}" -ne 1 ]; then \
+	    printf 'expected exactly one snap package, found %s\n' "$${snap_file_count}" >&2; \
+	    printf '%s\n' "$${snap_file_list}" >&2; \
+	    exit 1; \
+	  fi; \
+	  snap_file="$${snap_file_list[0]}"; \
+	  ./scripts/verify-snap.sh "$${snap_file}"; \
 	fi
 
 release-validate-flags:

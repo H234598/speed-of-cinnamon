@@ -6,7 +6,7 @@ import json
 import os
 import platform
 import shutil
-import subprocess
+import subprocess  # nosec B404
 import sys
 import time
 import tempfile
@@ -1125,12 +1125,13 @@ def command_install_text_model(args: argparse.Namespace) -> dict[str, object]:
         env["OLLAMA_HOST"] = url
     try:
         with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
-            proc = subprocess.run(
+            proc = subprocess.run(  # nosec B603
                 [ollama, "pull", model],
                 stdout=stdout_file,
                 stderr=stderr_file,
                 timeout=OLLAMA_PULL_TIMEOUT_SECONDS,
                 env=env,
+                shell=False,
             )
             stdout = _read_binary_output(stdout_file, MAX_LOG_EXCERPT_CHARS, field_name="ollama pull stdout")
             stderr = _read_binary_output(stderr_file, MAX_LOG_EXCERPT_CHARS, field_name="ollama pull stderr")

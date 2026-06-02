@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import subprocess
 import urllib.parse
 import urllib.error
 import urllib.request
@@ -88,6 +87,27 @@ def _assert_clean_url(url: str, *, field_name: str) -> str:
     if _contains_escaped_null(normalized):
         raise PostProcessError(f"{field_name} contains invalid null byte")
     return _assert_text_length(normalized, field_name=field_name, max_chars=MAX_POSTPROCESS_URL_CHARS)
+
+
+def _validate_http_url(url: str, *, field_name: str) -> str:
+    if not isinstance(url, str) or isinstance(url, bool):
+        raise PostProcessError(f"{field_name} must be text")
+    normalized = _assert_text_length(url.strip(), field_name=field_name, max_chars=MAX_POSTPROCESS_URL_CHARS)
+    parsed = urllib.parse.urlparse(normalized)
+    if parsed.scheme not in {"http", "https"}:
+        raise PostProcessError(f"{field_name} must use http:// or https://")
+    if not parsed.netloc:
+        raise PostProcessError(f"{field_name} is missing network location")
+    return normalized
+
+
+def _validate_http_request(request: urllib.request.Request, *, field_name: str) -> None:
+    if not hasattr(request, "get_full_url"):
+        raise PostProcessError(f"{field_name} is not a valid request object")
+    url = request.get_full_url()
+    if not isinstance(url, str):
+        raise PostProcessError(f"{field_name} URL must be text")
+    _validate_http_url(url, field_name=field_name)
 
 
 def _contains_escaped_null(value: str) -> bool:
@@ -183,7 +203,7 @@ def build_ollama_prompt(
 
 
 def _ollama_endpoint(url: str, path: str) -> str:
-    base = _assert_clean_url(url, field_name="ollama url").rstrip("/")
+    base = _validate_http_url(_assert_clean_url(url, field_name="ollama url"), field_name="ollama url").rstrip("/")
     return base + "/" + path.lstrip("/")
 
 
@@ -197,22 +217,14 @@ def _openai_compatible_endpoint(url: str, path: str) -> str:
 
 
 def _validate_openai_compatible_http_url(url: str) -> str:
-    if not isinstance(url, str) or isinstance(url, bool):
-        raise PostProcessError("openai-compatible url must be text")
-    parsed = urllib.parse.urlparse(url)
-    if not parsed.scheme:
-        raise PostProcessError("openai-compatible url is required")
-    if parsed.scheme not in {"http", "https"}:
-        raise PostProcessError("openai-compatible url must use http:// or https://")
-    if not parsed.netloc:
-        raise PostProcessError("openai-compatible url is required")
-    return url
+    return _validate_http_url(url, field_name="openai-compatible url")
 
 
 def _read_json(request: urllib.request.Request, timeout: int) -> object:
     if not isinstance(timeout, int) or isinstance(timeout, bool):
         raise PostProcessError("timeout must be an integer")
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    _validate_http_request(request, field_name="postprocess request")
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310
         raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
     return json.loads(raw)
 
@@ -441,7 +453,8 @@ def post_process_with_ollama(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=180) as response:
+        _validate_http_request(request, field_name="ollama post-process request")
+        with urllib.request.urlopen(request, timeout=180) as response:  # nosec B310
             raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
     except OSError as exc:
         raise PostProcessError(f"Ollama request failed: {exc}") from exc
@@ -550,7 +563,8 @@ def post_process_with_openai_compatible(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=180) as response:
+        _validate_http_request(request, field_name="openai-compatible post-process request")
+        with urllib.request.urlopen(request, timeout=180) as response:  # nosec B310
             raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
     except urllib.error.HTTPError as exc:
         try:

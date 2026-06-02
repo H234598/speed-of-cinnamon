@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
+import subprocess  # nosec B404
 import tempfile
 import io
 import os
@@ -138,13 +138,14 @@ def _run_with_input(
 
     with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
         try:
-            proc = subprocess.run(
+            proc = subprocess.run(  # nosec B603
                 [runtime_command, *argv[1:]],
                 input=input_bytes,
                 text=False,
                 stdout=stdout_file,
                 stderr=stderr_file,
                 timeout=timeout,
+                shell=False,
             )
         except FileNotFoundError as exc:
             raise OutputError(f"{command} is not available") from exc
@@ -198,12 +199,13 @@ def _run_stdout(argv: list[str] | tuple[str, ...], *, timeout: int = MAX_EXEC_TI
 
     runtime_command = _command_path(command)
     try:
-        proc = subprocess.run(
+        proc = subprocess.run(  # nosec B603
             [runtime_command, *argv[1:]],
             input=b"",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=timeout,
+            shell=False,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return ""

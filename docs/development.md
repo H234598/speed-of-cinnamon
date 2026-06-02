@@ -191,13 +191,13 @@ all package payloads, and finally publishes a GitHub Release
 with the source archive, checksum, Fedora noarch RPM, generic noarch RPM, their source RPMs, and the Snap package.
 It also has manual inputs:
 
-- `dry_run=true` to validate release automation without publishing.
 - `build_snap=false` to skip snap package generation in CI.
 - `build_generic_rpm=false` to skip generic RPM generation.
 - `run_workflow_lint=false` to skip workflow validation step.
 
 For environments without `snapcraft`, run `make release-dry-run SNAP_BUILD=0` locally.
 To skip local generic RPM generation, use `make release-dry-run BUILD_GENERIC_RPM=0`.
+This keeps the release build and validation steps and skips only the publish/upload step for local dry-runs.
 To combine both optional skips:
 
 ```bash
@@ -212,16 +212,10 @@ Flag values are validated locally before any artifacts are built:
 To run the manual release workflow from CLI:
 
 ```bash
-gh workflow run release.yml -f tag=v0.1.2 -f dry_run=true -f build_snap=true
+gh workflow run release.yml -f tag=v0.1.2 -f build_snap=true
 ```
 
 Use `build_snap=false` and/or `build_generic_rpm=false` to skip optional package types.
-
-To publish a real release (no dry-run), use:
-
-```bash
-gh workflow run release.yml -f tag=v0.1.2 -f dry_run=false -f build_snap=true
-```
 
 Local release helpers:
 
@@ -236,8 +230,8 @@ For local real release attempts with fewer artifacts, you can also skip snap or 
 make release SNAP_BUILD=0 BUILD_GENERIC_RPM=0
 ```
 
-`make release-dry-run` builds and verifies release assets, then shows the exact release publishing path without creating
-or uploading a GitHub Release. `make release` publishes through `GH_TOKEN` or `GITHUB_TOKEN`.
+`make release-dry-run` builds and verifies release assets, then exits after reporting what would be uploaded.
+It is intended for local validation without creating or updating a GitHub Release.
 
 ## Distribution Verification
 

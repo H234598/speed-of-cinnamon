@@ -5,6 +5,7 @@ import hashlib
 import os
 import shutil
 import tempfile
+import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -238,7 +239,7 @@ def _cached_or_computed_sha1(path: Path) -> str:
         if isinstance(checksum, str):
             return checksum
 
-    digest = hashlib.sha1()
+    digest = hashlib.sha1(usedforsecurity=False)
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
@@ -328,6 +329,22 @@ def _read_content_length(response: Any) -> int | None:
             return parsed
 
     return None
+
+
+def _assert_download_url(url: str, *, field_name: str = "model download URL") -> str:
+    if not isinstance(url, str) or isinstance(url, bool):
+        raise ModelError(f"{field_name} must be text")
+    normalized = (url or "").strip()
+    if not normalized:
+        raise ModelError(f"{field_name} is required")
+    if _contains_escaped_null(normalized):
+        raise ModelError(f"{field_name} contains invalid null byte")
+    parsed = urllib.parse.urlparse(normalized)
+    if parsed.scheme not in {"http", "https"}:
+        raise ModelError(f"{field_name} must use http:// or https://")
+    if not parsed.netloc:
+        raise ModelError(f"{field_name} is missing network location")
+    return normalized
 
 
 class ModelError(RuntimeError):
@@ -640,8 +657,9 @@ def _model_is_verified(model: ModelSpec, path: Path, checksum: str = "") -> bool
 
 
 def _download_url_to_file(url: str, tmp_path: Path, size_limit: int, model_name: str) -> int:
+    url = _assert_download_url(url, field_name="model download URL")
     with (
-        urllib.request.urlopen(url, timeout=30) as response,
+        urllib.request.urlopen(url, timeout=30) as response,  # nosec B310
         tmp_path.open("wb") as output,
     ):
         try:

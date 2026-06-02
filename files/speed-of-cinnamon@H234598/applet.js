@@ -1697,17 +1697,41 @@ MyApplet.prototype = {
   _installOllamaRuntimeCommand: function() {
     return this._terminalWorkflowScript([
       "echo 'Installing Ollama runtime...'",
-      "if command -v ollama >/dev/null 2>&1; then echo 'Ollama is already installed.'; ollama --version || true; else curl -fsSL https://ollama.com/install.sh | sh; fi",
+      "if command -v ollama >/dev/null 2>&1; then",
+      "  echo 'Ollama is already installed.'",
+      "  ollama --version || true",
+      "else",
+      "  if command -v dnf >/dev/null 2>&1; then",
+      "    sudo dnf install -y ollama",
+      "  elif command -v apt-get >/dev/null 2>&1; then",
+      "    sudo apt-get update",
+      "    sudo apt-get install -y ollama",
+      "  else",
+      "    printf 'No supported package manager found (dnf/apt-get). Install Ollama manually and rerun this step.\\n' >&2",
+      "    exit 1",
+      "  fi",
+      "fi",
       "if command -v systemctl >/dev/null 2>&1; then sudo systemctl enable --now ollama || true; fi",
       "if command -v ollama >/dev/null 2>&1; then ollama serve >/tmp/speed-of-cinnamon-ollama.log 2>&1 & sleep 2 || true; fi",
-      "curl -fsS http://127.0.0.1:11434/api/tags >/dev/null && echo 'Ollama is reachable on 127.0.0.1:11434.' || { echo 'Ollama installed, but the local API is not reachable yet.'; exit 1; }"
+      "if command -v ollama >/dev/null 2>&1; then ollama list >/dev/null 2>&1 && echo 'Ollama is reachable on 127.0.0.1:11434.' || { echo 'Ollama installed, but the local API is not reachable yet.'; exit 1; }; fi"
     ]);
   },
 
   _uninstallOllamaRuntimeCommand: function() {
     return this._terminalWorkflowScript([
       "echo 'Uninstalling Ollama runtime...'",
-      "if command -v rpm >/dev/null 2>&1 && rpm -q ollama >/dev/null 2>&1; then sudo dnf remove -y ollama; else sudo systemctl disable --now ollama 2>/dev/null || true; sudo rm -f /etc/systemd/system/ollama.service /usr/local/bin/ollama; sudo rm -rf /usr/share/ollama; sudo userdel ollama 2>/dev/null || true; sudo groupdel ollama 2>/dev/null || true; sudo systemctl daemon-reload 2>/dev/null || true; fi",
+      "if command -v dnf >/dev/null 2>&1 && rpm -q ollama >/dev/null 2>&1; then",
+      "  sudo dnf remove -y ollama",
+      "elif command -v apt-get >/dev/null 2>&1 && dpkg -s ollama >/dev/null 2>&1; then",
+      "  sudo apt-get remove -y ollama",
+      "else",
+      "  sudo systemctl disable --now ollama 2>/dev/null || true",
+      "  sudo rm -f /etc/systemd/system/ollama.service /usr/local/bin/ollama",
+      "  sudo rm -rf /usr/share/ollama",
+      "  sudo userdel ollama 2>/dev/null || true",
+      "  sudo groupdel ollama 2>/dev/null || true",
+      "  sudo systemctl daemon-reload 2>/dev/null || true",
+      "fi",
       "if command -v ollama >/dev/null 2>&1; then echo 'Ollama command is still present.'; exit 1; fi",
       "echo 'Ollama runtime removed.'"
     ]);
@@ -1717,7 +1741,7 @@ MyApplet.prototype = {
     let cli = this._shellQuote(this._cliCommand());
     return this._terminalWorkflowScript([
       "echo 'Running Speed of Cinnamon basic setup...'",
-      "if command -v dnf >/dev/null 2>&1; then sudo dnf install -y curl zenity xdotool xclip xsel wl-clipboard pipewire-utils pulseaudio-utils alsa-utils python3-pip; fi",
+      "if command -v dnf >/dev/null 2>&1; then sudo dnf install -y zenity xdotool xclip xsel wl-clipboard pipewire-utils pulseaudio-utils alsa-utils python3-pip; fi",
       "if command -v python3 >/dev/null 2>&1; then python3 -m pip install --user --upgrade faster-whisper; fi",
       cli + " download-model ct2-base-int8 --json",
       "echo 'Basic setup finished.'"

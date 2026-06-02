@@ -161,13 +161,15 @@ For real publishing, use:
 gh workflow run release.yml -f tag=v0.1.2 -f build_snap=true
 ```
 
-For local validation without publishing to GitHub:
+For local release validation, use:
 
 ```bash
 make release-dry-run SNAP_BUILD=0 BUILD_GENERIC_RPM=0
 ```
 
-To publish locally from a machine without snap support and without generic RPMs in the release set:
+`release-dry-run` validates all artifacts in the same order as release while skipping optional package types; it does not publish.
+
+For local publishing from a machine without snap support and without generic RPMs in the release set:
 
 ```bash
 make release SNAP_BUILD=0 BUILD_GENERIC_RPM=0

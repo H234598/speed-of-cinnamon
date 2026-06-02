@@ -20,7 +20,12 @@ done
 
 rpm_candidates=()
 if [[ $# -eq 1 ]]; then
-  rpm_path="$(realpath "${1}")"
+  rpm_path="${1}"
+  if [[ -L "${rpm_path}" ]]; then
+    printf 'RPM package must not be a symlink: %s\n' "${rpm_path}" >&2
+    exit 1
+  fi
+  rpm_path="$(realpath "${rpm_path}")"
 else
   rpm_candidates=(
     "${repo_dir}"/dist/rpmbuild/RPMS/noarch/speed-of-cinnamon-*.noarch.rpm
@@ -28,7 +33,7 @@ else
   shopt -s nullglob
   filtered_rpms=()
   for candidate in "${rpm_candidates[@]}"; do
-    if [[ -f "${candidate}" ]]; then
+    if [[ -f "${candidate}" && ! -L "${candidate}" ]]; then
       filtered_rpms+=("${candidate}")
     fi
   done
@@ -45,6 +50,10 @@ if [[ ! -f "${rpm_path}" || ! ( "${rpm_path}" == "${repo_dir}/dist/rpmbuild/"*".
   exit 1
 fi
 rpm_path="$(realpath "${rpm_path}")"
+if [[ -L "${rpm_path}" || ! -f "${rpm_path}" || ! ( "${rpm_path}" == "${repo_dir}/dist/rpmbuild/"*".rpm" || "${rpm_path}" == "${repo_dir}/dist/rpmbuild-generic/"*".rpm" ) ]]; then
+  printf 'RPM package not valid: %s\n' "${rpm_path}" >&2
+  exit 1
+fi
 
 tmp_root="${TMPDIR:-/tmp}"
 if [[ ! "${tmp_root}" == /* ]]; then

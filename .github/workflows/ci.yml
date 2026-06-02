@@ -1,3 +1,6 @@
+permissions:
+  contents: read
+
 name: CI
 
 on:
@@ -151,6 +154,9 @@ jobs:
             make snap
           fi
         if: env.BUILD_SNAP == '1'
+      - name: Verify Snap package
+        if: env.BUILD_SNAP == '1'
+        run: make snap-check
       - name: Upload source release archive
         uses: actions/upload-artifact@v7.0.1
         with:

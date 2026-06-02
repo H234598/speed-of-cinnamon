@@ -16,7 +16,7 @@ if ! command -v realpath >/dev/null 2>&1; then
 fi
 
 tarball="$(realpath "$1")"
-if [[ ! -f "${tarball}" || ! "${tarball}" == *.tar.gz ]]; then
+if [[ -L "${tarball}" || ! -f "${tarball}" || ! "${tarball}" == *.tar.gz || ! "${tarball}" == "${repo_dir}/dist/"* ]]; then
   printf 'archive missing or invalid: %s\n' "${tarball}" >&2
   exit 1
 fi

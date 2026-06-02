@@ -566,7 +566,8 @@ def format_alarm_overview(alarms: list[dict[str, Any]], now: datetime | None = N
     if not next_items:
         return f"{len(active)} active alarm(s)"
     next_at, next_alarm = min(next_items, key=lambda item: item[0])
-    assert next_at is not None
+    if next_at is None:
+        raise RuntimeError("next occurrence is missing")
     prefix = "1 active alarm" if len(active) == 1 else f"{len(active)} active alarms"
     label = format_alarm_name(next_alarm)
     if next_at.date() == current.date():

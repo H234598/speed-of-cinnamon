@@ -19,7 +19,7 @@ require_cmd() {
   fi
 }
 
-for tool in python3 snapcraft mktemp rm mkdir find; do
+for tool in python3 snapcraft mktemp rm mkdir find realpath; do
   require_cmd "${tool}"
 done
 
@@ -98,6 +98,10 @@ PYCODE
 
 dist_dir="${repo_dir}/dist/snap"
 mkdir -p "${dist_dir}"
+if [[ -L "${dist_dir}" ]]; then
+  printf 'dist snap directory must not be a symlink: %s\n' "${dist_dir}" >&2
+  exit 1
+fi
 rm -f -- "${dist_dir}/speed-of-cinnamon_${version}_*.snap" "${repo_dir}/speed-of-cinnamon_${version}_*.snap"
 
 tmp_output="$(mktemp "${repo_tmp_root}/speed-of-cinnamon-snap-output-XXXXXX")"
@@ -115,6 +119,15 @@ if [[ ${#snap_files[@]} -ne 1 ]]; then
 fi
 
 for path in "${snap_files[@]}"; do
+  if [[ -L "${path}" ]]; then
+    printf 'snap package must not be a symlink: %s\n' "${path}" >&2
+    exit 1
+  fi
+  absolute="$(realpath "${path}")"
+  if [[ "${absolute}" != "${dist_dir}/speed-of-cinnamon_${version}_"* && "${absolute}" != "${repo_dir}/speed-of-cinnamon_${version}_"* ]]; then
+    printf 'snap package path is unexpected: %s\n' "${path}" >&2
+    exit 1
+  fi
   filename="$(basename "${path}")"
   if [[ ! "${filename}" == "speed-of-cinnamon_${version}_"* ]]; then
     printf 'unexpected snap file name: %s\n' "${filename}" >&2

@@ -50,6 +50,10 @@ if [[ ! -x "${repo_dir}/scripts/build-dist.sh" ]]; then
   exit 1
 fi
 read -r tarball < <("${repo_dir}/scripts/build-dist.sh")
+if [[ -L "${tarball}" ]]; then
+  printf 'build-dist output must not be a symlink: %s\n' "${tarball}" >&2
+  exit 1
+fi
 tarball="$(realpath "${tarball}")"
 if [[ ! -f "${tarball}" || ! "${tarball}" == "${repo_dir}/dist/"*".tar.gz" ]]; then
   printf 'build-dist output is invalid: %s\n' "${tarball}" >&2

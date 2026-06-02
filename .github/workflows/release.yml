@@ -121,7 +121,11 @@ jobs:
             exit 1
           fi
 
-          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          {
+            printf 'tag<<TAG\n'
+            printf '%s\n' "${tag}"
+            printf 'TAG\n'
+          } >> "${GITHUB_OUTPUT}"
           echo "Resolved release tag: ${tag}"
       - name: Verify project
         run: make check
@@ -148,6 +152,9 @@ jobs:
           else
             make SNAP_BUILD=0 snap
           fi
+      - name: Verify Snap package
+        if: env.BUILD_SNAP == '1'
+        run: make snap-check
       - name: Shellcheck scripts
         run: shellcheck scripts/*.sh
       - name: Upload source release archive

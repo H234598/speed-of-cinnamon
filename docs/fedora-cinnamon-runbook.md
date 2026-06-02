@@ -58,43 +58,37 @@ archive and checksum, plus `speed-of-cinnamon-rpm-<commit>` with the Fedora noar
 Pushing a version tag that matches `pyproject.toml`, for example `v0.1.0`, runs the release workflow. It validates workflow
 YAML in a dedicated lint step, then repeats the normal checks and publishes a GitHub Release with the source archive,
 checksum, Fedora noarch RPM, generic noarch RPM, their source RPMs, and the Snap package. The same workflow has a manual
-`dry_run=true` path to validate release automation without
-publishing.
+Optional flags to skip package types when triggering manually:
 
 To trigger the workflow manually:
 
 ```bash
-gh workflow run release.yml -f tag=v0.1.2 -f dry_run=true -f build_snap=true
+gh workflow run release.yml -f tag=v0.1.2 -f build_snap=true
 ```
 
-Set `build_snap=false` to run a release dry-run without rebuilding the snap package.
+Set `build_snap=false` to skip snap package generation.
 Set `build_generic_rpm=false` to skip the generic RPM profile in the same way.
+Set `run_workflow_lint=false` to skip the workflow-lint step.
 
 To skip the workflow-lint preflight on a manual release run:
 
 ```bash
-gh workflow run release.yml -f tag=v0.1.2 -f dry_run=true -f build_snap=true -f run_workflow_lint=false
+gh workflow run release.yml -f tag=v0.1.2 -f build_snap=true -f run_workflow_lint=false
 ```
 
-For a release run that also skips snap creation (validation-only), run:
+For a release run that also skips snap creation, run:
 
 ```bash
-gh workflow run release.yml -f tag=v0.1.2 -f dry_run=true -f build_snap=false
+gh workflow run release.yml -f tag=v0.1.2 -f build_snap=false
 ```
 
 For a validation-only run that skips both optional package types:
 
 ```bash
-gh workflow run release.yml -f tag=v0.1.2 -f dry_run=true -f build_snap=false -f build_generic_rpm=false
+gh workflow run release.yml -f tag=v0.1.2 -f build_snap=false -f build_generic_rpm=false
 ```
 
-For a real publish run:
-
-```bash
-gh workflow run release.yml -f tag=v0.1.2 -f dry_run=false -f build_snap=true
-```
-
-For local validation-only release checks without publishing, keep everything local and skip optional package builds as needed:
+For local release validation checks without optional package types, keep everything local and skip optional builds as needed:
 
 ```bash
 make release-dry-run SNAP_BUILD=0 BUILD_GENERIC_RPM=0

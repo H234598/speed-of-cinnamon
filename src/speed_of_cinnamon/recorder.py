@@ -5,7 +5,7 @@ import io
 import math
 import os
 import shutil
-import subprocess
+import subprocess  # nosec B404
 import sys
 import tempfile
 import time
@@ -316,11 +316,12 @@ def _run_pactl_command(command: list[str] | tuple[str, ...], *, required: bool) 
     try:
         with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
             try:
-                proc = subprocess.run(
+                proc = subprocess.run(  # nosec B603
                     args=runtime_command,
                     stdout=stdout_file,
                     stderr=stderr_file,
                     timeout=MAX_PACTL_TIMEOUT_SECONDS,
+                    shell=False,
                 )
             except FileNotFoundError as exc:
                 raise RecorderError(f"{pactl} command not found") from exc
@@ -363,12 +364,13 @@ def _run_kill(command: list[str] | tuple[str, ...], *, check_exit: bool) -> None
         raise RecorderError("kill command contains invalid null byte")
     runtime_command = [_command_path(kill_command), *command[1:]]
     try:
-        subprocess.run(
+        subprocess.run(  # nosec B603
             runtime_command,
             check=check_exit,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=1,
+            shell=False,
         )
     except subprocess.TimeoutExpired as exc:
         raise RecorderError(f"kill command timed out: {runtime_command}") from exc
@@ -400,7 +402,7 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
         except OSError:
             pass
         runtime_command = [_command_path(command.argv[0]), *command.argv[1:]]
-        return subprocess.Popen(runtime_command, stdout=log_file, stderr=subprocess.STDOUT, start_new_session=True)
+        return subprocess.Popen(runtime_command, stdout=log_file, stderr=log_file, start_new_session=True, shell=False)  # nosec B603
     except OSError as exc:
         raise RecorderError(f"failed to start {command.name}: {exc}") from exc
     finally:

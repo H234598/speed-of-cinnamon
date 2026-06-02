@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import shutil
 import shlex
-import subprocess
+import subprocess  # nosec B404
 import tempfile
 import io
 import json
@@ -153,6 +153,15 @@ def _read_response_text(response: object, max_bytes: int = MAX_TRANSCRIBER_JSON_
         raise TranscriptionError("API response is not valid UTF-8") from exc
 
 
+def _validate_http_request(request: urllib.request.Request, *, field_name: str) -> None:
+    if not hasattr(request, "get_full_url"):
+        raise TranscriptionError(f"{field_name} is not a valid request object")
+    url = request.get_full_url()
+    if not isinstance(url, str):
+        raise TranscriptionError(f"{field_name} URL must be text")
+    _validate_openai_compatible_api_url(url, field_name=field_name)
+
+
 def _file_size(file: io.BufferedRandom) -> int:
     if not hasattr(file, "seek") or not hasattr(file, "tell"):
         raise TranscriptionError("file must be a binary file handle")
@@ -178,11 +187,12 @@ def _run_limited_process(command: list[str] | tuple[str, ...], *, timeout: int =
     try:
         with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
             try:
-                proc = subprocess.run(
+                proc = subprocess.run(  # nosec B603
                     [runtime_executable, *command[1:]],
                     stdout=stdout_file,
                     stderr=stderr_file,
                     timeout=timeout,
+                    shell=False,
                 )
             except FileNotFoundError as exc:
                 raise TranscriptionError(f"{executable} is not available") from exc
@@ -625,7 +635,8 @@ def transcribe_with_openai_compatible_api(
         headers["Authorization"] = f"Bearer {api_key}"
     request = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(request, timeout=TRANSCRIBE_COMMAND_TIMEOUT_SECONDS) as response:
+        _validate_http_request(request, field_name="OpenAI-compatible speech request")
+        with urllib.request.urlopen(request, timeout=TRANSCRIBE_COMMAND_TIMEOUT_SECONDS) as response:  # nosec B310
             raw = _read_response_text(response)
     except urllib.error.HTTPError as exc:
         try:

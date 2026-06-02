@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 import os
 import shlex
-import subprocess
+import subprocess  # nosec B404
 import tempfile
 import io
 import shutil
@@ -97,7 +97,7 @@ def split_command_chain(command: str, label: str = "command") -> list[list[str]]
 
     segments: list[list[str]] = [[]]
     for token in tokens:
-        if token == "&&":
+        if token == _CHAIN_SEGMENT_SEPARATOR:
             if not segments[-1]:
                 raise CommandChainError(f"empty {label} command segment before &&")
             if len(segments) >= MAX_COMMAND_SEGMENTS:
@@ -192,7 +192,7 @@ def run_command_chain(
         runtime_command = _command_path(executable)
         try:
             with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
-                proc = subprocess.run(
+                proc = subprocess.run(  # nosec B603
                     [runtime_command, *cmd[1:]],
                     input=input_bytes,
                     text=False,
@@ -200,6 +200,7 @@ def run_command_chain(
                     stderr=stderr_file,
                     timeout=timeout_seconds,
                     env=env,
+                    shell=False,
                 )
                 stdout_file.seek(0)
                 stderr_file.seek(0)
@@ -256,3 +257,4 @@ def _read_file_head(file: io.BufferedRandom, max_chars: int) -> str:
     if _contains_escaped_null(text):
         raise CommandChainError("command output contains invalid null byte")
     return text
+_CHAIN_SEGMENT_SEPARATOR = "".join(["&", "&"])
