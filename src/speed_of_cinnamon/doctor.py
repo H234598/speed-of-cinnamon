@@ -106,14 +106,14 @@ def _coerce_desktop_env(name: str) -> str:
     if isinstance(name, bool) or not isinstance(name, str):
         return ""
     try:
-        value = os.environ[name]
+        value = os.environ.__getitem__(name)
     except KeyError:
         return ""
     if value is None or isinstance(value, bool) or not isinstance(value, str):
         return ""
-    normalized = value.strip().lower()
-    if _contains_http_header_control_chars(normalized):
+    if _contains_escaped_null(value) or _contains_http_header_control_chars(value):
         return ""
+    normalized = value.strip().lower()
     return normalized
 
 

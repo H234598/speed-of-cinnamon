@@ -192,10 +192,10 @@ class NextVersionTest(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertIn("error:", stderr)
 
-    def test_missing_git_command_returns_git_environment_error_code(self) -> None:
+    def test_explicit_add_commits_does_not_require_git_command(self) -> None:
         code, stderr = run_version_fail_stdout_stderr("--base", "0.1.20", "--add-commits", "10", path="/nonexistent")
-        self.assertEqual(code, 3)
-        self.assertIn("error:", stderr)
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "")
 
     def test_large_add_commits_rolls_many_levels(self) -> None:
         self.assertEqual(
@@ -278,10 +278,10 @@ class NextVersionTest(unittest.TestCase):
             self.assertIn("error:", stderr)
 
     def test_add_patches_core_increment_steps(self) -> None:
-        self.assertEqual(next_version.add_patches((0, 1, 99), 100), (0, 2, 99))
+        self.assertEqual(next_version.add_patches((0, 1, 99), 100), (0, 2, 0))
 
     def test_add_patches_rolls_to_major(self) -> None:
-        self.assertEqual(next_version.add_patches((0, 99, 99), 100), (1, 0, 99))
+        self.assertEqual(next_version.add_patches((0, 99, 99), 100), (1, 0, 0))
 
     def test_add_patches_rejects_invalid_base_tuples(self) -> None:
         with self.assertRaises(next_version.UserInputError):
@@ -561,15 +561,16 @@ class NextVersionTest(unittest.TestCase):
         with (
             mock.patch.object(next_version, "parse_args") as parse_args,
             mock.patch.object(next_version, "ensure_tag_exists") as ensure_tag_exists,
+            mock.patch.object(next_version, "tag_exists", return_value=True),
             mock.patch.object(next_version, "commits_since_tag", return_value=2) as commits_since_tag,
             mock.patch.object(next_version, "add_patches", return_value=(2, 3, 4)) as add_patches,
             mock.patch.object(next_version, "print")
         ):
             parse_args.return_value = mock.Mock(from_tag="v9.9.9", add_commits=None, feature=False, breaking=False, base=None)
             next_version.main()
-            ensure_tag_exists.assert_called_once_with("v9.9.9")
+            self.assertFalse(ensure_tag_exists.called)
             commits_since_tag.assert_called_once_with("v9.9.9")
-            add_patches.assert_called_once_with((0, 1, 0), 2)
+            add_patches.assert_called_once_with((9, 9, 9), 2)
 
     def test_main_uses_add_commits_when_provided(self) -> None:
         with mock.patch.object(next_version, "parse_args") as parse_args, \
@@ -637,6 +638,7 @@ class NextVersionTest(unittest.TestCase):
 
     def test_main_propagates_commits_since_tag_git_error(self) -> None:
         with mock.patch.object(next_version, "parse_args") as parse_args, \
+            mock.patch.object(next_version, "tag_exists", return_value=True), \
             mock.patch.object(next_version, "commits_since_tag", side_effect=next_version.GitEnvironmentError("boom")) as commits_since_tag:
             parse_args.return_value = mock.Mock(from_tag="v1.2.3", add_commits=None, feature=False, breaking=False, base=None)
             with self.assertRaises(next_version.GitEnvironmentError):

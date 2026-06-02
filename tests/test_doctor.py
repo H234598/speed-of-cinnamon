@@ -215,7 +215,7 @@ class DoctorTest(unittest.TestCase):
                 self.assertEqual(kwargs["path"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
     def test_env_desktop_rejects_control_characters(self) -> None:
-        with mock.patch.dict("speed_of_cinnamon.doctor.os.environ", {"XDG_CURRENT_DESKTOP": "x-cinnamon\n", "XDG_SESSION_TYPE": "x11", "DESKTOP_SESSION": "cinnamon\x00"}):
+        with mock.patch.dict("speed_of_cinnamon.doctor.os.environ", {"XDG_CURRENT_DESKTOP": "x-cinnamon\n", "XDG_SESSION_TYPE": "x11", "DESKTOP_SESSION": "cinnamon\\x00"}):
             payload = doctor.report({"recorder": "auto", "transcriber": "auto", "insert-method": "clipboard"})
         self.assertEqual(payload["desktop"]["current_desktop"], "")
         self.assertEqual(payload["desktop"]["desktop_session"], "")

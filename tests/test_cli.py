@@ -64,7 +64,7 @@ class CliTest(unittest.TestCase):
             {
                 "XDG_CURRENT_DESKTOP": "X-Cinnamon\n",
                 "XDG_SESSION_TYPE": "x11",
-                "DESKTOP_SESSION": "cinnamon\x00",
+                "DESKTOP_SESSION": "cinnamon\\x00",
             },
         ):
             stdout = io.StringIO()

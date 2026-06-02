@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import __version__
+from . import doctor
 from .alarms import (
     add_alarm,
     check_due_alarms,
@@ -153,7 +154,7 @@ def _coerce_environment_value(name: str) -> str | None:
     if isinstance(name, bool) or not isinstance(name, str):
         return None
     try:
-        value = os.environ[name]
+        value = os.environ.__getitem__(name)
     except KeyError:
         return None
     if value is None or isinstance(value, bool) or not isinstance(value, str):
@@ -173,8 +174,10 @@ def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
         for key, value in base.items():
             if not isinstance(key, str) or isinstance(key, bool):
                 raise RuntimeError("environment keys must be text")
-            if not isinstance(value, str) or isinstance(value, bool):
+            if isinstance(value, bool):
                 raise RuntimeError("environment values must be text")
+            if not isinstance(value, str):
+                raise RuntimeError("environment base must be a mapping")
             if _is_unsafe_env_var(key):
                 raise RuntimeError(f"environment key is not allowed: {key}")
             env[key] = value
@@ -217,8 +220,10 @@ def _coerce_log_level_from_environment() -> str:
     level = _coerce_environment_value("SPEED_OF_CINNAMON_LOG_LEVEL") or DEFAULT_LOG_LEVEL
     if not isinstance(level, str) or isinstance(level, bool):
         return DEFAULT_LOG_LEVEL
+    if _contains_http_header_control_chars(level):
+        return DEFAULT_LOG_LEVEL
     cleaned = level.strip().lower()
-    if not cleaned or _contains_http_header_control_chars(cleaned):
+    if not cleaned:
         return DEFAULT_LOG_LEVEL
     if cleaned in LOG_LEVELS:
         return cleaned
@@ -512,7 +517,7 @@ def read_transcript_history(limit: int = 10) -> list[dict[str, object]]:
     if not directory.exists():
         return []
 
-    candidates = heapq.nlargest(limit, _transcript_history_candidates(directory))
+    candidates = heapq.nlargest(max(limit * 4, limit + 16), _transcript_history_candidates(directory))
 
     entries: list[dict[str, object]] = []
     for mtime, path in candidates:

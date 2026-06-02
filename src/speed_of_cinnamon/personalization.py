@@ -48,11 +48,13 @@ def _coerce_environment_value(name: str) -> str | None:
     if isinstance(name, bool) or not isinstance(name, str):
         return None
     try:
-        value = os.environ[name]
+        value = os.environ.__getitem__(name)
     except KeyError:
         return None
-    if value is None or isinstance(value, bool) or not isinstance(value, str):
+    if value is None:
         return None
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise ValueError("environment value must be text")
     return value
 
 

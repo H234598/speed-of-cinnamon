@@ -65,7 +65,7 @@ def _coerce_environment_value(name: str) -> str | None:
     if isinstance(name, bool) or not isinstance(name, str):
         return None
     try:
-        value = os.environ[name]
+        value = os.environ.__getitem__(name)
     except KeyError:
         return None
     if value is None or isinstance(value, bool) or not isinstance(value, str):
@@ -86,8 +86,10 @@ def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
         for key, value in base.items():
             if not isinstance(key, str) or isinstance(key, bool):
                 raise CommandChainError("environment keys must be text")
-            if not isinstance(value, str) or isinstance(value, bool):
+            if isinstance(value, bool):
                 raise CommandChainError("environment values must be text")
+            if not isinstance(value, str):
+                raise CommandChainError("environment base must be a mapping")
             if _is_unsafe_env_var(key):
                 raise CommandChainError(f"environment key is not allowed: {key}")
             env[key] = value
@@ -266,6 +268,7 @@ def run_command_chain(
 
     try:
         env = command_environment(personal_context, vocabulary)
+        env = {key: value for key, value in env.items() if isinstance(key, str) and not _is_unsafe_env_var(key)}
         env = _filtered_environment(env)
     except ValueError as exc:
         raise CommandChainError(str(exc)) from exc

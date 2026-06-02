@@ -107,9 +107,12 @@ def add_patches(base: tuple[int,int,int], patch_steps: int) -> tuple[int,int,int
     major, minor, patch = _assert_version_tuple(base)
     patch_steps = _assert_non_negative_int("patch_steps", patch_steps)
     patch_steps = patch_steps // COMMITS_PER_PATCH
-    total_patch = patch + patch_steps
-    minor += total_patch // PATCHES_PER_MINOR
-    patch = total_patch % PATCHES_PER_MINOR
+    minor += patch_steps // PATCHES_PER_MINOR
+    if patch_steps % PATCHES_PER_MINOR:
+        patch += patch_steps % PATCHES_PER_MINOR
+        if patch >= PATCHES_PER_MINOR:
+            patch -= PATCHES_PER_MINOR
+            minor += 1
     major += minor // MINORS_PER_MAJOR
     minor %= MINORS_PER_MAJOR
     return major, minor, patch
@@ -197,24 +200,39 @@ def main() -> int:
         raise UserInputError("base must be a valid version string")
     if a.from_tag is not None and not isinstance(a.from_tag, str):
         raise UserInputError("from-tag must be a valid version string")
+    if a.add_commits is not None:
+        _assert_non_negative_int("add_commits", a.add_commits)
+
     base_raw = a.base.strip() if isinstance(a.base, str) else a.base
     from_tag_raw = a.from_tag.strip() if isinstance(a.from_tag, str) else a.from_tag
-    if a.base is not None:
-        if not base_raw:
-            raise UserInputError("base must be a non-empty version")
-        base = parse_version(base_raw)
-    else:
-        base = read_current_version()
+
     if from_tag_raw is not None and a.from_tag is not None:
         if not from_tag_raw:
             raise UserInputError("from-tag must be a non-empty version")
-        ensure_tag_exists(from_tag_raw)
-        commits = commits_since_tag(from_tag_raw)
-    elif a.add_commits is not None:
-        commits = a.add_commits
+        base = parse_version(from_tag_raw)
+        if tag_exists(from_tag_raw):
+            commits = commits_since_tag(from_tag_raw)
+        elif base == read_current_version():
+            commits = 0
+        else:
+            raise UserInputError(f"release tag {normalize_tag(from_tag_raw)} does not exist")
+    elif a.base is not None:
+        if not base_raw:
+            raise UserInputError("base must be a non-empty version")
+        base = parse_version(base_raw)
+        if a.add_commits is not None:
+            commits = a.add_commits
+        else:
+            auto_tag = tag_for_version(base)
+            commits = commits_since_tag(auto_tag) if tag_exists(auto_tag) else 0
     else:
-        auto_tag = tag_for_version(base)
-        commits = commits_since_tag(auto_tag) if tag_exists(auto_tag) else 0
+        base = read_current_version()
+        if a.add_commits is not None:
+            commits = a.add_commits
+        else:
+            auto_tag = tag_for_version(base)
+            commits = commits_since_tag(auto_tag) if tag_exists(auto_tag) else 0
+
     major, minor, patch = add_patches(base, commits)
     if a.feature:
         major, minor, patch = apply_feature_increase(major, minor, patch)
@@ -222,7 +240,6 @@ def main() -> int:
         major, minor, patch = apply_breaking_change(major, minor, patch)
     print(to_version(major, minor, patch))
     return 0
-
 
 def run() -> int:
     try:
