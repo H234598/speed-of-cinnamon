@@ -640,6 +640,14 @@ class NextVersionTest(unittest.TestCase):
             self.assertFalse(commits_since_tag.called)
             add_patches.assert_called_once_with((3, 4, 5), 0)
 
+    def test_main_add_patches_failure_propagates(self) -> None:
+        with mock.patch.object(next_version, "parse_args") as parse_args, \
+            mock.patch.object(next_version, "add_patches", side_effect=next_version.UserInputError("bad")) as add_patches:
+            parse_args.return_value = mock.Mock(from_tag=None, add_commits=10, feature=False, breaking=False, base="0.1.20")
+            with self.assertRaises(next_version.UserInputError):
+                next_version.main()
+            add_patches.assert_called_once_with((0, 1, 20), 10)
+
     def test_main_uses_auto_tag_when_tag_exists(self) -> None:
         with mock.patch.object(next_version, "parse_args") as parse_args, \
             mock.patch.object(next_version, "read_current_version", return_value=(2, 0, 0)) as read_current_version, \
