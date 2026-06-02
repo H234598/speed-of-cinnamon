@@ -262,7 +262,7 @@ It is intended for local validation without creating or updating a GitHub Releas
 
 Current project versioning follows a deterministic step policy:
 
-- `PATCH` increments by one for each merged commit.
+- `PATCH` increments by one for every `100` merged commits.
 - `MINOR` increments by one after every `100` patch increments.
 - `MAJOR` increments by one after every `100` minor increments.
 - `MAJOR` also increments for breaking changes, independent of patch/minor counts.
@@ -270,7 +270,7 @@ Current project versioning follows a deterministic step policy:
 
 Example:
 
-- `0.1.20` -> `0.1.21` on the next commit.
+- `0.1.20` -> `0.2.0` after `100` commits.
 - `0.1.99` -> `0.2.0` after the 100th patch since `0.1.99`.
 - `0.2.99` -> `0.3.0` after the 100th minor since `0.2.0`.
 - `0.3.x` -> `1.0.0` on the next major break.

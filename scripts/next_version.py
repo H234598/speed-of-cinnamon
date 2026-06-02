@@ -39,9 +39,10 @@ def commits_since_tag(tag: str) -> int:
 
 def add_patches(base: tuple[int, int, int], patch_steps: int) -> tuple[int, int, int]:
     major, minor, patch = base
-    total_patch = patch + patch_steps
-    if total_patch < 0:
+    if patch_steps < 0:
         raise ValueError("negative patch steps are not supported")
+    patch_steps = patch_steps // 100
+    total_patch = patch + patch_steps
     minor += total_patch // 100
     patch = total_patch % 100
     major += minor // 100
