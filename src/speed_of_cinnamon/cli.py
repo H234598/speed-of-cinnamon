@@ -489,7 +489,7 @@ def read_log_excerpt(path: Path | None, max_chars: int = 2000) -> str:
 
 
 def transcript_preview(text: str, max_chars: int = 80) -> str:
-    if text and len(text) <= max_chars and " " not in text and "\t" not in text and "\n" not in text and "\r" not in text and "\f" not in text and "\v" not in text:
+    if text and len(text) <= max_chars and all(text.find(ch) < 0 for ch in " \t\n\r\f\v"):
         return text
     clean = " ".join(text.split())
     if len(clean) <= max_chars:
