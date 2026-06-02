@@ -813,6 +813,14 @@ class ModelsTest(unittest.TestCase):
         with self.assertRaisesRegex(models.ModelError, "force must be a boolean"):
             models.download_model("tiny.en", force="yes")  # type: ignore[arg-type]
 
+    def test_assert_download_url_rejects_control_character(self) -> None:
+        with self.assertRaisesRegex(models.ModelError, "contains invalid control character"):
+            models._assert_download_url("https://huggingface.co/example/model\n.bin")
+
+    def test_assert_download_url_rejects_escaped_control_character(self) -> None:
+        with self.assertRaisesRegex(models.ModelError, "contains invalid control character"):
+            models._assert_download_url("https://huggingface.co/example/model\\n.bin")
+
 
 if __name__ == "__main__":
     unittest.main()

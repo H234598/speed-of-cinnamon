@@ -21,13 +21,14 @@ on:
 
 jobs:
   workflow-change-detection:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       workflows_changed: ${{ steps.detect_workflows.outputs.workflows_changed }}
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Detect workflow file changes
         id: detect_workflows
         run: |
@@ -35,28 +36,45 @@ jobs:
             base="${{ github.event.pull_request.base.sha }}"
             head="${{ github.event.pull_request.head.sha }}"
           else
-            echo "workflows_changed=true" >> "${GITHUB_OUTPUT}"
+            {
+              printf 'workflows_changed<<WORKFLOWS_CHANGED\n'
+              printf 'true\n'
+              printf 'WORKFLOWS_CHANGED\n'
+            } >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
           if [[ -z "${base}" || "${base}" == 0000000000000000000000000000000000000000 ]]; then
-            echo "workflows_changed=true" >> "${GITHUB_OUTPUT}"
+            {
+              printf 'workflows_changed<<WORKFLOWS_CHANGED\n'
+              printf 'true\n'
+              printf 'WORKFLOWS_CHANGED\n'
+            } >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
           if git diff --name-only "${base}" "${head}" -- .github/workflows/ | grep -qE '\.ya?ml$'; then
-            echo "workflows_changed=true" >> "${GITHUB_OUTPUT}"
+            {
+              printf 'workflows_changed<<WORKFLOWS_CHANGED\n'
+              printf 'true\n'
+              printf 'WORKFLOWS_CHANGED\n'
+            } >> "${GITHUB_OUTPUT}"
           else
-            echo "workflows_changed=false" >> "${GITHUB_OUTPUT}"
+            {
+              printf 'workflows_changed<<WORKFLOWS_CHANGED\n'
+              printf 'false\n'
+              printf 'WORKFLOWS_CHANGED\n'
+            } >> "${GITHUB_OUTPUT}"
           fi
 
   workflow-lint:
     needs: workflow-change-detection
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Lint GitHub workflows
         run: |
           if [[ "${WORKFLOWS_CHANGED}" != "true" ]]; then
@@ -71,17 +89,18 @@ jobs:
 
   check:
     needs: workflow-lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       QLTY_COVERAGE_TOKEN: ${{ secrets.QLTY_COVERAGE_TOKEN }}
       BUILD_SNAP: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_snap && '1' || '0') }}
       BUILD_GENERIC_RPM: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_generic_rpm && '1' || '0') }}
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v6.2.0
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: "3.12"
       - name: Install shell tooling
@@ -116,7 +135,11 @@ jobs:
               printf 'Failed to install a compatible snap base (tried core24, core22).\n' >&2
               exit 1
             fi
-            echo "SNAPCRAFT_BASE=${snapcraft_base}" >> "${GITHUB_ENV}"
+            {
+              printf 'SNAPCRAFT_BASE<<SNAPCRAFT_BASE\n'
+              printf '%s\n' "${snapcraft_base}"
+              printf 'SNAPCRAFT_BASE\n'
+            } >> "${GITHUB_ENV}"
           else
             printf 'Skipping snap toolchain bootstrap (build_snap=false).\n'
           fi
@@ -128,7 +151,7 @@ jobs:
         run: make coverage
       - name: Upload coverage to QLTY
         if: ${{ env.QLTY_COVERAGE_TOKEN != '' }}
-        uses: qltysh/qlty-action/coverage@v2
+        uses: qltysh/qlty-action/coverage@a19242102d17e497f437d7466aa01b528537e899
         with:
           token: ${{ env.QLTY_COVERAGE_TOKEN }}
           files: reports/lcov.info
@@ -151,6 +174,8 @@ jobs:
       - name: Build Snap package
         run: |
           if [[ "${BUILD_SNAP}" == "1" ]]; then
+            find . -path "./.git" -prune -o -type d -exec chmod a+rx {} +
+            find . -path "./.git" -prune -o -type f -exec chmod a+r {} +
             make snap
           fi
         if: env.BUILD_SNAP == '1'
@@ -158,7 +183,7 @@ jobs:
         if: env.BUILD_SNAP == '1'
         run: make snap-check
       - name: Upload source release archive
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: speed-of-cinnamon-source-${{ github.sha }}
           path: |
@@ -167,7 +192,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Upload Fedora RPM packages
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: speed-of-cinnamon-rpm-${{ github.sha }}
           path: |
@@ -177,7 +202,7 @@ jobs:
           retention-days: 30
       - name: Upload generic RPM packages
         if: env.BUILD_GENERIC_RPM == '1'
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: speed-of-cinnamon-generic-rpm-${{ github.sha }}
           path: |
@@ -187,7 +212,7 @@ jobs:
           retention-days: 30
       - name: Upload Snap package
         if: env.BUILD_SNAP == '1'
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: speed-of-cinnamon-snap-${{ github.sha }}
           path: |

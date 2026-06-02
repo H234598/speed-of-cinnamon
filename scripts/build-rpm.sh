@@ -18,9 +18,17 @@ repo_tmp_root="${TMPDIR:-/tmp}"
 if [[ ! "${repo_tmp_root}" == /* ]]; then
   repo_tmp_root="/tmp"
 fi
-
+if [[ -L "${repo_tmp_root}" ]]; then
+  repo_tmp_root="${repo_dir}/.tmp"
+fi
+if [[ -L "${repo_tmp_root}" ]]; then
+  repo_tmp_root="/tmp"
+fi
 if [[ ! -d "${repo_tmp_root}" || ! -w "${repo_tmp_root}" ]]; then
   repo_tmp_root="${repo_dir}/.tmp"
+fi
+if [[ -L "${repo_tmp_root}" ]]; then
+  repo_tmp_root="/tmp"
 fi
 mkdir -p "${repo_tmp_root}"
 
@@ -66,6 +74,19 @@ if [[ "${profile}" == "generic" ]]; then
 else
   topdir="${repo_dir}/dist/rpmbuild"
   spec_source="${repo_dir}/packaging/speed-of-cinnamon.spec"
+fi
+if [[ -L "${topdir}" ]]; then
+  printf 'RPM build directory must not be a symlink: %s\n' "${topdir}" >&2
+  exit 1
+fi
+if [[ -L "${spec_source}" ]]; then
+  printf 'spec source file must not be a symlink: %s\n' "${spec_source}" >&2
+  exit 1
+fi
+dist_dir="$(dirname "${topdir}")"
+if [[ -L "${dist_dir}" ]]; then
+  printf 'dist parent directory must not be a symlink: %s\n' "${dist_dir}" >&2
+  exit 1
 fi
 spec_file="${topdir}/SPECS/speed-of-cinnamon.spec"
 

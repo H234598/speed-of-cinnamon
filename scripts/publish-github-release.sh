@@ -49,6 +49,10 @@ input_tag="$1"
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_dir}"
 repo_dir="$(realpath "${repo_dir}")"
+if [[ -L "${repo_dir}/dist" ]]; then
+  printf 'dist directory must not be a symlink: %s\n' "${repo_dir}/dist" >&2
+  exit 1
+fi
 if [[ "${input_tag}" == v* ]]; then
   tag="${input_tag}"
 else
@@ -130,6 +134,15 @@ verify_asset_path() {
   local asset=$1
   local absolute
 
+  if [[ "${asset}" == -* ]]; then
+    printf 'asset name may not start with option-like prefix: %s\n' "${asset}" >&2
+    exit 1
+  fi
+  if [[ "${asset}" == *$'\n'* || "${asset}" == *$'\r'* || "${asset}" == *$'\t'* ]]; then
+    printf 'asset name must not contain control characters: %s\n' "${asset}" >&2
+    exit 1
+  fi
+
   absolute="$(realpath "${asset}")"
   if [[ "${absolute}" != "${repo_dir}"/* ]]; then
     printf 'asset is outside repository: %s\n' "${asset}" >&2
@@ -167,11 +180,14 @@ for asset in "${assets[@]}"; do
   verify_asset_path "${asset}"
 done
 
-staging_dir="${repo_dir}/dist/release-upload"
+staging_dir=""
 upload_refs=("${assets[@]}")
 if [[ "${skip_generic}" != "true" ]]; then
-  rm -rf "${staging_dir}"
-  mkdir -p "${staging_dir}"
+  staging_dir="$(mktemp -d "${repo_dir}/dist/release-upload-XXXXXX")"
+  if [[ -z "${staging_dir}" ]]; then
+    printf 'failed to create staging directory for upload assets.\n' >&2
+    exit 1
+  fi
   for generic_asset in "${generic_rpms[@]}" "${generic_srpms[@]}"; do
     staged_path="${staging_dir}/$(generic_asset_label "${generic_asset}")"
     cp -f -- "${generic_asset}" "${staged_path}"
@@ -226,10 +242,24 @@ if [[ ! "${checksum}" =~ ^[0-9A-Fa-f]{64}$ ]]; then
   exit 1
 fi
 
-notes_file="$(mktemp "${TMPDIR:-/tmp}/speed-of-cinnamon-release-notes-XXXXXX")"
+notes_tmp_root="${TMPDIR:-/tmp}"
+if [[ ! "${notes_tmp_root}" == /* ]]; then
+  notes_tmp_root="/tmp"
+fi
+if [[ -L "${notes_tmp_root}" ]]; then
+  notes_tmp_root="${repo_dir}/.tmp"
+fi
+if [[ ! -d "${notes_tmp_root}" || ! -w "${notes_tmp_root}" ]]; then
+  notes_tmp_root="${repo_dir}/.tmp"
+fi
+if [[ -L "${notes_tmp_root}" ]]; then
+  notes_tmp_root="/tmp"
+fi
+mkdir -p "${notes_tmp_root}"
+notes_file="$(mktemp "${notes_tmp_root}/speed-of-cinnamon-release-notes-XXXXXX")"
 cleanup_notes() {
   rm -f -- "${notes_file}"
-  if [[ "${skip_generic}" != "true" ]]; then
+  if [[ -n "${staging_dir}" ]]; then
     rm -rf -- "${staging_dir}"
   fi
 }

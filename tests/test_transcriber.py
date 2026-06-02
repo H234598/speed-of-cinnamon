@@ -203,6 +203,10 @@ class TranscriberTest(unittest.TestCase):
         with self.assertRaisesRegex(TranscriptionError, "invalid null byte"):
             validate_audio_file(Path("sample\\x00.wav"))
 
+    def test_validate_audio_file_rejects_control_character(self) -> None:
+        with self.assertRaisesRegex(TranscriptionError, "invalid control character"):
+            validate_audio_file(Path("sample\n.wav"))
+
     def test_validate_audio_file_rejects_non_path(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "audio path must be a Path"):
             validate_audio_file("sample.wav")  # type: ignore[arg-type]
@@ -343,7 +347,7 @@ class TranscriberTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
             audio.write_bytes(b"audio")
-            with self.assertRaisesRegex(TranscriptionError, "command not found"):
+            with self.assertRaisesRegex(TranscriptionError, "path separators"):
                 transcribe(
                     audio,
                     "en",
@@ -444,6 +448,14 @@ class TranscriberTest(unittest.TestCase):
         with self.assertRaisesRegex(TranscriptionError, "command argument contains invalid null byte"):
             _run_limited_process(["whisper\\x00"])
 
+    def test_run_limited_process_rejects_control_character_in_executable(self) -> None:
+        with self.assertRaisesRegex(TranscriptionError, "command argument contains invalid control character"):
+            _run_limited_process(["whisper\\n"])
+
+    def test_run_limited_process_rejects_command_with_path_separator(self) -> None:
+        with self.assertRaisesRegex(TranscriptionError, "path separators"):
+            _run_limited_process(["/usr/bin/whisper"])
+
     def test_run_limited_process_rejects_non_positive_timeout(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "timeout must be positive"):
             _run_limited_process(["whisper"], timeout=0)
@@ -455,6 +467,10 @@ class TranscriberTest(unittest.TestCase):
     def test_run_limited_process_rejects_arguments_with_escaped_null(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "command argument contains invalid null byte"):
             _run_limited_process(["whisper", "audio\\x00file"])
+
+    def test_run_limited_process_rejects_arguments_with_control_character(self) -> None:
+        with self.assertRaisesRegex(TranscriptionError, "command argument contains invalid control character"):
+            _run_limited_process(["whisper", "audio\nfile"])
 
     def test_openai_whisper_rejects_missing_binary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -663,6 +679,20 @@ class TranscriberTest(unittest.TestCase):
                     openai_compatible_url="https://api.openai.com/v1",
                 )
 
+    def test_openai_compatible_api_rejects_model_with_newline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with self.assertRaisesRegex(TranscriptionError, "multipart form field contains invalid control character"):
+                transcribe(
+                    audio,
+                    "en",
+                    Path(tmp) / "sample.txt",
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-transcribe\n",
+                    openai_compatible_url="https://api.openai.com/v1",
+                )
+
     def test_openai_compatible_api_rejects_api_key_with_null_byte(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
@@ -676,6 +706,51 @@ class TranscriberTest(unittest.TestCase):
                     openai_compatible_model="gpt-4o-transcribe",
                     openai_compatible_url="https://api.openai.com/v1",
                     openai_compatible_api_key="secret\x00",
+                )
+
+    def test_openai_compatible_api_rejects_api_key_with_newline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with self.assertRaisesRegex(TranscriptionError, "invalid control character"):
+                transcribe(
+                    audio,
+                    "en",
+                    Path(tmp) / "sample.txt",
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-transcribe",
+                    openai_compatible_url="https://api.openai.com/v1",
+                    openai_compatible_api_key="secret\n",
+                )
+
+    def test_openai_compatible_api_rejects_url_with_newline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with self.assertRaisesRegex(TranscriptionError, "contains invalid control character"):
+                transcribe(
+                    audio,
+                    "en",
+                    Path(tmp) / "sample.txt",
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-transcribe",
+                    openai_compatible_url="https://api.openai.com/v1\n",
+                    openai_compatible_api_key="secret",
+                )
+
+    def test_openai_compatible_api_rejects_escaped_newline_in_api_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with self.assertRaisesRegex(TranscriptionError, "invalid control character"):
+                transcribe(
+                    audio,
+                    "en",
+                    Path(tmp) / "sample.txt",
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-transcribe",
+                    openai_compatible_url="https://api.openai.com/v1",
+                    openai_compatible_api_key="secret\\r\\n",
                 )
 
     def test_openai_compatible_api_reports_http_error_detail_and_endpoint(self) -> None:

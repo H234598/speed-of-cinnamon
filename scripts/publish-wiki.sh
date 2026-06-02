@@ -19,8 +19,14 @@ work_root="${TMPDIR:-/tmp}"
 if [[ ! "${work_root}" == /* ]]; then
   work_root="/tmp"
 fi
+if [[ -L "${work_root}" ]]; then
+  work_root="${repo_dir}/.tmp"
+fi
 if [[ ! -d "${work_root}" || ! -w "${work_root}" ]]; then
   work_root="${repo_dir}/.tmp"
+fi
+if [[ -L "${work_root}" ]]; then
+  work_root="/tmp"
 fi
 mkdir -p "${work_root}"
 work_dir="$(mktemp -d "${work_root}/speed-of-cinnamon-publish-wiki-XXXXXX")"

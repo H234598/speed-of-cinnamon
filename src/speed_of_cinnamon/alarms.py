@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .paths import alarms_file
+from .path_safety import assert_no_symlink_ancestors
 
 STORE_VERSION = 1
 DAY_CODES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
@@ -43,6 +44,7 @@ def _assert_clean_path(path: Path, *, field_name: str) -> None:
         raise RuntimeError(f"{field_name} path is invalid")
     if _contains_escaped_null(text):
         raise RuntimeError(f"{field_name} contains invalid null byte")
+    assert_no_symlink_ancestors(path, field_name=field_name)
 
 
 def _contains_escaped_null(value: str) -> bool:

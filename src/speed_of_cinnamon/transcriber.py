@@ -23,6 +23,7 @@ from .postprocessor import (
     MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
     MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
 )
+from .path_safety import assert_no_symlink_ancestors
 
 
 TRANSCRIBE_COMMAND_TIMEOUT_SECONDS = 900
@@ -51,11 +52,12 @@ def _command_path(command: str) -> str:
     if not command_name:
         raise TranscriptionError("empty transcriber executable is not allowed")
     if os.path.sep in command_name or (os.path.altsep and os.path.altsep in command_name):
-        return command_name
+        raise TranscriptionError("command must be a bare command name without path separators")
     resolved = shutil.which(command_name)
     if not resolved:
         raise TranscriptionError(f"{command_name} is not available")
-    return resolved
+    command_path = Path(resolved)
+    return str(command_path)
 
 
 def _contains_escaped_null(value: str) -> bool:
@@ -63,6 +65,40 @@ def _contains_escaped_null(value: str) -> bool:
         raise TranscriptionError("value must be text")
     lowered = (value or "").lower()
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
+
+
+def _contains_multipart_control_chars(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise TranscriptionError("value must be text")
+    lowered = (value or "")
+    if _contains_escaped_null(value):
+        return True
+    if any(ord(ch) < 0x20 for ch in lowered):
+        return True
+    if "\\r" in lowered.lower() or "\\n" in lowered.lower():
+        return True
+    return False
+
+
+def _contains_http_header_control_chars(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise TranscriptionError("value must be text")
+    lowered = (value or "").lower()
+    if (
+        "\r" in lowered
+        or "\n" in lowered
+        or "\\r" in lowered
+        or "\\n" in lowered
+        or "\\u000d" in lowered
+        or "\\u000a" in lowered
+        or "\\x0a" in lowered
+        or "\\x0d" in lowered
+    ):
+        return True
+    for char in lowered:
+        if ord(char) < 0x20 or ord(char) == 0x7F:
+            return True
+    return False
 
 
 def _model_path_exists(path: str) -> bool:
@@ -81,6 +117,7 @@ def _write_text_atomic(path: Path, text: str) -> None:
         raise TranscriptionError("path must be a Path")
     if isinstance(text, bool) or not isinstance(text, str):
         raise TranscriptionError("text must be text")
+    assert_no_symlink_ancestors(path, field_name="transcript path")
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
         try:
@@ -181,8 +218,16 @@ def _run_limited_process(command: list[str] | tuple[str, ...], *, timeout: int =
     executable = command[0].strip()
     if not executable:
         raise TranscriptionError("empty transcriber executable is not allowed")
-    if _contains_escaped_null(executable) or any(_contains_escaped_null(arg) for arg in command[1:]):
+    if (
+        _contains_escaped_null(executable)
+        or any(_contains_escaped_null(arg) for arg in command[1:])
+    ):
         raise TranscriptionError("command argument contains invalid null byte")
+    if (
+        _contains_http_header_control_chars(executable)
+        or any(_contains_http_header_control_chars(arg) for arg in command[1:])
+    ):
+        raise TranscriptionError("command argument contains invalid control character")
     runtime_executable = _command_path(executable)
     try:
         with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
@@ -233,6 +278,9 @@ def validate_audio_file(path: Path) -> Path:
         raise TranscriptionError("audio path must be a Path")
     if _contains_escaped_null(str(path)):
         raise TranscriptionError("audio path contains invalid null byte")
+    if _contains_http_header_control_chars(str(path)):
+        raise TranscriptionError("audio path contains invalid control character")
+    assert_no_symlink_ancestors(path, field_name="audio path")
     normalized = path.expanduser().resolve(strict=False)
     if len(str(normalized)) > MAX_AUDIO_PATH_CHARS:
         raise TranscriptionError(f"audio file path is too long: {path}")
@@ -384,13 +432,14 @@ def transcribe_with_template(
 
 
 def transcribe_with_openai_whisper(audio_path: Path, language: str, text_path: Path) -> str:
-    whisper = shutil.which("whisper")
-    if not whisper:
-        raise TranscriptionError("OpenAI whisper command is not installed")
+    try:
+        _command_path("whisper")
+    except TranscriptionError as exc:
+        raise TranscriptionError("OpenAI whisper command is not installed") from exc
     output_dir = text_path.parent
     _run_limited_process(
         [
-            whisper,
+            "whisper",
             str(audio_path),
             "--language",
             language,
@@ -411,9 +460,17 @@ def transcribe_with_openai_whisper(audio_path: Path, language: str, text_path: P
 
 def resolve_whisper_cpp_command() -> str | None:
     for command in ("whisper-cli", "whisper.cpp", "pwcpp"):
-        if shutil.which(command):
+        if _is_command_available(command):
             return command
     return None
+
+
+def _is_command_available(command: str) -> bool:
+    try:
+        _command_path(command)
+        return True
+    except TranscriptionError:
+        return False
 
 
 def _whisper_cpp_invocation(
@@ -530,6 +587,8 @@ def _openai_compatible_endpoint(url: str, path: str) -> str:
 def _validate_openai_compatible_api_url(url: str, field_name: str = "OpenAI-compatible API URL") -> str:
     if _contains_escaped_null(url):
         raise TranscriptionError(f"{field_name} contains invalid null byte")
+    if _contains_http_header_control_chars(url):
+        raise TranscriptionError(f"{field_name} contains invalid control character")
     base = _assert_text_length(url, field_name=field_name, max_chars=MAX_OPENAI_URL_CHARS).strip()
     if not base:
         raise TranscriptionError(f"{field_name} is required")
@@ -567,6 +626,8 @@ def _multipart_form_data(fields: dict[str, str], file_field: str, file_path: Pat
         raise TranscriptionError("audio file name contains invalid newline")
     file_name = file_name.replace("\\", "\\\\").replace('"', '\\"')
     for key, value in fields.items():
+        if _contains_multipart_control_chars(key) or _contains_multipart_control_chars(value):
+            raise TranscriptionError("multipart form field contains invalid control character")
         body.extend(f"--{boundary}\r\n".encode("utf-8"))
         body.extend(f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("utf-8"))
         body.extend(value.encode("utf-8"))
@@ -597,6 +658,8 @@ def transcribe_with_openai_compatible_api(
 ) -> str:
     if _contains_escaped_null(model):
         raise TranscriptionError("OpenAI-compatible speech model contains invalid null byte")
+    if _contains_http_header_control_chars(model):
+        raise TranscriptionError("multipart form field contains invalid control character")
     model = _assert_text_length(
         model,
         field_name="OpenAI-compatible speech model",
@@ -606,6 +669,8 @@ def transcribe_with_openai_compatible_api(
         raise TranscriptionError("OpenAI-compatible speech model is required")
     if _contains_escaped_null(api_key):
         raise TranscriptionError("OpenAI-compatible API key contains invalid null byte")
+    if _contains_http_header_control_chars(api_key):
+        raise TranscriptionError("OpenAI-compatible API key contains invalid control character")
     api_key = _assert_text_length(
         api_key,
         field_name="OpenAI-compatible API key",
@@ -724,7 +789,7 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
             return "faster-whisper"
         if configured_model_backend == "whisper-cpp" and resolve_whisper_cpp_command():
             return "whisper-cpp"
-        if shutil.which("whisper"):
+        if _is_command_available("whisper"):
             return "whisper"
         if local_model and model_backend_for_path(local_model) == "faster-whisper" and faster_whisper_available():
             return "faster-whisper"
@@ -756,7 +821,6 @@ def transcribe(
         raise TranscriptionError("audio path must be a Path")
     if isinstance(language, bool) or not isinstance(language, str):
         raise TranscriptionError("language must be text")
-    audio_path = validate_audio_file(audio_path)
     text_path.parent.mkdir(parents=True, exist_ok=True)
     if not isinstance(command_template, str) or isinstance(command_template, bool):
         raise TranscriptionError("command template must be text")
@@ -778,6 +842,10 @@ def transcribe(
         raise TranscriptionError("OpenAI-compatible speech model contains invalid null byte")
     if _contains_escaped_null(openai_compatible_api_key):
         raise TranscriptionError("OpenAI-compatible API key contains invalid null byte")
+    if _contains_http_header_control_chars(openai_compatible_api_key):
+        raise TranscriptionError("openai-compatible API key contains invalid control character")
+    if _contains_http_header_control_chars(openai_compatible_model):
+        raise TranscriptionError("multipart form field contains invalid control character")
 
     command_template = _assert_text_length(command_template, field_name="command template", max_chars=MAX_TRANSCRIBER_TEXT_CHARS)
     openai_compatible_model = _assert_text_length(
@@ -799,6 +867,11 @@ def transcribe(
         language=language,
     )
     resolved_backend = resolve_transcriber(config)
+    if resolved_backend == "openai-compatible" and (
+        "\r" in audio_path.name or "\n" in audio_path.name
+    ):
+        raise TranscriptionError("audio file name contains invalid newline")
+    audio_path = validate_audio_file(audio_path)
     if resolved_backend == "command":
         if not command_template.strip():
             raise TranscriptionError("custom transcriber command is required")

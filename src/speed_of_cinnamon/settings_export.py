@@ -12,6 +12,7 @@ from .alarms import MAX_ALARM_COUNT, STORE_VERSION as ALARM_STORE_VERSION
 from .alarms import normalize_alarm
 from .paths import APP_ID
 from .recorder import MAX_RECORDING_SECONDS
+from .path_safety import assert_no_symlink_ancestors
 
 EXPORT_VERSION = 2
 MAX_SETTINGS_EXPORT_BYTES = 1_000_000
@@ -72,6 +73,7 @@ def _assert_clean_path(path: Path, *, field_name: str) -> None:
         raise SettingsExportError(f"{field_name} path is invalid")
     if _contains_escaped_null(text):
         raise SettingsExportError(f"{field_name} contains invalid null byte")
+    assert_no_symlink_ancestors(path, field_name=field_name)
 
 
 def _contains_escaped_null(text: str) -> bool:
@@ -81,6 +83,18 @@ def _contains_escaped_null(text: str) -> bool:
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
 
 
+def _contains_http_header_control_chars(text: str) -> bool:
+    if isinstance(text, bool) or not isinstance(text, str):
+        raise SettingsExportError("value must be text")
+    lowered = (text or "").lower()
+    if "\r" in lowered or "\n" in lowered or "\\r" in lowered or "\\n" in lowered or "\\u000d" in lowered or "\\u000a" in lowered:
+        return True
+    for char in lowered:
+        if ord(char) < 0x20 or ord(char) == 0x7F:
+            return True
+    return False
+
+
 def _sanitize_text_field(value: object, *, field_name: str) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         raise SettingsExportError(f"{field_name} must be text")
@@ -88,6 +102,8 @@ def _sanitize_text_field(value: object, *, field_name: str) -> str:
     if _contains_escaped_null(text):
         raise SettingsExportError(f"{field_name} contains invalid null byte")
     text = text.strip()
+    if _contains_http_header_control_chars(text):
+        raise SettingsExportError(f"{field_name} contains invalid control character")
     if len(text) > MAX_SETTINGS_TEXT_CHARS:
         raise SettingsExportError(f"{field_name} is too long")
     if len(text.encode("utf-8")) > MAX_SETTINGS_TEXT_CHARS:

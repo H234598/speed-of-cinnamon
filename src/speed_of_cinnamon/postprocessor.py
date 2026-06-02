@@ -86,13 +86,15 @@ def _assert_clean_url(url: str, *, field_name: str) -> str:
         raise PostProcessError(f"{field_name} is required")
     if _contains_escaped_null(normalized):
         raise PostProcessError(f"{field_name} contains invalid null byte")
+    if _contains_http_header_control_chars(normalized):
+        raise PostProcessError(f"{field_name} contains invalid control character")
     return _assert_text_length(normalized, field_name=field_name, max_chars=MAX_POSTPROCESS_URL_CHARS)
 
 
 def _validate_http_url(url: str, *, field_name: str) -> str:
     if not isinstance(url, str) or isinstance(url, bool):
         raise PostProcessError(f"{field_name} must be text")
-    normalized = _assert_text_length(url.strip(), field_name=field_name, max_chars=MAX_POSTPROCESS_URL_CHARS)
+    normalized = _assert_clean_url(url, field_name=field_name)
     parsed = urllib.parse.urlparse(normalized)
     if parsed.scheme not in {"http", "https"}:
         raise PostProcessError(f"{field_name} must use http:// or https://")
@@ -117,6 +119,27 @@ def _contains_escaped_null(value: str) -> bool:
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
 
 
+def _contains_http_header_control_chars(value: str) -> bool:
+    if not isinstance(value, str) or isinstance(value, bool):
+        raise PostProcessError("value must be text")
+    lowered = (value or "").lower()
+    if (
+        "\r" in lowered
+        or "\n" in lowered
+        or "\\r" in lowered
+        or "\\n" in lowered
+        or "\\u000d" in lowered
+        or "\\u000a" in lowered
+        or "\\x0a" in lowered
+        or "\\x0d" in lowered
+    ):
+        return True
+    for char in lowered:
+        if ord(char) < 0x20 or ord(char) == 0x7F:
+            return True
+    return False
+
+
 def _assert_openai_compatible_text(
     value: str,
     *,
@@ -125,6 +148,8 @@ def _assert_openai_compatible_text(
 ) -> str:
     if _contains_escaped_null(value):
         raise PostProcessError(f"{field_name} contains invalid null byte")
+    if _contains_http_header_control_chars(value):
+        raise PostProcessError(f"{field_name} contains invalid control character")
     return _assert_text_length(value, field_name=field_name, max_chars=max_chars)
 
 
@@ -475,7 +500,12 @@ def post_process_with_ollama(
 
 def _openai_compatible_headers(api_key: str = "") -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
-    api_key = (api_key or os.environ.get("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY", "")).strip()
+    api_key = api_key or os.environ.get("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY", "")
+    if _contains_escaped_null(api_key):
+        raise PostProcessError("openai-compatible API key contains invalid null byte")
+    if _contains_http_header_control_chars(api_key):
+        raise PostProcessError("openai-compatible API key contains invalid control character")
+    api_key = api_key.strip()
     api_key = _assert_openai_compatible_text(api_key, field_name="openai-compatible API key", max_chars=MAX_OPENAI_COMPATIBLE_API_KEY_CHARS)
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"

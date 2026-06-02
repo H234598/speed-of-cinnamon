@@ -384,15 +384,12 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertIn('new PopupMenu.PopupIconMenuItem(_("Benchmark downloaded models")', source)
         self.assertIn("_selectBenchmarkAudioFile: function()", source)
-        self.assertIn("_benchmarkTerminalArgs: function()", source)
-        self.assertIn("gnome-terminal", source)
-        self.assertIn("x-terminal-emulator", source)
-        self.assertIn("Press Enter to close", source)
         self.assertIn("_benchmarkAudioFileDialogArgs: function()", source)
         self.assertIn("--file-selection", source)
         self.assertIn("--file-filter=Audio files | *.wav *.WAV *.flac *.FLAC *.mp3 *.MP3 *.ogg *.OGG *.oga *.OGA *.opus *.OPUS *.m4a *.M4A *.aac *.AAC *.webm *.WEBM", source)
         self.assertIn("_benchmarkDownloadedModels: function(audioPath)", source)
         self.assertIn('return [this._cliCommand(), "benchmark-models", String(audioPath || ""), "--language", String(this._currentLanguage()), "--json"]', source)
+        self.assertIn("_benchmarkDownloadedModels(audioPath)", source)
         self.assertIn("BENCHMARK_COMMAND_TIMEOUT_MS", source)
 
     def test_recording_status_shows_microphone_level(self) -> None:
@@ -712,7 +709,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (method === "type")', source)
         self.assertIn("if (this._typeTextAfterFocus(text)) {", source)
         self.assertIn("Util.spawn(this._coerceSpawnArgs(args));", source)
-        self.assertIn('["xdotool", "type", "--clearmodifiers", "--delay", String(delay), typedText]', source)
+        self.assertIn('["xdotool", "type", "--clearmodifiers", "--delay", String(delay), "--", typedText]', source)
         self.assertIn("_isTerminalTargetWindow: function()", source)
         self.assertIn('let pasteKey = this._isTerminalTargetWindow() ? "ctrl+shift+v" : "ctrl+v";', source)
         self.assertIn('["xdotool", "key", "--clearmodifiers", pasteKey]', source)

@@ -10,6 +10,11 @@ on:
         description: "Release tag to validate or publish"
         required: true
         type: string
+      dry_run:
+        description: "Run in dry-run mode (validate and report assets without publishing)"
+        required: false
+        default: false
+        type: boolean
       run_workflow_lint:
         description: "Run GitHub workflow lint before publishing"
         required: false
@@ -28,6 +33,12 @@ on:
 
 permissions:
   contents: write
+  actions: none
+  checks: none
+  id-token: none
+  issues: none
+  packages: none
+  pull-requests: none
 
 concurrency:
   group: release-${{ (github.ref_type == 'tag' && github.ref_name) || (github.event_name == 'workflow_dispatch' && inputs.tag) || github.ref_name }}
@@ -35,11 +46,12 @@ concurrency:
 
 jobs:
   workflow-lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Lint GitHub workflows
         run: |
           if [[ "${RUN_WORKFLOW_LINT}" != "true" ]]; then
@@ -54,15 +66,16 @@ jobs:
 
   publish:
     needs: workflow-lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       BUILD_SNAP: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_snap && '1' || '0') }}
       BUILD_GENERIC_RPM: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_generic_rpm && '1' || '0') }}
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v6.2.0
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: "3.12"
       - name: Install release tooling
@@ -97,7 +110,11 @@ jobs:
               printf 'Failed to install a compatible snap base (tried core24, core22).\n' >&2
               exit 1
             fi
-            echo "SNAPCRAFT_BASE=${snapcraft_base}" >> "${GITHUB_ENV}"
+            {
+              printf 'SNAPCRAFT_BASE<<SNAPCRAFT_BASE\n'
+              printf '%s\n' "${snapcraft_base}"
+              printf 'SNAPCRAFT_BASE\n'
+            } >> "${GITHUB_ENV}"
           else
             printf 'Skipping snap toolchain bootstrap (build_snap=false).\n'
           fi
@@ -148,6 +165,8 @@ jobs:
       - name: Build Snap package
         run: |
           if [[ "${BUILD_SNAP}" == "1" ]]; then
+            find . -path "./.git" -prune -o -type d -exec chmod a+rx {} +
+            find . -path "./.git" -prune -o -type f -exec chmod a+r {} +
             make snap
           else
             make SNAP_BUILD=0 snap
@@ -158,7 +177,7 @@ jobs:
       - name: Shellcheck scripts
         run: shellcheck scripts/*.sh
       - name: Upload source release archive
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: speed-of-cinnamon-source-${{ github.sha }}
           path: |
@@ -167,7 +186,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Upload Fedora RPM packages
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: speed-of-cinnamon-rpm-${{ github.sha }}
           path: |
@@ -177,7 +196,7 @@ jobs:
           retention-days: 30
       - name: Upload generic RPM packages
         if: env.BUILD_GENERIC_RPM == '1'
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: speed-of-cinnamon-generic-rpm-${{ github.sha }}
           path: |
@@ -187,7 +206,7 @@ jobs:
           retention-days: 30
       - name: Upload Snap package
         if: env.BUILD_SNAP == '1'
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: speed-of-cinnamon-snap-${{ github.sha }}
           path: |
@@ -198,6 +217,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
+          DRY_RUN: ${{ github.event_name != 'workflow_dispatch' && 'false' || (inputs.dry_run && 'true' || 'false') }}
         run: |
           args=()
           if [[ "${BUILD_SNAP}" != "1" ]]; then
@@ -205,5 +225,8 @@ jobs:
           fi
           if [[ "${BUILD_GENERIC_RPM}" != "1" ]]; then
             args+=(--skip-generic-rpm)
+          fi
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            args+=(--dry-run)
           fi
           ./scripts/publish-github-release.sh "${args[@]}" "${RELEASE_TAG}"

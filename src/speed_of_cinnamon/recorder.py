@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .paths import recordings_dir
+from .path_safety import assert_no_symlink_ancestors
 
 
 class RecorderError(RuntimeError):
@@ -52,6 +53,18 @@ def _contains_escaped_null(value: str) -> bool:
         raise RecorderError("value must be text")
     lowered = (value or "").lower()
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
+
+
+def _contains_http_header_control_chars(value: str) -> bool:
+    if not isinstance(value, str) or isinstance(value, bool):
+        raise RecorderError("value must be text")
+    lowered = (value or "").lower()
+    if "\r" in lowered or "\n" in lowered or "\\r" in lowered or "\\n" in lowered or "\\u000d" in lowered or "\\u000a" in lowered:
+        return True
+    for char in lowered:
+        if ord(char) < 0x20 or ord(char) == 0x7F:
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -94,11 +107,12 @@ def _command_path(command: str) -> str:
     if not command_name:
         raise RecorderError("command is empty")
     if os.path.sep in command_name or (os.path.altsep and os.path.altsep in command_name):
-        return command_name
+        raise RecorderError("command must be a bare command name without path separators")
     resolved = shutil.which(command_name)
     if not resolved:
         raise RecorderError(f"{command_name} is not available")
-    return resolved
+    command_path = Path(resolved)
+    return str(command_path)
 
 
 def _assert_positive_pid(pid: int) -> None:
@@ -312,6 +326,10 @@ def _run_pactl_command(command: list[str] | tuple[str, ...], *, required: bool) 
         raise RecorderError("empty pactl executable is not allowed")
     if _contains_escaped_null(pactl) or any(_contains_escaped_null(arg) for arg in command[1:]):
         raise RecorderError("pactl command contains invalid null byte")
+    if _contains_http_header_control_chars(pactl) or any(
+        _contains_http_header_control_chars(arg) for arg in command[1:]
+    ):
+        raise RecorderError("pactl command contains invalid control character")
     runtime_command = [_command_path(pactl), *command[1:]]
     try:
         with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
@@ -362,6 +380,10 @@ def _run_kill(command: list[str] | tuple[str, ...], *, check_exit: bool) -> None
         raise RecorderError("empty kill executable is not allowed")
     if _contains_escaped_null(kill_command) or any(_contains_escaped_null(arg) for arg in command[1:]):
         raise RecorderError("kill command contains invalid null byte")
+    if _contains_http_header_control_chars(kill_command) or any(
+        _contains_http_header_control_chars(arg) for arg in command[1:]
+    ):
+        raise RecorderError("kill command contains invalid control character")
     runtime_command = [_command_path(kill_command), *command[1:]]
     try:
         subprocess.run(  # nosec B603
@@ -393,6 +415,10 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
         raise RecorderError("recorder executable is empty")
     if _contains_escaped_null(command.argv[0]) or any(_contains_escaped_null(arg) for arg in command.argv[1:]):
         raise RecorderError("recorder command contains invalid null byte")
+    if _contains_http_header_control_chars(command.argv[0]) or any(
+        _contains_http_header_control_chars(arg) for arg in command.argv[1:]
+    ):
+        raise RecorderError("recorder command contains invalid control character")
     log_path = validate_recording_path(log_path, suffix=".log")
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = log_path.open("ab")

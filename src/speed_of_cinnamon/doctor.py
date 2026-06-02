@@ -100,7 +100,10 @@ def _setting(settings: Mapping[str, object], key: str, default: str = "") -> str
         return default
     if isinstance(value, bool) or not isinstance(value, str):
         raise ValueError(f"setting {key} must be text")
-    return value.strip()
+    normalized = value.strip()
+    if _contains_http_header_control_chars(normalized):
+        raise ValueError(f"setting {key} contains invalid control character")
+    return normalized
 
 
 def _recorder_status(settings: Mapping[str, object], checks: Mapping[str, Check]) -> dict[str, object]:
@@ -351,11 +354,29 @@ def configured_status(
     desktop: Mapping[str, object],
     applet: bool = False,
 ) -> dict[str, object]:
+    def _status_result(fn: object, *, fallback_value: str) -> dict[str, object]:
+        try:
+            return fn()  # type: ignore[misc]
+        except ValueError as exc:
+            return {"ok": False, "value": fallback_value, "detail": str(exc)}
+
     applet = _coerce_required_bool(applet, field_name="applet")
-    recorder = _recorder_status(settings, checks)
-    transcriber = _transcriber_status(settings, checks)
-    output = _output_status(settings, checks, desktop, applet)
-    postprocessor = _postprocessor_status(settings)
+    recorder = _status_result(
+        lambda: _recorder_status(settings, checks),
+        fallback_value="recorder",
+    )
+    transcriber = _status_result(
+        lambda: _transcriber_status(settings, checks),
+        fallback_value="transcriber",
+    )
+    output = _status_result(
+        lambda: _output_status(settings, checks, desktop, applet),
+        fallback_value="output",
+    )
+    postprocessor = _status_result(
+        lambda: _postprocessor_status(settings),
+        fallback_value="postprocessor",
+    )
     warnings = []
     if (
         applet
@@ -414,6 +435,18 @@ def _contains_escaped_null(value: str) -> bool:
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
 
 
+def _contains_http_header_control_chars(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise ValueError("value must be text")
+    lowered = (value or "").lower()
+    if "\r" in lowered or "\n" in lowered or "\\r" in lowered or "\\n" in lowered or "\\u000d" in lowered or "\\u000a" in lowered:
+        return True
+    for char in lowered:
+        if ord(char) < 0x20 or ord(char) == 0x7F:
+            return True
+    return False
+
+
 def parse_settings_json(value: str) -> dict[str, object]:
     if isinstance(value, bool) or not isinstance(value, str):
         raise ValueError("settings JSON must be text")
@@ -421,6 +454,8 @@ def parse_settings_json(value: str) -> dict[str, object]:
         return {}
     if _contains_escaped_null(value):
         raise ValueError("settings JSON contains invalid null byte")
+    if _contains_http_header_control_chars(value):
+        raise ValueError("settings JSON contains invalid control character")
     if len(value) > MAX_SETTINGS_JSON_CHARS:
         raise ValueError(f"settings JSON is too large (max {MAX_SETTINGS_JSON_CHARS} characters)")
     if len(value.encode("utf-8")) > MAX_SETTINGS_JSON_CHARS:

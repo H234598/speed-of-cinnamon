@@ -94,6 +94,13 @@ class StateStoreTest(unittest.TestCase):
             state = StateStore(path).read()
         self.assertEqual(state.error, "state file could not be read")
 
+    def test_read_rejects_control_char_text_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('{"status":"id\\u000ale"}', encoding="utf-8")
+            state = StateStore(path).read()
+        self.assertEqual(state.error, "state file could not be read")
+
     def test_read_rejects_non_object_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
@@ -115,6 +122,13 @@ class StateStoreTest(unittest.TestCase):
             store = StateStore(path)
             with self.assertRaisesRegex(ValueError, "state status contains invalid null byte"):
                 store.write(RecordingState(status="oops\x00"))
+
+    def test_write_rejects_control_char_text_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            store = StateStore(path)
+            with self.assertRaisesRegex(ValueError, "state status contains invalid control character"):
+                store.write(RecordingState(status="oops\rextra"))
 
     def test_write_rejects_oversized_state(self) -> None:
         long_value = "Y" * (MAX_STATE_STRING_CHARS + 5)

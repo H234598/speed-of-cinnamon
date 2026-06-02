@@ -30,6 +30,12 @@ do
     exit 1
   fi
 done
+for target in "${applet_target}" "${app_data}" "${bin_dir}" "${man_dir}"; do
+  if [[ -L "${target}" ]]; then
+    printf 'refusing to follow symlink during install: %s\n' "${target}" >&2
+    exit 1
+  fi
+done
 
 mkdir -p "$(dirname "${applet_target}")" "${app_data}" "${bin_dir}" "${man_dir}"
 rm -rf "${applet_target}"

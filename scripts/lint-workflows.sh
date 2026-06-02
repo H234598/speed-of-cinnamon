@@ -15,9 +15,10 @@ run_actionlint() {
     return 0
   fi
 
+  actionlint_image="rhysd/actionlint:v1.7.12"
   if command -v docker >/dev/null 2>&1; then
     if docker info >/dev/null 2>&1; then
-      if docker run --rm -v "${PWD}:/repo" -w /repo rhysd/actionlint:latest "$@"; then
+      if docker run --rm -v "${PWD}:/repo" -w /repo "${actionlint_image}" "$@"; then
         return 0
       fi
       return 2

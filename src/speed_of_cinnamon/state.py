@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from .path_safety import assert_no_symlink_ancestors
 
 
 def now_iso() -> str:
@@ -23,6 +24,18 @@ def _contains_escaped_null(value: str) -> bool:
         raise ValueError("value must be text")
     lowered = (value or "").lower()
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
+
+
+def _contains_http_header_control_chars(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise ValueError("value must be text")
+    lowered = (value or "").lower()
+    if "\r" in lowered or "\n" in lowered or "\\r" in lowered or "\\n" in lowered or "\\u000d" in lowered or "\\u000a" in lowered:
+        return True
+    for char in lowered:
+        if ord(char) < 0x20 or ord(char) == 0x7F:
+            return True
+    return False
 
 
 @dataclass
@@ -55,6 +68,7 @@ class StateStore:
             raise RuntimeError("state file path is invalid")
         if _contains_escaped_null(text):
             raise RuntimeError("state file path contains invalid null byte")
+        assert_no_symlink_ancestors(path, field_name="state file path")
         self.path = path
 
     @staticmethod
@@ -66,6 +80,9 @@ class StateStore:
         text = str(value)
         if _contains_escaped_null(text):
             raise ValueError(f"state {field_name} contains invalid null byte")
+        text = text.strip()
+        if _contains_http_header_control_chars(text):
+            raise ValueError(f"state {field_name} contains invalid control character")
         if len(text) > MAX_STATE_STRING_CHARS:
             raise ValueError(f"state {field_name} is too large (max {MAX_STATE_STRING_CHARS} characters)")
         if len(text.encode("utf-8")) > MAX_STATE_STRING_CHARS:

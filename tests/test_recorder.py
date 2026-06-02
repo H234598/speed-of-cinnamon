@@ -271,6 +271,13 @@ class RecorderTest(unittest.TestCase):
                 with self.assertRaisesRegex(RecorderError, "recorder command contains invalid null byte"):
                     start_recorder(command, Path(tmp) / "session.log")
 
+    def test_start_recorder_rejects_escaped_newline(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true", "ok\\r\\n"])
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
+                with self.assertRaisesRegex(RecorderError, "recorder command contains invalid control character"):
+                    start_recorder(command, Path(tmp) / "session.log")
+
     def test_run_pactl_command_rejects_empty_command(self) -> None:
         with self.assertRaisesRegex(RecorderError, "empty pactl command"):
             _run_pactl_command([], required=True)
@@ -286,6 +293,10 @@ class RecorderTest(unittest.TestCase):
     def test_run_pactl_command_rejects_escaped_null_bytes(self) -> None:
         with self.assertRaisesRegex(RecorderError, "pactl command contains invalid null byte"):
             _run_pactl_command(["pactl", "--name\\x00"], required=True)
+
+    def test_run_pactl_command_rejects_control_chars(self) -> None:
+        with self.assertRaisesRegex(RecorderError, "pactl command contains invalid control character"):
+            _run_pactl_command(["pactl", "bad\\r"], required=True)
 
     def test_run_pactl_command_rejects_bad_command_shape(self) -> None:
         with self.assertRaisesRegex(RecorderError, "invalid pactl command"):
@@ -395,6 +406,18 @@ class RecorderTest(unittest.TestCase):
     def test_run_kill_rejects_escaped_null_bytes(self) -> None:
         with self.assertRaisesRegex(RecorderError, "kill command contains invalid null byte"):
             _run_kill(["kill", "-9", "\\x00bad"], check_exit=False)
+
+    def test_run_kill_rejects_control_chars(self) -> None:
+        with self.assertRaisesRegex(RecorderError, "kill command contains invalid control character"):
+            _run_kill(["kill", "-9", "bad\\n"], check_exit=False)
+
+    def test_run_kill_rejects_command_with_path_separator(self) -> None:
+        with self.assertRaisesRegex(RecorderError, "path separators"):
+            _run_kill(["/usr/bin/kill", "-9", "1234"], check_exit=False)
+
+    def test_run_pactl_command_rejects_command_with_path_separator(self) -> None:
+        with self.assertRaisesRegex(RecorderError, "path separators"):
+            _run_pactl_command(["/usr/bin/pactl", "get-default-source"], required=False)
 
     def test_parse_pactl_sources_filters_monitors_and_marks_default(self) -> None:
         sources = parse_pactl_sources(PACTL_SOURCES, "alsa_input.usb-mic.analog-stereo")

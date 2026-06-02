@@ -97,6 +97,10 @@ class OutputTest(unittest.TestCase):
         with self.assertRaisesRegex(OutputError, "command is empty"):
             _run_with_input(["   "], "input")
 
+    def test_run_with_input_rejects_command_with_path_separator(self) -> None:
+        with self.assertRaisesRegex(OutputError, "path separators"):
+            _run_with_input(["bin/cmd"], "input")
+
     def test_run_with_input_rejects_non_int_timeout(self) -> None:
         with self.assertRaisesRegex(OutputError, "timeout must be an integer"):
             _run_with_input(["sleep"], "", timeout="1")  # type: ignore[arg-type]
@@ -191,6 +195,10 @@ class OutputTest(unittest.TestCase):
         with self.assertRaisesRegex(OutputError, "command argument contains invalid null byte"):
             _run_with_input(["cmd", "bad\\x00arg"], "input")
 
+    def test_run_with_input_rejects_control_characters_in_command_argument(self) -> None:
+        with self.assertRaisesRegex(OutputError, "command argument contains invalid control character"):
+            _run_with_input(["cmd", "bad\\narg"], "input")
+
     def test_run_with_input_rejects_empty_executable(self) -> None:
         with self.assertRaisesRegex(OutputError, "command is empty"):
             _run_with_input([""], "input")
@@ -230,6 +238,10 @@ class OutputTest(unittest.TestCase):
         with self.assertRaisesRegex(OutputError, "command is empty"):
             _run_stdout(["   "], timeout=1)
 
+    def test_run_stdout_rejects_command_with_path_separator(self) -> None:
+        with self.assertRaisesRegex(OutputError, "path separators"):
+            _run_stdout(["bin/cmd"], timeout=1)
+
     def test_run_stdout_rejects_non_int_timeout(self) -> None:
         with self.assertRaisesRegex(OutputError, "timeout must be an integer"):
             _run_stdout(["xdotool"], timeout="1")  # type: ignore[arg-type]
@@ -245,6 +257,10 @@ class OutputTest(unittest.TestCase):
     def test_run_stdout_rejects_null_byte_argument(self) -> None:
         with self.assertRaisesRegex(OutputError, "command argument contains invalid null byte"):
             _run_stdout(["xdotool", "bad\x00arg"], timeout=1)
+
+    def test_run_stdout_rejects_control_chars_in_argument(self) -> None:
+        with self.assertRaisesRegex(OutputError, "command argument contains invalid control character"):
+            _run_stdout(["xdotool", "bad\\rarg"], timeout=1)
 
     def test_run_stdout_resolves_command_from_which(self) -> None:
         calls: list[list[str]] = []

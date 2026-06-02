@@ -32,6 +32,10 @@ if [[ ! -f "${repo_dir}/snap/snapcraft.yaml" ]]; then
   printf 'snapcraft manifest missing: %s\n' "${repo_dir}/snap/snapcraft.yaml" >&2
   exit 1
 fi
+if [[ -L "${repo_dir}/snap/snapcraft.yaml" ]]; then
+  printf 'snapcraft manifest must not be a symlink: %s\n' "${repo_dir}/snap/snapcraft.yaml" >&2
+  exit 1
+fi
 
 version="$(
   python3 - <<'PY'
@@ -49,8 +53,14 @@ repo_tmp_root="${TMPDIR:-/tmp}"
 if [[ ! "${repo_tmp_root}" == /* ]]; then
   repo_tmp_root="/tmp"
 fi
+if [[ -L "${repo_tmp_root}" ]]; then
+  repo_tmp_root="${repo_dir}/.tmp"
+fi
 if [[ ! -d "${repo_tmp_root}" || ! -w "${repo_tmp_root}" ]]; then
   repo_tmp_root="${repo_dir}/.tmp"
+fi
+if [[ -L "${repo_tmp_root}" ]]; then
+  repo_tmp_root="/tmp"
 fi
 mkdir -p "${repo_tmp_root}"
 
@@ -102,17 +112,17 @@ if [[ -L "${dist_dir}" ]]; then
   printf 'dist snap directory must not be a symlink: %s\n' "${dist_dir}" >&2
   exit 1
 fi
-rm -f -- "${dist_dir}/speed-of-cinnamon_${version}_*.snap" "${repo_dir}/speed-of-cinnamon_${version}_*.snap"
+rm -f -- "${dist_dir}/speed-of-cinnamon_${version}"_*.snap "${repo_dir}/speed-of-cinnamon_${version}"_*.snap
 
 tmp_output="$(mktemp "${repo_tmp_root}/speed-of-cinnamon-snap-output-XXXXXX")"
 
 ( umask 022 && snapcraft pack --destructive-mode )
 {
-  find "${dist_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -type f -print
-  find "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -type f -print
-} | sort -u > "${tmp_output}"
+  find "${dist_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -type f -print0
+  find "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -type f -print0
+} | sort -z > "${tmp_output}"
 
-mapfile -t snap_files < "${tmp_output}"
+mapfile -d '' -t snap_files < "${tmp_output}"
 if [[ ${#snap_files[@]} -ne 1 ]]; then
   printf 'expected exactly one new snap package, found %d\n' "${#snap_files[@]}" >&2
   exit 1

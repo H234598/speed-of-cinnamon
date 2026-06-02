@@ -60,6 +60,10 @@ class SettingsExportTest(unittest.TestCase):
         with self.assertRaisesRegex(SettingsExportError, "must be text"):
             _sanitize_text_field(True, field_name="setting value")
 
+    def test_sanitize_text_field_rejects_control_character(self) -> None:
+        with self.assertRaisesRegex(SettingsExportError, "invalid control character"):
+            _sanitize_text_field("value\\rextra", field_name="setting value")
+
     def test_read_export_rejects_oversized_path(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "path is invalid"):
             read_export(Path("a" * (MAX_SETTINGS_EXPORT_PATH_CHARS + 1)))
@@ -91,6 +95,15 @@ class SettingsExportTest(unittest.TestCase):
             path = Path(tmp) / "settings-export.json"
             path.write_bytes(b"\xff")
             with self.assertRaisesRegex(SettingsExportError, "settings export could not be read"):
+                read_export(path)
+
+    def test_read_export_rejects_control_char_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text('{"app":"speed-of-cinnamon","version":2,"created_at":"","speed_of_cinnamon_version":"",'
+                            '"settings":{"language":"en\\rde","max-seconds":30},'
+                            '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}', encoding="utf-8")
+            with self.assertRaisesRegex(SettingsExportError, "invalid control character"):
                 read_export(path)
 
     def test_build_export_keeps_only_supported_settings(self) -> None:

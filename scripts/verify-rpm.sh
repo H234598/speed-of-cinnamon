@@ -6,6 +6,12 @@ IFS=$'\n\t'
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_dir}"
 
+dist_dir="${repo_dir}/dist"
+if [[ -L "${dist_dir}" || ! -d "${dist_dir}" ]]; then
+  printf 'dist directory is invalid: %s\n' "${dist_dir}" >&2
+  exit 1
+fi
+
 if [[ $# -gt 1 ]]; then
   printf 'usage: %s [dist/rpmbuild*/RPMS/noarch/speed-of-cinnamon-*.rpm]\n' "$0" >&2
   exit 2
@@ -59,7 +65,13 @@ tmp_root="${TMPDIR:-/tmp}"
 if [[ ! "${tmp_root}" == /* ]]; then
   tmp_root="/tmp"
 fi
+if [[ -L "${tmp_root}" ]]; then
+  tmp_root="${repo_dir}/.tmp"
+fi
 if [[ ! -d "${tmp_root}" || ! -w "${tmp_root}" ]]; then
+  tmp_root="${repo_dir}/.tmp"
+fi
+if [[ -L "${tmp_root}" ]]; then
   tmp_root="${repo_dir}/.tmp"
 fi
 mkdir -p "${tmp_root}"
@@ -123,7 +135,7 @@ done
 
 (
   cd "${tmp_dir}"
-  rpm2cpio "${rpm_path}" | cpio -idmu --quiet
+  rpm2cpio "${rpm_path}" | cpio -idmu --no-absolute-filenames --quiet
 )
 
 backend="${tmp_dir}/usr/bin/speed-of-cinnamon"

@@ -40,12 +40,22 @@ fi
 
 package="${name}-${version}"
 dist_dir="${repo_dir}/dist"
+if [[ -L "${dist_dir}" ]]; then
+  printf 'dist directory must not be a symlink: %s\n' "${dist_dir}" >&2
+  exit 1
+fi
 work_root="${TMPDIR:-/tmp}"
 if [[ ! "${work_root}" == /* ]]; then
   work_root="/tmp"
 fi
+if [[ -L "${work_root}" ]]; then
+  work_root="${repo_dir}/.tmp"
+fi
 if [[ ! -d "${work_root}" || ! -w "${work_root}" ]]; then
   work_root="${repo_dir}/.tmp"
+fi
+if [[ -L "${work_root}" ]]; then
+  work_root="/tmp"
 fi
 mkdir -p "${work_root}"
 work_dir="$(mktemp -d "${work_root}/speed-of-cinnamon-build-dist-XXXXXX")"
@@ -76,6 +86,11 @@ find "${work_dir}/${package}" \
   -type d \( -name __pycache__ -o -name .pytest_cache -o -name .mypy_cache \) \
   -prune -exec rm -rf {} +
 find "${work_dir}/${package}" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+
+if find "${work_dir}/${package}" -type l -print -quit | grep -q .; then
+  printf 'build-dist detected unsupported symlink in package contents.\n' >&2
+  exit 1
+fi
 
 cat > "${work_dir}/${package}/RELEASE-MANIFEST.txt" <<EOF
 ${package}

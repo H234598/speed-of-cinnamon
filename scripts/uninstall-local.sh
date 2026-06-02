@@ -16,6 +16,12 @@ if [[ "${HOME}" == "/" ]]; then
   printf 'Refusing to run uninstall from root home directory.\n' >&2
   exit 1
 fi
+for target in "${applet_dir}" "${bin_path}" "${man_dir}"; do
+  if [[ -L "${target}" ]]; then
+    printf 'refusing to follow symlink during uninstall: %s\n' "${target}" >&2
+    exit 1
+  fi
+done
 if [[ "${applet_dir}" == "${HOME}" || "${bin_path}" == "${HOME}" || "${man_dir}" == "${HOME}" ]]; then
   printf 'Unsafe uninstall target resolved inside HOME root.\n' >&2
   exit 1

@@ -5,6 +5,9 @@ import subprocess  # nosec B404
 import tempfile
 import io
 import os
+from pathlib import Path
+
+from .path_safety import assert_no_symlink_ancestors
 
 
 class OutputError(RuntimeError):
@@ -61,6 +64,18 @@ def _contains_escaped_null(value: str) -> bool:
         raise OutputError("value must be text")
     lowered = (value or "").lower()
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
+
+
+def _contains_http_header_control_chars(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise OutputError("value must be text")
+    lowered = (value or "").lower()
+    if "\r" in lowered or "\n" in lowered or "\\r" in lowered or "\\n" in lowered or "\\u000d" in lowered or "\\u000a" in lowered:
+        return True
+    for char in lowered:
+        if ord(char) < 0x20 or ord(char) == 0x7F:
+            return True
+    return False
 
 
 def _filesize(file: io.BufferedRandom) -> int:
@@ -132,6 +147,10 @@ def _run_with_input(
         raise OutputError("command is empty")
     if _contains_escaped_null(command) or any(_contains_escaped_null(arg) for arg in argv[1:]):
         raise OutputError("command argument contains invalid null byte")
+    if _contains_http_header_control_chars(command) or any(
+        _contains_http_header_control_chars(arg) for arg in argv[1:]
+    ):
+        raise OutputError("command argument contains invalid control character")
     runtime_command = _command_path(command)
 
     input_bytes = _validate_text_input(text)
@@ -172,11 +191,12 @@ def _command_path(command: str) -> str:
     if not command_name:
         raise OutputError("command is empty")
     if os.path.sep in command_name or (os.path.altsep and os.path.altsep in command_name):
-        return command_name
+        raise OutputError("command must be a bare command name without path separators")
     resolved = shutil.which(command_name)
     if not resolved:
         raise OutputError(f"{command_name} is not available")
-    return resolved
+    command_path = Path(resolved)
+    return str(command_path)
 
 
 def _run_stdout(argv: list[str] | tuple[str, ...], *, timeout: int = MAX_EXEC_TIMEOUT_SECONDS) -> str:
@@ -196,6 +216,10 @@ def _run_stdout(argv: list[str] | tuple[str, ...], *, timeout: int = MAX_EXEC_TI
         raise OutputError("command is empty")
     if _contains_escaped_null(command) or any(_contains_escaped_null(arg) for arg in argv[1:]):
         raise OutputError("command argument contains invalid null byte")
+    if _contains_http_header_control_chars(command) or any(
+        _contains_http_header_control_chars(arg) for arg in argv[1:]
+    ):
+        raise OutputError("command argument contains invalid control character")
 
     runtime_command = _command_path(command)
     try:

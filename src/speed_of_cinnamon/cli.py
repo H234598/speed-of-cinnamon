@@ -50,6 +50,7 @@ from .paths import (
     state_dir,
     transcript_dir,
 )
+from .path_safety import assert_no_symlink_ancestors
 from .postprocessor import (
     DEFAULT_OLLAMA_URL,
     DEFAULT_OPENAI_COMPATIBLE_MODEL,
@@ -111,6 +112,41 @@ def _contains_escaped_null(value: str) -> bool:
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
 
 
+def _contains_http_header_control_chars(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise RuntimeError("value must be text")
+    lowered = (value or "").lower()
+    if (
+        "\r" in lowered
+        or "\n" in lowered
+        or "\\r" in lowered
+        or "\\n" in lowered
+        or "\\x0d" in lowered
+        or "\\x0a" in lowered
+        or "\\u000d" in lowered
+        or "\\u000a" in lowered
+    ):
+        return True
+    for char in lowered:
+        if ord(char) < 0x20 or ord(char) == 0x7F:
+            return True
+    return False
+
+
+def _command_path(command: str) -> str:
+    if not isinstance(command, str) or isinstance(command, bool):
+        raise RuntimeError("command must be text")
+    command_name = command.strip()
+    if not command_name:
+        raise RuntimeError("command is empty")
+    if os.path.sep in command_name or (os.path.altsep and os.path.altsep in command_name):
+        raise RuntimeError("command must be a bare command name without path separators")
+    path = shutil.which(command_name)
+    if not path:
+        raise RuntimeError(f"{command_name} command is not available")
+    return path
+
+
 def _assert_text_limit(value: str, *, field_name: str, max_chars: int) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         raise RuntimeError(f"{field_name} must be text")
@@ -128,6 +164,8 @@ def _assert_text_limit(value: str, *, field_name: str, max_chars: int) -> str:
 def _assert_clean_text(value: str, *, field_name: str, max_chars: int) -> str:
     if _contains_escaped_null(value):
         raise RuntimeError(f"{field_name} contains invalid null byte")
+    if _contains_http_header_control_chars(value):
+        raise RuntimeError(f"{field_name} contains invalid control character")
     return _assert_text_limit(value, field_name=field_name, max_chars=max_chars)
 
 
@@ -375,6 +413,7 @@ def _write_json_atomic(path: Path, payload: dict[str, object], *, max_bytes: int
     content = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     if len(content.encode("utf-8")) > max_bytes:
         raise RuntimeError(f"output JSON is too large (max {max_bytes} bytes)")
+    assert_no_symlink_ancestors(path, field_name="JSON output path")
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
         try:
@@ -398,6 +437,7 @@ def _write_json_atomic(path: Path, payload: dict[str, object], *, max_bytes: int
 
 
 def _write_text_atomic(path: Path, text: str) -> None:
+    assert_no_symlink_ancestors(path, field_name="text output path")
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
         try:
@@ -423,6 +463,7 @@ def _write_text_atomic(path: Path, text: str) -> None:
 def _prepare_private_file(path: Path, *, field_name: str) -> None:
     if not isinstance(path, Path):
         raise RuntimeError(f"{field_name} must be a path")
+    assert_no_symlink_ancestors(path, field_name=field_name)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with path.open("ab") as handle:
@@ -475,6 +516,7 @@ def _coerce_path(
         raise RuntimeError("max_chars must be positive")
     _assert_clean_text(path_value, field_name=field_name, max_chars=max_chars)
     path = Path(path_value).expanduser()
+    assert_no_symlink_ancestors(path, field_name=field_name)
     return path.resolve(strict=False) if resolve else path
 
 
@@ -1090,7 +1132,15 @@ def command_text_models(args: argparse.Namespace) -> dict[str, object]:
         }
     url = _validate_text_model_url(args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url")
     payload = _normalize_text_models_payload(list_ollama_models(url))
-    if _is_local_ollama_url(url) and not shutil.which("ollama") and payload["available"] is False:
+    if _is_local_ollama_url(url):
+        try:
+            _command_path("ollama")
+            ollama_available = True
+        except RuntimeError:
+            ollama_available = False
+    else:
+        ollama_available = False
+    if _is_local_ollama_url(url) and not ollama_available and payload["available"] is False:
         return {
             "status": "done",
             "backend": "ollama",
@@ -1117,9 +1167,16 @@ def command_install_text_model(args: argparse.Namespace) -> dict[str, object]:
     if model.startswith("-"):
         raise RuntimeError("ollama model must not start with '-'")
     url = _validate_text_model_url(args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url")
-    ollama = shutil.which("ollama")
-    if not ollama:
-        raise RuntimeError("ollama command is not available")
+    try:
+        ollama = _command_path("ollama")
+    except RuntimeError as exc:
+        if str(exc).startswith("command path is not trusted"):
+            raise RuntimeError("ollama command is not available") from exc
+        raise
+    except RuntimeError as exc:
+        if "command is not available" in str(exc):
+            raise RuntimeError("ollama command is not available") from exc
+        raise
     env = os.environ.copy()
     if url:
         env["OLLAMA_HOST"] = url

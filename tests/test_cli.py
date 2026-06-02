@@ -504,6 +504,25 @@ class CliTest(unittest.TestCase):
         mocked_list.assert_called_once_with(cli.DEFAULT_OLLAMA_URL)
 
     @mock.patch("speed_of_cinnamon.cli.list_ollama_models")
+    def test_text_models_reports_missing_local_ollama_command_when_path_validation_fails(self, mocked_list: mock.Mock) -> None:
+        mocked_list.return_value = {
+            "available": False,
+            "models": [],
+            "message": "Ollama is not reachable at http://127.0.0.1:11434",
+        }
+        stdout = io.StringIO()
+        with (
+            mock.patch("speed_of_cinnamon.cli._command_path", side_effect=RuntimeError("command path is not trusted")),
+            redirect_stdout(stdout),
+        ):
+            code = cli.run(["text-models", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertFalse(payload["available"])
+        self.assertIn("Ollama command is not available", payload["message"])
+        mocked_list.assert_called_once_with(cli.DEFAULT_OLLAMA_URL)
+
+    @mock.patch("speed_of_cinnamon.cli.list_ollama_models")
     def test_text_models_rejects_overlong_ollama_url(self, mocked_list: mock.Mock) -> None:
         long_url = "http://localhost:11434/" + ("x" * (cli.MAX_URL_CHARS + 10))
         stdout = io.StringIO()
@@ -662,6 +681,20 @@ class CliTest(unittest.TestCase):
         stdout = io.StringIO()
         with (
             mock.patch("speed_of_cinnamon.cli.shutil.which", return_value=None),
+            redirect_stdout(stdout),
+        ):
+            code = cli.run(["install-text-model", "--model", "llama3.2:3b", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("ollama command is not available", payload["error"])
+
+    def test_install_text_model_rejects_untrusted_command_path(self) -> None:
+        stdout = io.StringIO()
+        with (
+            mock.patch(
+                "speed_of_cinnamon.cli._command_path",
+                side_effect=RuntimeError("command path is not trusted"),
+            ),
             redirect_stdout(stdout),
         ):
             code = cli.run(["install-text-model", "--model", "llama3.2:3b", "--json"])
@@ -2058,6 +2091,44 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("contains invalid null byte", payload["error"])
 
+    def test_transcribe_file_rejects_control_character_in_transcriber_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--json",
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf hi\nwhoami",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("contains invalid control character", payload["error"])
+
+    def test_transcribe_file_rejects_escaped_newline_in_transcriber_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--json",
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf hi\\nwhoami",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("contains invalid control character", payload["error"])
+
     def test_transcribe_file_rejects_overlong_personal_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "input.wav"
@@ -2100,6 +2171,27 @@ class CliTest(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 1)
         self.assertIn("openai-compatible API key is too large", payload["error"])
+
+    def test_transcribe_file_rejects_control_character_in_openai_compatible_api_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--json",
+                    "--transcriber",
+                    "openai-compatible",
+                    "--openai-compatible-url",
+                    "https://api.openai.com/v1",
+                    "--openai-compatible-api-key",
+                    "key\\nvalue",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("contains invalid control character", payload["error"])
 
     def test_transcribe_file_rejects_overlong_openai_compatible_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2931,6 +3023,20 @@ class CliTest(unittest.TestCase):
     def test_assert_clean_text_rejects_non_text_value(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "must be text"):
             cli._assert_clean_text(123, field_name="value", max_chars=10)  # type: ignore[arg-type]
+
+    def test_assert_clean_text_rejects_control_characters(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "contains invalid control character"):
+            cli._assert_clean_text("line1\nline2", field_name="value", max_chars=20)
+        with self.assertRaisesRegex(RuntimeError, "contains invalid control character"):
+            cli._assert_clean_text("line1\\nline2", field_name="value", max_chars=20)
+        with self.assertRaisesRegex(RuntimeError, "contains invalid control character"):
+            cli._assert_clean_text("line1\\rline2", field_name="value", max_chars=20)
+        with self.assertRaisesRegex(RuntimeError, "contains invalid control character"):
+            cli._assert_clean_text("line1\\x0a", field_name="value", max_chars=20)
+        with self.assertRaisesRegex(RuntimeError, "contains invalid control character"):
+            cli._assert_clean_text("line1\\x0d", field_name="value", max_chars=20)
+        with self.assertRaisesRegex(RuntimeError, "contains invalid control character"):
+            cli._assert_clean_text("line1\\u000a", field_name="value", max_chars=20)
 
     def test_assert_text_limit_rejects_oversized_bytes(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "is too large"):

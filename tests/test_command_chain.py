@@ -65,6 +65,14 @@ class CommandChainTest(unittest.TestCase):
         with self.assertRaisesRegex(CommandChainError, "contains control characters"):
             split_command_chain("printf hello\nworld")
 
+    def test_split_command_chain_rejects_escaped_control_characters(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "contains control characters"):
+            split_command_chain("printf hello\\r\\nworld")
+
+    def test_split_command_chain_rejects_other_control_characters(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "contains control characters"):
+            split_command_chain("printf hello\x1bworld")
+
     def test_split_command_chain_rejects_too_long_command(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "command too long"):
             split_command_chain("x " + ("arg " * 8192))
@@ -263,6 +271,18 @@ class CommandChainTest(unittest.TestCase):
     def test_run_command_chain_rejects_control_chars_in_command_argument(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "command contains invalid control character"):
             run_command_chain([("cmd", "arg\rvalue")], "", label="post-process")
+
+    def test_run_command_chain_rejects_escaped_control_chars_in_command_argument(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "command contains invalid control character"):
+            run_command_chain([("cmd", "arg\\nvalue")], "", label="post-process")
+
+    def test_run_command_chain_rejects_other_control_characters_in_command_argument(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "command contains invalid control character"):
+            run_command_chain([("cmd", "arg\x1fvalue")], "", label="post-process")
+
+    def test_run_command_chain_rejects_command_with_path_separator(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "path separators"):
+            run_command_chain([("/usr/bin/cmd",)], "", label="post-process")
 
     def test_run_command_chain_rejects_too_large_input(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "input exceeded"):

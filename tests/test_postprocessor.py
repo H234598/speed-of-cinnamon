@@ -124,7 +124,7 @@ class PostProcessorTest(unittest.TestCase):
             post_process_text("hello", "en", "python3 -c 'unterminated")
 
     def test_post_process_command_reports_missing_binary(self) -> None:
-        with self.assertRaisesRegex(PostProcessError, "command not found"):
+        with self.assertRaisesRegex(PostProcessError, "path separators"):
             post_process_text("hello", "en", "/definitely/missing/command")
 
     def test_post_process_reports_empty_chain(self) -> None:
@@ -266,6 +266,48 @@ class PostProcessorTest(unittest.TestCase):
                 openai_compatible_api_key="x" * (MAX_OPENAI_COMPATIBLE_API_KEY_CHARS + 1),
             )
 
+    def test_openai_compatible_backend_rejects_api_key_with_newline(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "invalid control character"):
+            post_process_text(
+                "hello",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="local",
+                openai_compatible_url="http://127.0.0.1:8000/v1/",
+                openai_compatible_api_key="secret\r\nX: injected",
+            )
+
+    def test_openai_compatible_backend_rejects_escaped_newline_in_api_key(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "invalid control character"):
+            post_process_text(
+                "hello",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="local",
+                openai_compatible_url="http://127.0.0.1:8000/v1/",
+                openai_compatible_api_key="secret\\r\\n",
+            )
+
+    def test_openai_compatible_backend_rejects_model_with_newline(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "invalid control character"):
+            post_process_text(
+                "hello",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="local\\nX",
+                openai_compatible_url="http://127.0.0.1:8000/v1/",
+            )
+
+    def test_openai_compatible_backend_rejects_model_with_escaped_hex_newline(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "invalid control character"):
+            post_process_text(
+                "hello",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="local\\\\x0a",
+                openai_compatible_url="http://127.0.0.1:8000/v1/",
+            )
+
     def test_ollama_backend_calls_generate_endpoint(self) -> None:
         requests = []
 
@@ -320,6 +362,26 @@ class PostProcessorTest(unittest.TestCase):
                 openai_compatible_url="http://127.0.0.1:8000\x00",
             )
 
+    def test_openai_url_rejects_control_character(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "openai-compatible url contains invalid control character"):
+            post_process_text(
+                "hello",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="local",
+                openai_compatible_url="http://127.0.0.1:8000/v1\\r\\n",
+            )
+
+    def test_openai_url_rejects_escaped_hex_newline(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "openai-compatible url contains invalid control character"):
+            post_process_text(
+                "hello",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="local",
+                openai_compatible_url="http://127.0.0.1:8000/v1\\\\x0a",
+            )
+
     def test_ollama_url_rejects_oversize(self) -> None:
         with mock.patch(
             "speed_of_cinnamon.postprocessor.MAX_POSTPROCESS_URL_CHARS",
@@ -342,6 +404,26 @@ class PostProcessorTest(unittest.TestCase):
                 backend="openai-compatible",
                 openai_compatible_model="local",
                 openai_compatible_url="http://127.0.0.1:8000/v1\\\\u0000",
+            )
+
+    def test_ollama_url_rejects_control_character(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "ollama url contains invalid control character"):
+            post_process_text(
+                "hello",
+                "en",
+                backend="ollama",
+                ollama_model="llama3.2:3b",
+                ollama_url="http://127.0.0.1:11434/v1\\n",
+            )
+
+    def test_ollama_url_rejects_escaped_hex_newline(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "ollama url contains invalid control character"):
+            post_process_text(
+                "hello",
+                "en",
+                backend="ollama",
+                ollama_model="llama3.2:3b",
+                ollama_url="http://127.0.0.1:11434/v1\\\\x0a",
             )
 
     def test_openai_compatible_backend_rejects_non_http_url(self) -> None:
@@ -593,6 +675,11 @@ class PostProcessorTest(unittest.TestCase):
         )
         self.assertFalse(result["available"])
         self.assertIn("openai-compatible API key is too large", result["message"])
+
+    def test_list_openai_compatible_models_rejects_api_key_with_newline(self) -> None:
+        result = list_openai_compatible_models("http://127.0.0.1:8000/v1", api_key="secret\n")
+        self.assertFalse(result["available"])
+        self.assertIn("invalid control character", result["message"])
 
     def test_list_openai_compatible_models_reports_http_error_detail(self) -> None:
         error = urllib.error.HTTPError(

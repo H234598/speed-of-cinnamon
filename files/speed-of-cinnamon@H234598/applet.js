@@ -1652,6 +1652,17 @@ MyApplet.prototype = {
     return "'" + String(value || "").replace(/'/g, "'\"'\"'") + "'";
   },
 
+  _terminalCommandQuote: function(value, fieldName) {
+    let command = String(value || "").trim();
+    if (command === "") {
+      throw new Error((fieldName || "command") + " is empty");
+    }
+    if (!this._isAllowedCliCommand(command)) {
+      throw new Error((fieldName || "command") + " is not executable");
+    }
+    return this._shellQuote(command);
+  },
+
   _terminalCommandArgs: function(title, command) {
     let terminalTitle = String(title || "Speed of Cinnamon");
     if (GLib.find_program_in_path("gnome-terminal")) {
@@ -1738,7 +1749,7 @@ MyApplet.prototype = {
   },
 
   _basicSetupCommand: function() {
-    let cli = this._shellQuote(this._cliCommand());
+    let cli = this._terminalCommandQuote(this._cliCommand(), "CLI command");
     return this._terminalWorkflowScript([
       "echo 'Running Speed of Cinnamon basic setup...'",
       "if command -v dnf >/dev/null 2>&1; then sudo dnf install -y zenity xdotool xclip xsel wl-clipboard pipewire-utils pulseaudio-utils alsa-utils python3-pip; fi",
@@ -1749,46 +1760,41 @@ MyApplet.prototype = {
   },
 
   _installOllamaRuntime: function(openChooserAfterInstall) {
-    let opened = this._runTerminalWorkflow(_("Install Ollama"), this._installOllamaRuntimeCommand(), _("Ollama install terminal opened"));
+    let opened = false;
+    try {
+      opened = this._runTerminalWorkflow(_("Install Ollama"), this._installOllamaRuntimeCommand(), _("Ollama install terminal opened"));
+    } catch (err) {
+      global.logError(err);
+      this._setStatus("error", _("Could not start install terminal: ") + String(err), this.lastTranscript);
+      this._notify(_("Could not start install terminal"), String(err), true);
+      return;
+    }
     if (opened && openChooserAfterInstall) {
       this._watchOllamaInstallThenChoose();
     }
   },
 
   _uninstallOllamaRuntime: function() {
-    this._runTerminalWorkflow(_("Uninstall Ollama"), this._uninstallOllamaRuntimeCommand(), _("Ollama uninstall terminal opened"));
+    try {
+      this._runTerminalWorkflow(_("Uninstall Ollama"), this._uninstallOllamaRuntimeCommand(), _("Ollama uninstall terminal opened"));
+    } catch (err) {
+      global.logError(err);
+      this._setStatus("error", _("Could not start uninstall terminal: ") + String(err), this.lastTranscript);
+      this._notify(_("Could not start uninstall terminal"), String(err), true);
+    }
   },
 
   _runBasicSetup: function() {
-    this._runTerminalWorkflow(_("Speed of Cinnamon basic setup"), this._basicSetupCommand(), _("Basic setup terminal opened"));
-  },
-
-  _benchmarkTerminalArgs: function() {
-    let command = [
-      "audio=$(zenity --file-selection --title='Choose benchmark audio file' --file-filter='Audio files | *.wav *.WAV *.flac *.FLAC *.mp3 *.MP3 *.ogg *.OGG *.oga *.OGA *.opus *.OPUS *.m4a *.M4A *.aac *.AAC *.webm *.WEBM')",
-      "if [ -z \"$audio\" ]; then echo 'Benchmark cancelled.'; read -r -p 'Press Enter to close...'; exit 0; fi",
-      "printf 'Benchmark audio: %s\\n\\n' \"$audio\"",
-      this._shellQuote(this._cliCommand()) + " benchmark-models \"$audio\" --language " + this._shellQuote(this._currentLanguage()) + " --json",
-      "rc=$?",
-      "printf '\\nBenchmark finished with exit code %s.\\n' \"$rc\"",
-      "read -r -p 'Press Enter to close...'",
-      "exit \"$rc\""
-    ].join("; ");
-    return this._terminalCommandArgs("Speed of Cinnamon Benchmark", command);
+    try {
+      this._runTerminalWorkflow(_("Speed of Cinnamon basic setup"), this._basicSetupCommand(), _("Basic setup terminal opened"));
+    } catch (err) {
+      global.logError(err);
+      this._setStatus("error", _("Could not start setup terminal: ") + String(err), this.lastTranscript);
+      this._notify(_("Could not start setup terminal"), String(err), true);
+    }
   },
 
   _selectBenchmarkAudioFile: function() {
-    let terminalArgs = this._benchmarkTerminalArgs();
-    if (terminalArgs.length > 0) {
-      try {
-        Util.spawn(this._coerceSpawnArgs(terminalArgs));
-        this._setStatus("processing", _("Benchmark terminal opened"), this.lastTranscript);
-      } catch (err) {
-        global.logError(err);
-        this._setStatus("error", _("Could not open benchmark terminal: ") + String(err), this.lastTranscript);
-      }
-      return;
-    }
     if (!GLib.find_program_in_path("zenity")) {
       this._setStatus("error", _("Install zenity to choose a benchmark audio file"), this.lastTranscript);
       return;
@@ -2374,11 +2380,15 @@ MyApplet.prototype = {
   },
 
   _externalApiEnvContent: function() {
+    let safeOpenAiCompatibleUrl = this._coerceCliTextArg(this._externalApiEnvValue(this.openaiCompatibleUrl, DEFAULT_OPENAI_COMPATIBLE_URL), "openai-compatible URL").trim();
+    let safeOpenAiCompatibleModel = this._coerceCliTextArg(this._externalApiEnvValue(this.openaiCompatibleModel, DEFAULT_OPENAI_COMPATIBLE_MODEL), "openai-compatible model").trim();
+    let safeOpenAiCompatibleTextModel = this._coerceCliTextArg(this._externalApiEnvValue(this.openaiCompatibleTextModel, DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL), "openai-compatible text model").trim();
+    let safeOpenAiCompatibleApiKey = this._coerceCliTextArg(this.openaiCompatibleApiKey || "", "openai-compatible API key").trim();
     return [
-      "OPENAI_COMPATIBLE_URL=" + this._externalApiEnvValue(this.openaiCompatibleUrl, DEFAULT_OPENAI_COMPATIBLE_URL),
-      "OPENAI_COMPATIBLE_STT_MODEL=" + this._externalApiEnvValue(this.openaiCompatibleModel, DEFAULT_OPENAI_COMPATIBLE_MODEL),
-      "OPENAI_COMPATIBLE_TEXT_MODEL=" + this._externalApiEnvValue(this.openaiCompatibleTextModel, DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL),
-      "OPENAI_COMPATIBLE_API_KEY=" + String(this.openaiCompatibleApiKey || "").trim(),
+      "OPENAI_COMPATIBLE_URL=" + safeOpenAiCompatibleUrl,
+      "OPENAI_COMPATIBLE_STT_MODEL=" + safeOpenAiCompatibleModel,
+      "OPENAI_COMPATIBLE_TEXT_MODEL=" + safeOpenAiCompatibleTextModel,
+      "OPENAI_COMPATIBLE_API_KEY=" + safeOpenAiCompatibleApiKey,
       ""
     ].join("\n");
   },
@@ -2987,6 +2997,9 @@ MyApplet.prototype = {
       if (i === 0) {
         value = value.trim();
       }
+      if (this._containsCliControlChars(value)) {
+        throw new Error("Backend command argument contains invalid control character");
+      }
       if (value.indexOf("\u0000") >= 0) {
         throw new Error("Backend command argument contains invalid bytes");
       }
@@ -3010,10 +3023,34 @@ MyApplet.prototype = {
     if (normalized.indexOf("\u0000") >= 0) {
       throw new Error(String(fieldName || "value") + " contains invalid bytes");
     }
+    if (this._containsCliControlChars(normalized)) {
+      throw new Error(String(fieldName || "value") + " contains invalid control character");
+    }
     if (normalized.length > MAX_SETTING_TEXT_CHARS) {
       throw new Error(String(fieldName || "value") + " is too long");
     }
     return normalized;
+  },
+
+  _containsCliControlChars: function(value) {
+    let normalized = String(value || "").toLowerCase();
+    if (
+      normalized.indexOf("\u000d") >= 0
+      || normalized.indexOf("\u000a") >= 0
+      || normalized.indexOf("\\r") >= 0
+      || normalized.indexOf("\\n") >= 0
+      || normalized.indexOf("\\u000d") >= 0
+      || normalized.indexOf("\\u000a") >= 0
+    ) {
+      return true;
+    }
+    for (let i = 0; i < normalized.length; i++) {
+      const code = normalized.charCodeAt(i);
+      if (code < 0x20 || code === 0x7f) {
+        return true;
+      }
+    }
+    return false;
   },
 
   _coerceImportedSetting: function(key, value, fallback) {
@@ -3034,6 +3071,9 @@ MyApplet.prototype = {
       return false;
     }
     if (value.indexOf("/") >= 0) {
+      if (value.charAt(0) !== "/") {
+        return false;
+      }
       return GLib.file_test(value, GLib.FileTest.IS_EXECUTABLE);
     }
     return GLib.find_program_in_path(value) !== null;
@@ -3436,7 +3476,7 @@ MyApplet.prototype = {
     if (typedText === null) {
       return false;
     }
-    this._spawnKeyboardAfterFocus(["xdotool", "type", "--clearmodifiers", "--delay", String(delay), typedText]);
+    this._spawnKeyboardAfterFocus(["xdotool", "type", "--clearmodifiers", "--delay", String(delay), "--", typedText]);
     return true;
   },
 

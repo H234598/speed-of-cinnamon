@@ -7,8 +7,10 @@ import subprocess  # nosec B404
 import tempfile
 import io
 import shutil
+from pathlib import Path
 
 from .personalization import command_environment
+from .path_safety import assert_no_symlink_ancestors
 
 
 class CommandChainError(RuntimeError):
@@ -50,14 +52,15 @@ def _command_path(command: str) -> str:
     command_name = command.strip()
     if not command_name:
         raise CommandChainError("command is empty")
+    if os.path.sep in command_name or (os.path.altsep and os.path.altsep in command_name):
+        raise CommandChainError("command must be a bare command name without path separators")
     if _contains_command_control_chars(command_name):
         raise CommandChainError("command contains invalid control character")
-    if os.path.sep in command_name or (os.path.altsep and os.path.altsep in command_name):
-        return command_name
     resolved = shutil.which(command_name)
     if not resolved:
         raise CommandChainError(f"{command_name} is not available")
-    return resolved
+    command_path = Path(resolved)
+    return str(command_path)
 
 
 def _contains_escaped_null(value: str) -> bool:
@@ -67,10 +70,22 @@ def _contains_escaped_null(value: str) -> bool:
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
 
 
+def _contains_http_header_control_chars(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise CommandChainError("value must be text")
+    lowered = (value or "").lower()
+    if "\r" in lowered or "\n" in lowered or "\\r" in lowered or "\\n" in lowered or "\\u000d" in lowered or "\\u000a" in lowered:
+        return True
+    for char in lowered:
+        if ord(char) < 0x20 or ord(char) == 0x7F:
+            return True
+    return False
+
+
 def _contains_command_control_chars(value: str) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise CommandChainError("value must be text")
-    return "\r" in value or "\n" in value
+    return _contains_http_header_control_chars(value)
 
 
 def split_command_chain(command: str, label: str = "command") -> list[list[str]]:
@@ -78,10 +93,10 @@ def split_command_chain(command: str, label: str = "command") -> list[list[str]]
         raise CommandChainError("command must be text")
     if isinstance(label, bool) or not isinstance(label, str):
         raise CommandChainError("label must be text")
-    if _contains_command_control_chars(command):
-        raise CommandChainError(f"invalid {label} command: contains control characters")
     if _contains_escaped_null(command):
         raise CommandChainError(f"invalid {label} command: contains invalid null byte")
+    if _contains_command_control_chars(command):
+        raise CommandChainError(f"invalid {label} command: contains control characters")
     if len(command) > MAX_COMMAND_LENGTH_CHARS:
         raise CommandChainError(f"invalid {label} command: command too long")
     if len(command.encode("utf-8")) > MAX_COMMAND_LENGTH_CHARS:

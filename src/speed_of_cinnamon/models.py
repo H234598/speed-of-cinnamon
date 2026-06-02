@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .paths import ctranslate2_models_dir, models_dir
+from .path_safety import assert_no_symlink_ancestors
 
 HUGGING_FACE_BASE_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
 TINY_DE_MODEL_URL = "https://huggingface.co/wabisabisocial/whisper-tiny-german-ggml/resolve/main/ggml-tiny-de.bin"
@@ -33,6 +34,27 @@ def _contains_escaped_null(value: str) -> bool:
         raise ModelError("value must be text")
     lowered = (value or "").lower()
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
+
+
+def _contains_http_header_control_chars(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise ModelError("value must be text")
+    lowered = (value or "").lower()
+    if (
+        "\r" in lowered
+        or "\n" in lowered
+        or "\\r" in lowered
+        or "\\n" in lowered
+        or "\\u000d" in lowered
+        or "\\u000a" in lowered
+        or "\\x0a" in lowered
+        or "\\x0d" in lowered
+    ):
+        return True
+    for char in lowered:
+        if ord(char) < 0x20 or ord(char) == 0x7F:
+            return True
+    return False
 
 
 def _is_valid_checksum(value: str) -> bool:
@@ -61,7 +83,9 @@ def _is_valid_cache_entry(entry: Any) -> bool:
 
 
 def _model_checksum_cache_path() -> Path:
-    return models_dir() / _MODEL_CHECKSUM_CACHE_FILE
+    path = models_dir() / _MODEL_CHECKSUM_CACHE_FILE
+    assert_no_symlink_ancestors(path, field_name="model checksum cache path")
+    return path
 
 
 def _load_model_checksum_cache() -> None:
@@ -161,6 +185,7 @@ def _prune_model_checksum_cache() -> None:
 
 def _write_model_checksum_cache() -> None:
     cache_path = _model_checksum_cache_path()
+    assert_no_symlink_ancestors(cache_path, field_name="model checksum cache path")
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         rendered = json.dumps(_model_checksum_cache, indent=2, sort_keys=True) + "\n"
@@ -339,6 +364,8 @@ def _assert_download_url(url: str, *, field_name: str = "model download URL") ->
         raise ModelError(f"{field_name} is required")
     if _contains_escaped_null(normalized):
         raise ModelError(f"{field_name} contains invalid null byte")
+    if _contains_http_header_control_chars(normalized):
+        raise ModelError(f"{field_name} contains invalid control character")
     parsed = urllib.parse.urlparse(normalized)
     if parsed.scheme not in {"http", "https"}:
         raise ModelError(f"{field_name} must use http:// or https://")
@@ -514,8 +541,11 @@ def resolve_model(name: str) -> ModelSpec:
 
 def model_path(model: ModelSpec) -> Path:
     if model.model_format == "ctranslate2":
-        return ctranslate2_models_dir() / model.filename
-    return models_dir() / model.filename
+        path = ctranslate2_models_dir() / model.filename
+    else:
+        path = models_dir() / model.filename
+    assert_no_symlink_ancestors(path, field_name="model path")
+    return path
 
 
 def model_download_urls(model: ModelSpec) -> list[tuple[str, str]]:
@@ -657,6 +687,7 @@ def _model_is_verified(model: ModelSpec, path: Path, checksum: str = "") -> bool
 
 
 def _download_url_to_file(url: str, tmp_path: Path, size_limit: int, model_name: str) -> int:
+    assert_no_symlink_ancestors(tmp_path, field_name="model temporary file")
     url = _assert_download_url(url, field_name="model download URL")
     with (
         urllib.request.urlopen(url, timeout=30) as response,  # nosec B310
@@ -685,12 +716,14 @@ def _download_url_to_file(url: str, tmp_path: Path, size_limit: int, model_name:
 
 
 def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict[str, object]:
+    assert_no_symlink_ancestors(path, field_name="model path")
     if path.exists() and not force:
         status = model_status(model, verify=True)
         if status["verified"]:
             return {**status, "status": "done", "message": f"model already downloaded: {path}"}
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_dir = Path(tempfile.mkdtemp(prefix=f".{model.filename}.", dir=path.parent))
+    assert_no_symlink_ancestors(tmp_dir, field_name="model temporary directory")
     size_limit = _download_size_limit(model)
     if model.files and not model.repo_id:
         raise ModelError(f"model catalog entry {model.name} is missing repo_id for multi-file download")
@@ -722,6 +755,7 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
     path = model_path(model)
     if model.files:
         return _download_directory_model(model, path, force)
+    assert_no_symlink_ancestors(path, field_name="model path")
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and not force:
         status = model_status(model, verify=True)
@@ -729,6 +763,7 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
             return {**status, "status": "done", "message": f"model already downloaded: {path}"}
 
     tmp_path = path.with_suffix(path.suffix + ".tmp")
+    assert_no_symlink_ancestors(tmp_path, field_name="model temporary file")
     size_limit = _download_size_limit(model)
     try:
         _download_url_to_file(model.url, tmp_path, size_limit, model.name)

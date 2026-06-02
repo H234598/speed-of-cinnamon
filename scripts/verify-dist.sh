@@ -10,6 +10,12 @@ fi
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+dist_dir="${repo_dir}/dist"
+if [[ -L "${dist_dir}" || ! -d "${dist_dir}" ]]; then
+  printf 'dist directory is invalid: %s\n' "${dist_dir}" >&2
+  exit 1
+fi
+
 if ! command -v realpath >/dev/null 2>&1; then
   printf 'realpath not found.\n' >&2
   exit 1
@@ -21,11 +27,25 @@ if [[ -L "${tarball}" || ! -f "${tarball}" || ! "${tarball}" == *.tar.gz || ! "$
   exit 1
 fi
 
+if ! tar -tzf "${tarball}" | awk -F'/' '
+  /(^|\/)\.\.(\/|$)/ || /^\// { print; bad = 1 }
+  END { exit bad ? 1 : 0 }
+' > /dev/null; then
+  printf 'archive contains unsafe path entries (path traversal or absolute path): %s\n' "${tarball}" >&2
+  exit 1
+fi
+
 tmp_root="${TMPDIR:-/tmp}"
 if [[ ! "${tmp_root}" == /* ]]; then
   tmp_root="/tmp"
 fi
+if [[ -L "${tmp_root}" ]]; then
+  tmp_root="${repo_dir}/.tmp"
+fi
 if [[ ! -d "${tmp_root}" || ! -w "${tmp_root}" ]]; then
+  tmp_root="${repo_dir}/.tmp"
+fi
+if [[ -L "${tmp_root}" ]]; then
   tmp_root="${repo_dir}/.tmp"
 fi
 mkdir -p "${tmp_root}"
@@ -51,6 +71,11 @@ fi
 package_dir="${package_dirs[0]}"
 if [[ -z "${package_dir}" || ! -d "${package_dir}" ]]; then
   printf 'archive did not contain a package directory: %s\n' "${tarball}" >&2
+  exit 1
+fi
+
+if find "${package_dir}" -type l -print -quit | grep -q .; then
+  printf 'archive expansion contains unsupported symlink entries.\n' >&2
   exit 1
 fi
 
