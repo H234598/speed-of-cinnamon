@@ -487,6 +487,16 @@ class TranscriberTest(unittest.TestCase):
         self.assertEqual(captured_env["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/run/user/1000/bus")
         self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
+    def test_filtered_environment_skips_non_text_environment_values(self) -> None:
+        from speed_of_cinnamon.transcriber import _filtered_environment as transcriber_filtered_environment
+
+        with mock.patch("speed_of_cinnamon.transcriber.os.environ.__getitem__", return_value=123):
+            env = transcriber_filtered_environment()
+
+        self.assertNotIn("HOME", env)
+        self.assertNotIn("LANG", env)
+        self.assertIn("PATH", env)
+
     def test_run_limited_process_rejects_non_list_command(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "transcriber command must be a list or tuple"):
             _run_limited_process("whisper", timeout=1)  # type: ignore[arg-type]

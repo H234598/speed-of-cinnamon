@@ -268,6 +268,16 @@ class RecorderTest(unittest.TestCase):
         self.assertEqual(captured_env["PIPEWIRE_REMOTE"], "pipewire-0")
         self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
+    def test_filtered_environment_skips_non_text_environment_values(self) -> None:
+        from speed_of_cinnamon.recorder import _filtered_environment as recorder_filtered_environment
+
+        with mock.patch("speed_of_cinnamon.recorder.os.environ.__getitem__", return_value=123):
+            env = recorder_filtered_environment()
+
+        self.assertNotIn("HOME", env)
+        self.assertNotIn("LANG", env)
+        self.assertIn("PATH", env)
+
     def test_start_recorder_sets_private_log_permissions(self) -> None:
         command = RecorderCommand(name="noop", argv=["true"])
         with tempfile.TemporaryDirectory() as tmp:
