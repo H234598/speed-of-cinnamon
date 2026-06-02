@@ -15,6 +15,12 @@ from typing import Any, TextIO
 from .paths import logs_dir
 
 LOG_LEVELS = ("off", "error", "warning", "info", "debug")
+LOG_LEVEL_VALUES = {
+    "error": logging.ERROR,
+    "warning": logging.WARNING,
+    "info": logging.INFO,
+    "debug": logging.DEBUG,
+}
 DEFAULT_LOG_LEVEL = "error"
 MAX_DAILY_LOG_BYTES = 1_000_000
 MAX_TOTAL_LOG_BYTES = 5_000_000
@@ -110,6 +116,12 @@ def validate_log_level(level: str) -> str:
     return normalized
 
 
+def _log_level_value(level: str) -> int:
+    if level == "off":
+        return 0
+    return LOG_LEVEL_VALUES[level]
+
+
 def configure_logging(level: str = DEFAULT_LOG_LEVEL, *, base_dir: Path | None = None) -> None:
     normalized = validate_log_level(level)
     logger = logging.getLogger(LOGGER_NAME)
@@ -122,7 +134,8 @@ def configure_logging(level: str = DEFAULT_LOG_LEVEL, *, base_dir: Path | None =
         return
 
     logger.disabled = False
-    logger.setLevel(getattr(logging, normalized.upper()))
+    level_value = _log_level_value(normalized)
+    logger.setLevel(level_value)
     directory = base_dir or logs_dir()
     maintain_logs(directory)
     directory.mkdir(parents=True, exist_ok=True)
@@ -131,7 +144,7 @@ def configure_logging(level: str = DEFAULT_LOG_LEVEL, *, base_dir: Path | None =
 
     handler = SizeCappedJsonFileHandler(log_path, directory)
     handler.setFormatter(JsonLogFormatter())
-    handler.setLevel(getattr(logging, normalized.upper()))
+    handler.setLevel(level_value)
     logger.addHandler(handler)
 
 
@@ -142,7 +155,7 @@ def log_event(level: str, event: str, **fields: object) -> None:
     normalized = validate_log_level(level)
     if normalized == "off":
         return
-    logger.log(getattr(logging, normalized.upper()), event, extra={"fields": fields})
+    logger.log(_log_level_value(normalized), event, extra={"fields": fields})
 
 
 def maintain_logs(base_dir: Path | None = None, *, today: date | None = None) -> None:
