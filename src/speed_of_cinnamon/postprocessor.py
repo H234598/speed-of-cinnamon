@@ -229,13 +229,12 @@ def build_ollama_prompt(
 
 
 def _ollama_endpoint(url: str, path: str) -> str:
-    base = _validate_http_url(_assert_clean_url(url, field_name="ollama url"), field_name="ollama url").rstrip("/")
+    base = _validate_http_url(url, field_name="ollama url").rstrip("/")
     return base + "/" + path.lstrip("/")
 
 
 def _openai_compatible_endpoint(url: str, path: str) -> str:
-    base = _assert_clean_url(url, field_name="openai-compatible url")
-    base = _validate_openai_compatible_http_url(base).rstrip("/")
+    base = _validate_openai_compatible_http_url(url).rstrip("/")
     normalized_path = "/" + path.strip("/")
     if base.endswith(normalized_path):
         return base

@@ -10,6 +10,8 @@ from speed_of_cinnamon.postprocessor import (
     PostProcessError,
     build_ollama_prompt,
     build_openai_compatible_messages,
+    _ollama_endpoint,
+    _openai_compatible_endpoint,
     _contains_escaped_null,
     _coerce_environment_text,
     _quote,
@@ -437,6 +439,13 @@ class PostProcessorTest(unittest.TestCase):
                 openai_compatible_model="local",
                 openai_compatible_url="ftp://127.0.0.1:8000/v1",
             )
+
+    def test_endpoint_builders_normalize_without_duplicate_behavior_change(self) -> None:
+        self.assertEqual(_ollama_endpoint("http://127.0.0.1:11434/", "/api/generate"), "http://127.0.0.1:11434/api/generate")
+        self.assertEqual(
+            _openai_compatible_endpoint("http://127.0.0.1:8000/v1/", "/models"),
+            "http://127.0.0.1:8000/v1/models",
+        )
 
     def test_openai_compatible_backend_calls_chat_completions_endpoint(self) -> None:
         requests = []

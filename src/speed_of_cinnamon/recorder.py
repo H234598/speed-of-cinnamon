@@ -526,6 +526,8 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
     ):
         raise RecorderError("recorder command contains invalid control character")
     log_path = validate_recording_path(log_path, suffix=".log")
+    existed_before = log_path.exists()
+    preserved_size = log_path.stat().st_size if existed_before else 0
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = _open_recorder_log_file(log_path)
     try:
@@ -543,6 +545,11 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
             env=_filtered_environment(),  # nosec B603
         )
     except OSError as exc:
+        try:
+            if not existed_before or preserved_size == 0:
+                os.unlink(log_path)
+        except OSError:
+            pass
         raise RecorderError(f"failed to start {command.name}: {exc}") from exc
     finally:
         log_file.close()
