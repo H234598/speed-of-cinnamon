@@ -196,6 +196,14 @@ class NextVersionTest(unittest.TestCase):
     def test_add_patches_rolls_to_major(self) -> None:
         self.assertEqual(next_version.add_patches((0, 99, 99), 100), (1, 0, 99))
 
+    def test_add_patches_rejects_invalid_base_tuples(self) -> None:
+        with self.assertRaises(next_version.UserInputError):
+            next_version.add_patches((0, 1), 10)  # type: ignore[arg-type]
+        with self.assertRaises(next_version.UserInputError):
+            next_version.add_patches((0, 1, 2, 3), 10)  # type: ignore[arg-type]
+        with self.assertRaises(next_version.UserInputError):
+            next_version.add_patches(("0", 1, 2), 10)  # type: ignore[arg-type]
+
     def test_apply_feature_increase_wraps_minor(self) -> None:
         self.assertEqual(next_version.apply_feature_increase(1, 99, 5), (2, 0, 5))
 

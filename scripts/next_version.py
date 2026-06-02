@@ -29,11 +29,24 @@ MINORS_PER_MAJOR = 100
 
 
 def _assert_non_negative_int(name: str, value: int) -> int:
+    if isinstance(value, bool):
+        raise UserInputError(f"{name} must be an int")
     if not isinstance(value, int):
         raise UserInputError(f"{name} must be an int")
     if value < 0:
         raise UserInputError(f"{name} must be >= 0")
     return value
+
+
+def _assert_version_tuple(value: tuple[int, int, int]) -> tuple[int, int, int]:
+    if not isinstance(value, tuple) or len(value) != 3:
+        raise UserInputError("base version must be a tuple of three elements")
+    major, minor, patch = value
+    return (
+        _assert_non_negative_int("major", major),
+        _assert_non_negative_int("minor", minor),
+        _assert_non_negative_int("patch", patch),
+    )
 
 
 def parse_version(value: str) -> tuple[int, int, int]:
@@ -71,7 +84,7 @@ def commits_since_tag(tag: str) -> int:
     return commits_since_ref(normalize_tag(tag))
 
 def add_patches(base: tuple[int,int,int], patch_steps: int) -> tuple[int,int,int]:
-    major, minor, patch = (_assert_non_negative_int("major", base[0]), _assert_non_negative_int("minor", base[1]), _assert_non_negative_int("patch", base[2]))
+    major, minor, patch = _assert_version_tuple(base)
     patch_steps = _assert_non_negative_int("patch_steps", patch_steps)
     patch_steps = patch_steps // COMMITS_PER_PATCH
     total_patch = patch + patch_steps
