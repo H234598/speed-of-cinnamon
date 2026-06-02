@@ -211,6 +211,10 @@ class NextVersionTest(unittest.TestCase):
             self.assertEqual(code, 2)
             self.assertIn("error:", stderr)
 
+    def test_read_current_version_rejects_empty_path(self) -> None:
+        with self.assertRaises(next_version.UserInputError):
+            next_version.read_current_version(Path(""))
+
     def test_pyproject_missing_version_is_user_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             Path(tmpdir, "pyproject.toml").write_text("[project]\nname=\"x\"\n", encoding="utf-8")
