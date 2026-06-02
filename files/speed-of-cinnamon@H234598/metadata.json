@@ -1,9 +1,9 @@
 {
   "uuid": "speed-of-cinnamon@H234598",
   "name": "Speed of Cinnamon",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "description": "Cinnamon-native voice typing for Fedora Cinnamon.",
-  "comments": "Version: 0.1.18",
+  "comments": "Version: 0.1.19",
   "icon": "audio-input-microphone-symbolic",
   "author": "H234598",
   "max-instances": 1,

@@ -1,4 +1,4 @@
-.PHONY: check test coverage lint lint-workflows python-security-scan shell-security-scan security-scan verify-authorship smoke-doctor smoke-backend release-dry-run release dist dist-check rpm rpm-check rpm-generic rpm-generic-check snap snap-check release-validate-flags install-local uninstall-local
+.PHONY: check test coverage lint lint-workflows python-security-scan shell-security-scan security-scan verify-authorship smoke-doctor smoke-backend release-dry-run release dist dist-check rpm rpm-check rpm-generic rpm-generic-check snap snap-check release-validate-flags install-local uninstall-local clean
 SHELL := /usr/bin/env bash
 
 PYTHON := $(shell command -v python3 2>/dev/null | awk 'NR==1 {print}')
@@ -136,3 +136,8 @@ install-local:
 
 uninstall-local:
 	./scripts/uninstall-local.sh
+
+clean:
+	rm -rf -- build dist reports .coverage .pytest_cache .mypy_cache *.egg-info
+	find src tests -type d -name __pycache__ -prune -exec rm -rf -- {} +
+	find src tests -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete

@@ -17,6 +17,16 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class CiStaticTest(unittest.TestCase):
+    def test_makefile_has_repo_local_clean_target(self) -> None:
+        makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+
+        self.assertIn("clean", makefile.splitlines()[0])
+        self.assertIn("clean:\n", makefile)
+        self.assertIn("rm -rf -- build dist reports .coverage .pytest_cache .mypy_cache *.egg-info", makefile)
+        self.assertIn("find src tests -type d -name __pycache__ -prune -exec rm -rf -- {} +", makefile)
+        self.assertIn("find src tests -type f \\( -name '*.pyc' -o -name '*.pyo' \\) -delete", makefile)
+        self.assertNotIn("~/.local", makefile)
+
     def test_cli_reference_and_manpage_cover_subcommands(self) -> None:
         parser = cli.build_parser()
         subcommands: list[str] = []
