@@ -169,9 +169,12 @@ class CommandChainTest(unittest.TestCase):
                 "CDPATH": "/tmp/cd",
                 "PS4": "pwn",
                 "BASH_XTRACEFD": "9",
+                "HOME": "/home/test",
+                "LANG": "C.UTF-8",
                 "XDG_RUNTIME_DIR": "/run/user/1000",
                 "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
             },
+            clear=True,
         ):
             from speed_of_cinnamon.personalization import command_environment
 
@@ -182,6 +185,8 @@ class CommandChainTest(unittest.TestCase):
         self.assertNotIn("CDPATH", env)
         self.assertNotIn("PS4", env)
         self.assertNotIn("BASH_XTRACEFD", env)
+        self.assertEqual(env["XDG_RUNTIME_DIR"], "/run/user/1000")
+        self.assertEqual(env["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/run/user/1000/bus")
 
     def test_module_environment_builders_strip_shell_state_variables(self) -> None:
         with mock.patch.dict(
@@ -192,7 +197,12 @@ class CommandChainTest(unittest.TestCase):
                 "CDPATH": "/tmp/cd",
                 "PS4": "pwn",
                 "BASH_XTRACEFD": "9",
+                "HOME": "/home/test",
+                "LANG": "C.UTF-8",
+                "XDG_RUNTIME_DIR": "/run/user/1000",
+                "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
             },
+            clear=True,
         ):
             from speed_of_cinnamon.cli import _filtered_environment as cli_filtered_environment
             from speed_of_cinnamon.command_chain import _filtered_environment as chain_filtered_environment
