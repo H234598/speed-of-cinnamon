@@ -520,6 +520,14 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('SNAP_BUILD must be 0 or 1.\\n', makefile)
         self.assertIn('BUILD_GENERIC_RPM must be 0 or 1.\\n', makefile)
 
+    def test_build_rpm_stages_topdir_before_replacing_previous_build(self) -> None:
+        build_rpm = (REPO_ROOT / "scripts" / "build-rpm.sh").read_text(encoding="utf-8")
+        self.assertIn('final_topdir="${repo_dir}/dist/rpmbuild"', build_rpm)
+        self.assertIn('stage_topdir="$(mktemp -d "${dist_dir}/.$(basename "${final_topdir}").stage.XXXXXX")"', build_rpm)
+        self.assertIn('--define "_topdir ${stage_topdir}"', build_rpm)
+        self.assertIn('mv -T -- "${stage_topdir}" "${final_topdir}"', build_rpm)
+        self.assertNotIn('rm -rf "${topdir}"', build_rpm)
+
     def test_parallel_build_dist_does_not_corrupt_archive(self) -> None:
         build_dist = REPO_ROOT / "scripts" / "build-dist.sh"
 

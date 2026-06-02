@@ -49,8 +49,12 @@ fi
 mkdir -p "${repo_tmp_root}"
 
 rpmbuild_tmpdir="$(mktemp -d "${repo_tmp_root}/speed-of-cinnamon-rpm-tmp-XXXXXX")"
+stage_topdir=""
 cleanup_tmpdir() {
   rm -rf -- "${rpmbuild_tmpdir}"
+  if [[ -n "${stage_topdir}" ]]; then
+    rm -rf -- "${stage_topdir}"
+  fi
 }
 trap cleanup_tmpdir EXIT
 
@@ -85,26 +89,28 @@ if [[ ! -f "${tarball}" || ! "${tarball}" == "${repo_dir}/dist/"*".tar.gz" ]]; t
 fi
 
 if [[ "${profile}" == "generic" ]]; then
-  topdir="${repo_dir}/dist/rpmbuild-generic"
+  final_topdir="${repo_dir}/dist/rpmbuild-generic"
   spec_source="${repo_dir}/packaging/speed-of-cinnamon-generic.spec"
 else
-  topdir="${repo_dir}/dist/rpmbuild"
+  final_topdir="${repo_dir}/dist/rpmbuild"
   spec_source="${repo_dir}/packaging/speed-of-cinnamon.spec"
 fi
-if [[ -L "${topdir}" ]]; then
-  printf 'RPM build directory must not be a symlink: %s\n' "${topdir}" >&2
+if [[ -L "${final_topdir}" ]]; then
+  printf 'RPM build directory must not be a symlink: %s\n' "${final_topdir}" >&2
   exit 1
 fi
 if [[ -L "${spec_source}" ]]; then
   printf 'spec source file must not be a symlink: %s\n' "${spec_source}" >&2
   exit 1
 fi
-dist_dir="$(dirname "${topdir}")"
+dist_dir="$(dirname "${final_topdir}")"
 if [[ -L "${dist_dir}" ]]; then
   printf 'dist parent directory must not be a symlink: %s\n' "${dist_dir}" >&2
   exit 1
 fi
-spec_file="${topdir}/SPECS/speed-of-cinnamon.spec"
+mkdir -p "${dist_dir}"
+stage_topdir="$(mktemp -d "${dist_dir}/.$(basename "${final_topdir}").stage.XXXXXX")"
+spec_file="${stage_topdir}/SPECS/speed-of-cinnamon.spec"
 
 if [[ ! -f "${spec_source}" ]]; then
   printf 'spec source missing: %s\n' "${spec_source}" >&2
@@ -113,9 +119,8 @@ fi
 require_regular_source_file "${tarball}" "tarball source"
 require_regular_source_file "${spec_source}" "spec source"
 
-rm -rf "${topdir}"
-mkdir -p "${topdir}"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
-cp "${tarball}" "${topdir}/SOURCES/"
+mkdir -p "${stage_topdir}"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+cp "${tarball}" "${stage_topdir}/SOURCES/"
 
 version="$(
   "${python_bin}" - "${repo_dir}" <<'PY'
@@ -148,12 +153,30 @@ PY
 
 rpmbuild \
   --nodeps \
-  --define "_topdir ${topdir}" \
-  --define "_sourcedir ${topdir}/SOURCES" \
+  --define "_topdir ${stage_topdir}" \
+  --define "_sourcedir ${stage_topdir}/SOURCES" \
   --define "_specdir ${repo_dir}/packaging" \
   --define "_smp_build_ncpus 1" \
   --define "_tmppath ${rpmbuild_tmpdir}" \
   --define "__python3 ${python_bin}" \
   -ba "${spec_file}"
 
-find "${topdir}/RPMS" "${topdir}/SRPMS" -type f \( -name '*.rpm' -o -name '*.src.rpm' \) -print | sort
+backup_topdir=""
+if [[ -e "${final_topdir}" ]]; then
+  backup_topdir="$(mktemp -d "${dist_dir}/.$(basename "${final_topdir}").backup.XXXXXX")"
+  rmdir -- "${backup_topdir}"
+  mv -T -- "${final_topdir}" "${backup_topdir}"
+fi
+if ! mv -T -- "${stage_topdir}" "${final_topdir}"; then
+  if [[ -n "${backup_topdir}" && -e "${backup_topdir}" && ! -e "${final_topdir}" ]]; then
+    mv -T -- "${backup_topdir}" "${final_topdir}" || true
+  fi
+  printf 'failed to activate RPM build directory: %s\n' "${final_topdir}" >&2
+  exit 1
+fi
+stage_topdir=""
+if [[ -n "${backup_topdir}" ]]; then
+  rm -rf -- "${backup_topdir}"
+fi
+
+find "${final_topdir}/RPMS" "${final_topdir}/SRPMS" -type f \( -name '*.rpm' -o -name '*.src.rpm' \) -print | sort
