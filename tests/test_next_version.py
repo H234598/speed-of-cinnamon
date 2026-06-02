@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import unittest
+import os
 from pathlib import Path
 
 
@@ -22,11 +23,31 @@ def run_version_fail(*args: str) -> int:
     return result.returncode
 
 
+def run_version_fail_with_path(*args: str, path: str) -> int:
+    root = Path(__file__).resolve().parents[1]
+    cmd = [sys.executable, str(root / "scripts" / "next_version.py")]
+    cmd.extend(args)
+    env = os.environ.copy()
+    env["PATH"] = path
+    result = subprocess.run(cmd, check=False, text=True, capture_output=True, env=env)
+    return result.returncode
+
+
 def run_version_fail_stdout_stderr(*args: str) -> tuple[int, str]:
     root = Path(__file__).resolve().parents[1]
     cmd = [sys.executable, str(root / "scripts" / "next_version.py")]
     cmd.extend(args)
     result = subprocess.run(cmd, check=False, text=True, capture_output=True)
+        return result.returncode, (result.stderr or "")
+
+
+def run_version_fail_stdout_stderr_with_path(*args: str, path: str) -> tuple[int, str]:
+    root = Path(__file__).resolve().parents[1]
+    cmd = [sys.executable, str(root / "scripts" / "next_version.py")]
+    cmd.extend(args)
+    env = os.environ.copy()
+    env["PATH"] = path
+    result = subprocess.run(cmd, check=False, text=True, capture_output=True, env=env)
     return result.returncode, (result.stderr or "")
 
 
@@ -90,6 +111,11 @@ class NextVersionTest(unittest.TestCase):
     def test_feature_and_breaking_are_mutually_exclusive(self) -> None:
         code, stderr = run_version_fail_stdout_stderr("--base", "0.1.20", "--feature", "--breaking")
         self.assertNotEqual(code, 0)
+        self.assertIn("error:", stderr)
+
+    def test_missing_git_command_returns_git_environment_error_code(self) -> None:
+        code, stderr = run_version_fail_stdout_stderr_with_path("--base", "0.1.20", "--add-commits", "10", path="/nonexistent")
+        self.assertEqual(code, 3)
         self.assertIn("error:", stderr)
 
 
