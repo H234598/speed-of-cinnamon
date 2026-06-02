@@ -446,6 +446,21 @@ class NextVersionTest(unittest.TestCase):
         with self.assertRaises(next_version.UserInputError):
             next_version.ensure_tag_exists(None)  # type: ignore[arg-type]
 
+    def test_tag_exists_missing_git_is_git_error(self) -> None:
+        with mock.patch.object(
+            next_version.subprocess,
+            "run",
+            side_effect=FileNotFoundError("git"),
+        ):
+            with self.assertRaises(next_version.GitEnvironmentError):
+                next_version.tag_exists("0.1.20")
+
+    def test_tag_exists_calledprocesserror_is_git_error(self) -> None:
+        called = subprocess.CalledProcessError(1, ["git", "tag", "-l", "v0.1.20"], stderr="boom")
+        with mock.patch.object(next_version.subprocess, "run", side_effect=called):
+            with self.assertRaises(next_version.GitEnvironmentError):
+                next_version.tag_exists("0.1.20")
+
     def test_main_uses_from_tag_when_provided(self) -> None:
         with (
             mock.patch.object(next_version, "parse_args") as parse_args,
