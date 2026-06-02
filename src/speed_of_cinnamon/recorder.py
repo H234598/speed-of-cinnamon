@@ -10,6 +10,7 @@ import subprocess  # nosec B404
 import sys
 import tempfile
 import time
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -129,6 +130,7 @@ class SilenceDetectionResult:
     duration_seconds: float
     silence_seconds: float
     speech_seconds: float
+    leading_silence_seconds: float = 0.0
     detail: str = ""
 
 
@@ -231,11 +233,12 @@ def _parse_ffmpeg_duration(text: str) -> float:
     return hours * 3600 + minutes * 60 + seconds
 
 
-def _parse_silence_seconds(text: str, duration_seconds: float) -> float:
+def _parse_silence_seconds(text: str, duration_seconds: float) -> tuple[float, float]:
     if duration_seconds <= 0:
-        return 0.0
+        return 0.0, 0.0
     intervals: list[tuple[float, float]] = []
     current_start: float | None = None
+    leading_silence_seconds = 0.0
     for line in text.splitlines():
         start_match = _SILENCE_START_RE.search(line)
         if start_match:
@@ -248,10 +251,17 @@ def _parse_silence_seconds(text: str, duration_seconds: float) -> float:
         silence_duration = max(0.0, float(end_match.group(2)))
         start = current_start if current_start is not None else max(0.0, end - silence_duration)
         intervals.append((min(start, duration_seconds), end))
+        if leading_silence_seconds == 0.0 and start <= 0.0:
+            leading_silence_seconds = max(0.0, end - start)
         current_start = None
     if current_start is not None and current_start < duration_seconds:
         intervals.append((current_start, duration_seconds))
-    return min(duration_seconds, sum(max(0.0, end - start) for start, end in intervals))
+        if leading_silence_seconds == 0.0 and current_start <= 0.0:
+            leading_silence_seconds = max(0.0, duration_seconds - current_start)
+    return (
+        min(duration_seconds, sum(max(0.0, end - start) for start, end in intervals)),
+        min(duration_seconds, leading_silence_seconds),
+    )
 
 
 def detect_silent_recording(audio_path: Path) -> SilenceDetectionResult:
@@ -260,7 +270,7 @@ def detect_silent_recording(audio_path: Path) -> SilenceDetectionResult:
     try:
         ffmpeg = _command_path("ffmpeg")
     except RecorderError as exc:
-        return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, str(exc))
+        return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, str(exc))
     try:
         # argv-only ffmpeg invocation with trusted binary resolution.
         proc = subprocess.run(  # nosec B603
@@ -285,13 +295,13 @@ def detect_silent_recording(audio_path: Path) -> SilenceDetectionResult:
             env=_filtered_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, f"ffmpeg silence detection failed: {exc}")
+        return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, f"ffmpeg silence detection failed: {exc}")
     if proc.returncode != 0:
-        return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, "ffmpeg silence detection failed")
+        return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, "ffmpeg silence detection failed")
     duration_seconds = _parse_ffmpeg_duration(proc.stderr)
     if duration_seconds <= 0:
-        return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, "ffmpeg duration was unavailable")
-    silence_seconds = _parse_silence_seconds(proc.stderr, duration_seconds)
+        return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, "ffmpeg duration was unavailable")
+    silence_seconds, leading_silence_seconds = _parse_silence_seconds(proc.stderr, duration_seconds)
     speech_seconds = max(0.0, duration_seconds - silence_seconds)
     silence_ratio = silence_seconds / duration_seconds if duration_seconds else 0.0
     silent = silence_ratio >= SILENCE_SKIP_RATIO and speech_seconds <= SILENCE_SKIP_MAX_SPEECH_SECONDS
@@ -301,8 +311,50 @@ def detect_silent_recording(audio_path: Path) -> SilenceDetectionResult:
         round(duration_seconds, 4),
         round(silence_seconds, 4),
         round(speech_seconds, 4),
+        round(leading_silence_seconds, 4),
         "silent recording" if silent else "speech detected",
     )
+
+
+def trim_recording_leading_silence(audio_path: Path, leading_silence_seconds: float) -> Path:
+    if not isinstance(audio_path, Path):
+        raise RecorderError("recording audio path must be a path")
+    if not isinstance(leading_silence_seconds, (int, float)) or isinstance(leading_silence_seconds, bool):
+        raise RecorderError("leading silence seconds must be numeric")
+    if leading_silence_seconds <= 0:
+        return audio_path
+    try:
+        with wave.open(str(audio_path), "rb") as source:
+            frame_rate = source.getframerate()
+            total_frames = source.getnframes()
+            start_frame = min(total_frames, max(0, int(round(leading_silence_seconds * frame_rate))))
+            if start_frame <= 0:
+                return audio_path
+            if start_frame >= total_frames:
+                raise RecorderError("recording contains no speech after leading silence")
+            params = source.getparams()
+            source.setpos(start_frame)
+            frames = source.readframes(total_frames - start_frame)
+    except (OSError, wave.Error) as exc:
+        raise RecorderError(f"failed to trim recording audio file {audio_path}: {exc}") from exc
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f"{audio_path.stem}.trimmed-",
+        suffix=audio_path.suffix,
+        dir=str(audio_path.parent),
+    )
+    os.close(fd)
+    temp_path = Path(temp_name)
+    try:
+        with wave.open(str(temp_path), "wb") as dest:
+            dest.setparams(params)
+            dest.writeframes(frames)
+    except Exception as exc:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise RecorderError(f"failed to write trimmed recording audio file {temp_path}: {exc}") from exc
+    return temp_path
 
 
 def _assert_positive_pid(pid: int) -> None:

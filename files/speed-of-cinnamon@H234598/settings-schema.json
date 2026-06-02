@@ -5,26 +5,31 @@
     "main-page": {
       "type": "page",
       "title": "Speed of Cinnamon",
-      "sections": ["activation-section", "recording-section", "personalization-section", "notification-section", "output-section", "backend-section"]
+      "sections": ["main-menu-map-section", "activation-section", "recording-section", "personalization-section", "notification-section", "output-section", "backend-section"]
     },
     "about-page": {
       "type": "page",
       "title": "About",
       "sections": ["about-section"]
     },
+    "main-menu-map-section": {
+      "type": "section",
+      "title": "Main menu settings",
+      "keys": ["main-menu-settings-map"]
+    },
     "activation-section": {
       "type": "section",
-      "title": "Activation",
+      "title": "Activation and shortcuts",
       "keys": ["toggle-keybinding", "primary-language-keybinding", "secondary-language-keybinding", "show-panel-label"]
     },
     "recording-section": {
       "type": "section",
-      "title": "Recording",
+      "title": "Recording (menu: Recording)",
       "keys": ["language", "secondary-language", "max-seconds", "auto-transcribe-timeout", "auto-relisten", "keep-recording-artifacts", "recorder", "input-device"]
     },
     "personalization-section": {
       "type": "section",
-      "title": "Personalization",
+      "title": "Personalization (menu: Text and output)",
       "keys": ["personal-context", "vocabulary"]
     },
     "notification-section": {
@@ -34,12 +39,12 @@
     },
     "output-section": {
       "type": "section",
-      "title": "Text output",
+      "title": "Text output (menu: Text and output)",
       "keys": ["insert-method", "append-space", "sanitize-special-chars", "typing-delay-ms", "auto-paste-window-title"]
     },
     "backend-section": {
       "type": "section",
-      "title": "Backend",
+      "title": "Voice and text models (menu: Voice model / Text model)",
       "keys": ["cli-path", "transcriber", "whisper-model", "transcriber-command", "post-process-backend", "post-process-command", "ollama-url", "ollama-model", "openai-compatible-url", "openai-compatible-model", "openai-compatible-text-model", "openai-compatible-flex-processing", "openai-compatible-api-key", "post-process-prompt"]
     },
     "about-section": {
@@ -51,6 +56,10 @@
   "about-version": {
     "type": "label",
     "description": "Version: 0.1.26\nAuthor: H234598\nCinnamon-native voice typing for Fedora Cinnamon."
+  },
+  "main-menu-settings-map": {
+    "type": "label",
+    "description": "All persistent settings from the applet menu are available here. Recording options are in Recording, output and Auto-Paste are in Text output, personal context and vocabulary are in Personalization, and voice/text model backend values are in Voice and text models. Dynamic actions such as downloading models, opening transcript folders, diagnostics, cleanup, and alarm commands remain in the applet panel menu."
   },
   "toggle-keybinding": {
     "type": "keybinding",
@@ -134,7 +143,7 @@
   },
   "max-seconds": {
     "type": "spinbutton",
-    "description": "Maximum recording length",
+    "description": "Duration",
     "min": 0,
     "max": 3600,
     "step": 5,
@@ -172,21 +181,21 @@
   },
   "input-device": {
     "type": "entry",
-    "description": "Input device",
+    "description": "Input source",
     "tooltip": "Optional PipeWire/Pulse source name. Max 4096 chars. Leave empty for the current default. Run 'speed-of-cinnamon list-inputs --json' to inspect available sources.",
     "default": ""
   },
   "personal-context": {
     "type": "textview",
     "description": "Personal context",
-    "tooltip": "Optional local-only context for custom ASR or post-processing commands. Max 4096 chars. Available as {context}, {prompt}, and SPEED_OF_CINNAMON_CONTEXT.",
+    "tooltip": "Optional private context for recognition and text polishing. Use this for names, project terms, or other background that should influence the transcript. Max 4096 chars. Available as {context}, {prompt}, and SPEED_OF_CINNAMON_CONTEXT.",
     "height": 120,
     "default": ""
   },
   "vocabulary": {
     "type": "textview",
     "description": "Custom vocabulary",
-    "tooltip": "Optional terms, one per line. Max 4096 chars. Available as {vocabulary}, {prompt}, and SPEED_OF_CINNAMON_VOCABULARY.",
+    "tooltip": "Optional custom terms, one per line, that should be recognized or preserved more reliably. Use this for product names, abbreviations, spellings, and proper nouns. Max 4096 chars. Available as {vocabulary}, {prompt}, and SPEED_OF_CINNAMON_VOCABULARY.",
     "height": 120,
     "default": ""
   },
@@ -250,7 +259,7 @@
   },
   "transcriber": {
     "type": "combobox",
-    "description": "Speech recognition",
+    "description": "Voice model backend",
     "tooltip": "Automatic uses the selected Voice model to choose the local engine. Leave this on Automatic unless you need a command override.",
     "options": {
       "Automatic": "auto",
@@ -276,7 +285,7 @@
   },
   "post-process-backend": {
     "type": "combobox",
-    "description": "Text polishing",
+    "description": "Text model / text polishing",
     "tooltip": "Optional cleanup after ASR. Command runs a custom command template. Ollama uses a local model; OpenAI-compatible API can target compatible endpoints.",
     "options": {
       "Disabled": "none",

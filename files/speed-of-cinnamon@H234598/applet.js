@@ -754,7 +754,9 @@ MyApplet.prototype = {
   },
 
   on_applet_clicked: function() {
-    this._rememberFocusedWindow();
+    if (!this.menu.isOpen) {
+      this._rememberFocusedWindow();
+    }
     this.menu.toggle();
   },
 
@@ -2325,11 +2327,16 @@ MyApplet.prototype = {
   },
 
   _refreshModelMenu: function() {
-    if (!this.modelItem) {
+    if (!this._canMutateMenu(this.modelItem)) {
       return;
     }
+    let refreshToken = {};
+    this.modelMenuRefreshToken = refreshToken;
     this._populateModelMenu([], _("Loading voice models..."));
     this._spawnJson(this._modelsArgs(), (payload) => {
+      if (this.modelMenuRefreshToken !== refreshToken || !this._canMutateMenu(this.modelItem)) {
+        return;
+      }
       if (payload.error) {
         this._populateModelMenu([], payload.error);
         this._setStatus("error", payload.error, this.lastTranscript);
@@ -2340,7 +2347,7 @@ MyApplet.prototype = {
   },
 
   _populateModelMenu: function(models, message) {
-    if (!this.modelItem) {
+    if (!this._canMutateMenu(this.modelItem)) {
       return;
     }
     this.modelItem.menu.removeAll();
@@ -2877,9 +2884,11 @@ MyApplet.prototype = {
   },
 
   _refreshTextModelMenuForBackend: function(backendOverride) {
-    if (!this.textModelItem) {
+    if (!this._canMutateMenu(this.textModelItem)) {
       return;
     }
+    let refreshToken = {};
+    this.textModelMenuRefreshToken = refreshToken;
     let backend = String(backendOverride || this.postProcessBackend || "");
     let provider = backend === "openai-compatible" ? "openai-compatible" : "ollama";
     let loadingMessage = provider === "openai-compatible"
@@ -2887,6 +2896,9 @@ MyApplet.prototype = {
       : _("Loading local text models...");
     this._populateTextModelMenu([], loadingMessage, provider);
     this._spawnJson(this._textModelsArgs(backendOverride), (payload) => {
+      if (this.textModelMenuRefreshToken !== refreshToken || !this._canMutateMenu(this.textModelItem)) {
+        return;
+      }
       if (payload.error) {
         this._populateTextModelMenu([], payload.error, provider);
         return;
@@ -2896,7 +2908,7 @@ MyApplet.prototype = {
   },
 
   _populateTextModelMenu: function(models, message, provider) {
-    if (!this.textModelItem) {
+    if (!this._canMutateMenu(this.textModelItem)) {
       return;
     }
     this.textModelItem.menu.removeAll();
@@ -2947,6 +2959,15 @@ MyApplet.prototype = {
     for (let model of models) {
       this._addTextModelMenuEntry(model, activeProvider);
     }
+  },
+
+  _canMutateMenu: function(item) {
+    return Boolean(
+      item &&
+      item.menu &&
+      typeof item.menu.removeAll === "function" &&
+      typeof item.menu.addMenuItem === "function"
+    );
   },
 
   _addTextModelMenuEntry: function(model, backend) {
@@ -3474,17 +3495,22 @@ MyApplet.prototype = {
       this._setStatus("error", payload.error, this.lastTranscript);
       return;
     }
-    if (payload.status === "done" && (payload.transcript || this.autoRelistenPending)) {
-      this._finishAppletTextInsert(payload);
-      return;
-    }
+    let hasTranscript = typeof payload.transcript === "string" && payload.transcript.length > 0;
     if (payload.status === "done" && payload.silence_detected) {
       this._finishSilentRelistenSkip(payload);
       return;
     }
+    if (payload.status === "done" && hasTranscript) {
+      this._finishAppletTextInsert(payload);
+      return;
+    }
+    if (payload.status === "done" && this.autoRelistenPending) {
+      this._finishEmptyRelistenDone(payload);
+      return;
+    }
     this.autoRelistenPending = false;
     let message = payload.message || status;
-    let transcript = payload.transcript || this.lastTranscript || "";
+    let transcript = typeof payload.transcript === "string" ? payload.transcript : this.lastTranscript || "";
     this._setStatus(status, message, transcript);
     this._maybeAutoTranscribeRecorded(payload);
   },
@@ -3802,19 +3828,39 @@ MyApplet.prototype = {
   _finishAppletTextInsert: function(payload) {
     let shouldRelisten = this.autoRelistenPending;
     this.autoRelistenPending = false;
-    if (this._insertTranscriptText(payload.transcript) && shouldRelisten) {
+    let relistenStarted = false;
+    if (shouldRelisten) {
+      relistenStarted = this._restartRelistenRecording();
+    }
+    this._insertTranscriptText(payload.transcript);
+    if (relistenStarted) {
       this.notificationSessionActive = true;
-      this._restartRelistenRecording();
     }
   },
 
   _finishSilentRelistenSkip: function(payload) {
     let shouldRelisten = this.autoRelistenPending;
     this.autoRelistenPending = false;
-    this._setStatus("done", payload.message || _("Silent recording skipped"), this.lastTranscript);
+    let relistenStarted = false;
     if (shouldRelisten) {
+      relistenStarted = this._restartRelistenRecording();
+    }
+    this._setStatus("done", payload.message || _("Silent recording skipped"), this.lastTranscript);
+    if (relistenStarted) {
       this.notificationSessionActive = true;
-      this._restartRelistenRecording();
+    }
+  },
+
+  _finishEmptyRelistenDone: function(payload) {
+    let shouldRelisten = this.autoRelistenPending;
+    this.autoRelistenPending = false;
+    let relistenStarted = false;
+    if (shouldRelisten) {
+      relistenStarted = this._restartRelistenRecording();
+    }
+    this._setStatus("done", payload.message || _("Recording finished without transcript"), this.lastTranscript);
+    if (relistenStarted) {
+      this.notificationSessionActive = true;
     }
   },
 
@@ -3857,13 +3903,13 @@ MyApplet.prototype = {
 
   _restartRelistenRecording: function() {
     if (!this.notificationSessionActive || this.isCommandRunning) {
-      return;
+      return false;
     }
     if (!this.autoRelisten) {
-      return;
+      return false;
     }
     if (!this._ensureVoiceModelCompatibleWithCurrentLanguage(true)) {
-      return;
+      return false;
     }
     this.isCommandRunning = true;
     this.autoTranscribeRecordingKey = "";
@@ -3879,6 +3925,7 @@ MyApplet.prototype = {
       }
       this._applyPayload(payload);
     });
+    return true;
   },
 
   _preparedTranscriptText: function(transcript, suppressAutoPasteEnter) {

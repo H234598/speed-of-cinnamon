@@ -129,6 +129,9 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
 
+        self.assertIn("on_applet_clicked: function()", source)
+        self.assertIn("if (!this.menu.isOpen) {", source)
+        self.assertIn("this._rememberFocusedWindow();", source)
         activation_keys = schema["layout"]["activation-section"]["keys"]
         self.assertIn("primary-language-keybinding", activation_keys)
         self.assertIn("secondary-language-keybinding", activation_keys)
@@ -348,6 +351,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.autoRelistenPending = false;', source)
         self.assertIn('let shouldRelisten = this.autoRelistenPending;', source)
         self.assertIn('this.autoRelistenPending = Boolean(this.autoRelisten);', source)
+        self.assertIn('let hasTranscript = typeof payload.transcript === "string" && payload.transcript.length > 0;', source)
+        self.assertIn('if (payload.status === "done" && payload.silence_detected)', source)
+        self.assertIn('if (payload.status === "done" && hasTranscript)', source)
+        self.assertIn('if (payload.status === "done" && this.autoRelistenPending)', source)
+        self.assertIn('let transcript = typeof payload.transcript === "string" ? payload.transcript : this.lastTranscript || "";', source)
+        self.assertIn('let relistenStarted = false;', source)
+        self.assertIn('if (shouldRelisten) {', source)
+        self.assertIn('relistenStarted = this._restartRelistenRecording();', source)
+        self.assertIn('this._insertTranscriptText(payload.transcript);', source)
+        self.assertIn('if (relistenStarted) {', source)
+        self.assertIn('return true;', source)
+        self.assertIn('return false;', source)
         self.assertIn('this._spawnJson(this._baseArgs("start"), (payload) => {', source)
         self.assertIn('this._restartRelistenRecording();', source)
         self.assertIn('(!this.autoTranscribeTimeout && !this.autoRelisten)', source)
@@ -355,6 +370,22 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.autoTranscribeRecordingKey = "";', source)
         self.assertIn('_recordingOptionsLabel: function()', source)
         self.assertIn('_("relisten")', source)
+
+    def test_auto_relisten_done_payload_routing_is_ordered(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        silent_index = source.index('if (payload.status === "done" && payload.silence_detected)')
+        transcript_index = source.index('if (payload.status === "done" && hasTranscript)')
+        empty_index = source.index('if (payload.status === "done" && this.autoRelistenPending)')
+        reset_index = source.index("this.autoRelistenPending = false;", empty_index)
+        restart_index = source.index("relistenStarted = this._restartRelistenRecording();", empty_index)
+        status_index = source.index('payload.message || _("Recording finished without transcript")', empty_index)
+
+        self.assertLess(silent_index, transcript_index)
+        self.assertLess(transcript_index, empty_index)
+        self.assertLess(empty_index, reset_index)
+        self.assertLess(reset_index, restart_index)
+        self.assertLess(restart_index, status_index)
 
     def test_applet_exposes_notification_options_submenu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -594,6 +625,13 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertIn("Max 4096 chars", schema["personal-context"]["tooltip"])
         self.assertIn("Max 4096 chars", schema["vocabulary"]["tooltip"])
+        self.assertIn("main-menu-map-section", schema["layout"]["main-page"]["sections"])
+        self.assertEqual(schema["layout"]["main-menu-map-section"]["title"], "Main menu settings")
+        self.assertIn("main-menu-settings-map", schema)
+        self.assertIn("All persistent settings from the applet menu are available here", schema["main-menu-settings-map"]["description"])
+        self.assertIn("menu: Recording", schema["layout"]["recording-section"]["title"])
+        self.assertIn("menu: Text and output", schema["layout"]["output-section"]["title"])
+        self.assertIn("Voice model", schema["layout"]["backend-section"]["title"])
         self.assertIn("Max 4096 chars", schema["transcriber-command"]["tooltip"])
         self.assertIn("Max 4096 chars", schema["post-process-command"]["tooltip"])
         self.assertIn("Max 4096 chars", schema["post-process-prompt"]["tooltip"])
@@ -765,6 +803,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('_("Append trailing space")', source)
         self.assertIn('_("Replace accents before output")', source)
 
+    def test_dynamic_model_menus_guard_fast_expand_clicks(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("_canMutateMenu: function(item)", source)
+        self.assertIn('typeof item.menu.removeAll === "function"', source)
+        self.assertIn('typeof item.menu.addMenuItem === "function"', source)
+        self.assertIn("if (!this._canMutateMenu(this.modelItem))", source)
+        self.assertIn("if (!this._canMutateMenu(this.textModelItem))", source)
+        self.assertIn("this.modelMenuRefreshToken = refreshToken;", source)
+        self.assertIn("this.textModelMenuRefreshToken = refreshToken;", source)
+        self.assertIn("if (this.modelMenuRefreshToken !== refreshToken || !this._canMutateMenu(this.modelItem))", source)
+        self.assertIn("if (this.textModelMenuRefreshToken !== refreshToken || !this._canMutateMenu(this.textModelItem))", source)
+
     def test_applet_can_reinsert_last_transcript_with_current_output_mode(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
@@ -777,11 +828,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_finishAppletTextInsert: function(payload)", source)
         self.assertIn("let shouldRelisten = this.autoRelistenPending;", source)
         self.assertIn("this.autoRelistenPending = false;", source)
+        self.assertIn("let relistenStarted = false;", source)
+        self.assertIn("if (shouldRelisten) {", source)
+        self.assertIn("relistenStarted = this._restartRelistenRecording();", source)
+        self.assertIn("this._insertTranscriptText(payload.transcript);", source)
+        self.assertIn("if (relistenStarted) {", source)
         self.assertIn("_finishSilentRelistenSkip: function(payload)", source)
+        self.assertIn("_finishEmptyRelistenDone: function(payload)", source)
         self.assertIn('if (payload.status === "done" && payload.silence_detected)', source)
-        self.assertIn('if (this._insertTranscriptText(payload.transcript) && shouldRelisten) {', source)
         self.assertIn("this.notificationSessionActive = true;", source)
-        self.assertIn('if (payload.status === "done" && (payload.transcript || this.autoRelistenPending))', source)
+        self.assertIn('if (payload.status === "done" && hasTranscript)', source)
+        self.assertIn('payload.message || _("Recording finished without transcript")', source)
         self.assertIn('if (method === "none")', source)
         self.assertIn('if (method === "type")', source)
         self.assertIn("if (this._typeTextAfterFocus(text)) {", source)

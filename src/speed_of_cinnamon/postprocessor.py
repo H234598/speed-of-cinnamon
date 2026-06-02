@@ -113,6 +113,45 @@ def _validate_http_request(request: urllib.request.Request, *, field_name: str) 
     _validate_http_url(url, field_name=field_name)
 
 
+def _effective_url_port(parsed: urllib.parse.ParseResult) -> int | None:
+    with suppress(ValueError):
+        if parsed.port is not None:
+            return parsed.port
+    if parsed.scheme == "http":
+        return 80
+    if parsed.scheme == "https":
+        return 443
+    return None
+
+
+def _url_origin(url: str, *, field_name: str) -> tuple[str, str, int | None]:
+    normalized = _validate_http_url(url, field_name=field_name)
+    parsed = urllib.parse.urlparse(normalized)
+    hostname = parsed.hostname
+    if not hostname:
+        raise PostProcessError(f"{field_name} is missing hostname")
+    return parsed.scheme, hostname.lower(), _effective_url_port(parsed)
+
+
+def _validate_same_origin_redirect(source_url: str, redirect_url: str, *, field_name: str) -> None:
+    source_origin = _url_origin(source_url, field_name=field_name)
+    redirect_origin = _url_origin(redirect_url, field_name=f"{field_name} redirect")
+    if redirect_origin != source_origin:
+        raise PostProcessError(f"{field_name} redirect target changes origin")
+
+
+class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        _validate_same_origin_redirect(req.get_full_url(), newurl, field_name="remote post-process request")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _open_http_request(request: urllib.request.Request, *, timeout: int, field_name: str) -> object:
+    _validate_http_request(request, field_name=field_name)
+    opener = urllib.request.build_opener(_SameOriginRedirectHandler)
+    return opener.open(request, timeout=timeout)  # nosec B310
+
+
 def _contains_escaped_null(value: str) -> bool:
     if not isinstance(value, str) or isinstance(value, bool):
         raise PostProcessError("value must be text")
@@ -273,8 +312,7 @@ def _validate_openai_compatible_http_url(url: str) -> str:
 def _read_json(request: urllib.request.Request, timeout: int) -> object:
     if not isinstance(timeout, int) or isinstance(timeout, bool):
         raise PostProcessError("timeout must be an integer")
-    _validate_http_request(request, field_name="postprocess request")
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310
+    with _open_http_request(request, timeout=timeout, field_name="postprocess request") as response:
         raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
     return json.loads(raw)
 
@@ -506,8 +544,7 @@ def post_process_with_ollama(
         method="POST",
     )
     try:
-        _validate_http_request(request, field_name="ollama post-process request")
-        with urllib.request.urlopen(request, timeout=180) as response:  # nosec B310
+        with _open_http_request(request, timeout=180, field_name="ollama post-process request") as response:
             raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
     except OSError as exc:
         raise PostProcessError(f"Ollama request failed: {exc}") from exc
@@ -631,8 +668,7 @@ def post_process_with_openai_compatible(
             headers=_openai_compatible_headers(api_key),
             method="POST",
         )
-        _validate_http_request(request, field_name="openai-compatible post-process request")
-        with urllib.request.urlopen(request, timeout=180) as response:  # nosec B310
+        with _open_http_request(request, timeout=180, field_name="openai-compatible post-process request") as response:
             return _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
 
     try:

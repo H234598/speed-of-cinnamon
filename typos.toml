@@ -1,0 +1,13 @@
+[files]
+extend-exclude = [
+  ".git",
+  ".mypy_cache",
+  ".pytest_cache",
+  "build",
+  "dist",
+  "reports",
+]
+
+[default.extend-words]
+H234598 = "H234598"
+ser = "ser"

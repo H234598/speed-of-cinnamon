@@ -17,6 +17,7 @@ from speed_of_cinnamon.postprocessor import (
     _quote,
     _assert_text_length,
     _openai_compatible_headers,
+    _validate_same_origin_redirect,
     _format_model_size,
     post_process_text,
     MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
@@ -177,7 +178,7 @@ class PostProcessorTest(unittest.TestCase):
     def test_post_process_command_rejects_oversized_remote_response(self) -> None:
         giant = "{" + '"x":' + '"' * (MAX_POSTPROCESS_JSON_BYTES + 1) + "}"
         with mock.patch(
-            "speed_of_cinnamon.postprocessor.urllib.request.urlopen",
+            "speed_of_cinnamon.postprocessor._open_http_request",
             return_value=FakeResponse(giant),
         ):
             with self.assertRaisesRegex(PostProcessError, "too large"):
@@ -190,7 +191,7 @@ class PostProcessorTest(unittest.TestCase):
 
     def test_post_process_with_ollama_rejects_invalid_utf8_response(self) -> None:
         with mock.patch(
-            "speed_of_cinnamon.postprocessor.urllib.request.urlopen",
+            "speed_of_cinnamon.postprocessor._open_http_request",
             return_value=FakeBytesResponse(b"\xff"),
         ):
             with self.assertRaisesRegex(PostProcessError, "invalid UTF-8"):
@@ -198,7 +199,7 @@ class PostProcessorTest(unittest.TestCase):
 
     def test_post_process_with_ollama_rejects_escaped_null_response(self) -> None:
         with mock.patch(
-            "speed_of_cinnamon.postprocessor.urllib.request.urlopen",
+            "speed_of_cinnamon.postprocessor._open_http_request",
             return_value=FakeResponse('{"response":"hello\\\\u0000"}'),
         ):
             with self.assertRaisesRegex(PostProcessError, "invalid null byte"):
@@ -315,11 +316,11 @@ class PostProcessorTest(unittest.TestCase):
     def test_ollama_backend_calls_generate_endpoint(self) -> None:
         requests = []
 
-        def fake_urlopen(request: object, timeout: int = 0) -> FakeResponse:
+        def fake_urlopen(request: object, timeout: int = 0, **_: object) -> FakeResponse:
             requests.append((request, timeout))
             return FakeResponse({"response": "Hello Cinnamon."})
 
-        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=fake_urlopen):
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=fake_urlopen):
             result = post_process_text(
                 "hello cinnamon",
                 "en",
@@ -447,15 +448,28 @@ class PostProcessorTest(unittest.TestCase):
             "http://127.0.0.1:8000/v1/models",
         )
 
+    def test_remote_redirects_must_keep_same_origin(self) -> None:
+        _validate_same_origin_redirect(
+            "https://api.openai.com/v1/models",
+            "https://api.openai.com:443/v1/models?cursor=next",
+            field_name="postprocess request",
+        )
+        with self.assertRaisesRegex(PostProcessError, "redirect target changes origin"):
+            _validate_same_origin_redirect(
+                "http://127.0.0.1:11434/api/generate",
+                "http://example.invalid/api/generate",
+                field_name="postprocess request",
+            )
+
     def test_openai_compatible_backend_calls_chat_completions_endpoint(self) -> None:
         requests = []
 
-        def fake_urlopen(request: object, timeout: int = 0) -> FakeResponse:
+        def fake_urlopen(request: object, timeout: int = 0, **_: object) -> FakeResponse:
             requests.append((request, timeout))
             return FakeResponse({"choices": [{"message": {"content": "Hello Cinnamon."}}]})
 
         with (
-            mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=fake_urlopen),
+            mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=fake_urlopen),
             mock.patch.dict("os.environ", {"SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY": "local-key"}),
         ):
             result = post_process_text(
@@ -480,11 +494,11 @@ class PostProcessorTest(unittest.TestCase):
     def test_openai_compatible_backend_enables_flex_for_openai_api_by_default(self) -> None:
         requests = []
 
-        def fake_urlopen(request: object, timeout: int = 0) -> FakeResponse:
+        def fake_urlopen(request: object, timeout: int = 0, **_: object) -> FakeResponse:
             requests.append((request, timeout))
             return FakeResponse({"choices": [{"message": {"content": "Hello Cinnamon."}}]})
 
-        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=fake_urlopen):
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=fake_urlopen):
             result = post_process_text(
                 "hello cinnamon",
                 "en",
@@ -502,11 +516,11 @@ class PostProcessorTest(unittest.TestCase):
     def test_openai_compatible_backend_can_disable_flex_for_openai_api(self) -> None:
         requests = []
 
-        def fake_urlopen(request: object, timeout: int = 0) -> FakeResponse:
+        def fake_urlopen(request: object, timeout: int = 0, **_: object) -> FakeResponse:
             requests.append((request, timeout))
             return FakeResponse({"choices": [{"message": {"content": "Hello Cinnamon."}}]})
 
-        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=fake_urlopen):
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=fake_urlopen):
             result = post_process_text(
                 "hello cinnamon",
                 "en",
@@ -525,7 +539,7 @@ class PostProcessorTest(unittest.TestCase):
     def test_openai_compatible_backend_falls_back_when_flex_is_rejected(self) -> None:
         requests = []
 
-        def fake_urlopen(request: object, timeout: int = 0) -> FakeResponse:
+        def fake_urlopen(request: object, timeout: int = 0, **_: object) -> FakeResponse:
             requests.append((request, timeout))
             if len(requests) == 1:
                 raise urllib.error.HTTPError(
@@ -537,7 +551,7 @@ class PostProcessorTest(unittest.TestCase):
                 )
             return FakeResponse({"choices": [{"message": {"content": "Hello Cinnamon."}}]})
 
-        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=fake_urlopen):
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=fake_urlopen):
             result = post_process_text(
                 "hello cinnamon",
                 "en",
@@ -556,11 +570,11 @@ class PostProcessorTest(unittest.TestCase):
     def test_openai_compatible_backend_uses_explicit_api_key(self) -> None:
         requests = []
 
-        def fake_urlopen(request: object, timeout: int = 0) -> FakeResponse:
+        def fake_urlopen(request: object, timeout: int = 0, **_: object) -> FakeResponse:
             requests.append((request, timeout))
             return FakeResponse({"choices": [{"message": {"content": "Hello Cinnamon."}}]})
 
-        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=fake_urlopen):
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=fake_urlopen):
             result = post_process_text(
                 "hello cinnamon",
                 "en",
@@ -582,12 +596,12 @@ class PostProcessorTest(unittest.TestCase):
     def test_openai_compatible_backend_ignores_invalid_environment_key(self) -> None:
         requests = []
 
-        def fake_urlopen(request: object, timeout: int = 0) -> FakeResponse:
+        def fake_urlopen(request: object, timeout: int = 0, **_: object) -> FakeResponse:
             requests.append((request, timeout))
             return FakeResponse({"choices": [{"message": {"content": "Hello Cinnamon."}}]})
 
         with mock.patch("speed_of_cinnamon.postprocessor.os.environ.__getitem__", return_value=123):
-            with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=fake_urlopen):
+            with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=fake_urlopen):
                 result = post_process_text(
                     "hello cinnamon",
                     "en",
@@ -613,7 +627,7 @@ class PostProcessorTest(unittest.TestCase):
             {},
             io.BytesIO(b'{"error":{"message":"missing API key","type":"invalid_request_error"}}'),
         )
-        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=error):
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=error):
             with self.assertRaisesRegex(PostProcessError, r"failed \(401\).*missing API key"):
                 post_process_text(
                     "hello cinnamon",
@@ -629,7 +643,7 @@ class PostProcessorTest(unittest.TestCase):
             post_process_text("hello", "en", backend="openai-compatible")
 
     def test_openai_compatible_empty_response_is_an_error(self) -> None:
-        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", return_value=FakeResponse({"choices": []})):
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", return_value=FakeResponse({"choices": []})):
             with self.assertRaisesRegex(PostProcessError, "without choices"):
                 post_process_text("hello", "en", backend="openai-compatible", openai_compatible_model="local-model")
 
@@ -665,7 +679,7 @@ class PostProcessorTest(unittest.TestCase):
             _contains_escaped_null(123)  # type: ignore[arg-type]
 
     def test_ollama_empty_response_is_an_error(self) -> None:
-        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", return_value=FakeResponse({"response": ""})):
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", return_value=FakeResponse({"response": ""})):
             with self.assertRaisesRegex(PostProcessError, "without output"):
                 post_process_text("hello", "en", backend="ollama", ollama_model="llama3.2:3b")
 
@@ -695,11 +709,11 @@ class PostProcessorTest(unittest.TestCase):
         }
         requests = []
 
-        def fake_urlopen(request: object, timeout: int = 0) -> FakeResponse:
+        def fake_urlopen(request: object, timeout: int = 0, **_: object) -> FakeResponse:
             requests.append((request, timeout))
             return FakeResponse(payload)
 
-        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=fake_urlopen):
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=fake_urlopen):
             result = list_ollama_models("http://127.0.0.1:11434/")
         self.assertTrue(result["available"])
         self.assertEqual(result["models"][0]["name"], "llama3.2:3b")
@@ -709,7 +723,7 @@ class PostProcessorTest(unittest.TestCase):
         self.assertEqual(timeout, 5)
 
     def test_list_ollama_models_reports_unavailable_server(self) -> None:
-        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=OSError("offline")):
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=OSError("offline")):
             result = list_ollama_models("http://127.0.0.1:11434")
         self.assertFalse(result["available"])
         self.assertEqual(result["models"], [])
@@ -730,11 +744,11 @@ class PostProcessorTest(unittest.TestCase):
         }
         requests = []
 
-        def fake_urlopen(request: object, timeout: int = 0) -> FakeResponse:
+        def fake_urlopen(request: object, timeout: int = 0, **_: object) -> FakeResponse:
             requests.append((request, timeout))
             return FakeResponse(payload)
 
-        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=fake_urlopen):
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=fake_urlopen):
             result = list_openai_compatible_models("http://127.0.0.1:8000/v1/", api_key="secret")
         self.assertTrue(result["available"])
         self.assertEqual([model["name"] for model in result["models"]], ["local-llama", "local-mistral"])
@@ -763,7 +777,7 @@ class PostProcessorTest(unittest.TestCase):
                 {"id": "local-mistral-instruct", "object": "model", "owned_by": "local"},
             ],
         }
-        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", return_value=FakeResponse(payload)):
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", return_value=FakeResponse(payload)):
             result = list_openai_compatible_models("https://api.openai.com/v1")
         self.assertEqual(
             [model["name"] for model in result["models"]],
@@ -779,7 +793,7 @@ class PostProcessorTest(unittest.TestCase):
                 {"id": "text-embedding-3-large", "object": "model", "owned_by": "openai"},
             ],
         }
-        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", return_value=FakeResponse(payload)):
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", return_value=FakeResponse(payload)):
             result = list_openai_compatible_models("https://api.openai.com/v1")
         self.assertTrue(result["available"])
         self.assertEqual(result["models"], [])
@@ -810,7 +824,7 @@ class PostProcessorTest(unittest.TestCase):
             {},
             io.BytesIO(b'{"error":{"message":"missing API key","type":"invalid_request_error"}}'),
         )
-        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.urlopen", side_effect=error):
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=error):
             result = list_openai_compatible_models("https://api.openai.com/v1")
         self.assertFalse(result["available"])
         self.assertIn("failed (401)", result["message"])

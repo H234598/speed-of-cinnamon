@@ -95,6 +95,18 @@ jobs:
           WORKFLOWS_CHANGED: ${{ github.event_name != 'pull_request' || needs.workflow-change-detection.outputs.workflows_changed == 'true' }}
           ACTIONLINT_STRICT: "true"
 
+  spelling-lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check spelling
+        uses: crate-ci/typos@v1
+        with:
+          config: ./typos.toml
+
   security-scan:
     needs: workflow-lint
     uses: ./.github/workflows/security-scan.yml
@@ -102,6 +114,7 @@ jobs:
   check:
     needs:
       - workflow-lint
+      - spelling-lint
       - security-scan
     runs-on: ubuntu-24.04
     env:

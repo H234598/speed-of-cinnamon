@@ -3002,7 +3002,7 @@ class CliTest(unittest.TestCase):
             store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
             args = self._build_finalize_args(keep_recording_artifacts=False)
             args.skip_silent_auto_relisten = True
-            silence = cli.SilenceDetectionResult(True, True, 3.0, 3.0, 0.0, "silent recording")
+            silence = cli.SilenceDetectionResult(True, True, 3.0, 3.0, 0.0, 0.0, "silent recording")
             with (
                 mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
                 mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
@@ -3023,6 +3023,100 @@ class CliTest(unittest.TestCase):
         mocked_transcribe.assert_not_called()
         mocked_insert.assert_not_called()
 
+    def test_finalize_keeps_silent_auto_relisten_artifacts_when_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "silent.wav"
+            log = recordings_root / "silent.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=True)
+            args.skip_silent_auto_relisten = True
+            silence = cli.SilenceDetectionResult(True, True, 3.0, 3.0, 0.0, 0.0, "silent recording")
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=silence),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript") as mocked_transcribe,
+                mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True) as mocked_insert,
+            ):
+                payload = cli.finalize_recording(args, store, store.read())
+
+            self.assertEqual(payload["status"], "done")
+            self.assertTrue(payload["silence_detected"])
+            self.assertEqual(payload["transcript"], "")
+            self.assertTrue(audio.exists())
+            self.assertTrue(log.exists())
+            mocked_transcribe.assert_not_called()
+            mocked_insert.assert_not_called()
+
+    def test_finalize_skips_silent_initial_recording_without_transcribing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "silent.wav"
+            log = recordings_root / "silent.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=False)
+            silence = cli.SilenceDetectionResult(True, True, 3.0, 3.0, 0.0, 0.0, "silent recording")
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=silence),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript") as mocked_transcribe,
+                mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True) as mocked_insert,
+            ):
+                payload = cli.finalize_recording(args, store, store.read())
+
+        self.assertEqual(payload["status"], "done")
+        self.assertTrue(payload["silence_detected"])
+        self.assertEqual(payload["transcript"], "")
+        mocked_transcribe.assert_not_called()
+        mocked_insert.assert_not_called()
+
+    def test_finalize_trims_leading_silence_before_transcribing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "speech.wav"
+            log = recordings_root / "speech.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            trimmed = recordings_root / "speech.trimmed.wav"
+            trimmed.write_bytes(b"audio")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args()
+            silence = cli.SilenceDetectionResult(True, False, 4.0, 1.0, 3.0, 1.0, "speech detected")
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=silence),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_leading_silence", return_value=trimmed) as mocked_trim,
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript") as mocked_transcribe,
+                mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True),
+            ):
+                payload = cli.finalize_recording(args, store, store.read())
+
+        self.assertEqual(payload["status"], "done")
+        self.assertNotIn("silence_detected", payload)
+        mocked_trim.assert_called_once_with(audio, 1.0)
+        self.assertEqual(mocked_transcribe.call_args.kwargs["audio_path"], trimmed)
+
     def test_finalize_transcribes_when_auto_relisten_silence_detection_fails_open(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -3037,7 +3131,7 @@ class CliTest(unittest.TestCase):
             store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
             args = self._build_finalize_args()
             args.skip_silent_auto_relisten = True
-            silence = cli.SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, "ffmpeg missing")
+            silence = cli.SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, "ffmpeg missing")
             with (
                 mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
                 mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),

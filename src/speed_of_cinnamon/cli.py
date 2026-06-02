@@ -73,6 +73,7 @@ from .recorder import (
     detect_silent_recording,
     list_input_sources,
     read_recording_level,
+    trim_recording_leading_silence,
     start_recorder,
     stop_process,
 )
@@ -1166,62 +1167,70 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
     normalized_transcriber = normalize_backend(args.transcriber)
     try:
         audio_path = validate_audio_file(audio_path)
-        skip_silent_auto_relisten = _coerce_bool(
-            getattr(args, "skip_silent_auto_relisten", False),
-            field_name="skip_silent_auto_relisten",
-        )
-        if skip_silent_auto_relisten:
-            silence = detect_silent_recording(audio_path)
-            if silence.silent:
-                keep_recording_artifacts = _coerce_bool(
-                    getattr(args, "keep_recording_artifacts", False),
-                    field_name="keep_recording_artifacts",
-                )
-                audio_deleted = False
-                log_deleted = False
-                done_audio_path = state.audio_path
-                done_log_path = state.log_path
-                if not keep_recording_artifacts:
-                    audio_deleted = remove_file(state.audio_path, suffix=".wav")
-                    log_deleted = remove_file(state.log_path, suffix=".log")
-                    done_audio_path = None
-                    done_log_path = None
-                done = store.update(
-                    status="done",
-                    stopped_at=state.stopped_at or now_iso(),
-                    audio_path=done_audio_path,
-                    log_path=done_log_path,
-                    transcript="",
-                    transcript_path="",
-                    inserted=False,
-                    error="",
-                )
-                return {
-                    "status": done.status,
-                    "message": "silent recording skipped",
-                    "transcript": "",
-                    "transcript_path": "",
-                    "inserted": False,
-                    "language": language,
-                    "recording_artifacts_kept": keep_recording_artifacts,
-                    "audio_deleted": audio_deleted,
-                    "log_deleted": log_deleted,
-                    "silence_detected": True,
-                    "silence_duration_seconds": silence.silence_seconds,
-                    "speech_duration_seconds": silence.speech_seconds,
-                }
+        _coerce_bool(getattr(args, "skip_silent_auto_relisten", False), field_name="skip_silent_auto_relisten")
+        silence = detect_silent_recording(audio_path)
+        if silence.silent:
+            keep_recording_artifacts = _coerce_bool(
+                getattr(args, "keep_recording_artifacts", False),
+                field_name="keep_recording_artifacts",
+            )
+            audio_deleted = False
+            log_deleted = False
+            done_audio_path = state.audio_path
+            done_log_path = state.log_path
+            if not keep_recording_artifacts:
+                audio_deleted = remove_file(state.audio_path, suffix=".wav")
+                log_deleted = remove_file(state.log_path, suffix=".log")
+                done_audio_path = None
+                done_log_path = None
+            done = store.update(
+                status="done",
+                stopped_at=state.stopped_at or now_iso(),
+                audio_path=done_audio_path,
+                log_path=done_log_path,
+                transcript="",
+                transcript_path="",
+                inserted=False,
+                error="",
+            )
+            return {
+                "status": done.status,
+                "message": "silent recording skipped",
+                "transcript": "",
+                "transcript_path": "",
+                "inserted": False,
+                "language": language,
+                "recording_artifacts_kept": keep_recording_artifacts,
+                "audio_deleted": audio_deleted,
+                "log_deleted": log_deleted,
+                "silence_detected": True,
+                "silence_duration_seconds": silence.silence_seconds,
+                "speech_duration_seconds": silence.speech_seconds,
+            }
         text_path = transcript_dir() / f"{audio_path.stem}.txt"
-        text = transcribe(
-            audio_path=audio_path,
-            language=language,
-            text_path=text_path,
-            command_template=args.transcriber_command,
-            backend=normalized_transcriber,
-            whisper_model=args.whisper_model,
-            personal_context=args.personal_context,
-            vocabulary=args.vocabulary,
-            **_openai_compatible_transcribe_kwargs(args, normalized_transcriber),
-        )
+        transcription_audio_path = audio_path
+        trimmed_audio_path: Path | None = None
+        if silence.leading_silence_seconds > 0:
+            try:
+                trimmed_audio_path = trim_recording_leading_silence(audio_path, silence.leading_silence_seconds)
+                transcription_audio_path = trimmed_audio_path
+            except RecorderError:
+                transcription_audio_path = audio_path
+        try:
+            text = transcribe(
+                audio_path=transcription_audio_path,
+                language=language,
+                text_path=text_path,
+                command_template=args.transcriber_command,
+                backend=normalized_transcriber,
+                whisper_model=args.whisper_model,
+                personal_context=args.personal_context,
+                vocabulary=args.vocabulary,
+                **_openai_compatible_transcribe_kwargs(args, normalized_transcriber),
+            )
+        finally:
+            if trimmed_audio_path is not None:
+                remove_file(str(trimmed_audio_path), suffix=".wav")
         text = post_process_text(
             text,
             language,

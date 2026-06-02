@@ -23,6 +23,7 @@ from speed_of_cinnamon.recorder import (
     list_input_sources,
     parse_pactl_sources,
     read_recording_level,
+    trim_recording_leading_silence,
     start_recorder,
     stop_process,
     validate_recording_path,
@@ -93,11 +94,48 @@ class RecorderTest(unittest.TestCase):
                 with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=completed) as mocked_run:
                     result = detect_silent_recording(audio)
 
-        self.assertEqual(result, SilenceDetectionResult(True, True, 2.0, 2.0, 0.0, "silent recording"))
+        self.assertEqual(result, SilenceDetectionResult(True, True, 2.0, 2.0, 0.0, 2.0, "silent recording"))
         argv = mocked_run.call_args.args[0]
         self.assertIn("-nostdin", argv)
         self.assertIn("silencedetect=noise=-50dB:d=0.3", argv)
         self.assertNotIsInstance(argv, str)
+
+    def test_detect_silent_recording_reports_leading_silence_seconds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "speech.wav"
+            audio.write_bytes(b"RIFF" + b"\x00" * 44)
+            stderr = (
+                "Duration: 00:00:03.50, bitrate: 256 kb/s\n"
+                "[silencedetect @ 0x1] silence_start: 0\n"
+                "[silencedetect @ 0x1] silence_end: 1.25 | silence_duration: 1.25\n"
+                "[silencedetect @ 0x1] silence_start: 2.50\n"
+                "[silencedetect @ 0x1] silence_end: 2.75 | silence_duration: 0.25\n"
+            )
+            completed = subprocess.CompletedProcess(["ffmpeg"], 0, stdout="", stderr=stderr)
+            with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
+                with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=completed):
+                    result = detect_silent_recording(audio)
+
+        self.assertFalse(result.silent)
+        self.assertEqual(result.leading_silence_seconds, 1.25)
+        self.assertEqual(result.silence_seconds, 1.5)
+        self.assertEqual(result.speech_seconds, 2.0)
+
+    def test_trim_recording_leading_silence_removes_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            self._write_wav(audio, [0] * 1600 + [12000] * 1600)
+
+            trimmed = trim_recording_leading_silence(audio, 0.1)
+            try:
+                with wave.open(str(trimmed), "rb") as handle:
+                    first_frame = int.from_bytes(handle.readframes(1), "little", signed=True)
+                    frame_count = handle.getnframes()
+            finally:
+                trimmed.unlink(missing_ok=True)
+
+        self.assertLess(frame_count, 3200)
+        self.assertEqual(first_frame, 12000)
 
     def test_detect_silent_recording_fails_open_when_ffmpeg_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
