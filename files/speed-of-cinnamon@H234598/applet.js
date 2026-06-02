@@ -30,6 +30,9 @@ const MAX_CLI_COMMAND_BYTES = 32768;
 const MAX_TEXT_INSERT_CHARS = 120000;
 const MAX_SETTING_TEXT_CHARS = 4096;
 const NUL_RE = /\u0000/g;
+const NON_ASCII_RE = /[^\u0000-\u007E]/g;
+const COMBINING_MARKS_RE = /[\u0300-\u036f]/g;
+const ASCII_ONLY_RE = /^[\u0000-\u007E]*$/;
 const SANITIZE_SPECIAL_CHAR_MAP = {
   "ß": "ss", "ẞ": "SS", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE",
   "ø": "o", "Ø": "O", "đ": "d", "Đ": "D", "ł": "l", "Ł": "L",
@@ -3610,12 +3613,12 @@ MyApplet.prototype = {
   },
 
   _sanitizeSpecialChars: function(text) {
-    return String(text || "").replace(/[^\u0000-\u007E]/g, (char) => {
+    return String(text || "").replace(NON_ASCII_RE, (char) => {
       if (Object.prototype.hasOwnProperty.call(SANITIZE_SPECIAL_CHAR_MAP, char)) {
         return SANITIZE_SPECIAL_CHAR_MAP[char];
       }
-      let normalized = char.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
-      return /^[\u0000-\u007E]*$/.test(normalized) ? normalized : char;
+      let normalized = char.normalize("NFKD").replace(COMBINING_MARKS_RE, "");
+      return ASCII_ONLY_RE.test(normalized) ? normalized : char;
     });
   },
 
