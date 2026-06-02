@@ -80,7 +80,6 @@ class StateStore:
         text = str(value)
         if _contains_escaped_null(text):
             raise ValueError(f"state {field_name} contains invalid null byte")
-        text = text.strip()
         if _contains_http_header_control_chars(text):
             raise ValueError(f"state {field_name} contains invalid control character")
         if len(text) > MAX_STATE_STRING_CHARS:
@@ -96,23 +95,26 @@ class StateStore:
         return value
 
     @staticmethod
-    def _coerce_state_int(value: Any, *, field_name: str) -> int:
+    def _coerce_state_int(value: Any, *, field_name: str, min_value: int | None = None) -> int:
         if isinstance(value, bool):
             raise ValueError(f"{field_name} must be an integer")
         if isinstance(value, float):
             raise ValueError(f"{field_name} must be an integer")
         if isinstance(value, int):
-            return value
-        if isinstance(value, str):
-            value = value.strip()
-            if not value:
+            parsed = value
+        elif isinstance(value, str):
+            raw_value = value.strip()
+            if not raw_value:
                 raise ValueError(f"{field_name} must be an integer")
             try:
-                parsed = int(value)
+                parsed = int(raw_value)
             except ValueError as exc:
                 raise ValueError(f"{field_name} must be an integer") from exc
-            return parsed
-        raise ValueError(f"{field_name} must be an integer")
+        else:
+            raise ValueError(f"{field_name} must be an integer")
+        if min_value is not None and parsed < min_value:
+            raise ValueError(f"{field_name} must be at least {min_value}")
+        return parsed
 
     @staticmethod
     def _normalize_state_data(raw: dict[str, Any]) -> dict[str, Any]:
@@ -125,9 +127,9 @@ class StateStore:
             if field_name in {"status", "audio_path", "log_path", "started_at", "stopped_at", "language", "recorder", "input_device", "transcript", "transcript_path", "error", "updated_at"}:
                 normalized[field_name] = StateStore._sanitize_text_field(value, field_name=field_name)
             elif field_name == "pid":
-                normalized[field_name] = StateStore._coerce_state_int(value, field_name="state pid") if value is not None else None
+                normalized[field_name] = StateStore._coerce_state_int(value, field_name="state pid", min_value=1) if value is not None else None
             elif field_name == "max_seconds":
-                normalized[field_name] = StateStore._coerce_state_int(value, field_name="state max_seconds")
+                normalized[field_name] = StateStore._coerce_state_int(value, field_name="state max_seconds", min_value=0)
             elif field_name == "inserted":
                 normalized[field_name] = StateStore._coerce_boolean(value)
         return normalized

@@ -443,7 +443,8 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("checksum mismatch for", publisher)
         self.assertIn("gh release create", publisher)
         self.assertIn("gh release upload", publisher)
-        self.assertIn("--clobber", publisher)
+        self.assertIn("existing release assets are never overwritten", publisher)
+        self.assertNotIn("--clobber", publisher)
 
     def test_ci_workflow_is_read_only(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
