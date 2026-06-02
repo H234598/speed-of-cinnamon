@@ -87,7 +87,10 @@ def commits_since_ref(ref: str) -> int:
     except subprocess.CalledProcessError as exc:
         raise GitEnvironmentError(f"failed to compute commits since {ref}: {exc.stderr.strip()}") from exc
     try:
-        value = int(result.stdout.strip())
+        value_text = result.stdout.strip()
+        if value_text == "":
+            raise GitEnvironmentError(f"invalid git commit-count output: {result.stdout!r}")
+        value = int(value_text)
     except ValueError as exc:
         raise GitEnvironmentError(f"invalid git commit-count output: {result.stdout!r}") from exc
     if value < 0:
