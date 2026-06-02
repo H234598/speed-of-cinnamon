@@ -198,6 +198,22 @@ class SetupPlanTest(unittest.TestCase):
         self.assertEqual(plan["steps"][0]["id"], "automatic-paste")
         self.assertTrue(plan["steps"][0]["optional"])
 
+    def test_applet_paste_warning_matches_mixed_case(self) -> None:
+        payload = {
+            "ok": True,
+            "configured": {
+                "recorder": {"ok": True},
+                "transcriber": {"ok": True},
+                "output": {"ok": True},
+                "postprocessor": {"ok": True},
+                "warnings": ["Automatic Paste needs XDoTool"],
+            },
+            "desktop": {"cinnamon": True},
+        }
+        plan = build_setup_plan(payload)
+        self.assertEqual(plan["steps"][0]["id"], "automatic-paste")
+        self.assertTrue(plan["steps"][0]["optional"])
+
     def test_missing_ollama_model_gets_text_model_step(self) -> None:
         payload = {
             "ok": False,

@@ -144,7 +144,8 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
         )
 
     for warning in _warnings(doctor_payload):
-        if "automatic paste" in warning or "xdotool" in warning:
+        warning_key = warning.casefold()
+        if "automatic paste" in warning_key or "xdotool" in warning_key:
             _add_step(
                 steps,
                 "automatic-paste",
