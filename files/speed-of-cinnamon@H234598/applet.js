@@ -29,6 +29,7 @@ const MAX_CLI_ARG_COUNT = 128;
 const MAX_CLI_COMMAND_BYTES = 32768;
 const MAX_TEXT_INSERT_CHARS = 120000;
 const MAX_SETTING_TEXT_CHARS = 4096;
+const NUL_RE = /\u0000/g;
 const CLI_TEXT_SETTINGS = {
   "input-device": "input device",
   "transcriber-command": "transcriber command",
@@ -3586,13 +3587,12 @@ MyApplet.prototype = {
   },
 
   _preparedTranscriptText: function(transcript) {
-    let text = transcript || "";
+    let text = String(transcript || "");
     if (this.sanitizeSpecialChars) {
       text = this._sanitizeSpecialChars(text);
     }
-    text = String(text || "");
     if (text.indexOf("\u0000") >= 0) {
-      text = text.replace(/\u0000/g, "");
+      text = text.replace(NUL_RE, "");
     }
     if (text.length > MAX_TEXT_INSERT_CHARS) {
       text = text.slice(0, MAX_TEXT_INSERT_CHARS);
