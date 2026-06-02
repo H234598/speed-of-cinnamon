@@ -85,7 +85,8 @@ def commits_since_ref(ref: str) -> int:
     except FileNotFoundError as exc:
         raise GitEnvironmentError("git command not available") from exc
     except subprocess.CalledProcessError as exc:
-        raise GitEnvironmentError(f"failed to compute commits since {ref}: {exc.stderr.strip()}") from exc
+        stderr = (exc.stderr or "").strip()
+        raise GitEnvironmentError(f"failed to compute commits since {ref}: {stderr}") from exc
     try:
         value_text = result.stdout.strip()
         if value_text == "":

@@ -325,6 +325,12 @@ class NextVersionTest(unittest.TestCase):
             with self.assertRaises(next_version.GitEnvironmentError):
                 next_version.commits_since_ref("v0.1.20")
 
+    def test_commits_since_ref_calledprocesserror_without_stderr_is_handled(self) -> None:
+        called = subprocess.CalledProcessError(1, ["git", "rev-list", "--count", "v0.1.20..HEAD"], stderr=None)
+        with mock.patch.object(next_version.subprocess, "run", side_effect=called):
+            with self.assertRaises(next_version.GitEnvironmentError):
+                next_version.commits_since_ref("v0.1.20")
+
     def test_commits_since_ref_rejects_negative_count(self) -> None:
         with mock.patch.object(
             next_version.subprocess,
