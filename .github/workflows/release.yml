@@ -61,8 +61,8 @@ jobs:
     needs: workflow-lint
     runs-on: ubuntu-latest
     env:
-      BUILD_SNAP: ${{ github.event_name != 'workflow_dispatch' || inputs.build_snap }}
-      BUILD_GENERIC_RPM: ${{ github.event_name != 'workflow_dispatch' || inputs.build_generic_rpm }}
+      BUILD_SNAP: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_snap && '1' || '0') }}
+      BUILD_GENERIC_RPM: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_generic_rpm && '1' || '0') }}
     steps:
       - uses: actions/checkout@v6.0.2
         with:
@@ -74,7 +74,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cpio rpm shellcheck
-          if [[ "${BUILD_SNAP}" == "true" ]]; then
+          if [[ "${BUILD_SNAP}" == "1" ]]; then
             if ! command -v snapcraft >/dev/null 2>&1; then
               if command -v snap >/dev/null 2>&1; then
                 sudo snap install snapcraft --classic
@@ -118,17 +118,17 @@ jobs:
         run: make rpm-check
       - name: Build generic RPM package
         run: |
-          if [[ "${BUILD_GENERIC_RPM}" == "true" ]]; then
+          if [[ "${BUILD_GENERIC_RPM}" == "1" ]]; then
             make rpm-generic
           else
             printf 'Skipping generic RPM package build (build_generic_rpm=false).\n'
           fi
       - name: Verify generic RPM payload
-        if: env.BUILD_GENERIC_RPM == 'true'
+        if: env.BUILD_GENERIC_RPM == '1'
         run: make rpm-generic-check
       - name: Build Snap package
         run: |
-          if [[ "${BUILD_SNAP}" == "true" ]]; then
+          if [[ "${BUILD_SNAP}" == "1" ]]; then
             make snap
           else
             make SNAP_BUILD=0 snap
@@ -154,7 +154,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Upload generic RPM packages
-        if: env.BUILD_GENERIC_RPM == 'true'
+        if: env.BUILD_GENERIC_RPM == '1'
         uses: actions/upload-artifact@v7.0.1
         with:
           name: speed-of-cinnamon-generic-rpm-${{ github.sha }}
@@ -164,7 +164,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Upload Snap package
-        if: env.BUILD_SNAP == 'true'
+        if: env.BUILD_SNAP == '1'
         uses: actions/upload-artifact@v7.0.1
         with:
           name: speed-of-cinnamon-snap-${{ github.sha }}
@@ -182,10 +182,10 @@ jobs:
           if [[ "${RELEASE_DRY_RUN}" == "true" ]]; then
             args+=(--dry-run)
           fi
-          if [[ "${BUILD_SNAP}" != "true" ]]; then
+          if [[ "${BUILD_SNAP}" != "1" ]]; then
             args+=(--skip-snap)
           fi
-          if [[ "${BUILD_GENERIC_RPM}" != "true" ]]; then
+          if [[ "${BUILD_GENERIC_RPM}" != "1" ]]; then
             args+=(--skip-generic-rpm)
           fi
           ./scripts/publish-github-release.sh "${args[@]}" "${RELEASE_TAG}"
