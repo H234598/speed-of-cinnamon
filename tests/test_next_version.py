@@ -136,6 +136,16 @@ class NextVersionTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("error", stderr.lower())
 
+    def test_base_empty_is_rejected(self) -> None:
+        code, stderr = run_version_fail_stdout_stderr("--base", "", "--add-commits", "0")
+        self.assertEqual(code, 2)
+        self.assertIn("error", stderr.lower())
+
+    def test_add_commits_empty_is_rejected(self) -> None:
+        code, stderr = run_version_fail_stdout_stderr("--base", "0.1.20", "--add-commits", "")
+        self.assertEqual(code, 2)
+        self.assertIn("error", stderr.lower())
+
     def test_parse_version_invalid_values_are_rejected(self) -> None:
         for version in [
             "",
