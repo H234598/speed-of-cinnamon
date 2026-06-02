@@ -269,6 +269,15 @@ class NextVersionTest(unittest.TestCase):
             with self.assertRaises(next_version.GitEnvironmentError):
                 next_version.commits_since_ref("v0.1.20")
 
+    def test_commits_since_ref_rejects_negative_count(self) -> None:
+        with mock.patch.object(
+            next_version.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="-1\n", stderr=""),
+        ):
+            with self.assertRaises(next_version.GitEnvironmentError):
+                next_version.commits_since_ref("v0.1.20")
+
     def test_tag_exists_checks_normalized_tag(self) -> None:
         with mock.patch.object(
             next_version.subprocess,

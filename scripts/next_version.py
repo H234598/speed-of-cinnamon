@@ -82,9 +82,12 @@ def commits_since_ref(ref: str) -> int:
     except subprocess.CalledProcessError as exc:
         raise GitEnvironmentError(f"failed to compute commits since {ref}: {exc.stderr.strip()}") from exc
     try:
-        return int(result.stdout.strip())
+        value = int(result.stdout.strip())
     except ValueError as exc:
         raise GitEnvironmentError(f"invalid git commit-count output: {result.stdout!r}") from exc
+    if value < 0:
+        raise GitEnvironmentError(f"invalid git commit-count output: {value}")
+    return value
 
 def commits_since_tag(tag: str) -> int:
     return commits_since_ref(normalize_tag(tag))
