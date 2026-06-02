@@ -4,6 +4,7 @@ import subprocess
 import sys
 import unittest
 import os
+import tempfile
 from pathlib import Path
 
 
@@ -38,7 +39,15 @@ def run_version_fail_stdout_stderr(*args: str) -> tuple[int, str]:
     cmd = [sys.executable, str(root / "scripts" / "next_version.py")]
     cmd.extend(args)
     result = subprocess.run(cmd, check=False, text=True, capture_output=True)
-        return result.returncode, (result.stderr or "")
+    return result.returncode, (result.stderr or "")
+
+
+def run_version_fail_in_cwd(*args: str, cwd: Path) -> tuple[int, str]:
+    root = Path(__file__).resolve().parents[1]
+    cmd = [sys.executable, str(root / "scripts" / "next_version.py")]
+    cmd.extend(args)
+    result = subprocess.run(cmd, check=False, text=True, capture_output=True, cwd=str(cwd))
+    return result.returncode, (result.stderr or "")
 
 
 def run_version_fail_stdout_stderr_with_path(*args: str, path: str) -> tuple[int, str]:
@@ -117,6 +126,12 @@ class NextVersionTest(unittest.TestCase):
         code, stderr = run_version_fail_stdout_stderr_with_path("--base", "0.1.20", "--add-commits", "10", path="/nonexistent")
         self.assertEqual(code, 3)
         self.assertIn("error:", stderr)
+
+    def test_missing_pyproject_is_user_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            code, stderr = run_version_fail_in_cwd("--add-commits", "10", cwd=Path(tmpdir))
+            self.assertEqual(code, 2)
+            self.assertIn("error:", stderr)
 
 
 if __name__ == "__main__":

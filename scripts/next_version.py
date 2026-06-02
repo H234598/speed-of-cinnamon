@@ -79,8 +79,19 @@ def apply_breaking_change(major:int, minor:int, patch:int) -> tuple[int,int,int]
     return major+1, 0, 0
 
 def read_current_version(path: Path = Path("pyproject.toml")) -> tuple[int,int,int]:
-    data = tomllib.loads(path.read_text(encoding="utf-8"))
-    val = data["project"]["version"]
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise UserInputError(f"project metadata file not found: {path}") from exc
+    except OSError as exc:
+        raise UserInputError(f"unable to read project metadata: {exc}") from exc
+    except Exception as exc:  # pragma: no cover - tomllib decode error path
+        raise UserInputError(f"invalid project metadata: {exc}") from exc
+
+    try:
+        val = data["project"]["version"]
+    except (KeyError, TypeError) as exc:
+        raise UserInputError("project.version is missing") from exc
     if not isinstance(val, str):
         raise UserInputError("project.version is not a string")
     return parse_version(val)
@@ -145,6 +156,8 @@ def run() -> int:
     except NextVersionError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return exc.exit_code
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else 1
 
 if __name__ == '__main__':
     raise SystemExit(run())
