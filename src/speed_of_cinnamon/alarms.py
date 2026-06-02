@@ -188,6 +188,28 @@ def _normalize_alarm_list(alarms: object) -> list[dict[str, Any]]:
             normalized.append(normalize_alarm(raw_alarm))
         except (TypeError, ValueError):
             continue
+    return _dedupe_alarm_ids(normalized)
+
+
+def _dedupe_alarm_ids(alarms: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    used_ids: set[str] = set()
+    normalized: list[dict[str, Any]] = []
+    for alarm in alarms:
+        item = dict(alarm)
+        hour = _coerce_alarm_component(item.get("hour", 0), field_name="alarm hour")
+        minute = _coerce_alarm_component(item.get("minute", 0), field_name="alarm minute")
+        base_id = _sanitize_text_field(item.get("id"), field_name="alarm id", max_chars=MAX_ALARM_ID_CHARS)
+        if not base_id:
+            base_id = f"alarm-{hour:02d}{minute:02d}"
+        candidate = base_id
+        index = 2
+        while not candidate or candidate in used_ids:
+            suffix = f"-{index}"
+            candidate = f"{base_id[: MAX_ALARM_ID_CHARS - len(suffix)]}{suffix}"
+            index += 1
+        item["id"] = candidate
+        used_ids.add(candidate)
+        normalized.append(item)
     return normalized
 
 
@@ -502,8 +524,11 @@ def check_due_alarms(
         raise ValueError("catch-up minutes must be at least 0")
     if max_catch_up > MAX_CATCH_UP_MINUTES:
         raise ValueError(f"catch-up minutes must be at most {MAX_CATCH_UP_MINUTES}")
-    window_start = current - timedelta(minutes=max(1, max_catch_up))
-    if last_checked:
+    if max_catch_up == 0:
+        window_start = current
+    else:
+        window_start = current - timedelta(minutes=max_catch_up)
+    if last_checked and max_catch_up > 0:
         last_checked = last_checked.replace(second=0, microsecond=0)
         if last_checked <= current:
             window_start = max(last_checked, current - timedelta(minutes=max_catch_up))

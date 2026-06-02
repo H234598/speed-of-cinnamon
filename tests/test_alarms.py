@@ -178,6 +178,15 @@ class AlarmTest(unittest.TestCase):
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["due"][0]["scheduled_at"], "2026-06-01T09:00")
 
+    def test_due_check_with_zero_catch_up_skips_past_alarm(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            add_alarm("09:00", name="Morning", days="mon", path=path)
+            payload = check_due_alarms(path=path, now=datetime(2026, 6, 1, 9, 10), mark=True, catch_up_minutes=0)
+
+        self.assertEqual(payload["count"], 0)
+        self.assertEqual(payload["due"], [])
+
     def test_cli_adds_lists_checks_and_removes_alarm(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             stdout = io.StringIO()
@@ -522,6 +531,49 @@ class AlarmTest(unittest.TestCase):
 
         self.assertEqual(len(payload["alarms"]), 1)
         self.assertEqual(payload["alarms"][0]["id"], "good")
+
+    def test_load_and_save_alarm_store_assign_unique_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            save_alarm_store(
+                {
+                    "version": 1,
+                    "last_checked_at": "",
+                    "alarms": [
+                        {"id": "custom", "hour": 9, "minute": 0, "days": ["mon"], "name": "First"},
+                        {"id": "", "hour": 9, "minute": 0, "days": ["mon"], "name": "Second"},
+                        {"id": "custom", "hour": 10, "minute": 0, "days": ["mon"], "name": "Third"},
+                    ],
+                },
+                path,
+            )
+            payload = load_alarm_store(path)
+
+        self.assertEqual([alarm["id"] for alarm in payload["alarms"]], ["custom", "alarm-0900", "custom-2"])
+        self.assertEqual(payload["alarms"][0]["name"], "First")
+        self.assertEqual(payload["alarms"][1]["name"], "Second")
+        self.assertEqual(payload["alarms"][2]["name"], "Third")
+
+    def test_duplicate_alarm_id_suffixes_stay_within_limit(self) -> None:
+        alarm_id = "a" * MAX_ALARM_ID_CHARS
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            save_alarm_store(
+                {
+                    "version": 1,
+                    "last_checked_at": "",
+                    "alarms": [
+                        {"id": alarm_id, "hour": 9, "minute": 0},
+                        {"id": alarm_id, "hour": 10, "minute": 0},
+                    ],
+                },
+                path,
+            )
+            payload = load_alarm_store(path)
+
+        self.assertEqual(payload["alarms"][0]["id"], alarm_id)
+        self.assertEqual(len(payload["alarms"][1]["id"]), MAX_ALARM_ID_CHARS)
+        self.assertTrue(payload["alarms"][1]["id"].endswith("-2"))
 
     def test_load_alarm_store_truncates_oversized_alarm_list(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
