@@ -226,7 +226,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("workflow-change-detection:", workflow)
         self.assertIn("needs: workflow-lint", workflow)
         self.assertIn("needs: workflow-change-detection", workflow)
-        self.assertIn("uses: crate-ci/typos@v1", workflow)
+        self.assertIn("uses: crate-ci/typos@f8a58b6b53f2279f71eb605f03a4ae4d10608f45", workflow)
         self.assertIn("config: ./typos.toml", workflow)
         self.assertIn("security-scan:", workflow)
         self.assertIn("uses: ./.github/workflows/security-scan.yml", workflow)
@@ -432,7 +432,11 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('- "v*"', workflow)
         self.assertIn("workflow_dispatch:", workflow)
         self.assertIn("run_workflow_lint:", workflow)
-        self.assertIn("contents: write", workflow)
+        self.assertIn("permissions:\n  contents: read", workflow)
+        self.assertIn(
+            "publish:\n    needs:\n      - workflow-lint\n      - security-scan\n    permissions:\n      contents: write",
+            workflow,
+        )
         self.assertIn("actions: none", workflow)
         self.assertIn("checks: none", workflow)
         self.assertIn("id-token: none", workflow)

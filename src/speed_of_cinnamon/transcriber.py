@@ -282,6 +282,45 @@ def _validate_http_request(request: urllib.request.Request, *, field_name: str) 
     _validate_openai_compatible_api_url(url, field_name=field_name)
 
 
+def _effective_url_port(parsed: urllib.parse.ParseResult) -> int | None:
+    with suppress(ValueError):
+        if parsed.port is not None:
+            return parsed.port
+    if parsed.scheme == "http":
+        return 80
+    if parsed.scheme == "https":
+        return 443
+    return None
+
+
+def _url_origin(url: str, *, field_name: str) -> tuple[str, str, int | None]:
+    normalized = _validate_openai_compatible_api_url(url, field_name=field_name)
+    parsed = urllib.parse.urlparse(normalized)
+    hostname = parsed.hostname
+    if not hostname:
+        raise TranscriptionError(f"{field_name} is missing hostname")
+    return parsed.scheme, hostname.lower(), _effective_url_port(parsed)
+
+
+def _validate_same_origin_redirect(source_url: str, redirect_url: str, *, field_name: str) -> None:
+    source_origin = _url_origin(source_url, field_name=field_name)
+    redirect_origin = _url_origin(redirect_url, field_name=f"{field_name} redirect")
+    if redirect_origin != source_origin:
+        raise TranscriptionError(f"{field_name} redirect target changes origin")
+
+
+class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        _validate_same_origin_redirect(req.get_full_url(), newurl, field_name="OpenAI-compatible speech request")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _open_http_request(request: urllib.request.Request, *, timeout: int, field_name: str) -> object:
+    _validate_http_request(request, field_name=field_name)
+    opener = urllib.request.build_opener(_SameOriginRedirectHandler)
+    return opener.open(request, timeout=timeout)  # nosec B310
+
+
 def _file_size(file: io.BufferedRandom) -> int:
     if not hasattr(file, "seek") or not hasattr(file, "tell"):
         raise TranscriptionError("file must be a binary file handle")
@@ -831,8 +870,11 @@ def transcribe_with_openai_compatible_api(
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         request = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
-        _validate_http_request(request, field_name="OpenAI-compatible speech request")
-        with urllib.request.urlopen(request, timeout=TRANSCRIBE_COMMAND_TIMEOUT_SECONDS) as response:  # nosec B310
+        with _open_http_request(
+            request,
+            timeout=TRANSCRIBE_COMMAND_TIMEOUT_SECONDS,
+            field_name="OpenAI-compatible speech request",
+        ) as response:
             return _read_response_text(response)
 
     try:

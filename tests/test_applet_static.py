@@ -349,8 +349,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('_("Keep recording files")', source)
         self.assertIn('this._populateRecordingOptionsMenu();', source)
         self.assertIn('this.autoRelistenPending = false;', source)
+        self.assertIn('this.autoRelistenPendingToken = "";', source)
+        self.assertIn("this.autoRelistenSequence = 0;", source)
         self.assertIn('let shouldRelisten = this.autoRelistenPending;', source)
-        self.assertIn('this.autoRelistenPending = Boolean(this.autoRelisten);', source)
+        self.assertIn('relistenToken = String(this.autoRelistenSequence) + ":" + recordingKey;', source)
+        self.assertIn('this.autoRelistenPending = Boolean(relistenToken);', source)
+        self.assertIn('this.autoRelistenPendingToken = relistenToken;', source)
+        self.assertIn('if (relistenToken && this.autoRelistenPendingToken !== relistenToken) {', source)
         self.assertIn('let hasTranscript = typeof payload.transcript === "string" && payload.transcript.length > 0;', source)
         self.assertIn('if (payload.status === "done" && payload.silence_detected)', source)
         self.assertIn('if (payload.status === "done" && hasTranscript)', source)
@@ -386,6 +391,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertLess(empty_index, reset_index)
         self.assertLess(reset_index, restart_index)
         self.assertLess(restart_index, status_index)
+
+    def test_spawn_callbacks_ignore_removed_applet(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("this.appletRemoved = false;", source)
+        self.assertIn("this.spawnGeneration = 0;", source)
+        self.assertIn("this.appletRemoved = true;", source)
+        self.assertIn("this.spawnGeneration += 1;", source)
+        self.assertIn("!this.appletRemoved &&", source)
+        self.assertIn("let applet = this;", source)
+        self.assertIn("let spawnGeneration = this.spawnGeneration;", source)
+        self.assertIn("if (applet.appletRemoved || applet.spawnGeneration !== spawnGeneration) {", source)
 
     def test_applet_exposes_notification_options_submenu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

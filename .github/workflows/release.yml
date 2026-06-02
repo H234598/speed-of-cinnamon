@@ -32,7 +32,7 @@ on:
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
   actions: none
   checks: none
   id-token: none
@@ -80,6 +80,14 @@ jobs:
     needs:
       - workflow-lint
       - security-scan
+    permissions:
+      contents: write
+      actions: none
+      checks: none
+      id-token: none
+      issues: none
+      packages: none
+      pull-requests: none
     runs-on: ubuntu-24.04
     env:
       BUILD_SNAP: ${{ github.event_name != 'workflow_dispatch' && '0' || (inputs.build_snap && '1' || '0') }}

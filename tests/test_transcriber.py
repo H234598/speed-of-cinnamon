@@ -23,6 +23,7 @@ from speed_of_cinnamon.transcriber import (
     _read_text_file,
     _assert_text_length,
     _contains_escaped_null,
+    _validate_same_origin_redirect,
     _quote,
     _write_text_atomic,
     validate_audio_file,
@@ -690,7 +691,7 @@ class TranscriberTest(unittest.TestCase):
 
         captured: dict[str, object] = {}
 
-        def fake_urlopen(request: object, timeout: int = 0) -> Response:
+        def fake_open_http_request(request: object, *, timeout: int = 0, field_name: str = "") -> Response:
             captured["url"] = request.full_url
             captured["headers"] = dict(request.header_items())
             captured["data"] = request.data
@@ -701,7 +702,7 @@ class TranscriberTest(unittest.TestCase):
             audio = Path(tmp) / "sample.wav"
             audio.write_bytes(b"audio")
             text_path = Path(tmp) / "sample.txt"
-            with mock.patch("speed_of_cinnamon.transcriber.urllib.request.urlopen", side_effect=fake_urlopen):
+            with mock.patch("speed_of_cinnamon.transcriber._open_http_request", side_effect=fake_open_http_request):
                 result = transcribe(
                     audio,
                     "de",
@@ -741,7 +742,7 @@ class TranscriberTest(unittest.TestCase):
 
         captured: dict[str, object] = {}
 
-        def fake_urlopen(request: object, timeout: int = 0) -> Response:
+        def fake_open_http_request(request: object, *, timeout: int = 0, field_name: str = "") -> Response:
             captured["url"] = request.full_url
             captured["data"] = request.data
             return Response()
@@ -750,7 +751,7 @@ class TranscriberTest(unittest.TestCase):
             audio = Path(tmp) / "sample.wav"
             audio.write_bytes(b"audio")
             text_path = Path(tmp) / "sample.txt"
-            with mock.patch("speed_of_cinnamon.transcriber.urllib.request.urlopen", side_effect=fake_urlopen):
+            with mock.patch("speed_of_cinnamon.transcriber._open_http_request", side_effect=fake_open_http_request):
                 result = transcribe(
                     audio,
                     "de",
@@ -782,7 +783,7 @@ class TranscriberTest(unittest.TestCase):
 
         captured: dict[str, object] = {}
 
-        def fake_urlopen(request: object, timeout: int = 0) -> Response:
+        def fake_open_http_request(request: object, *, timeout: int = 0, field_name: str = "") -> Response:
             captured["data"] = request.data
             return Response()
 
@@ -790,7 +791,7 @@ class TranscriberTest(unittest.TestCase):
             audio = Path(tmp) / "sample.wav"
             audio.write_bytes(b"audio")
             text_path = Path(tmp) / "sample.txt"
-            with mock.patch("speed_of_cinnamon.transcriber.urllib.request.urlopen", side_effect=fake_urlopen):
+            with mock.patch("speed_of_cinnamon.transcriber._open_http_request", side_effect=fake_open_http_request):
                 result = transcribe(
                     audio,
                     "de",
@@ -820,7 +821,7 @@ class TranscriberTest(unittest.TestCase):
 
         requests = []
 
-        def fake_urlopen(request: object, timeout: int = 0) -> Response:
+        def fake_open_http_request(request: object, *, timeout: int = 0, field_name: str = "") -> Response:
             requests.append(request)
             if len(requests) == 1:
                 raise urllib.error.HTTPError(
@@ -836,7 +837,7 @@ class TranscriberTest(unittest.TestCase):
             audio = Path(tmp) / "sample.wav"
             audio.write_bytes(b"audio")
             text_path = Path(tmp) / "sample.txt"
-            with mock.patch("speed_of_cinnamon.transcriber.urllib.request.urlopen", side_effect=fake_urlopen):
+            with mock.patch("speed_of_cinnamon.transcriber._open_http_request", side_effect=fake_open_http_request):
                 result = transcribe(
                     audio,
                     "de",
@@ -1007,7 +1008,7 @@ class TranscriberTest(unittest.TestCase):
                 ErrorBody(),
             )
             body = error.fp
-            with mock.patch("speed_of_cinnamon.transcriber.urllib.request.urlopen", side_effect=error):
+            with mock.patch("speed_of_cinnamon.transcriber._open_http_request", side_effect=error):
                 with self.assertRaisesRegex(TranscriptionError, "failed \\(401\\).*missing API key.*invalid_request_error"):
                     transcribe(
                         audio,
@@ -1023,7 +1024,7 @@ class TranscriberTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
             audio.write_bytes(b"audio")
-            with mock.patch("speed_of_cinnamon.transcriber.urllib.request.urlopen") as mocked_urlopen:
+            with mock.patch("speed_of_cinnamon.transcriber._open_http_request") as mocked_open_http_request:
                 with self.assertRaisesRegex(TranscriptionError, "requires a speech-to-text model.*gpt-5"):
                     transcribe(
                         audio,
@@ -1033,7 +1034,15 @@ class TranscriberTest(unittest.TestCase):
                         openai_compatible_model="gpt-5",
                         openai_compatible_url="https://api.openai.com/v1",
                     )
-        mocked_urlopen.assert_not_called()
+        mocked_open_http_request.assert_not_called()
+
+    def test_openai_compatible_api_rejects_cross_origin_redirect(self) -> None:
+        with self.assertRaisesRegex(TranscriptionError, "redirect target changes origin"):
+            _validate_same_origin_redirect(
+                "https://api.openai.com/v1/audio/transcriptions",
+                "http://127.0.0.1:8000/steal",
+                field_name="OpenAI-compatible speech request",
+            )
 
     def test_openai_compatible_api_rejects_non_http_url(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

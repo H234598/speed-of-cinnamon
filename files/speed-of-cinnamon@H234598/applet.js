@@ -251,6 +251,8 @@ MyApplet.prototype = {
     this.lastNotificationKey = "";
     this.autoTranscribeRecordingKey = "";
     this.autoRelistenPending = false;
+    this.autoRelistenPendingToken = "";
+    this.autoRelistenSequence = 0;
     this.recordingStartedAtMs = 0;
     this.recordingMaxSeconds = 0;
     this.targetWindow = null;
@@ -264,6 +266,8 @@ MyApplet.prototype = {
     this.ollamaInstallWatchPolls = 0;
     this.externalApiEnvMonitor = null;
     this.externalApiEnvApplyTarget = "voice";
+    this.appletRemoved = false;
+    this.spawnGeneration = 0;
 
     this.set_applet_icon_path(this.metadata.path + "/icon.svg");
     this.set_applet_label("");
@@ -761,6 +765,12 @@ MyApplet.prototype = {
   },
 
   on_applet_removed_from_panel: function() {
+    this.appletRemoved = true;
+    this.spawnGeneration += 1;
+    this.autoRelistenPending = false;
+    this.autoRelistenPendingToken = "";
+    this.modelMenuRefreshToken = null;
+    this.textModelMenuRefreshToken = null;
     this._clearStatusTimer();
     this._clearDisplayTimer();
     this._clearSetupCheckTimer();
@@ -1638,6 +1648,7 @@ MyApplet.prototype = {
     this.lastNotificationKey = "";
     this.autoTranscribeRecordingKey = "";
     this.autoRelistenPending = false;
+    this.autoRelistenPendingToken = "";
     this.recordingStartedAtMs = 0;
     this.recordingMaxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
     this.isCommandRunning = true;
@@ -1679,6 +1690,7 @@ MyApplet.prototype = {
     this.isCommandRunning = true;
     this.autoTranscribeRecordingKey = "";
     this.autoRelistenPending = false;
+    this.autoRelistenPendingToken = "";
     this._setStatus("processing", _("Cancelling..."), this.lastTranscript);
     this._spawnJson(this._cancelArgs(), (payload) => {
       this.isCommandRunning = false;
@@ -2963,6 +2975,7 @@ MyApplet.prototype = {
 
   _canMutateMenu: function(item) {
     return Boolean(
+      !this.appletRemoved &&
       item &&
       item.menu &&
       typeof item.menu.removeAll === "function" &&
@@ -3401,6 +3414,8 @@ MyApplet.prototype = {
     let done = false;
     let normalizedArgs;
     let callbackFn = typeof callback === "function" ? callback : function() {};
+    let applet = this;
+    let spawnGeneration = this.spawnGeneration;
 
     const finalize = function(payload) {
       if (done) {
@@ -3410,6 +3425,9 @@ MyApplet.prototype = {
       if (timeoutId) {
         Mainloop.source_remove(timeoutId);
         timeoutId = 0;
+      }
+      if (applet.appletRemoved || applet.spawnGeneration !== spawnGeneration) {
+        return;
       }
       try {
         callbackFn(payload || {});
@@ -3445,6 +3463,8 @@ MyApplet.prototype = {
     let timeoutId = 0;
     let done = false;
     let callbackFn = typeof callback === "function" ? callback : function() {};
+    let applet = this;
+    let spawnGeneration = this.spawnGeneration;
 
     const finalize = function(output) {
       if (done) {
@@ -3454,6 +3474,9 @@ MyApplet.prototype = {
       if (timeoutId) {
         Mainloop.source_remove(timeoutId);
         timeoutId = 0;
+      }
+      if (applet.appletRemoved || applet.spawnGeneration !== spawnGeneration) {
+        return;
       }
       try {
         callbackFn(String(output || ""));
@@ -3492,6 +3515,7 @@ MyApplet.prototype = {
     this._applyMicrophoneLevel(payload.microphone_level, status);
     if (payload.error) {
       this.autoRelistenPending = false;
+      this.autoRelistenPendingToken = "";
       this._setStatus("error", payload.error, this.lastTranscript);
       return;
     }
@@ -3509,6 +3533,7 @@ MyApplet.prototype = {
       return;
     }
     this.autoRelistenPending = false;
+    this.autoRelistenPendingToken = "";
     let message = payload.message || status;
     let transcript = typeof payload.transcript === "string" ? payload.transcript : this.lastTranscript || "";
     this._setStatus(status, message, transcript);
@@ -3577,10 +3602,19 @@ MyApplet.prototype = {
       return;
     }
     this.autoTranscribeRecordingKey = recordingKey;
-    this.autoRelistenPending = Boolean(this.autoRelisten);
+    let relistenToken = "";
+    if (this.autoRelisten) {
+      this.autoRelistenSequence += 1;
+      relistenToken = String(this.autoRelistenSequence) + ":" + recordingKey;
+    }
+    this.autoRelistenPending = Boolean(relistenToken);
+    this.autoRelistenPendingToken = relistenToken;
     this.isCommandRunning = true;
     this._setStatus("processing", _("Transcribing timed-out recording..."), this.lastTranscript);
     this._spawnJson(this._baseArgs("stop"), (nextPayload) => {
+      if (relistenToken && this.autoRelistenPendingToken !== relistenToken) {
+        return;
+      }
       this.isCommandRunning = false;
       this._applyPayload(nextPayload);
     });
@@ -3828,6 +3862,7 @@ MyApplet.prototype = {
   _finishAppletTextInsert: function(payload) {
     let shouldRelisten = this.autoRelistenPending;
     this.autoRelistenPending = false;
+    this.autoRelistenPendingToken = "";
     let relistenStarted = false;
     if (shouldRelisten) {
       relistenStarted = this._restartRelistenRecording();
@@ -3841,6 +3876,7 @@ MyApplet.prototype = {
   _finishSilentRelistenSkip: function(payload) {
     let shouldRelisten = this.autoRelistenPending;
     this.autoRelistenPending = false;
+    this.autoRelistenPendingToken = "";
     let relistenStarted = false;
     if (shouldRelisten) {
       relistenStarted = this._restartRelistenRecording();
@@ -3854,6 +3890,7 @@ MyApplet.prototype = {
   _finishEmptyRelistenDone: function(payload) {
     let shouldRelisten = this.autoRelistenPending;
     this.autoRelistenPending = false;
+    this.autoRelistenPendingToken = "";
     let relistenStarted = false;
     if (shouldRelisten) {
       relistenStarted = this._restartRelistenRecording();
@@ -3920,6 +3957,7 @@ MyApplet.prototype = {
       this.isCommandRunning = false;
       if (payload.error) {
         this.autoRelistenPending = false;
+        this.autoRelistenPendingToken = "";
         this._setStatus("error", payload.error, this.lastTranscript);
         return;
       }
