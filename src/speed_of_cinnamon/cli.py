@@ -53,6 +53,7 @@ from .paths import (
 from .postprocessor import (
     DEFAULT_OLLAMA_URL,
     DEFAULT_OPENAI_COMPATIBLE_MODEL,
+    DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL,
     DEFAULT_OPENAI_COMPATIBLE_URL,
     MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
     MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
@@ -170,7 +171,7 @@ def _openai_compatible_transcribe_kwargs(args: argparse.Namespace, backend: str)
 
 def _openai_compatible_post_process_model(args: argparse.Namespace) -> str:
     text_model = getattr(args, "openai_compatible_text_model", "")
-    return text_model or getattr(args, "openai_compatible_model", DEFAULT_OPENAI_COMPATIBLE_MODEL)
+    return text_model or DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL
 
 
 def _validate_pipeline_text_args(
@@ -1539,7 +1540,7 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--ollama-model", default="")
     parser.add_argument("--openai-compatible-url", default=DEFAULT_OPENAI_COMPATIBLE_URL)
     parser.add_argument("--openai-compatible-model", default=DEFAULT_OPENAI_COMPATIBLE_MODEL)
-    parser.add_argument("--openai-compatible-text-model", default="")
+    parser.add_argument("--openai-compatible-text-model", default=DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL)
     parser.add_argument("--openai-compatible-api-key", default="")
     parser.add_argument("--post-process-prompt", default="")
     parser.add_argument("--personal-context", default="")
@@ -1742,7 +1743,7 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_file.add_argument("--ollama-model", default="")
     transcribe_file.add_argument("--openai-compatible-url", default=DEFAULT_OPENAI_COMPATIBLE_URL)
     transcribe_file.add_argument("--openai-compatible-model", default=DEFAULT_OPENAI_COMPATIBLE_MODEL)
-    transcribe_file.add_argument("--openai-compatible-text-model", default="")
+    transcribe_file.add_argument("--openai-compatible-text-model", default=DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL)
     transcribe_file.add_argument("--openai-compatible-api-key", default="")
     transcribe_file.add_argument("--post-process-prompt", default="")
     transcribe_file.add_argument("--personal-context", default="")

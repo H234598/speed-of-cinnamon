@@ -53,7 +53,7 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "ollama-model": (str, ""),
     "openai-compatible-url": (str, "https://api.openai.com/v1"),
     "openai-compatible-model": (str, "gpt-4o-transcribe"),
-    "openai-compatible-text-model": (str, ""),
+    "openai-compatible-text-model": (str, "gpt-4o-mini"),
     "post-process-prompt": (str, ""),
 }
 

@@ -388,7 +388,7 @@ class DoctorTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["configured"]["postprocessor"]["value"], "ollama")
 
-    def test_openai_compatible_postprocessor_requires_model(self) -> None:
+    def test_openai_compatible_postprocessor_uses_default_text_model(self) -> None:
         tools = {"python3", "pw-record"}
         settings = {
             "recorder": "auto",
@@ -400,9 +400,9 @@ class DoctorTest(unittest.TestCase):
         }
         with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
             payload = doctor.report(settings)
-        self.assertFalse(payload["ok"])
-        self.assertFalse(payload["configured"]["postprocessor"]["ok"])
-        self.assertIn("OpenAI-compatible text model", payload["configured"]["postprocessor"]["detail"])
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["configured"]["postprocessor"]["ok"])
+        self.assertEqual(payload["configured"]["postprocessor"]["value"], "openai-compatible")
 
     def test_openai_compatible_postprocessor_is_ready_when_model_is_configured(self) -> None:
         tools = {"python3", "pw-record"}

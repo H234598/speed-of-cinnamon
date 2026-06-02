@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .models import default_ctranslate2_model_path, default_whisper_cpp_model_path, model_backend_for_path, model_supports_language
-from .postprocessor import DEFAULT_OPENAI_COMPATIBLE_MODEL, DEFAULT_OPENAI_COMPATIBLE_URL
+from .postprocessor import DEFAULT_OPENAI_COMPATIBLE_MODEL, DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL, DEFAULT_OPENAI_COMPATIBLE_URL
 from .transcriber import faster_whisper_available, normalize_backend
 
 
@@ -309,7 +309,7 @@ def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
     command_template = _setting(settings, "post-process-command")
     ollama_model = _setting(settings, "ollama-model")
     ollama_url = _setting(settings, "ollama-url", "http://127.0.0.1:11434")
-    openai_compatible_model = _setting(settings, "openai-compatible-text-model") or _setting(settings, "openai-compatible-model", DEFAULT_OPENAI_COMPATIBLE_MODEL)
+    openai_compatible_model = _setting(settings, "openai-compatible-text-model", DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL)
     openai_compatible_url = _setting(settings, "openai-compatible-url", DEFAULT_OPENAI_COMPATIBLE_URL)
     if backend in {"", "none", "off", "disabled"}:
         return {"ok": True, "value": "none", "detail": "text polishing disabled"}

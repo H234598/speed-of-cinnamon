@@ -293,8 +293,8 @@
   "openai-compatible-text-model": {
     "type": "entry",
     "description": "OpenAI-compatible text model",
-    "tooltip": "Optional model name for OpenAI-compatible text polishing. Leave empty to reuse the speech model. Max 4096 chars.",
-    "default": ""
+    "tooltip": "Model name for OpenAI-compatible text polishing. Defaults to gpt-4o-mini. Max 4096 chars.",
+    "default": "gpt-4o-mini"
   },
   "openai-compatible-api-key": {
     "type": "entry",

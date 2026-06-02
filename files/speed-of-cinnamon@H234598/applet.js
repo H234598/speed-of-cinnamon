@@ -20,6 +20,7 @@ const SYSTEM_CLI = "/usr/bin/speed-of-cinnamon";
 const RUNBOOK_URL = "https://gist.github.com/H234598/b95129e13ac0b09c9777edd41aeedfa0";
 const DEFAULT_OPENAI_COMPATIBLE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_COMPATIBLE_MODEL = "gpt-4o-transcribe";
+const DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL = "gpt-4o-mini";
 const LEGACY_OPENAI_COMPATIBLE_URL = "http://127.0.0.1:8000/v1";
 const PASTE_FOCUS_DELAY_MS = 120;
 const ALARM_CHECK_SECONDS = 60;
@@ -207,7 +208,7 @@ MyApplet.prototype = {
     this.ollamaModel = "";
     this.openaiCompatibleUrl = DEFAULT_OPENAI_COMPATIBLE_URL;
     this.openaiCompatibleModel = DEFAULT_OPENAI_COMPATIBLE_MODEL;
-    this.openaiCompatibleTextModel = "";
+    this.openaiCompatibleTextModel = DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL;
     this.openaiCompatibleApiKey = "";
     this.postProcessPrompt = "";
     this.personalContext = "";
@@ -2352,7 +2353,7 @@ MyApplet.prototype = {
     return [
       "OPENAI_COMPATIBLE_URL=" + this._externalApiEnvValue(this.openaiCompatibleUrl, DEFAULT_OPENAI_COMPATIBLE_URL),
       "OPENAI_COMPATIBLE_STT_MODEL=" + this._externalApiEnvValue(this.openaiCompatibleModel, DEFAULT_OPENAI_COMPATIBLE_MODEL),
-      "OPENAI_COMPATIBLE_TEXT_MODEL=" + this._externalApiEnvValue(this.openaiCompatibleTextModel, ""),
+      "OPENAI_COMPATIBLE_TEXT_MODEL=" + this._externalApiEnvValue(this.openaiCompatibleTextModel, DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL),
       "OPENAI_COMPATIBLE_API_KEY=" + String(this.openaiCompatibleApiKey || "").trim(),
       ""
     ].join("\n");
@@ -2433,7 +2434,7 @@ MyApplet.prototype = {
     }
     if (migrated.indexOf("OPENAI_COMPATIBLE_TEXT_MODEL=") < 0) {
       let suffix = migrated.lastIndexOf("\n") === migrated.length - 1 ? "" : "\n";
-      migrated += suffix + "OPENAI_COMPATIBLE_TEXT_MODEL=" + this._externalApiEnvValue(this.openaiCompatibleTextModel, "") + "\n";
+      migrated += suffix + "OPENAI_COMPATIBLE_TEXT_MODEL=" + this._externalApiEnvValue(this.openaiCompatibleTextModel, DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL) + "\n";
     }
     if (migrated !== text) {
       GLib.file_set_contents(path, migrated);
@@ -2477,7 +2478,7 @@ MyApplet.prototype = {
     let values = this._parseExternalApiEnvText(ByteArray.toString(contents));
     let url = this._coerceCliTextArg(this._externalApiEnvValue(values.OPENAI_COMPATIBLE_URL || "", DEFAULT_OPENAI_COMPATIBLE_URL), "openai-compatible URL").trim();
     let model = this._coerceCliTextArg(this._externalApiEnvValue(values.OPENAI_COMPATIBLE_STT_MODEL || values.OPENAI_COMPATIBLE_MODEL || "", DEFAULT_OPENAI_COMPATIBLE_MODEL), "openai-compatible model").trim();
-    let textModel = this._coerceCliTextArg(values.OPENAI_COMPATIBLE_TEXT_MODEL || "", "openai-compatible text model").trim();
+    let textModel = this._coerceCliTextArg(this._externalApiEnvValue(values.OPENAI_COMPATIBLE_TEXT_MODEL || "", DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL), "openai-compatible text model").trim();
     let apiKey = this._coerceCliTextArg(values.OPENAI_COMPATIBLE_API_KEY || "", "openai-compatible API key").trim();
     if (url !== "") {
       this.openaiCompatibleUrl = url;

@@ -19,6 +19,7 @@ class PostProcessError(RuntimeError):
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 DEFAULT_OPENAI_COMPATIBLE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_COMPATIBLE_MODEL = "gpt-4o-transcribe"
+DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL = "gpt-4o-mini"
 DEFAULT_OLLAMA_PROMPT = (
     "Clean up the transcript for direct insertion. Preserve meaning, language, names, "
     "technical terms, and formatting. Return only the final text."
