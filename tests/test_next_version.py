@@ -232,6 +232,18 @@ class NextVersionTest(unittest.TestCase):
         with self.assertRaises(next_version.UserInputError):
             next_version.normalize_tag(None)  # type: ignore[arg-type]
 
+    def test_to_version_rejects_invalid_inputs(self) -> None:
+        with self.assertRaises(next_version.UserInputError):
+            next_version.to_version(-1, 0, 0)
+        with self.assertRaises(next_version.UserInputError):
+            next_version.to_version(1, "2", 3)  # type: ignore[arg-type]
+
+    def test_tag_for_version_rejects_invalid_version(self) -> None:
+        with self.assertRaises(next_version.UserInputError):
+            next_version.tag_for_version((0, 1))
+        with self.assertRaises(next_version.UserInputError):
+            next_version.tag_for_version(("0", 1, 2))  # type: ignore[arg-type]
+
     def test_parse_version_rejects_negative_segments(self) -> None:
         with self.assertRaises(next_version.UserInputError):
             next_version.parse_version("1.-2.3")

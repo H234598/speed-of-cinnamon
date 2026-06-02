@@ -69,6 +69,9 @@ def normalize_tag(tag: str) -> str:
     return tag if tag.startswith("v") else f"v{tag}"
 
 def to_version(major: int, minor: int, patch: int) -> str:
+    major = _assert_non_negative_int("major", major)
+    minor = _assert_non_negative_int("minor", minor)
+    patch = _assert_non_negative_int("patch", patch)
     return f"{major}.{minor}.{patch}"
 
 def commits_since_ref(ref: str) -> int:
@@ -132,7 +135,7 @@ def read_current_version(path: Path = Path("pyproject.toml")) -> tuple[int,int,i
     return parse_version(val)
 
 def tag_for_version(version: tuple[int,int,int]) -> str:
-    return f"v{to_version(*version)}"
+    return f"v{to_version(*_assert_version_tuple(version))}"
 
 def tag_exists(tag: str) -> bool:
     tag = normalize_tag(tag)
