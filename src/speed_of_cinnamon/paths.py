@@ -23,9 +23,7 @@ def _xdg_path(environment_variable: str, default: Path) -> Path:
     if isinstance(environment_variable, bool) or not isinstance(environment_variable, str):
         raise RuntimeError("environment variable name must be text")
     value = os.environ.get(environment_variable)
-    if value is None:
-        return default
-    if not isinstance(value, str):
+    if value is None or isinstance(value, bool) or not isinstance(value, str):
         return default
     normalized = (value or "").strip()
     if not normalized:

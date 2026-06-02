@@ -66,10 +66,19 @@ def _is_unsafe_env_var(name: str) -> bool:
     return name in _DANGEROUS_ENV_KEYS or name.startswith(_DANGEROUS_ENV_PREFIXES)
 
 
+def _coerce_environment_value(name: str) -> str | None:
+    if isinstance(name, bool) or not isinstance(name, str):
+        return None
+    value = os.environ.get(name)
+    if value is None or isinstance(value, bool) or not isinstance(value, str):
+        return None
+    return value
+
+
 def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
     env: dict[str, str] = {}
     for key in _BASE_ENV_KEYS:
-        value = os.environ.get(key)
+        value = _coerce_environment_value(key)
         if value is not None:
             env[key] = value
     if base is not None:
