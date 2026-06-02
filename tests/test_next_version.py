@@ -314,6 +314,20 @@ class NextVersionTest(unittest.TestCase):
         with self.assertRaises(next_version.UserInputError):
             next_version.commits_since_ref(None)  # type: ignore[arg-type]
 
+    def test_commits_since_tag_normalizes_input(self) -> None:
+        with mock.patch.object(
+            next_version.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="4\n", stderr=""),
+        ) as run:
+            self.assertEqual(next_version.commits_since_tag("  0.1.20  "), 4)
+            run.assert_called_once_with(
+                ["git", "rev-list", "--count", "v0.1.20..HEAD"],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
     def test_tag_exists_checks_normalized_tag(self) -> None:
         with mock.patch.object(
             next_version.subprocess,
