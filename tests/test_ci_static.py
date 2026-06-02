@@ -95,6 +95,17 @@ class CiStaticTest(unittest.TestCase):
 
         self.assertFalse(offenders, f"unsafe subprocess usage found: {offenders}")
 
+    def test_runtime_code_does_not_use_os_environ_get(self) -> None:
+        src_root = REPO_ROOT / "src"
+        offenders: list[str] = []
+        for path in src_root.rglob("*.py"):
+            if "__pycache__" in path.parts:
+                continue
+            text = path.read_text(encoding="utf-8")
+            if "os.environ.get(" in text:
+                offenders.append(str(path))
+        self.assertEqual(offenders, [], f"os.environ.get should not be used in runtime code: {offenders}")
+
     def test_runtime_code_has_no_shell_invocations(self) -> None:
         patterns = [
             "shell=True",
