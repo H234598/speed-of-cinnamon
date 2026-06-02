@@ -396,6 +396,8 @@ class NextVersionTest(unittest.TestCase):
             return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="v0.1.19\n", stderr=""),
         ):
             self.assertFalse(next_version.tag_exists("0.1.20"))
+        with self.assertRaises(next_version.UserInputError):
+            next_version.tag_exists(None)  # type: ignore[arg-type]
 
     def test_main_uses_from_tag_when_provided(self) -> None:
         with (

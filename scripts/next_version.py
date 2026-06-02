@@ -150,6 +150,8 @@ def tag_for_version(version: tuple[int,int,int]) -> str:
     return f"v{to_version(*_assert_version_tuple(version))}"
 
 def tag_exists(tag: str) -> bool:
+    if not isinstance(tag, str):
+        raise UserInputError("tag must be a non-empty string")
     tag = normalize_tag(tag)
     try:
         rc = subprocess.run(["git", "tag", "-l", tag], text=True, capture_output=True, check=True)
