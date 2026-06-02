@@ -323,6 +323,8 @@ class NextVersionTest(unittest.TestCase):
         with self.assertRaises(next_version.UserInputError):
             next_version.normalize_tag("   ")
         with self.assertRaises(next_version.UserInputError):
+            next_version.normalize_tag(True)  # type: ignore[arg-type]
+        with self.assertRaises(next_version.UserInputError):
             next_version.normalize_tag(None)  # type: ignore[arg-type]
 
     def test_to_version_rejects_invalid_inputs(self) -> None:
