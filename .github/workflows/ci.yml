@@ -75,6 +75,14 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Install actionlint
+        run: |
+          version="1.7.12"
+          archive="actionlint_${version}_linux_amd64.tar.gz"
+          curl -fsSLo "/tmp/${archive}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${version}/${archive}"
+          tar -xzf "/tmp/${archive}" -C /tmp actionlint
+          sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
       - name: Lint GitHub workflows
         run: |
           if [[ "${WORKFLOWS_CHANGED}" != "true" ]]; then

@@ -15,18 +15,8 @@ run_actionlint() {
     return 0
   fi
 
-  actionlint_image="rhysd/actionlint:v1.7.12"
-  if command -v -- docker >/dev/null 2>&1; then
-    if docker info >/dev/null 2>&1; then
-      if docker run --rm -v "${PWD}:/repo" -w /repo "${actionlint_image}" "$@"; then
-        return 0
-      fi
-      return 2
-    fi
-  fi
-
   if [[ "${actionlint_strict}" == "true" ]]; then
-    printf 'actionlint unavailable in strict mode. Install actionlint (or ensure docker access) for workflow checks.\n' >&2
+    printf 'actionlint unavailable in strict mode. Install actionlint for workflow checks.\n' >&2
     return 1
   fi
 
@@ -67,5 +57,5 @@ PY
   fi
 fi
 
-printf 'No actionlint or YAML fallback available. Install actionlint, docker, or python3+PyYAML.\n' >&2
+printf 'No actionlint or YAML fallback available. Install actionlint or python3+PyYAML.\n' >&2
 exit 1

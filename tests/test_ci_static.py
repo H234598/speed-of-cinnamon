@@ -349,10 +349,16 @@ class CiStaticTest(unittest.TestCase):
 
         self.assertIn("workflows_changed<<WORKFLOWS_CHANGED", workflow)
 
-    def test_lint_workflows_script_pins_actionlint_image(self) -> None:
+    def test_workflows_install_pinned_actionlint_release(self) -> None:
+        ci_workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        lint_workflow = (REPO_ROOT / ".github" / "workflows" / "super-linter.yml").read_text(encoding="utf-8")
         linter = (REPO_ROOT / "scripts" / "lint-workflows.sh").read_text(encoding="utf-8")
-        self.assertIn("rhysd/actionlint:v1.7.12", linter)
-        self.assertNotIn("rhysd/actionlint:latest", linter)
+        self.assertIn('version="1.7.12"', ci_workflow)
+        self.assertIn('version="1.7.12"', lint_workflow)
+        self.assertIn("rhysd/actionlint/releases/download/v${version}", ci_workflow)
+        self.assertIn("rhysd/actionlint/releases/download/v${version}", lint_workflow)
+        self.assertNotIn("rhysd/actionlint:", linter)
+        self.assertNotIn("latest", linter)
 
     def test_local_release_targets_support_generic_rpm_toggle(self) -> None:
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")

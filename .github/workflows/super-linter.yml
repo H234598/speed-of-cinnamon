@@ -25,6 +25,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install actionlint
+        run: |
+          version="1.7.12"
+          archive="actionlint_${version}_linux_amd64.tar.gz"
+          curl -fsSLo "/tmp/${archive}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${version}/${archive}"
+          tar -xzf "/tmp/${archive}" -C /tmp actionlint
+          sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
+
       - name: Lint Python and applet metadata
         run: make lint
 
