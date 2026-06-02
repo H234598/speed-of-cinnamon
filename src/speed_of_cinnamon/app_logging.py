@@ -232,7 +232,8 @@ def _is_sensitive_key(key: str) -> bool:
 
 def _safe_path(path: Path) -> str:
     try:
-        return sanitize_text(str(path.expanduser()), max_chars=MAX_LOG_FIELD_CHARS)
+        expanded = path.expanduser()
+        return sanitize_text(str(expanded), max_chars=MAX_LOG_FIELD_CHARS)
     except RuntimeError:
         return "[invalid-path]"
 
