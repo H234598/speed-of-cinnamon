@@ -135,7 +135,7 @@ tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@0" -C "${work_dir}
 mv "${staging_tarball}" "${final_tarball}"
 checksum_value="$(sha256sum "${final_tarball}")"
 checksum_value="${checksum_value%% *}"
-printf '%s  dist/%s\n' "${checksum_value}" "${package}.tar.gz" > "${final_checksum}"
+printf '%s  %s\n' "${checksum_value}" "${package}.tar.gz" > "${final_checksum}"
 
 printf 'Built %s\n' "${final_tarball}" >&2
 printf '%s\n' "${final_tarball}"

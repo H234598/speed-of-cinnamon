@@ -3,6 +3,8 @@ from __future__ import annotations
 import concurrent.futures
 import subprocess
 import re
+import shutil
+import tempfile
 import unittest
 import ast
 from pathlib import Path
@@ -330,7 +332,8 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("asset must not be a symlink", publisher)
         self.assertIn("checksum_target", publisher)
         self.assertIn("checksum file target mismatch", publisher)
-        self.assertIn("sha256sum --check --strict --status", publisher)
+        self.assertIn('checksum_dir="$(dirname "${checksums[0]}")"', publisher)
+        self.assertIn('sha256sum --check --strict --status "${checksum_file}"', publisher)
         self.assertIn("checksum mismatch for", publisher)
         self.assertIn("gh release create", publisher)
         self.assertIn("gh release upload", publisher)
@@ -406,8 +409,24 @@ class CiStaticTest(unittest.TestCase):
         self.assertTrue(tarball.exists())
         self.assertTrue(checksum.exists())
         checksum_text = checksum.read_text(encoding="utf-8")
-        self.assertIn(f"  dist/speed-of-cinnamon-{version}.tar.gz\n", checksum_text)
-        subprocess.run(["sha256sum", "--check", "--strict", "--status", str(checksum)], cwd=REPO_ROOT, check=True)
+        self.assertIn(f"  speed-of-cinnamon-{version}.tar.gz\n", checksum_text)
+        self.assertNotIn(f"  dist/speed-of-cinnamon-{version}.tar.gz\n", checksum_text)
+        subprocess.run(
+            ["sha256sum", "--check", "--strict", "--status", checksum.name],
+            cwd=checksum.parent,
+            check=True,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            download_dir = Path(tmp)
+            copied_tarball = download_dir / tarball.name
+            copied_checksum = download_dir / checksum.name
+            shutil.copy2(tarball, copied_tarball)
+            shutil.copy2(checksum, copied_checksum)
+            subprocess.run(
+                ["sha256sum", "--check", "--strict", "--status", copied_checksum.name],
+                cwd=download_dir,
+                check=True,
+            )
 
         outputs = [output for _, output in results]
         tarball_paths = set()

@@ -256,7 +256,9 @@ if [[ "${checksum_target##*/}" != "$(basename "${source_archives[0]}")" ]]; then
   printf 'checksum file target mismatch (%s) for %s\n' "${checksum_target}" "${source_archives[0]}" >&2
   exit 1
 fi
-if ! (cd "${repo_dir}" && sha256sum --check --strict --status "${checksums[0]}"); then
+checksum_dir="$(dirname "${checksums[0]}")"
+checksum_file="$(basename "${checksums[0]}")"
+if ! (cd "${repo_dir}/${checksum_dir}" && sha256sum --check --strict --status "${checksum_file}"); then
   printf 'checksum verification failed for %s\n' "${source_archives[0]}" >&2
   exit 1
 fi
