@@ -27,7 +27,7 @@ make install-local
 
 Then add `Speed of Cinnamon` from Cinnamon's applet settings. If needed, reload Cinnamon with `Alt+F2`, `r`, `Enter`.
 
-Release archives can be built and verified from the repo:
+Release archives can be built and verified from the repository:
 
 ```bash
 make dist-check
@@ -105,7 +105,7 @@ Local flag values are validated before release steps run:
 - `SNAP_BUILD=0` or `SNAP_BUILD=1`
 - `BUILD_GENERIC_RPM=0` or `BUILD_GENERIC_RPM=1`
 
-`make check` also runs `scripts/verify-authorship.sh`. That guard verifies the expected GitHub repo URL, commit
+`make check` also runs `scripts/verify-authorship.sh`. That guard verifies the expected GitHub repository URL, commit
 author/committer identity, applet metadata, Python project metadata, RPM spec metadata, and rejects upstream author
 markers in tracked text files.
 
