@@ -245,7 +245,10 @@ def _openai_compatible_endpoint(url: str, path: str) -> str:
 def _coerce_environment_text(name: str) -> str:
     if not isinstance(name, str) or isinstance(name, bool):
         return ""
-    value = os.environ.get(name)
+    try:
+        value = os.environ[name]
+    except KeyError:
+        return ""
     if value is None or isinstance(value, bool) or not isinstance(value, str):
         return ""
     return value

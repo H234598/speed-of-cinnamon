@@ -105,7 +105,10 @@ def _env_desktop() -> dict[str, object]:
 def _coerce_desktop_env(name: str) -> str:
     if isinstance(name, bool) or not isinstance(name, str):
         return ""
-    value = os.environ.get(name)
+    try:
+        value = os.environ[name]
+    except KeyError:
+        return ""
     if value is None or isinstance(value, bool) or not isinstance(value, str):
         return ""
     normalized = value.strip().lower()

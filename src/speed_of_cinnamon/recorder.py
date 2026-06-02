@@ -69,7 +69,10 @@ def _is_unsafe_env_var(name: str) -> bool:
 def _coerce_environment_value(name: str) -> str | None:
     if isinstance(name, bool) or not isinstance(name, str):
         return None
-    value = os.environ.get(name)
+    try:
+        value = os.environ[name]
+    except KeyError:
+        return None
     if value is None or isinstance(value, bool) or not isinstance(value, str):
         return None
     return value

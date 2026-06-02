@@ -22,7 +22,10 @@ def _contains_escaped_null(value: str) -> bool:
 def _xdg_path(environment_variable: str, default: Path) -> Path:
     if isinstance(environment_variable, bool) or not isinstance(environment_variable, str):
         raise RuntimeError("environment variable name must be text")
-    value = os.environ.get(environment_variable)
+    try:
+        value = os.environ[environment_variable]
+    except KeyError:
+        return default
     if value is None or isinstance(value, bool) or not isinstance(value, str):
         return default
     normalized = (value or "").strip()
