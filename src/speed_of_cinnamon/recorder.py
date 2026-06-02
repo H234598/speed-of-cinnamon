@@ -262,7 +262,8 @@ def detect_silent_recording(audio_path: Path) -> SilenceDetectionResult:
     except RecorderError as exc:
         return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, str(exc))
     try:
-        proc = subprocess.run(
+        # argv-only ffmpeg invocation with trusted binary resolution.
+        proc = subprocess.run(  # nosec B603
             [
                 ffmpeg,
                 "-hide_banner",

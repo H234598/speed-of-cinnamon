@@ -54,7 +54,8 @@ def _safe_home_path(*parts: str) -> Path:
         try:
             assert_no_symlink_ancestors(temp_root, field_name="temporary directory")
         except RuntimeError:
-            temp_root = Path("/tmp")
+            # Last-resort non-symlink fallback; no temp file is created here.
+            temp_root = Path("/tmp")  # nosec B108
         return temp_root.joinpath(*parts)
     return candidate
 

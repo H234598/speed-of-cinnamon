@@ -199,6 +199,7 @@ def _run_with_input(
     *,
     timeout: int = MAX_EXEC_TIMEOUT_SECONDS,
     max_output_chars: int | None = None,
+    resolved_command: str | None = None,
 ) -> None:
     if not isinstance(argv, (list, tuple)):
         raise OutputError("argv must be a sequence")
@@ -228,7 +229,7 @@ def _run_with_input(
         _contains_http_header_control_chars(arg) for arg in argv[1:]
     ):
         raise OutputError("command argument contains invalid control character")
-    runtime_command = _command_path(command)
+    runtime_command = resolved_command or _command_path(command)
 
     input_bytes = _validate_text_input(text)
 
@@ -281,7 +282,12 @@ def _which(command_name: str) -> str | None:
     return shutil.which(command_name, path=_TRUSTED_COMMAND_PATH)
 
 
-def _run_stdout(argv: list[str] | tuple[str, ...], *, timeout: int = MAX_EXEC_TIMEOUT_SECONDS) -> str:
+def _run_stdout(
+    argv: list[str] | tuple[str, ...],
+    *,
+    timeout: int = MAX_EXEC_TIMEOUT_SECONDS,
+    resolved_command: str | None = None,
+) -> str:
     if not isinstance(argv, (list, tuple)):
         raise OutputError("argv must be a sequence")
     if not all(isinstance(item, str) for item in argv):
@@ -303,7 +309,7 @@ def _run_stdout(argv: list[str] | tuple[str, ...], *, timeout: int = MAX_EXEC_TI
     ):
         raise OutputError("command argument contains invalid control character")
 
-    runtime_command = _command_path(command)
+    runtime_command = resolved_command or _command_path(command)
     try:
         proc = subprocess.run(  # nosec B603
             [runtime_command, *argv[1:]],
@@ -338,15 +344,26 @@ def _looks_like_terminal(value: str) -> bool:
     return any(marker in normalized for marker in TERMINAL_WINDOW_MARKERS)
 
 
-def _active_window_paste_key(*, xdotool_available: bool | None = None) -> str:
+def _active_window_paste_key(*, xdotool_available: bool | None = None, xdotool_command: str | None = None) -> str:
     if xdotool_available is None:
-        xdotool_available = bool(_which("xdotool"))
+        if xdotool_command is None:
+            xdotool_command = _which("xdotool")
+        xdotool_available = bool(xdotool_command)
     if not xdotool_available:
         return "ctrl+v"
-    window_id = _run_stdout(["xdotool", "getactivewindow"], timeout=MAX_PASTE_TIMEOUT_SECONDS)
+    runtime_command = xdotool_command or _command_path("xdotool")
+    window_id = _run_stdout(
+        ["xdotool", "getactivewindow"],
+        timeout=MAX_PASTE_TIMEOUT_SECONDS,
+        resolved_command=runtime_command,
+    )
     if not window_id:
         return "ctrl+v"
-    window_class = _run_stdout(["xdotool", "getwindowclassname", window_id], timeout=MAX_PASTE_TIMEOUT_SECONDS)
+    window_class = _run_stdout(
+        ["xdotool", "getwindowclassname", window_id],
+        timeout=MAX_PASTE_TIMEOUT_SECONDS,
+        resolved_command=runtime_command,
+    )
     return "ctrl+shift+v" if _looks_like_terminal(window_class) else "ctrl+v"
 
 
@@ -366,19 +383,23 @@ def set_clipboard(text: str) -> str:
 
 
 def paste_from_clipboard() -> None:
-    if _which("xdotool"):
-        paste_key = _active_window_paste_key(xdotool_available=True)
+    xdotool = _which("xdotool")
+    if xdotool:
+        paste_key = _active_window_paste_key(xdotool_available=True, xdotool_command=xdotool)
         _run_with_input(
             ["xdotool", "key", "--clearmodifiers", paste_key],
             "",
             timeout=MAX_PASTE_TIMEOUT_SECONDS,
+            resolved_command=xdotool,
         )
         return
-    if _which("wtype"):
+    wtype = _which("wtype")
+    if wtype:
         _run_with_input(
             ["wtype", "-M", "ctrl", "v", "-m", "ctrl"],
             "",
             timeout=MAX_PASTE_TIMEOUT_SECONDS,
+            resolved_command=wtype,
         )
         return
     raise OutputError("no keyboard helper found; install xdotool on Cinnamon X11")

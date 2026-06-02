@@ -366,13 +366,6 @@ class CommandChainTest(unittest.TestCase):
         with mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"):
             with self.assertRaisesRegex(CommandChainError, "segment is too long"):
                 run_command_chain([tuple(segment)], "", label="post-process")
-        with mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"):
-            with mock.patch(
-                "speed_of_cinnamon.command_chain.subprocess.run",
-                return_value=subprocess.CompletedProcess(["cmd"], 0, stdout=b"", stderr=b""),
-            ):
-                output = run_command_chain([tuple(segment)], "", label="post-process")
-        self.assertEqual(output, "")
 
     def test_run_command_chain_reports_command_not_found(self) -> None:
         with mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="missing"):

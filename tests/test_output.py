@@ -432,6 +432,7 @@ class OutputTest(unittest.TestCase):
             paste_from_clipboard()
 
         self.assertEqual(which_calls.count("xdotool"), 1)
+        self.assertEqual(which_calls.count("wtype"), 0)
 
     def test_active_window_paste_key_uses_shift_for_terminal_class(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
