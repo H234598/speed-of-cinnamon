@@ -279,6 +279,48 @@ class CommandChainTest(unittest.TestCase):
         with self.assertRaisesRegex(CommandChainError, "too many segments"):
             run_command_chain([("cmd",)] * (MAX_COMMAND_SEGMENTS + 1), "", label="post-process")
 
+    def test_filtered_environment_rejects_non_mapping_inputs(self) -> None:
+        from speed_of_cinnamon.cli import _filtered_environment as cli_filtered_environment
+        from speed_of_cinnamon.command_chain import _filtered_environment as chain_filtered_environment
+        from speed_of_cinnamon.output import _filtered_environment as output_filtered_environment
+        from speed_of_cinnamon.recorder import _filtered_environment as recorder_filtered_environment
+        from speed_of_cinnamon.transcriber import _filtered_environment as transcriber_filtered_environment
+
+        validators = [
+            cli_filtered_environment,
+            chain_filtered_environment,
+            output_filtered_environment,
+            recorder_filtered_environment,
+            transcriber_filtered_environment,
+        ]
+        for validate_env in validators:
+            with self.subTest(func=validate_env.__module__):
+                with self.assertRaisesRegex(RuntimeError, "environment base must be a mapping"):
+                    validate_env(base={"k": 1})  # type: ignore[arg-type]
+                with self.assertRaisesRegex(RuntimeError, "environment base must be a mapping"):
+                    validate_env(["bad"])  # type: ignore[arg-type]
+
+    def test_filtered_environment_rejects_invalid_items(self) -> None:
+        from speed_of_cinnamon.cli import _filtered_environment as cli_filtered_environment
+        from speed_of_cinnamon.command_chain import _filtered_environment as chain_filtered_environment
+        from speed_of_cinnamon.output import _filtered_environment as output_filtered_environment
+        from speed_of_cinnamon.recorder import _filtered_environment as recorder_filtered_environment
+        from speed_of_cinnamon.transcriber import _filtered_environment as transcriber_filtered_environment
+
+        validators = [
+            cli_filtered_environment,
+            chain_filtered_environment,
+            output_filtered_environment,
+            recorder_filtered_environment,
+            transcriber_filtered_environment,
+        ]
+        for validate_env in validators:
+            with self.subTest(func=validate_env.__module__):
+                with self.assertRaisesRegex(RuntimeError, "environment keys must be text"):
+                    validate_env(base={1: "value"})  # type: ignore[dict-key]
+                with self.assertRaisesRegex(RuntimeError, "environment values must be text"):
+                    validate_env(base={"key": False})  # type: ignore[arg-type]
+
     def test_run_command_chain_rejects_too_many_tokens_in_segment(self) -> None:
         segment: list[str] = ["cmd"] + ["a"] * (MAX_COMMAND_SEGMENT_TOKENS + 1)
         with mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"):
