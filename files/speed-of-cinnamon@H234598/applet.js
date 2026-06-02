@@ -3603,7 +3603,7 @@ MyApplet.prototype = {
     if (text.length > MAX_TEXT_INSERT_CHARS) {
       text = text.slice(0, MAX_TEXT_INSERT_CHARS);
     }
-    if (this.appendSpace && text && !/\s$/.test(text)) {
+    if (this.appendSpace && text && !" \t\n\r\f\v".includes(text[text.length - 1])) {
       text += " ";
     }
     return text;
