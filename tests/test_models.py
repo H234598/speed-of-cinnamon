@@ -727,9 +727,40 @@ class ModelsTest(unittest.TestCase):
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
             mock.patch.object(models, "CATALOG", (spec,)),
-            ):
+        ):
             with self.assertRaisesRegex(models.ModelError, "unsupported format"):
                 models.download_model("bad-size")
+
+    def test_model_path_rejects_absolute_catalog_filename(self) -> None:
+        spec = models.ModelSpec(
+            name="absolute",
+            filename="/tmp/ggml-absolute.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(b"absolute").hexdigest(),
+            description="absolute path",
+        )
+        with self.assertRaisesRegex(models.ModelError, "model filename must be a relative path without parent traversal"):
+            models.model_path(spec)
+
+    def test_download_model_rejects_multifile_catalog_path_traversal(self) -> None:
+        spec = models.ModelSpec(
+            name="ct2-escape",
+            filename="ct2-escape",
+            size="2 KiB",
+            sha1="",
+            description="ct2 escape",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-escape",
+            files=("config.json", "../model.bin"),
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+        ):
+            with self.assertRaisesRegex(models.ModelError, "model file path must be a relative path without parent traversal"):
+                models.download_model("ct2-escape")
 
     def test_resolve_model_rejects_non_text_name(self) -> None:
         with self.assertRaisesRegex(models.ModelError, "model name must be text"):

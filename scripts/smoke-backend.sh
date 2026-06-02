@@ -7,6 +7,23 @@ if [[ -z "${HOME:-}" ]]; then
   printf 'HOME must be set.\n' >&2
   exit 1
 fi
+account_home="$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f6 || true)"
+if [[ -z "${account_home}" || "${HOME}" != "${account_home}" ]]; then
+  printf 'Refusing to run with mismatched HOME: %s (expected %s).\n' "${HOME}" "${account_home}" >&2
+  exit 1
+fi
+if [[ -L "${HOME}" ]]; then
+  printf 'HOME must not be a symlink: %s\n' "${HOME}" >&2
+  exit 1
+fi
+if [[ "${HOME}" == "/" ]]; then
+  printf 'Refusing to run with root home directory.\n' >&2
+  exit 1
+fi
+if [[ ! -d "${HOME}" ]]; then
+  printf 'HOME must be an existing directory: %s\n' "${HOME}" >&2
+  exit 1
+fi
 
 if [[ ! -x "${HOME}/.local/bin/speed-of-cinnamon" && $# -eq 0 ]]; then
   printf 'backend not executable or missing; provide explicit backend path as first argument\n' >&2
@@ -18,8 +35,8 @@ if [[ ! -x "${backend}" ]]; then
   printf 'backend path is not executable: %s\n' "${backend}" >&2
   exit 1
 fi
-if command -v "${backend}" >/dev/null 2>&1; then
-  backend="$(command -v "${backend}")"
+if command -v -- "${backend}" >/dev/null 2>&1; then
+  backend="$(command -v -- "${backend}")"
 fi
 
 "${backend}" doctor --json

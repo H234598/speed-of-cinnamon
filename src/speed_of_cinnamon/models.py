@@ -539,22 +539,41 @@ def resolve_model(name: str) -> ModelSpec:
     raise ModelError(f"unknown model: {name}")
 
 
+def _validated_catalog_path_fragment(value: str, *, field_name: str) -> Path:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise ModelError(f"{field_name} must be text")
+    normalized = (value or "").strip()
+    if not normalized:
+        raise ModelError(f"{field_name} is required")
+    if _contains_escaped_null(normalized):
+        raise ModelError(f"{field_name} contains invalid null byte")
+    path = Path(normalized)
+    if path.is_absolute() or any(part == ".." for part in path.parts):
+        raise ModelError(f"{field_name} must be a relative path without parent traversal")
+    return path
+
+
 def model_path(model: ModelSpec) -> Path:
+    filename = _validated_catalog_path_fragment(model.filename, field_name="model filename")
     if model.model_format == "ctranslate2":
-        path = ctranslate2_models_dir() / model.filename
+        path = ctranslate2_models_dir() / filename
     else:
-        path = models_dir() / model.filename
+        path = models_dir() / filename
     assert_no_symlink_ancestors(path, field_name="model path")
     return path
 
 
 def model_download_urls(model: ModelSpec) -> list[tuple[str, str]]:
+    filename = _validated_catalog_path_fragment(model.filename, field_name="model filename")
     if model.files:
         return [
-            (filename, HUGGING_FACE_RESOLVE_URL.format(repo=model.repo_id, filename=filename))
+            (
+                str(_validated_catalog_path_fragment(filename, field_name="model file path")),
+                HUGGING_FACE_RESOLVE_URL.format(repo=model.repo_id, filename=filename),
+            )
             for filename in model.files
         ]
-    return [(model.filename, model.url)]
+    return [(str(filename), model.url)]
 
 
 def is_english_language(language: str) -> bool:
@@ -673,7 +692,10 @@ def default_ctranslate2_model_path(language: str = "") -> str:
 
 def _model_is_downloaded(model: ModelSpec, path: Path) -> bool:
     if model.files:
-        return path.is_dir() and all((path / filename).is_file() for filename in model.files)
+        return path.is_dir() and all(
+            (path / _validated_catalog_path_fragment(filename, field_name="model file path")).is_file()
+            for filename in model.files
+        )
     return path.is_file()
 
 

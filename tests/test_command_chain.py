@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import unittest
 import tempfile
@@ -11,6 +12,7 @@ from speed_of_cinnamon.command_chain import (
     MAX_COMMAND_SEGMENTS,
     MAX_COMMAND_INPUT_CHARS,
     MAX_COMMAND_OUTPUT_CHARS,
+    _command_path,
     _contains_escaped_null,
     _filesize,
     _read_file_head,
@@ -49,6 +51,8 @@ class CommandChainTest(unittest.TestCase):
 
         with self.assertRaisesRegex(CommandChainError, "unsupported shell operator"):
             split_command_chain("printf hello | printf world")
+        with self.assertRaisesRegex(CommandChainError, "unsupported shell operator"):
+            split_command_chain("printf hello ; printf world")
 
         with self.assertRaisesRegex(CommandChainError, "unsupported shell operator"):
             split_command_chain("python3 -c \"print(1)\" 2> /tmp/log")
@@ -108,7 +112,7 @@ class CommandChainTest(unittest.TestCase):
                 stdout_file.write(f"{cmd_text}\n".encode("utf-8"))
             return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
 
-        def which(command: str) -> str | None:
+        def which(command: str, path: str | None = None) -> str | None:
             return {"first": "first", "second": "second"}.get(command)
 
         with (
@@ -126,6 +130,49 @@ class CommandChainTest(unittest.TestCase):
         self.assertEqual(calls[0][1], "seed")
         self.assertEqual(calls[1][0][0], "second")
         self.assertEqual(calls[1][1], "segment-1")
+
+    def test_run_command_chain_strips_dangerous_environment_variables(self) -> None:
+        captured_env: dict[str, str] = {}
+
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            env = kwargs.get("env")
+            if isinstance(env, dict):
+                captured_env.update(env)
+            return subprocess.CompletedProcess(args[0] if isinstance(args[0], list) else [], 0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch(
+                "speed_of_cinnamon.command_chain.command_environment",
+                return_value={
+                    "SPEED_OF_CINNAMON_CONTEXT": "test",
+                    "LD_PRELOAD": "malicious-lib.so",
+                    "PYTHONPATH": "/tmp/evil",
+                },
+            ),
+            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="command"),
+            mock.patch("speed_of_cinnamon.command_chain.subprocess.run", side_effect=fake_run),
+        ):
+            run_command_chain([("command",)], "", label="command-chain")
+
+        self.assertNotIn("LD_PRELOAD", captured_env)
+        self.assertNotIn("PYTHONPATH", captured_env)
+        self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+
+    def test_command_path_ignores_trusted_path_environment_override(self) -> None:
+        captured_path: dict[str, str | None] = {}
+
+        def fake_which(command_name: str, path: str | None = None) -> str | None:
+            captured_path["path"] = path
+            return f"/usr/bin/{command_name}"
+
+        with (
+            mock.patch.dict(os.environ, {"SPEED_OF_CINNAMON_TRUSTED_PATH": "/tmp/evil"}),
+            mock.patch("speed_of_cinnamon.command_chain.shutil.which", side_effect=fake_which),
+        ):
+            resolved = _command_path("printf")
+
+        self.assertEqual(resolved, "/usr/bin/printf")
+        self.assertEqual(captured_path["path"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
     def test_run_command_chain_rejects_large_output(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:

@@ -547,6 +547,7 @@ class CliTest(unittest.TestCase):
         with (
             mock.patch("speed_of_cinnamon.cli.shutil.which", return_value="/usr/bin/ollama"),
             mock.patch("speed_of_cinnamon.cli.subprocess.run", return_value=completed) as mocked_run,
+            mock.patch.dict("os.environ", {"LD_PRELOAD": "bad", "PYTHONPATH": "/tmp/evil"}, clear=False),
             redirect_stdout(stdout),
         ):
             code = cli.run([
@@ -564,6 +565,8 @@ class CliTest(unittest.TestCase):
         mocked_run.assert_called_once()
         self.assertEqual(mocked_run.call_args.args[0], ["/usr/bin/ollama", "pull", "llama3.2:3b"])
         self.assertEqual(mocked_run.call_args.kwargs["env"]["OLLAMA_HOST"], "http://localhost:11434")
+        self.assertNotIn("LD_PRELOAD", mocked_run.call_args.kwargs["env"])
+        self.assertNotIn("PYTHONPATH", mocked_run.call_args.kwargs["env"])
 
     def test_install_text_model_rejects_oversized_stdout(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
@@ -1221,6 +1224,24 @@ class CliTest(unittest.TestCase):
         self.assertEqual(len(payload["transcripts"]), 1)
         self.assertEqual(payload["transcripts"][0]["name"], "huge.txt")
         self.assertLessEqual(len(payload["transcripts"][0]["text"]), 4000)
+
+    def test_history_skips_symlinked_transcripts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            real = transcript_dir / "real.txt"
+            real.write_text("real transcript\n", encoding="utf-8")
+            symlink = transcript_dir / "link.txt"
+            symlink.symlink_to(real)
+            os.utime(real, (100, 100))
+            os.utime(symlink, (200, 200), follow_symlinks=False)
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["history", "--limit", "5", "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(len(payload["transcripts"]), 1)
+        self.assertEqual(payload["transcripts"][0]["name"], "real.txt")
 
     def test_history_rejects_negative_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2990,6 +3011,29 @@ class CliTest(unittest.TestCase):
             path.write_bytes(b"bad\xff")
             with self.assertRaisesRegex(ValueError, "failed to decode file as UTF-8"):
                 cli.read_file_tail(path, 10)
+
+    def test_read_file_tail_opens_without_following_symlinks(self) -> None:
+        captured: dict[str, object] = {}
+        handle = mock.Mock()
+        handle.read.return_value = b"hello"
+        handle.tell.return_value = 5
+
+        def fake_os_open(path: Path, flags: int, mode: int = 0o600) -> int:
+            captured["path"] = path
+            captured["flags"] = flags
+            captured["mode"] = mode
+            return 11
+
+        with (
+            mock.patch("speed_of_cinnamon.cli.os.open", side_effect=fake_os_open),
+            mock.patch("speed_of_cinnamon.cli.os.fdopen", return_value=handle),
+        ):
+            text = cli.read_file_tail(Path("/tmp/sample.txt"), 10)
+
+        self.assertEqual(text, "hello")
+        self.assertEqual(captured["path"], Path("/tmp/sample.txt"))
+        self.assertEqual(captured["flags"], os.O_RDONLY | os.O_NOFOLLOW)
+        handle.close.assert_called_once()
 
     def test_read_file_tail_rejects_escaped_null(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,12 +1,18 @@
-.PHONY: check test coverage lint lint-workflows verify-authorship smoke-doctor smoke-backend release-dry-run release dist dist-check rpm rpm-check rpm-generic rpm-generic-check snap snap-check release-validate-flags install-local uninstall-local
+.PHONY: check test coverage lint lint-workflows python-security-scan shell-security-scan security-scan verify-authorship smoke-doctor smoke-backend release-dry-run release dist dist-check rpm rpm-check rpm-generic rpm-generic-check snap snap-check release-validate-flags install-local uninstall-local
 SHELL := /usr/bin/env bash
 
-PYTHON ?= python3
+PYTHON := $(shell command -v python3 2>/dev/null | awk 'NR==1 {print}')
+ifneq ($(strip $(PYTHON)),)
+override PYTHON := $(PYTHON)
+endif
+ifeq ($(strip $(PYTHON)),)
+$(error python3 is required)
+endif
 PROJECT_VERSION := $(shell $(PYTHON) -c 'import tomllib, pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])')
 SNAP_BUILD ?= 1
 BUILD_GENERIC_RPM ?= 1
 
-check: test lint verify-authorship smoke-doctor
+check: test lint verify-authorship smoke-doctor security-scan
 
 test:
 	PYTHONPATH=src $(PYTHON) -m unittest discover -s tests
@@ -23,6 +29,14 @@ lint:
 
 lint-workflows:
 	./scripts/lint-workflows.sh
+
+python-security-scan:
+	bandit -q -r src/speed_of_cinnamon -x tests
+
+shell-security-scan:
+	shellcheck scripts/*.sh
+
+security-scan: python-security-scan shell-security-scan
 
 verify-authorship:
 	./scripts/verify-authorship.sh

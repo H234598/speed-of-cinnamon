@@ -18,7 +18,7 @@ if [[ $# -gt 1 ]]; then
 fi
 
 for tool in rpm rpm2cpio cpio python3 realpath; do
-  if ! command -v "${tool}" >/dev/null 2>&1; then
+  if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found. Install rpm and cpio tooling.\n' "${tool}" >&2
     exit 1
   fi

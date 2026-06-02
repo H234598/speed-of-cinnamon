@@ -9,12 +9,12 @@ if [[ "${EUID:-0}" -eq 0 ]]; then
 fi
 
 for tool in dnf sudo command; do
-  if ! command -v "${tool}" >/dev/null 2>&1; then
+  if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found.\n' "${tool}" >&2
     exit 1
   fi
 done
-if ! command -v dnf >/dev/null 2>&1; then
+if ! command -v -- dnf >/dev/null 2>&1; then
   printf 'dnf not found. This helper is intended for Fedora.\n' >&2
   exit 1
 fi

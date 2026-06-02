@@ -87,8 +87,14 @@ jobs:
           WORKFLOWS_CHANGED: ${{ github.event_name != 'pull_request' || needs.workflow-change-detection.outputs.workflows_changed == 'true' }}
           ACTIONLINT_STRICT: "true"
 
-  check:
+  security-scan:
     needs: workflow-lint
+    uses: ./.github/workflows/security-scan.yml
+
+  check:
+    needs:
+      - workflow-lint
+      - security-scan
     runs-on: ubuntu-24.04
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -108,8 +114,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cpio rpm shellcheck
           if [[ "${BUILD_SNAP}" == "1" ]]; then
-            if ! command -v snapcraft >/dev/null 2>&1; then
-              if command -v snap >/dev/null 2>&1; then
+            if ! command -v -- snapcraft >/dev/null 2>&1; then
+              if command -v -- snap >/dev/null 2>&1; then
                 sudo snap install snapcraft --classic
               else
                 printf 'snap is missing; cannot install snapcraft. Install snapd or set build_snap to false.\n' >&2
@@ -174,8 +180,6 @@ jobs:
       - name: Build Snap package
         run: |
           if [[ "${BUILD_SNAP}" == "1" ]]; then
-            find . -path "./.git" -prune -o -type d -exec chmod a+rx {} +
-            find . -path "./.git" -prune -o -type f -exec chmod a+r {} +
             make snap
           fi
         if: env.BUILD_SNAP == '1'

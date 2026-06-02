@@ -10,13 +10,13 @@ workflows=(.github/workflows/*.yml .github/workflows/*.yaml)
 actionlint_strict="${ACTIONLINT_STRICT:-false}"
 
 run_actionlint() {
-  if command -v actionlint >/dev/null 2>&1; then
+  if command -v -- actionlint >/dev/null 2>&1; then
     actionlint "$@"
     return 0
   fi
 
   actionlint_image="rhysd/actionlint:v1.7.12"
-  if command -v docker >/dev/null 2>&1; then
+  if command -v -- docker >/dev/null 2>&1; then
     if docker info >/dev/null 2>&1; then
       if docker run --rm -v "${PWD}:/repo" -w /repo "${actionlint_image}" "$@"; then
         return 0
@@ -44,7 +44,7 @@ if [[ "${run_status}" == "1" ]]; then
   exit 1
 fi
 
-if command -v python3 >/dev/null 2>&1; then
+if command -v -- python3 >/dev/null 2>&1; then
   if python3 - <<'PY'
 import sys
 import glob

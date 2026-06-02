@@ -103,6 +103,53 @@ TRANSCRIBER_CHOICES = [
     "custom",
     "template",
 ]
+_TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+_BASE_ENV_KEYS = {
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "TERM",
+}
+_DANGEROUS_ENV_PREFIXES = ("LD_", "PYTHON", "BASH_", "__")
+_DANGEROUS_ENV_KEYS = {
+    "ENV",
+    "SHELLOPTS",
+    "PROMPT_COMMAND",
+    "IFS",
+    "PYTHONPATH",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "PYTHONSTARTUP",
+    "PYTHONHOME",
+    "BASH_ENV",
+}
+
+
+def _which(command_name: str) -> str | None:
+    return shutil.which(command_name, path=_TRUSTED_COMMAND_PATH)
+
+
+def _is_unsafe_env_var(name: str) -> bool:
+    return name in _DANGEROUS_ENV_KEYS or name.startswith(_DANGEROUS_ENV_PREFIXES)
+
+
+def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
+    env: dict[str, str] = {}
+    for key in _BASE_ENV_KEYS:
+        value = os.environ.get(key)
+        if value is not None:
+            env[key] = value
+    if base:
+        env.update(base)
+    env["PATH"] = _TRUSTED_COMMAND_PATH
+    for key in list(env):
+        if _is_unsafe_env_var(key):
+            env.pop(key, None)
+    return env
 
 
 def _contains_escaped_null(value: str) -> bool:
@@ -141,7 +188,7 @@ def _command_path(command: str) -> str:
         raise RuntimeError("command is empty")
     if os.path.sep in command_name or (os.path.altsep and os.path.altsep in command_name):
         raise RuntimeError("command must be a bare command name without path separators")
-    path = shutil.which(command_name)
+    path = _which(command_name)
     if not path:
         raise RuntimeError(f"{command_name} command is not available")
     return path
@@ -249,7 +296,26 @@ def read_file_tail(path: Path, max_chars: int) -> str:
     if max_chars > MAX_TRANSCRIPT_HISTORY_TEXT_CHARS:
         raise ValueError(f"max_chars must be at most {MAX_TRANSCRIPT_HISTORY_TEXT_CHARS}")
     max_bytes = max_chars * 4
-    with path.open("rb") as handle:
+    try:
+        assert_no_symlink_ancestors(path, field_name="file path")
+    except RuntimeError as exc:
+        raise OSError(str(exc)) from exc
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise OSError("secure file open is not supported on this platform")
+    try:
+        fd = os.open(path, os.O_RDONLY | nofollow_flag)
+    except OSError as exc:
+        raise OSError(str(exc)) from exc
+    try:
+        handle = os.fdopen(fd, "rb")
+    except OSError:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
+    try:
         handle.seek(0, os.SEEK_END)
         size = handle.tell()
         if size <= max_bytes:
@@ -260,6 +326,11 @@ def read_file_tail(path: Path, max_chars: int) -> str:
             text = handle.read().decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ValueError(f"failed to decode file as UTF-8: {path}") from exc
+    finally:
+        try:
+            handle.close()
+        except OSError:
+            pass
     if _contains_escaped_null(text):
         raise ValueError(f"file tail contains invalid null byte: {path}")
     if len(text) > max_chars:
@@ -1177,7 +1248,7 @@ def command_install_text_model(args: argparse.Namespace) -> dict[str, object]:
         if "command is not available" in str(exc):
             raise RuntimeError("ollama command is not available") from exc
         raise
-    env = os.environ.copy()
+    env = _filtered_environment()
     if url:
         env["OLLAMA_HOST"] = url
     try:

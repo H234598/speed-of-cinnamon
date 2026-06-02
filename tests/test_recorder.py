@@ -43,7 +43,7 @@ Source #11
 
 
 def which_only(command: str) -> mock.Mock:
-    return mock.Mock(side_effect=lambda name: f"/usr/bin/{command}" if name == command else None)
+    return mock.Mock(side_effect=lambda name, path=None: f"/usr/bin/{command}" if name == command else None)
 
 
 class RecorderTest(unittest.TestCase):
@@ -214,6 +214,33 @@ class RecorderTest(unittest.TestCase):
         self.assertIs(result, mocked_process)
         self.assertEqual(mocked_popen.call_args.args[0][0], "/usr/bin/true")
 
+    def test_start_recorder_filters_dangerous_environment_variables(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        captured_env: dict[str, str] = {}
+
+        def fake_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+            env = kwargs.get("env")
+            if isinstance(env, dict):
+                captured_env.update(env)
+            return mock.Mock()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch.dict(
+                    "speed_of_cinnamon.recorder.os.environ",
+                    {"LD_PRELOAD": "malicious-lib.so", "PYTHONPATH": "/tmp/evil", "HOME": "/tmp/home", "LANG": "en_US.UTF-8"},
+                    clear=True,
+                ),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=fake_popen),
+            ):
+                start_recorder(command, Path(tmp) / "session.log")
+
+        self.assertNotIn("LD_PRELOAD", captured_env)
+        self.assertNotIn("PYTHONPATH", captured_env)
+        self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+
     def test_start_recorder_sets_private_log_permissions(self) -> None:
         command = RecorderCommand(name="noop", argv=["true"])
         with tempfile.TemporaryDirectory() as tmp:
@@ -227,6 +254,55 @@ class RecorderTest(unittest.TestCase):
                 start_recorder(command, log_path)
             mode = log_path.stat().st_mode & 0o777
             self.assertEqual(mode, 0o600)
+
+    def test_start_recorder_opens_log_file_without_following_symlinks(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        captured: dict[str, object] = {}
+        fake_log_file = mock.Mock()
+        fake_log_file.fileno.return_value = 11
+
+        def fake_os_open(path: Path, flags: int, mode: int = 0o600) -> int:
+            captured["path"] = path
+            captured["flags"] = flags
+            captured["mode"] = mode
+            return 11
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "session.log"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+                mock.patch("speed_of_cinnamon.recorder.os.open", side_effect=fake_os_open),
+                mock.patch("speed_of_cinnamon.recorder.os.fdopen", return_value=fake_log_file),
+                mock.patch("speed_of_cinnamon.recorder.os.fchmod"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen") as mocked_popen,
+            ):
+                mocked_popen.return_value = mock.Mock()
+                start_recorder(command, log_path)
+
+        self.assertEqual(captured["path"], log_path)
+        self.assertEqual(captured["mode"], 0o600)
+        self.assertTrue(captured["flags"] & os.O_APPEND)
+        self.assertTrue(captured["flags"] & os.O_CREAT)
+        self.assertTrue(captured["flags"] & os.O_NOFOLLOW)
+
+    def test_start_recorder_rejects_symlink_log_leaf_after_validation(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            target = base / "foreign.log"
+            target.write_bytes(b"foreign-data")
+            log_path = base / "session.log"
+            log_path.symlink_to(target)
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.validate_recording_path", return_value=log_path),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+            ):
+                with self.assertRaisesRegex(RecorderError, "failed to open recorder log file"):
+                    start_recorder(command, log_path)
+
+            self.assertEqual(target.read_bytes(), b"foreign-data")
 
     def test_start_recorder_rejects_non_text_argument(self) -> None:
         command = RecorderCommand(name="noop", argv=["true", 1])  # type: ignore[list-item]
@@ -344,6 +420,32 @@ class RecorderTest(unittest.TestCase):
 
         self.assertEqual(calls, [["/usr/bin/pactl"]])
 
+    def test_run_pactl_command_filters_dangerous_environment_variables(self) -> None:
+        captured_env: dict[str, str] = {}
+
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            env = kwargs.get("env")
+            if isinstance(env, dict):
+                captured_env.update(env)
+            stdout = kwargs["stdout"]
+            stdout.write(b"default\n")
+            return subprocess.CompletedProcess(["pactl"], 0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch.dict(
+                "speed_of_cinnamon.recorder.os.environ",
+                {"LD_PRELOAD": "malicious-lib.so", "PYTHONPATH": "/tmp/evil", "HOME": "/tmp/home", "LANG": "en_US.UTF-8"},
+                clear=True,
+            ),
+            mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/pactl"),
+            mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=fake_run),
+        ):
+            _run_pactl_command(["pactl"], required=True)
+
+        self.assertNotIn("LD_PRELOAD", captured_env)
+        self.assertNotIn("PYTHONPATH", captured_env)
+        self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+
     def test_run_kill_rejects_bad_command_shape(self) -> None:
         with self.assertRaisesRegex(RecorderError, "invalid kill command"):
             _run_kill(("kill", "-9", 10), check_exit=True)  # type: ignore[arg-type]
@@ -385,6 +487,30 @@ class RecorderTest(unittest.TestCase):
             _run_kill(["kill", "-INT", "1234"], check_exit=True)
 
         self.assertEqual(calls[0][0], "/usr/bin/kill")
+
+    def test_run_kill_filters_dangerous_environment_variables(self) -> None:
+        captured_env: dict[str, str] = {}
+
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            env = kwargs.get("env")
+            if isinstance(env, dict):
+                captured_env.update(env)
+            return subprocess.CompletedProcess(["kill"], 0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch.dict(
+                "speed_of_cinnamon.recorder.os.environ",
+                {"LD_PRELOAD": "malicious-lib.so", "PYTHONPATH": "/tmp/evil", "HOME": "/tmp/home", "LANG": "en_US.UTF-8"},
+                clear=True,
+            ),
+            mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/kill"),
+            mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=fake_run),
+        ):
+            _run_kill(["kill", "-INT", "1234"], check_exit=False)
+
+        self.assertNotIn("LD_PRELOAD", captured_env)
+        self.assertNotIn("PYTHONPATH", captured_env)
+        self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
     def test_run_kill_rejects_missing_command(self) -> None:
         with mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value=None):

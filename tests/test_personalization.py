@@ -70,12 +70,26 @@ class PersonalizationTest(unittest.TestCase):
         self.assertEqual(env["SPEED_OF_CINNAMON_CONTEXT"], "Use project terms.")
         self.assertEqual(env["SPEED_OF_CINNAMON_VOCABULARY"], "PipeWire")
         self.assertIn("Vocabulary:\n- PipeWire", env["SPEED_OF_CINNAMON_PROMPT"])
+        self.assertIn("PATH", env)
 
     def test_command_environment_rejects_oversized_payload(self) -> None:
         with self.assertRaisesRegex(ValueError, "personal context is too large"):
             command_environment("x" * (MAX_PERSONAL_CONTEXT_CHARS + 1), "PipeWire")
         with self.assertRaisesRegex(ValueError, "vocabulary is too large"):
             command_environment("Use terms", "x" * (MAX_VOCABULARY_CHARS + 1))
+
+    def test_command_environment_filters_dangerous_variables(self) -> None:
+        with mock.patch.dict("speed_of_cinnamon.personalization.os.environ", {
+            "LD_PRELOAD": "malicious-lib.so",
+            "PYTHONPATH": "/tmp/evil",
+            "HOME": "/home/test",
+            "LANG": "en_US.UTF-8",
+        }, clear=True):
+            env = command_environment("Use project terms.", "PipeWire")
+
+        self.assertNotIn("LD_PRELOAD", env)
+        self.assertNotIn("PYTHONPATH", env)
+        self.assertEqual(env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
     def test_command_environment_rejects_oversized_payload_bytes(self) -> None:
         with mock.patch("speed_of_cinnamon.personalization.MAX_PERSONAL_CONTEXT_CHARS", 4):

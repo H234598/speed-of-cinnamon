@@ -38,7 +38,7 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output.shutil.which") as mocked_which,
             mock.patch("speed_of_cinnamon.output.subprocess.run") as mocked_run,
         ):
-            mocked_which.side_effect = lambda command: "found" if command == "xclip" else None
+            mocked_which.side_effect = lambda command, path=None: "found" if command == "xclip" else None
             mocked_run.return_value = subprocess.CompletedProcess(["xclip"], 0)
 
             method = set_clipboard("hello")
@@ -68,7 +68,7 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output.shutil.which") as mocked_which,
             mock.patch("speed_of_cinnamon.output.subprocess.run") as mocked_run,
         ):
-            mocked_which.side_effect = lambda command: {
+            mocked_which.side_effect = lambda command, path=None: {
                 "xclip": None,
                 "xsel": "found",
                 "wl-copy": None,
@@ -180,6 +180,30 @@ class OutputTest(unittest.TestCase):
             _run_with_input(["cmd", "arg"], "input")
 
         self.assertEqual(calls, [["/usr/bin/cmd", "arg"]])
+
+    def test_run_with_input_filters_dangerous_environment_variables(self) -> None:
+        captured_env: dict[str, str] = {}
+
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            env = kwargs.get("env")
+            if isinstance(env, dict):
+                captured_env.update(env)
+            return subprocess.CompletedProcess(["cmd"], 0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch.dict(
+                "speed_of_cinnamon.output.os.environ",
+                {"LD_PRELOAD": "malicious-lib.so", "PYTHONPATH": "/tmp/evil", "HOME": "/tmp/home", "LANG": "en_US.UTF-8"},
+                clear=True,
+            ),
+            mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"),
+            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+        ):
+            self.assertIsNone(_run_with_input(["cmd"], "hello"))
+
+        self.assertNotIn("LD_PRELOAD", captured_env)
+        self.assertNotIn("PYTHONPATH", captured_env)
+        self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
     def test_run_with_input_rejects_missing_command_when_resolved_path_missing(self) -> None:
         with mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/missing"):

@@ -75,13 +75,35 @@ class CiStaticTest(unittest.TestCase):
         offenders = sorted(set(offenders))
         self.assertEqual(offenders, [], f"shell-like runtime execution should be avoided: {offenders}")
 
+    def test_runtime_command_resolver_prefers_trusted_path(self) -> None:
+        files = [
+            "src/speed_of_cinnamon/command_chain.py",
+            "src/speed_of_cinnamon/cli.py",
+            "src/speed_of_cinnamon/output.py",
+            "src/speed_of_cinnamon/doctor.py",
+            "src/speed_of_cinnamon/recorder.py",
+            "src/speed_of_cinnamon/transcriber.py",
+        ]
+        for rel_path in files:
+            path = REPO_ROOT / rel_path
+            self.assertTrue(path.exists(), f"missing expected file: {path}")
+            text = path.read_text(encoding="utf-8")
+            self.assertIn('_TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"', text)
+            self.assertIn('def _which(command_name: str) -> str | None:', text)
+            self.assertIn("shutil.which(command_name, path=_TRUSTED_COMMAND_PATH)", text)
+            self.assertNotIn("SPEED_OF_CINNAMON_TRUSTED_PATH", text)
+
     def test_ci_uploads_release_and_rpm_artifacts(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        security_workflow = (REPO_ROOT / ".github" / "workflows" / "security-scan.yml").read_text(encoding="utf-8")
 
         self.assertIn("workflow-lint:", workflow)
         self.assertIn("workflow-change-detection:", workflow)
         self.assertIn("needs: workflow-lint", workflow)
         self.assertIn("needs: workflow-change-detection", workflow)
+        self.assertIn("security-scan:", workflow)
+        self.assertIn("uses: ./.github/workflows/security-scan.yml", workflow)
+        self.assertIn("needs:\n      - workflow-lint\n      - security-scan", workflow)
         self.assertIn('ACTIONLINT_STRICT: "true"', workflow)
         self.assertIn("build_generic_rpm:", workflow)
         self.assertIn("fetch-depth: 0", workflow)
@@ -95,7 +117,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("files: reports/lcov.info", workflow)
         self.assertIn("sudo apt-get update", workflow)
         self.assertIn("sudo apt-get install -y cpio rpm shellcheck", workflow)
-        self.assertIn("if ! command -v snapcraft", workflow)
+        self.assertIn("if ! command -v -- snapcraft", workflow)
         self.assertIn("run: make rpm-check", workflow)
         self.assertIn("run: make rpm-generic", workflow)
         self.assertIn("build_generic_rpm=false", workflow)
@@ -128,18 +150,42 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn("::set-output", workflow)
         self.assertNotIn("::set-state", workflow)
 
+        self.assertIn("name: Security Scan", security_workflow)
+        self.assertIn("workflow_call:", security_workflow)
+        self.assertIn("workflow_dispatch:", security_workflow)
+        self.assertIn("timeout-minutes: 15", security_workflow)
+        self.assertIn("timeout-minutes: 10", security_workflow)
+        self.assertIn("python-security:", security_workflow)
+        self.assertIn("shell-security:", security_workflow)
+        self.assertIn("run: python -m pip install --disable-pip-version-check --no-cache-dir bandit", security_workflow)
+        self.assertIn("run: make python-security-scan", security_workflow)
+        self.assertIn("run: make shell-security-scan", security_workflow)
+        self.assertIn("run: |\n          sudo apt-get update\n          sudo apt-get install -y --no-install-recommends shellcheck", security_workflow)
+        self.assertIn("permissions:", security_workflow)
+        self.assertIn("contents: read", security_workflow)
+        self.assertNotIn("contents: write", security_workflow)
+
     def test_authorship_guard_is_part_of_check_target(self) -> None:
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
         verifier = (REPO_ROOT / "scripts" / "verify-authorship.sh").read_text(encoding="utf-8")
 
-        self.assertIn("check: test lint verify-authorship smoke-doctor", makefile)
+        self.assertIn("check: test lint verify-authorship smoke-doctor security-scan", makefile)
         self.assertIn("coverage:", makefile)
         self.assertIn("coverage run --source=src/speed_of_cinnamon", makefile)
         self.assertIn("coverage lcov -o reports/lcov.info", makefile)
+        self.assertIn("PYTHON := $(shell command -v python3", makefile)
+        self.assertIn("ifneq ($(strip $(PYTHON)),)", makefile)
+        self.assertIn("override PYTHON := $(PYTHON)", makefile)
+        self.assertIn("$(error python3 is required)", makefile)
         self.assertIn("verify-authorship:\n\t./scripts/verify-authorship.sh", makefile)
+        self.assertIn("python-security-scan:\n\tbandit -q -r src/speed_of_cinnamon -x tests", makefile)
+        self.assertIn("shell-security-scan:\n\tshellcheck scripts/*.sh", makefile)
+        self.assertIn("security-scan: python-security-scan shell-security-scan", makefile)
         self.assertIn('expected_name = "H234598"', verifier)
         self.assertIn('expected_email = "54270221+H234598@users.noreply.github.com"', verifier)
         self.assertIn('expected_repo = "github.com/H234598/speed-of-cinnamon"', verifier)
+        self.assertIn('allowed_committers = {', verifier)
+        self.assertIn('("GitHub", "noreply@github.com")', verifier)
         self.assertIn("check_forbidden_names()", verifier)
         self.assertIn("check_git_identity()", verifier)
         self.assertNotIn("check_mailmap", verifier)
@@ -166,8 +212,36 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("speed-of-cinnamon\\.1(\\.gz)?", rpm_verifier)
         self.assertIn("speed-of-cinnamon-alarms\\.1(\\.gz)?", rpm_verifier)
         self.assertIn("docs/man/speed-of-cinnamon.1", install_local)
+        self.assertIn('export PYTHONPATH="${HOME}/.local/share/speed-of-cinnamon/python"', install_local)
+        self.assertIn('SPEED_OF_CINNAMON_TEST_HOME:-0', install_local)
+        self.assertIn("SPEED_OF_CINNAMON_TEST_HOME=1 make -C", dist_verifier)
         self.assertIn("speed-of-cinnamon.wiki.git", wiki_publisher)
         self.assertIn("User-Guide.md", wiki_publisher)
+
+    def test_verify_dist_blocks_dangerous_archive_entries(self) -> None:
+        dist_verifier = (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(encoding="utf-8")
+        self.assertIn("tarfile.open(tarball, \"r:gz\")", dist_verifier)
+        self.assertIn("member.issym()", dist_verifier)
+        self.assertIn("member.islnk()", dist_verifier)
+        self.assertIn("raise SystemExit(f\"dist archive contains unsupported link entry", dist_verifier)
+
+    def test_dev_backend_path_does_not_append_env_pythonpath(self) -> None:
+        dev_backend = (REPO_ROOT / "scripts" / "dev-backend.sh").read_text(encoding="utf-8")
+        self.assertNotIn("PYTHONPATH:+", dev_backend)
+        self.assertIn('export PYTHONPATH="${repo_dir}/src"', dev_backend)
+
+    def test_build_snap_rejects_symlinked_snap_dir(self) -> None:
+        build_snap = (REPO_ROOT / "scripts" / "build-snap.sh").read_text(encoding="utf-8")
+        verify_snap = (REPO_ROOT / "scripts" / "verify-snap.sh").read_text(encoding="utf-8")
+        self.assertIn('snap_dir="${repo_dir}/snap"', build_snap)
+        self.assertIn('if [[ -L "${snap_dir}" ]]; then', build_snap)
+        self.assertIn('snap directory must not be a symlink', build_snap)
+        self.assertIn('snapcraft_file="${snap_dir}/snapcraft.yaml"', build_snap)
+        self.assertIn('snap_dir="${repo_dir}/dist/snap"', verify_snap)
+        self.assertIn('if [[ -L "${snap_dir}" ]]; then', verify_snap)
+        self.assertIn('snap directory must not be a symlink', verify_snap)
+        self.assertIn('$\'\\n\'', verify_snap)
+        self.assertIn('snap file path contains control characters', verify_snap)
 
     def test_tag_release_workflow_publishes_verified_assets(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -185,7 +259,9 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("packages: none", workflow)
         self.assertIn("pull-requests: none", workflow)
         self.assertIn("workflow-lint:", workflow)
-        self.assertIn("needs: workflow-lint", workflow)
+        self.assertIn("security-scan:", workflow)
+        self.assertIn("uses: ./.github/workflows/security-scan.yml", workflow)
+        self.assertIn("needs:\n      - workflow-lint\n      - security-scan", workflow)
         self.assertIn('ACTIONLINT_STRICT: "true"', workflow)
         self.assertIn("fetch-depth: 0", workflow)
         self.assertIn("run: gh --version", workflow)
@@ -226,6 +302,9 @@ class CiStaticTest(unittest.TestCase):
             'snaps=(dist/snap/speed-of-cinnamon_"${version}"_*.snap)' in publisher
             or 'snaps=(dist/snap/speed-of-cinnamon_${version}_*.snap)' in publisher
         )
+        self.assertIn("required_tools=(git python3 realpath awk sha256sum grep)", publisher)
+        self.assertIn("if [[ \"${dry_run}\" == \"false\" ]]; then", publisher)
+        self.assertIn("required_tools+=(gh)", publisher)
         self.assertIn("skip_generic=", publisher)
         self.assertIn("generic_rpms=(", publisher)
         self.assertIn("generic_srpms=(", publisher)
@@ -235,6 +314,10 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("asset is not a regular file", publisher)
         self.assertIn("if [[ -L \"${asset}\" ]];", publisher)
         self.assertIn("asset must not be a symlink", publisher)
+        self.assertIn("checksum_target", publisher)
+        self.assertIn("checksum file target mismatch", publisher)
+        self.assertIn("sha256sum --check --strict --status", publisher)
+        self.assertIn("checksum mismatch for", publisher)
         self.assertIn("gh release create", publisher)
         self.assertIn("gh release upload", publisher)
         self.assertIn("--clobber", publisher)
@@ -294,6 +377,17 @@ class CiStaticTest(unittest.TestCase):
 
         for code, _ in results:
             self.assertEqual(code, 0)
+        pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        match = re.search(r'^version = "([^"]+)"$', pyproject, flags=re.MULTILINE)
+        self.assertIsNotNone(match)
+        version = match.group(1)
+        tarball = REPO_ROOT / "dist" / f"speed-of-cinnamon-{version}.tar.gz"
+        checksum = tarball.with_suffix(tarball.suffix + ".sha256")
+        self.assertTrue(tarball.exists())
+        self.assertTrue(checksum.exists())
+        checksum_text = checksum.read_text(encoding="utf-8")
+        self.assertIn(f"  dist/speed-of-cinnamon-{version}.tar.gz\n", checksum_text)
+        subprocess.run(["sha256sum", "--check", "--strict", "--status", str(checksum)], cwd=REPO_ROOT, check=True)
 
         outputs = [output for _, output in results]
         tarball_paths = set()

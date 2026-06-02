@@ -19,6 +19,10 @@ repo_dir = Path(sys.argv[1])
 expected_name = "H234598"
 expected_email = "54270221+H234598@users.noreply.github.com"
 expected_repo = "github.com/H234598/speed-of-cinnamon"
+allowed_committers = {
+    (expected_name, expected_email),
+    ("GitHub", "noreply@github.com"),
+}
 forbidden = re.compile("staff" + r"[-_ ]?" + "control", re.IGNORECASE)
 
 
@@ -106,12 +110,7 @@ def check_git_identity() -> None:
         if len(fields) != 5:
             fail(f"could not parse commit identity record: {record!r}")
         sha, author_name, author_email, committer_name, committer_email = fields
-        if (
-            author_name != expected_name
-            or author_email != expected_email
-            or committer_name != expected_name
-            or committer_email != expected_email
-        ):
+        if author_name != expected_name or author_email != expected_email or (committer_name, committer_email) not in allowed_committers:
             bad_commits.append(
                 f"{sha[:12]} author={author_name} <{author_email}> "
                 f"committer={committer_name} <{committer_email}>"

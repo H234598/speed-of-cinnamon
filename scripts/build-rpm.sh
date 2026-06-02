@@ -8,7 +8,7 @@ cd "${repo_dir}"
 
 require_cmd() {
   local tool=$1
-  if ! command -v "${tool}" >/dev/null 2>&1; then
+  if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found. Install %s.\n' "${tool}" "${tool}" >&2
     exit 1
   fi
@@ -52,7 +52,7 @@ require_cmd rpmbuild
 require_cmd python3
 require_cmd realpath
 
-python_bin="$(command -v python3)"
+python_bin="$(command -v -- python3)"
 if [[ ! -x "${repo_dir}/scripts/build-dist.sh" ]]; then
   printf 'build-dist script is missing: %s\n' "${repo_dir}/scripts/build-dist.sh" >&2
   exit 1

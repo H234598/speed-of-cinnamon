@@ -15,6 +15,7 @@ from speed_of_cinnamon.transcriber import (
     MAX_AUDIO_FILE_BYTES,
     MAX_AUDIO_PATH_CHARS,
     MAX_TRANSCRIBER_TEXT_CHARS,
+    _multipart_form_data,
     _read_file_head,
     _read_text_file,
     _assert_text_length,
@@ -88,6 +89,22 @@ class TranscriberTest(unittest.TestCase):
                     "printf hello",
                 )
         mocked_replace.assert_called_once()
+
+    def test_transcribe_rejects_symlinked_transcript_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            real_dir = Path(tmp) / "real-transcripts"
+            real_dir.mkdir()
+            link_dir = Path(tmp) / "link-transcripts"
+            link_dir.symlink_to(real_dir, target_is_directory=True)
+            with self.assertRaisesRegex(TranscriptionError, "transcript path must not pass through a symlink"):
+                transcribe(
+                    audio,
+                    "en",
+                    link_dir / "sample.txt",
+                    "printf hello",
+                )
 
     def test_write_text_atomic_sets_private_permissions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -206,6 +223,18 @@ class TranscriberTest(unittest.TestCase):
     def test_validate_audio_file_rejects_control_character(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "invalid control character"):
             validate_audio_file(Path("sample\n.wav"))
+
+    def test_validate_audio_file_rejects_home_symlink_expansion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            real_home = Path(tmp) / "real-home"
+            link_home = Path(tmp) / "link-home"
+            real_home.mkdir()
+            audio = real_home / "sample.wav"
+            audio.write_bytes(b"audio")
+            link_home.symlink_to(real_home, target_is_directory=True)
+            with mock.patch.dict("os.environ", {"HOME": str(link_home)}):
+                with self.assertRaisesRegex(TranscriptionError, "audio path must not pass through a symlink"):
+                    validate_audio_file(Path("~/sample.wav"))
 
     def test_validate_audio_file_rejects_non_path(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "audio path must be a Path"):
@@ -404,6 +433,32 @@ class TranscriberTest(unittest.TestCase):
 
         self.assertEqual(calls[0][0], "/usr/bin/whisper")
 
+    def test_run_limited_process_filters_dangerous_environment_variables(self) -> None:
+        captured_env: dict[str, str] = {}
+
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            env = kwargs.get("env")
+            if isinstance(env, dict):
+                captured_env.update(env)
+            stdout = kwargs["stdout"]
+            stdout.write(b"done")
+            return subprocess.CompletedProcess(["whisper"], 0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch.dict(
+                "speed_of_cinnamon.transcriber.os.environ",
+                {"LD_PRELOAD": "malicious-lib.so", "PYTHONPATH": "/tmp/evil", "HOME": "/tmp/home", "LANG": "en_US.UTF-8"},
+                clear=True,
+            ),
+            mock.patch("speed_of_cinnamon.transcriber.shutil.which", return_value="/usr/bin/whisper"),
+            mock.patch("speed_of_cinnamon.transcriber.subprocess.run", side_effect=fake_run),
+        ):
+            self.assertIsNone(_run_limited_process(["whisper", "audio"]))
+
+        self.assertNotIn("LD_PRELOAD", captured_env)
+        self.assertNotIn("PYTHONPATH", captured_env)
+        self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+
     def test_run_limited_process_rejects_non_list_command(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "transcriber command must be a list or tuple"):
             _run_limited_process("whisper", timeout=1)  # type: ignore[arg-type]
@@ -485,7 +540,7 @@ class TranscriberTest(unittest.TestCase):
                     transcribe_with_openai_whisper(audio, "en", text)
 
     def test_resolve_whisper_cpp_accepts_fedora_pwcpp(self) -> None:
-        def which(command: str) -> str | None:
+        def which(command: str, path: str | None = None) -> str | None:
             return "/usr/bin/pwcpp" if command == "pwcpp" else None
 
         with mock.patch("speed_of_cinnamon.transcriber.shutil.which", side_effect=which):
@@ -630,6 +685,15 @@ class TranscriberTest(unittest.TestCase):
         self.assertIn(b"whisper-large-v3", data)
         self.assertIn(b'name="language"', data)
         self.assertIn(b"de", data)
+
+    def test_multipart_form_data_rejects_symlink_audio_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target.wav"
+            target.write_bytes(b"audio")
+            audio_path = Path(tmp) / "sample.wav"
+            audio_path.symlink_to(target)
+            with self.assertRaisesRegex(TranscriptionError, "failed to read audio file for API upload"):
+                _multipart_form_data({"model": "whisper-1", "language": "en", "response_format": "json"}, "file", audio_path)
 
     def test_openai_compatible_api_requires_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -873,12 +937,12 @@ class TranscriberTest(unittest.TestCase):
         config = TranscriberConfig()
         with (
             mock.patch("speed_of_cinnamon.transcriber.default_whisper_cpp_model_path", return_value=""),
-            mock.patch("speed_of_cinnamon.transcriber.shutil.which", side_effect=lambda name: "/usr/bin/whisper" if name == "whisper" else None),
+            mock.patch("speed_of_cinnamon.transcriber.shutil.which", side_effect=lambda name, path=None: "/usr/bin/whisper" if name == "whisper" else None),
         ):
             self.assertEqual(resolve_transcriber(config), "whisper")
 
     def test_auto_uses_whisper_cpp_when_model_is_configured(self) -> None:
-        def which(command: str) -> str | None:
+        def which(command: str, path: str | None = None) -> str | None:
             return "/usr/bin/whisper-cli" if command == "whisper-cli" else None
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -892,7 +956,7 @@ class TranscriberTest(unittest.TestCase):
                 self.assertEqual(resolve_transcriber(config), "whisper-cpp")
 
     def test_auto_uses_downloaded_whisper_cpp_model(self) -> None:
-        def which(command: str) -> str | None:
+        def which(command: str, path: str | None = None) -> str | None:
             return "/usr/bin/whisper-cli" if command == "whisper-cli" else None
 
         with (

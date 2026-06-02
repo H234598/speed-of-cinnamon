@@ -16,7 +16,7 @@ if [[ -L "${dist_dir}" || ! -d "${dist_dir}" ]]; then
   exit 1
 fi
 
-if ! command -v realpath >/dev/null 2>&1; then
+if ! command -v -- realpath >/dev/null 2>&1; then
   printf 'realpath not found.\n' >&2
   exit 1
 fi
@@ -56,7 +56,27 @@ cleanup_tmpdir() {
 }
 trap cleanup_tmpdir EXIT
 
-tar -xzf "${tarball}" -C "${tmp_dir}"
+python3 - "$tarball" "$tmp_dir" <<'PY'
+import pathlib
+import tarfile
+import sys
+
+tarball = sys.argv[1]
+target = pathlib.Path(sys.argv[2])
+target.mkdir(parents=True, exist_ok=True)
+
+with tarfile.open(tarball, "r:gz") as archive:
+    for member in archive.getmembers():
+        if not (member.isfile() or member.isdir()):
+            raise SystemExit(f"dist archive contains unsupported entry type: {member.name}")
+        if member.name.startswith("/"):
+            raise SystemExit(f"dist archive path is absolute: {member.name}")
+        if ".." in member.name.split("/"):
+            raise SystemExit(f"dist archive path escapes target: {member.name}")
+        if member.issym() or member.islnk():
+            raise SystemExit(f"dist archive contains unsupported link entry: {member.name}")
+        archive.extract(member, target)
+PY
 
 package_dirs=()
 while IFS= read -r -d '' path; do
@@ -118,7 +138,7 @@ make -C "${package_dir}" check
 
 home_dir="${tmp_dir}/home"
 mkdir -p "${home_dir}"
-HOME="${home_dir}" make -C "${package_dir}" install-local
+HOME="${home_dir}" SPEED_OF_CINNAMON_TEST_HOME=1 make -C "${package_dir}" install-local
 
 backend="${home_dir}/.local/bin/speed-of-cinnamon"
 applet="${home_dir}/.local/share/cinnamon/applets/speed-of-cinnamon@H234598/applet.js"

@@ -6,7 +6,7 @@ IFS=$'\n\t'
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 wiki_url="${WIKI_URL:-https://github.com/H234598/speed-of-cinnamon.wiki.git}"
 
-if ! command -v git >/dev/null 2>&1; then
+if ! command -v -- git >/dev/null 2>&1; then
   printf 'git not found.\n' >&2
   exit 1
 fi

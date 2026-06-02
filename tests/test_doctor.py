@@ -11,7 +11,7 @@ from speed_of_cinnamon import doctor
 
 
 def which_from(names: set[str]) -> mock.Mock:
-    return mock.Mock(side_effect=lambda name: f"/usr/bin/{name}" if name in names else None)
+    return mock.Mock(side_effect=lambda name, path=None: f"/usr/bin/{name}" if name in names else None)
 
 
 class DoctorTest(unittest.TestCase):
@@ -200,6 +200,19 @@ class DoctorTest(unittest.TestCase):
                 payload = doctor.report(settings)
         self.assertTrue(payload["configured"]["transcriber"]["ok"])
         self.assertEqual(payload["configured"]["transcriber"]["resolved"], "faster-whisper")
+
+    def test_command_checks_use_trusted_command_path(self) -> None:
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which") as mocked_which:
+            with mock.patch.dict(
+                os.environ,
+                {"SPEED_OF_CINNAMON_TRUSTED_PATH": "/custom/bin:/usr/local/bin"},
+            ):
+                doctor.command_check("python3")
+            mocked_which.assert_called_once()
+            args, kwargs = mocked_which.call_args
+            self.assertEqual(args, ("python3",))
+            if "path" in kwargs:
+                self.assertEqual(kwargs["path"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
     def test_auto_asr_reports_missing_configured_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

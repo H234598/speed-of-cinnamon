@@ -45,6 +45,55 @@ OPENAI_TRANSCRIPTION_MODELS = {
 }
 
 
+_TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+_BASE_ENV_KEYS = {
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "TERM",
+}
+_DANGEROUS_ENV_PREFIXES = ("LD_", "PYTHON", "BASH_", "__")
+_DANGEROUS_ENV_KEYS = {
+    "ENV",
+    "SHELLOPTS",
+    "PROMPT_COMMAND",
+    "IFS",
+    "PYTHONPATH",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "PYTHONSTARTUP",
+    "PYTHONHOME",
+    "BASH_ENV",
+}
+
+
+def _which(command_name: str) -> str | None:
+    return shutil.which(command_name, path=_TRUSTED_COMMAND_PATH)
+
+
+def _is_unsafe_env_var(name: str) -> bool:
+    return name in _DANGEROUS_ENV_KEYS or name.startswith(_DANGEROUS_ENV_PREFIXES)
+
+
+def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
+    env: dict[str, str] = {}
+    for key in _BASE_ENV_KEYS:
+        value = os.environ.get(key)
+        if value is not None:
+            env[key] = value
+    if base:
+        env.update(base)
+    env["PATH"] = _TRUSTED_COMMAND_PATH
+    for key in list(env):
+        if _is_unsafe_env_var(key):
+            env.pop(key, None)
+    return env
+
+
 def _command_path(command: str) -> str:
     if not isinstance(command, str) or isinstance(command, bool):
         raise TranscriptionError("command must be text")
@@ -53,7 +102,7 @@ def _command_path(command: str) -> str:
         raise TranscriptionError("empty transcriber executable is not allowed")
     if os.path.sep in command_name or (os.path.altsep and os.path.altsep in command_name):
         raise TranscriptionError("command must be a bare command name without path separators")
-    resolved = shutil.which(command_name)
+    resolved = _which(command_name)
     if not resolved:
         raise TranscriptionError(f"{command_name} is not available")
     command_path = Path(resolved)
@@ -238,6 +287,7 @@ def _run_limited_process(command: list[str] | tuple[str, ...], *, timeout: int =
                     stderr=stderr_file,
                     timeout=timeout,
                     shell=False,
+                    env=_filtered_environment(),
                 )
             except FileNotFoundError as exc:
                 raise TranscriptionError(f"{executable} is not available") from exc
@@ -280,8 +330,13 @@ def validate_audio_file(path: Path) -> Path:
         raise TranscriptionError("audio path contains invalid null byte")
     if _contains_http_header_control_chars(str(path)):
         raise TranscriptionError("audio path contains invalid control character")
-    assert_no_symlink_ancestors(path, field_name="audio path")
-    normalized = path.expanduser().resolve(strict=False)
+    normalized = path.expanduser()
+    try:
+        assert_no_symlink_ancestors(normalized, field_name="audio path")
+    except RuntimeError as exc:
+        raise TranscriptionError(str(exc)) from exc
+    if normalized.is_symlink():
+        raise TranscriptionError(f"audio path must not be a symlink: {path}")
     if len(str(normalized)) > MAX_AUDIO_PATH_CHARS:
         raise TranscriptionError(f"audio file path is too long: {path}")
     if len(str(normalized).encode("utf-8")) > MAX_AUDIO_PATH_CHARS:
@@ -309,6 +364,30 @@ def validate_audio_file(path: Path) -> Path:
             f"audio file is too large: {stat_result.st_size} bytes (max {MAX_AUDIO_FILE_BYTES})"
         )
     return normalized
+
+
+def _read_private_file_bytes(path: Path, *, field_name: str) -> bytes:
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise TranscriptionError(f"secure {field_name} open is not supported on this platform")
+    try:
+        fd = os.open(path, os.O_RDONLY | nofollow_flag)
+    except OSError as exc:
+        raise TranscriptionError(f"failed to read {field_name}: {path}") from exc
+    try:
+        handle = os.fdopen(fd, "rb")
+    except OSError as exc:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise TranscriptionError(f"failed to read {field_name}: {path}") from exc
+    try:
+        return handle.read()
+    except OSError as exc:
+        raise TranscriptionError(f"failed to read {field_name}: {path}") from exc
+    finally:
+        handle.close()
 
 
 def _assert_text_length(value: str, *, field_name: str, max_chars: int | None = None) -> str:
@@ -640,9 +719,9 @@ def _multipart_form_data(fields: dict[str, str], file_field: str, file_path: Pat
         ).encode("utf-8")
     )
     try:
-        body.extend(file_path.read_bytes())
-    except OSError as exc:
-        raise TranscriptionError(f"failed to read audio file for API upload: {file_path}") from exc
+        body.extend(_read_private_file_bytes(file_path, field_name="audio file for API upload"))
+    except TranscriptionError as exc:
+        raise TranscriptionError(str(exc)) from exc
     body.extend(b"\r\n")
     body.extend(f"--{boundary}--\r\n".encode("utf-8"))
     return bytes(body), boundary
@@ -819,8 +898,15 @@ def transcribe(
 ) -> str:
     if not isinstance(audio_path, Path):
         raise TranscriptionError("audio path must be a Path")
+    if not isinstance(text_path, Path):
+        raise TranscriptionError("text path must be a Path")
     if isinstance(language, bool) or not isinstance(language, str):
         raise TranscriptionError("language must be text")
+    text_path = text_path.expanduser()
+    try:
+        assert_no_symlink_ancestors(text_path, field_name="transcript path")
+    except RuntimeError as exc:
+        raise TranscriptionError(str(exc)) from exc
     text_path.parent.mkdir(parents=True, exist_ok=True)
     if not isinstance(command_template, str) or isinstance(command_template, bool):
         raise TranscriptionError("command template must be text")

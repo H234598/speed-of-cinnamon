@@ -13,7 +13,7 @@ fi
 
 require_cmd() {
   local tool=$1
-  if ! command -v "${tool}" >/dev/null 2>&1; then
+  if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found. Install %s.\n' "${tool}" "${tool}" >&2
     exit 1
   fi
@@ -22,18 +22,24 @@ require_cmd() {
 for tool in python3 snapcraft mktemp rm mkdir find realpath; do
   require_cmd "${tool}"
 done
+snap_dir="${repo_dir}/snap"
 
 if ! snapcraft --version >/dev/null 2>&1; then
   printf 'snapcraft is installed but did not execute successfully.\n' >&2
   exit 1
 fi
 
-if [[ ! -f "${repo_dir}/snap/snapcraft.yaml" ]]; then
-  printf 'snapcraft manifest missing: %s\n' "${repo_dir}/snap/snapcraft.yaml" >&2
+if [[ -L "${snap_dir}" ]]; then
+  printf 'snap directory must not be a symlink: %s\n' "${snap_dir}" >&2
   exit 1
 fi
-if [[ -L "${repo_dir}/snap/snapcraft.yaml" ]]; then
-  printf 'snapcraft manifest must not be a symlink: %s\n' "${repo_dir}/snap/snapcraft.yaml" >&2
+
+if [[ ! -f "${snap_dir}/snapcraft.yaml" ]]; then
+  printf 'snapcraft manifest missing: %s\n' "${snap_dir}/snapcraft.yaml" >&2
+  exit 1
+fi
+if [[ -L "${snap_dir}/snapcraft.yaml" ]]; then
+  printf 'snapcraft manifest must not be a symlink: %s\n' "${snap_dir}/snapcraft.yaml" >&2
   exit 1
 fi
 
@@ -64,7 +70,7 @@ if [[ -L "${repo_tmp_root}" ]]; then
 fi
 mkdir -p "${repo_tmp_root}"
 
-snapcraft_file="${repo_dir}/snap/snapcraft.yaml"
+snapcraft_file="${snap_dir}/snapcraft.yaml"
 snapcraft_backup="$(mktemp "${repo_tmp_root}/speed-of-cinnamon-snapcraft-XXXXXX")"
 cp "${snapcraft_file}" "${snapcraft_backup}"
 tmp_output=""

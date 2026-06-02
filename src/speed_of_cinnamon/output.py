@@ -14,6 +14,30 @@ class OutputError(RuntimeError):
     pass
 
 
+_TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+_BASE_ENV_KEYS = {
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "TERM",
+}
+_DANGEROUS_ENV_PREFIXES = ("LD_", "PYTHON", "BASH_", "__")
+_DANGEROUS_ENV_KEYS = {
+    "ENV",
+    "SHELLOPTS",
+    "PROMPT_COMMAND",
+    "IFS",
+    "PYTHONPATH",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "PYTHONSTARTUP",
+    "PYTHONHOME",
+    "BASH_ENV",
+}
 MAX_OUTPUT_CHARS = 1_000_000
 MAX_INPUT_CHARS = 1_000_000
 MAX_ERROR_CHARS = 1_024
@@ -21,6 +45,25 @@ MAX_PASTE_TIMEOUT_SECONDS = 10
 MAX_TYPE_TIMEOUT_SECONDS = 30
 MAX_EXEC_TIMEOUT_SECONDS = 10
 MAX_TYPE_DELAY_MS = 10_000
+
+
+def _is_unsafe_env_var(name: str) -> bool:
+    return name in _DANGEROUS_ENV_KEYS or name.startswith(_DANGEROUS_ENV_PREFIXES)
+
+
+def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
+    env: dict[str, str] = {}
+    for key in _BASE_ENV_KEYS:
+        value = os.environ.get(key)
+        if value is not None:
+            env[key] = value
+    if base:
+        env.update(base)
+    env["PATH"] = _TRUSTED_COMMAND_PATH
+    for key in list(env):
+        if _is_unsafe_env_var(key):
+            env.pop(key, None)
+    return env
 TERMINAL_WINDOW_MARKERS = (
     "alacritty",
     "blackbox",
@@ -165,6 +208,7 @@ def _run_with_input(
                 stderr=stderr_file,
                 timeout=timeout,
                 shell=False,
+                env=_filtered_environment(),
             )
         except FileNotFoundError as exc:
             raise OutputError(f"{command} is not available") from exc
@@ -192,11 +236,15 @@ def _command_path(command: str) -> str:
         raise OutputError("command is empty")
     if os.path.sep in command_name or (os.path.altsep and os.path.altsep in command_name):
         raise OutputError("command must be a bare command name without path separators")
-    resolved = shutil.which(command_name)
+    resolved = _which(command_name)
     if not resolved:
         raise OutputError(f"{command_name} is not available")
     command_path = Path(resolved)
     return str(command_path)
+
+
+def _which(command_name: str) -> str | None:
+    return shutil.which(command_name, path=_TRUSTED_COMMAND_PATH)
 
 
 def _run_stdout(argv: list[str] | tuple[str, ...], *, timeout: int = MAX_EXEC_TIMEOUT_SECONDS) -> str:
@@ -230,6 +278,7 @@ def _run_stdout(argv: list[str] | tuple[str, ...], *, timeout: int = MAX_EXEC_TI
             stderr=subprocess.PIPE,
             timeout=timeout,
             shell=False,
+            env=_filtered_environment(),
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return ""
@@ -256,7 +305,7 @@ def _looks_like_terminal(value: str) -> bool:
 
 
 def _active_window_paste_key() -> str:
-    if not shutil.which("xdotool"):
+    if not _which("xdotool"):
         return "ctrl+v"
     window_id = _run_stdout(["xdotool", "getactivewindow"], timeout=MAX_PASTE_TIMEOUT_SECONDS)
     if not window_id:
@@ -268,20 +317,20 @@ def _active_window_paste_key() -> str:
 def set_clipboard(text: str) -> str:
     if not isinstance(text, str) or isinstance(text, bool):
         raise OutputError("text must be text")
-    if shutil.which("xclip"):
+    if _which("xclip"):
         _run_with_input(["xclip", "-selection", "clipboard"], text)
         return "xclip"
-    if shutil.which("xsel"):
+    if _which("xsel"):
         _run_with_input(["xsel", "--clipboard", "--input"], text)
         return "xsel"
-    if shutil.which("wl-copy"):
+    if _which("wl-copy"):
         _run_with_input(["wl-copy"], text)
         return "wl-copy"
     raise OutputError("no clipboard helper found; install xclip, xsel, or wl-clipboard")
 
 
 def paste_from_clipboard() -> None:
-    if shutil.which("xdotool"):
+    if _which("xdotool"):
         paste_key = _active_window_paste_key()
         _run_with_input(
             ["xdotool", "key", "--clearmodifiers", paste_key],
@@ -289,7 +338,7 @@ def paste_from_clipboard() -> None:
             timeout=MAX_PASTE_TIMEOUT_SECONDS,
         )
         return
-    if shutil.which("wtype"):
+    if _which("wtype"):
         _run_with_input(
             ["wtype", "-M", "ctrl", "v", "-m", "ctrl"],
             "",
@@ -300,7 +349,7 @@ def paste_from_clipboard() -> None:
 
 
 def type_text(text: str, delay_ms: int) -> None:
-    if not shutil.which("xdotool"):
+    if not _which("xdotool"):
         raise OutputError("xdotool is required for direct typing on Cinnamon X11")
     if not isinstance(delay_ms, int) or isinstance(delay_ms, bool):
         raise OutputError("typing delay must be an integer")

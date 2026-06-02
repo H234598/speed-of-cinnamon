@@ -5,10 +5,15 @@ IFS=$'\n\t'
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_dir}"
+snap_dir="${repo_dir}/dist/snap"
+if [[ -L "${snap_dir}" ]]; then
+  printf 'snap directory must not be a symlink: %s\n' "${snap_dir}" >&2
+  exit 1
+fi
 
 require_cmd() {
   local tool=$1
-  if ! command -v "${tool}" >/dev/null 2>&1; then
+  if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found. Install %s.\n' "${tool}" "${tool}" >&2
     exit 1
   fi
@@ -28,6 +33,10 @@ if [[ ! -f "${snap_path}" ]]; then
   printf 'snap file not found: %s\n' "${snap_path}" >&2
   exit 1
 fi
+if [[ "${snap_path}" == *$'\n'* || "${snap_path}" == *$'\r'* || "${snap_path}" == *$'\t'* ]]; then
+  printf 'snap file path contains control characters: %s\n' "${snap_path}" >&2
+  exit 1
+fi
 
 if [[ -L "${snap_path}" ]]; then
   printf 'snap file must not be a symlink: %s\n' "${snap_path}" >&2
@@ -35,7 +44,7 @@ if [[ -L "${snap_path}" ]]; then
 fi
 
 absolute="$(realpath "${snap_path}")"
-if [[ "${absolute}" != "${repo_dir}/dist/snap/"* ]]; then
+if [[ "${absolute}" != "${snap_dir}/"* ]]; then
   printf 'snap file is outside repository root: %s\n' "${snap_path}" >&2
   exit 1
 fi

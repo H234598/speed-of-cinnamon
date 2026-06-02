@@ -7,10 +7,16 @@ This document covers local checks, coverage, release archives, RPMs, and CI beha
 ```bash
 make check
 make lint-workflows
+make python-security-scan
+make shell-security-scan
+make security-scan
 ```
 
 `make lint-workflows` runs the workflow YAML parser locally and uses a fallback `actionlint` check when available; CI sets
 `ACTIONLINT_STRICT=true` so `actionlint` (or Docker-based actionlint) is mandatory in workflow lint jobs.
+
+`make python-security-scan` runs Bandit over `src/speed_of_cinnamon`, and `make shell-security-scan` runs ShellCheck
+over `scripts/*.sh`. `make security-scan` runs both local scans.
 
 `make check` runs:
 
@@ -18,7 +24,8 @@ make lint-workflows
 - Python bytecode compilation for `src` and `tests`,
 - Cinnamon `metadata.json` and `settings-schema.json` validation,
 - authorship and metadata verification,
-- backend doctor smoke check.
+- backend doctor smoke check,
+- repository security scan.
 
 The authorship guard checks the expected GitHub repo URL, commit author/committer identity, applet metadata, Python
 project metadata, RPM spec metadata, and forbidden upstream author markers in tracked text files.
@@ -152,6 +159,7 @@ GitHub Actions runs on push, pull request, and manual dispatch. CI has a dedicat
 - installs Python 3.12,
 - installs shell/RPM tooling,
 - installs Coverage.py,
+- calls the reusable `Security Scan` workflow before the main build job,
 - runs `make check`,
 - generates LCOV coverage,
 - uploads coverage to QLTY when the secret exists,
@@ -161,6 +169,11 @@ GitHub Actions runs on push, pull request, and manual dispatch. CI has a dedicat
 - builds snap package,
 - uploads source, RPM, generic RPM and snap artifacts,
 - runs `shellcheck`.
+
+The reusable security workflow runs:
+
+- `make python-security-scan` after installing Bandit,
+- `make shell-security-scan` after installing ShellCheck.
 
 When dispatching CI manually, use `build_snap=false` to skip snap-toolchain/bootstrap and snap artifact creation.
 Use `build_generic_rpm=false` to skip generic RPM generation and upload when only core packages are desired.

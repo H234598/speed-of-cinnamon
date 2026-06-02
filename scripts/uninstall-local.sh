@@ -8,6 +8,23 @@ if [[ -z "${HOME:-}" ]]; then
   printf 'HOME must be set.\n' >&2
   exit 1
 fi
+account_home="$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f6 || true)"
+if [[ -z "${account_home}" || "${HOME}" != "${account_home}" ]]; then
+  printf 'Refusing to run with mismatched HOME: %s (expected %s).\n' "${HOME}" "${account_home}" >&2
+  exit 1
+fi
+if [[ -L "${HOME}" ]]; then
+  printf 'HOME must not be a symlink: %s\n' "${HOME}" >&2
+  exit 1
+fi
+if [[ "${HOME}" == "/" ]]; then
+  printf 'Refusing to run with root home directory.\n' >&2
+  exit 1
+fi
+if [[ ! -d "${HOME}" ]]; then
+  printf 'HOME must be an existing directory: %s\n' "${HOME}" >&2
+  exit 1
+fi
 applet_dir="${HOME}/.local/share/cinnamon/applets/${uuid}"
 bin_path="${HOME}/.local/bin/speed-of-cinnamon"
 man_dir="${HOME}/.local/share/man/man1"

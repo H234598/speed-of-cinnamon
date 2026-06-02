@@ -7,7 +7,7 @@ repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_dir}"
 
 for tool in python3 tar sha256sum mktemp cp find rm git; do
-  if ! command -v "${tool}" >/dev/null 2>&1; then
+  if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found.\n' "${tool}" >&2
     exit 1
   fi
@@ -105,13 +105,13 @@ EOF
 final_tarball="${dist_dir}/${package}.tar.gz"
 final_checksum="${final_tarball}.sha256"
 staging_tarball="$(mktemp "${dist_dir}/.${package}.tar.gz.XXXXXX")"
-staging_checksum="${staging_tarball}.sha256"
-trap 'rm -f "${staging_tarball}" "${staging_checksum}"' EXIT
+trap 'rm -f "${staging_tarball}"' EXIT
 
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@0" -C "${work_dir}" -czf "${staging_tarball}" "${package}"
-sha256sum "${staging_tarball}" > "${staging_checksum}"
 mv "${staging_tarball}" "${final_tarball}"
-mv "${staging_checksum}" "${final_checksum}"
+checksum_value="$(sha256sum "${final_tarball}")"
+checksum_value="${checksum_value%% *}"
+printf '%s  dist/%s\n' "${checksum_value}" "${package}.tar.gz" > "${final_checksum}"
 
 printf 'Built %s\n' "${final_tarball}" >&2
 printf '%s\n' "${final_tarball}"

@@ -17,11 +17,65 @@ class CommandChainError(RuntimeError):
     pass
 
 
+_TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+_BASE_ENV_KEYS = {
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "TERM",
+}
+_DANGEROUS_ENV_PREFIXES = ("LD_", "PYTHON", "BASH_", "__")
+_DANGEROUS_ENV_KEYS = {
+    "ENV",
+    "SHELLOPTS",
+    "PROMPT_COMMAND",
+    "IFS",
+    "PYTHONPATH",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "PYTHONSTARTUP",
+    "PYTHONHOME",
+    "BASH_ENV",
+}
+
+
+def _which(command_name: str) -> str | None:
+    return shutil.which(command_name, path=_TRUSTED_COMMAND_PATH)
+
+
+def _is_unsafe_env_var(name: str) -> bool:
+    return name in _DANGEROUS_ENV_KEYS or name.startswith(_DANGEROUS_ENV_PREFIXES)
+
+
+def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
+    env: dict[str, str] = {}
+    for key in _BASE_ENV_KEYS:
+        value = os.environ.get(key)
+        if value is not None:
+            env[key] = value
+
+    if base:
+        for key, value in base.items():
+            env[key] = value
+
+    env["PATH"] = _TRUSTED_COMMAND_PATH
+    for key in list(env):
+        if _is_unsafe_env_var(key):
+            env.pop(key, None)
+    return env
+
+
 FORBIDDEN_COMMAND_OPERATORS = {
     "|",
     "||",
     "|&",
     "&",
+    ";",
+    ";;",
     "<",
     ">",
     ">>",
@@ -56,7 +110,7 @@ def _command_path(command: str) -> str:
         raise CommandChainError("command must be a bare command name without path separators")
     if _contains_command_control_chars(command_name):
         raise CommandChainError("command contains invalid control character")
-    resolved = shutil.which(command_name)
+    resolved = _which(command_name)
     if not resolved:
         raise CommandChainError(f"{command_name} is not available")
     command_path = Path(resolved)
@@ -182,6 +236,7 @@ def run_command_chain(
 
     try:
         env = command_environment(personal_context, vocabulary)
+        env = _filtered_environment(env)
     except ValueError as exc:
         raise CommandChainError(str(exc)) from exc
     output = input_text

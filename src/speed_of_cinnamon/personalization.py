@@ -4,6 +4,47 @@ import os
 
 MAX_PERSONAL_CONTEXT_CHARS = 65_535
 MAX_VOCABULARY_CHARS = 65_535
+_TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+_BASE_ENV_KEYS = {
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "TERM",
+}
+_DANGEROUS_ENV_PREFIXES = ("LD_", "PYTHON", "BASH_", "__")
+_DANGEROUS_ENV_KEYS = {
+    "ENV",
+    "SHELLOPTS",
+    "PROMPT_COMMAND",
+    "IFS",
+    "PYTHONPATH",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "PYTHONSTARTUP",
+    "PYTHONHOME",
+    "BASH_ENV",
+}
+
+
+def _is_unsafe_env_var(name: str) -> bool:
+    return name in _DANGEROUS_ENV_KEYS or name.startswith(_DANGEROUS_ENV_PREFIXES)
+
+
+def _filtered_environment() -> dict[str, str]:
+    env: dict[str, str] = {}
+    for key in _BASE_ENV_KEYS:
+        value = os.environ.get(key)
+        if value is not None:
+            env[key] = value
+    env["PATH"] = _TRUSTED_COMMAND_PATH
+    for key in list(env):
+        if _is_unsafe_env_var(key):
+            env.pop(key, None)
+    return env
 
 
 def normalize_context(value: str = "") -> str:
@@ -66,7 +107,7 @@ def command_environment(personal_context: str = "", vocabulary: str = "") -> dic
     normalized_vocabulary = normalize_vocabulary(vocabulary)
     prompt = build_personalization_prompt(personal_context, vocabulary)
 
-    env = os.environ.copy()
+    env = _filtered_environment()
     env["SPEED_OF_CINNAMON_CONTEXT"] = context
     env["SPEED_OF_CINNAMON_VOCABULARY"] = normalized_vocabulary
     env["SPEED_OF_CINNAMON_PROMPT"] = prompt

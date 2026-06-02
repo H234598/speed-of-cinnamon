@@ -20,6 +20,55 @@ class RecorderError(RuntimeError):
     pass
 
 
+_TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+_BASE_ENV_KEYS = {
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "TERM",
+}
+_DANGEROUS_ENV_PREFIXES = ("LD_", "PYTHON", "BASH_", "__")
+_DANGEROUS_ENV_KEYS = {
+    "ENV",
+    "SHELLOPTS",
+    "PROMPT_COMMAND",
+    "IFS",
+    "PYTHONPATH",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "PYTHONSTARTUP",
+    "PYTHONHOME",
+    "BASH_ENV",
+}
+
+
+def _which(command_name: str) -> str | None:
+    return shutil.which(command_name, path=_TRUSTED_COMMAND_PATH)
+
+
+def _is_unsafe_env_var(name: str) -> bool:
+    return name in _DANGEROUS_ENV_KEYS or name.startswith(_DANGEROUS_ENV_PREFIXES)
+
+
+def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
+    env: dict[str, str] = {}
+    for key in _BASE_ENV_KEYS:
+        value = os.environ.get(key)
+        if value is not None:
+            env[key] = value
+    if base:
+        env.update(base)
+    env["PATH"] = _TRUSTED_COMMAND_PATH
+    for key in list(env):
+        if _is_unsafe_env_var(key):
+            env.pop(key, None)
+    return env
+
+
 @dataclass(frozen=True)
 class RecorderCommand:
     name: str
@@ -108,7 +157,7 @@ def _command_path(command: str) -> str:
         raise RecorderError("command is empty")
     if os.path.sep in command_name or (os.path.altsep and os.path.altsep in command_name):
         raise RecorderError("command must be a bare command name without path separators")
-    resolved = shutil.which(command_name)
+    resolved = _which(command_name)
     if not resolved:
         raise RecorderError(f"{command_name} is not available")
     command_path = Path(resolved)
@@ -204,7 +253,9 @@ def validate_recording_path(path: Path, *, suffix: str, require_recordings_dir: 
         raise RecorderError("recording artifact suffix must be text")
     if _contains_escaped_null(str(path)):
         raise RecorderError("recording artifact path contains invalid null byte")
-    normalized = path.expanduser().resolve(strict=False)
+    normalized = path.expanduser()
+    assert_no_symlink_ancestors(normalized, field_name="recording artifact path")
+    normalized = normalized.resolve(strict=False)
     if len(str(normalized)) > MAX_RECORDING_PATH_CHARS:
         raise RecorderError("recording artifact path is too long")
     if len(str(normalized).encode("utf-8")) > MAX_RECORDING_PATH_CHARS:
@@ -221,6 +272,7 @@ def validate_recording_path(path: Path, *, suffix: str, require_recordings_dir: 
         raise RecorderError(f"recording artifact must use {suffix} extension")
     if require_recordings_dir:
         root = recordings_dir().resolve(strict=False)
+        assert_no_symlink_ancestors(root, field_name="recordings directory")
         try:
             normalized.relative_to(root)
         except ValueError as exc:
@@ -249,7 +301,7 @@ def choose_recorder(preference: str, audio_path: Path, max_seconds: int, input_d
     target = normalize_input_device(input_device)
     candidates = [preference] if preference != "auto" else ["pw-record", "parecord", "arecord"]
     for candidate in candidates:
-        if candidate == "pw-record" and shutil.which("pw-record"):
+        if candidate == "pw-record" and _which("pw-record"):
             argv = ["pw-record", "--rate", "16000", "--channels", "1", "--format", "s16"]
             if target:
                 argv.extend(["--target", target])
@@ -257,12 +309,12 @@ def choose_recorder(preference: str, audio_path: Path, max_seconds: int, input_d
                 argv.extend(["--sample-count", str(16000 * max_seconds)])
             argv.append(str(audio_path))
             return RecorderCommand(candidate, argv)
-        if candidate == "parecord" and shutil.which("parecord"):
+        if candidate == "parecord" and _which("parecord"):
             argv = ["parecord", "--file-format=wav", "--rate=16000", "--channels=1", str(audio_path)]
             if target:
                 argv.insert(-1, f"--device={target}")
             return RecorderCommand(candidate, argv)
-        if candidate == "arecord" and shutil.which("arecord"):
+        if candidate == "arecord" and _which("arecord"):
             argv = ["arecord", "-f", "S16_LE", "-r", "16000", "-c", "1"]
             if target:
                 argv.extend(["--device", target])
@@ -340,6 +392,7 @@ def _run_pactl_command(command: list[str] | tuple[str, ...], *, required: bool) 
                     stderr=stderr_file,
                     timeout=MAX_PACTL_TIMEOUT_SECONDS,
                     shell=False,
+                    env=_filtered_environment(),
                 )
             except FileNotFoundError as exc:
                 raise RecorderError(f"{pactl} command not found") from exc
@@ -362,7 +415,7 @@ def _run_pactl_command(command: list[str] | tuple[str, ...], *, required: bool) 
 
 
 def list_input_sources(include_monitors: bool = False) -> list[InputSource]:
-    if not shutil.which("pactl"):
+    if not _which("pactl"):
         raise RecorderError("pactl is required to list input sources; install pulseaudio-utils")
 
     default_source = _run_pactl_command(["pactl", "get-default-source"], required=False)
@@ -393,11 +446,27 @@ def _run_kill(command: list[str] | tuple[str, ...], *, check_exit: bool) -> None
             stderr=subprocess.DEVNULL,
             timeout=1,
             shell=False,
+            env=_filtered_environment(),
         )
     except subprocess.TimeoutExpired as exc:
         raise RecorderError(f"kill command timed out: {runtime_command}") from exc
     except OSError as exc:
         raise RecorderError(f"failed to run kill command {runtime_command}: {exc}") from exc
+
+
+def _open_recorder_log_file(log_path: Path) -> io.BufferedWriter:
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise RecorderError("secure log file open is not supported on this platform")
+    try:
+        fd = os.open(log_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | nofollow_flag, 0o600)
+    except OSError as exc:
+        raise RecorderError(f"failed to open recorder log file {log_path}: {exc}") from exc
+    try:
+        return os.fdopen(fd, "ab")
+    except OSError as exc:
+        os.close(fd)
+        raise RecorderError(f"failed to open recorder log file {log_path}: {exc}") from exc
 
 
 def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen[bytes]:
@@ -421,14 +490,21 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
         raise RecorderError("recorder command contains invalid control character")
     log_path = validate_recording_path(log_path, suffix=".log")
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_file = log_path.open("ab")
+    log_file = _open_recorder_log_file(log_path)
     try:
         try:
             os.fchmod(log_file.fileno(), 0o600)
         except OSError:
             pass
         runtime_command = [_command_path(command.argv[0]), *command.argv[1:]]
-        return subprocess.Popen(runtime_command, stdout=log_file, stderr=log_file, start_new_session=True, shell=False)  # nosec B603
+        return subprocess.Popen(
+            runtime_command,
+            stdout=log_file,
+            stderr=log_file,
+            start_new_session=True,
+            shell=False,
+            env=_filtered_environment(),  # nosec B603
+        )
     except OSError as exc:
         raise RecorderError(f"failed to start {command.name}: {exc}") from exc
     finally:

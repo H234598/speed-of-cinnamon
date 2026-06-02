@@ -64,13 +64,13 @@ if [[ ! "${tag}" =~ ^v[0-9]+(\.[0-9]+){0,2}([0-9A-Za-z.+-]*)?$ ]]; then
   exit 1
 fi
 
-required_tools=(git python3 realpath awk)
+required_tools=(git python3 realpath awk sha256sum grep)
 if [[ "${dry_run}" == "false" ]]; then
   required_tools+=(gh)
 fi
 
 for tool in "${required_tools[@]}"; do
-  if ! command -v "${tool}" >/dev/null 2>&1; then
+  if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found.\n' "${tool}" >&2
     exit 1
   fi
@@ -239,6 +239,23 @@ fi
 checksum="$(awk 'NF {print $1; exit}' "${checksums[0]}")"
 if [[ ! "${checksum}" =~ ^[0-9A-Fa-f]{64}$ ]]; then
   printf 'invalid sha256 checksum: %s\n' "${checksum}" >&2
+  exit 1
+fi
+checksum_target="$(awk 'NF {print $2; exit}' "${checksums[0]}")"
+if [[ -z "${checksum_target}" ]]; then
+  printf 'checksum file missing target path: %s\n' "${checksums[0]}" >&2
+  exit 1
+fi
+if [[ "${checksum_target##*/}" != "$(basename "${source_archives[0]}")" ]]; then
+  printf 'checksum file target mismatch (%s) for %s\n' "${checksum_target}" "${source_archives[0]}" >&2
+  exit 1
+fi
+if ! (cd "${repo_dir}" && sha256sum --check --strict --status "${checksums[0]}"); then
+  printf 'checksum verification failed for %s\n' "${source_archives[0]}" >&2
+  exit 1
+fi
+if ! sha256sum "${source_archives[0]}" | awk '{print $1}' | grep -Fxq "${checksum}"; then
+  printf 'checksum mismatch for %s\n' "${source_archives[0]}" >&2
   exit 1
 fi
 

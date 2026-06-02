@@ -12,6 +12,13 @@ from .postprocessor import DEFAULT_OPENAI_COMPATIBLE_MODEL, DEFAULT_OPENAI_COMPA
 from .transcriber import faster_whisper_available, normalize_backend
 
 
+_TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+
+def _which(command_name: str) -> str | None:
+    return shutil.which(command_name, path=_TRUSTED_COMMAND_PATH)
+
+
 @dataclass(frozen=True)
 class Check:
     name: str
@@ -20,7 +27,7 @@ class Check:
 
 
 def command_check(name: str, package_hint: str = "") -> Check:
-    path = shutil.which(name)
+    path = _which(name)
     if path:
         return Check(name, True, path)
     hint = f" missing; install {package_hint}" if package_hint else " missing"
