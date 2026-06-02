@@ -188,12 +188,25 @@ def sanitize_value(key: str, value: object) -> object:
 def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         return "[invalid]"
+    home = str(Path.home())
+    if (
+        "\r" not in value
+        and "\n" not in value
+        and "\x00" not in value
+        and _TOKEN_RE.search(value) is None
+        and _BEARER_RE.search(value) is None
+        and _OPENAI_KEY_RE.search(value) is None
+        and _URL_CREDENTIAL_RE.search(value) is None
+        and (not home or home == "/" or home not in value)
+    ):
+        if len(value) > max_chars:
+            return value[:max_chars] + "...[truncated]"
+        return value
     text = value.replace("\r", "\\r").replace("\n", "\\n").replace("\x00", "\\x00")
     text = _TOKEN_RE.sub(lambda match: f"{match.group(1)}=[redacted]", text)
     text = _BEARER_RE.sub("Bearer [redacted]", text)
     text = _OPENAI_KEY_RE.sub("[redacted]", text)
     text = _URL_CREDENTIAL_RE.sub(r"\1[redacted]@", text)
-    home = str(Path.home())
     if home and home != "/":
         text = text.replace(home, "~")
     if len(text) > max_chars:
