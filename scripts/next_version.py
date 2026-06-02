@@ -10,16 +10,28 @@ try:
 except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore[import-not-found]
 
+
+class NextVersionError(Exception):
+    exit_code = 2
+
+
+class UserInputError(NextVersionError):
+    exit_code = 2
+
+
+class GitEnvironmentError(NextVersionError):
+    exit_code = 3
+
 def parse_version(value: str) -> tuple[int, int, int]:
     parts = value.strip().lstrip("vV").split(".")
     if len(parts) != 3:
-        raise ValueError(f"invalid version format: {value}")
+        raise UserInputError(f"invalid version format: {value}")
     try:
         major, minor, patch = (int(x) for x in parts)
     except ValueError as exc:
-        raise ValueError(f"invalid version format: {value}") from exc
+        raise UserInputError(f"invalid version format: {value}") from exc
     if major < 0 or minor < 0 or patch < 0:
-        raise ValueError(f"invalid version format: {value}")
+        raise UserInputError(f"invalid version format: {value}")
     return major, minor, patch
 
 
@@ -33,13 +45,13 @@ def commits_since_ref(ref: str) -> int:
     try:
         result = subprocess.run(["git", "rev-list", "--count", f"{ref}..HEAD"], check=True, text=True, capture_output=True)
     except FileNotFoundError as exc:
-        raise ValueError("git command not available") from exc
+        raise GitEnvironmentError("git command not available") from exc
     except subprocess.CalledProcessError as exc:
-        raise ValueError(f"failed to compute commits since {ref}: {exc.stderr.strip()}") from exc
+        raise GitEnvironmentError(f"failed to compute commits since {ref}: {exc.stderr.strip()}") from exc
     try:
         return int(result.stdout.strip())
     except ValueError as exc:
-        raise ValueError(f"invalid git commit-count output: {result.stdout!r}") from exc
+        raise GitEnvironmentError(f"invalid git commit-count output: {result.stdout!r}") from exc
 
 def commits_since_tag(tag: str) -> int:
     return commits_since_ref(normalize_tag(tag))
@@ -47,7 +59,7 @@ def commits_since_tag(tag: str) -> int:
 def add_patches(base: tuple[int,int,int], patch_steps: int) -> tuple[int,int,int]:
     major, minor, patch = base
     if patch_steps < 0:
-        raise ValueError("negative patch steps are not supported")
+        raise UserInputError("negative patch steps are not supported")
     patch_steps = patch_steps // 100
     total_patch = patch + patch_steps
     minor += total_patch // 100
@@ -70,7 +82,7 @@ def read_current_version(path: Path = Path("pyproject.toml")) -> tuple[int,int,i
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     val = data["project"]["version"]
     if not isinstance(val, str):
-        raise ValueError("project.version is not a string")
+        raise UserInputError("project.version is not a string")
     return parse_version(val)
 
 def tag_for_version(version: tuple[int,int,int]) -> str:
@@ -78,12 +90,17 @@ def tag_for_version(version: tuple[int,int,int]) -> str:
 
 def tag_exists(tag: str) -> bool:
     tag = normalize_tag(tag)
-    rc = subprocess.run(["git", "tag", "-l", tag], text=True, capture_output=True)
-    return rc.returncode == 0 and tag in (rc.stdout or "").splitlines()
+    try:
+        rc = subprocess.run(["git", "tag", "-l", tag], text=True, capture_output=True, check=True)
+    except FileNotFoundError as exc:
+        raise GitEnvironmentError("git command not available") from exc
+    except subprocess.CalledProcessError as exc:
+        raise GitEnvironmentError(f"failed to inspect git tags: {exc.stderr.strip()}") from exc
+    return tag in (rc.stdout or "").splitlines()
 
 def ensure_tag_exists(tag: str) -> None:
     if not tag_exists(tag):
-        raise ValueError(f"release tag {tag} does not exist")
+        raise UserInputError(f"release tag {tag} does not exist")
 
 def parse_args() -> argparse.Namespace:
     def non_negative_int(value: str) -> int:
@@ -125,9 +142,9 @@ def main() -> int:
 def run() -> int:
     try:
         return main()
-    except ValueError as exc:
+    except NextVersionError as exc:
         print(f"error: {exc}", file=sys.stderr)
-        return 2
+        return exc.exit_code
 
 if __name__ == '__main__':
     raise SystemExit(run())
