@@ -148,7 +148,7 @@ jobs:
               done
             fi
             if [[ -z "${snapcraft_base}" ]]; then
-              printf 'Failed to install a compatible snap base (tried core24, core22).\n' >&2
+              printf 'Could not install a compatible snap base (tried core24, core22).\n' >&2
               exit 1
             fi
             {

@@ -37,6 +37,8 @@ jobs:
       # Checkout the repository to the GitHub Actions runner
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       # Execute Codacy Analysis CLI and generate a SARIF output with the security issues identified during the analysis
       - name: Run Codacy Analysis CLI
@@ -45,7 +47,7 @@ jobs:
           # Check https://github.com/codacy/codacy-analysis-cli#project-token to get your project token from your Codacy repository
           # You can also omit the token and run the tools that support default configurations
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
-          verbose: true
+          verbose: false
           directory: ${{ github.workspace }}/src
           output: ${{ github.workspace }}/results.sarif
           format: sarif
