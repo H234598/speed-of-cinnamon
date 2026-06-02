@@ -57,6 +57,10 @@ class CliTest(unittest.TestCase):
         applet_version = applet_metadata["version"]
         self.assertEqual(project_version, applet_version)
         self.assertIn(f"Version: {project_version}", applet_metadata["comments"])
+        applet_schema = json.loads(Path("files/speed-of-cinnamon@H234598/settings-schema.json").read_text(encoding="utf-8"))
+        self.assertIn("about-page", applet_schema["layout"]["pages"])
+        self.assertIn("about-version", applet_schema["layout"]["about-section"]["keys"])
+        self.assertIn(f"Version: {project_version}", applet_schema["about-version"]["description"])
 
     def _write_wav(self, path: Path, samples: list[int]) -> None:
         with wave.open(str(path), "wb") as handle:

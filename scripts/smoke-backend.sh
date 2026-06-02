@@ -27,6 +27,15 @@ if [[ ! -d "${HOME}" ]]; then
   exit 1
 fi
 
+smoke_root=""
+if [[ "${SPEED_OF_CINNAMON_SMOKE_REAL_STATE:-0}" != "1" ]]; then
+  smoke_root="$(mktemp -d "${TMPDIR:-/tmp}/speed-of-cinnamon-smoke-XXXXXX")"
+  trap 'rm -rf -- "${smoke_root}"' EXIT
+  export XDG_STATE_HOME="${smoke_root}/state"
+  export XDG_DATA_HOME="${smoke_root}/data"
+  export XDG_CACHE_HOME="${smoke_root}/cache"
+fi
+
 if [[ ! -x "${HOME}/.local/bin/speed-of-cinnamon" && $# -eq 0 ]]; then
   printf 'backend not executable or missing; provide explicit backend path as first argument\n' >&2
   exit 1

@@ -1,11 +1,16 @@
 {
   "layout": {
     "type": "layout",
-    "pages": ["main-page"],
+    "pages": ["main-page", "about-page"],
     "main-page": {
       "type": "page",
       "title": "Speed of Cinnamon",
       "sections": ["activation-section", "recording-section", "personalization-section", "notification-section", "output-section", "backend-section"]
+    },
+    "about-page": {
+      "type": "page",
+      "title": "About",
+      "sections": ["about-section"]
     },
     "activation-section": {
       "type": "section",
@@ -36,7 +41,16 @@
       "type": "section",
       "title": "Backend",
       "keys": ["cli-path", "transcriber", "whisper-model", "transcriber-command", "post-process-backend", "post-process-command", "ollama-url", "ollama-model", "openai-compatible-url", "openai-compatible-model", "openai-compatible-text-model", "openai-compatible-flex-processing", "openai-compatible-api-key", "post-process-prompt"]
+    },
+    "about-section": {
+      "type": "section",
+      "title": "Speed of Cinnamon",
+      "keys": ["about-version"]
     }
+  },
+  "about-version": {
+    "type": "label",
+    "description": "Version: 0.1.18\nAuthor: H234598\nCinnamon-native voice typing for Fedora Cinnamon."
   },
   "toggle-keybinding": {
     "type": "keybinding",

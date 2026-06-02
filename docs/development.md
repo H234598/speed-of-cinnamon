@@ -60,7 +60,9 @@ make smoke-backend
 ```
 
 This records short audio samples, uses harmless dummy transcriber commands, disables insertion, and verifies manual
-stop, auto-expired recording finalization, and cancel/discard behavior.
+stop, auto-expired recording finalization, and cancel/discard behavior. It uses temporary XDG state, data, and cache
+directories by default so it does not leave dummy transcripts or recordings in the user profile. Set
+`SPEED_OF_CINNAMON_SMOKE_REAL_STATE=1` only when you intentionally want to exercise the live user profile.
 
 ## Coverage
 

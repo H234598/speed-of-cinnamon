@@ -363,7 +363,9 @@ speed-of-cinnamon doctor \
 
 The backend smoke records short audio samples through `pw-record`, uses harmless dummy transcribers, disables insertion,
 and verifies manual stop, cancel/discard, and the preserved-audio path used when a recording expires at its maximum
-length.
+length. It uses temporary XDG state, data, and cache directories by default so it does not leave dummy transcripts or
+recordings in the user profile. Set `SPEED_OF_CINNAMON_SMOKE_REAL_STATE=1` only when you intentionally want to exercise
+the live user profile.
 
 `make coverage` writes `reports/lcov.info`. GitHub Actions uploads that file to QLTY when the
 `QLTY_COVERAGE_TOKEN` Actions secret is configured; pull requests without the secret still skip the upload cleanly.

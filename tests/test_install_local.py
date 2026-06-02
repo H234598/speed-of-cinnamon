@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -221,3 +222,49 @@ class SmokeBackendTest(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("Skipping live recorder smoke", result.stderr)
+
+    def test_smoke_backend_uses_isolated_xdg_dirs_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            home = tmp_path / "home"
+            home.mkdir()
+            marker = tmp_path / "xdg-marker.json"
+            backend = tmp_path / "backend"
+            backend.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "case \"${1:-}\" in\n"
+                "  doctor)\n"
+                "    python3 - <<'PY'\n"
+                "import json, os\n"
+                f"open({str(marker)!r}, 'w', encoding='utf-8').write(json.dumps({{k: os.environ.get(k, '') for k in ('XDG_STATE_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME')}}))\n"
+                "PY\n"
+                "    printf '{\"status\":\"done\"}\\n'\n"
+                "    ;;\n"
+                "  models|status|cleanup)\n"
+                "    printf '{\"status\":\"done\"}\\n'\n"
+                "    ;;\n"
+                "  alarms)\n"
+                "    printf '{\"status\":\"done\"}\\n'\n"
+                "    ;;\n"
+                "  start)\n"
+                "    printf '{\"status\":\"error\",\"error\":\"no recorder backend started successfully: fake\"}\\n'\n"
+                "    exit 1\n"
+                "    ;;\n"
+                "  *)\n"
+                "    printf 'unexpected command: %s\\n' \"${1:-}\" >&2\n"
+                "    exit 2\n"
+                "    ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            backend.chmod(0o700)
+
+            result = self._run_smoke_backend(home, backend)
+
+            self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+            self.assertNotEqual(payload["XDG_STATE_HOME"], str(home / ".local" / "state"))
+            self.assertIn("speed-of-cinnamon-smoke-", payload["XDG_STATE_HOME"])
+            self.assertIn("speed-of-cinnamon-smoke-", payload["XDG_DATA_HOME"])
+            self.assertIn("speed-of-cinnamon-smoke-", payload["XDG_CACHE_HOME"])
