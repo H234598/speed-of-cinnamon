@@ -22,6 +22,11 @@ class UserInputError(NextVersionError):
 class GitEnvironmentError(NextVersionError):
     exit_code = 3
 
+
+COMMITS_PER_PATCH = 100
+PATCHES_PER_MINOR = 100
+MINORS_PER_MAJOR = 100
+
 def parse_version(value: str) -> tuple[int, int, int]:
     parts = value.strip().lstrip("vV").split(".")
     if len(parts) != 3:
@@ -60,12 +65,12 @@ def add_patches(base: tuple[int,int,int], patch_steps: int) -> tuple[int,int,int
     major, minor, patch = base
     if patch_steps < 0:
         raise UserInputError("negative patch steps are not supported")
-    patch_steps = patch_steps // 100
+    patch_steps = patch_steps // COMMITS_PER_PATCH
     total_patch = patch + patch_steps
-    minor += total_patch // 100
-    patch = total_patch % 100
-    major += minor // 100
-    minor %= 100
+    minor += total_patch // PATCHES_PER_MINOR
+    patch = total_patch % PATCHES_PER_MINOR
+    major += minor // MINORS_PER_MAJOR
+    minor %= MINORS_PER_MAJOR
     return major, minor, patch
 
 def apply_feature_increase(major:int, minor:int, patch:int) -> tuple[int,int,int]:
