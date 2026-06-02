@@ -46,6 +46,7 @@ jobs:
           # You can also omit the token and run the tools that support default configurations
           project-token: ${{ secrets.CODACY_PROJECT_TOKEN }}
           verbose: true
+          directory: src
           output: results.sarif
           format: sarif
           tool: bandit
