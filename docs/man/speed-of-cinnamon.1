@@ -103,10 +103,15 @@ or
 .BI --transcriber " BACKEND"
 Use
 .BR auto ,
+.BR openai ,
+.BR openai-whisper ,
 .BR whisper ,
 .BR whisper-cpp ,
+.BR faster-whisper ,
+.BR command ,
+.BR custom ,
 or
-.BR command .
+.BR template .
 The
 .B whisper-cpp
 backend accepts
@@ -114,6 +119,22 @@ backend accepts
 .BR whisper.cpp ,
 or Fedora
 .BR pwcpp .
+.PP
+Compatibility aliases are normalized as:
+.PP
+.B openai
+and
+.B openai-whisper
+map to
+.B whisper ;
+.B faster-whisper
+maps to
+.B whisper-cpp ;
+.B custom
+or
+.B template
+maps to
+.B command .
 .TP
 .BI --transcriber-command " TEMPLATE"
 Use a custom ASR command template.

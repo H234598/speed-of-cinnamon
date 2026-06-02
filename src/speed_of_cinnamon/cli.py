@@ -80,6 +80,17 @@ MAX_DIAGNOSTICS_JSON_BYTES = 1_000_000
 MAX_URL_CHARS = 2_048
 MAX_ALARM_CATCH_UP_MINUTES = 14_400
 DEFAULT_BENCHMARK_LANGUAGE = "de"
+TRANSCRIBER_CHOICES = [
+    "auto",
+    "openai",
+    "openai-whisper",
+    "whisper",
+    "whisper-cpp",
+    "faster-whisper",
+    "command",
+    "custom",
+    "template",
+]
 
 
 def _contains_escaped_null(value: str) -> bool:
@@ -1373,7 +1384,7 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-seconds", type=int, default=DEFAULT_MAX_SECONDS)
     parser.add_argument("--recorder", default="auto", choices=["auto", "pw-record", "parecord", "arecord"])
     parser.add_argument("--input-device", default="")
-    parser.add_argument("--transcriber", default="auto", choices=["auto", "whisper", "whisper-cpp", "faster-whisper", "command"])
+    parser.add_argument("--transcriber", default="auto", choices=TRANSCRIBER_CHOICES)
     parser.add_argument("--transcriber-command", default="")
     parser.add_argument("--whisper-model", default="")
     parser.add_argument("--post-process-backend", default="command", choices=["none", "command", "ollama", "openai-compatible"])
@@ -1566,7 +1577,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(transcribe_file)
     transcribe_file.add_argument("audio_path")
     transcribe_file.add_argument("--language", default="en")
-    transcribe_file.add_argument("--transcriber", default="auto", choices=["auto", "whisper", "whisper-cpp", "faster-whisper", "command"])
+    transcribe_file.add_argument("--transcriber", default="auto", choices=TRANSCRIBER_CHOICES)
     transcribe_file.add_argument("--transcriber-command", default="")
     transcribe_file.add_argument("--whisper-model", default="")
     transcribe_file.add_argument("--post-process-backend", default="command", choices=["none", "command", "ollama", "openai-compatible"])

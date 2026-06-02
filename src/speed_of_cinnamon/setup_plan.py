@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from .transcriber import normalize_backend
+
 
 def _configured(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     configured = payload.get("configured")
@@ -88,7 +90,7 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
 
     transcriber = _section(configured, "transcriber")
     if not _coerce_plan_bool(transcriber, "ok"):
-        value = str(transcriber.get("value") or "auto")
+        value = normalize_backend(str(transcriber.get("value") or "auto"))
         detail = str(transcriber.get("detail") or "Configure a local ASR backend.")
         if value == "command":
             _add_step(
@@ -105,7 +107,7 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
                 "voice-model",
                 "Download or select a voice model",
                 detail,
-                ["speed-of-cinnamon download-model ct2-base --json"],
+                ["speed-of-cinnamon download-model ct2-base-int8 --json"],
             )
         else:
             _add_step(
@@ -119,7 +121,7 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
                     "python3 -m pip install --user faster-whisper",
                     "sudo dnf install -y python3-pywhispercpp",
                     "speed-of-cinnamon models --json",
-                    "speed-of-cinnamon download-model ct2-base --json",
+                    "speed-of-cinnamon download-model ct2-base-int8 --json",
                     "speed-of-cinnamon download-model tiny --json",
                 ],
             )

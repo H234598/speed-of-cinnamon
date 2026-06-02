@@ -131,7 +131,8 @@ The `Voice model` menu exposes a local voice model catalog split into `CTranslat
 and remove catalog models, or switch back to `Automatic voice model`. Selecting a model chooses the matching local engine
 automatically.
 
-For German dictation, `ct2-base` and GGML `base` are the practical first comparison. `ct2-small-de` is a German
+For German dictation, `ct2-base-int8` is the default starter model because it is small, fast, and close to base quality
+on short local tests. Compare it with `ct2-base` and GGML `base` when accuracy matters. `ct2-small-de` is a German
 CTranslate2 small model, while `ct2-tiny-de` and GGML `tiny-de` prioritize speed. The `.en` models are English-only.
 GGML `large-v3-turbo-q5_0` is much more accurate on some recordings but can be very slow on CPU.
 
@@ -144,7 +145,7 @@ python3 -m pip install --user faster-whisper
 Use the same short local recording to compare model speed and output:
 
 ```bash
-speed-of-cinnamon benchmark-models ~/testaufnahme.wav --language de --models ct2-base ct2-small-de ct2-tiny-de ct2-small tiny-de tiny base --json
+speed-of-cinnamon benchmark-models ~/testaufnahme.wav --language de --models ct2-base-int8 ct2-base ct2-small-de ct2-tiny-de ct2-small tiny-de tiny base --json
 ```
 
 The benchmark only uses local downloaded catalog files. It reports missing models, failed runs, elapsed seconds, and the

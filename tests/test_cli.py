@@ -136,6 +136,59 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["transcript"], "TEST")
         self.assertEqual(saved, "TEST")
 
+    @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="ok")
+    @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
+    def test_transcribe_file_accepts_transcriber_aliases(self, mocked_validate: mock.Mock, mocked_transcribe: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            mocked_validate.return_value = audio
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--transcriber",
+                    "openai",
+                    "--json",
+                ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["transcript"], "ok")
+        mocked_transcribe.assert_called_once_with(
+            audio_path=audio,
+            language="en",
+            text_path=mock.ANY,
+            command_template="",
+            backend="openai",
+            whisper_model="",
+            personal_context="",
+            vocabulary="",
+        )
+
+    @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="ok")
+    @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
+    def test_transcribe_file_accepts_command_alias(self, mocked_validate: mock.Mock, mocked_transcribe: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            mocked_validate.return_value = audio
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--transcriber",
+                    "template",
+                    "--transcriber-command",
+                    "printf ok",
+                    "--json",
+                ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["transcript"], "ok")
+        self.assertEqual(mocked_transcribe.call_args.kwargs["backend"], "template")
+
     def test_transcribe_file_passes_personalization_to_post_process(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "input.wav"
@@ -1868,6 +1921,49 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["transcript"], "expired-transcript")
         self.assertEqual(final_state.status, "done")
         self.assertEqual(final_state.transcript, "expired-transcript")
+
+    @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="ok")
+    def test_toggle_accepts_transcriber_alias_openai(self, mocked_transcribe: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            audio = tmp_path / "expired.wav"
+            audio.write_bytes(b"audio")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(
+                RecordingState(
+                    status="recording",
+                    pid=123456789,
+                    audio_path=str(audio),
+                    language="en",
+                )
+            )
+            with mock.patch("speed_of_cinnamon.cli.remove_file", return_value=False):
+                stdout = io.StringIO()
+                with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                    code = cli.run([
+                        "toggle",
+                        "--state-file",
+                        str(state_file),
+                        "--insert-method",
+                        "none",
+                        "--transcriber",
+                        "openai",
+                        "--json",
+                    ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "done")
+        mocked_transcribe.assert_called_once_with(
+            audio_path=audio,
+            language="en",
+            text_path=mock.ANY,
+            command_template="",
+            backend="openai",
+            whisper_model="",
+            personal_context="",
+            vocabulary="",
+        )
 
     def test_toggle_finalizes_recording_with_saved_language(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

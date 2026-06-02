@@ -47,6 +47,64 @@ class SetupPlanTest(unittest.TestCase):
         self.assertIn("speed-of-cinnamon download-model tiny --json", plan["commands"])
         self.assertIn("Install or configure", plan["text"])
 
+    def test_missing_custom_alias_transcriber_maps_to_command_step(self) -> None:
+        payload = {
+            "ok": False,
+            "configured": {
+                "recorder": {"ok": True},
+                "transcriber": {
+                    "ok": False,
+                    "value": "template",
+                    "detail": "custom transcriber command is empty",
+                },
+                "output": {"ok": True},
+                "postprocessor": {"ok": True},
+                "warnings": [],
+            },
+            "desktop": {"cinnamon": True},
+        }
+        plan = build_setup_plan(payload)
+        self.assertEqual(plan["steps"][0]["id"], "custom-transcriber")
+        self.assertEqual(plan["steps"][0]["title"], "Configure the custom transcriber command")
+
+    def test_missing_openai_alias_transcriber_maps_to_asr_step(self) -> None:
+        payload = {
+            "ok": False,
+            "configured": {
+                "recorder": {"ok": True},
+                "transcriber": {
+                    "ok": False,
+                    "value": "openai",
+                    "detail": "install whisper, install faster-whisper, configure whisper.cpp with a model, or set a custom transcriber command",
+                },
+                "output": {"ok": True},
+                "postprocessor": {"ok": True},
+                "warnings": [],
+            },
+            "desktop": {"cinnamon": True},
+        }
+        plan = build_setup_plan(payload)
+        self.assertEqual(plan["steps"][0]["id"], "asr-backend")
+
+    def test_missing_openai_whisper_alias_transcriber_maps_to_asr_step(self) -> None:
+        payload = {
+            "ok": False,
+            "configured": {
+                "recorder": {"ok": True},
+                "transcriber": {
+                    "ok": False,
+                    "value": "openai-whisper",
+                    "detail": "install whisper, install faster-whisper, configure whisper.cpp with a model, or set a custom transcriber command",
+                },
+                "output": {"ok": True},
+                "postprocessor": {"ok": True},
+                "warnings": [],
+            },
+            "desktop": {"cinnamon": True},
+        }
+        plan = build_setup_plan(payload)
+        self.assertEqual(plan["steps"][0]["id"], "asr-backend")
+
     def test_missing_auto_asr_with_faster_whisper_text_gets_asr_backend_step(self) -> None:
         payload = {
             "ok": False,

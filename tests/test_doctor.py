@@ -135,6 +135,7 @@ class DoctorTest(unittest.TestCase):
                 "insert-method": "none",
             }
             with (
+                mock.patch("speed_of_cinnamon.doctor.default_ctranslate2_model_path", return_value=""),
                 mock.patch("speed_of_cinnamon.doctor.default_whisper_cpp_model_path", return_value=str(model)),
                 mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)),
             ):
@@ -250,6 +251,87 @@ class DoctorTest(unittest.TestCase):
             ):
                 payload = doctor.report(settings)
         self.assertEqual(payload["configured"]["transcriber"]["resolved"], "faster-whisper")
+
+    def test_report_treats_openai_whisper_alias_as_whisper(self) -> None:
+        tools = {"python3", "pw-record", "whisper"}
+        settings = {
+            "recorder": "auto",
+            "transcriber": "openai-whisper",
+            "insert-method": "none",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
+            payload = doctor.report(settings)
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["configured"]["transcriber"]["ok"])
+        self.assertEqual(payload["configured"]["transcriber"]["value"], "whisper")
+
+    def test_report_treats_custom_alias_as_command(self) -> None:
+        settings = {
+            "recorder": "auto",
+            "transcriber": "custom",
+            "transcriber-command": "printf ok",
+            "insert-method": "none",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from({"python3", "pw-record"})):
+            payload = doctor.report(settings)
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["configured"]["transcriber"]["ok"])
+        self.assertEqual(payload["configured"]["transcriber"]["value"], "command")
+
+    def test_report_treats_openai_alias_as_whisper(self) -> None:
+        tools = {"python3", "pw-record", "whisper"}
+        settings = {
+            "recorder": "auto",
+            "transcriber": "openai",
+            "insert-method": "none",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
+            payload = doctor.report(settings)
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["configured"]["transcriber"]["ok"])
+        self.assertEqual(payload["configured"]["transcriber"]["value"], "whisper")
+
+    def test_report_treats_template_alias_as_command(self) -> None:
+        settings = {
+            "recorder": "auto",
+            "transcriber": "template",
+            "transcriber-command": "printf ok",
+            "insert-method": "none",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from({"python3", "pw-record"})):
+            payload = doctor.report(settings)
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["configured"]["transcriber"]["ok"])
+        self.assertEqual(payload["configured"]["transcriber"]["value"], "command")
+
+    def test_report_treats_template_alias_as_command_and_requires_template(self) -> None:
+        settings = {
+            "recorder": "auto",
+            "transcriber": "template",
+            "insert-method": "none",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from({"python3", "pw-record"})):
+            payload = doctor.report(settings)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["configured"]["transcriber"]["ok"])
+        self.assertEqual(payload["configured"]["transcriber"]["value"], "command")
+        self.assertEqual(
+            payload["configured"]["transcriber"]["detail"],
+            "custom transcriber command is empty",
+        )
+
+    def test_report_treats_openai_alias_as_whisper_and_reports_missing_binary(self) -> None:
+        settings = {
+            "recorder": "auto",
+            "transcriber": "openai",
+            "insert-method": "none",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from({"python3", "pw-record"})):
+            payload = doctor.report(settings)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["configured"]["transcriber"]["ok"])
+        self.assertEqual(payload["configured"]["transcriber"]["value"], "whisper")
+        self.assertIn("whisper", payload["configured"]["transcriber"]["detail"])
 
     def test_ollama_postprocessor_requires_model(self) -> None:
         tools = {"python3", "pw-record"}

@@ -1909,7 +1909,7 @@ MyApplet.prototype = {
   },
 
   _starterVoiceModelName: function() {
-    return this._isEnglishLanguage(this._voiceModelLanguage()) ? "tiny.en" : "tiny";
+    return "ct2-base-int8";
   },
 
   _whisperModelSupportsLanguage: function(language) {

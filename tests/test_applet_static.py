@@ -377,7 +377,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_starterVoiceModelName: function()", source)
         self.assertIn("_voiceModelLanguage: function()", source)
         self.assertIn("return this._primaryLanguage();", source)
-        self.assertIn('return this._isEnglishLanguage(this._voiceModelLanguage()) ? "tiny.en" : "tiny";', source)
+        self.assertIn('return "ct2-base-int8";', source)
         self.assertIn("_ensureVoiceModelCompatibleWithPrimaryLanguage(false);", source)
         self.assertIn("_ensureVoiceModelCompatibleWithCurrentLanguage(true)", source)
         self.assertIn('_("Active: ") + this._currentLanguage() + _(", primary: ") + this._voiceModelLanguage()', source)

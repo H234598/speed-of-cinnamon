@@ -398,6 +398,17 @@ CATALOG: tuple[ModelSpec, ...] = (
         description="Better multilingual accuracy, still light",
     ),
     ModelSpec(
+        name="ct2-base-int8",
+        filename="base-int8",
+        size="76 MiB",
+        sha1="",
+        description="CTranslate2 multilingual base int8 starter model",
+        backend="faster-whisper",
+        model_format="ctranslate2",
+        repo_id="rhasspy/faster-whisper-base-int8",
+        files=("config.json", "model.bin", "vocabulary.txt"),
+    ),
+    ModelSpec(
         name="ct2-base",
         filename="base",
         size="141 MiB",

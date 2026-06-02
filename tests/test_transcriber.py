@@ -502,9 +502,11 @@ class TranscriberTest(unittest.TestCase):
                 transcribe(audio, True, Path(tmp) / "sample.txt", "printf ok")  # type: ignore[arg-type]
 
     def test_backend_aliases_are_normalized(self) -> None:
+        self.assertEqual(normalize_backend("openai"), "whisper")
         self.assertEqual(normalize_backend("openai-whisper"), "whisper")
         self.assertEqual(normalize_backend("whisper.cpp"), "whisper-cpp")
         self.assertEqual(normalize_backend("custom"), "command")
+        self.assertEqual(normalize_backend("template"), "command")
         self.assertEqual(normalize_backend(""), "auto")
 
     def test_auto_prefers_custom_command(self) -> None:
@@ -539,6 +541,7 @@ class TranscriberTest(unittest.TestCase):
             return "/usr/bin/whisper-cli" if command == "whisper-cli" else None
 
         with (
+            mock.patch("speed_of_cinnamon.transcriber.default_ctranslate2_model_path", return_value=""),
             mock.patch("speed_of_cinnamon.transcriber.default_whisper_cpp_model_path", return_value="/models/ggml-tiny.en.bin"),
             mock.patch("speed_of_cinnamon.transcriber.shutil.which", side_effect=which),
         ):
@@ -557,6 +560,7 @@ class TranscriberTest(unittest.TestCase):
 
     def test_auto_reports_missing_transcriber(self) -> None:
         with (
+            mock.patch("speed_of_cinnamon.transcriber.default_ctranslate2_model_path", return_value=""),
             mock.patch("speed_of_cinnamon.transcriber.default_whisper_cpp_model_path", return_value=""),
             mock.patch("speed_of_cinnamon.transcriber.shutil.which", return_value=None),
         ):

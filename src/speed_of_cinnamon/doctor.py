@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .models import default_ctranslate2_model_path, default_whisper_cpp_model_path, model_backend_for_path, model_supports_language
-from .transcriber import faster_whisper_available
+from .transcriber import faster_whisper_available, normalize_backend
 
 
 @dataclass(frozen=True)
@@ -134,6 +134,7 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
     whisper_ok = _ok(checks, "whisper")
     whisper_cpp_ok = _ok(checks, "whisper-cli") or _ok(checks, "whisper.cpp") or _ok(checks, "pwcpp")
     faster_whisper_ok = _ok(checks, "faster-whisper")
+    transcriber = normalize_backend(transcriber)
 
     model_backend = ""
     local_model_is_invalid = bool(local_model and _contains_escaped_null(local_model))

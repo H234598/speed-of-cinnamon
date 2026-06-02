@@ -244,6 +244,7 @@ model actions are available from the CLI:
 ```bash
 speed-of-cinnamon models --json
 python3 -m pip install --user faster-whisper
+speed-of-cinnamon download-model ct2-base-int8 --json
 speed-of-cinnamon download-model ct2-base --json
 speed-of-cinnamon download-model ct2-small-de --json
 speed-of-cinnamon download-model ct2-tiny-de --json
@@ -259,7 +260,7 @@ Avoid `.en` models for German dictation. Whisper can otherwise return placeholde
 model against the same local test recording:
 
 ```bash
-speed-of-cinnamon benchmark-models ~/testaufnahme.wav --language de --models ct2-base ct2-small-de ct2-tiny-de ct2-small tiny-de tiny base --json
+speed-of-cinnamon benchmark-models ~/testaufnahme.wav --language de --models ct2-base-int8 ct2-base ct2-small-de ct2-tiny-de ct2-small tiny-de tiny base --json
 ```
 
 Downloaded files are saved below:
@@ -425,9 +426,16 @@ Equivalent CLI examples:
 
 ```bash
 speed-of-cinnamon toggle --language de --transcriber whisper
+speed-of-cinnamon toggle --language de --transcriber openai
 speed-of-cinnamon toggle --language de --transcriber whisper-cpp --whisper-model ~/.local/share/whisper/models/ggml-base.bin
 speed-of-cinnamon toggle --language de --transcriber command --transcriber-command "printf 'test transcript'"
 ```
+
+`--transcriber` also accepts normalized aliases for compatibility:
+
+- `openai` and `openai-whisper` resolve to `whisper`
+- `faster-whisper` resolves to `whisper-cpp`
+- `custom` and `template` resolve to `command`
 
 ## Text Polishing
 
