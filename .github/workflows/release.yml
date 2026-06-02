@@ -25,11 +25,6 @@ on:
         required: false
         default: true
         type: boolean
-      dry_run:
-        description: "Validate release without publishing"
-        required: true
-        default: true
-        type: boolean
 
 permissions:
   contents: write
@@ -176,12 +171,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
-          RELEASE_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
         run: |
           args=()
-          if [[ "${RELEASE_DRY_RUN}" == "true" ]]; then
-            args+=(--dry-run)
-          fi
           if [[ "${BUILD_SNAP}" != "1" ]]; then
             args+=(--skip-snap)
           fi

@@ -149,16 +149,16 @@ Successful GitHub Actions runs upload:
 For manual release validation/publication, use workflow dispatch:
 
 ```bash
-gh workflow run release.yml -f tag=v0.1.2 -f dry_run=true -f build_snap=true -f build_generic_rpm=true
-gh workflow run release.yml -f tag=v0.1.2 -f dry_run=true -f build_generic_rpm=false
-gh workflow run release.yml -f tag=v0.1.2 -f dry_run=true -f build_snap=true -f build_generic_rpm=false -f run_workflow_lint=false
-gh workflow run release.yml -f tag=v0.1.2 -f dry_run=true -f build_snap=true -f run_workflow_lint=false
+gh workflow run release.yml -f tag=v0.1.2 -f build_snap=true -f build_generic_rpm=true
+gh workflow run release.yml -f tag=v0.1.2 -f build_generic_rpm=false
+gh workflow run release.yml -f tag=v0.1.2 -f build_snap=true -f build_generic_rpm=false -f run_workflow_lint=false
+gh workflow run release.yml -f tag=v0.1.2 -f build_snap=true -f run_workflow_lint=false
 ```
 
 For real publishing, use:
 
 ```bash
-gh workflow run release.yml -f tag=v0.1.2 -f dry_run=false -f build_snap=true
+gh workflow run release.yml -f tag=v0.1.2 -f build_snap=true
 ```
 
 For local validation without publishing to GitHub:
