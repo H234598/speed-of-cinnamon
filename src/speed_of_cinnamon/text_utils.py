@@ -31,6 +31,8 @@ SAFE_CHAR_MAP = {
 def sanitize_special_chars(text: str) -> str:
     if not isinstance(text, str) or isinstance(text, bool):
         raise ValueError("text must be text")
+    if text.isascii():
+        return text
     parts: list[str] = []
     for char in text:
         if char in SAFE_CHAR_MAP:
