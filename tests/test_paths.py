@@ -9,6 +9,12 @@ from speed_of_cinnamon import paths
 
 
 class PathsTest(unittest.TestCase):
+    def test_xdg_path_rejects_non_text_environment_values(self) -> None:
+        with mock.patch("speed_of_cinnamon.paths.os.environ.__getitem__", return_value=123):
+            self.assertEqual(paths.xdg_data_home(), Path.home() / ".local" / "share")
+            self.assertEqual(paths.xdg_state_home(), Path.home() / ".local" / "state")
+            self.assertEqual(paths.xdg_cache_home(), Path.home() / ".cache")
+
     def test_xdg_paths_reject_symlinked_environment_directories(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
