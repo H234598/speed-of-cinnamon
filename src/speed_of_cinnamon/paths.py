@@ -50,7 +50,12 @@ def _safe_home_path(*parts: str) -> Path:
     try:
         assert_no_symlink_ancestors(candidate, field_name="home path")
     except RuntimeError:
-        return Path(tempfile.gettempdir()).joinpath(*parts)
+        temp_root = Path(tempfile.gettempdir())
+        try:
+            assert_no_symlink_ancestors(temp_root, field_name="temporary directory")
+        except RuntimeError:
+            temp_root = Path("/tmp")
+        return temp_root.joinpath(*parts)
     return candidate
 
 
