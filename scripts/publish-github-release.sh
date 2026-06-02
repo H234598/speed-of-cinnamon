@@ -93,7 +93,7 @@ rpms=(dist/rpmbuild/RPMS/noarch/speed-of-cinnamon-"${version}"-*.noarch.rpm)
 srpms=(dist/rpmbuild/SRPMS/speed-of-cinnamon-"${version}"-*.src.rpm)
 generic_rpms=(dist/rpmbuild-generic/RPMS/noarch/speed-of-cinnamon-"${version}"-*.noarch.rpm)
 generic_srpms=(dist/rpmbuild-generic/SRPMS/speed-of-cinnamon-"${version}"-*.src.rpm)
-snaps=(dist/snap/speed-of-cinnamon_${version}_*.snap)
+snaps=(dist/snap/speed-of-cinnamon_"${version}"_*.snap)
 
 asset_display_name() {
   local ref=$1

@@ -86,7 +86,7 @@ PYCODE
 
 dist_dir="${repo_dir}/dist/snap"
 mkdir -p "${dist_dir}"
-rm -f -- "${dist_dir}"/speed-of-cinnamon_${version}_*.snap "${repo_dir}"/speed-of-cinnamon_${version}_*.snap
+rm -f -- "${dist_dir}/speed-of-cinnamon_${version}_*.snap" "${repo_dir}/speed-of-cinnamon_${version}_*.snap"
 
 tmp_output="$(mktemp "${repo_tmp_root}/speed-of-cinnamon-snap-output-XXXXXX")"
 
