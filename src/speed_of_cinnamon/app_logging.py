@@ -21,6 +21,7 @@ COMPRESS_AFTER_DAYS = 3
 MAX_LOG_MESSAGE_CHARS = 320
 MAX_LOG_FIELD_CHARS = 160
 LOGGER_NAME = "speed_of_cinnamon"
+HOME_DIR = str(Path.home())
 
 _DAILY_LOG_RE = re.compile(r"^speed-of-cinnamon-(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.log$")
 _DAILY_GZ_RE = re.compile(r"^speed-of-cinnamon-(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.log\.gz$")
@@ -188,7 +189,6 @@ def sanitize_value(key: str, value: object) -> object:
 def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         return "[invalid]"
-    home = str(Path.home())
     if (
         "\r" not in value
         and "\n" not in value
@@ -197,7 +197,7 @@ def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
         and _BEARER_RE.search(value) is None
         and _OPENAI_KEY_RE.search(value) is None
         and _URL_CREDENTIAL_RE.search(value) is None
-        and (not home or home == "/" or home not in value)
+        and (not HOME_DIR or HOME_DIR == "/" or HOME_DIR not in value)
     ):
         if len(value) > max_chars:
             return value[:max_chars] + "...[truncated]"
@@ -207,8 +207,8 @@ def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
     text = _BEARER_RE.sub("Bearer [redacted]", text)
     text = _OPENAI_KEY_RE.sub("[redacted]", text)
     text = _URL_CREDENTIAL_RE.sub(r"\1[redacted]@", text)
-    if home and home != "/":
-        text = text.replace(home, "~")
+    if HOME_DIR and HOME_DIR != "/":
+        text = text.replace(HOME_DIR, "~")
     if len(text) > max_chars:
         return text[:max_chars] + "...[truncated]"
     return text
