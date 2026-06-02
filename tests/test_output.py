@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import unittest
 import tempfile
+from typing import BinaryIO, cast
 from unittest import mock
 
 from speed_of_cinnamon.output import (
@@ -91,7 +92,7 @@ class OutputTest(unittest.TestCase):
 
     def test_run_with_input_rejects_non_text_argument(self) -> None:
         with self.assertRaisesRegex(OutputError, "command arguments must be text"):
-            _run_with_input(["echo", 12], "input")  # type: ignore[arg-type]
+            _run_with_input(["echo", 12], "input")  # type: ignore[list-item]
 
     def test_run_with_input_rejects_blank_executable(self) -> None:
         with self.assertRaisesRegex(OutputError, "command is empty"):
@@ -125,11 +126,11 @@ class OutputTest(unittest.TestCase):
                 return_value=subprocess.CompletedProcess(["echo"], 0, stdout=b"", stderr=b""),
             ),
         ):
-            self.assertIsNone(_run_with_input(("echo", "x"), "in"))
+            _run_with_input(("echo", "x"), "in")
 
     def test_run_with_input_rejects_command_error_output(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            stderr = kwargs["stderr"]
+            stderr = cast(BinaryIO, kwargs["stderr"])
             stderr.write(b"boom")
             return subprocess.CompletedProcess(["cmd"], 1, stdout=b"", stderr=b"")
 
@@ -169,7 +170,7 @@ class OutputTest(unittest.TestCase):
             command = args[0] if args else kwargs["args"]
             assert isinstance(command, list)
             calls.append(command)
-            stdout = kwargs["stdout"]
+            stdout = cast(BinaryIO, kwargs["stdout"])
             stdout.write(b"ok")
             return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
 
@@ -199,7 +200,7 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"),
             mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
         ):
-            self.assertIsNone(_run_with_input(["cmd"], "hello"))
+            _run_with_input(["cmd"], "hello")
 
         self.assertNotIn("LD_PRELOAD", captured_env)
         self.assertNotIn("PYTHONPATH", captured_env)
@@ -238,7 +239,7 @@ class OutputTest(unittest.TestCase):
 
     def test_run_with_input_limits_output_size(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            stdout = kwargs["stdout"]
+            stdout = cast(BinaryIO, kwargs["stdout"])
             stdout.write(b"x" * 200)
             return subprocess.CompletedProcess(["cmd"], 0, stdout=b"", stderr=b"")
 
@@ -256,7 +257,7 @@ class OutputTest(unittest.TestCase):
 
     def test_run_stdout_rejects_non_text_argv(self) -> None:
         with self.assertRaisesRegex(OutputError, "command arguments must be text"):
-            _run_stdout(["xdotool", 12], timeout=1)  # type: ignore[arg-type]
+            _run_stdout(["xdotool", 12], timeout=1)  # type: ignore[list-item]
 
     def test_run_stdout_rejects_empty_executable(self) -> None:
         with self.assertRaisesRegex(OutputError, "command is empty"):
@@ -431,7 +432,12 @@ class OutputTest(unittest.TestCase):
         calls: list[list[str]] = []
 
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            called = list(args[0]) if args and isinstance(args[0], list) else list(kwargs.get("args", []))
+            if args and isinstance(args[0], list):
+                called = list(args[0])
+            else:
+                raw_args = kwargs.get("args", [])
+                assert isinstance(raw_args, list)
+                called = list(raw_args)
             calls.append(called)
             return subprocess.CompletedProcess(["xdotool"], 0, stdout=b"", stderr=b"")
 
@@ -458,7 +464,7 @@ class OutputTest(unittest.TestCase):
 
     def test_read_file_head_rejects_invalid_file(self) -> None:
         with self.assertRaisesRegex(OutputError, "file must be a binary file handle"):
-            _read_file_head(object(), 10)
+            _read_file_head(object(), 10)  # type: ignore[arg-type]
 
     def test_read_file_head_rejects_invalid_max_chars(self) -> None:
         with tempfile.TemporaryFile() as handle:
