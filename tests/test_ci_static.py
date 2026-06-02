@@ -484,6 +484,12 @@ class CiStaticTest(unittest.TestCase):
 
         self.assertIn("workflows_changed<<WORKFLOWS_CHANGED", workflow)
 
+    def test_scorecard_workflow_does_not_request_oidc_token(self) -> None:
+        workflow = (REPO_ROOT / ".github" / "workflows" / "scorecard.yml").read_text(encoding="utf-8")
+        self.assertIn("security-events: write", workflow)
+        self.assertNotIn("id-token: write", workflow)
+        self.assertIn("publish_results: false", workflow)
+
     def test_workflows_install_pinned_actionlint_release(self) -> None:
         ci_workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         lint_workflow = (REPO_ROOT / ".github" / "workflows" / "super-linter.yml").read_text(encoding="utf-8")
