@@ -42,6 +42,11 @@ if [[ -L "${snap_path}" ]]; then
   printf 'snap file must not be a symlink: %s\n' "${snap_path}" >&2
   exit 1
 fi
+link_count="$(stat -c '%h' "${snap_path}")"
+if [[ "${link_count}" -ne 1 ]]; then
+  printf 'snap file must not be hardlinked: %s\n' "${snap_path}" >&2
+  exit 1
+fi
 
 absolute="$(realpath "${snap_path}")"
 if [[ "${absolute}" != "${snap_dir}/"* ]]; then

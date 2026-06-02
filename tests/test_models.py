@@ -600,6 +600,44 @@ class ModelsTest(unittest.TestCase):
                     prefix=".model.",
                 )
 
+    def test_download_url_allows_redirect_to_exact_allowed_url_with_query(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            response = FakeRedirectResponse(
+                b"model",
+                5,
+                "https://huggingface.co/wabisabisocial/whisper-tiny-german-ggml/resolve/main/ggml-tiny-de.bin?download=1",
+            )
+            with mock.patch("speed_of_cinnamon.models.urllib.request.urlopen", return_value=response):
+                tmp_path, downloaded = models._download_url_to_file(
+                    models.TINY_DE_MODEL_URL,
+                    Path(tmp),
+                    1024,
+                    "tiny-de",
+                    prefix=".model.",
+                )
+            self.assertEqual(downloaded, 5)
+            self.assertTrue(tmp_path.exists())
+            self.assertEqual(tmp_path.read_bytes(), b"model")
+
+    def test_download_url_rejects_redirects_to_other_huggingface_repo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(models.ModelError, "redirect URL is not allowed"):
+                with mock.patch(
+                    "speed_of_cinnamon.models.urllib.request.urlopen",
+                    return_value=FakeRedirectResponse(
+                        b"model",
+                        5,
+                        "https://huggingface.co/other/repo/resolve/main/ggml-tiny-de.bin?download=1",
+                    ),
+                ):
+                    models._download_url_to_file(
+                        models.TINY_DE_MODEL_URL,
+                        Path(tmp),
+                        1024,
+                        "tiny-de",
+                        prefix=".model.",
+                    )
+
     def test_download_model_raises_when_multifile_replace_fails(self) -> None:
         data = b"small model file"
         spec = models.ModelSpec(

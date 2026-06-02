@@ -387,6 +387,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('snap_dir="${repo_dir}/dist/snap"', verify_snap)
         self.assertIn('if [[ -L "${snap_dir}" ]]; then', verify_snap)
         self.assertIn('snap directory must not be a symlink', verify_snap)
+        self.assertIn("snap file must not be hardlinked", verify_snap)
         self.assertIn('$\'\\n\'', verify_snap)
         self.assertIn('snap file path contains control characters', verify_snap)
 

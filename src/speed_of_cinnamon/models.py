@@ -394,6 +394,18 @@ def _assert_download_url(
     return normalized
 
 
+def _url_matches_allowed_base(url: str, allowed_url: str) -> bool:
+    if not isinstance(url, str) or not isinstance(allowed_url, str):
+        return False
+    parsed = urllib.parse.urlsplit(url)
+    allowed = urllib.parse.urlsplit(allowed_url)
+    return (
+        parsed.scheme == allowed.scheme
+        and parsed.netloc == allowed.netloc
+        and parsed.path == allowed.path
+    )
+
+
 class ModelError(RuntimeError):
     pass
 
@@ -766,10 +778,11 @@ def _download_url_to_file(url: str, tmp_dir: Path, size_limit: int, model_name: 
                     geturl(),
                     field_name="model download redirect URL",
                     allowed_hosts=allowed_hosts,
-                    allowed_urls=allowed_urls,
                 )
-                if final_url != url:
-                    url = final_url
+                if allowed_urls is not None and not any(
+                    _url_matches_allowed_base(final_url, allowed_url) for allowed_url in allowed_urls
+                ):
+                    raise ModelError("model download redirect URL is not allowed")
             content_length = _read_content_length(response)
             if content_length is not None and content_length > size_limit:
                 raise ModelError(f"downloaded model too large for {model_name}: {content_length} > {size_limit}")
