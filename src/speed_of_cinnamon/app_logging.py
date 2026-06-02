@@ -185,7 +185,7 @@ def sanitize_value(key: str, value: object) -> object:
     if isinstance(value, Path):
         return _safe_path(value)
     if isinstance(value, (list, tuple, set)):
-        return [sanitize_value(key, item) for item in list(value)[:8]]
+        return [sanitize_value(key, item) for item in islice(value, 8)]
     if isinstance(value, dict):
         clean: dict[str, object] = {}
         for raw_key, raw_value in islice(value.items(), 16):
