@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import subprocess
 from pathlib import Path
 try:
@@ -110,5 +111,13 @@ def main() -> int:
     print(to_version(major, minor, patch))
     return 0
 
+
+def run() -> int:
+    try:
+        return main()
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
 if __name__ == '__main__':
-    raise SystemExit(main())
+    raise SystemExit(run())
