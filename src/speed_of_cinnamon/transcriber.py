@@ -55,6 +55,11 @@ _BASE_ENV_KEYS = {
     "TEMP",
     "TMP",
     "TERM",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XAUTHORITY",
+    "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS",
 }
 _DANGEROUS_ENV_PREFIXES = ("LD_", "PYTHON", "BASH_", "__")
 _DANGEROUS_ENV_KEYS = {
@@ -792,6 +797,11 @@ def transcribe_with_openai_compatible_api(
             raw_error = _read_response_text(exc, MAX_TRANSCRIBER_ERROR_CHARS)
         except TranscriptionError:
             raw_error = ""
+        finally:
+            try:
+                exc.close()
+            except Exception:
+                pass
         detail = _openai_compatible_error_detail(raw_error) or exc.reason or str(exc)
         raise TranscriptionError(f"OpenAI-compatible speech API failed ({exc.code}) at {endpoint}: {detail}") from exc
     except OSError as exc:

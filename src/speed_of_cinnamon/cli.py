@@ -63,7 +63,7 @@ from .postprocessor import (
     list_openai_compatible_models,
     post_process_text,
 )
-from .recorder import choose_recorder, list_input_sources, read_recording_level, start_recorder, stop_process
+from .recorder import RecorderCommand, choose_recorder, list_input_sources, read_recording_level, start_recorder, stop_process
 from .recorder import MAX_RECORDING_SECONDS, RecorderError, validate_recording_path
 from .settings_export import read_export, write_export
 from .setup_plan import build_setup_plan
@@ -114,6 +114,11 @@ _BASE_ENV_KEYS = {
     "TEMP",
     "TMP",
     "TERM",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "XAUTHORITY",
+    "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS",
 }
 _DANGEROUS_ENV_PREFIXES = ("LD_", "PYTHON", "BASH_", "__")
 _DANGEROUS_ENV_KEYS = {
@@ -939,15 +944,48 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
     audio_path = recordings_dir() / f"{stamp}.wav"
     log_path = recordings_dir() / f"{stamp}.log"
     max_seconds = _coerce_int(args.max_seconds, field_name="max-seconds", max_value=MAX_RECORDING_SECONDS)
-    command = choose_recorder(args.recorder, audio_path, max_seconds, args.input_device)
     audio_path = validate_recording_path(audio_path, suffix=".wav", require_recordings_dir=True)
     log_path = validate_recording_path(log_path, suffix=".log", require_recordings_dir=True)
+
+    def reset_recording_artifacts() -> None:
+        remove_file(str(audio_path), suffix=".wav")
+        remove_file(str(log_path), suffix=".log")
+        _prepare_private_file(audio_path, field_name="recording audio file")
+
     _prepare_private_file(audio_path, field_name="recording audio file")
-    proc = start_recorder(command, log_path)
-    time.sleep(RECORDER_START_GRACE_SECONDS)
-    if proc.poll() is not None:
-        detail = read_log_excerpt(log_path) or f"exit code {proc.returncode}"
-        raise RuntimeError(f"{command.name} exited immediately: {detail}")
+    recorder_preferences = ["pw-record", "parecord", "arecord"] if args.recorder == "auto" else [args.recorder]
+    startup_errors: list[str] = []
+    command: RecorderCommand | None = None
+    proc: subprocess.Popen[bytes] | None = None
+    for recorder_preference in recorder_preferences:
+        try:
+            candidate = choose_recorder(recorder_preference, audio_path, max_seconds, args.input_device)
+            candidate_proc = start_recorder(candidate, log_path)
+        except Exception as exc:
+            startup_errors.append(f"{recorder_preference}: {exc}")
+            if args.recorder != "auto":
+                remove_file(str(audio_path), suffix=".wav")
+                remove_file(str(log_path), suffix=".log")
+                raise
+            reset_recording_artifacts()
+            continue
+        time.sleep(RECORDER_START_GRACE_SECONDS)
+        if candidate_proc.poll() is None:
+            command = candidate
+            proc = candidate_proc
+            break
+        detail = read_log_excerpt(log_path) or f"exit code {candidate_proc.returncode}"
+        startup_errors.append(f"{candidate.name} exited immediately: {detail}")
+        if args.recorder != "auto":
+            remove_file(str(audio_path), suffix=".wav")
+            remove_file(str(log_path), suffix=".log")
+            raise RuntimeError(startup_errors[-1])
+        reset_recording_artifacts()
+    if command is None or proc is None:
+        remove_file(str(audio_path), suffix=".wav")
+        remove_file(str(log_path), suffix=".log")
+        detail = "; ".join(startup_errors) if startup_errors else "no supported recorder found"
+        raise RuntimeError(f"no recorder backend started successfully: {detail}")
     language = args.language or "en"
     state = RecordingState(
         status="recording",

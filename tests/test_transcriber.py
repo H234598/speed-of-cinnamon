@@ -463,7 +463,15 @@ class TranscriberTest(unittest.TestCase):
         with (
             mock.patch.dict(
                 "speed_of_cinnamon.transcriber.os.environ",
-                {"LD_PRELOAD": "malicious-lib.so", "PYTHONPATH": "/tmp/evil", "HOME": "/tmp/home", "LANG": "en_US.UTF-8"},
+                {
+                    "LD_PRELOAD": "malicious-lib.so",
+                    "PYTHONPATH": "/tmp/evil",
+                    "HOME": "/tmp/home",
+                    "LANG": "en_US.UTF-8",
+                    "DISPLAY": ":0",
+                    "XDG_RUNTIME_DIR": "/run/user/1000",
+                    "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
+                },
                 clear=True,
             ),
             mock.patch("speed_of_cinnamon.transcriber.shutil.which", return_value="/usr/bin/whisper"),
@@ -473,6 +481,9 @@ class TranscriberTest(unittest.TestCase):
 
         self.assertNotIn("LD_PRELOAD", captured_env)
         self.assertNotIn("PYTHONPATH", captured_env)
+        self.assertEqual(captured_env["DISPLAY"], ":0")
+        self.assertEqual(captured_env["XDG_RUNTIME_DIR"], "/run/user/1000")
+        self.assertEqual(captured_env["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/run/user/1000/bus")
         self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
     def test_run_limited_process_rejects_non_list_command(self) -> None:
@@ -837,6 +848,7 @@ class TranscriberTest(unittest.TestCase):
         class ErrorBody:
             def __init__(self) -> None:
                 self._read = False
+                self.closed = False
 
             def read(self, size: int = -1) -> bytes:
                 if self._read:
@@ -845,7 +857,7 @@ class TranscriberTest(unittest.TestCase):
                 return b'{"error":{"message":"missing API key","type":"invalid_request_error"}}'
 
             def close(self) -> None:
-                return None
+                self.closed = True
 
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
@@ -857,6 +869,7 @@ class TranscriberTest(unittest.TestCase):
                 {},
                 ErrorBody(),
             )
+            body = error.fp
             with mock.patch("speed_of_cinnamon.transcriber.urllib.request.urlopen", side_effect=error):
                 with self.assertRaisesRegex(TranscriptionError, "failed \\(401\\).*missing API key.*invalid_request_error"):
                     transcribe(
@@ -867,6 +880,7 @@ class TranscriberTest(unittest.TestCase):
                         openai_compatible_model="gpt-4o-transcribe",
                         openai_compatible_url="https://api.openai.com/v1",
                     )
+            self.assertTrue(body.closed)
 
     def test_openai_api_rejects_non_transcription_model_before_network(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

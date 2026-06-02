@@ -502,6 +502,7 @@ class PostProcessorTest(unittest.TestCase):
                     openai_compatible_model="gpt-4o-mini",
                     openai_compatible_url="https://api.openai.com/v1",
                 )
+        self.assertTrue(error.fp.closed)
 
     def test_openai_compatible_backend_requires_model(self) -> None:
         with self.assertRaisesRegex(PostProcessError, "model is required"):
@@ -695,6 +696,7 @@ class PostProcessorTest(unittest.TestCase):
         self.assertIn("failed (401)", result["message"])
         self.assertIn("missing API key", result["message"])
         self.assertNotIn("local server", result["message"])
+        self.assertTrue(error.fp.closed)
 
 
 if __name__ == "__main__":

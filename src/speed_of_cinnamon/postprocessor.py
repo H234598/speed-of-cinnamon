@@ -402,6 +402,11 @@ def list_openai_compatible_models(
             raw_error = _read_response_text(exc, MAX_POSTPROCESS_JSON_BYTES)
         except PostProcessError:
             raw_error = ""
+        finally:
+            try:
+                exc.close()
+            except Exception:
+                pass
         detail = _openai_compatible_error_detail(raw_error) or exc.reason or str(exc)
         return {
             "available": False,
@@ -601,6 +606,11 @@ def post_process_with_openai_compatible(
             raw_error = _read_response_text(exc, MAX_POSTPROCESS_JSON_BYTES)
         except PostProcessError:
             raw_error = ""
+        finally:
+            try:
+                exc.close()
+            except Exception:
+                pass
         detail = _openai_compatible_error_detail(raw_error) or exc.reason or str(exc)
         raise PostProcessError(f"OpenAI-compatible request failed ({exc.code}) at {endpoint}: {detail}") from exc
     except OSError as exc:

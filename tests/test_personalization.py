@@ -84,11 +84,15 @@ class PersonalizationTest(unittest.TestCase):
             "PYTHONPATH": "/tmp/evil",
             "HOME": "/home/test",
             "LANG": "en_US.UTF-8",
+            "XDG_RUNTIME_DIR": "/run/user/1000",
+            "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
         }, clear=True):
             env = command_environment("Use project terms.", "PipeWire")
 
         self.assertNotIn("LD_PRELOAD", env)
         self.assertNotIn("PYTHONPATH", env)
+        self.assertEqual(env["XDG_RUNTIME_DIR"], "/run/user/1000")
+        self.assertEqual(env["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/run/user/1000/bus")
         self.assertEqual(env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
     def test_command_environment_rejects_oversized_payload_bytes(self) -> None:

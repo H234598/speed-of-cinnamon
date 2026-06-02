@@ -145,6 +145,7 @@ class CommandChainTest(unittest.TestCase):
                 "speed_of_cinnamon.command_chain.command_environment",
                 return_value={
                     "SPEED_OF_CINNAMON_CONTEXT": "test",
+                    "XDG_RUNTIME_DIR": "/run/user/1000",
                     "LD_PRELOAD": "malicious-lib.so",
                     "PYTHONPATH": "/tmp/evil",
                 },
@@ -156,6 +157,7 @@ class CommandChainTest(unittest.TestCase):
 
         self.assertNotIn("LD_PRELOAD", captured_env)
         self.assertNotIn("PYTHONPATH", captured_env)
+        self.assertEqual(captured_env["XDG_RUNTIME_DIR"], "/run/user/1000")
         self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
     def test_command_environment_strips_shell_state_variables(self) -> None:
@@ -167,6 +169,8 @@ class CommandChainTest(unittest.TestCase):
                 "CDPATH": "/tmp/cd",
                 "PS4": "pwn",
                 "BASH_XTRACEFD": "9",
+                "XDG_RUNTIME_DIR": "/run/user/1000",
+                "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
             },
         ):
             from speed_of_cinnamon.personalization import command_environment
@@ -212,6 +216,8 @@ class CommandChainTest(unittest.TestCase):
             self.assertNotIn("CDPATH", env)
             self.assertNotIn("PS4", env)
             self.assertNotIn("BASH_XTRACEFD", env)
+            self.assertEqual(env["XDG_RUNTIME_DIR"], "/run/user/1000")
+            self.assertEqual(env["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/run/user/1000/bus")
 
     def test_command_path_ignores_trusted_path_environment_override(self) -> None:
         captured_path: dict[str, str | None] = {}

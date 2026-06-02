@@ -81,3 +81,68 @@ class InstallLocalTest(unittest.TestCase):
             self.assertTrue(
                 (home / ".local" / "share" / "speed-of-cinnamon" / "python" / "speed_of_cinnamon" / "cli.py").exists()
             )
+
+
+class SmokeBackendTest(unittest.TestCase):
+    def _run_smoke_backend(self, home: Path, backend: Path) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env["HOME"] = str(home)
+        env["SPEED_OF_CINNAMON_TEST_HOME"] = "1"
+        return subprocess.run(
+            ["bash", str(REPO_ROOT / "scripts" / "smoke-backend.sh"), str(backend)],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+
+    def _write_fake_backend(self, path: Path, start_error: str) -> None:
+        path.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            "case \"${1:-}\" in\n"
+            "  doctor|models|status|cleanup)\n"
+            "    printf '{\"status\":\"done\"}\\n'\n"
+            "    ;;\n"
+            "  alarms)\n"
+            "    printf '{\"status\":\"done\"}\\n'\n"
+            "    ;;\n"
+            "  start)\n"
+            f"    printf '{{\"status\":\"error\",\"error\":\"{start_error}\"}}\\n'\n"
+            "    exit 1\n"
+            "    ;;\n"
+            "  *)\n"
+            "    printf 'unexpected command: %s\\n' \"${1:-}\" >&2\n"
+            "    exit 2\n"
+            "    ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        path.chmod(0o700)
+
+    def test_smoke_backend_skips_live_audio_when_no_recorder_can_start(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            home = tmp_path / "home"
+            home.mkdir()
+            backend = tmp_path / "backend"
+            self._write_fake_backend(backend, "no recorder backend started successfully: pw-record failed")
+
+            result = self._run_smoke_backend(home, backend)
+
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("Skipping live recorder smoke", result.stderr)
+
+    def test_smoke_backend_keeps_unexpected_start_errors_hard(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            home = tmp_path / "home"
+            home.mkdir()
+            backend = tmp_path / "backend"
+            self._write_fake_backend(backend, "unexpected start failure")
+
+            result = self._run_smoke_backend(home, backend)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("Skipping live recorder smoke", result.stderr)

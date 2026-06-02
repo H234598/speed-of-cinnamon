@@ -245,7 +245,15 @@ class RecorderTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
                 mock.patch.dict(
                     "speed_of_cinnamon.recorder.os.environ",
-                    {"LD_PRELOAD": "malicious-lib.so", "PYTHONPATH": "/tmp/evil", "HOME": "/tmp/home", "LANG": "en_US.UTF-8"},
+                    {
+                        "LD_PRELOAD": "malicious-lib.so",
+                        "PYTHONPATH": "/tmp/evil",
+                        "HOME": "/tmp/home",
+                        "LANG": "en_US.UTF-8",
+                        "XDG_RUNTIME_DIR": "/run/user/1000",
+                        "PULSE_SERVER": "unix:/run/user/1000/pulse/native",
+                        "PIPEWIRE_REMOTE": "pipewire-0",
+                    },
                     clear=True,
                 ),
                 mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
@@ -255,6 +263,9 @@ class RecorderTest(unittest.TestCase):
 
         self.assertNotIn("LD_PRELOAD", captured_env)
         self.assertNotIn("PYTHONPATH", captured_env)
+        self.assertEqual(captured_env["XDG_RUNTIME_DIR"], "/run/user/1000")
+        self.assertEqual(captured_env["PULSE_SERVER"], "unix:/run/user/1000/pulse/native")
+        self.assertEqual(captured_env["PIPEWIRE_REMOTE"], "pipewire-0")
         self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
     def test_start_recorder_sets_private_log_permissions(self) -> None:
@@ -450,7 +461,14 @@ class RecorderTest(unittest.TestCase):
         with (
             mock.patch.dict(
                 "speed_of_cinnamon.recorder.os.environ",
-                {"LD_PRELOAD": "malicious-lib.so", "PYTHONPATH": "/tmp/evil", "HOME": "/tmp/home", "LANG": "en_US.UTF-8"},
+                {
+                    "LD_PRELOAD": "malicious-lib.so",
+                    "PYTHONPATH": "/tmp/evil",
+                    "HOME": "/tmp/home",
+                    "LANG": "en_US.UTF-8",
+                    "XDG_RUNTIME_DIR": "/run/user/1000",
+                    "PULSE_SERVER": "unix:/run/user/1000/pulse/native",
+                },
                 clear=True,
             ),
             mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/pactl"),
@@ -460,6 +478,8 @@ class RecorderTest(unittest.TestCase):
 
         self.assertNotIn("LD_PRELOAD", captured_env)
         self.assertNotIn("PYTHONPATH", captured_env)
+        self.assertEqual(captured_env["XDG_RUNTIME_DIR"], "/run/user/1000")
+        self.assertEqual(captured_env["PULSE_SERVER"], "unix:/run/user/1000/pulse/native")
         self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
     def test_run_kill_rejects_bad_command_shape(self) -> None:
@@ -516,7 +536,14 @@ class RecorderTest(unittest.TestCase):
         with (
             mock.patch.dict(
                 "speed_of_cinnamon.recorder.os.environ",
-                {"LD_PRELOAD": "malicious-lib.so", "PYTHONPATH": "/tmp/evil", "HOME": "/tmp/home", "LANG": "en_US.UTF-8"},
+                {
+                    "LD_PRELOAD": "malicious-lib.so",
+                    "PYTHONPATH": "/tmp/evil",
+                    "HOME": "/tmp/home",
+                    "LANG": "en_US.UTF-8",
+                    "XDG_RUNTIME_DIR": "/run/user/1000",
+                    "PULSE_SERVER": "unix:/run/user/1000/pulse/native",
+                },
                 clear=True,
             ),
             mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/kill"),
@@ -526,6 +553,8 @@ class RecorderTest(unittest.TestCase):
 
         self.assertNotIn("LD_PRELOAD", captured_env)
         self.assertNotIn("PYTHONPATH", captured_env)
+        self.assertEqual(captured_env["XDG_RUNTIME_DIR"], "/run/user/1000")
+        self.assertEqual(captured_env["PULSE_SERVER"], "unix:/run/user/1000/pulse/native")
         self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
     def test_run_kill_rejects_missing_command(self) -> None:

@@ -194,7 +194,16 @@ class OutputTest(unittest.TestCase):
         with (
             mock.patch.dict(
                 "speed_of_cinnamon.output.os.environ",
-                {"LD_PRELOAD": "malicious-lib.so", "PYTHONPATH": "/tmp/evil", "HOME": "/tmp/home", "LANG": "en_US.UTF-8"},
+                {
+                    "LD_PRELOAD": "malicious-lib.so",
+                    "PYTHONPATH": "/tmp/evil",
+                    "HOME": "/tmp/home",
+                    "LANG": "en_US.UTF-8",
+                    "DISPLAY": ":0",
+                    "WAYLAND_DISPLAY": "wayland-0",
+                    "XDG_RUNTIME_DIR": "/run/user/1000",
+                    "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
+                },
                 clear=True,
             ),
             mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"),
@@ -204,6 +213,10 @@ class OutputTest(unittest.TestCase):
 
         self.assertNotIn("LD_PRELOAD", captured_env)
         self.assertNotIn("PYTHONPATH", captured_env)
+        self.assertEqual(captured_env["DISPLAY"], ":0")
+        self.assertEqual(captured_env["WAYLAND_DISPLAY"], "wayland-0")
+        self.assertEqual(captured_env["XDG_RUNTIME_DIR"], "/run/user/1000")
+        self.assertEqual(captured_env["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/run/user/1000/bus")
         self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
     def test_run_with_input_rejects_missing_command_when_resolved_path_missing(self) -> None:

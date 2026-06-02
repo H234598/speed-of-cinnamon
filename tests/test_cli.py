@@ -2865,6 +2865,101 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(mode, 0o600)
 
+    def test_start_auto_falls_back_when_first_recorder_exits_immediately(self) -> None:
+        failed_proc = mock.Mock()
+        failed_proc.pid = 23456
+        failed_proc.poll.return_value = 1
+        failed_proc.returncode = 1
+        working_proc = mock.Mock()
+        working_proc.pid = 23457
+        working_proc.poll.return_value = None
+        second_log_existed: list[bool] = []
+
+        def fake_choose(preference: str, *_args: object) -> RecorderCommand:
+            return RecorderCommand(preference, [preference])
+
+        def fake_start(command: RecorderCommand, log_path: Path) -> object:
+            if command.name == "pw-record":
+                log_path.write_text("first recorder failed\n", encoding="utf-8")
+                return failed_proc
+            second_log_existed.append(log_path.exists())
+            return working_proc
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.choose_recorder", side_effect=fake_choose) as mocked_choose,
+                mock.patch("speed_of_cinnamon.cli.start_recorder", side_effect=fake_start),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["start", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            state = StateStore(state_file).read()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["recorder"], "parecord")
+        self.assertEqual(state.recorder, "parecord")
+        self.assertEqual([call.args[0] for call in mocked_choose.call_args_list], ["pw-record", "parecord"])
+        self.assertEqual(second_log_existed, [False])
+
+    def test_start_explicit_recorder_reports_immediate_exit_without_fallback(self) -> None:
+        failed_proc = mock.Mock()
+        failed_proc.pid = 23456
+        failed_proc.poll.return_value = 1
+        failed_proc.returncode = 1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch(
+                    "speed_of_cinnamon.cli.choose_recorder",
+                    return_value=RecorderCommand("pw-record", ["pw-record"]),
+                ) as mocked_choose,
+                mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=failed_proc),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["start", "--recorder", "pw-record", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            recording_artifacts = list((Path(tmp) / "speed-of-cinnamon" / "recordings").glob("*"))
+
+        self.assertEqual(code, 1)
+        self.assertIn("pw-record exited immediately", payload["error"])
+        self.assertEqual([call.args[0] for call in mocked_choose.call_args_list], ["pw-record"])
+        self.assertEqual(recording_artifacts, [])
+
+    def test_start_auto_removes_artifacts_when_all_recorders_fail(self) -> None:
+        failed_processes = []
+        for returncode in (1, 2, 3):
+            proc = mock.Mock()
+            proc.pid = 23456 + returncode
+            proc.poll.return_value = returncode
+            proc.returncode = returncode
+            failed_processes.append(proc)
+
+        def fake_choose(preference: str, *_args: object) -> RecorderCommand:
+            return RecorderCommand(preference, [preference])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.choose_recorder", side_effect=fake_choose),
+                mock.patch("speed_of_cinnamon.cli.start_recorder", side_effect=failed_processes),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["start", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            recording_artifacts = list((Path(tmp) / "speed-of-cinnamon" / "recordings").glob("*"))
+
+        self.assertEqual(code, 1)
+        self.assertIn("no recorder backend started successfully", payload["error"])
+        self.assertEqual(recording_artifacts, [])
+
     def test_start_rejects_negative_max_seconds(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             stdout = io.StringIO()
