@@ -79,7 +79,11 @@ class SizeCappedJsonFileHandler(logging.Handler):
             if len(encoded) > MAX_DAILY_LOG_BYTES:
                 line = _oversized_record_line(record)
                 encoded = line.encode("utf-8")
-            if self.path.exists() and self.path.stat().st_size + len(encoded) > MAX_DAILY_LOG_BYTES:
+            try:
+                current_size = self.path.stat().st_size
+            except OSError:
+                current_size = None
+            if current_size is not None and current_size + len(encoded) > MAX_DAILY_LOG_BYTES:
                 self.close()
                 _rotate_active_if_needed(self.path, force=True)
             self._open()
