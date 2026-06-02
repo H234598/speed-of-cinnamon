@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import tempfile
+from itertools import islice
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, TextIO
@@ -186,7 +187,7 @@ def sanitize_value(key: str, value: object) -> object:
         return [sanitize_value(key, item) for item in list(value)[:8]]
     if isinstance(value, dict):
         clean: dict[str, object] = {}
-        for raw_key, raw_value in list(value.items())[:16]:
+        for raw_key, raw_value in islice(value.items(), 16):
             child_key = sanitize_key(raw_key)
             if child_key:
                 clean[child_key] = sanitize_value(child_key, raw_value)
