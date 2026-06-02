@@ -35,7 +35,7 @@
     "output-section": {
       "type": "section",
       "title": "Text output",
-      "keys": ["insert-method", "append-space", "sanitize-special-chars", "typing-delay-ms"]
+      "keys": ["insert-method", "append-space", "sanitize-special-chars", "typing-delay-ms", "auto-paste-window-title"]
     },
     "backend-section": {
       "type": "section",
@@ -229,6 +229,12 @@
     "step": 1,
     "units": "ms",
     "default": 8
+  },
+  "auto-paste-window-title": {
+    "type": "entry",
+    "description": "AutoPaste window title",
+    "tooltip": "When any comma-separated or line-separated text appears in the remembered target window title, inserted text gets a trailing Enter. Empty disables Auto-Paste. Max 4096 chars.",
+    "default": "codex"
   },
   "cli-path": {
     "type": "entry",

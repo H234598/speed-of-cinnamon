@@ -62,6 +62,13 @@ const DEFAULT_RECORDING_SECONDS = 30;
 const MIN_TYPING_DELAY_MS = 0;
 const MAX_TYPING_DELAY_MS = 10000;
 const DEFAULT_TYPING_DELAY_MS = 8;
+const DEFAULT_AUTO_PASTE_TITLE = "codex";
+const AUTO_PASTE_TITLE_PRESETS = [
+  "codex",
+  "Terminal",
+  "PDF",
+  "Excel"
+];
 const CLI_COMMAND_TIMEOUT_MS = 300000;
 const STATUS_COMMAND_TIMEOUT_MS = 10000;
 const DOCTOR_COMMAND_TIMEOUT_MS = 20000;
@@ -161,6 +168,7 @@ const EXPORTABLE_SETTINGS = [
   ["append-space", "appendSpace"],
   ["typing-delay-ms", "typingDelayMs"],
   ["sanitize-special-chars", "sanitizeSpecialChars"],
+  ["auto-paste-window-title", "autoPasteWindowTitle"],
   ["transcriber", "transcriber"],
   ["whisper-model", "whisperModel"],
   ["transcriber-command", "transcriberCommand"],
@@ -209,6 +217,7 @@ MyApplet.prototype = {
     this.appendSpace = true;
     this.typingDelayMs = DEFAULT_TYPING_DELAY_MS;
     this.sanitizeSpecialChars = false;
+    this.autoPasteWindowTitle = DEFAULT_AUTO_PASTE_TITLE;
     this.cliPath = "";
     this.transcriber = "auto";
     this.whisperModel = "";
@@ -285,6 +294,7 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "append-space", "appendSpace", this._onTextOutputSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "typing-delay-ms", "typingDelayMs", this._onTextOutputSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "sanitize-special-chars", "sanitizeSpecialChars", this._onTextOutputSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "auto-paste-window-title", "autoPasteWindowTitle", this._onTextOutputSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "cli-path", "cliPath", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "transcriber", "transcriber", this._onVoiceBackendSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "whisper-model", "whisperModel", this._onVoiceBackendSettingsChanged, null);
@@ -418,6 +428,15 @@ MyApplet.prototype = {
     });
     this.textOutputMenuItem.menu.addMenuItem(this.textOptionsItem);
     this._populateTextOptionsMenu();
+
+    this.autoPasteItem = new PopupMenu.PopupSubMenuMenuItem(_("Auto-Paste: codex"));
+    this.autoPasteItem.menu.connect("open-state-changed", (menu, open) => {
+      if (open) {
+        this._populateAutoPasteMenu();
+      }
+    });
+    this.textOutputMenuItem.menu.addMenuItem(this.autoPasteItem);
+    this._populateAutoPasteMenu();
 
     this.transcriptItem = this._styleMenuItemLabel(new PopupMenu.PopupMenuItem(_("No transcript yet")), { maxWidthEm: MENU_LABEL_WIDTH_EM });
     this.transcriptItem.setSensitive(false);
@@ -579,6 +598,7 @@ MyApplet.prototype = {
     this._styleSelectionSubmenu(this.inputSourceItem);
     this._styleSelectionSubmenu(this.modelItem);
     this._styleSelectionSubmenu(this.textModelItem);
+    this._styleSelectionSubmenu(this.autoPasteItem);
   },
 
   _styleSelectionSubmenu: function(menuItem) {
@@ -681,6 +701,7 @@ MyApplet.prototype = {
   _onTextOutputSettingsChanged: function() {
     this.typingDelayMs = this._normalizeTypingDelayMs(this.typingDelayMs);
     this._populateTextOptionsMenu();
+    this._updateAutoPasteItem();
     this._updatePanel();
   },
 
@@ -1227,6 +1248,122 @@ MyApplet.prototype = {
     this._setTextOptionStatus(
       this.sanitizeSpecialChars ? _("Accent replacement enabled") : _("Accent replacement disabled")
     );
+  },
+
+  _autoPasteTitleValues: function(value) {
+    let raw = String(value || "").replace(NUL_RE, "").slice(0, MAX_SETTING_TEXT_CHARS);
+    let values = [];
+    let seen = {};
+    for (let item of raw.split(/[,\n\r]+/)) {
+      let title = String(item || "").trim();
+      let key = title.toLowerCase();
+      if (title === "" || seen[key]) {
+        continue;
+      }
+      seen[key] = true;
+      values.push(title);
+    }
+    return values;
+  },
+
+  _normalizeAutoPasteTitle: function(value) {
+    return this._autoPasteTitleValues(value).join(", ");
+  },
+
+  _autoPasteEnabled: function() {
+    return this._autoPasteTitleValues(this.autoPasteWindowTitle).length > 0;
+  },
+
+  _autoPasteLabel: function() {
+    let titles = this._autoPasteTitleValues(this.autoPasteWindowTitle);
+    if (titles.length === 0) {
+      return _("AutoPaste: off");
+    }
+    return _("Auto-Paste: ") + this._shortMenuText(titles.join(", "), 48);
+  },
+
+  _configureAutoPaste: function() {
+    this._openAppletSettings();
+    this._setTextOptionStatus(_("Set AutoPaste window title in applet settings. Empty disables it."));
+  },
+
+  _setAutoPasteTitles: function(values) {
+    this.autoPasteWindowTitle = this._normalizeAutoPasteTitle((values || []).join(", "));
+    this.settings.setValue("auto-paste-window-title", this.autoPasteWindowTitle);
+    this._populateAutoPasteMenu();
+    let message = this._autoPasteEnabled()
+      ? _("Auto-Paste window titles: ") + this.autoPasteWindowTitle
+      : _("Auto-Paste disabled");
+    this._setTextOptionStatus(message);
+  },
+
+  _toggleAutoPasteTitle: function(value) {
+    let title = String(value || "").trim();
+    if (title === "") {
+      return;
+    }
+    let values = this._autoPasteTitleValues(this.autoPasteWindowTitle);
+    let lower = title.toLowerCase();
+    let next = [];
+    let removed = false;
+    for (let item of values) {
+      if (item.toLowerCase() === lower) {
+        removed = true;
+        continue;
+      }
+      next.push(item);
+    }
+    if (!removed) {
+      next.push(title);
+    }
+    this._setAutoPasteTitles(next);
+  },
+
+  _populateAutoPasteMenu: function() {
+    if (!this.autoPasteItem) {
+      return;
+    }
+    this.autoPasteItem.menu.removeAll();
+    let currentValues = this._autoPasteTitleValues(this.autoPasteWindowTitle);
+    let current = {};
+    for (let value of currentValues) {
+      current[value.toLowerCase()] = true;
+    }
+    for (let preset of AUTO_PASTE_TITLE_PRESETS) {
+      let label = (current[String(preset).toLowerCase()] ? "[x] " : "[ ] ") + String(preset);
+      let item = new PopupMenu.PopupMenuItem(label);
+      item.connect("activate", () => this._toggleAutoPasteTitle(preset));
+      this.autoPasteItem.menu.addMenuItem(item);
+    }
+    this.autoPasteItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    let disabled = new PopupMenu.PopupMenuItem((currentValues.length === 0 ? "[x] " : "[ ] ") + _("Disabled"));
+    disabled.connect("activate", () => this._setAutoPasteTitles([]));
+    this.autoPasteItem.menu.addMenuItem(disabled);
+    this.autoPasteItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    let custom = new PopupMenu.PopupIconMenuItem(_("Custom string..."), "document-edit-symbolic", St.IconType.SYMBOLIC);
+    custom.connect("activate", () => this._configureAutoPaste());
+    this.autoPasteItem.menu.addMenuItem(custom);
+  },
+
+  _updateAutoPasteItem: function() {
+    if (this.autoPasteItem) {
+      this.autoPasteItem.label.text = this._autoPasteLabel();
+    }
+    this._populateAutoPasteMenu();
+  },
+
+  _windowTitleMatchesAutoPaste: function() {
+    let markers = this._autoPasteTitleValues(this.autoPasteWindowTitle);
+    if (markers.length === 0 || !this._isUsableTargetWindow(this.targetWindow)) {
+      return false;
+    }
+    let title = this._windowProbeValue(this.targetWindow, "get_title");
+    for (let marker of markers) {
+      if (title.indexOf(marker.toLowerCase()) >= 0) {
+        return true;
+      }
+    }
+    return false;
   },
 
   _updateOpenAiFlexProcessingItem: function() {
@@ -3022,6 +3159,7 @@ MyApplet.prototype = {
     this._updateOpenAiFlexProcessingItem();
     this.insertMethod = this._normalizeOutputMethod(this.insertMethod);
     this._populateOutputMethodMenu();
+    this._updateAutoPasteItem();
     this._registerHotkeys();
     this._updatePanel();
     return applied;
@@ -3600,7 +3738,8 @@ MyApplet.prototype = {
 
   _preparedTranscriptText: function(transcript) {
     let text = String(transcript || "");
-    if (!this.sanitizeSpecialChars && !this.appendSpace && text.length <= MAX_TEXT_INSERT_CHARS && text.indexOf("\u0000") < 0) {
+    let autoPasteEnter = this._windowTitleMatchesAutoPaste();
+    if (!this.sanitizeSpecialChars && !this.appendSpace && !autoPasteEnter && text.length <= MAX_TEXT_INSERT_CHARS && text.indexOf("\u0000") < 0) {
       return text;
     }
     if (this.sanitizeSpecialChars) {
@@ -3614,6 +3753,9 @@ MyApplet.prototype = {
     }
     if (this.appendSpace && text && !" \t\n\r\f\v".includes(text[text.length - 1])) {
       text += " ";
+    }
+    if (autoPasteEnter && text && text[text.length - 1] !== "\n") {
+      text += "\n";
     }
     return text;
   },
@@ -3961,6 +4103,7 @@ MyApplet.prototype = {
     if (this.textOptionsItem) {
       this.textOptionsItem.label.text = this._textOptionsLabel();
     }
+    this._updateAutoPasteItem();
     if (this.inputSourceItem) {
       this.inputSourceItem.label.text = this._inputSourceLabel();
     }

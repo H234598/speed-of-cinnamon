@@ -227,6 +227,37 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.recordingLimitItem.label.text = _("Duration: ") + this._formatSeconds(this._normalizeRecordingLimit(this.maxSeconds))', source)
         self.assertIn('this.lastMessage = _("Duration for next recording: ") + label', source)
 
+
+    def test_applet_exposes_auto_paste_title_marker(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
+
+        self.assertIn("auto-paste-window-title", schema["layout"]["output-section"]["keys"])
+        self.assertEqual(schema["auto-paste-window-title"]["default"], "codex")
+        self.assertIn('const DEFAULT_AUTO_PASTE_TITLE = "codex";', source)
+        self.assertIn("const AUTO_PASTE_TITLE_PRESETS = [", source)
+        self.assertIn('"Terminal"', source)
+        self.assertIn('"PDF"', source)
+        self.assertIn('"Excel"', source)
+        self.assertIn('this.autoPasteWindowTitle = DEFAULT_AUTO_PASTE_TITLE;', source)
+        self.assertIn('["auto-paste-window-title", "autoPasteWindowTitle"]', source)
+        self.assertIn('this.settings.bindProperty(Settings.BindingDirection.IN, "auto-paste-window-title", "autoPasteWindowTitle", this._onTextOutputSettingsChanged, null)', source)
+        self.assertIn('this.autoPasteItem = new PopupMenu.PopupSubMenuMenuItem(_("Auto-Paste: codex"))', source)
+        self.assertIn('_populateAutoPasteMenu: function()', source)
+        self.assertIn('for (let preset of AUTO_PASTE_TITLE_PRESETS)', source)
+        self.assertIn('disabled.connect("activate", () => this._setAutoPasteTitles([]))', source)
+        self.assertIn('let custom = new PopupMenu.PopupIconMenuItem(_("Custom string...")', source)
+        self.assertIn('_autoPasteTitleValues: function(value)', source)
+        self.assertIn('raw.split(/[,\\n\\r]+/)', source)
+        self.assertIn('_normalizeAutoPasteTitle: function(value)', source)
+        self.assertIn('_toggleAutoPasteTitle: function(value)', source)
+        self.assertIn('this._setAutoPasteTitles([])', source)
+        self.assertIn('_windowTitleMatchesAutoPaste: function()', source)
+        self.assertIn('this._windowProbeValue(this.targetWindow, "get_title")', source)
+        self.assertIn('for (let marker of markers)', source)
+        self.assertIn('if (autoPasteEnter && text && text[text.length - 1] !== "\\n")', source)
+        self.assertIn('this._openAppletSettings();', source)
+
     def test_typing_delay_has_backend_limits(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
