@@ -66,7 +66,16 @@ from .postprocessor import (
     list_openai_compatible_models,
     post_process_text,
 )
-from .recorder import RecorderCommand, choose_recorder, list_input_sources, read_recording_level, start_recorder, stop_process
+from .recorder import (
+    RecorderCommand,
+    SilenceDetectionResult,
+    choose_recorder,
+    detect_silent_recording,
+    list_input_sources,
+    read_recording_level,
+    start_recorder,
+    stop_process,
+)
 from .recorder import MAX_RECORDING_SECONDS, RecorderError, validate_recording_path
 from .settings_export import read_export, write_export
 from .setup_plan import build_setup_plan
@@ -76,13 +85,15 @@ from .transcriber import MAX_AUDIO_PATH_CHARS, normalize_backend, validate_audio
 
 RECORDER_START_GRACE_SECONDS = 0.2
 DEFAULT_KEEP_TRANSCRIPTS = 100
-DEFAULT_KEEP_RECORDINGS = 25
+DEFAULT_KEEP_RECORDINGS = 20
+DEFAULT_RECORDING_MAX_AGE_DAYS = 7
 MAX_LOG_EXCERPT_CHARS = 2000
 MAX_TRANSCRIPT_HISTORY_TEXT_CHARS = 4_000
 MAX_HISTORY_LIMIT = 1_000
 DEFAULT_MAX_SECONDS = 30
 MAX_KEEP_TRANSCRIPTS = 1_000
 MAX_KEEP_RECORDINGS = 1_000
+MAX_RECORDING_MAX_AGE_DAYS = 3_650
 MAX_TYPING_DELAY_MS = 10_000
 DEFAULT_TYPING_DELAY_MS = 8
 MAX_PATH_CHARS = 240
@@ -921,7 +932,12 @@ def recording_groups() -> list[dict[str, object]]:
     return sorted(groups.values(), key=lambda group: (float(group["mtime"]), str(group["stem"])), reverse=True)
 
 
-def prune_recording_groups(keep: int, active_paths: set[Path], dry_run: bool) -> dict[str, object]:
+def prune_recording_groups(
+    keep: int,
+    active_paths: set[Path],
+    dry_run: bool,
+    max_age_days: int = DEFAULT_RECORDING_MAX_AGE_DAYS,
+) -> dict[str, object]:
     planned_recordings = 0
     planned_logs = 0
     planned_paths: list[str] = []
@@ -930,8 +946,11 @@ def prune_recording_groups(keep: int, active_paths: set[Path], dry_run: bool) ->
     deleted_paths: list[str] = []
     failed_paths: list[str] = []
     skipped_active_paths: list[str] = []
-    groups = recording_groups()[max(keep, 0) :]
-    for group in groups:
+    cutoff = time.time() - max(0, max_age_days) * 24 * 60 * 60
+    groups = recording_groups()
+    for index, group in enumerate(groups):
+        if index < max(keep, 0) and float(group.get("mtime", 0.0)) >= cutoff:
+            continue
         files = group.get("files", [])
         if not isinstance(files, list):
             continue
@@ -1088,6 +1107,50 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
     normalized_transcriber = normalize_backend(args.transcriber)
     try:
         audio_path = validate_audio_file(audio_path)
+        skip_silent_auto_relisten = _coerce_bool(
+            getattr(args, "skip_silent_auto_relisten", False),
+            field_name="skip_silent_auto_relisten",
+        )
+        if skip_silent_auto_relisten:
+            silence = detect_silent_recording(audio_path)
+            if silence.silent:
+                keep_recording_artifacts = _coerce_bool(
+                    getattr(args, "keep_recording_artifacts", False),
+                    field_name="keep_recording_artifacts",
+                )
+                audio_deleted = False
+                log_deleted = False
+                done_audio_path = state.audio_path
+                done_log_path = state.log_path
+                if not keep_recording_artifacts:
+                    audio_deleted = remove_file(state.audio_path, suffix=".wav")
+                    log_deleted = remove_file(state.log_path, suffix=".log")
+                    done_audio_path = None
+                    done_log_path = None
+                done = store.update(
+                    status="done",
+                    stopped_at=state.stopped_at or now_iso(),
+                    audio_path=done_audio_path,
+                    log_path=done_log_path,
+                    transcript="",
+                    transcript_path="",
+                    inserted=False,
+                    error="",
+                )
+                return {
+                    "status": done.status,
+                    "message": "silent recording skipped",
+                    "transcript": "",
+                    "transcript_path": "",
+                    "inserted": False,
+                    "language": language,
+                    "recording_artifacts_kept": keep_recording_artifacts,
+                    "audio_deleted": audio_deleted,
+                    "log_deleted": log_deleted,
+                    "silence_detected": True,
+                    "silence_duration_seconds": silence.silence_seconds,
+                    "speech_duration_seconds": silence.speech_seconds,
+                }
         text_path = transcript_dir() / f"{audio_path.stem}.txt"
         text = transcribe(
             audio_path=audio_path,
@@ -1512,6 +1575,11 @@ def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     keep_transcripts = _coerce_int(args.keep_transcripts, field_name="keep-transcripts", max_value=MAX_KEEP_TRANSCRIPTS)
     keep_recordings = _coerce_int(args.keep_recordings, field_name="keep-recordings", max_value=MAX_KEEP_RECORDINGS)
+    recording_max_age_days = _coerce_int(
+        args.recording_max_age_days,
+        field_name="recording-max-age-days",
+        max_value=MAX_RECORDING_MAX_AGE_DAYS,
+    )
     dry_run = _coerce_bool(args.dry_run, field_name="dry-run")
     state = build_store(args).read()
     active_paths = active_artifact_paths(state)
@@ -1521,7 +1589,7 @@ def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
         active_paths,
         dry_run,
     )
-    recording_result = prune_recording_groups(keep_recordings, active_paths, dry_run)
+    recording_result = prune_recording_groups(keep_recordings, active_paths, dry_run, recording_max_age_days)
     deleted_transcripts = len(transcript_result["deleted_paths"])
     deleted_recordings = _coerce_int(recording_result["deleted_recordings"], field_name="deleted-recordings")  # type: ignore[arg-type]
     deleted_logs = _coerce_int(recording_result["deleted_logs"], field_name="deleted-logs")  # type: ignore[arg-type]
@@ -1540,6 +1608,7 @@ def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
         "dry_run": dry_run,
         "keep_transcripts": keep_transcripts,
         "keep_recordings": keep_recordings,
+        "recording_max_age_days": recording_max_age_days,
         "deleted_transcripts": deleted_transcripts,
         "deleted_recordings": deleted_recordings,
         "deleted_logs": deleted_logs,
@@ -1823,6 +1892,11 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="keep temporary WAV/log files after successful transcription",
     )
+    parser.add_argument(
+        "--skip-silent-auto-relisten",
+        action="store_true",
+        help="skip transcription when Auto Relisten records only silence",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1924,6 +1998,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(cleanup)
     cleanup.add_argument("--keep-transcripts", type=int, default=DEFAULT_KEEP_TRANSCRIPTS)
     cleanup.add_argument("--keep-recordings", type=int, default=DEFAULT_KEEP_RECORDINGS)
+    cleanup.add_argument("--recording-max-age-days", type=int, default=DEFAULT_RECORDING_MAX_AGE_DAYS)
     cleanup.add_argument("--dry-run", action="store_true")
     cleanup.set_defaults(handler=command_cleanup)
 

@@ -12,9 +12,11 @@ from unittest import mock
 from speed_of_cinnamon.recorder import (
     RecorderCommand,
     RecorderError,
+    SilenceDetectionResult,
     _ensure_file_head,
     _file_size,
     choose_recorder,
+    detect_silent_recording,
     _run_kill,
     _run_pactl_command,
     normalize_input_device,
@@ -77,6 +79,36 @@ class RecorderTest(unittest.TestCase):
         self.assertFalse(level.ok)
         self.assertEqual(level.percent, 0)
         self.assertEqual(level.detail, "waiting for audio")
+
+    def test_detect_silent_recording_uses_ffmpeg_silencedetect(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "silent.wav"
+            audio.write_bytes(b"RIFF" + b"\x00" * 44)
+            stderr = (
+                "Duration: 00:00:02.00, bitrate: 256 kb/s\n"
+                "[silencedetect @ 0x1] silence_start: 0\n"
+            )
+            completed = subprocess.CompletedProcess(["ffmpeg"], 0, stdout="", stderr=stderr)
+            with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
+                with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=completed) as mocked_run:
+                    result = detect_silent_recording(audio)
+
+        self.assertEqual(result, SilenceDetectionResult(True, True, 2.0, 2.0, 0.0, "silent recording"))
+        argv = mocked_run.call_args.args[0]
+        self.assertIn("-nostdin", argv)
+        self.assertIn("silencedetect=noise=-50dB:d=0.3", argv)
+        self.assertNotIsInstance(argv, str)
+
+    def test_detect_silent_recording_fails_open_when_ffmpeg_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"RIFF" + b"\x00" * 44)
+            with mock.patch("speed_of_cinnamon.recorder._command_path", side_effect=RecorderError("ffmpeg missing")):
+                result = detect_silent_recording(audio)
+
+        self.assertFalse(result.analyzed)
+        self.assertFalse(result.silent)
+        self.assertIn("ffmpeg missing", result.detail)
 
     @mock.patch("speed_of_cinnamon.recorder.os.open", wraps=os.open)
     def test_read_recording_level_uses_secure_open_flags(self, mocked_open: mock.Mock) -> None:

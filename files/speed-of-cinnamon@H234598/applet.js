@@ -810,6 +810,9 @@ MyApplet.prototype = {
     if (this.keepRecordingArtifacts) {
       args.push("--keep-recording-artifacts");
     }
+    if (this.autoRelisten) {
+      args.push("--skip-silent-auto-relisten");
+    }
     if (safeInputDevice.trim() !== "") {
       args.push("--input-device", safeInputDevice);
     }
@@ -914,11 +917,11 @@ MyApplet.prototype = {
   },
 
   _cleanupArgs: function() {
-    return [this._cliCommand(), "cleanup", "--keep-transcripts", "100", "--keep-recordings", "25", "--json"];
+    return [this._cliCommand(), "cleanup", "--keep-transcripts", "100", "--keep-recordings", "20", "--json"];
   },
 
   _cleanupPreviewArgs: function() {
-    return [this._cliCommand(), "cleanup", "--keep-transcripts", "100", "--keep-recordings", "25", "--dry-run", "--json"];
+    return [this._cliCommand(), "cleanup", "--keep-transcripts", "100", "--keep-recordings", "20", "--dry-run", "--json"];
   },
 
   _listInputsArgs: function() {
@@ -3426,6 +3429,10 @@ MyApplet.prototype = {
       this._finishAppletTextInsert(payload);
       return;
     }
+    if (payload.status === "done" && payload.silence_detected) {
+      this._finishSilentRelistenSkip(payload);
+      return;
+    }
     this.autoRelistenPending = false;
     let message = payload.message || status;
     let transcript = payload.transcript || this.lastTranscript || "";
@@ -3747,6 +3754,15 @@ MyApplet.prototype = {
     let shouldRelisten = this.autoRelistenPending;
     this.autoRelistenPending = false;
     if (this._insertTranscriptText(payload.transcript) && shouldRelisten) {
+      this._restartRelistenRecording();
+    }
+  },
+
+  _finishSilentRelistenSkip: function(payload) {
+    let shouldRelisten = this.autoRelistenPending;
+    this.autoRelistenPending = false;
+    this._setStatus("done", payload.message || _("Silent recording skipped"), this.lastTranscript);
+    if (shouldRelisten) {
       this._restartRelistenRecording();
     }
   },
