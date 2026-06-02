@@ -33,6 +33,27 @@ class InstallLocalTest(unittest.TestCase):
             text=True,
         )
 
+    def _run_uninstall_local(
+        self,
+        repo_root: Path,
+        home: Path,
+        extra_env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env["HOME"] = str(home)
+        env["PATH"] = env.get("PATH", "")
+        env["SPEED_OF_CINNAMON_TEST_HOME"] = "1"
+        if extra_env:
+            env.update(extra_env)
+        return subprocess.run(
+            ["bash", str(repo_root / "scripts" / "uninstall-local.sh")],
+            cwd=repo_root,
+            env=env,
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+
     def _copy_minimal_repo(self, destination: Path) -> Path:
         repo_root = destination / "repo"
         (repo_root / "scripts").mkdir(parents=True)
@@ -109,6 +130,32 @@ class InstallLocalTest(unittest.TestCase):
 
         self.assertEqual(version_result.returncode, 0, msg=version_result.stdout + version_result.stderr)
         self.assertIn(f"speed-of-cinnamon {project_version}", version_result.stdout)
+
+    def test_uninstall_local_removes_installed_code_but_preserves_user_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            home = tmp_path / "home"
+            home.mkdir()
+            install_result = self._run_install_local(REPO_ROOT, home)
+            self.assertEqual(install_result.returncode, 0, msg=install_result.stdout + install_result.stderr)
+
+            data_dir = home / ".local" / "share" / "speed-of-cinnamon"
+            model_file = data_dir / "models" / "whisper.cpp" / "ggml-base.bin"
+            alarm_file = data_dir / "alarms.json"
+            model_file.parent.mkdir(parents=True)
+            alarm_file.write_text("[]\n", encoding="utf-8")
+            model_file.write_text("model\n", encoding="utf-8")
+
+            uninstall_result = self._run_uninstall_local(REPO_ROOT, home)
+
+            self.assertEqual(uninstall_result.returncode, 0, msg=uninstall_result.stdout + uninstall_result.stderr)
+            self.assertFalse((home / ".local" / "bin" / "speed-of-cinnamon").exists())
+            self.assertFalse((home / ".local" / "share" / "cinnamon" / "applets" / "speed-of-cinnamon@H234598").exists())
+            self.assertFalse((home / ".local" / "share" / "speed-of-cinnamon" / "python").exists())
+            self.assertFalse((home / ".local" / "share" / "man" / "man1" / "speed-of-cinnamon.1").exists())
+            self.assertFalse((home / ".local" / "share" / "man" / "man1" / "speed-of-cinnamon-alarms.1").exists())
+            self.assertTrue(model_file.exists())
+            self.assertTrue(alarm_file.exists())
 
 
 class SmokeBackendTest(unittest.TestCase):

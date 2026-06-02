@@ -29,6 +29,9 @@ Then add `Speed of Cinnamon` from Cinnamon's applet settings.
 After updating an installed checkout, `make install-local` reloads the applet through Cinnamon when a session bus is
 available. The applet menu also includes `Restart applet` for stale UI or settings state.
 
+Use `make uninstall-local` to remove the local applet, backend wrapper, installed Python package, and man pages. It
+preserves user data such as downloaded models, alarms, transcripts, diagnostics, and settings exports.
+
 ## Current Runtime Paths
 
 ```text

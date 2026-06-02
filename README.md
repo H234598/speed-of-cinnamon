@@ -14,7 +14,7 @@ XDG portal core path.
 - Global Cinnamon shortcut, default `Super+Z`, plus optional primary/secondary language shortcuts.
 - Recording through PipeWire `pw-record`, PulseAudio `parecord`, or ALSA `arecord`.
 - ASR through Automatic mode, OpenAI Whisper CLI, whisper.cpp, or a hardened custom command template.
-- Optional local text polishing through a command, Ollama, or an OpenAI-compatible local server.
+- Optional text polishing through a command, Ollama, or an OpenAI-compatible API.
 - Cinnamon clipboard output, optional X11 paste/direct typing via `xdotool`, and clipboard-only/no-insert modes.
 - Transcript history, last-transcript retry, cleanup preview/removal, diagnostics, and portable settings backup.
 - Cinnamon-local repeating alarms with applet notifications and CLI management.
@@ -44,6 +44,9 @@ The backend command is installed to:
 ```text
 ~/.local/bin/speed-of-cinnamon
 ```
+
+Use `make uninstall-local` to remove the local applet, backend wrapper, installed Python package, and man pages. It
+preserves user data such as downloaded models, alarms, transcripts, diagnostics, and settings exports.
 
 When the applet's `Backend command` setting is empty, it auto-detects the backend in this order:
 `~/.local/bin/speed-of-cinnamon`, `/usr/bin/speed-of-cinnamon`, then `speed-of-cinnamon` from `PATH`.

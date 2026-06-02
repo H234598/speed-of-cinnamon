@@ -27,6 +27,9 @@ make install-local
 
 Then add `Speed of Cinnamon` from Cinnamon's applet settings. If needed, reload Cinnamon with `Alt+F2`, `r`, `Enter`.
 
+Use `make uninstall-local` to remove the local applet, backend wrapper, installed Python package, and man pages. It
+preserves user data such as downloaded models, alarms, transcripts, diagnostics, and settings exports.
+
 Release archives can be built and verified from the repository:
 
 ```bash
@@ -518,7 +521,7 @@ speed-of-cinnamon toggle \
 ```
 
 The Ollama backend calls `/api/generate` with `stream=false`. It sends the transcript, language, personal context, and
-vocabulary to the local server and expects the polished text in the `response` field. The backend stores and inserts the
+vocabulary to the Ollama server and expects the polished text in the `response` field. The backend stores and inserts the
 post-processed text. The OpenAI-compatible backend calls `/v1/chat/completions` with `stream=false` and the same context.
 For OpenAI API hosts, Flex processing is enabled by default for speech-to-text and text polishing; use
 `--no-openai-compatible-flex-processing` to disable it. The Flex flag is not sent to local OpenAI-compatible servers.
@@ -532,9 +535,9 @@ speed-of-cinnamon text-models --json
 speed-of-cinnamon text-models --backend openai-compatible --openai-compatible-url http://127.0.0.1:8000/v1 --json
 ```
 
-The Cinnamon applet exposes the same local lists in `Text model`. Selecting a local model switches `Text polishing` to
-the matching provider and stores the chosen model name. If the selected local server is not running, the menu reports
-that local status without changing the current dictation pipeline.
+The Cinnamon applet exposes the same model lists in `Text model`. Selecting a model switches `Text polishing` to the
+matching provider and stores the chosen model name. If the selected endpoint is not reachable, the menu reports that
+status without changing the current dictation pipeline.
 
 ## Current Known Limits
 
