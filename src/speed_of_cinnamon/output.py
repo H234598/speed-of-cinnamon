@@ -18,6 +18,36 @@ MAX_PASTE_TIMEOUT_SECONDS = 10
 MAX_TYPE_TIMEOUT_SECONDS = 30
 MAX_EXEC_TIMEOUT_SECONDS = 10
 MAX_TYPE_DELAY_MS = 10_000
+TERMINAL_WINDOW_MARKERS = (
+    "alacritty",
+    "blackbox",
+    "com.mitchellh.ghostty",
+    "cool-retro-term",
+    "foot",
+    "gnome-terminal",
+    "guake",
+    "hyper",
+    "kgx",
+    "kitty",
+    "konsole",
+    "lxterminal",
+    "mate-terminal",
+    "org.gnome.console",
+    "org.gnome.terminal",
+    "ptyxis",
+    "qterminal",
+    "rio",
+    "rxvt",
+    "sakura",
+    "tabby",
+    "terminator",
+    "tilix",
+    "urxvt",
+    "wezterm",
+    "xfce4-terminal",
+    "xterm",
+    "yakuake",
+)
 
 
 def _contains_escaped_null(value: str) -> bool:
@@ -137,6 +167,42 @@ def _command_path(command: str) -> str:
     return resolved
 
 
+def _run_stdout(argv: list[str], *, timeout: int = MAX_EXEC_TIMEOUT_SECONDS) -> str:
+    command = argv[0].strip()
+    runtime_command = _command_path(command)
+    try:
+        proc = subprocess.run(
+            [runtime_command, *argv[1:]],
+            input=b"",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return ""
+    if proc.returncode != 0:
+        return ""
+    try:
+        return proc.stdout.decode("utf-8", "replace").strip()
+    except UnicodeDecodeError:
+        return ""
+
+
+def _looks_like_terminal(value: str) -> bool:
+    normalized = str(value or "").lower()
+    return any(marker in normalized for marker in TERMINAL_WINDOW_MARKERS)
+
+
+def _active_window_paste_key() -> str:
+    if not shutil.which("xdotool"):
+        return "ctrl+v"
+    window_id = _run_stdout(["xdotool", "getactivewindow"], timeout=MAX_PASTE_TIMEOUT_SECONDS)
+    if not window_id:
+        return "ctrl+v"
+    window_class = _run_stdout(["xdotool", "getwindowclassname", window_id], timeout=MAX_PASTE_TIMEOUT_SECONDS)
+    return "ctrl+shift+v" if _looks_like_terminal(window_class) else "ctrl+v"
+
+
 def set_clipboard(text: str) -> str:
     if not isinstance(text, str) or isinstance(text, bool):
         raise OutputError("text must be text")
@@ -154,8 +220,9 @@ def set_clipboard(text: str) -> str:
 
 def paste_from_clipboard() -> None:
     if shutil.which("xdotool"):
+        paste_key = _active_window_paste_key()
         _run_with_input(
-            ["xdotool", "key", "--clearmodifiers", "ctrl+v"],
+            ["xdotool", "key", "--clearmodifiers", paste_key],
             "",
             timeout=MAX_PASTE_TIMEOUT_SECONDS,
         )

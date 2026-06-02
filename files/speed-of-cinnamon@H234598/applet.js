@@ -52,6 +52,36 @@ const MENU_MIN_WIDTH_EM = 30;
 const MENU_LABEL_WIDTH_EM = 32;
 const SELECTION_MENU_MIN_WIDTH_EM = 42;
 const SELECTION_MENU_LABEL_WIDTH_EM = 40;
+const TERMINAL_WINDOW_MARKERS = [
+  "alacritty",
+  "blackbox",
+  "com.mitchellh.ghostty",
+  "cool-retro-term",
+  "foot",
+  "gnome-terminal",
+  "guake",
+  "hyper",
+  "kgx",
+  "kitty",
+  "konsole",
+  "lxterminal",
+  "mate-terminal",
+  "org.gnome.console",
+  "org.gnome.terminal",
+  "ptyxis",
+  "qterminal",
+  "rio",
+  "rxvt",
+  "sakura",
+  "tabby",
+  "terminator",
+  "tilix",
+  "urxvt",
+  "wezterm",
+  "xfce4-terminal",
+  "xterm",
+  "yakuake"
+];
 const PANEL_STATUS_CLASSES = [
   "speed-of-cinnamon-recording",
   "speed-of-cinnamon-processing",
@@ -2575,8 +2605,37 @@ MyApplet.prototype = {
     }
   },
 
+  _windowProbeValue: function(window, methodName) {
+    if (!window || !window[methodName]) {
+      return "";
+    }
+    try {
+      return String(window[methodName]() || "").toLowerCase();
+    } catch (err) {
+      return "";
+    }
+  },
+
+  _isTerminalTargetWindow: function() {
+    if (!this._isUsableTargetWindow(this.targetWindow)) {
+      return false;
+    }
+    let values = [
+      this._windowProbeValue(this.targetWindow, "get_wm_class"),
+      this._windowProbeValue(this.targetWindow, "get_wm_class_instance"),
+      this._windowProbeValue(this.targetWindow, "get_gtk_application_id")
+    ].join("\n");
+    for (let i = 0; i < TERMINAL_WINDOW_MARKERS.length; i++) {
+      if (values.indexOf(TERMINAL_WINDOW_MARKERS[i]) >= 0) {
+        return true;
+      }
+    }
+    return false;
+  },
+
   _pasteClipboardAfterFocus: function() {
-    this._spawnKeyboardAfterFocus(["xdotool", "key", "--clearmodifiers", "ctrl+v"]);
+    let pasteKey = this._isTerminalTargetWindow() ? "ctrl+shift+v" : "ctrl+v";
+    this._spawnKeyboardAfterFocus(["xdotool", "key", "--clearmodifiers", pasteKey]);
   },
 
   _typeTextAfterFocus: function(text) {

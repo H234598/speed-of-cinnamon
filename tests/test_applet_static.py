@@ -545,7 +545,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (this._typeTextAfterFocus(text)) {", source)
         self.assertIn("Util.spawn(this._coerceSpawnArgs(args));", source)
         self.assertIn('["xdotool", "type", "--clearmodifiers", "--delay", String(delay), typedText]', source)
-        self.assertIn('["xdotool", "key", "--clearmodifiers", "ctrl+v"]', source)
+        self.assertIn("_isTerminalTargetWindow: function()", source)
+        self.assertIn('let pasteKey = this._isTerminalTargetWindow() ? "ctrl+shift+v" : "ctrl+v";', source)
+        self.assertIn('["xdotool", "key", "--clearmodifiers", pasteKey]', source)
 
     def test_history_entries_can_be_copied_or_inserted(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

@@ -13,6 +13,8 @@ from speed_of_cinnamon.output import (
     _filesize,
     _read_file_head,
     _validate_text_input,
+    _active_window_paste_key,
+    _looks_like_terminal,
     _run_with_input,
     insert_text,
     paste_from_clipboard,
@@ -205,6 +207,42 @@ class OutputTest(unittest.TestCase):
         with mock.patch("speed_of_cinnamon.output.shutil.which", return_value=None):
             with self.assertRaisesRegex(OutputError, "no keyboard helper"):
                 paste_from_clipboard()
+
+    def test_active_window_paste_key_uses_shift_for_terminal_class(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0] if args else kwargs["args"]
+            assert isinstance(command, list)
+            if "getactivewindow" in command:
+                return subprocess.CompletedProcess(command, 0, stdout=b"123\n", stderr=b"")
+            if "getwindowclassname" in command:
+                return subprocess.CompletedProcess(command, 0, stdout=b"Gnome-terminal\n", stderr=b"")
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
+            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+        ):
+            self.assertEqual(_active_window_paste_key(), "ctrl+shift+v")
+
+    def test_active_window_paste_key_falls_back_to_normal_paste(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0] if args else kwargs["args"]
+            assert isinstance(command, list)
+            if "getactivewindow" in command:
+                return subprocess.CompletedProcess(command, 0, stdout=b"123\n", stderr=b"")
+            if "getwindowclassname" in command:
+                return subprocess.CompletedProcess(command, 0, stdout=b"Firefox\n", stderr=b"")
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
+            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+        ):
+            self.assertEqual(_active_window_paste_key(), "ctrl+v")
+
+    def test_terminal_marker_matching_is_conservative(self) -> None:
+        self.assertTrue(_looks_like_terminal("org.gnome.Terminal"))
+        self.assertFalse(_looks_like_terminal("firefox"))
 
     def test_type_text_rejects_null_bytes(self) -> None:
         with mock.patch("speed_of_cinnamon.output.shutil.which", return_value="xdotool"):
