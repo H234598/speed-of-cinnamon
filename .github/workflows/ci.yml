@@ -167,10 +167,9 @@ jobs:
         run: make coverage
       - name: Upload coverage to QLTY
         if: ${{ env.QLTY_COVERAGE_TOKEN != '' }}
-        uses: qltysh/qlty-action/coverage@v2.2.0
-        with:
-          token: ${{ env.QLTY_COVERAGE_TOKEN }}
-          files: reports/lcov.info
+        run: |
+          curl -fsSL https://qlty.sh | sh
+          "${HOME}/.qlty/bin/qlty" coverage publish reports/lcov.info
       - name: Build and verify release archive
         run: make dist-check
       - name: Build RPM package
