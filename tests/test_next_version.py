@@ -278,6 +278,14 @@ class NextVersionTest(unittest.TestCase):
             with self.assertRaises(next_version.GitEnvironmentError):
                 next_version.commits_since_ref("v0.1.20")
 
+    def test_commits_since_ref_rejects_empty_ref(self) -> None:
+        with self.assertRaises(next_version.UserInputError):
+            next_version.commits_since_ref("")
+        with self.assertRaises(next_version.UserInputError):
+            next_version.commits_since_ref("   ")
+        with self.assertRaises(next_version.UserInputError):
+            next_version.commits_since_ref(None)  # type: ignore[arg-type]
+
     def test_tag_exists_checks_normalized_tag(self) -> None:
         with mock.patch.object(
             next_version.subprocess,
