@@ -39,6 +39,7 @@ _SANITIZE_ESCAPE_TABLE = {
     ord("\n"): "\\n",
     ord("\x00"): "\\x00",
 }
+_SANITIZE_KEY_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
 _SENSITIVE_KEYWORDS = (
     "api_key",
     "apikey",
@@ -168,7 +169,7 @@ def maintain_logs(base_dir: Path | None = None, *, today: date | None = None) ->
 def sanitize_key(key: object) -> str:
     if isinstance(key, bool) or not isinstance(key, str):
         return ""
-    safe = re.sub(r"[^a-zA-Z0-9_.-]+", "_", key.strip().lower())
+    safe = _SANITIZE_KEY_RE.sub("_", key.strip().lower())
     return safe[:64]
 
 
