@@ -202,6 +202,20 @@ class NextVersionTest(unittest.TestCase):
     def test_apply_breaking_change_resets_minor_and_patch(self) -> None:
         self.assertEqual(next_version.apply_breaking_change(9, 99, 99), (10, 0, 0))
 
+    def test_apply_breaking_change_rejects_negative_values(self) -> None:
+        with self.assertRaises(next_version.UserInputError):
+            next_version.apply_breaking_change(-1, 0, 0)
+        with self.assertRaises(next_version.UserInputError):
+            next_version.apply_breaking_change(0, -1, 0)
+        with self.assertRaises(next_version.UserInputError):
+            next_version.apply_breaking_change(0, 0, -1)
+
+    def test_apply_breaking_change_rejects_non_int_values(self) -> None:
+        with self.assertRaises(next_version.UserInputError):
+            next_version.apply_breaking_change("1", 0, 0)
+        with self.assertRaises(next_version.UserInputError):
+            next_version.apply_breaking_change(1, 2.0, 3)
+
     def test_parse_version_rejects_negative_segments(self) -> None:
         with self.assertRaises(next_version.UserInputError):
             next_version.parse_version("1.-2.3")

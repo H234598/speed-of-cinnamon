@@ -27,6 +27,15 @@ COMMITS_PER_PATCH = 100
 PATCHES_PER_MINOR = 100
 MINORS_PER_MAJOR = 100
 
+
+def _assert_non_negative_int(name: str, value: int) -> int:
+    if not isinstance(value, int):
+        raise UserInputError(f"{name} must be an int")
+    if value < 0:
+        raise UserInputError(f"{name} must be >= 0")
+    return value
+
+
 def parse_version(value: str) -> tuple[int, int, int]:
     parts = value.strip().lstrip("vV").split(".")
     if len(parts) != 3:
@@ -62,9 +71,8 @@ def commits_since_tag(tag: str) -> int:
     return commits_since_ref(normalize_tag(tag))
 
 def add_patches(base: tuple[int,int,int], patch_steps: int) -> tuple[int,int,int]:
-    major, minor, patch = base
-    if patch_steps < 0:
-        raise UserInputError("negative patch steps are not supported")
+    major, minor, patch = (_assert_non_negative_int("major", base[0]), _assert_non_negative_int("minor", base[1]), _assert_non_negative_int("patch", base[2]))
+    patch_steps = _assert_non_negative_int("patch_steps", patch_steps)
     patch_steps = patch_steps // COMMITS_PER_PATCH
     total_patch = patch + patch_steps
     minor += total_patch // PATCHES_PER_MINOR
@@ -74,13 +82,19 @@ def add_patches(base: tuple[int,int,int], patch_steps: int) -> tuple[int,int,int
     return major, minor, patch
 
 def apply_feature_increase(major:int, minor:int, patch:int) -> tuple[int,int,int]:
+    major = _assert_non_negative_int("major", major)
+    minor = _assert_non_negative_int("minor", minor)
+    patch = _assert_non_negative_int("patch", patch)
     minor += 1
-    if minor >= 100:
+    if minor >= MINORS_PER_MAJOR:
         minor = 0
         major += 1
     return major, minor, patch
 
 def apply_breaking_change(major:int, minor:int, patch:int) -> tuple[int,int,int]:
+    major = _assert_non_negative_int("major", major)
+    minor = _assert_non_negative_int("minor", minor)
+    patch = _assert_non_negative_int("patch", patch)
     return major+1, 0, 0
 
 def read_current_version(path: Path = Path("pyproject.toml")) -> tuple[int,int,int]:
