@@ -72,8 +72,15 @@ def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
         value = os.environ.get(key)
         if value is not None:
             env[key] = value
-    if base:
-        env.update(base)
+    if base is not None:
+        if not isinstance(base, dict):
+            raise RecorderError("environment base must be a mapping")
+        for key, value in base.items():
+            if not isinstance(key, str) or isinstance(key, bool):
+                raise RecorderError("environment keys must be text")
+            if not isinstance(value, str) or isinstance(value, bool):
+                raise RecorderError("environment values must be text")
+            env[key] = value
     env["PATH"] = _TRUSTED_COMMAND_PATH
     for key in list(env):
         if _is_unsafe_env_var(key):

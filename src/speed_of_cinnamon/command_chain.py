@@ -68,8 +68,14 @@ def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
         if value is not None:
             env[key] = value
 
-    if base:
+    if base is not None:
+        if not isinstance(base, dict):
+            raise CommandChainError("environment base must be a mapping")
         for key, value in base.items():
+            if not isinstance(key, str) or isinstance(key, bool):
+                raise CommandChainError("environment keys must be text")
+            if not isinstance(value, str) or isinstance(value, bool):
+                raise CommandChainError("environment values must be text")
             env[key] = value
 
     env["PATH"] = _TRUSTED_COMMAND_PATH
