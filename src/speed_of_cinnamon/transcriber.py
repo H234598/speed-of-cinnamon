@@ -339,7 +339,7 @@ def _effective_url_port(parsed: urllib.parse.ParseResult) -> int | None:
 
 
 def _url_origin(url: str, *, field_name: str) -> tuple[str, str, int | None]:
-    normalized = _validate_openai_compatible_api_url(url, field_name=field_name)
+    normalized = _validate_openai_compatible_api_url(url, field_name=field_name, allow_query_fragment=True)
     parsed = urllib.parse.urlparse(normalized)
     hostname = parsed.hostname
     if not hostname:
@@ -879,7 +879,11 @@ def _is_flex_service_tier_rejected(detail: str) -> bool:
     return "service_tier" in normalized and ("invalid" in normalized or "unsupported" in normalized)
 
 
-def _validate_openai_compatible_api_url(url: str, field_name: str = "OpenAI-compatible API URL") -> str:
+def _validate_openai_compatible_api_url(
+    url: str,
+    field_name: str = "OpenAI-compatible API URL",
+    allow_query_fragment: bool = False,
+) -> str:
     if _contains_escaped_null(url):
         raise TranscriptionError(f"{field_name} contains invalid null byte")
     if _contains_http_header_control_chars(url):
@@ -890,7 +894,28 @@ def _validate_openai_compatible_api_url(url: str, field_name: str = "OpenAI-comp
     parsed = urllib.parse.urlparse(base)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise TranscriptionError(f"{field_name} must use http:// or https://")
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise TranscriptionError(f"{field_name} has invalid port") from exc
+    if parsed.username or parsed.password:
+        raise TranscriptionError(f"{field_name} must not contain userinfo")
+    if not allow_query_fragment and (parsed.query or parsed.fragment):
+        raise TranscriptionError(f"{field_name} must not contain query or fragment")
     return base
+
+
+def _safe_url_display(url: str, *, field_name: str) -> str:
+    normalized = _validate_openai_compatible_api_url(url, field_name=field_name)
+    parsed = urllib.parse.urlparse(normalized)
+    hostname = parsed.hostname or ""
+    if ":" in hostname and not hostname.startswith("["):
+        hostname = f"[{hostname}]"
+    netloc = hostname
+    port = _effective_url_port(parsed)
+    if parsed.port is not None and port is not None:
+        netloc = f"{netloc}:{port}"
+    return urllib.parse.urlunparse((parsed.scheme, netloc, parsed.path.rstrip("/"), "", "", ""))
 
 
 def _openai_compatible_error_detail(raw: str) -> str:
@@ -1005,6 +1030,7 @@ def transcribe_with_openai_compatible_api(
     if not isinstance(flex_processing, bool):
         raise TranscriptionError("OpenAI-compatible flex processing must be a boolean")
     endpoint = _openai_compatible_endpoint(url, "/audio/transcriptions")
+    endpoint_display = _safe_url_display(endpoint, field_name="OpenAI-compatible API URL")
     is_openai_api = _is_openai_api_endpoint(endpoint)
     if is_openai_api and model not in OPENAI_TRANSCRIPTION_MODELS:
         raise TranscriptionError(
@@ -1065,17 +1091,17 @@ def transcribe_with_openai_compatible_api(
                     _openai_compatible_error_detail(raw_error) or fallback_exc.reason or str(fallback_exc)
                 )
                 raise TranscriptionError(
-                    f"OpenAI-compatible speech API failed ({fallback_exc.code}) at {endpoint}: {fallback_detail}"
+                    f"OpenAI-compatible speech API failed ({fallback_exc.code}) at {endpoint_display}: {fallback_detail}"
                 ) from fallback_exc
             except OSError as fallback_exc:
                 detail = _sanitize_remote_error_detail(fallback_exc)
-                raise TranscriptionError(f"OpenAI-compatible speech API is not reachable at {endpoint}: {detail}") from fallback_exc
+                raise TranscriptionError(f"OpenAI-compatible speech API is not reachable at {endpoint_display}: {detail}") from fallback_exc
         else:
             detail = _sanitize_remote_error_detail(raw_detail)
-            raise TranscriptionError(f"OpenAI-compatible speech API failed ({exc.code}) at {endpoint}: {detail}") from exc
+            raise TranscriptionError(f"OpenAI-compatible speech API failed ({exc.code}) at {endpoint_display}: {detail}") from exc
     except OSError as exc:
         detail = _sanitize_remote_error_detail(exc)
-        raise TranscriptionError(f"OpenAI-compatible speech API is not reachable at {endpoint}: {detail}") from exc
+        raise TranscriptionError(f"OpenAI-compatible speech API is not reachable at {endpoint_display}: {detail}") from exc
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -1085,7 +1111,7 @@ def transcribe_with_openai_compatible_api(
     if payload.get("error"):
         error = payload["error"]
         detail = _sanitize_remote_error_detail(str(error.get("message") or error) if isinstance(error, dict) else str(error))
-        raise TranscriptionError(f"OpenAI-compatible speech API failed at {endpoint}: {detail}")
+        raise TranscriptionError(f"OpenAI-compatible speech API failed at {endpoint_display}: {detail}")
     text = str(payload.get("text") or "").strip()
     if not text:
         raise TranscriptionError("OpenAI-compatible speech API returned no transcript")
