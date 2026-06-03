@@ -246,11 +246,31 @@ def _reject_unsafe_tree(tree: Path, label: str) -> None:
                 fail(f"refusing to install hardlinked {label}: {path}")
 
 
+def _tree_signature(tree: Path) -> dict[str, tuple[int, int, int, int]]:
+    signature: dict[str, tuple[int, int, int, int]] = {}
+    root_stat = tree.lstat()
+    signature["."] = (root_stat.st_dev, root_stat.st_ino, root_stat.st_mode, root_stat.st_mtime_ns)
+    for root, dirs, files in os.walk(tree):
+        root_path = Path(root)
+        for name in [*dirs, *files]:
+            path = root_path / name
+            stat_result = path.lstat()
+            rel_path = str(path.relative_to(tree))
+            signature[rel_path] = (
+                stat_result.st_dev,
+                stat_result.st_ino,
+                stat_result.st_mode,
+                stat_result.st_mtime_ns,
+            )
+    return signature
+
+
 def cmd_install_tree(args: argparse.Namespace) -> None:
     source = _validate_absolute(args.source, "source tree")
     target = _validate_absolute(args.target, "target tree")
     label = str(args.label or "tree")
     _reject_unsafe_tree(source, f"{label} source tree")
+    source_signature = _tree_signature(source)
     parent_fd, leaf = _open_parent(target, action=args.action, create=True)
     assert parent_fd is not None
     token = secrets.token_hex(8)
@@ -262,8 +282,18 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
     try:
         os.mkdir(stage_name, 0o700, dir_fd=parent_fd)
         staged_tree = parent_path / stage_name / leaf
+        if _tree_signature(source) != source_signature:
+            fail(f"source tree changed during {args.action}: {source}")
         shutil.copytree(source, staged_tree)
+        if _tree_signature(source) != source_signature:
+            fail(f"source tree changed during {args.action}: {source}")
         _reject_unsafe_tree(staged_tree, label)
+        _check_leaf(parent_fd, stage_name, parent_path / stage_name, action=args.action, kind="dir", must_exist=True)
+        stage_fd = os.open(stage_name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        try:
+            _check_leaf(stage_fd, leaf, staged_tree, action=args.action, kind="dir", must_exist=True)
+        finally:
+            os.close(stage_fd)
         existing = _lstat_at(parent_fd, leaf)
         if existing is not None:
             if stat_is_symlink_no_follow(existing.st_mode):

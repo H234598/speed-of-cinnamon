@@ -177,6 +177,27 @@ class InstallLocalTest(unittest.TestCase):
 
             self.assertFalse(target.exists())
 
+    def test_safe_fs_install_tree_rejects_source_mutation_during_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = self._load_safe_fs_module()
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir()
+            (source / "payload.txt").write_text("safe\n", encoding="utf-8")
+            real_copytree = module.shutil.copytree
+
+            def copytree_with_source_mutation(src: Path, dst: Path) -> Path:
+                (source / "payload.txt").write_text("changed\n", encoding="utf-8")
+                return real_copytree(src, dst)
+
+            args = module.argparse.Namespace(action="install", source=str(source), target=str(target), label="tree")
+            with mock.patch.object(module.shutil, "copytree", side_effect=copytree_with_source_mutation):
+                with self.assertRaisesRegex(SystemExit, "1"):
+                    module.cmd_install_tree(args)
+
+            self.assertFalse(target.exists())
+
     def test_install_local_refuses_symlinked_home_ancestor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

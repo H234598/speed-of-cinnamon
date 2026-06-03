@@ -459,6 +459,30 @@ class TranscriberTest(unittest.TestCase):
             self.assertFalse(generated.exists())
             self.assertFalse(text.exists())
 
+    def test_openai_whisper_removes_generated_transcript_after_writing(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0] if args else kwargs["args"]
+            assert isinstance(command, list)
+            output_dir = Path(command[command.index("--output_dir") + 1])
+            (output_dir / "sample.txt").write_text("hello whisper\n", encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text = Path(tmp) / "result.txt"
+            generated = Path(tmp) / "sample.txt"
+
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.shutil.which", return_value="/usr/bin/whisper"),
+                mock.patch("speed_of_cinnamon.transcriber.subprocess.run", side_effect=fake_run),
+            ):
+                result = transcribe_with_openai_whisper(audio, "en", text)
+
+            self.assertEqual(result, "hello whisper")
+            self.assertFalse(generated.exists())
+            self.assertEqual(text.read_text(encoding="utf-8"), "hello whisper\n")
+
     def test_run_limited_process_rejects_empty_command(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "empty transcriber command"):
             _run_limited_process([])

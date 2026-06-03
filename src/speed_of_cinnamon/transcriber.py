@@ -609,11 +609,10 @@ def transcribe_with_openai_whisper(
         _assert_text_length(text, field_name="transcript")
         if write_transcript:
             _write_text_atomic(text_path, text + "\n")
-        else:
-            try:
-                generated.unlink()
-            except OSError as exc:
-                raise TranscriptionError("failed to remove generated transcript") from exc
+        try:
+            generated.unlink()
+        except OSError as exc:
+            raise TranscriptionError("failed to remove generated transcript") from exc
         return text
     raise TranscriptionError("whisper completed but did not produce a transcript")
 

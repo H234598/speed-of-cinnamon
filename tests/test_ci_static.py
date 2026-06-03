@@ -693,6 +693,33 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn("GITHUB_TOKEN:", workflow)
         self.assertNotIn("secrets.GITHUB_TOKEN", workflow)
 
+    def test_workflow_actions_are_pinned_or_explicitly_reviewed(self) -> None:
+        allowed_mutable_refs = {
+            "actions/checkout@v6",
+            "actions/setup-python@v6",
+            "actions/upload-artifact@v7",
+            "github/codeql-action/upload-sarif@v4",
+        }
+        offenders: list[str] = []
+        for path in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
+            for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                match = re.search(r"\buses:\s*[\"']?([^\"'\s#]+)", line)
+                if not match:
+                    continue
+                ref = match.group(1)
+                if ref.startswith("./"):
+                    continue
+                if "@" not in ref:
+                    offenders.append(f"{path}:{line_number}: action reference must include @ref")
+                    continue
+                pinned_ref = ref.rsplit("@", 1)[1]
+                if re.fullmatch(r"[0-9a-fA-F]{40}", pinned_ref):
+                    continue
+                if ref not in allowed_mutable_refs:
+                    offenders.append(f"{path}:{line_number}: mutable action ref must be reviewed explicitly: {ref}")
+
+        self.assertEqual(offenders, [])
+
     def test_workflows_install_pinned_actionlint_release(self) -> None:
         ci_workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         lint_workflow = (REPO_ROOT / ".github" / "workflows" / "super-linter.yml").read_text(encoding="utf-8")
