@@ -589,39 +589,7 @@ def transcribe_with_template(
         )
     except CommandChainError as exc:
         restore_text_path()
-        message = str(exc)
-        if message.startswith("invalid transcriber") or message.startswith("unsupported shell operator in transcriber"):
-            raise TranscriptionError(message) from exc
-        if (
-            message.startswith("transcriber command ended")
-            or message.startswith("empty transcriber")
-            or message.startswith("transcriber command chain is empty")
-        ):
-            raise TranscriptionError(message) from exc
-        if (
-            "personal context is too large" in message
-            or "vocabulary is too large" in message
-            or "command output contains invalid null byte" in message
-            or "command contains invalid null byte" in message
-            or "command failed" in message
-            or "command not found" in message
-            or "command execution failed" in message
-            or "command input exceeded" in message
-            or "max_input_chars must be positive" in message
-            or "max_input_chars must be non-negative" in message
-            or "max_input_chars must not exceed" in message
-            or "max_output_chars must be non-negative" in message
-            or "max_output_chars must be positive" in message
-            or "max_output_chars must not exceed" in message
-            or "timeout_seconds must be positive" in message
-            or "command input contains invalid null byte" in message
-        ):
-            raise TranscriptionError(message) from exc
-        if "command output exceeded" in message:
-            raise TranscriptionError(message) from exc
-        if "command timed out" in message:
-            raise TranscriptionError(message) from exc
-        raise TranscriptionError(f"transcriber command failed: {message}") from exc
+        raise TranscriptionError(_sanitize_local_command_error(str(exc))) from exc
 
     try:
         if should_read_text_file and text_path.exists():
@@ -941,33 +909,56 @@ def _openai_compatible_error_detail(raw: str) -> str:
     return raw
 
 
+def _sanitize_local_command_error(message: str) -> str:
+    message = message.strip()
+    if not message:
+        return "transcriber command failed: [redacted command error]"
+    lowered = message.lower()
+    if message.startswith("invalid transcriber") or message.startswith("unsupported shell operator in transcriber"):
+        return message
+    if (
+        message.startswith("transcriber command ended")
+        or message.startswith("empty transcriber")
+        or message.startswith("transcriber command chain is empty")
+    ):
+        return message
+    if "path separators" in lowered or "must be text" in lowered or "must not contain" in lowered:
+        return message
+    if "exit code " in lowered:
+        start = lowered.index("exit code ") + len("exit code ")
+        exit_code = ""
+        while start < len(message) and message[start].isdigit():
+            exit_code += message[start]
+            start += 1
+        if not exit_code:
+            exit_code = "unknown"
+        return f"transcriber command failed: exit code {exit_code}; command output redacted"
+    if "command timed out" in lowered:
+        return "transcriber command timed out: [redacted command output]"
+    if (
+        "command output exceeded" in lowered
+        or "command output contains invalid null byte" in lowered
+        or "command contains invalid null byte" in lowered
+        or "command not found" in lowered
+        or "command execution failed" in lowered
+        or "command input exceeded" in lowered
+        or "command input contains invalid null byte" in lowered
+        or "personal context is too large" in lowered
+        or "vocabulary is too large" in lowered
+        or "max_input_chars must be positive" in lowered
+        or "max_input_chars must be non-negative" in lowered
+        or "max_input_chars must not exceed" in lowered
+        or "max_output_chars must be non-negative" in lowered
+        or "max_output_chars must be positive" in lowered
+        or "max_output_chars must not exceed" in lowered
+        or "timeout_seconds must be positive" in lowered
+    ):
+        return message
+    return "transcriber command failed: [redacted command error]"
+
+
 def _sanitize_remote_error_detail(value: object) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return "remote error"
-    text = text.replace("\r", "\\r").replace("\n", "\\n").replace("\x00", "\\x00")
-    lowered = text.lower()
-    sensitive_hints = (
-        "authorization",
-        "bearer ",
-        "api key",
-        "api_key",
-        "apikey",
-        "password",
-        "prompt",
-        "secret",
-        "sess-",
-        "sk-",
-        "token",
-        "transcript",
-    )
-    if any(hint in lowered for hint in sensitive_hints):
-        return "[redacted remote error]"
-    if "://" in text and "@" in text:
-        return "[redacted remote error]"
-    if len(text) > 160:
-        return text[:157] + "..."
-    return text
+    return "[redacted remote error]"
 
 
 def _multipart_form_data(

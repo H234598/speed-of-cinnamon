@@ -234,6 +234,34 @@ class TranscriberTest(unittest.TestCase):
 
             self.assertEqual(text.read_text(encoding="utf-8"), "old")
 
+    def test_template_with_command_error_redacts_output_and_stderr(self) -> None:
+        def command_fails(*_args: object, **_kwargs: object) -> str:
+            text.write_text("command-output", encoding="utf-8")
+            raise CommandChainError(
+                'transcriber command failed: exit code 127; stdout: secret transcript\n'
+                "stderr: /tmp/secret/api-key=sk-leak token=abc"
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text = Path(tmp) / "sample.txt"
+            text.write_text("old", encoding="utf-8")
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.split_command_chain", return_value=[("cmd",)]),
+                mock.patch("speed_of_cinnamon.transcriber.run_command_chain", side_effect=command_fails),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "transcriber command failed: exit code 127; command output redacted") as raised:
+                    transcribe_with_template("{text}", audio, "en", text)
+
+            message = str(raised.exception)
+            self.assertIn("transcriber command failed", message)
+            self.assertNotIn("secret transcript", message)
+            self.assertNotIn("stderr", message)
+            self.assertNotIn("sk-leak", message)
+            self.assertNotIn("api-key", message)
+            self.assertEqual(text.read_text(encoding="utf-8"), "old")
+
     def test_template_with_text_placeholder_preserves_existing_text_path_on_read_error(self) -> None:
         def command_writes_invalid(*_args: object, **_kwargs: object) -> str:
             text.write_bytes(b"invalid\\x00text")
@@ -1617,6 +1645,75 @@ class TranscriberTest(unittest.TestCase):
                     )
             self.assertNotIn("sk-secret", str(raised.exception))
             self.assertNotIn("Alice", str(raised.exception))
+
+    def test_openai_compatible_api_error_never_leaks_body_or_prompt_in_transcription_exception(self) -> None:
+        class ErrorBody:
+            def __init__(self) -> None:
+                self._read = False
+                self.closed = False
+
+            def read(self, size: int = -1) -> bytes:
+                if self._read:
+                    return b""
+                self._read = True
+                return (
+                    b'{"error":{"message":"token sk-secret leaked transcript for Alice prompt:'
+                    b' whisper this secret is sensitive","type":"invalid_request_error"}}'
+                )
+
+            def close(self) -> None:
+                self.closed = True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            error = urllib.error.HTTPError(
+                "https://api.openai.com/v1/audio/transcriptions",
+                401,
+                "Unauthorized",
+                {},
+                ErrorBody(),
+            )
+            with mock.patch("speed_of_cinnamon.transcriber._open_http_request", side_effect=error):
+                with self.assertRaisesRegex(TranscriptionError, "OpenAI-compatible speech API failed \\(401\\).*\\[redacted remote error\\]") as raised:
+                    transcribe(
+                        audio,
+                        "en",
+                        Path(tmp) / "sample.txt",
+                        backend="openai-compatible",
+                        openai_compatible_model="gpt-4o-transcribe",
+                        openai_compatible_url="https://api.openai.com/v1",
+                    )
+
+            self.assertNotIn("sk-secret", str(raised.exception))
+            self.assertNotIn("prompt:", str(raised.exception))
+            self.assertNotIn("Alice", str(raised.exception))
+            self.assertIn("https://api.openai.com/v1/audio/transcriptions", str(raised.exception))
+
+    def test_openai_compatible_api_network_error_does_not_leak_request_payload(self) -> None:
+        class ResponseError(OSError):
+            pass
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with mock.patch(
+                "speed_of_cinnamon.transcriber._open_http_request",
+                side_effect=ResponseError("transcript secret prompt sk-supersecret"),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "is not reachable at .*\\[redacted remote error\\]") as raised:
+                    transcribe(
+                        audio,
+                        "en",
+                        Path(tmp) / "sample.txt",
+                        backend="openai-compatible",
+                        openai_compatible_model="gpt-4o-transcribe",
+                        openai_compatible_url="https://api.openai.com/v1",
+                        openai_compatible_api_key="secret-key",
+                    )
+
+            self.assertNotIn("secret", str(raised.exception))
+            self.assertNotIn("sk-supersecret", str(raised.exception))
 
     def test_openai_api_rejects_non_transcription_model_before_network(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
