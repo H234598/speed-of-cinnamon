@@ -38,6 +38,21 @@ _PHONE_RE = re.compile(
 _TOKEN_RE = re.compile(
     r"(?i)\b(?:token|api[_-]?key|api\s+key|secret|apikey|bearer)\b\s*(?::|=)\s*[^,;\s]+"
 )
+_SPOKEN_SECRET_LABEL_PATTERN = (
+    r"(?:token|api[_-]?key|api\s+key|secret|apikey|bearer|password|passwort|kennwort|"
+    r"passcode|iban|name|adresse|anschrift|address|kundennummer|kundennr|kunden-nr|ssn|tax\s+id)"
+)
+_SPOKEN_SECRET_VALUE_PATTERN = (
+    r"(?:\"[^\n\"]{1,120}\"|'[^\n']{1,120}'|"
+    rf"(?:(?!\s+(?:(?:und|and)\s+)?(?:meine|my\s+)?{_SPOKEN_SECRET_LABEL_PATTERN}\b)[^,;\n.?!]){{1,120}})"
+)
+_VERBAL_TOKEN_RE = re.compile(
+    r"(?i)\b(?:token|api[_-]?key|api\s+key|secret|apikey|bearer)\b\s+"
+    r"(?:ist|is|lautet|hei[ßs]t)\s+"
+    r"(?!(?:invalid|required|missing|too|contains?|fehlt|leer|ung[üu]ltig)\b)"
+    rf"(?!(?:{_SPOKEN_SECRET_LABEL_PATTERN})\s*[:=])"
+    + _SPOKEN_SECRET_VALUE_PATTERN
+)
 _BARE_TOKEN_RE = re.compile(
     r"(?i)\b(?:token|api[_-]?key|api\s+key|secret|apikey|bearer)\b\s+"
     r"(?!(?:ist|is|war|was|are|were|missing|invalid|required|too|contains?|muss|darf|soll)\b)"
@@ -47,6 +62,13 @@ _BARE_TOKEN_RE = re.compile(
 _PASSWORD_RE = re.compile(
     r"(?i)\b(?:password|passwort|kennwort|passcode)\b\s*[:=]\s*"
     r"(?:\"[^\n\"]{1,120}\"|'[^\n']{1,120}'|[^,;\n.?!]{1,120})"
+)
+_VERBAL_PASSWORD_RE = re.compile(
+    r"(?i)\b(?:password|passwort|kennwort|passcode)\b\s+"
+    r"(?:ist|is|lautet|hei[ßs]t)\s+"
+    r"(?!(?:invalid|required|missing|too|contains?|fehlt|leer|ung[üu]ltig)\b)"
+    rf"(?!(?:{_SPOKEN_SECRET_LABEL_PATTERN})\s*[:=])"
+    + _SPOKEN_SECRET_VALUE_PATTERN
 )
 _ACCESS_TOKEN_RE = re.compile(r"(?i)\b(?:sk|sess|ghp|gho|xox[pb]-|hf|pat)[A-Za-z0-9_\-]{12,}\b")
 _URL_CRED_RE = re.compile(r"[a-z][a-z0-9+.-]*://[^\s/@:]+:[^\s/@]+@")
@@ -81,9 +103,11 @@ _ADDRESS_RE = re.compile(
 )
 
 _SENSITIVE_PATTERNS = [
-    (_TOKEN_RE, "[redacted token]"),
-    (_BARE_TOKEN_RE, "[redacted token]"),
     (_PASSWORD_RE, "[redacted password]"),
+    (_VERBAL_PASSWORD_RE, "[redacted password]"),
+    (_TOKEN_RE, "[redacted token]"),
+    (_VERBAL_TOKEN_RE, "[redacted token]"),
+    (_BARE_TOKEN_RE, "[redacted token]"),
     (_ACCESS_TOKEN_RE, "[redacted token]"),
     (_URL_CRED_RE, "[redacted credentials]"),
     (_LABELED_NAME_RE, "[redacted name]"),
@@ -165,18 +189,24 @@ def _safe_blacklist_path(path: Path) -> Path:
     return path
 
 
-def _read_blacklist(path: Path) -> list[str]:
+def _read_blacklist(path: Path, *, strict: bool = False) -> list[str]:
     try:
         path = _safe_blacklist_path(path)
-    except RuntimeError:
+    except RuntimeError as exc:
+        if strict:
+            raise ValueError("blacklist file path is not safe") from exc
         return []
     if not path.is_file():
         return []
     try:
         if path.stat().st_size > _MAX_BLACKLIST_FILE_BYTES:
+            if strict:
+                raise ValueError("blacklist file is too large")
             return []
         text = read_text_without_following_symlinks(path, field_name="blacklist file")
-    except (OSError, UnicodeDecodeError):
+    except (OSError, UnicodeDecodeError) as exc:
+        if strict:
+            raise ValueError("failed to read blacklist file") from exc
         return []
     values: list[str] = []
     value_keys: set[str] = set()
@@ -345,8 +375,8 @@ def apply_blacklist_mode(text: str, blacklist: list[str]) -> tuple[str, int]:
     return clean.strip(), count
 
 
-def load_blacklist_file(path: Path) -> list[str]:
-    return _read_blacklist(path)
+def load_blacklist_file(path: Path, *, strict: bool = False) -> list[str]:
+    return _read_blacklist(path, strict=strict)
 
 
 def update_blacklist_file(path: Path, added: list[str]) -> list[str]:

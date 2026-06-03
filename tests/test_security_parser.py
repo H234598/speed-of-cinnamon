@@ -102,6 +102,15 @@ class SecurityParserTest(unittest.TestCase):
         self.assertNotIn("cd", sanitized)
         self.assertGreaterEqual(count, 1)
 
+    def test_apply_security_mode_masks_spoken_secret_values(self) -> None:
+        sanitized, count = apply_security_mode("mein Passwort ist ab cd und token is abc123", [])
+
+        self.assertIn("[redacted password]", sanitized)
+        self.assertIn("[redacted token]", sanitized)
+        self.assertNotIn("ab cd", sanitized)
+        self.assertNotIn("abc123", sanitized)
+        self.assertGreaterEqual(count, 2)
+
     def test_apply_security_mode_masks_broader_personal_information(self) -> None:
         text = (
             "token abc123 Name: Max Mustermann Adresse: Hauptstraße 5 "
@@ -223,6 +232,17 @@ class SecurityParserTest(unittest.TestCase):
             os.symlink(target, path)
             entries = load_blacklist_file(path)
         self.assertEqual(entries, [])
+
+    def test_load_blacklist_file_strict_rejects_unreadable_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            path.write_bytes(b"\xff")
+
+            tolerant_entries = load_blacklist_file(path)
+            with self.assertRaises(ValueError):
+                load_blacklist_file(path, strict=True)
+
+        self.assertEqual(tolerant_entries, [])
 
     def test_update_blacklist_file_does_not_follow_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

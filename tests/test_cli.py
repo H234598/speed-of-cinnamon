@@ -42,6 +42,15 @@ class CliTest(unittest.TestCase):
             mode = path.stat().st_mode & 0o777
             self.assertEqual(mode, 0o600)
 
+    def test_security_post_processing_fails_closed_on_unreadable_blacklist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            path.write_bytes(b"\xff")
+
+            with mock.patch("speed_of_cinnamon.cli.blacklist_file", return_value=path):
+                with self.assertRaises(ValueError):
+                    cli._apply_security_post_processing("sichtbarer text")
+
     @mock.patch(
         "speed_of_cinnamon.cli.write_text_atomically_without_following_symlinks",
         side_effect=OSError("out of space"),
@@ -852,7 +861,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(security["blacklist_hits"], 1)
         self.assertEqual(security["blacklist_added"], [])
         mocked_blacklist.assert_called_once_with("Hallo geheim", ["geheim"])
-        mocked_load.assert_called_once_with(mock.ANY)
+        mocked_load.assert_called_once_with(mock.ANY, strict=True)
         mocked_update.assert_not_called()
 
     @mock.patch("speed_of_cinnamon.cli.list_input_sources")

@@ -734,7 +734,7 @@ def _open_blacklist_document() -> bool:
 
 def _apply_security_post_processing(text: str) -> tuple[str, dict[str, object]]:
     directives = parse_security_directives(text)
-    entries = load_blacklist_file(blacklist_file())
+    entries = load_blacklist_file(blacklist_file(), strict=True)
     if directives.added_blacklist:
         entries = update_blacklist_file(blacklist_file(), directives.added_blacklist)
     blacklist_opened = False
@@ -778,7 +778,7 @@ def _merge_security_post_processing(left: dict[str, object], right: dict[str, ob
 
 def _apply_security_mask_only(text: str) -> tuple[str, dict[str, object]]:
     directives = parse_security_directives(text)
-    entries = load_blacklist_file(blacklist_file())
+    entries = load_blacklist_file(blacklist_file(), strict=True)
     sanitized, redactions = apply_security_mode(directives.text, entries)
     _, blacklist_hits = apply_blacklist_mode(directives.text, entries)
     if blacklist_hits > 0:

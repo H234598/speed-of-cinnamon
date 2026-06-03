@@ -946,6 +946,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("runs-on: ubuntu-24.04", workflow)
         self.assertNotIn("ubuntu-latest", workflow)
         self.assertIn("persist-credentials: false", workflow)
+        self.assertNotIn("exit_zero: true", workflow)
         self.assertNotIn("GITHUB_TOKEN:", workflow)
         self.assertNotIn("secrets.GITHUB_TOKEN", workflow)
 
