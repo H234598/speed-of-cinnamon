@@ -116,6 +116,29 @@ const TERMINAL_WINDOW_MARKERS = [
   "xterm",
   "yakuake"
 ];
+const AUTO_PASTE_IDENTITY_MARKERS = {
+  "codex": TERMINAL_WINDOW_MARKERS,
+  "terminal": TERMINAL_WINDOW_MARKERS,
+  "pdf": [
+    "acroread",
+    "adobe",
+    "evince",
+    "okular",
+    "org.gnome.evince",
+    "org.pwmt.zathura",
+    "xreader",
+    "zathura"
+  ],
+  "excel": [
+    "calc",
+    "excel",
+    "libreoffice",
+    "onlyoffice",
+    "soffice",
+    "spreadsheet",
+    "wps"
+  ]
+};
 const PANEL_STATUS_CLASSES = [
   "speed-of-cinnamon-recording",
   "speed-of-cinnamon-processing",
@@ -993,7 +1016,10 @@ MyApplet.prototype = {
       if (configured.indexOf("~/") === 0) {
         configured = GLib.build_filenamev([GLib.get_home_dir(), configured.substring(2)]);
       }
-      return configured;
+      if (configured.charAt(0) === "/" && GLib.file_test(configured, GLib.FileTest.IS_EXECUTABLE)) {
+        return configured;
+      }
+      return "";
     }
     if (GLib.file_test(DEFAULT_CLI, GLib.FileTest.IS_EXECUTABLE)) {
       return DEFAULT_CLI;
@@ -1001,7 +1027,7 @@ MyApplet.prototype = {
     if (GLib.file_test(SYSTEM_CLI, GLib.FileTest.IS_EXECUTABLE)) {
       return SYSTEM_CLI;
     }
-    return "speed-of-cinnamon";
+    return "";
   },
 
   _outputMethodLabel: function(method) {
@@ -1460,7 +1486,7 @@ MyApplet.prototype = {
     }
     let title = String(this._windowProbeValue(this.targetWindow, "get_title") || "").toLowerCase();
     for (let marker of markers) {
-      if (title.indexOf(marker.toLowerCase()) >= 0) {
+      if (title.indexOf(marker.toLowerCase()) >= 0 && this._windowIdentityMatchesAutoPaste(marker)) {
         return true;
       }
     }
@@ -3231,7 +3257,6 @@ MyApplet.prototype = {
 
   _settingsSnapshotForCli: function() {
     let snapshot = this._settingsSnapshot();
-    snapshot["openai-compatible-api-key"] = this.openaiCompatibleApiKey;
     for (let key in CLI_TEXT_SETTINGS) {
       if (Object.prototype.hasOwnProperty.call(CLI_TEXT_SETTINGS, key) && Object.prototype.hasOwnProperty.call(snapshot, key)) {
         snapshot[key] = this._coerceCliTextArg(snapshot[key], CLI_TEXT_SETTINGS[key]);
@@ -3797,6 +3822,28 @@ MyApplet.prototype = {
     } catch (err) {
       return "";
     }
+  },
+
+  _windowIdentityMatchesAutoPaste: function(marker) {
+    let key = String(marker || "").trim().toLowerCase();
+    let allowed = AUTO_PASTE_IDENTITY_MARKERS[key] || null;
+    if (!allowed) {
+      return false;
+    }
+    let values = [
+      this._windowProbeValue(this.targetWindow, "get_wm_class"),
+      this._windowProbeValue(this.targetWindow, "get_wm_class_instance"),
+      this._windowProbeValue(this.targetWindow, "get_gtk_application_id")
+    ];
+    for (let i = 0; i < values.length; i++) {
+      let value = values[i];
+      for (let j = 0; j < allowed.length; j++) {
+        if (value.indexOf(allowed[j]) >= 0) {
+          return true;
+        }
+      }
+    }
+    return false;
   },
 
   _isTerminalTargetWindow: function() {

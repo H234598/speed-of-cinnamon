@@ -225,8 +225,11 @@ class TranscriberTest(unittest.TestCase):
         self.assertEqual(text, "generated transcript")
         self.assertTrue(
             any(
-                Path(args[0]) == path and isinstance(args[1], int) and args[1] & os.O_NOFOLLOW
-                for args, _ in mocked_open.call_args_list
+                args[0] == path.name
+                and isinstance(args[1], int)
+                and args[1] & os.O_NOFOLLOW
+                and "dir_fd" in kwargs
+                for args, kwargs in mocked_open.call_args_list
             )
         )
 

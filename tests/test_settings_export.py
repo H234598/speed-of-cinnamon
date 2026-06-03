@@ -47,8 +47,11 @@ class SettingsExportTest(unittest.TestCase):
         self.assertTrue(mocked_open.called)
         self.assertTrue(
             any(
-                Path(args[0]) == path and isinstance(args[1], int) and args[1] & os.O_NOFOLLOW
-                for args, _ in mocked_open.call_args_list
+                args[0] == path.name
+                and isinstance(args[1], int)
+                and args[1] & os.O_NOFOLLOW
+                and "dir_fd" in kwargs
+                for args, kwargs in mocked_open.call_args_list
             )
         )
 
@@ -365,6 +368,22 @@ class SettingsExportTest(unittest.TestCase):
             with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
                 write_export(path, {"language": "en"})
         mocked_replace.assert_called_once()
+
+    @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
+    def test_write_export_uses_secure_parent_directory_open(self, mocked_open: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            write_export(path, {"language": "en"})
+
+        self.assertTrue(
+            any(
+                args[0] == path.parent.name
+                and isinstance(args[1], int)
+                and args[1] & os.O_NOFOLLOW
+                and "dir_fd" in kwargs
+                for args, kwargs in mocked_open.call_args_list
+            )
+        )
 
     def test_write_export_sets_private_permissions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

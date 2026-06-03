@@ -114,6 +114,15 @@ class SecurityParserTest(unittest.TestCase):
 
         self.assertEqual(entries, ["erste", "zweite", "dritte"])
 
+    def test_update_blacklist_file_normalizes_added_entries_before_persisting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            entries = update_blacklist_file(path, [" geheim! ", "GEHEIM", True, "\x00bad", "zweite"])  # type: ignore[list-item]
+            content = path.read_text(encoding="utf-8")
+
+        self.assertEqual(entries, ["geheim", "zweite"])
+        self.assertEqual(content, "geheim\nzweite\n")
+
     def test_update_blacklist_file_writes_through_secure_temp_fd(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "blacklist.txt"

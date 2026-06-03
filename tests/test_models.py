@@ -91,8 +91,11 @@ class ModelsTest(unittest.TestCase):
             )
             self.assertTrue(
                 any(
-                    Path(args[0]) == cache_path and isinstance(args[1], int) and args[1] & os.O_NOFOLLOW
-                    for args, _ in mocked_open.call_args_list
+                    args[0] == cache_path.name
+                    and isinstance(args[1], int)
+                    and args[1] & os.O_NOFOLLOW
+                    and "dir_fd" in kwargs
+                    for args, kwargs in mocked_open.call_args_list
                 )
             )
             self.assertIn(spec.sha1, cache_path.read_text(encoding="utf-8"))

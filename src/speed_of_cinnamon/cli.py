@@ -2123,8 +2123,6 @@ def command_settings_export(args: argparse.Namespace) -> dict[str, object]:
     settings = _parse_cli_settings_json(args.settings_json)
     path = _require_json_path(args.output, field_name="settings export output", default=default_settings_export_file())
     payload = write_export(path, settings, load_alarm_store())
-    if path.stat().st_size > MAX_SETTINGS_FILE_BYTES:
-        raise RuntimeError(f"settings export file is too large (max {MAX_SETTINGS_FILE_BYTES} bytes)")
     return {
         "status": "done",
         "message": f"settings exported to {path}",
@@ -2137,8 +2135,6 @@ def command_settings_export(args: argparse.Namespace) -> dict[str, object]:
 def command_settings_import(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     path = _require_json_path(args.input, field_name="settings import input", default=default_settings_export_file())
-    if path.stat().st_size > MAX_SETTINGS_FILE_BYTES:
-        raise RuntimeError(f"settings export file is too large (max {MAX_SETTINGS_FILE_BYTES} bytes)")
     payload = read_export(path)
     save_alarm_store(payload["alarms"])
     return {

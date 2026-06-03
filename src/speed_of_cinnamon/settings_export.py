@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
+import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -12,7 +12,11 @@ from .alarms import MAX_ALARM_COUNT, STORE_VERSION as ALARM_STORE_VERSION
 from .alarms import normalize_alarm
 from .paths import APP_ID
 from .recorder import MAX_RECORDING_SECONDS
-from .path_safety import assert_no_symlink_ancestors, read_text_without_following_symlinks
+from .path_safety import (
+    assert_no_symlink_ancestors,
+    open_directory_without_following_symlinks,
+    open_file_without_following_symlinks,
+)
 
 EXPORT_VERSION = 2
 MAX_SETTINGS_EXPORT_BYTES = 1_000_000
@@ -148,6 +152,33 @@ def _assert_json_value_budget(value: Any) -> None:
             stack.extend((child, depth + 1) for child in item)
 
 
+def _create_private_temp_file(parent_fd: int, final_name: str) -> tuple[int, str]:
+    safe_name = final_name.replace("/", "_") or "settings-export.json"
+    nofollow_flag = getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag
+    for _ in range(100):
+        temp_name = f".{safe_name}.{secrets.token_hex(8)}.tmp"
+        try:
+            return os.open(temp_name, flags, 0o600, dir_fd=parent_fd), temp_name
+        except FileExistsError:
+            continue
+    raise SettingsExportError("failed to create settings export temp file")
+
+
+def _read_text_capped_without_following_symlinks(path: Path) -> str:
+    fd = open_file_without_following_symlinks(path, os.O_RDONLY, field_name="settings export path")
+    try:
+        file_stat = os.fstat(fd)
+        if file_stat.st_size > MAX_SETTINGS_EXPORT_BYTES:
+            raise SettingsExportError(f"settings export is too large: {path}")
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            fd = -1
+            return handle.read(MAX_SETTINGS_EXPORT_BYTES + 1)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 def _sanitize_text_field(value: object, *, field_name: str) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         raise SettingsExportError(f"{field_name} must be text")
@@ -253,34 +284,39 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
     if len(rendered.encode("utf-8")) > MAX_SETTINGS_EXPORT_BYTES:
         raise SettingsExportError(f"settings export is too large: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
-        try:
-            os.fchmod(handle.fileno(), 0o600)
-        except OSError:
-            pass
-        handle.write(rendered)
-        tmp_path = Path(handle.name)
+    parent_fd = open_directory_without_following_symlinks(path.parent, field_name="settings export directory")
+    temp_name = ""
     try:
-        os.replace(tmp_path, path)
+        temp_fd, temp_name = _create_private_temp_file(parent_fd, path.name)
+        with os.fdopen(temp_fd, "w", encoding="utf-8") as handle:
+            try:
+                os.fchmod(handle.fileno(), 0o600)
+            except OSError:
+                pass
+            handle.write(rendered)
+        os.replace(temp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         try:
-            path.chmod(0o600)
+            os.chmod(path.name, 0o600, dir_fd=parent_fd)
         except OSError:
             pass
     except OSError as exc:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        if temp_name:
+            try:
+                os.unlink(temp_name, dir_fd=parent_fd)
+            except OSError:
+                pass
         raise SettingsExportError(f"failed to write settings export: {path}") from exc
+    finally:
+        os.close(parent_fd)
     return payload
 
 
 def read_export(path: Path) -> dict[str, Any]:
     _assert_clean_path(path, field_name="settings export path")
     try:
-        if path.stat().st_size > MAX_SETTINGS_EXPORT_BYTES:
+        text = _read_text_capped_without_following_symlinks(path)
+        if len(text.encode("utf-8")) > MAX_SETTINGS_EXPORT_BYTES:
             raise SettingsExportError(f"settings export is too large: {path}")
-        text = read_text_without_following_symlinks(path, field_name="settings export path")
         if _contains_escaped_null(text):
             raise SettingsExportError("settings export contains invalid null byte")
         _assert_json_text_budget(text)

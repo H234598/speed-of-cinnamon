@@ -49,7 +49,8 @@ Use `make uninstall-local` to remove the local applet, backend wrapper, installe
 preserves user data such as downloaded models, alarms, transcripts, diagnostics, and settings exports.
 
 When the applet's `Backend command` setting is empty, it auto-detects the backend in this order:
-`~/.local/bin/speed-of-cinnamon`, `/usr/bin/speed-of-cinnamon`, then `speed-of-cinnamon` from `PATH`.
+`~/.local/bin/speed-of-cinnamon`, then `/usr/bin/speed-of-cinnamon`. Custom backend overrides must be absolute
+executable paths; the applet does not run the backend through `PATH`.
 
 ## First Setup
 

@@ -70,13 +70,14 @@ def _compile_blacklist_pattern(entries: list[str]) -> re.Pattern[str] | None:
         if isinstance(raw_entry, bool) or not isinstance(raw_entry, str):
             continue
         entry = _normalize_blacklist_entry(raw_entry)
-        if not entry or entry in seen:
+        entry_key = entry.casefold()
+        if not entry or entry_key in seen:
             continue
         entry_bytes = len(entry.encode("utf-8"))
         if normalized and total_bytes + entry_bytes > _MAX_BLACKLIST_PATTERN_BYTES:
             break
         normalized.append(entry)
-        seen.add(entry)
+        seen.add(entry_key)
         total_bytes += entry_bytes
         if len(normalized) >= _MAX_BLACKLIST_ENTRIES:
             break
@@ -135,12 +136,15 @@ def _read_blacklist(path: Path) -> list[str]:
     except (OSError, UnicodeDecodeError):
         return []
     values: list[str] = []
+    value_keys: set[str] = set()
     for line in text.splitlines():
         entry = _normalize_blacklist_entry(line)
         if not entry:
             continue
-        if entry not in values:
+        entry_key = entry.casefold()
+        if entry_key not in value_keys:
             values.append(entry)
+            value_keys.add(entry_key)
         if len(values) >= _MAX_BLACKLIST_ENTRIES:
             break
     return values
@@ -346,11 +350,22 @@ def update_blacklist_file(path: Path, added: list[str]) -> list[str]:
     lock_fd = _acquire_blacklist_lock(path)
     try:
         existing = _read_blacklist(path)
+        existing_keys = {entry.casefold() for entry in existing}
         changed = False
-        for entry in added:
-            if entry not in existing:
-                existing.append(entry)
-                changed = True
+        for raw_entry in added:
+            if isinstance(raw_entry, bool) or not isinstance(raw_entry, str):
+                continue
+            entry = _normalize_blacklist_entry(raw_entry)
+            if not entry:
+                continue
+            entry_key = entry.casefold()
+            if entry_key in existing_keys:
+                continue
+            existing.append(entry)
+            existing_keys.add(entry_key)
+            changed = True
+            if len(existing) >= _MAX_BLACKLIST_ENTRIES:
+                break
         if len(existing) > _MAX_BLACKLIST_ENTRIES:
             existing = existing[:_MAX_BLACKLIST_ENTRIES]
             changed = True

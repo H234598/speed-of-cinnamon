@@ -271,7 +271,8 @@ The default export/import path is:
 ~/.local/share/speed-of-cinnamon/settings-export.json
 ```
 
-The export includes the local alarm store and intentionally excludes machine-local `cli-path`.
+The export includes the local alarm store and intentionally excludes machine-local `cli-path` and
+`openai-compatible-api-key`.
 
 ## Alarms
 

@@ -148,7 +148,8 @@ Alarms:      ~/.local/share/speed-of-cinnamon/alarms.json
 ```
 
 Leave the applet's `Backend command` setting empty for normal installs. The applet first uses the per-user backend
-from `~/.local/bin`, then the RPM/system backend from `/usr/bin`, then `speed-of-cinnamon` from `PATH`.
+from `~/.local/bin`, then the RPM/system backend from `/usr/bin`. Custom backend overrides must be absolute
+executable paths; the applet does not run the backend through `PATH`.
 
 Recording files are temporary runtime artifacts. By default, Speed of Cinnamon deletes the WAV file and recorder log
 after a successful transcription. Use the applet's `Recording options` submenu to enable `Keep recording files` only
@@ -244,8 +245,8 @@ speed-of-cinnamon settings-import --json
 
 The export includes the hotkey, languages, recorder/backend choices, command templates, personalization, output mode,
 recording retention, notification settings, and the local alarm store. It intentionally excludes the machine-local
-`cli-path`. Because command templates, personal context, vocabulary, and alarm names may contain private data, keep the
-export file private.
+`cli-path` and `openai-compatible-api-key`. Because command templates, personal context, vocabulary, and alarm names may
+contain private data, keep the export file private.
 
 ## Language Switching
 

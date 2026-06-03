@@ -92,6 +92,45 @@ reject_symlink_ancestors() {
   done
 }
 
+write_backend_wrapper() {
+  local wrapper_path="${bin_dir}/speed-of-cinnamon"
+  local wrapper_tmp
+
+  reject_symlink_ancestors "${wrapper_path}" "install"
+  if [[ -L "${bin_dir}" || -L "${wrapper_path}" ]]; then
+    printf 'refusing to follow symlink during install: %s\n' "${wrapper_path}" >&2
+    exit 1
+  fi
+  wrapper_tmp="$(mktemp "${bin_dir}/.speed-of-cinnamon.XXXXXX")"
+  if ! {
+    printf '#!/usr/bin/env bash\n'
+    printf 'set -euo pipefail\n'
+    printf 'export PYTHONPATH=%q\n' "${app_data}/python"
+    # shellcheck disable=SC2016
+    printf 'exec "$(command -v -- python3)" -m speed_of_cinnamon.cli "$@"\n'
+  } > "${wrapper_tmp}"; then
+    rm -f -- "${wrapper_tmp}"
+    printf 'failed to write backend wrapper: %s\n' "${wrapper_path}" >&2
+    exit 1
+  fi
+  if ! chmod 0755 "${wrapper_tmp}"; then
+    rm -f -- "${wrapper_tmp}"
+    printf 'failed to set backend wrapper permissions: %s\n' "${wrapper_path}" >&2
+    exit 1
+  fi
+  reject_symlink_ancestors "${wrapper_path}" "install"
+  if [[ -L "${bin_dir}" || -L "${wrapper_path}" ]]; then
+    rm -f -- "${wrapper_tmp}"
+    printf 'refusing to follow symlink during install: %s\n' "${wrapper_path}" >&2
+    exit 1
+  fi
+  if ! mv -T -- "${wrapper_tmp}" "${wrapper_path}"; then
+    rm -f -- "${wrapper_tmp}"
+    printf 'failed to install backend wrapper: %s\n' "${wrapper_path}" >&2
+    exit 1
+  fi
+}
+
 for target in "${applet_target}" "${app_data}" "${bin_dir}" "${man_dir}"; do
   reject_symlink_ancestors "${target}" "install"
   if [[ -L "${target}" ]]; then
@@ -171,15 +210,7 @@ install_tree_staged "${repo_dir}/src/speed_of_cinnamon" "${app_data}/python/spee
 reject_unsafe_file "${repo_dir}/docs/man/speed-of-cinnamon.1" "man page source"
 reject_unsafe_file "${repo_dir}/docs/man/speed-of-cinnamon-alarms.1" "man page source"
 
-rm -f "${bin_dir}/speed-of-cinnamon"
-{
-  printf '#!/usr/bin/env bash\n'
-  printf 'set -euo pipefail\n'
-  printf 'export PYTHONPATH=%q\n' "${app_data}/python"
-  # shellcheck disable=SC2016
-  printf 'exec "$(command -v -- python3)" -m speed_of_cinnamon.cli "$@"\n'
-} > "${bin_dir}/speed-of-cinnamon"
-chmod +x "${bin_dir}/speed-of-cinnamon"
+write_backend_wrapper
 
 install -m 0644 "${repo_dir}/docs/man/speed-of-cinnamon.1" "${man_dir}/speed-of-cinnamon.1"
 install -m 0644 "${repo_dir}/docs/man/speed-of-cinnamon-alarms.1" "${man_dir}/speed-of-cinnamon-alarms.1"
