@@ -183,6 +183,36 @@ verify_asset_path() {
   fi
 }
 
+resolve_github_remote_repo() {
+  local remote_url
+  remote_url="$(git remote get-url origin 2>/dev/null || true)"
+  if [[ "${remote_url}" =~ ^https://github\.com/([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)(\.git)?$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  if [[ "${remote_url}" =~ ^git@github\.com:([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)(\.git)?$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  return 1
+}
+
+rollback_release_state() {
+  local tag=$1
+  local repo=$2
+  local existing_release=$3
+  local existing_was_draft=$4
+  local created_release=$5
+
+  if [[ "${created_release}" == "true" ]]; then
+    gh release delete "${tag}" --repo "${repo}" --yes >/dev/null 2>&1 || true
+    return
+  fi
+  if [[ "${existing_release}" == "true" && "${existing_was_draft}" != "true" ]]; then
+    gh release edit "${tag}" --repo "${repo}" --draft=false >/dev/null 2>&1 || true
+  fi
+}
+
 require_one "source archive" "${source_archives[@]}"
 require_one "checksum file" "${checksums[@]}"
 require_one "RPM" "${rpms[@]}"
@@ -269,9 +299,26 @@ for asset_ref in "${upload_refs[@]}"; do
     snap_label="${staged_name}"
   fi
 done
-repo="${GITHUB_REPOSITORY:-H234598/speed-of-cinnamon}"
+repo="${GITHUB_REPOSITORY:-}"
+remote_repo=""
+if remote_repo="$(resolve_github_remote_repo)"; then
+  :
+else
+  remote_repo=""
+fi
+if [[ -z "${repo}" ]]; then
+  if [[ -z "${remote_repo}" ]]; then
+    printf 'GITHUB_REPOSITORY is not set and origin is not a GitHub repository.\n' >&2
+    exit 1
+  fi
+  repo="${remote_repo}"
+fi
 if [[ ! "${repo}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
   printf 'invalid repository value: %s\n' "${repo}" >&2
+  exit 1
+fi
+if [[ -n "${remote_repo}" && "${repo}" != "${remote_repo}" ]]; then
+  printf 'repository value does not match checked out origin: %s != %s\n' "${repo}" "${remote_repo}" >&2
   exit 1
 fi
 
@@ -367,7 +414,12 @@ if [[ -z "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]]; then
   exit 1
 fi
 
+existing_release="false"
+existing_was_draft="false"
+created_release="false"
 if gh release view "${tag}" --repo "${repo}" >/dev/null 2>&1; then
+  existing_release="true"
+  existing_was_draft="$(gh release view "${tag}" --repo "${repo}" --json isDraft --jq '.isDraft')"
   existing_assets="$(gh release view "${tag}" --repo "${repo}" --json assets --jq '.assets[].name')"
   for asset_ref in "${upload_refs[@]}"; do
     asset_name="$(basename "${asset_ref}")"
@@ -382,6 +434,7 @@ if gh release view "${tag}" --repo "${repo}" >/dev/null 2>&1; then
     --notes-file "${notes_file}" \
     --draft
 else
+  created_release="true"
   gh release create "${tag}" \
     --repo "${repo}" \
     --title "Speed of Cinnamon ${tag}" \
@@ -391,12 +444,17 @@ else
 fi
 
 if ! gh release upload "${tag}" "${upload_refs[@]}" --repo "${repo}"; then
+  rollback_release_state "${tag}" "${repo}" "${existing_release}" "${existing_was_draft}" "${created_release}"
   printf 'failed to upload one or more release assets.\n' >&2
   exit 1
 fi
 
-gh release edit "${tag}" \
-  --repo "${repo}" \
-  --title "Speed of Cinnamon ${tag}" \
-  --notes-file "${notes_file}" \
-  --draft=false
+if ! gh release edit "${tag}" \
+    --repo "${repo}" \
+    --title "Speed of Cinnamon ${tag}" \
+    --notes-file "${notes_file}" \
+    --draft=false; then
+  rollback_release_state "${tag}" "${repo}" "${existing_release}" "${existing_was_draft}" "${created_release}"
+  printf 'failed to publish release after uploading assets.\n' >&2
+  exit 1
+fi

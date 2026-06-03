@@ -458,10 +458,15 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("gh release upload", publish_script)
         self.assertNotIn("--clobber", publish_script)
         self.assertIn("--json assets", publish_script)
+        self.assertIn("--json isDraft", publish_script)
         self.assertIn(".assets[].name", publish_script)
         self.assertIn("release asset already exists", publish_script)
         self.assertIn("--draft", publish_script)
         self.assertIn("gh release edit \"${tag}\" \\", publish_script)
+        self.assertIn("rollback_release_state()", publish_script)
+        self.assertIn('rollback_release_state "${tag}" "${repo}" "${existing_release}" "${existing_was_draft}" "${created_release}"', publish_script)
+        self.assertIn('gh release delete "${tag}" --repo "${repo}" --yes', publish_script)
+        self.assertIn('gh release edit "${tag}" --repo "${repo}" --draft=false', publish_script)
 
     def test_release_scripts_use_safe_local_fs_for_risky_mutations(self) -> None:
         build_rpm = (REPO_ROOT / "scripts" / "build-rpm.sh").read_text(encoding="utf-8")
@@ -503,8 +508,18 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("chmod 0444 -- \"${staged_path}\"", publish_script)
         self.assertIn('gh release upload "${tag}" "${upload_refs[@]}" --repo "${repo}"', publish_script)
         self.assertIn('if ! gh release upload "${tag}" "${upload_refs[@]}" --repo "${repo}"; then', publish_script)
+        self.assertIn('if ! gh release edit "${tag}" \\', publish_script)
+        self.assertIn("failed to publish release after uploading assets.", publish_script)
         self.assertIn('--draft', publish_script)
         self.assertIn("--draft=false", publish_script)
+
+    def test_publish_script_resolves_repository_from_verified_checkout(self) -> None:
+        publish_script = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
+        self.assertIn("resolve_github_remote_repo()", publish_script)
+        self.assertIn("git remote get-url origin", publish_script)
+        self.assertIn("GITHUB_REPOSITORY is not set and origin is not a GitHub repository.", publish_script)
+        self.assertIn("repository value does not match checked out origin", publish_script)
+        self.assertNotIn('repo="${GITHUB_REPOSITORY:-H234598/speed-of-cinnamon}"', publish_script)
 
     def test_wiki_publish_does_not_bootstrap_after_clone_failure(self) -> None:
         publish_script = (REPO_ROOT / "scripts" / "publish-wiki.sh").read_text(encoding="utf-8")
