@@ -1672,6 +1672,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         done_log_path = state.log_path
         trimmed_audio_path: Path | None = None
         stabilized_audio_path: Path | None = None
+        remove_original_after_state_update = False
         audio_suffix = ""
         audio_path = validate_audio_file(audio_path)
         audio_suffix = audio_path.suffix.lower()
@@ -1757,7 +1758,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             stabilized_audio_path = _stabilize_recording_artifact_path(trimmed_audio_path)
             done_audio_path = str(stabilized_audio_path)
             if done_audio_path != str(audio_path):
-                remove_file(str(audio_path), suffix=audio_suffix)
+                remove_original_after_state_update = True
         else:
             if audio_path.suffix.lower() == ".wav":
                 try:
@@ -1768,7 +1769,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
                     stabilized_audio_path = _stabilize_recording_artifact_path(converted_audio_path)
                     done_audio_path = str(stabilized_audio_path)
                     if done_audio_path != str(audio_path):
-                        remove_file(str(audio_path), suffix=audio_suffix)
+                        remove_original_after_state_update = True
             else:
                 done_audio_path = str(audio_path)
 
@@ -1782,6 +1783,8 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             inserted=inserted,
             error="",
         )
+        if remove_original_after_state_update:
+            remove_file(str(audio_path), suffix=audio_suffix)
         state.audio_path = done_audio_path
         state.log_path = done_log_path
         state.transcript_path = str(text_path)

@@ -4153,7 +4153,7 @@ class CliTest(unittest.TestCase):
 
             self.assertFalse(final_audio.exists())
             self.assertFalse(temp_trimmed.exists())
-            self.assertFalse(original.exists())
+            self.assertTrue(original.exists())
 
     def test_cleanup_counts_and_deletes_stable_final_recording_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

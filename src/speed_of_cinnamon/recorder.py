@@ -362,7 +362,7 @@ def trim_recording_leading_silence(audio_path: Path, leading_silence_seconds: fl
         with wave.open(str(audio_path), "rb") as source:
             frame_rate = source.getframerate()
             total_frames = source.getnframes()
-            start_frame = min(total_frames - 1, max(0, int(leading_silence_seconds * frame_rate)))
+            start_frame = max(0, int(leading_silence_seconds * frame_rate))
             if start_frame <= 0:
                 return audio_path
             if start_frame >= total_frames:
