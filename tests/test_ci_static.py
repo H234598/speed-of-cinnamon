@@ -940,13 +940,17 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn("id-token: write", workflow)
         self.assertIn("publish_results: false", workflow)
 
-    def test_bandit_workflow_does_not_pass_github_token_to_third_party_action(self) -> None:
+    def test_bandit_workflow_runs_native_blocking_scan_without_extra_token_scope(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "bandit.yml").read_text(encoding="utf-8")
-        self.assertIn("security-events: write", workflow)
         self.assertIn("runs-on: ubuntu-24.04", workflow)
         self.assertNotIn("ubuntu-latest", workflow)
         self.assertIn("persist-credentials: false", workflow)
+        self.assertIn("actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6", workflow)
+        self.assertIn("bandit==1.9.4", workflow)
+        self.assertIn("run: make python-security-scan", workflow)
+        self.assertNotIn("security-events: write", workflow)
         self.assertNotIn("exit_zero: true", workflow)
+        self.assertNotIn("shundor/python-bandit-scan", workflow)
         self.assertNotIn("GITHUB_TOKEN:", workflow)
         self.assertNotIn("secrets.GITHUB_TOKEN", workflow)
 
