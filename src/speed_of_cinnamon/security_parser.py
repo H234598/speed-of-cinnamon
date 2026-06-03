@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import fcntl
 import os
 import tempfile
 import re
@@ -137,12 +138,16 @@ def _write_blacklist(path: Path, entries: list[str]) -> None:
         if not path.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
             fd, temp_name = tempfile.mkstemp(prefix=f"{path.stem}.", suffix=".tmp", dir=str(path.parent))
-            os.close(fd)
             temp_path = Path(temp_name)
             try:
-                temp_path.touch(mode=0o600, exist_ok=True)
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    try:
+                        os.fchmod(handle.fileno(), 0o600)
+                    except OSError:
+                        pass
+                assert_no_symlink_ancestors(path, field_name="blacklist file")
                 os.replace(temp_path, path)
-            except OSError:
+            except (OSError, RuntimeError):
                 try:
                     temp_path.unlink(missing_ok=True)
                 except OSError:
@@ -151,17 +156,17 @@ def _write_blacklist(path: Path, entries: list[str]) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=f"{path.stem}.", suffix=".tmp", dir=str(path.parent))
-    os.close(fd)
     temp_path = Path(temp_name)
     try:
-        with temp_path.open("w", encoding="utf-8") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            try:
+                os.fchmod(handle.fileno(), 0o600)
+            except OSError:
+                pass
             handle.write("\n".join(entries) + "\n")
-        try:
-            temp_path.chmod(0o600)
-        except OSError:
-            pass
+        assert_no_symlink_ancestors(path, field_name="blacklist file")
         os.replace(temp_path, path)
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
         try:
             temp_path.unlink(missing_ok=True)
         except OSError:
@@ -171,6 +176,41 @@ def _write_blacklist(path: Path, entries: list[str]) -> None:
         path.chmod(0o600)
     except OSError:
         pass
+
+
+def _acquire_blacklist_lock(path: Path) -> int:
+    if not isinstance(path, Path):
+        raise ValueError("blacklist file path is not safe")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(f".{path.name}.lock")
+    try:
+        assert_no_symlink_ancestors(lock_path, field_name="blacklist lock file")
+    except RuntimeError as exc:
+        raise ValueError("blacklist lock file path is not safe") from exc
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise ValueError("secure blacklist lock open is not supported on this platform")
+    try:
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | nofollow_flag, 0o600)
+    except OSError as exc:
+        raise ValueError("failed to open blacklist lock file") from exc
+    try:
+        try:
+            os.fchmod(fd, 0o600)
+        except OSError:
+            pass
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except OSError as exc:
+        os.close(fd)
+        raise ValueError("failed to lock blacklist file") from exc
+    return fd
+
+
+def _release_blacklist_lock(fd: int) -> None:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 def _luhn_valid(value: str) -> bool:
@@ -282,15 +322,23 @@ def load_blacklist_file(path: Path) -> list[str]:
 
 
 def update_blacklist_file(path: Path, added: list[str]) -> list[str]:
-    existing = _read_blacklist(path)
-    changed = False
-    for entry in added:
-        if entry not in existing:
-            existing.append(entry)
+    try:
+        path = _safe_blacklist_path(path)
+    except RuntimeError as exc:
+        raise ValueError("blacklist file path is not safe") from exc
+    lock_fd = _acquire_blacklist_lock(path)
+    try:
+        existing = _read_blacklist(path)
+        changed = False
+        for entry in added:
+            if entry not in existing:
+                existing.append(entry)
+                changed = True
+        if len(existing) > _MAX_BLACKLIST_ENTRIES:
+            existing = existing[:_MAX_BLACKLIST_ENTRIES]
             changed = True
-    if len(existing) > _MAX_BLACKLIST_ENTRIES:
-        existing = existing[:_MAX_BLACKLIST_ENTRIES]
-        changed = True
-    if changed:
-        _write_blacklist(path, existing)
-    return existing
+        if changed:
+            _write_blacklist(path, existing)
+        return existing
+    finally:
+        _release_blacklist_lock(lock_fd)

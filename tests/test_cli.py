@@ -618,6 +618,24 @@ class CliTest(unittest.TestCase):
 
         self.assertFalse(opened)
 
+    def test_open_blacklist_document_prepares_file_without_plain_write_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            with (
+                mock.patch("speed_of_cinnamon.cli.blacklist_file", return_value=path),
+                mock.patch("speed_of_cinnamon.cli.ensure_runtime_dirs"),
+                mock.patch("speed_of_cinnamon.cli._which", return_value="xdg-open"),
+                mock.patch("speed_of_cinnamon.cli.subprocess.Popen") as mocked_popen,
+                mock.patch("pathlib.Path.write_text", side_effect=AssertionError("plain write_text used")),
+            ):
+                opened = cli._open_blacklist_document()
+
+            mode = path.stat().st_mode & 0o777
+
+        self.assertTrue(opened)
+        self.assertEqual(mode, 0o600)
+        mocked_popen.assert_called_once()
+
     def test_models_lists_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             stdout = io.StringIO()

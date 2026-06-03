@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import fcntl
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from speed_of_cinnamon.security_parser import (
     apply_blacklist_mode,
@@ -86,6 +88,29 @@ class SecurityParserTest(unittest.TestCase):
             entries = update_blacklist_file(path, ["zweite", "dritte"])
 
         self.assertEqual(entries, ["erste", "zweite", "dritte"])
+
+    def test_update_blacklist_file_writes_through_secure_temp_fd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            with mock.patch("speed_of_cinnamon.security_parser.Path.open", side_effect=AssertionError("reopened temp path")):
+                entries = update_blacklist_file(path, ["geheim"])
+
+            content = path.read_text(encoding="utf-8")
+
+        self.assertEqual(entries, ["geheim"])
+        self.assertEqual(content, "geheim\n")
+
+    def test_update_blacklist_file_locks_read_modify_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            with mock.patch("speed_of_cinnamon.security_parser.fcntl.flock") as mocked_flock:
+                entries = update_blacklist_file(path, ["geheim"])
+
+        self.assertEqual(entries, ["geheim"])
+        self.assertEqual(
+            [call.args[1] for call in mocked_flock.call_args_list],
+            [fcntl.LOCK_EX, fcntl.LOCK_UN],
+        )
 
     def test_load_blacklist_file_rejects_symlink_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

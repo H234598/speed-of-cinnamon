@@ -591,15 +591,7 @@ def prepare_output_text(text: str, append_space: bool, sanitize: bool) -> str:
 def _ensure_private_text_file(path: Path) -> None:
     assert_no_symlink_ancestors(path, field_name="blacklist file")
     path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.exists():
-        try:
-            path.write_text("", encoding="utf-8")
-        except OSError as exc:
-            raise RuntimeError(f"failed to create text file: {path}") from exc
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+    _prepare_private_file(path, field_name="blacklist file")
 
 
 def _open_blacklist_document() -> bool:
