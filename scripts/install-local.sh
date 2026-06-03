@@ -224,8 +224,30 @@ rollback_staged_items() {
 }
 
 install_workspace_cleanup() {
-  if [[ -n "${staged_workspace}" && -d "${staged_workspace}" ]]; then
-    rm -rf -- "${staged_workspace}"
+  if [[ -n "${staged_workspace}" && -e "${staged_workspace}" ]]; then
+    if ! safe_fs remove install "${staged_workspace}" --kind dir; then
+      printf 'failed to clean install staging workspace: %s\n' "${staged_workspace}" >&2
+    fi
+  fi
+}
+
+validate_staged_workspace() {
+  local app_data_real
+  local staged_real
+
+  if [[ -z "${staged_workspace}" || "${staged_workspace}" != "${app_data}/install-stage-"* ]]; then
+    printf 'install staging workspace is outside app data: %s\n' "${staged_workspace}" >&2
+    exit 1
+  fi
+  if [[ -L "${staged_workspace}" || ! -d "${staged_workspace}" ]]; then
+    printf 'install staging workspace is invalid: %s\n' "${staged_workspace}" >&2
+    exit 1
+  fi
+  app_data_real="$(realpath "${app_data}")"
+  staged_real="$(realpath "${staged_workspace}")"
+  if [[ "${staged_real}" != "${app_data_real}/install-stage-"* ]]; then
+    printf 'install staging workspace resolved outside app data: %s\n' "${staged_workspace}" >&2
+    exit 1
   fi
 }
 
@@ -245,6 +267,7 @@ reject_unsafe_file "${repo_dir}/docs/man/speed-of-cinnamon-alarms.1" "man page s
 
 resolve_tmp_root >/dev/null
 staged_workspace="$(mktemp -d "${app_data}/install-stage-XXXXXX")"
+validate_staged_workspace
 rollback_root="${staged_workspace}/rollback"
 safe_fs mkdirs install "${rollback_root}"
 safe_fs mkdirs install "${rollback_root}"
