@@ -66,6 +66,7 @@ mkdir -p "${work_root}"
 work_dir="$(mktemp -d "${work_root}/speed-of-cinnamon-build-dist-XXXXXX")"
 staging_tarball=""
 staging_checksum=""
+dist_finalize_lock="${dist_dir}/.build-dist.finalize.lock"
 cleanup() {
   if [[ -n "${staging_tarball}" ]]; then
     rm -f -- "${staging_tarball}"
@@ -76,6 +77,50 @@ cleanup() {
   rm -rf -- "${work_dir}"
 }
 trap cleanup EXIT
+
+replace_with_finalize_lock() {
+  local lock_path=$1
+  local staging_path=$2
+  local final_path=$3
+  local staging_checksum_path=$4
+  local final_checksum_path=$5
+
+  python3 - "$lock_path" "$safe_fs" "$staging_path" "$final_path" "$staging_checksum_path" "$final_checksum_path" <<'PY'
+import os
+import subprocess
+import sys
+
+try:
+    import fcntl
+except ModuleNotFoundError:
+    print("fcntl is required for safe finalization", file=sys.stderr)
+    raise SystemExit(1)
+
+lock_path, safe_fs, staging_path, final_path, staging_checksum_path, final_checksum_path = sys.argv[1:]
+
+if os.path.islink(lock_path):
+    print(f"finalization lock must not be a symlink: {lock_path}", file=sys.stderr)
+    raise SystemExit(1)
+
+flags = os.O_CREAT | os.O_RDWR
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+
+lock_fd = os.open(lock_path, flags, 0o600)
+with os.fdopen(lock_fd, "r+", encoding="utf-8") as lock:
+    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    if staging_path and final_path:
+        subprocess.run(
+            [sys.executable, safe_fs, "replace", "build-dist", staging_path, final_path, "--src-kind", "file"],
+            check=True,
+        )
+    if staging_checksum_path and final_checksum_path:
+        subprocess.run(
+            [sys.executable, safe_fs, "replace", "build-dist", staging_checksum_path, final_checksum_path, "--src-kind", "file"],
+            check=True,
+        )
+PY
+}
 
 mkdir -p "${dist_dir}" "${work_dir}/${package}"
 
@@ -145,13 +190,17 @@ final_checksum="${final_tarball}.sha256"
 staging_tarball="$(mktemp "${dist_dir}/.${package}.tar.gz.XXXXXX")"
 
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@0" -C "${work_dir}" -czf "${staging_tarball}" "${package}"
-python3 "${safe_fs}" replace build-dist "${staging_tarball}" "${final_tarball}" --src-kind file
-staging_tarball=""
-checksum_value="$(sha256sum "${final_tarball}")"
+checksum_value="$(sha256sum "${staging_tarball}")"
 checksum_value="${checksum_value%% *}"
 staging_checksum="$(mktemp "${dist_dir}/.${package}.tar.gz.sha256.XXXXXX")"
 printf '%s  %s\n' "${checksum_value}" "${package}.tar.gz" > "${staging_checksum}"
-python3 "${safe_fs}" replace build-dist "${staging_checksum}" "${final_checksum}" --src-kind file
+replace_with_finalize_lock \
+  "${dist_finalize_lock}" \
+  "${staging_tarball}" \
+  "${final_tarball}" \
+  "${staging_checksum}" \
+  "${final_checksum}"
+staging_tarball=""
 staging_checksum=""
 
 printf 'Built %s\n' "${final_tarball}" >&2

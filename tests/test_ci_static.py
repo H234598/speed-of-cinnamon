@@ -932,8 +932,11 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('require_unsafe_source "${safe_fs}" "safe local filesystem helper"', build_dist_source)
         self.assertIn('staging_checksum="$(mktemp "${dist_dir}/.${package}.tar.gz.sha256.XXXXXX")"', build_dist_source)
         self.assertIn('printf \'%s  %s\\n\' "${checksum_value}" "${package}.tar.gz" > "${staging_checksum}"', build_dist_source)
-        self.assertIn('python3 "${safe_fs}" replace build-dist "${staging_tarball}" "${final_tarball}" --src-kind file', build_dist_source)
-        self.assertIn('python3 "${safe_fs}" replace build-dist "${staging_checksum}" "${final_checksum}" --src-kind file', build_dist_source)
+        self.assertIn("dist_finalize_lock=\"${dist_dir}/.build-dist.finalize.lock\"", build_dist_source)
+        self.assertIn("replace_with_finalize_lock() {", build_dist_source)
+        self.assertIn("import fcntl", build_dist_source)
+        self.assertIn('"${dist_finalize_lock}"', build_dist_source)
+        self.assertIn('  "${staging_tarball}" \\\n  "${final_tarball}" \\\n  "${staging_checksum}" \\\n  "${final_checksum}"', build_dist_source)
         self.assertNotIn('mv -T -- "${staging_checksum}" "${final_checksum}"', build_dist_source)
         self.assertNotIn('> "${final_checksum}"', build_dist_source)
 
