@@ -73,7 +73,10 @@ release_is_mutated="false"
 release_publish_complete="false"
 existing_release="false"
 existing_was_draft="false"
+existing_release_title=""
+existing_notes_file=""
 created_release="false"
+uploaded_asset_names=()
 safe_fs="${repo_dir}/scripts/safe-local-fs.py"
 safe_fs_cmd=(python3 "${safe_fs}")
 
@@ -206,13 +209,31 @@ rollback_release_state() {
   local tag=$1
   local repo=$2
   local existing_release=$3
+  local existing_was_draft=$4
   local created_release=$5
+  local edit_args
 
   if [[ "${created_release}" == "true" ]]; then
     gh release delete "${tag}" --repo "${repo}" --yes >/dev/null 2>&1 || true
     return
   fi
   if [[ "${existing_release}" == "true" ]]; then
+    for asset_name in "${uploaded_asset_names[@]}"; do
+      gh release delete-asset "${tag}" "${asset_name}" --repo "${repo}" --yes >/dev/null 2>&1 || true
+    done
+    edit_args=(gh release edit "${tag}" --repo "${repo}")
+    if [[ -n "${existing_release_title}" ]]; then
+      edit_args+=(--title "${existing_release_title}")
+    fi
+    if [[ -n "${existing_notes_file}" && -f "${existing_notes_file}" ]]; then
+      edit_args+=(--notes-file "${existing_notes_file}")
+    fi
+    if [[ "${existing_was_draft}" == "true" ]]; then
+      edit_args+=(--draft)
+    else
+      edit_args+=(--draft=false)
+    fi
+    "${edit_args[@]}" >/dev/null 2>&1 || true
     return
   fi
 }
@@ -295,6 +316,7 @@ for asset in "${assets[@]}"; do
   fi
   chmod 0444 -- "${staged_path}"
   upload_refs+=("${staged_path}")
+  uploaded_asset_names+=("${staged_name}")
   verify_asset_path "${staged_path}"
   if [[ "${asset}" == "${source_archives[0]}" ]]; then
     source_archive_ref="${staged_path}"
@@ -406,6 +428,9 @@ notes_file="$(mktemp "${notes_tmp_root}/speed-of-cinnamon-release-notes-XXXXXX")
 cleanup_notes() {
   cleanup_release_state
   rm -f -- "${notes_file}"
+  if [[ -n "${existing_notes_file}" ]]; then
+    rm -f -- "${existing_notes_file}"
+  fi
   if [[ -n "${staging_dir}" ]]; then
     rm -rf -- "${staging_dir}"
   fi
@@ -445,6 +470,12 @@ if gh release view "${tag}" --repo "${repo}" >/dev/null 2>&1; then
   existing_release="true"
   existing_was_draft="$(gh release view "${tag}" --repo "${repo}" --json isDraft --jq '.isDraft')"
   existing_assets="$(gh release view "${tag}" --repo "${repo}" --json assets --jq '.assets[].name')"
+  existing_release_title="$(gh release view "${tag}" --repo "${repo}" --json name --jq '.name')"
+  existing_notes_file="$(mktemp "${notes_tmp_root}/speed-of-cinnamon-existing-release-notes-XXXXXX")"
+  if ! gh release view "${tag}" --repo "${repo}" --json body --jq '.body // ""' > "${existing_notes_file}"; then
+    printf 'failed to snapshot existing release notes for rollback: %s\n' "${tag}" >&2
+    exit 1
+  fi
   for asset_ref in "${upload_refs[@]}"; do
     asset_name="$(basename "${asset_ref}")"
     if grep -Fxq -- "${asset_name}" <<<"${existing_assets}"; then
@@ -452,21 +483,27 @@ if gh release view "${tag}" --repo "${repo}" >/dev/null 2>&1; then
       exit 1
     fi
   done
-  gh release edit "${tag}" \
-    --repo "${repo}" \
-    --title "Speed of Cinnamon ${tag}" \
-    --notes-file "${notes_file}" \
-    --draft
   mark_release_mutation
+  if ! gh release edit "${tag}" \
+      --repo "${repo}" \
+      --title "Speed of Cinnamon ${tag}" \
+      --notes-file "${notes_file}" \
+      --draft; then
+    printf 'failed to prepare existing release as draft: %s\n' "${tag}" >&2
+    exit 1
+  fi
 else
   created_release="true"
-  gh release create "${tag}" \
-    --repo "${repo}" \
-    --title "Speed of Cinnamon ${tag}" \
-    --notes-file "${notes_file}" \
-    --verify-tag \
-    --draft
   mark_release_mutation
+  if ! gh release create "${tag}" \
+      --repo "${repo}" \
+      --title "Speed of Cinnamon ${tag}" \
+      --notes-file "${notes_file}" \
+      --verify-tag \
+      --draft; then
+    printf 'failed to create draft release: %s\n' "${tag}" >&2
+    exit 1
+  fi
 fi
 
 if ! gh release upload "${tag}" "${upload_refs[@]}" --repo "${repo}"; then

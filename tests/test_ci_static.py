@@ -468,6 +468,12 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("publish_release_succeeded()", publish_script)
         self.assertIn("rollback_release_state", publish_script)
         self.assertIn('gh release delete "${tag}" --repo "${repo}" --yes', publish_script)
+        self.assertIn('gh release delete-asset "${tag}" "${asset_name}" --repo "${repo}" --yes', publish_script)
+        self.assertIn("uploaded_asset_names=()", publish_script)
+        self.assertIn('uploaded_asset_names+=("${staged_name}")', publish_script)
+        self.assertIn("existing_release_title=", publish_script)
+        self.assertIn("existing_notes_file=", publish_script)
+        self.assertIn("failed to snapshot existing release notes for rollback", publish_script)
         self.assertIn('gh release edit "${tag}" \\', publish_script)
         self.assertIn("--draft=false", publish_script)
         self.assertNotIn('gh release edit "${tag}" --repo "${repo}" --draft=false >/dev/null 2>&1 || true', publish_script)
@@ -778,9 +784,10 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('printf \'failed to resolve temporary root:', install_local)
         self.assertNotIn("${repo_dir}/.tmp", install_local)
 
-    def test_tmp_root_resolves_fail_closed_in_build_and_verify_rpm(self) -> None:
+    def test_tmp_root_resolves_fail_closed_in_build_and_verify_rpm_and_dist(self) -> None:
         build_rpm = (REPO_ROOT / "scripts" / "build-rpm.sh").read_text(encoding="utf-8")
         verify_rpm = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(encoding="utf-8")
+        verify_dist = (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(encoding="utf-8")
 
         self.assertIn('repo_tmp_root="${TMPDIR:-/tmp}"', build_rpm)
         self.assertIn('temporary root must be an absolute path:', build_rpm)
@@ -795,6 +802,13 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('temporary root is not a writable directory:', verify_rpm)
         self.assertIn('failed to resolve temporary root:', verify_rpm)
         self.assertNotIn("${repo_dir}/.tmp", verify_rpm)
+
+        self.assertIn('tmp_root="${TMPDIR:-/tmp}"', verify_dist)
+        self.assertIn('temporary root must be an absolute path:', verify_dist)
+        self.assertIn('temporary root must not be a symlink:', verify_dist)
+        self.assertIn('temporary root is not a writable directory:', verify_dist)
+        self.assertIn('failed to resolve temporary root:', verify_dist)
+        self.assertNotIn("${repo_dir}/.tmp", verify_dist)
 
     def test_tmp_root_resolves_fail_closed_for_release_notes(self) -> None:
         publish_script = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")

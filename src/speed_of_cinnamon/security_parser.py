@@ -46,6 +46,14 @@ _SPOKEN_SENSITIVE_VALUE_PATTERN = (
     r"(?:\"[^\n\"]{1,120}\"|'[^\n']{1,120}'|"
     rf"(?:(?!\s+(?:(?:und|and)\s+)?(?:meine|my\s+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)[^,;\n.?!]){{1,120}})"
 )
+_BARE_SENSITIVE_STATUS_WORD_PATTERN = (
+    r"(?:ist|is|war|was|are|were|missing|invalid|required|too|contains?|fehlt|leer|ung[üu]ltig|"
+    r"muss|darf|soll|active|aktiv|gesetzt|needed|erforderlich)"
+)
+_BARE_SENSITIVE_WORD_VALUE_PATTERN = (
+    rf"(?!(?:{_BARE_SENSITIVE_STATUS_WORD_PATTERN})\b)"
+    r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]{1,120}\b"
+)
 _VERBAL_TOKEN_RE = re.compile(
     r"(?i)\b(?:token|api[_-]?key|api\s+key|secret|apikey|bearer)\b\s+"
     r"(?:ist|is|lautet|hei[ßs]t)\s+"
@@ -59,6 +67,10 @@ _BARE_TOKEN_RE = re.compile(
     r"(?=[A-Za-z0-9_./+=-]*\d|[A-Za-z0-9_./+=-]*[+/=_-][A-Za-z0-9_./+=-]*)"
     r"[A-Za-z0-9_./+=-]{4,}"
 )
+_BARE_TOKEN_WORD_RE = re.compile(
+    r"(?i)\b(?:token|api[_-]?key|api\s+key|secret|apikey|bearer)\b\s+"
+    + _BARE_SENSITIVE_WORD_VALUE_PATTERN
+)
 _PASSWORD_RE = re.compile(
     r"(?i)\b(?:password|passwort|kennwort|passcode)\b\s*[:=]\s*"
     r"(?:\"[^\n\"]{1,120}\"|'[^\n']{1,120}'|[^,;\n.?!]{1,120})"
@@ -69,6 +81,10 @@ _VERBAL_PASSWORD_RE = re.compile(
     r"(?!(?:invalid|required|missing|too|contains?|fehlt|leer|ung[üu]ltig)\b)"
     rf"(?!(?:{_SPOKEN_SENSITIVE_LABEL_PATTERN})\s*[:=])"
     + _SPOKEN_SENSITIVE_VALUE_PATTERN
+)
+_BARE_PASSWORD_WORD_RE = re.compile(
+    r"(?i)\b(?:password|passwort|kennwort|passcode)\b\s+"
+    + _BARE_SENSITIVE_WORD_VALUE_PATTERN
 )
 _ACCESS_TOKEN_RE = re.compile(r"(?i)\b(?:sk|sess|ghp|gho|xox[pb]-|hf|pat)[A-Za-z0-9_\-]{12,}\b")
 _URL_CRED_RE = re.compile(r"[a-z][a-z0-9+.-]*://[^\s/@:]+:[^\s/@]+@")
@@ -105,9 +121,11 @@ _ADDRESS_RE = re.compile(
 _SENSITIVE_PATTERNS = [
     (_PASSWORD_RE, "[redacted password]"),
     (_VERBAL_PASSWORD_RE, "[redacted password]"),
+    (_BARE_PASSWORD_WORD_RE, "[redacted password]"),
     (_TOKEN_RE, "[redacted token]"),
     (_VERBAL_TOKEN_RE, "[redacted token]"),
     (_BARE_TOKEN_RE, "[redacted token]"),
+    (_BARE_TOKEN_WORD_RE, "[redacted token]"),
     (_ACCESS_TOKEN_RE, "[redacted token]"),
     (_URL_CRED_RE, "[redacted credentials]"),
     (_LABELED_NAME_RE, "[redacted name]"),
@@ -386,7 +404,7 @@ def update_blacklist_file(path: Path, added: list[str]) -> list[str]:
         raise ValueError("blacklist file path is not safe") from exc
     lock_fd = _acquire_blacklist_lock(path)
     try:
-        existing = _read_blacklist(path)
+        existing = _read_blacklist(path, strict=True)
         existing_keys = {entry.casefold() for entry in existing}
         changed = False
         for raw_entry in added:

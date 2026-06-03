@@ -111,6 +111,16 @@ class SecurityParserTest(unittest.TestCase):
         self.assertNotIn("abc123", sanitized)
         self.assertGreaterEqual(count, 2)
 
+    def test_apply_security_mode_masks_bare_spoken_word_secret_values(self) -> None:
+        sanitized, count = apply_security_mode("token geheim und password blau, aber token invalid bleibt.", [])
+
+        self.assertIn("[redacted token]", sanitized)
+        self.assertIn("[redacted password]", sanitized)
+        self.assertNotIn("geheim", sanitized)
+        self.assertNotIn("blau", sanitized)
+        self.assertIn("token invalid bleibt", sanitized)
+        self.assertGreaterEqual(count, 2)
+
     def test_apply_security_mode_masks_broader_personal_information(self) -> None:
         text = (
             "token abc123 Name: Max Mustermann Adresse: Hauptstraße 5 "
@@ -200,6 +210,16 @@ class SecurityParserTest(unittest.TestCase):
 
         self.assertEqual(entries, ["geheim", "zweite"])
         self.assertEqual(content, "geheim\nzweite\n")
+
+    def test_update_blacklist_file_fails_closed_on_corrupt_existing_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            path.write_bytes(b"bestehend\n\xff")
+
+            with self.assertRaises(ValueError):
+                update_blacklist_file(path, ["neu"])
+
+            self.assertEqual(path.read_bytes(), b"bestehend\n\xff")
 
     def test_update_blacklist_file_writes_through_secure_temp_fd(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

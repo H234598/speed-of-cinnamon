@@ -1671,6 +1671,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         done_audio_path = str(audio_path)
         done_log_path = state.log_path
         trimmed_audio_path: Path | None = None
+        stabilized_audio_path: Path | None = None
         audio_suffix = ""
         audio_path = validate_audio_file(audio_path)
         audio_suffix = audio_path.suffix.lower()
@@ -1753,7 +1754,8 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             done_audio_path = None
             done_log_path = None
         elif trimmed_audio_path is not None:
-            done_audio_path = str(_stabilize_recording_artifact_path(trimmed_audio_path))
+            stabilized_audio_path = _stabilize_recording_artifact_path(trimmed_audio_path)
+            done_audio_path = str(stabilized_audio_path)
             if done_audio_path != str(audio_path):
                 remove_file(str(audio_path), suffix=audio_suffix)
         else:
@@ -1763,7 +1765,8 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
                 except RecorderError:
                     done_audio_path = str(audio_path)
                 else:
-                    done_audio_path = str(_stabilize_recording_artifact_path(converted_audio_path))
+                    stabilized_audio_path = _stabilize_recording_artifact_path(converted_audio_path)
+                    done_audio_path = str(stabilized_audio_path)
                     if done_audio_path != str(audio_path):
                         remove_file(str(audio_path), suffix=audio_suffix)
             else:
@@ -1783,6 +1786,8 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         state.log_path = done_log_path
         state.transcript_path = str(text_path)
         artifact_cleanup_active_paths: set[Path] = set()
+        if stabilized_audio_path is not None:
+            artifact_cleanup_active_paths.add(stabilized_audio_path)
         if trimmed_audio_path is not None:
             artifact_cleanup_active_paths.add(trimmed_audio_path)
         if audio_path is not None:
@@ -1810,6 +1815,8 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
                 state = store.read()
             if trimmed_audio_path is not None:
                 remove_file(str(trimmed_audio_path), suffix=".flac")
+            if stabilized_audio_path is not None:
+                remove_file(str(stabilized_audio_path), suffix=stabilized_audio_path.suffix)
             error_update: dict[str, object] = {
                 "status": "error",
                 "stopped_at": now_iso(),
