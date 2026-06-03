@@ -265,6 +265,10 @@ class CommandChainTest(unittest.TestCase):
             with self.assertRaisesRegex(CommandChainError, "output exceeded"):
                 run_command_chain([("cmd",)], "", label="post-process", max_output_chars=5)
 
+    def test_split_command_chain_rejects_invalid_utf8_command(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "not valid UTF-8"):
+            split_command_chain("printf hello\udcff")
+
     def test_run_command_chain_rejects_large_stderr_output(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             stderr_file = kwargs["stderr"]

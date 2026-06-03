@@ -192,7 +192,11 @@ def split_command_chain(command: str, label: str = "command") -> list[list[str]]
         raise CommandChainError(f"invalid {label} command: contains control characters")
     if len(command) > MAX_COMMAND_LENGTH_CHARS:
         raise CommandChainError(f"invalid {label} command: command too long")
-    if len(command.encode("utf-8")) > MAX_COMMAND_LENGTH_CHARS:
+    try:
+        command_bytes_len = len(command.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise CommandChainError(f"invalid {label} command: not valid UTF-8") from exc
+    if command_bytes_len > MAX_COMMAND_LENGTH_CHARS:
         raise CommandChainError(f"invalid {label} command: command too long")
 
     try:

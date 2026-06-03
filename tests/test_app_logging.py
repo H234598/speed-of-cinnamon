@@ -24,6 +24,21 @@ class AppLoggingTest(unittest.TestCase):
             "[redacted error details]",
         )
 
+    def test_sanitize_error_message_redacts_secret_even_after_text_mutation(self) -> None:
+        with mock.patch("speed_of_cinnamon.app_logging.HOME_DIR", "/tmp/fake-home"):
+            self.assertEqual(
+                app_logging.sanitize_error_message("/tmp/fake-home/.config/secret/settings", max_chars=120),
+                "[redacted error details]",
+            )
+        self.assertEqual(
+            app_logging.sanitize_error_message("line1\r\nline2 secret payload", max_chars=120),
+            "[redacted error details]",
+        )
+        self.assertEqual(
+            app_logging.sanitize_error_message("x" * 400 + " secret tail", max_chars=40),
+            "[redacted error details]",
+        )
+
     def test_log_event_redacts_sensitive_fields_and_tokens(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

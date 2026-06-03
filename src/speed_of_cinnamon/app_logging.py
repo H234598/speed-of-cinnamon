@@ -253,9 +253,9 @@ def sanitize_error_message(error: object, *, max_chars: int = MAX_LOG_MESSAGE_CH
         return "[invalid]"
     if _ERROR_DETAIL_RE.search(error):
         return "[redacted error details]"
-    sanitized = sanitize_text(error, max_chars=max_chars)
+    sanitized = sanitize_text(error, max_chars=max(len(error), max_chars))
     sanitized = _SHORT_API_KEY_RE.sub("[redacted]", sanitized)
-    if _ERROR_SECRET_WORD_RE.search(sanitized) and sanitized == error:
+    if _ERROR_SECRET_WORD_RE.search(sanitized):
         return "[redacted error details]"
     if len(sanitized) > max_chars:
         return sanitized[:max_chars] + "...[truncated]"
