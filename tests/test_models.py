@@ -784,6 +784,35 @@ class ModelsTest(unittest.TestCase):
                 with self.assertRaisesRegex(models.ModelError, "failed to remove model backup"):
                     models.download_model("ct2-backup-cleanup-fails", force=True)
 
+    def test_download_model_force_replaces_file_with_multifile_model(self) -> None:
+        data = b"small model file"
+        spec = models.ModelSpec(
+            name="ct2-replaces-file",
+            filename="ct2-replaces-file",
+            size="2 KiB",
+            sha1="",
+            description="ct2 replaces file",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-replaces-file",
+            files=("config.json",),
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            path.write_text("old file", encoding="utf-8")
+            payload = models.download_model("ct2-replaces-file", force=True)
+
+            self.assertEqual(payload["status"], "done")
+            self.assertTrue(path.is_dir())
+            self.assertEqual((path / "config.json").read_bytes(), data)
+            self.assertEqual(list(path.parent.glob(f".{spec.filename}.*.backup")), [])
+
     def test_download_model_sets_private_permissions(self) -> None:
         data = b"tiny model"
         spec = models.ModelSpec(
@@ -1217,6 +1246,31 @@ class ModelsTest(unittest.TestCase):
             with mock.patch("speed_of_cinnamon.models.Path.unlink", side_effect=OSError("cleanup failed")):
                 with self.assertRaisesRegex(models.ModelError, "failed to remove model backup"):
                     models.download_model("backup-cleanup-fails", force=True)
+
+    def test_download_model_force_replaces_directory_with_file_model(self) -> None:
+        new_data = b"new model"
+        spec = models.ModelSpec(
+            name="file-replaces-directory",
+            filename="ggml-file-replaces-directory.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(new_data).hexdigest(),
+            description="file replaces directory",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(new_data)),
+        ):
+            path = models.model_path(spec)
+            path.mkdir(parents=True)
+            (path / "old.txt").write_text("old model", encoding="utf-8")
+            payload = models.download_model("file-replaces-directory", force=True)
+
+            self.assertEqual(payload["status"], "done")
+            self.assertTrue(path.is_file())
+            self.assertEqual(path.read_bytes(), new_data)
+            self.assertEqual(list(path.parent.glob(f".{path.name}.*.backup")), [])
 
     def test_restore_model_file_backup_reports_restore_failure(self) -> None:
         old_data = b"old model"

@@ -367,7 +367,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertTrue("if: env.BUILD_GENERIC_RPM == 'true'" in workflow or "if: env.BUILD_GENERIC_RPM == '1'" in workflow)
         self.assertIn("name: Build Snap package", workflow)
         self.assertTrue("if: env.BUILD_SNAP == 'true'" in workflow or "if: env.BUILD_SNAP == '1'" in workflow)
-        self.assertIn("uses: actions/upload-artifact@v7", workflow)
+        self.assertIn("uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7", workflow)
         self.assertIn("name: speed-of-cinnamon-source-${{ github.sha }}", workflow)
         self.assertIn("dist/speed-of-cinnamon-*.tar.gz", workflow)
         self.assertIn("dist/speed-of-cinnamon-*.tar.gz.sha256", workflow)
@@ -380,7 +380,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("name: speed-of-cinnamon-snap-${{ github.sha }}", workflow)
         self.assertIn("dist/snap/*.snap", workflow)
         self.assertEqual(workflow.count("if-no-files-found: error"), 4)
-        self.assertIn("uses: actions/checkout@v6", workflow)
+        self.assertIn("uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6", workflow)
         self.assertIn("persist-credentials: false", workflow)
         self.assertIn("SNAPCRAFT_BASE<<SNAPCRAFT_BASE", workflow)
         self.assertIn("runs-on: ubuntu-24.04", workflow)
@@ -396,7 +396,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("runs-on: ubuntu-24.04", codacy_workflow)
         self.assertIn("python -m pip install --disable-pip-version-check --no-cache-dir 'bandit[sarif]'", codacy_workflow)
         self.assertIn("python -m bandit -q -r src/speed_of_cinnamon -x tests -f sarif -o results.sarif --exit-zero", codacy_workflow)
-        self.assertIn("uses: github/codeql-action/upload-sarif@v4", codacy_workflow)
+        self.assertIn("uses: github/codeql-action/upload-sarif@a6fd1787519fd23e68309fad43738e41a6ff2a9d # v4", codacy_workflow)
         self.assertNotIn("codacy/codacy-analysis-cli-action", codacy_workflow)
         self.assertNotIn("ubuntu-latest", codacy_workflow)
 
@@ -579,7 +579,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("pull-requests: none", workflow)
         self.assertIn("workflow-lint:", workflow)
         self.assertIn('version="1.7.12"', workflow)
-        self.assertIn("github.com/rhysd/actionlint/cmd/actionlint@v${version}", workflow)
+        self.assertIn("rhysd/actionlint/releases/download/v${version}", workflow)
         self.assertIn("Verify release tag provenance", workflow)
         self.assertIn('git rev-list -n 1 "${tag}^{commit}"', workflow)
         self.assertIn("security-scan:", workflow)
@@ -588,10 +588,10 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('ACTIONLINT_STRICT: "true"', workflow)
         self.assertIn("fetch-depth: 0", workflow)
         self.assertIn("run: gh --version", workflow)
-        self.assertIn("uses: actions/checkout@v6", workflow)
-        self.assertIn("uses: actions/setup-python@v6", workflow)
+        self.assertIn("uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6", workflow)
+        self.assertIn("uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6", workflow)
         self.assertIn("persist-credentials: false", workflow)
-        self.assertIn("uses: actions/upload-artifact@v7", workflow)
+        self.assertIn("uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7", workflow)
         self.assertIn("runs-on: ubuntu-24.04", workflow)
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
         self.assertIn("- name: Install release tooling", workflow)
@@ -668,7 +668,7 @@ class CiStaticTest(unittest.TestCase):
     def test_pylint_workflow_is_read_only(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "pylint.yml").read_text(encoding="utf-8")
         top_level_permissions = _workflow_block_lines(workflow, "permissions:")
-        checkout_block = _workflow_block_lines(workflow, "- uses: actions/checkout@v6")
+        checkout_block = _workflow_block_lines(workflow, "- uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6")
 
         self.assertEqual(top_level_permissions, ["  contents: read"])
         self.assertEqual(checkout_block, [
@@ -696,12 +696,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn("secrets.GITHUB_TOKEN", workflow)
 
     def test_workflow_actions_are_pinned_or_explicitly_reviewed(self) -> None:
-        allowed_mutable_refs = {
-            "actions/checkout@v6",
-            "actions/setup-python@v6",
-            "actions/upload-artifact@v7",
-            "github/codeql-action/upload-sarif@v4",
-        }
+        allowed_mutable_refs: set[str] = set()
         offenders: list[str] = []
         for path in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
             for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
@@ -728,10 +723,12 @@ class CiStaticTest(unittest.TestCase):
         linter = (REPO_ROOT / "scripts" / "lint-workflows.sh").read_text(encoding="utf-8")
         self.assertIn('version="1.7.12"', ci_workflow)
         self.assertIn('version="1.7.12"', lint_workflow)
-        self.assertIn("github.com/rhysd/actionlint/cmd/actionlint@v${version}", ci_workflow)
-        self.assertIn("github.com/rhysd/actionlint/cmd/actionlint@v${version}", lint_workflow)
-        self.assertNotIn("rhysd/actionlint/releases/download/v${version}", ci_workflow)
-        self.assertNotIn("rhysd/actionlint/releases/download/v${version}", lint_workflow)
+        self.assertIn("rhysd/actionlint/releases/download/v${version}", ci_workflow)
+        self.assertIn("rhysd/actionlint/releases/download/v${version}", lint_workflow)
+        self.assertIn("archive_sha256=\"8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8\"", ci_workflow)
+        self.assertIn("archive_sha256=\"8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8\"", lint_workflow)
+        self.assertIn("sha256sum -c -", ci_workflow)
+        self.assertIn("sha256sum -c -", lint_workflow)
         self.assertNotIn("rhysd/actionlint:", linter)
         self.assertNotIn("latest", linter)
 

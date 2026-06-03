@@ -725,6 +725,8 @@ class OutputTest(unittest.TestCase):
         mocked_paste.assert_not_called()
 
     def test_clipboard_targets_treat_rich_text_as_non_text_payload(self) -> None:
+        self.assertTrue(output_module._clipboard_targets_contain_non_text_payload(""))
+        self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("TARGETS\nTIMESTAMP\n"))
         self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("text/html\ntext/plain\n"))
         self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("text/rtf\n"))
         self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("image/bmp\n"))
@@ -746,6 +748,13 @@ class OutputTest(unittest.TestCase):
             self.assertTrue(output_module._clipboard_has_non_text_payload())
 
         self.assertEqual(calls, [["xsel", "--clipboard", "--output", "--target", "TARGETS"]])
+
+    def test_clipboard_non_text_detection_fails_closed_on_empty_targets(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.output._which", side_effect=lambda command: "/usr/bin/xclip" if command == "xclip" else None),
+            mock.patch("speed_of_cinnamon.output._run_stdout", return_value=""),
+        ):
+            self.assertTrue(output_module._clipboard_has_non_text_payload())
 
     def test_insert_text_fails_closed_when_dedupe_state_is_malformed(self) -> None:
         with (

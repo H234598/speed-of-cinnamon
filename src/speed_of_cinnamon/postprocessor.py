@@ -93,7 +93,7 @@ def _assert_clean_url(url: str, *, field_name: str) -> str:
     return _assert_text_length(normalized, field_name=field_name, max_chars=MAX_POSTPROCESS_URL_CHARS)
 
 
-def _validate_http_url(url: str, *, field_name: str) -> str:
+def _validate_http_url(url: str, *, field_name: str, allow_query_fragment: bool = False) -> str:
     if not isinstance(url, str) or isinstance(url, bool):
         raise PostProcessError(f"{field_name} must be text")
     normalized = _assert_clean_url(url, field_name=field_name)
@@ -102,7 +102,28 @@ def _validate_http_url(url: str, *, field_name: str) -> str:
         raise PostProcessError(f"{field_name} must use http:// or https://")
     if not parsed.netloc:
         raise PostProcessError(f"{field_name} is missing network location")
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise PostProcessError(f"{field_name} has invalid port") from exc
+    if parsed.username or parsed.password:
+        raise PostProcessError(f"{field_name} must not contain userinfo")
+    if not allow_query_fragment and (parsed.query or parsed.fragment):
+        raise PostProcessError(f"{field_name} must not contain query or fragment")
     return normalized
+
+
+def _safe_url_display(url: str, *, field_name: str) -> str:
+    normalized = _validate_http_url(url, field_name=field_name)
+    parsed = urllib.parse.urlparse(normalized)
+    hostname = parsed.hostname or ""
+    if ":" in hostname and not hostname.startswith("["):
+        hostname = f"[{hostname}]"
+    netloc = hostname
+    port = _effective_url_port(parsed)
+    if parsed.port is not None and port is not None:
+        netloc = f"{netloc}:{port}"
+    return urllib.parse.urlunparse((parsed.scheme, netloc, parsed.path.rstrip("/"), "", "", ""))
 
 
 def _validate_http_request(request: urllib.request.Request, *, field_name: str) -> None:
@@ -126,7 +147,7 @@ def _effective_url_port(parsed: urllib.parse.ParseResult) -> int | None:
 
 
 def _url_origin(url: str, *, field_name: str) -> tuple[str, str, int | None]:
-    normalized = _validate_http_url(url, field_name=field_name)
+    normalized = _validate_http_url(url, field_name=field_name, allow_query_fragment=True)
     parsed = urllib.parse.urlparse(normalized)
     hostname = parsed.hostname
     if not hostname:
@@ -390,7 +411,7 @@ def list_ollama_models(url: str = DEFAULT_OLLAMA_URL, timeout: int = 5) -> dict[
         return {
             "available": False,
             "models": [],
-            "message": f"Ollama is not reachable at {(url or DEFAULT_OLLAMA_URL).rstrip('/')}: {exc}",
+            "message": f"Ollama is not reachable at {_safe_url_display(url or DEFAULT_OLLAMA_URL, field_name='ollama url')}: {_sanitize_remote_error_detail(exc)}",
         }
     except PostProcessError as exc:
         return {
@@ -455,29 +476,11 @@ def _openai_compatible_model_supports_text_polishing(name: str) -> bool:
 def _sanitize_remote_error_detail(value: object) -> str:
     text = str(value or "").strip()
     if not text:
-        return "remote error"
+        return "[redacted remote error]"
     text = text.replace("\r", "\\r").replace("\n", "\\n").replace("\x00", "\\x00")
-    lowered = text.lower()
-    sensitive_hints = (
-        "authorization",
-        "bearer ",
-        "api_key",
-        "apikey",
-        "password",
-        "prompt",
-        "secret",
-        "sess-",
-        "sk-",
-        "token",
-        "transcript",
-    )
-    if any(hint in lowered for hint in sensitive_hints):
-        return "[redacted remote error]"
-    if "://" in text and "@" in text:
-        return "[redacted remote error]"
-    if len(text) > 160:
-        return text[:157] + "..."
-    return text
+    if _is_flex_service_tier_rejected(text):
+        return "service_tier unsupported"
+    return "[redacted remote error]"
 
 
 def list_openai_compatible_models(
@@ -501,14 +504,14 @@ def list_openai_compatible_models(
         return {
             "available": False,
             "models": [],
-            "message": f"OpenAI-compatible API failed ({exc.code}) at {endpoint}: {detail}",
+            "message": f"OpenAI-compatible API failed ({exc.code}) at {_safe_url_display(endpoint, field_name='openai-compatible url')}: {detail}",
         }
     except OSError as exc:
         detail = _sanitize_remote_error_detail(str(exc))
         return {
             "available": False,
             "models": [],
-            "message": f"OpenAI-compatible API is not reachable at {(url or DEFAULT_OPENAI_COMPATIBLE_URL).rstrip('/')}: {detail}",
+            "message": f"OpenAI-compatible API is not reachable at {_safe_url_display(url or DEFAULT_OPENAI_COMPATIBLE_URL, field_name='openai-compatible url')}: {detail}",
         }
     except PostProcessError as exc:
         return {
@@ -726,11 +729,15 @@ def post_process_with_openai_compatible(
                     with suppress(Exception):
                         fallback_exc.close()
                 fallback_detail = _sanitize_remote_error_detail(_openai_compatible_error_detail(raw_error) or fallback_exc.reason or str(fallback_exc))
-                raise PostProcessError(f"OpenAI-compatible request failed ({fallback_exc.code}) at {endpoint}: {fallback_detail}") from fallback_exc
+                raise PostProcessError(
+                    f"OpenAI-compatible request failed ({fallback_exc.code}) at {_safe_url_display(endpoint, field_name='openai-compatible url')}: {fallback_detail}"
+                ) from fallback_exc
             except OSError as fallback_exc:
                 raise PostProcessError(f"OpenAI-compatible request failed: {_sanitize_remote_error_detail(fallback_exc)}") from fallback_exc
         else:
-            raise PostProcessError(f"OpenAI-compatible request failed ({exc.code}) at {endpoint}: {detail}") from exc
+            raise PostProcessError(
+                f"OpenAI-compatible request failed ({exc.code}) at {_safe_url_display(endpoint, field_name='openai-compatible url')}: {detail}"
+            ) from exc
     except OSError as exc:
         raise PostProcessError(f"OpenAI-compatible request failed: {_sanitize_remote_error_detail(exc)}") from exc
     try:

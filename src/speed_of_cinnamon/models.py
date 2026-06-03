@@ -899,7 +899,8 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                 raise ModelError(f"failed to persist downloaded model file: {target}") from exc
         if downloaded_total > size_limit:
             raise ModelError(f"downloaded model too large for {model.name}: {downloaded_total} > {size_limit}")
-        _assert_safe_model_directory(path)
+        if path.exists() and path.is_dir():
+            _assert_safe_model_directory(path)
         backup_dir: Path | None = None
         if path.exists():
             backup_dir = path.with_name(f".{path.name}.{secrets.token_hex(8)}.backup")
@@ -923,7 +924,7 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
             raise ModelError(f"failed to persist downloaded model directory: {path}") from exc
         if backup_dir is not None:
             try:
-                shutil.rmtree(backup_dir)
+                _remove_model_backup_path(backup_dir)
             except OSError as cleanup_exc:
                 raise ModelError(f"failed to remove model backup after successful download: {backup_dir}") from cleanup_exc
     except Exception:
@@ -934,6 +935,13 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
 
 def _restore_model_file_backup(path: Path, backup_path: Path) -> None:
     os.replace(backup_path, path)
+
+
+def _remove_model_backup_path(backup_path: Path) -> None:
+    if backup_path.is_dir() and not backup_path.is_symlink():
+        shutil.rmtree(backup_path)
+        return
+    backup_path.unlink()
 
 
 def download_model(name: str, force: bool = False) -> dict[str, object]:
@@ -1017,7 +1025,7 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
         raise
     if backup_path is not None:
         try:
-            backup_path.unlink()
+            _remove_model_backup_path(backup_path)
         except OSError as cleanup_exc:
             raise ModelError(f"failed to remove model backup after successful download: {backup_path}") from cleanup_exc
     return {**model_status(model, verify=True), "status": "done", "message": f"model downloaded: {path}"}

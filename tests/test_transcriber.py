@@ -117,6 +117,35 @@ class TranscriberTest(unittest.TestCase):
             mode = path.stat().st_mode & 0o777
             self.assertEqual(mode, 0o600)
 
+    def test_write_text_atomic_removes_temp_file_when_write_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "transcript.txt"
+            fd, temp_name = tempfile.mkstemp(prefix="transcript-", dir=tmp)
+            temp_path = Path(temp_name)
+
+            class FailingHandle:
+                name = temp_name
+
+                def __enter__(self) -> "FailingHandle":
+                    return self
+
+                def __exit__(self, *_args: object) -> None:
+                    os.close(fd)
+
+                def fileno(self) -> int:
+                    return fd
+
+                def write(self, _text: str) -> int:
+                    os.write(fd, b"partial transcript")
+                    raise OSError("disk full")
+
+            with mock.patch("speed_of_cinnamon.transcriber.tempfile.NamedTemporaryFile", return_value=FailingHandle()):
+                with self.assertRaisesRegex(TranscriptionError, "failed to write transcript file"):
+                    _write_text_atomic(target, "private output")
+
+            self.assertFalse(temp_path.exists())
+            self.assertFalse(target.exists())
+
     def test_template_supports_safe_chained_commands(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"

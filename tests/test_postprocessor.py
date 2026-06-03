@@ -471,6 +471,26 @@ class PostProcessorTest(unittest.TestCase):
                 openai_compatible_url="ftp://127.0.0.1:8000/v1",
             )
 
+    def test_openai_compatible_backend_rejects_url_userinfo(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "must not contain userinfo"):
+            post_process_text(
+                "hello",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="local",
+                openai_compatible_url="https://user:secret@example.com/v1",
+            )
+
+    def test_ollama_backend_rejects_url_query(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "must not contain query or fragment"):
+            post_process_text(
+                "hello",
+                "en",
+                backend="ollama",
+                ollama_model="llama3.2:3b",
+                ollama_url="http://127.0.0.1:11434?token=secret",
+            )
+
     def test_openai_compatible_backend_redacts_sensitive_remote_error(self) -> None:
         with mock.patch(
             "speed_of_cinnamon.postprocessor._open_http_request",
@@ -676,7 +696,7 @@ class PostProcessorTest(unittest.TestCase):
             io.BytesIO(b'{"error":{"message":"missing API key","type":"invalid_request_error"}}'),
         )
         with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=error):
-            with self.assertRaisesRegex(PostProcessError, r"failed \(401\).*missing API key"):
+            with self.assertRaises(PostProcessError) as cm:
                 post_process_text(
                     "hello cinnamon",
                     "en",
@@ -684,6 +704,10 @@ class PostProcessorTest(unittest.TestCase):
                     openai_compatible_model="gpt-4o-mini",
                     openai_compatible_url="https://api.openai.com/v1",
                 )
+        message = str(cm.exception)
+        self.assertIn("failed (401)", message)
+        self.assertIn("[redacted remote error]", message)
+        self.assertNotIn("missing API key", message)
         self.assertTrue(error.fp.closed)
 
     def test_openai_compatible_backend_requires_model(self) -> None:
@@ -876,7 +900,8 @@ class PostProcessorTest(unittest.TestCase):
             result = list_openai_compatible_models("https://api.openai.com/v1")
         self.assertFalse(result["available"])
         self.assertIn("failed (401)", result["message"])
-        self.assertIn("missing API key", result["message"])
+        self.assertIn("[redacted remote error]", result["message"])
+        self.assertNotIn("missing API key", result["message"])
         self.assertNotIn("local server", result["message"])
         self.assertTrue(error.fp.closed)
 

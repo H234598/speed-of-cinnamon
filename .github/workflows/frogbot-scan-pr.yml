@@ -18,7 +18,7 @@ permissions:
   contents: read
 jobs:
   check-frogbot-secrets:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       configured: ${{ steps.check.outputs.configured }}
     steps:
@@ -37,14 +37,14 @@ jobs:
 
   scan-pull-request:
     needs: check-frogbot-secrets
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: needs.check-frogbot-secrets.outputs.configured == 'true'
     # A pull request needs to be approved, before Frogbot scans it. Any GitHub user who is associated with the
     # "frogbot" GitHub environment can approve the pull request to be scanned.
     # Read more here (Install Frogbot Using GitHub Actions): https://docs.jfrog-applications.jfrog.io/jfrog-applications/frogbot/setup-frogbot/setup-frogbot-using-github-actions
     environment: frogbot
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 

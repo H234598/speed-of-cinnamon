@@ -682,14 +682,16 @@ def _clipboard_targets_contain_non_text_payload(targets: str) -> bool:
         "text/plain;charset=utf-8",
         "text/plain;charset=utf8",
     }
+    saw_text_target = False
     for line in str(targets or "").splitlines():
         target = line.strip().lower()
         if not target or target in ignored:
             continue
         if target in text_targets:
+            saw_text_target = True
             continue
         return True
-    return False
+    return not saw_text_target
 
 
 def _clipboard_has_non_text_payload() -> bool:

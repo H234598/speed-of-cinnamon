@@ -15,21 +15,26 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: "3.12"
 
       - name: Install actionlint
         run: |
           version="1.7.12"
-          GOBIN="/tmp/actionlint-bin" go install "github.com/rhysd/actionlint/cmd/actionlint@v${version}"
-          sudo install -m 0755 /tmp/actionlint-bin/actionlint /usr/local/bin/actionlint
+          archive="actionlint_${version}_linux_amd64.tar.gz"
+          archive_sha256="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+          curl -fsSLo "/tmp/${archive}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${version}/${archive}"
+          printf '%s  %s\n' "${archive_sha256}" "/tmp/${archive}" | sha256sum -c -
+          tar -xzf "/tmp/${archive}" -C /tmp actionlint
+          sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
 
       - name: Lint Python and applet metadata
         run: make lint

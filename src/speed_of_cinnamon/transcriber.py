@@ -203,20 +203,22 @@ def _write_text_atomic(path: Path, text: str) -> None:
         raise TranscriptionError("text must be text")
     assert_no_symlink_ancestors(path, field_name="transcript path")
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
-        try:
-            os.fchmod(handle.fileno(), 0o600)
-        except OSError:
-            pass
-        handle.write(text)
-        tmp_path = Path(handle.name)
+    tmp_path: Path | None = None
     try:
+        with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
+            try:
+                os.fchmod(handle.fileno(), 0o600)
+            except OSError:
+                pass
+            tmp_path = Path(handle.name)
+            handle.write(text)
         os.replace(tmp_path, path)
     except OSError as exc:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
         raise TranscriptionError(f"failed to write transcript file: {path}") from exc
 
 
