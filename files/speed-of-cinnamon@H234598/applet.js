@@ -69,7 +69,8 @@ const AUTO_PASTE_TITLE_PRESETS = [
   "codex",
   "Terminal",
   "PDF",
-  "Excel"
+  "Excel",
+  "Teams"
 ];
 const CLI_COMMAND_TIMEOUT_MS = 300000;
 const STATUS_COMMAND_TIMEOUT_MS = 10000;

@@ -258,6 +258,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('"Terminal"', source)
         self.assertIn('"PDF"', source)
         self.assertIn('"Excel"', source)
+        self.assertIn('"Teams"', source)
         self.assertIn('this.autoPasteWindowTitle = DEFAULT_AUTO_PASTE_TITLE;', source)
         self.assertIn('["auto-paste-window-title", "autoPasteWindowTitle"]', source)
         self.assertIn('this.settings.bindProperty(Settings.BindingDirection.IN, "auto-paste-window-title", "autoPasteWindowTitle", this._onTextOutputSettingsChanged, null)', source)
