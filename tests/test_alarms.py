@@ -207,6 +207,31 @@ class AlarmTest(unittest.TestCase):
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["due"][0]["scheduled_at"], "2026-06-01T09:00")
 
+    def test_due_check_handles_offset_last_checked_at(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            save_alarm_store(
+                {
+                    "last_checked_at": "2026-06-01T06:45:00+00:00",
+                    "alarms": [
+                        {
+                            "id": "morning",
+                            "name": "Morning",
+                            "hour": 9,
+                            "minute": 0,
+                            "days": ["mon"],
+                            "enabled": True,
+                            "urgency": "normal",
+                        }
+                    ],
+                },
+                path,
+            )
+            payload = check_due_alarms(path=path, now=datetime(2026, 6, 1, 9, 10), mark=True, catch_up_minutes=15)
+
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["due"][0]["scheduled_at"], "2026-06-01T09:00")
+
     def test_due_check_with_zero_catch_up_skips_past_alarm(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"

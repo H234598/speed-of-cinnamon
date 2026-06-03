@@ -1474,8 +1474,8 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(len(payload["transcripts"]), 1)
         self.assertEqual(payload["transcripts"][0]["name"], "newer.txt")
-        self.assertEqual(payload["transcripts"][0]["text"], "newer text with more words")
         self.assertEqual(payload["transcripts"][0]["preview"], "newer text with more words")
+        self.assertNotIn("text", payload["transcripts"][0])
 
     def test_history_skips_empty_transcripts_when_filling_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1541,7 +1541,8 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(len(payload["transcripts"]), 1)
         self.assertEqual(payload["transcripts"][0]["name"], "huge.txt")
-        self.assertLessEqual(len(payload["transcripts"][0]["text"]), 4000)
+        self.assertNotIn("text", payload["transcripts"][0])
+        self.assertLessEqual(len(payload["transcripts"][0]["preview"]), 80)
 
     def test_history_skips_symlinked_transcripts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

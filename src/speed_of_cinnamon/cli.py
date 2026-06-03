@@ -718,7 +718,6 @@ def read_transcript_history(limit: int = 10) -> list[dict[str, object]]:
                 "name": path.name,
                 "modified_at": modified_at,
                 "preview": transcript_preview(text),
-                "text": text,
             }
         )
         if len(entries) >= limit:
