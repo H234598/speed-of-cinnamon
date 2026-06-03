@@ -16,25 +16,55 @@ from speed_of_cinnamon import cli
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _is_command_sequence(node: ast.AST | None) -> bool:
+def _is_command_sequence(node: ast.AST | None, safe_names: set[str] | None = None) -> bool:
+    safe_names = safe_names or set()
     if isinstance(node, (ast.List, ast.Tuple)):
         return True
     if isinstance(node, ast.Name):
-        return True
+        return node.id in safe_names
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"list", "tuple"}:
         return len(node.args) == 1 and isinstance(node.args[0], (ast.List, ast.Tuple))
     return False
 
 
-def _is_safe_env_argument(node: ast.AST | None) -> bool:
+def _safe_command_names(tree: ast.AST) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and _is_command_sequence(node.value):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+        elif isinstance(node, ast.AnnAssign) and node.value is not None and _is_command_sequence(node.value):
+            if isinstance(node.target, ast.Name):
+                names.add(node.target.id)
+    return names
+
+
+def _is_filtered_environment_call(node: ast.AST) -> bool:
+    return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_filtered_environment"
+
+
+def _safe_env_names(tree: ast.AST) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and _is_filtered_environment_call(node.value):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+        elif isinstance(node, ast.AnnAssign) and node.value is not None and _is_filtered_environment_call(node.value):
+            if isinstance(node.target, ast.Name):
+                names.add(node.target.id)
+    return names
+
+
+def _is_safe_env_argument(node: ast.AST | None, safe_names: set[str] | None = None) -> bool:
     if node is None:
         return True
+    safe_names = safe_names or set()
     if isinstance(node, ast.Name):
-        return True
+        return node.id in safe_names
     if isinstance(node, ast.Call):
-        if isinstance(node.func, ast.Name) and node.func.id == "dict":
-            return False
-        return True
+        return _is_filtered_environment_call(node)
     if not isinstance(node, ast.Dict):
         return False
     for key in node.keys:
@@ -44,6 +74,71 @@ def _is_safe_env_argument(node: ast.AST | None) -> bool:
         if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
             return False
     return True
+
+
+_SUBPROCESS_CALLS = {"run", "Popen", "call", "check_call", "check_output"}
+
+
+def _subprocess_aliases(tree: ast.AST) -> tuple[set[str], set[str]]:
+    module_names = {"subprocess"}
+    direct_call_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "subprocess":
+                    module_names.add(alias.asname or alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.module == "subprocess":
+            for alias in node.names:
+                if alias.name in _SUBPROCESS_CALLS:
+                    direct_call_names.add(alias.asname or alias.name)
+    return module_names, direct_call_names
+
+
+def _called_subprocess_name(func: ast.AST, module_names: set[str], direct_call_names: set[str]) -> str | None:
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        if func.value.id in module_names and func.attr in _SUBPROCESS_CALLS:
+            return func.attr
+    if isinstance(func, ast.Name) and func.id in direct_call_names:
+        return func.id
+    return None
+
+
+def _subprocess_security_offenders(path: Path, tree: ast.AST) -> list[str]:
+    offenders: list[str] = []
+    module_names, direct_call_names = _subprocess_aliases(tree)
+    safe_command_names = _safe_command_names(tree)
+    safe_env_names = _safe_env_names(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        call_name = _called_subprocess_name(node.func, module_names, direct_call_names)
+        if call_name is None:
+            continue
+
+        for kw in node.keywords:
+            if kw.arg == "shell":
+                if not (isinstance(kw.value, ast.Constant) and kw.value.value is False):
+                    offenders.append(f"{path}: {call_name} with unsupported shell value")
+                continue
+            if kw.arg == "env":
+                if not _is_safe_env_argument(kw.value, safe_env_names):
+                    offenders.append(f"{path}: {call_name} env must be a prepared value or string literal dict")
+
+        command = None
+        if node.args:
+            command = node.args[0]
+        else:
+            for kw in node.keywords:
+                if kw.arg == "args":
+                    command = kw.value
+                    break
+        if isinstance(command, ast.Constant) and isinstance(command.value, str):
+            offenders.append(f"{path}: {call_name} first arg is string constant")
+        elif isinstance(command, ast.JoinedStr):
+            offenders.append(f"{path}: {call_name} first arg is f-string")
+        elif not _is_command_sequence(command, safe_command_names):
+            offenders.append(f"{path}: {call_name} command must be list/tuple")
+    return offenders
 
 
 def _workflow_block_lines(text: str, header: str) -> list[str]:
@@ -111,46 +206,13 @@ class CiStaticTest(unittest.TestCase):
             if "__pycache__" in path.parts:
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"))
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Call):
-                    continue
-                func = node.func
-                if not isinstance(func, ast.Attribute) or not isinstance(func.value, ast.Name):
-                    continue
-                if func.value.id != "subprocess":
-                    continue
-                if func.attr not in {"run", "Popen", "call", "check_call", "check_output"}:
-                    continue
-
-                for kw in node.keywords:
-                    if kw.arg == "shell":
-                        if not (isinstance(kw.value, ast.Constant) and kw.value.value is False):
-                            offenders.append(f"{path}: {func.attr} with unsupported shell value")
-                        continue
-                    if kw.arg == "env":
-                        if not _is_safe_env_argument(kw.value):
-                            offenders.append(f"{path}: {func.attr} env must be a prepared value or string literal dict")
-
-                command = None
-                if node.args:
-                    command = node.args[0]
-                else:
-                    for kw in node.keywords:
-                        if kw.arg == "args":
-                            command = kw.value
-                            break
-                if isinstance(command, ast.Constant) and isinstance(command.value, str):
-                    offenders.append(f"{path}: {func.attr} first arg is string constant")
-                elif isinstance(command, ast.JoinedStr):
-                    offenders.append(f"{path}: {func.attr} first arg is f-string")
-                elif not _is_command_sequence(command):
-                    offenders.append(f"{path}: {func.attr} command must be list/tuple")
+            offenders.extend(_subprocess_security_offenders(path, tree))
 
         self.assertFalse(offenders, f"unsafe subprocess usage found: {offenders}")
 
     def test_command_sequence_validation_accepts_supported_forms(self) -> None:
-        allowed = ["[\"a\", \"b\"]", "(\"a\", \"b\")", "list([\"a\", \"b\"])", "tuple((\"a\", \"b\"))", "command"]
-        blocked = ["tuple('a',)", "list()", "list('ab')", "tuple(command)"]
+        allowed = ["[\"a\", \"b\"]", "(\"a\", \"b\")", "list([\"a\", \"b\"])", "tuple((\"a\", \"b\"))"]
+        blocked = ["command", "tuple('a',)", "list()", "list('ab')", "tuple(command)"]
 
         for expr in allowed:
             node = ast.parse(expr, mode="eval").body
@@ -160,8 +222,8 @@ class CiStaticTest(unittest.TestCase):
             self.assertFalse(_is_command_sequence(node))
 
     def test_subprocess_env_literal_requirement(self) -> None:
-        allowed = ["{\"A\": \"B\", \"C\": \"D\"}", "env", "_filtered_environment()"]
-        blocked = ["{\"A\": b, \"C\": os.environ['C']}", "dict(a='b')", "{k: v for k, v in vars.items()}"]
+        allowed = ["{\"A\": \"B\", \"C\": \"D\"}", "_filtered_environment()"]
+        blocked = ["env", "{\"A\": b, \"C\": os.environ['C']}", "dict(a='b')", "os.environ.copy()", "{k: v for k, v in vars.items()}"]
 
         for expr in allowed:
             node = ast.parse(expr, mode="eval").body
@@ -169,6 +231,19 @@ class CiStaticTest(unittest.TestCase):
         for expr in blocked:
             node = ast.parse(expr, mode="eval").body
             self.assertFalse(_is_safe_env_argument(node))
+
+    def test_subprocess_static_scan_detects_alias_imports(self) -> None:
+        tree = ast.parse(
+            "from subprocess import run as execute\n"
+            "import subprocess as sp\n"
+            "execute('echo unsafe', shell=True)\n"
+            "sp.Popen('echo unsafe')\n"
+        )
+
+        offenders = _subprocess_security_offenders(Path("sample.py"), tree)
+
+        self.assertTrue(any("unsupported shell value" in offender for offender in offenders))
+        self.assertTrue(any("Popen first arg is string constant" in offender for offender in offenders))
 
     def test_runtime_code_does_not_use_os_environ_get(self) -> None:
         src_root = REPO_ROOT / "src"
@@ -304,6 +379,19 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("contents: read", security_workflow)
         self.assertNotIn("contents: write", security_workflow)
 
+    def test_shell_scripts_have_security_preamble(self) -> None:
+        offenders: list[str] = []
+        for path in sorted((REPO_ROOT / "scripts").glob("*.sh")):
+            text = path.read_text(encoding="utf-8")
+            if not text.startswith("#!/usr/bin/env bash\n"):
+                offenders.append(f"{path}: missing bash shebang")
+            if "set -euo pipefail" not in text:
+                offenders.append(f"{path}: missing set -euo pipefail")
+            if "IFS=$'\\n\\t'" not in text:
+                offenders.append(f"{path}: missing strict IFS")
+
+        self.assertEqual(offenders, [])
+
     def test_release_publish_does_not_clobber_existing_assets(self) -> None:
         publish_script = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
         self.assertIn("gh release upload", publish_script)
@@ -376,13 +464,14 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("speed-of-cinnamon\\.1(\\.gz)?", rpm_verifier)
         self.assertIn("speed-of-cinnamon-alarms\\.1(\\.gz)?", rpm_verifier)
         self.assertIn("docs/man/speed-of-cinnamon.1", install_local)
-        self.assertIn('printf \'export PYTHONPATH=%q\\n\' "${app_data}/python"', install_local)
         self.assertIn('SPEED_OF_CINNAMON_TEST_HOME:-0', install_local)
         self.assertIn("reject_unsafe_tree()", install_local)
         self.assertIn('find "${tree}" \\( -type l -o -type f -links +1 \\) -print -quit', install_local)
         self.assertIn("reject_unsafe_file()", install_local)
         self.assertIn("write_backend_wrapper()", install_local)
-        self.assertIn('mv -T -- "${wrapper_tmp}" "${wrapper_path}"', install_local)
+        self.assertIn('safe_fs write-wrapper install "${wrapper_path}" "${app_data}/python"', install_local)
+        self.assertIn('safe_fs replace install "${staged_tree}" "${target_tree}" --src-kind dir', install_local)
+        self.assertIn('safe_fs copy-file install "${repo_dir}/docs/man/speed-of-cinnamon.1"', install_local)
         self.assertIn("python3 -m compileall -q", dist_verifier)
         self.assertIn('exec "$(command -v -- python3)" -m speed_of_cinnamon.cli "$@"', dist_verifier)
         self.assertIn("RPM package contains unsafe path entry", rpm_verifier)

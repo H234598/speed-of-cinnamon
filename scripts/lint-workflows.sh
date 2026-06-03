@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+IFS=$'\n\t'
 
 if ! compgen -G '.github/workflows/*.yml' > /dev/null && ! compgen -G '.github/workflows/*.yaml' > /dev/null; then
   printf 'No workflow files found under .github/workflows.\n' >&2

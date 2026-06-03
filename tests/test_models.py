@@ -675,6 +675,48 @@ class ModelsTest(unittest.TestCase):
             with self.assertRaisesRegex(models.ModelError, "failed to persist downloaded model file"):
                 models.download_model("ct2-replace-fails")
 
+    def test_download_model_restores_existing_multifile_model_when_final_replace_fails(self) -> None:
+        data = b"small model file"
+        spec = models.ModelSpec(
+            name="ct2-final-replace-fails",
+            filename="ct2-final-replace-fails",
+            size="2 KiB",
+            sha1="",
+            description="ct2 final replace failure",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-final-replace-fails",
+            files=("config.json",),
+        )
+        real_replace = os.replace
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
+        ):
+            path = models.model_path(spec)
+            path.mkdir(parents=True)
+            (path / "old.txt").write_text("old model", encoding="utf-8")
+
+            def replace_or_fail(src: object, dst: object) -> None:
+                source = Path(src)
+                if (
+                    source.is_dir()
+                    and Path(dst) == path
+                    and source.name.startswith(f".{spec.filename}.")
+                    and not source.name.endswith(".backup")
+                ):
+                    raise OSError("disk full")
+                real_replace(src, dst)
+
+            with mock.patch("speed_of_cinnamon.models.os.replace", side_effect=replace_or_fail):
+                with self.assertRaisesRegex(models.ModelError, "failed to persist downloaded model directory"):
+                    models.download_model("ct2-final-replace-fails", force=True)
+
+            self.assertEqual((path / "old.txt").read_text(encoding="utf-8"), "old model")
+
     def test_download_model_sets_private_permissions(self) -> None:
         data = b"tiny model"
         spec = models.ModelSpec(

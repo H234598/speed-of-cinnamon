@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import secrets
 import shutil
 import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -898,13 +900,27 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
         if downloaded_total > size_limit:
             raise ModelError(f"downloaded model too large for {model.name}: {downloaded_total} > {size_limit}")
         _assert_safe_model_directory(path)
+        backup_dir: Path | None = None
         if path.exists():
-            shutil.rmtree(path)
+            backup_dir = path.with_name(f".{path.name}.{secrets.token_hex(8)}.backup")
+            assert_no_symlink_ancestors(backup_dir, field_name="model backup directory")
+            _assert_path_within_model_root(backup_dir, root)
+            if backup_dir.exists() or backup_dir.is_symlink():
+                raise ModelError(f"model backup path already exists: {backup_dir}")
+            try:
+                os.replace(path, backup_dir)
+            except OSError as exc:
+                raise ModelError(f"failed to prepare existing model directory backup: {path}") from exc
             _assert_safe_model_directory(path)
         try:
             os.replace(tmp_dir, path)
         except OSError as exc:
+            if backup_dir is not None:
+                with suppress(Exception):
+                    os.replace(backup_dir, path)
             raise ModelError(f"failed to persist downloaded model directory: {path}") from exc
+        if backup_dir is not None:
+            shutil.rmtree(backup_dir, ignore_errors=True)
     except Exception:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise

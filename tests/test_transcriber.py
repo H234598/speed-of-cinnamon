@@ -435,6 +435,30 @@ class TranscriberTest(unittest.TestCase):
                 with self.assertRaisesRegex(TranscriptionError, "output exceeded"):
                     transcribe_with_openai_whisper(audio, "en", text)
 
+    def test_openai_whisper_removes_generated_transcript_when_not_writing(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0] if args else kwargs["args"]
+            assert isinstance(command, list)
+            output_dir = Path(command[command.index("--output_dir") + 1])
+            (output_dir / "sample.txt").write_text("hello whisper\n", encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text = Path(tmp) / "result.txt"
+            generated = Path(tmp) / "sample.txt"
+
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.shutil.which", return_value="/usr/bin/whisper"),
+                mock.patch("speed_of_cinnamon.transcriber.subprocess.run", side_effect=fake_run),
+            ):
+                result = transcribe_with_openai_whisper(audio, "en", text, write_transcript=False)
+
+            self.assertEqual(result, "hello whisper")
+            self.assertFalse(generated.exists())
+            self.assertFalse(text.exists())
+
     def test_run_limited_process_rejects_empty_command(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "empty transcriber command"):
             _run_limited_process([])
@@ -1055,7 +1079,7 @@ class TranscriberTest(unittest.TestCase):
             )
             body = error.fp
             with mock.patch("speed_of_cinnamon.transcriber._open_http_request", side_effect=error):
-                with self.assertRaisesRegex(TranscriptionError, "failed \\(401\\).*missing API key.*invalid_request_error"):
+                with self.assertRaisesRegex(TranscriptionError, "failed \\(401\\).*\\[redacted remote error\\]") as raised:
                     transcribe(
                         audio,
                         "en",
@@ -1065,6 +1089,38 @@ class TranscriberTest(unittest.TestCase):
                         openai_compatible_url="https://api.openai.com/v1",
                     )
             self.assertTrue(body.closed)
+            self.assertNotIn("missing API key", str(raised.exception))
+            self.assertNotIn("invalid_request_error", str(raised.exception))
+
+    def test_openai_compatible_api_redacts_json_error_payload(self) -> None:
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self, size: int = -1) -> bytes:
+                if getattr(self, "_read", False):
+                    return b""
+                self._read = True
+                return b'{"error":{"message":"token sk-secret for Alice transcript leaked"}}'
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with mock.patch("speed_of_cinnamon.transcriber._open_http_request", return_value=Response()):
+                with self.assertRaisesRegex(TranscriptionError, "\\[redacted remote error\\]") as raised:
+                    transcribe(
+                        audio,
+                        "en",
+                        Path(tmp) / "sample.txt",
+                        backend="openai-compatible",
+                        openai_compatible_model="gpt-4o-transcribe",
+                        openai_compatible_url="https://api.openai.com/v1",
+                    )
+            self.assertNotIn("sk-secret", str(raised.exception))
+            self.assertNotIn("Alice", str(raised.exception))
 
     def test_openai_api_rejects_non_transcription_model_before_network(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

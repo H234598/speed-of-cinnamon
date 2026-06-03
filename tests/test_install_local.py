@@ -65,6 +65,7 @@ class InstallLocalTest(unittest.TestCase):
         (repo_root / "docs" / "man" / "speed-of-cinnamon.1").write_text("man page\n", encoding="utf-8")
         (repo_root / "docs" / "man" / "speed-of-cinnamon-alarms.1").write_text("man page\n", encoding="utf-8")
         shutil.copy2(REPO_ROOT / "scripts" / "install-local.sh", repo_root / "scripts" / "install-local.sh")
+        shutil.copy2(REPO_ROOT / "scripts" / "safe-local-fs.py", repo_root / "scripts" / "safe-local-fs.py")
         payload = destination / "payload.py"
         payload.write_text(
             "from pathlib import Path\n"
@@ -87,6 +88,7 @@ class InstallLocalTest(unittest.TestCase):
         (repo_root / "docs" / "man" / "speed-of-cinnamon.1").write_text("man page\n", encoding="utf-8")
         (repo_root / "docs" / "man" / "speed-of-cinnamon-alarms.1").write_text("man page\n", encoding="utf-8")
         shutil.copy2(REPO_ROOT / "scripts" / "install-local.sh", repo_root / "scripts" / "install-local.sh")
+        shutil.copy2(REPO_ROOT / "scripts" / "safe-local-fs.py", repo_root / "scripts" / "safe-local-fs.py")
         return repo_root
 
     def test_install_local_refuses_symlinked_python_package(self) -> None:
@@ -179,6 +181,29 @@ class InstallLocalTest(unittest.TestCase):
         self.assertEqual(version_result.returncode, 0, msg=version_result.stdout + version_result.stderr)
         self.assertIn(f"speed-of-cinnamon {project_version}", version_result.stdout)
 
+    def test_install_local_does_not_use_path_mv_for_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "fake-bin"
+            fake_bin.mkdir()
+            marker = tmp_path / "mv-marker"
+            fake_mv = fake_bin / "mv"
+            fake_mv.write_text(
+                "#!/usr/bin/env bash\n"
+                f"printf used > {str(marker)!r}\n"
+                "exit 77\n",
+                encoding="utf-8",
+            )
+            fake_mv.chmod(0o755)
+            home = tmp_path / "home"
+            home.mkdir()
+
+            result = self._run_install_local(REPO_ROOT, home, {"PATH": f"{fake_bin}:{os.environ.get('PATH', '')}"})
+
+            self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+            self.assertFalse(marker.exists())
+            self.assertTrue((home / ".local" / "bin" / "speed-of-cinnamon").exists())
+
     def test_uninstall_local_removes_installed_code_but_preserves_user_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -222,6 +247,36 @@ class InstallLocalTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
             self.assertIn("refusing to follow symlink during uninstall", result.stderr)
             self.assertTrue(protected.exists())
+
+    def test_uninstall_local_does_not_use_path_rm_for_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            home = tmp_path / "home"
+            fake_bin = tmp_path / "fake-bin"
+            marker = tmp_path / "rm-marker"
+            home.mkdir()
+            fake_bin.mkdir()
+            (fake_bin / "rm").write_text(
+                "#!/usr/bin/env bash\n"
+                f"printf used > {str(marker)!r}\n"
+                "exit 77\n",
+                encoding="utf-8",
+            )
+            (fake_bin / "rm").chmod(0o755)
+            (home / ".local" / "bin").mkdir(parents=True)
+            (home / ".local" / "bin" / "speed-of-cinnamon").write_text("wrapper\n", encoding="utf-8")
+            (home / ".local" / "share" / "cinnamon" / "applets" / "speed-of-cinnamon@H234598").mkdir(parents=True)
+            (home / ".local" / "share" / "speed-of-cinnamon" / "python").mkdir(parents=True)
+            (home / ".local" / "share" / "man" / "man1").mkdir(parents=True)
+            (home / ".local" / "share" / "man" / "man1" / "speed-of-cinnamon.1").write_text(
+                "man\n", encoding="utf-8"
+            )
+
+            result = self._run_uninstall_local(REPO_ROOT, home, {"PATH": f"{fake_bin}:{os.environ.get('PATH', '')}"})
+
+            self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+            self.assertFalse(marker.exists())
+            self.assertFalse((home / ".local" / "bin" / "speed-of-cinnamon").exists())
 
 
 class SmokeBackendTest(unittest.TestCase):

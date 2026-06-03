@@ -19,6 +19,9 @@ _MAX_BLACKLIST_PATTERN_BYTES = _MAX_BLACKLIST_ENTRY_CHARS * _MAX_BLACKLIST_ENTRI
 _BLACKLIST_ADD_RE = re.compile(
     r"(?im)^\s*(?:blacklisteintrag|blacklist\s*eintrag)\b[\s:,-]*(.+?)\s*$",
 )
+_BLACKLIST_ADD_INLINE_RE = re.compile(
+    r"(?i)\b(?:blacklisteintrag|blacklist\s*eintrag)\b[\s:,-]*(.+?)\s*$",
+)
 _BLACKLIST_SHOW_RE = re.compile(
     r"(?im)^\s*(?:(?:bitte\s+)?(?:mir\s+)?(?:die\s+)?"
     r"(?:blacklist|blackliste|sperrliste)\b[^\n]*\b(?:anzeigen|anzeige|öffnen|open|show|zeigen|zeige)\b[^\n]*"
@@ -277,6 +280,16 @@ def parse_security_directives(text: str) -> SecurityParserResult:
             entry = _normalize_blacklist_entry(match_add.group(1))
             if entry and entry not in added:
                 added.append(entry)
+            continue
+        match_inline_add = _BLACKLIST_ADD_INLINE_RE.search(line)
+        if match_inline_add:
+            saw_directive = True
+            entry = _normalize_blacklist_entry(match_inline_add.group(1))
+            if entry and entry not in added:
+                added.append(entry)
+            kept_line = line[:match_inline_add.start()].strip()
+            if kept_line:
+                kept.append(kept_line)
             continue
         if _BLACKLIST_SHOW_RE.match(line):
             saw_directive = True

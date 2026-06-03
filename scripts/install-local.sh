@@ -30,7 +30,7 @@ if [[ ! -d "${HOME}" ]]; then
   printf 'HOME must be an existing directory: %s\n' "${HOME}" >&2
   exit 1
 fi
-for tool in cp install mkdir mktemp mv rm rmdir command; do
+for tool in cp mkdir mktemp python3 rmdir command; do
   if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found.\n' "${tool}" >&2
     exit 1
@@ -39,6 +39,7 @@ done
 for path in \
   "${repo_dir}/files/${uuid}" \
   "${repo_dir}/src/speed_of_cinnamon" \
+  "${repo_dir}/scripts/safe-local-fs.py" \
   "${repo_dir}/docs/man/speed-of-cinnamon.1" \
   "${repo_dir}/docs/man/speed-of-cinnamon-alarms.1"
 do
@@ -47,6 +48,10 @@ do
     exit 1
   fi
 done
+
+safe_fs() {
+  python3 "${repo_dir}/scripts/safe-local-fs.py" "$@"
+}
 
 reject_unsafe_tree() {
   local tree="$1"
@@ -94,38 +99,13 @@ reject_symlink_ancestors() {
 
 write_backend_wrapper() {
   local wrapper_path="${bin_dir}/speed-of-cinnamon"
-  local wrapper_tmp
 
   reject_symlink_ancestors "${wrapper_path}" "install"
   if [[ -L "${bin_dir}" || -L "${wrapper_path}" ]]; then
     printf 'refusing to follow symlink during install: %s\n' "${wrapper_path}" >&2
     exit 1
   fi
-  wrapper_tmp="$(mktemp "${bin_dir}/.speed-of-cinnamon.XXXXXX")"
-  if ! {
-    printf '#!/usr/bin/env bash\n'
-    printf 'set -euo pipefail\n'
-    printf 'export PYTHONPATH=%q\n' "${app_data}/python"
-    # shellcheck disable=SC2016
-    printf 'exec "$(command -v -- python3)" -m speed_of_cinnamon.cli "$@"\n'
-  } > "${wrapper_tmp}"; then
-    rm -f -- "${wrapper_tmp}"
-    printf 'failed to write backend wrapper: %s\n' "${wrapper_path}" >&2
-    exit 1
-  fi
-  if ! chmod 0755 "${wrapper_tmp}"; then
-    rm -f -- "${wrapper_tmp}"
-    printf 'failed to set backend wrapper permissions: %s\n' "${wrapper_path}" >&2
-    exit 1
-  fi
-  reject_symlink_ancestors "${wrapper_path}" "install"
-  if [[ -L "${bin_dir}" || -L "${wrapper_path}" ]]; then
-    rm -f -- "${wrapper_tmp}"
-    printf 'refusing to follow symlink during install: %s\n' "${wrapper_path}" >&2
-    exit 1
-  fi
-  if ! mv -T -- "${wrapper_tmp}" "${wrapper_path}"; then
-    rm -f -- "${wrapper_tmp}"
+  if ! safe_fs write-wrapper install "${wrapper_path}" "${app_data}/python"; then
     printf 'failed to install backend wrapper: %s\n' "${wrapper_path}" >&2
     exit 1
   fi
@@ -158,7 +138,7 @@ install_tree_staged() {
     exit 1
   fi
   reject_symlink_ancestors "${target_tree}" "install"
-  mkdir -p "${parent}"
+  safe_fs mkdirs install "${parent}"
   reject_symlink_ancestors "${target_tree}" "install"
   if [[ -L "${parent}" || -L "${target_tree}" ]]; then
     printf 'refusing to follow symlink during install: %s\n' "${target_tree}" >&2
@@ -178,29 +158,49 @@ install_tree_staged() {
   if [[ -e "${target_tree}" ]]; then
     backup_tree="$(mktemp -d "${parent}/.${name}.backup.XXXXXX")"
     rmdir -- "${backup_tree}"
-    if ! mv -T -- "${target_tree}" "${backup_tree}"; then
-      rm -rf -- "${stage_root}" "${backup_tree}"
+    reject_symlink_ancestors "${target_tree}" "install"
+    if [[ -L "${parent}" || -L "${target_tree}" || -L "${backup_tree}" ]]; then
+      safe_fs remove install "${stage_root}" --kind dir || true
+      printf 'refusing to follow symlink during install: %s\n' "${target_tree}" >&2
+      exit 1
+    fi
+    if ! safe_fs replace install "${target_tree}" "${backup_tree}" --src-kind dir --dst-must-not-exist; then
+      safe_fs remove install "${stage_root}" --kind dir || true
+      safe_fs remove install "${backup_tree}" --kind dir || true
       printf 'failed to preserve existing %s install: %s\n' "${label}" "${target_tree}" >&2
       exit 1
     fi
   fi
 
-  if ! mv -T -- "${staged_tree}" "${target_tree}"; then
+  reject_symlink_ancestors "${target_tree}" "install"
+  if [[ -L "${parent}" || -L "${target_tree}" ]]; then
     if [[ -n "${backup_tree}" && -e "${backup_tree}" && ! -e "${target_tree}" ]]; then
-      mv -T -- "${backup_tree}" "${target_tree}" || true
+      safe_fs replace install "${backup_tree}" "${target_tree}" --src-kind dir --dst-must-not-exist || true
     fi
-    rm -rf -- "${stage_root}"
+    safe_fs remove install "${stage_root}" --kind dir || true
+    printf 'refusing to follow symlink during install: %s\n' "${target_tree}" >&2
+    exit 1
+  fi
+  if ! safe_fs replace install "${staged_tree}" "${target_tree}" --src-kind dir --dst-must-not-exist; then
+    if [[ -n "${backup_tree}" && -e "${backup_tree}" && ! -e "${target_tree}" ]]; then
+      safe_fs replace install "${backup_tree}" "${target_tree}" --src-kind dir --dst-must-not-exist || true
+    fi
+    safe_fs remove install "${stage_root}" --kind dir || true
     printf 'failed to activate staged %s install: %s\n' "${label}" "${target_tree}" >&2
     exit 1
   fi
 
-  rm -rf -- "${stage_root}"
+  safe_fs remove install "${stage_root}" --kind dir || true
   if [[ -n "${backup_tree}" ]]; then
-    rm -rf -- "${backup_tree}"
+    safe_fs remove install "${backup_tree}" --kind dir || true
   fi
 }
 
-mkdir -p "$(dirname "${applet_target}")" "${app_data}" "${app_data}/python" "${bin_dir}" "${man_dir}"
+safe_fs mkdirs install "$(dirname "${applet_target}")"
+safe_fs mkdirs install "${app_data}"
+safe_fs mkdirs install "${app_data}/python"
+safe_fs mkdirs install "${bin_dir}"
+safe_fs mkdirs install "${man_dir}"
 for target in "${applet_target}" "${app_data}" "${bin_dir}" "${man_dir}"; do
   reject_symlink_ancestors "${target}" "install"
 done
@@ -212,8 +212,8 @@ reject_unsafe_file "${repo_dir}/docs/man/speed-of-cinnamon-alarms.1" "man page s
 
 write_backend_wrapper
 
-install -m 0644 "${repo_dir}/docs/man/speed-of-cinnamon.1" "${man_dir}/speed-of-cinnamon.1"
-install -m 0644 "${repo_dir}/docs/man/speed-of-cinnamon-alarms.1" "${man_dir}/speed-of-cinnamon-alarms.1"
+safe_fs copy-file install "${repo_dir}/docs/man/speed-of-cinnamon.1" "${man_dir}/speed-of-cinnamon.1" 0644
+safe_fs copy-file install "${repo_dir}/docs/man/speed-of-cinnamon-alarms.1" "${man_dir}/speed-of-cinnamon-alarms.1" 0644
 
 printf 'Installed %s to %s\n' "${uuid}" "${applet_target}"
 printf 'Installed backend command to %s/speed-of-cinnamon\n' "${bin_dir}"

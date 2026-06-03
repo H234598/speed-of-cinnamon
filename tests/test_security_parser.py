@@ -57,6 +57,13 @@ class SecurityParserTest(unittest.TestCase):
         self.assertEqual(directives.added_blacklist, ["geheim"])
         self.assertEqual(directives.text, "")
 
+    def test_parse_security_directives_strips_inline_add_from_output(self) -> None:
+        text = "Hallo blacklisteintrag: geheim"
+        directives = parse_security_directives(text)
+        self.assertEqual(directives.added_blacklist, [])
+        self.assertFalse(directives.show_blacklist)
+        self.assertEqual(directives.text, "Hallo")
+
     def test_parse_security_directives_detects_show_phrase_with_open(self) -> None:
         text = "Bitte Blacklist öffnen"
         directives = parse_security_directives(text)

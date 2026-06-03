@@ -609,6 +609,11 @@ def transcribe_with_openai_whisper(
         _assert_text_length(text, field_name="transcript")
         if write_transcript:
             _write_text_atomic(text_path, text + "\n")
+        else:
+            try:
+                generated.unlink()
+            except OSError as exc:
+                raise TranscriptionError("failed to remove generated transcript") from exc
         return text
     raise TranscriptionError("whisper completed but did not produce a transcript")
 
@@ -800,6 +805,35 @@ def _openai_compatible_error_detail(raw: str) -> str:
     return raw
 
 
+def _sanitize_remote_error_detail(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "remote error"
+    text = text.replace("\r", "\\r").replace("\n", "\\n").replace("\x00", "\\x00")
+    lowered = text.lower()
+    sensitive_hints = (
+        "authorization",
+        "bearer ",
+        "api key",
+        "api_key",
+        "apikey",
+        "password",
+        "prompt",
+        "secret",
+        "sess-",
+        "sk-",
+        "token",
+        "transcript",
+    )
+    if any(hint in lowered for hint in sensitive_hints):
+        return "[redacted remote error]"
+    if "://" in text and "@" in text:
+        return "[redacted remote error]"
+    if len(text) > 160:
+        return text[:157] + "..."
+    return text
+
+
 def _multipart_form_data(fields: dict[str, str], file_field: str, file_path: Path) -> tuple[bytes, str]:
     boundary = "speed-of-cinnamon-" + uuid.uuid4().hex
     body = bytearray()
@@ -905,8 +939,8 @@ def transcribe_with_openai_compatible_api(
         finally:
             with suppress(Exception):
                 exc.close()
-        detail = _openai_compatible_error_detail(raw_error) or exc.reason or str(exc)
-        if use_flex_processing and _is_flex_service_tier_rejected(detail):
+        raw_detail = _openai_compatible_error_detail(raw_error) or exc.reason or str(exc)
+        if use_flex_processing and _is_flex_service_tier_rejected(raw_detail):
             fallback_fields = dict(fields)
             fallback_fields.pop("service_tier", None)
             try:
@@ -919,16 +953,21 @@ def transcribe_with_openai_compatible_api(
                 finally:
                     with suppress(Exception):
                         fallback_exc.close()
-                fallback_detail = _openai_compatible_error_detail(raw_error) or fallback_exc.reason or str(fallback_exc)
+                fallback_detail = _sanitize_remote_error_detail(
+                    _openai_compatible_error_detail(raw_error) or fallback_exc.reason or str(fallback_exc)
+                )
                 raise TranscriptionError(
                     f"OpenAI-compatible speech API failed ({fallback_exc.code}) at {endpoint}: {fallback_detail}"
                 ) from fallback_exc
             except OSError as fallback_exc:
-                raise TranscriptionError(f"OpenAI-compatible speech API is not reachable at {endpoint}: {fallback_exc}") from fallback_exc
+                detail = _sanitize_remote_error_detail(fallback_exc)
+                raise TranscriptionError(f"OpenAI-compatible speech API is not reachable at {endpoint}: {detail}") from fallback_exc
         else:
+            detail = _sanitize_remote_error_detail(raw_detail)
             raise TranscriptionError(f"OpenAI-compatible speech API failed ({exc.code}) at {endpoint}: {detail}") from exc
     except OSError as exc:
-        raise TranscriptionError(f"OpenAI-compatible speech API is not reachable at {endpoint}: {exc}") from exc
+        detail = _sanitize_remote_error_detail(exc)
+        raise TranscriptionError(f"OpenAI-compatible speech API is not reachable at {endpoint}: {detail}") from exc
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -937,7 +976,7 @@ def transcribe_with_openai_compatible_api(
         raise TranscriptionError("OpenAI-compatible speech API response must be a JSON object")
     if payload.get("error"):
         error = payload["error"]
-        detail = str(error.get("message") or error) if isinstance(error, dict) else str(error)
+        detail = _sanitize_remote_error_detail(str(error.get("message") or error) if isinstance(error, dict) else str(error))
         raise TranscriptionError(f"OpenAI-compatible speech API failed at {endpoint}: {detail}")
     text = str(payload.get("text") or "").strip()
     if not text:
