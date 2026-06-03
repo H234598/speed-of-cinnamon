@@ -747,6 +747,7 @@ class ModelsTest(unittest.TestCase):
                     models.download_model("ct2-final-replace-fails", force=True)
 
             self.assertEqual((path / "old.txt").read_text(encoding="utf-8"), "old model")
+            self.assertEqual(list(path.parent.glob(f".{spec.filename}.*.backup")), [])
 
     def test_download_model_sets_private_permissions(self) -> None:
         data = b"tiny model"

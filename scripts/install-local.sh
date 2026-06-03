@@ -30,7 +30,7 @@ if [[ ! -d "${HOME}" ]]; then
   printf 'HOME must be an existing directory: %s\n' "${HOME}" >&2
   exit 1
 fi
-for tool in cp mkdir mktemp python3 rmdir command; do
+for tool in find grep python3 command; do
   if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found.\n' "${tool}" >&2
     exit 1
@@ -118,10 +118,6 @@ install_tree_staged() {
   local target_tree="$2"
   local label="$3"
   local parent="${target_tree%/*}"
-  local name="${target_tree##*/}"
-  local stage_root
-  local staged_tree
-  local backup_tree=""
 
   if [[ -z "${parent}" || "${parent}" == "${target_tree}" ]]; then
     printf 'invalid install target for %s: %s\n' "${label}" "${target_tree}" >&2
@@ -140,53 +136,9 @@ install_tree_staged() {
   fi
   reject_unsafe_tree "${source_tree}" "${label} source tree"
 
-  stage_root="$(mktemp -d "${parent}/.${name}.install.XXXXXX")"
-  staged_tree="${stage_root}/${name}"
-  if ! cp -a "${source_tree}" "${staged_tree}"; then
-    safe_fs remove install "${stage_root}" --kind dir || true
-    printf 'failed to stage %s install: %s\n' "${label}" "${target_tree}" >&2
-    exit 1
-  fi
-  reject_unsafe_tree "${staged_tree}" "${label}"
-
-  if [[ -e "${target_tree}" ]]; then
-    backup_tree="$(mktemp -d "${parent}/.${name}.backup.XXXXXX")"
-    rmdir -- "${backup_tree}"
-    reject_symlink_ancestors "${target_tree}" "install"
-    if [[ -L "${parent}" || -L "${target_tree}" || -L "${backup_tree}" ]]; then
-      safe_fs remove install "${stage_root}" --kind dir || true
-      printf 'refusing to follow symlink during install: %s\n' "${target_tree}" >&2
-      exit 1
-    fi
-    if ! safe_fs replace install "${target_tree}" "${backup_tree}" --src-kind dir --dst-must-not-exist; then
-      safe_fs remove install "${stage_root}" --kind dir || true
-      safe_fs remove install "${backup_tree}" --kind dir || true
-      printf 'failed to preserve existing %s install: %s\n' "${label}" "${target_tree}" >&2
-      exit 1
-    fi
-  fi
-
-  reject_symlink_ancestors "${target_tree}" "install"
-  if [[ -L "${parent}" || -L "${target_tree}" ]]; then
-    if [[ -n "${backup_tree}" && -e "${backup_tree}" && ! -e "${target_tree}" ]]; then
-      safe_fs replace install "${backup_tree}" "${target_tree}" --src-kind dir --dst-must-not-exist || true
-    fi
-    safe_fs remove install "${stage_root}" --kind dir || true
-    printf 'refusing to follow symlink during install: %s\n' "${target_tree}" >&2
-    exit 1
-  fi
-  if ! safe_fs replace install "${staged_tree}" "${target_tree}" --src-kind dir --dst-must-not-exist; then
-    if [[ -n "${backup_tree}" && -e "${backup_tree}" && ! -e "${target_tree}" ]]; then
-      safe_fs replace install "${backup_tree}" "${target_tree}" --src-kind dir --dst-must-not-exist || true
-    fi
-    safe_fs remove install "${stage_root}" --kind dir || true
+  if ! safe_fs install-tree install "${source_tree}" "${target_tree}" "${label}"; then
     printf 'failed to activate staged %s install: %s\n' "${label}" "${target_tree}" >&2
     exit 1
-  fi
-
-  safe_fs remove install "${stage_root}" --kind dir || true
-  if [[ -n "${backup_tree}" ]]; then
-    safe_fs remove install "${backup_tree}" --kind dir || true
   fi
 }
 

@@ -229,6 +229,77 @@ def cmd_assert_file(args: argparse.Namespace) -> None:
         os.close(parent_fd)
 
 
+def _reject_unsafe_tree(tree: Path, label: str) -> None:
+    if not tree.exists() or tree.is_symlink() or not tree.is_dir():
+        fail(f"refusing to install unsafe {label}: {tree}")
+    for root, dirs, files in os.walk(tree):
+        root_path = Path(root)
+        for name in [*dirs, *files]:
+            path = root_path / name
+            try:
+                stat_result = path.lstat()
+            except OSError as exc:
+                fail(f"failed to inspect {label}: {path}: {exc}")
+            if stat_is_symlink_no_follow(stat_result.st_mode):
+                fail(f"refusing to install unsafe {label}: {path}")
+            if stat_is_file_no_follow(stat_result.st_mode) and stat_result.st_nlink != 1:
+                fail(f"refusing to install hardlinked {label}: {path}")
+
+
+def cmd_install_tree(args: argparse.Namespace) -> None:
+    source = _validate_absolute(args.source, "source tree")
+    target = _validate_absolute(args.target, "target tree")
+    label = str(args.label or "tree")
+    _reject_unsafe_tree(source, f"{label} source tree")
+    parent_fd, leaf = _open_parent(target, action=args.action, create=True)
+    assert parent_fd is not None
+    token = secrets.token_hex(8)
+    stage_name = f".{leaf}.{token}.install"
+    backup_name = f".{leaf}.{token}.backup"
+    backup_created = False
+    activated = False
+    parent_path = Path(f"/proc/self/fd/{parent_fd}")
+    try:
+        os.mkdir(stage_name, 0o700, dir_fd=parent_fd)
+        staged_tree = parent_path / stage_name / leaf
+        shutil.copytree(source, staged_tree)
+        _reject_unsafe_tree(staged_tree, label)
+        existing = _lstat_at(parent_fd, leaf)
+        if existing is not None:
+            if stat_is_symlink_no_follow(existing.st_mode):
+                fail(f"refusing to follow symlink during {args.action}: {target}")
+            if not stat_is_dir_no_follow(existing.st_mode):
+                fail(f"path must be a directory during {args.action}: {target}")
+            os.replace(leaf, backup_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            backup_created = True
+        os.replace(f"{stage_name}/{leaf}", leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        activated = True
+        _check_leaf(parent_fd, leaf, target, action=args.action, kind="dir", must_exist=True)
+        if backup_created:
+            shutil.rmtree(backup_name, dir_fd=parent_fd)
+            backup_created = False
+    except Exception:
+        if backup_created and activated and _lstat_at(parent_fd, backup_name) is not None:
+            with context_suppress():
+                current = _lstat_at(parent_fd, leaf)
+                if current is not None and stat_is_dir_no_follow(current.st_mode):
+                    shutil.rmtree(leaf, dir_fd=parent_fd)
+                os.replace(backup_name, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                backup_created = False
+        elif backup_created and _lstat_at(parent_fd, backup_name) is not None and _lstat_at(parent_fd, leaf) is None:
+            with context_suppress():
+                os.replace(backup_name, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                backup_created = False
+        raise
+    finally:
+        with context_suppress():
+            shutil.rmtree(stage_name, dir_fd=parent_fd)
+        if backup_created:
+            with context_suppress():
+                shutil.rmtree(backup_name, dir_fd=parent_fd)
+        os.close(parent_fd)
+
+
 def cmd_remove(args: argparse.Namespace) -> None:
     path = _validate_absolute(args.path, "remove path")
     parent_fd, leaf = _open_parent(path, action=args.action, missing_ok=True)
@@ -312,6 +383,13 @@ def build_parser() -> argparse.ArgumentParser:
     assert_file.add_argument("path")
     assert_file.add_argument("label")
     assert_file.set_defaults(func=cmd_assert_file)
+
+    install_tree = subparsers.add_parser("install-tree")
+    install_tree.add_argument("action")
+    install_tree.add_argument("source")
+    install_tree.add_argument("target")
+    install_tree.add_argument("label")
+    install_tree.set_defaults(func=cmd_install_tree)
 
     remove = subparsers.add_parser("remove")
     remove.add_argument("action")

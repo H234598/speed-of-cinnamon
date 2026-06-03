@@ -247,21 +247,38 @@ class CiStaticTest(unittest.TestCase):
 
     def test_shell_and_workflow_files_avoid_high_risk_shell_patterns(self) -> None:
         roots = [REPO_ROOT / "scripts", REPO_ROOT / ".github" / "workflows"]
+        applet = REPO_ROOT / "files" / "speed-of-cinnamon@H234598" / "applet.js"
+        allowed_applet_shell_lines = {
+            '"    sudo dnf install -y ollama",',
+            '"    sudo apt-get install -y ollama",',
+            '"  sudo rm -rf /usr/share/ollama",',
+            '"if command -v dnf >/dev/null 2>&1; then sudo dnf install -y zenity xdotool xclip xsel wl-clipboard pipewire-utils pulseaudio-utils alsa-utils python3-pip; fi",',
+        }
         offenders: list[str] = []
-        for root in roots:
-            for path in root.rglob("*"):
-                if path.is_dir() or path.suffix not in {".sh", ".yml", ".yaml"}:
-                    continue
-                text = path.read_text(encoding="utf-8")
-                if re.search(r"curl\b[^\n|]*\|\s*(?:sh|bash)\b", text):
-                    offenders.append(f"{path}: curl piped to shell")
+        files = [
+            path
+            for root in roots
+            for path in root.rglob("*")
+            if not path.is_dir() and path.suffix in {".sh", ".yml", ".yaml"}
+        ]
+        files.append(applet)
+        for path in files:
+            text = path.read_text(encoding="utf-8")
+            if re.search(r"curl\b[^\n|]*\|\s*(?:sh|bash)\b", text):
+                offenders.append(f"{path}: curl piped to shell")
+            for line in text.splitlines():
+                stripped = line.strip()
                 for pattern in ("eval ", "bash -c", "sh -c", "rm -rf /"):
-                    if pattern in text:
+                    if pattern in stripped and not (path == applet and stripped in allowed_applet_shell_lines):
                         offenders.append(f"{path}: high-risk shell pattern {pattern!r}")
-                if 'rm -rf -- "${stage_root}"' in text:
-                    offenders.append(f"{path}: install cleanup must use safe_fs")
-                if 'rm -rf -- "${python_dir}"' in text:
-                    offenders.append(f"{path}: uninstall target cleanup must use safe_fs")
+                if path == applet:
+                    for pattern in ("sudo dnf install -y", "sudo apt-get install -y"):
+                        if pattern in stripped and stripped not in allowed_applet_shell_lines:
+                            offenders.append(f"{path}: high-risk shell pattern {pattern!r}")
+            if 'rm -rf -- "${stage_root}"' in text:
+                offenders.append(f"{path}: install cleanup must use safe_fs")
+            if 'rm -rf -- "${python_dir}"' in text:
+                offenders.append(f"{path}: uninstall target cleanup must use safe_fs")
         self.assertEqual(offenders, [], f"high-risk shell/workflow patterns found: {offenders}")
 
     def test_runtime_code_does_not_read_full_environment(self) -> None:
@@ -489,7 +506,8 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("reject_unsafe_file()", install_local)
         self.assertIn("write_backend_wrapper()", install_local)
         self.assertIn('safe_fs write-wrapper install "${wrapper_path}" "${app_data}/python"', install_local)
-        self.assertIn('safe_fs replace install "${staged_tree}" "${target_tree}" --src-kind dir', install_local)
+        self.assertIn('safe_fs install-tree install "${source_tree}" "${target_tree}" "${label}"', install_local)
+        self.assertNotIn('mktemp -d "${parent}/.${name}.install.', install_local)
         self.assertIn('safe_fs copy-file install "${repo_dir}/docs/man/speed-of-cinnamon.1"', install_local)
         self.assertIn("python3 -m compileall -q", dist_verifier)
         self.assertIn('exec "$(command -v -- python3)" -m speed_of_cinnamon.cli "$@"', dist_verifier)
@@ -669,6 +687,9 @@ class CiStaticTest(unittest.TestCase):
     def test_bandit_workflow_does_not_pass_github_token_to_third_party_action(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "bandit.yml").read_text(encoding="utf-8")
         self.assertIn("security-events: write", workflow)
+        self.assertIn("runs-on: ubuntu-24.04", workflow)
+        self.assertNotIn("ubuntu-latest", workflow)
+        self.assertIn("persist-credentials: false", workflow)
         self.assertNotIn("GITHUB_TOKEN:", workflow)
         self.assertNotIn("secrets.GITHUB_TOKEN", workflow)
 
