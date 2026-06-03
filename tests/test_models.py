@@ -1066,6 +1066,37 @@ class ModelsTest(unittest.TestCase):
         self.assertFalse(path.exists())
         self.assertFalse(path.with_suffix(path.suffix + ".tmp").exists())
 
+    def test_download_model_preserves_existing_checksum_cache_when_atomic_replace_fails(self) -> None:
+        old_data = b"old model"
+        new_data = b"new model"
+        old_checksum = hashlib.sha1(old_data).hexdigest()
+        spec = models.ModelSpec(
+            name="replace-fails-with-cache",
+            filename="ggml-replace-fails-with-cache.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(new_data).hexdigest(),
+            description="replace failure with cache",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", True),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(new_data)),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            path.write_bytes(old_data)
+            models._set_model_checksum_cache(path, old_checksum, path.stat())
+
+            with mock.patch("speed_of_cinnamon.models.os.replace", side_effect=OSError("disk full")):
+                with self.assertRaisesRegex(models.ModelError, "failed to persist downloaded model file"):
+                    models.download_model("replace-fails-with-cache", force=True)
+
+            self.assertEqual(path.read_bytes(), old_data)
+            self.assertEqual(models._model_checksum_cache[str(path)]["checksum"], old_checksum)
+
     def test_model_status_rejects_non_boolean_verify(self) -> None:
         with self.assertRaisesRegex(models.ModelError, "verify must be a boolean"):
             models.model_status(models.CATALOG[0], verify="true")  # type: ignore[arg-type]

@@ -65,15 +65,9 @@ reject_unsafe_tree() {
 reject_unsafe_file() {
   local path="$1"
   local label="$2"
-  local link_count
 
-  if [[ ! -f "${path}" || -L "${path}" ]]; then
+  if ! safe_fs assert-file install "${path}" "${label}"; then
     printf 'refusing to install unsafe %s: %s\n' "${label}" "${path}" >&2
-    exit 1
-  fi
-  link_count="$(stat -c '%h' "${path}")"
-  if [[ "${link_count}" -ne 1 ]]; then
-    printf 'refusing to install hardlinked %s: %s\n' "${label}" "${path}" >&2
     exit 1
   fi
 }
@@ -149,7 +143,7 @@ install_tree_staged() {
   stage_root="$(mktemp -d "${parent}/.${name}.install.XXXXXX")"
   staged_tree="${stage_root}/${name}"
   if ! cp -a "${source_tree}" "${staged_tree}"; then
-    rm -rf -- "${stage_root}"
+    safe_fs remove install "${stage_root}" --kind dir || true
     printf 'failed to stage %s install: %s\n' "${label}" "${target_tree}" >&2
     exit 1
   fi

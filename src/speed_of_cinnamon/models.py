@@ -945,6 +945,7 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
 
     size_limit = _download_size_limit(model)
     tmp_path: Path | None = None
+    replaced_path = False
     try:
         tmp_path, _ = _download_url_to_file(
             model.url,
@@ -959,6 +960,7 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
         tmp_stat = tmp_path.stat()
         try:
             os.replace(tmp_path, path)
+            replaced_path = True
             _clear_model_checksum_cache(tmp_path)
             _set_model_checksum_cache(path, checksum, tmp_stat)
         except OSError as exc:
@@ -970,7 +972,8 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
                 tmp_path.unlink()
             except FileNotFoundError:
                 pass
-        _clear_model_checksum_cache(path)
+        if replaced_path:
+            _clear_model_checksum_cache(path)
         raise
     return {**model_status(model, verify=True), "status": "done", "message": f"model downloaded: {path}"}
 

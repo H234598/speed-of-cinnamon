@@ -594,6 +594,39 @@ def _read_text_clipboard() -> str | None:
     return None
 
 
+def _clipboard_targets_contain_non_text_payload(targets: str) -> bool:
+    ignored = {"targets", "multiple", "timestamp", "save_targets"}
+    text_targets = {
+        "text",
+        "string",
+        "utf8_string",
+        "text/plain",
+        "text/plain;charset=utf-8",
+        "text/plain;charset=utf8",
+    }
+    for line in str(targets or "").splitlines():
+        target = line.strip().lower()
+        if not target or target in ignored:
+            continue
+        if target in text_targets or target.startswith("text/"):
+            continue
+        if target.startswith("image/") or target in {"application/octet-stream"}:
+            return True
+    return False
+
+
+def _clipboard_has_non_text_payload() -> bool:
+    xclip = _which("xclip")
+    if xclip:
+        targets = _run_stdout(["xclip", "-selection", "clipboard", "-t", "TARGETS", "-out"], resolved_command=xclip)
+        return _clipboard_targets_contain_non_text_payload(targets)
+    wl_paste = _which("wl-paste")
+    if wl_paste:
+        targets = _run_stdout(["wl-paste", "--list-types"], resolved_command=wl_paste)
+        return _clipboard_targets_contain_non_text_payload(targets)
+    return False
+
+
 def paste_from_clipboard() -> None:
     xdotool = _which("xdotool")
     if xdotool:
@@ -741,6 +774,8 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
             if not _record_clipboard_insertion(text, method):
                 return False
             clipboard_snapshot = _read_text_clipboard()
+            if clipboard_snapshot is None and _clipboard_has_non_text_payload():
+                raise OutputError("refusing to overwrite non-text clipboard for automatic paste")
             set_clipboard(text)
             paste_from_clipboard()
             committed = True

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -8,11 +9,20 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class InstallLocalTest(unittest.TestCase):
+    def _load_safe_fs_module(self):
+        spec = importlib.util.spec_from_file_location("safe_local_fs_test", REPO_ROOT / "scripts" / "safe-local-fs.py")
+        assert spec is not None
+        assert spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
     def _run_install_local(
         self,
         repo_root: Path,
@@ -138,6 +148,34 @@ class InstallLocalTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
             self.assertTrue(marker.exists())
             self.assertEqual(marker.read_text(encoding="utf-8"), "old install\n")
+
+    def test_install_local_refuses_hardlinked_man_page_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo_root = self._copy_installable_minimal_repo(tmp_path)
+            home = tmp_path / "home"
+            hardlink_source = tmp_path / "hardlinked-man-source"
+            man_page = repo_root / "docs" / "man" / "speed-of-cinnamon.1"
+            home.mkdir()
+            hardlink_source.write_text("man page\n", encoding="utf-8")
+            man_page.unlink()
+            os.link(hardlink_source, man_page)
+
+            result = self._run_install_local(repo_root, home)
+
+            self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+            self.assertIn("refusing to use hardlinked man page source during install", result.stderr)
+
+    def test_safe_fs_atomic_write_removes_own_target_after_postcheck_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = self._load_safe_fs_module()
+            target = Path(tmp) / "target.txt"
+
+            with mock.patch.object(module, "_check_leaf", side_effect=RuntimeError("postcheck failed")):
+                with self.assertRaisesRegex(RuntimeError, "postcheck failed"):
+                    module._write_bytes_atomic(target, b"new", 0o600, action="install")
+
+            self.assertFalse(target.exists())
 
     def test_install_local_refuses_symlinked_home_ancestor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

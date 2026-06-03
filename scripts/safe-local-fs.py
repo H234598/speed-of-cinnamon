@@ -82,6 +82,14 @@ def _lstat_at(parent_fd: int, name: str) -> os.stat_result | None:
         return None
 
 
+def _stat_identity(stat_result: os.stat_result) -> tuple[int, int, int]:
+    return (stat_result.st_dev, stat_result.st_ino, stat_result.st_mode)
+
+
+def _same_identity(left: os.stat_result | None, right: os.stat_result | None) -> bool:
+    return left is not None and right is not None and _stat_identity(left) == _stat_identity(right)
+
+
 def _check_leaf(parent_fd: int, name: str, path: Path, *, action: str, kind: str, must_exist: bool) -> None:
     stat_result = _lstat_at(parent_fd, name)
     if stat_result is None:
@@ -124,13 +132,20 @@ def cmd_replace(args: argparse.Namespace) -> None:
     assert src_fd is not None and dst_fd is not None
     try:
         _check_leaf(src_fd, src_name, src, action=args.action, kind=args.src_kind, must_exist=True)
+        src_stat = _lstat_at(src_fd, src_name)
         existing = _lstat_at(dst_fd, dst_name)
         if existing is not None:
             if args.dst_must_not_exist:
                 fail(f"destination already exists during {args.action}: {dst}")
             if stat_is_symlink_no_follow(existing.st_mode):
                 fail(f"refusing to follow symlink during {args.action}: {dst}")
+        _check_leaf(src_fd, src_name, src, action=args.action, kind=args.src_kind, must_exist=True)
+        if not _same_identity(src_stat, _lstat_at(src_fd, src_name)):
+            fail(f"source changed during {args.action}: {src}")
         os.replace(src_name, dst_name, src_dir_fd=src_fd, dst_dir_fd=dst_fd)
+        final_stat = _lstat_at(dst_fd, dst_name)
+        if not _same_identity(src_stat, final_stat):
+            fail(f"destination changed during {args.action}: {dst}")
         _check_leaf(dst_fd, dst_name, dst, action=args.action, kind=args.src_kind, must_exist=True)
     finally:
         os.close(src_fd)
@@ -142,6 +157,8 @@ def _write_bytes_atomic(dst: Path, data: bytes, mode: int, *, action: str) -> No
     assert parent_fd is not None
     tmp_name = f".{leaf}.{secrets.token_hex(8)}.tmp"
     fd: int | None = None
+    replaced = False
+    tmp_stat: os.stat_result | None = None
     try:
         existing = _lstat_at(parent_fd, leaf)
         if existing is not None and stat_is_symlink_no_follow(existing.st_mode):
@@ -152,13 +169,20 @@ def _write_bytes_atomic(dst: Path, data: bytes, mode: int, *, action: str) -> No
             handle.write(data)
             handle.flush()
             os.fchmod(handle.fileno(), mode)
+        tmp_stat = _lstat_at(parent_fd, tmp_name)
         os.replace(tmp_name, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        replaced = True
+        if not _same_identity(tmp_stat, _lstat_at(parent_fd, leaf)):
+            fail(f"destination changed during {action}: {dst}")
         _check_leaf(parent_fd, leaf, dst, action=action, kind="file", must_exist=True)
     except Exception:
         with context_suppress():
             if fd is not None:
                 os.close(fd)
             os.unlink(tmp_name, dir_fd=parent_fd)
+        if replaced and _same_identity(tmp_stat, _lstat_at(parent_fd, leaf)):
+            with context_suppress():
+                os.unlink(leaf, dir_fd=parent_fd)
         raise
     finally:
         os.close(parent_fd)
@@ -188,6 +212,21 @@ def cmd_copy_file(args: argparse.Namespace) -> None:
     finally:
         os.close(src_fd)
     _write_bytes_atomic(dst, data, int(args.mode, 8), action=args.action)
+
+
+def cmd_assert_file(args: argparse.Namespace) -> None:
+    path = _validate_absolute(args.path, "file path")
+    parent_fd, leaf = _open_parent(path, action=args.action)
+    assert parent_fd is not None
+    try:
+        _check_leaf(parent_fd, leaf, path, action=args.action, kind="file", must_exist=True)
+        stat_result = _lstat_at(parent_fd, leaf)
+        if stat_result is None:
+            fail(f"path is missing during {args.action}: {path}")
+        if stat_result.st_nlink != 1:
+            fail(f"refusing to use hardlinked {args.label} during {args.action}: {path}")
+    finally:
+        os.close(parent_fd)
 
 
 def cmd_remove(args: argparse.Namespace) -> None:
@@ -267,6 +306,12 @@ def build_parser() -> argparse.ArgumentParser:
     copy_file.add_argument("dst")
     copy_file.add_argument("mode")
     copy_file.set_defaults(func=cmd_copy_file)
+
+    assert_file = subparsers.add_parser("assert-file")
+    assert_file.add_argument("action")
+    assert_file.add_argument("path")
+    assert_file.add_argument("label")
+    assert_file.set_defaults(func=cmd_assert_file)
 
     remove = subparsers.add_parser("remove")
     remove.add_argument("action")
