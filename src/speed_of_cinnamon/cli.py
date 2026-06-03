@@ -638,7 +638,7 @@ def _read_binary_output(file: io.BufferedRandom, max_bytes: int, *, field_name: 
 
 
 def timestamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
 
 
 def print_result(payload: dict[str, object], json_output: bool) -> None:
@@ -933,7 +933,7 @@ def _prepare_private_file(path: Path, *, field_name: str) -> None:
     if nofollow_flag is None:
         raise RuntimeError(f"secure {field_name} open is not supported on this platform")
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | nofollow_flag, 0o600)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag, 0o600)
     except OSError as exc:
         raise RuntimeError(f"failed to prepare {field_name}: {path}") from exc
     try:
@@ -1797,9 +1797,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             audio_deleted = remove_file(str(cleanup_audio_path), suffix=audio_suffix)
         if cleanup_log_path is not None:
             log_deleted = remove_file(cleanup_log_path, suffix=".log")
-        state.audio_path = done_audio_path
-        state.log_path = done_log_path
-        state.transcript_path = str(text_path)
+        state = done
         artifact_cleanup_active_paths: set[Path] = set()
         if stabilized_audio_path is not None:
             artifact_cleanup_active_paths.add(stabilized_audio_path)

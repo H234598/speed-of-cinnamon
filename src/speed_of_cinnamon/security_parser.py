@@ -59,7 +59,7 @@ _BARE_SENSITIVE_WORD_VALUE_PATTERN = (
 )
 _VERBAL_TOKEN_RE = re.compile(
     r"(?i)\b(?:token|api[_-]?key|api\s+key|secret|apikey|bearer)\b\s+"
-    r"(?:ist|is|lautet|hei[ßs]t)\s+"
+    r"(?:ist|is|lautet|heißt|heisst|heist)\s+"
     rf"(?!(?:{_BARE_SENSITIVE_STATUS_WORD_PATTERN})\b)"
     rf"(?!(?:{_SPOKEN_SENSITIVE_LABEL_PATTERN})\s*[:=])"
     + _SPOKEN_SENSITIVE_VALUE_PATTERN
@@ -80,7 +80,7 @@ _PASSWORD_RE = re.compile(
 )
 _VERBAL_PASSWORD_RE = re.compile(
     r"(?i)\b(?:password|passwort|kennwort|passcode)\b\s+"
-    r"(?:ist|is|lautet|hei[ßs]t)\s+"
+    r"(?:ist|is|lautet|heißt|heisst|heist)\s+"
     rf"(?!(?:{_BARE_SENSITIVE_STATUS_WORD_PATTERN})\b)"
     rf"(?!(?:{_SPOKEN_SENSITIVE_LABEL_PATTERN})\s*[:=])"
     + _SPOKEN_SENSITIVE_VALUE_PATTERN
@@ -99,7 +99,7 @@ _LABELED_NAME_RE = re.compile(
     r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß-]+){0,3}"
 )
 _NAME_RE = re.compile(
-    r"(?i)\b(?:mein\s+name\s+ist|ich\s+hei[ßss]e|name\s+is|my\s+name\s+is)\s+"
+    r"(?i)\b(?:mein\s+name\s+ist|ich\s+(?:heiße|heisse|heise)|name\s+is|my\s+name\s+is)\s+"
     r"([A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]*(?:\s+[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]*){0,3})"
 )
 _BANK_DATA_RE = re.compile(

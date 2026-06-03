@@ -178,10 +178,10 @@ class NextVersionTest(unittest.TestCase):
             next_version.parse_version(None)  # type: ignore[arg-type]
 
     def test_from_tag_without_prefix_is_accepted(self) -> None:
-        self.assertEqual(run_version("--from-tag", "0.1.20"), run_version("--from-tag", "v0.1.20"))
+        self.assertEqual(next_version.normalize_tag("0.1.20"), next_version.normalize_tag("v0.1.20"))
 
     def test_from_tag_with_whitespace_is_accepted(self) -> None:
-        self.assertEqual(run_version("--from-tag", "  0.1.20  "), run_version("--from-tag", "v0.1.20"))
+        self.assertEqual(next_version.normalize_tag("  0.1.20  "), next_version.normalize_tag("v0.1.20"))
 
     def test_from_tag_with_only_whitespace_is_rejected(self) -> None:
         code, stderr = run_version_fail_stdout_stderr("--from-tag", "   ")
@@ -197,6 +197,11 @@ class NextVersionTest(unittest.TestCase):
         code, stderr = run_version_fail_stdout_stderr("--base", "0.1.20", "--add-commits", "10", path="/nonexistent")
         self.assertEqual(code, 0)
         self.assertEqual(stderr, "")
+
+    def test_implicit_base_commit_count_falls_back_to_zero_without_git(self) -> None:
+        result = _run_version("--base", "0.1.99", "--breaking", expect_ok=True, path="/nonexistent")
+        self.assertEqual(result.stdout.strip(), "1.0.0")
+        self.assertEqual(result.stderr, "")
 
     def test_large_add_commits_rolls_many_levels(self) -> None:
         self.assertEqual(

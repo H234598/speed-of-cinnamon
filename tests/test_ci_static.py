@@ -199,14 +199,15 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("class CommandChainTest", text)
         self.assertIn("unsupported shell operator", text)
 
-    def test_runtime_code_does_not_execute_subprocess_with_shell_strings(self) -> None:
-        src_root = REPO_ROOT / "src"
+    def test_runtime_and_release_code_do_not_execute_subprocess_with_shell_strings(self) -> None:
+        code_roots = [REPO_ROOT / "src", REPO_ROOT / "scripts"]
         offenders = []
-        for path in src_root.rglob("*.py"):
-            if "__pycache__" in path.parts:
-                continue
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-            offenders.extend(_subprocess_security_offenders(path, tree))
+        for code_root in code_roots:
+            for path in code_root.rglob("*.py"):
+                if "__pycache__" in path.parts:
+                    continue
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+                offenders.extend(_subprocess_security_offenders(path, tree))
 
         self.assertFalse(offenders, f"unsafe subprocess usage found: {offenders}")
 

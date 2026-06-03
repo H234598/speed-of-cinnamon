@@ -266,8 +266,7 @@ def build_ollama_prompt(
 ) -> str:
     if not isinstance(text, str) or isinstance(text, bool):
         raise PostProcessError("text must be text")
-    if not isinstance(language, str) or isinstance(language, bool):
-        raise PostProcessError("language must be text")
+    language = _safe_prompt_language(language)
     if not isinstance(personal_context, str) or isinstance(personal_context, bool):
         raise PostProcessError("personal context must be text")
     if not isinstance(vocabulary, str) or isinstance(vocabulary, bool):
@@ -287,6 +286,20 @@ def build_ollama_prompt(
         sections.append(personalization)
     sections.append("Transcript:\n" + text.strip())
     return "\n\n".join(section for section in sections if section)
+
+
+def _safe_prompt_language(language: str) -> str:
+    if not isinstance(language, str) or isinstance(language, bool):
+        raise PostProcessError("language must be text")
+    value = language.strip()
+    if not value:
+        return "auto"
+    if len(value) > 32:
+        raise PostProcessError("language must be a simple language code")
+    for char in value:
+        if not char.isascii() or not (char.isalnum() or char in ("-", "_")):
+            raise PostProcessError("language must be a simple language code")
+    return value
 
 
 def _ollama_endpoint(url: str, path: str) -> str:
@@ -635,6 +648,7 @@ def build_openai_compatible_messages(
     vocabulary: str = "",
     instruction: str = "",
 ) -> list[dict[str, str]]:
+    language = _safe_prompt_language(language)
     try:
         personalization = build_personalization_prompt(personal_context, vocabulary)
     except ValueError as exc:

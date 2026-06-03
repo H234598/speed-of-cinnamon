@@ -88,6 +88,16 @@ class CliTest(unittest.TestCase):
 
             self.assertFalse((real / "security.txt").exists())
 
+    def test_prepare_private_file_rejects_existing_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "recording.wav"
+            path.write_bytes(b"old")
+
+            with self.assertRaisesRegex(RuntimeError, "failed to prepare recording audio file"):
+                cli._prepare_private_file(path, field_name="recording audio file")
+
+            self.assertEqual(path.read_bytes(), b"old")
+
     def test_write_json_atomic_rejects_symlink_parent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -139,6 +139,13 @@ const AUTO_PASTE_IDENTITY_MARKERS = {
     "soffice",
     "spreadsheet",
     "wps"
+  ],
+  "teams": [
+    "com.microsoft.teams",
+    "microsoft teams",
+    "microsoft-teams",
+    "msteams",
+    "teams-for-linux"
   ]
 };
 const PANEL_STATUS_CLASSES = [

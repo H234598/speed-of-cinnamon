@@ -93,7 +93,12 @@ def commits_since_ref(ref: str) -> int:
     if ref == "":
         raise UserInputError("ref must be a non-empty string")
     try:
-        result = subprocess.run(["git", "rev-list", "--count", f"{ref}..HEAD"], check=True, text=True, capture_output=True)
+        result = subprocess.run(  # nosec B603,B607 - fixed git argv, shell=False, ref is validated as text.
+            ["git", "rev-list", "--count", f"{ref}..HEAD"],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
     except FileNotFoundError as exc:
         raise GitEnvironmentError("git command not available") from exc
     except subprocess.CalledProcessError as exc:
@@ -112,6 +117,15 @@ def commits_since_ref(ref: str) -> int:
 
 def commits_since_tag(tag: str) -> int:
     return commits_since_ref(normalize_tag(tag))
+
+
+def implicit_commits_since_tag(tag: str) -> int:
+    try:
+        if tag_exists(tag):
+            return commits_since_tag(tag)
+    except GitEnvironmentError:
+        return 0
+    return 0
 
 def add_patches(base: tuple[int,int,int], patch_steps: int) -> tuple[int,int,int]:
     major, minor, patch = _assert_version_tuple(base)
@@ -173,7 +187,12 @@ def tag_exists(tag: str) -> bool:
         raise UserInputError("tag must be a non-empty string")
     tag = normalize_tag(tag)
     try:
-        rc = subprocess.run(["git", "tag", "-l", tag], text=True, capture_output=True, check=True)
+        rc = subprocess.run(  # nosec B603,B607 - fixed git argv, shell=False, tag is normalized first.
+            ["git", "tag", "-l", tag],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
     except FileNotFoundError as exc:
         raise GitEnvironmentError("git command not available") from exc
     except subprocess.CalledProcessError as exc:
@@ -236,14 +255,14 @@ def main() -> int:
             commits = a.add_commits
         else:
             auto_tag = tag_for_version(base)
-            commits = commits_since_tag(auto_tag) if tag_exists(auto_tag) else 0
+            commits = implicit_commits_since_tag(auto_tag)
     else:
         base = read_current_version()
         if a.add_commits is not None:
             commits = a.add_commits
         else:
             auto_tag = tag_for_version(base)
-            commits = commits_since_tag(auto_tag) if tag_exists(auto_tag) else 0
+            commits = implicit_commits_since_tag(auto_tag)
 
     major, minor, patch = add_patches(base, commits)
     if a.feature:

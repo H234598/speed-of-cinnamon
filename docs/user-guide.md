@@ -101,7 +101,7 @@ Use `Text options` to toggle:
 - `Append trailing space`
 - `Replace accents before output`
 
-Use `Auto-Paste` to choose one or more target-window title markers such as `codex`, `Terminal`, `PDF`, `Excel`, or `Teams`. When any selected marker appears in the remembered target window title, inserted text gets a trailing Enter. Use `Custom string...` for custom comma-separated or line-separated markers; an empty custom value disables Auto-Paste. The default marker is `codex`.
+Use `Auto-Paste` to choose one or more target-window markers such as `codex`, `Terminal`, `PDF`, `Excel`, or `Teams`. Built-in presets require both the selected title marker and a matching known window identity before inserted text gets a trailing Enter. Use `Custom string...` for custom comma-separated or line-separated title-only markers; an empty custom value disables Auto-Paste. The default marker is `codex`.
 
 Accent replacement is a compatibility fallback for direct typing. Saved transcripts stay unchanged.
 

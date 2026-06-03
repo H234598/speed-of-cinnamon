@@ -248,7 +248,7 @@
   "auto-paste-window-title": {
     "type": "entry",
     "description": "AutoPaste window title",
-    "tooltip": "When known comma-separated or line-separated text appears in the remembered target window title and the window identity matches a known target class, inserted text gets a trailing Enter. Empty disables Auto-Paste. Max 4096 chars.",
+    "tooltip": "Built-in presets require the title marker plus a matching known window identity; custom strings are title-only. Empty disables Auto-Paste. Max 4096 chars.",
     "default": "codex"
   },
   "cli-path": {

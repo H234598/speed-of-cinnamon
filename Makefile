@@ -47,7 +47,7 @@ lint-workflows:
 	./scripts/lint-workflows.sh
 
 python-security-scan:
-	bandit -q -r src/speed_of_cinnamon -x tests
+	bandit -q -r src/speed_of_cinnamon scripts -x tests
 
 shell-security-scan:
 	shellcheck scripts/*.sh
