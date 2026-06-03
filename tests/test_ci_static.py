@@ -928,6 +928,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("archive_sha256=\"8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8\"", lint_workflow)
         self.assertIn("sha256sum -c -", ci_workflow)
         self.assertIn("sha256sum -c -", lint_workflow)
+        self.assertGreaterEqual(ci_workflow.count("sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint"), 2)
         self.assertNotIn("rhysd/actionlint:", linter)
         self.assertNotIn("latest", linter)
 
