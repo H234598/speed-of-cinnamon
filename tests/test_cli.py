@@ -2826,6 +2826,20 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("preview", encoded)
         self.assertNotIn('"text"', encoded)
 
+    @mock.patch("speed_of_cinnamon.cli.list_input_sources", side_effect=RuntimeError("token abc123"))
+    def test_diagnostics_redacts_nested_source_errors(self, mocked_sources: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["diagnostics", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        encoded = json.dumps(payload)
+        self.assertEqual(code, 0)
+        self.assertNotIn("token abc123", encoded)
+        self.assertNotIn("abc123", encoded)
+
     @mock.patch("speed_of_cinnamon.cli.list_alarm_payload", return_value={"alarms": [], "last_checked_at": ""})
     @mock.patch("speed_of_cinnamon.cli.list_input_sources", return_value=[])
     def test_diagnostics_rejects_non_boolean_applet(self, mocked_sources: mock.Mock, mocked_alarms: mock.Mock) -> None:
@@ -4482,6 +4496,28 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["status"], "recorded")
         self.assertEqual(payload["microphone_level"]["percent"], 50)
         self.assertEqual(payload["microphone_level"]["source"], "recording-file")
+
+    def test_status_redacts_microphone_level_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "active.wav"
+            self._write_wav(audio, [0, 8192, -16384])
+            state_file = tmp_path / "state.json"
+            StateStore(state_file).write(RecordingState(status="recording", pid=999999999, audio_path=str(audio)))
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.read_recording_level", side_effect=cli.RecorderError("token abc123")),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["status", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 0)
+        self.assertNotIn("token abc123", payload["microphone_level"]["detail"])
+        self.assertNotIn("abc123", payload["microphone_level"]["detail"])
 
     def test_start_defaults_language_to_english(self) -> None:
         proc = mock.Mock()

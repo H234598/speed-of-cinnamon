@@ -465,10 +465,7 @@ def _release_clipboard_dedup_lock(path: Path | None) -> None:
 
 
 def _normalize_clipboard_text(text: str) -> str:
-    if text == "":
-        return ""
-    cleaned = " ".join(text.strip().split())
-    return cleaned or text
+    return text
 
 
 def _record_clipboard_insertion(text: str, method: str) -> bool:
@@ -1059,15 +1056,14 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
         finally:
             rollback_error: OutputError | None = None
             if not committed:
-                if not operation_performed:
-                    if clipboard_snapshot_available:
-                        try:
-                            if _clipboard_still_contains_inserted_text(text):
-                                set_clipboard(clipboard_snapshot)
-                        except OutputError as exc:
-                            rollback_error = exc
-                    _restore_clipboard_insertion_snapshot(snapshot)
-                    _restore_clipboard_dedup_state(persistent_snapshot)
+                if clipboard_snapshot_available:
+                    try:
+                        if _clipboard_still_contains_inserted_text(text):
+                            set_clipboard(clipboard_snapshot)
+                    except OutputError as exc:
+                        rollback_error = exc
+                _restore_clipboard_insertion_snapshot(snapshot)
+                _restore_clipboard_dedup_state(persistent_snapshot)
             _release_clipboard_dedup_lock(lock_path)
             if rollback_error is not None:
                 raise OutputError("failed to restore previous clipboard after paste failure") from rollback_error

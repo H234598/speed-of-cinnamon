@@ -655,6 +655,22 @@ def _redact_error_for_user(error: object) -> str:
     return sanitize_error_message(error, max_chars=MAX_LOG_EXCERPT_CHARS)
 
 
+def _redact_error_payload(value: object) -> object:
+    if isinstance(value, dict):
+        clean: dict[object, object] = {}
+        for key, child in value.items():
+            if isinstance(key, str) and key in {"detail", "error", "error_message"} and child is not None:
+                clean[key] = _redact_error_for_user(child)
+            else:
+                clean[key] = _redact_error_payload(child)
+        return clean
+    if isinstance(value, list):
+        return [_redact_error_payload(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_error_payload(item) for item in value)
+    return value
+
+
 def append_space_if_needed(text: str, append_space: bool) -> str:
     if isinstance(text, bool) or not isinstance(text, str):
         raise RuntimeError("text must be text")
@@ -2696,7 +2712,7 @@ def run(argv: list[str] | None = None) -> int:
         configure_logging(getattr(args, "log_level", DEFAULT_LOG_LEVEL))
         json_output = _coerce_bool(getattr(args, "json", False), field_name="json")
         log_event("info", "command_start", command=command_name)
-        payload = args.handler(args)
+        payload = _redact_error_payload(args.handler(args))
         if "error" in payload and payload["error"] is not None:
             payload["error"] = _redact_error_for_user(payload["error"])
         status = str(payload.get("status", "ok"))
