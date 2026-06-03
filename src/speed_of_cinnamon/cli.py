@@ -1195,10 +1195,13 @@ def prune_recording_groups(
     skipped_active_paths: list[str] = []
     cutoff = time.time() - max(0, max_age_days) * 24 * 60 * 60
     groups = recording_groups()
+    grouped_artifacts: list[Path] = []
     for index, group in enumerate(groups):
+        files = group.get("files", [])
+        if isinstance(files, list):
+            grouped_artifacts.extend(path for path in files if isinstance(path, Path))
         if index < max(keep, 0) and float(group.get("mtime", 0.0)) >= cutoff:
             continue
-        files = group.get("files", [])
         if not isinstance(files, list):
             continue
         if any(path.resolve(strict=False) in active_paths for path in files):
@@ -1236,7 +1239,7 @@ def prune_recording_groups(
     }
     remaining_artifacts = [
         path
-        for path in recording_artifact_files()
+        for path in grouped_artifacts
         if path.resolve(strict=False) not in handled_paths
     ]
     file_cap_result = prune_files_by_mtime(

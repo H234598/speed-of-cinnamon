@@ -1768,6 +1768,28 @@ class CliTest(unittest.TestCase):
         self.assertIn(str(ordered[0]), result["deleted_paths"])
         self.assertEqual(remaining_files, 20)
 
+    def test_prune_recording_groups_reuses_grouped_artifacts_for_file_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            for index in range(21):
+                audio = recordings / f"{index:03d}.wav"
+                audio.write_bytes(b"audio")
+                os.utime(audio, (100 + index, 100 + index))
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.recording_artifact_files", side_effect=AssertionError("unexpected rescan")),
+            ):
+                result = cli.prune_recording_groups(
+                    keep=cli.MAX_TEMP_RECORDING_FILES,
+                    active_paths=set(),
+                    dry_run=True,
+                    max_age_days=36500,
+                )
+
+        self.assertEqual(len(result["planned_paths"]), 1)
+        self.assertTrue(str(recordings / "000.wav") in result["planned_paths"])
+
     def test_cleanup_dry_run_does_not_delete_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
