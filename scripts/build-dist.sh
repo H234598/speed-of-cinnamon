@@ -7,7 +7,7 @@ repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_dir}"
 safe_fs="${repo_dir}/scripts/safe-local-fs.py"
 
-for tool in python3 tar sha256sum mktemp cp find rm git stat; do
+for tool in python3 tar sha256sum mktemp cp find rm git stat realpath; do
   if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found.\n' "${tool}" >&2
     exit 1
@@ -47,16 +47,20 @@ if [[ -L "${dist_dir}" ]]; then
 fi
 work_root="${TMPDIR:-/tmp}"
 if [[ ! "${work_root}" == /* ]]; then
-  work_root="/tmp"
+  printf 'temporary root must be an absolute path: %s\n' "${work_root}" >&2
+  exit 1
 fi
 if [[ -L "${work_root}" ]]; then
-  work_root="${repo_dir}/.tmp"
+  printf 'temporary root must not be a symlink: %s\n' "${work_root}" >&2
+  exit 1
 fi
 if [[ ! -d "${work_root}" || ! -w "${work_root}" ]]; then
-  work_root="${repo_dir}/.tmp"
+  printf 'temporary root is not a writable directory: %s\n' "${work_root}" >&2
+  exit 1
 fi
-if [[ -L "${work_root}" ]]; then
-  work_root="/tmp"
+if ! work_root="$(realpath "${work_root}")"; then
+  printf 'failed to resolve temporary root: %s\n' "${work_root}" >&2
+  exit 1
 fi
 mkdir -p "${work_root}"
 work_dir="$(mktemp -d "${work_root}/speed-of-cinnamon-build-dist-XXXXXX")"

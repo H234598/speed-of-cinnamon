@@ -3,7 +3,7 @@ set -euo pipefail
 umask 077
 IFS=$'\n\t'
 
-repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "${repo_dir}"
 
 dist_dir="${repo_dir}/dist"
@@ -31,7 +31,10 @@ if [[ $# -eq 1 ]]; then
     printf 'RPM package must not be a symlink: %s\n' "${rpm_path}" >&2
     exit 1
   fi
-  rpm_path="$(realpath "${rpm_path}")"
+  if ! rpm_path="$(realpath "${rpm_path}")"; then
+    printf 'failed to resolve RPM path: %s\n' "${1}" >&2
+    exit 1
+  fi
 else
   rpm_candidates=(
     "${repo_dir}"/dist/rpmbuild/RPMS/noarch/speed-of-cinnamon-*.noarch.rpm

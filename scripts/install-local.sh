@@ -30,7 +30,7 @@ if [[ ! -d "${HOME}" ]]; then
   printf 'HOME must be an existing directory: %s\n' "${HOME}" >&2
   exit 1
 fi
-for tool in find grep python3 command; do
+for tool in find grep python3 command realpath; do
   if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found.\n' "${tool}" >&2
     exit 1
@@ -96,16 +96,20 @@ resolve_tmp_root() {
   local base="${TMPDIR:-/tmp}"
 
   if [[ ! "${base}" == /* ]]; then
-    base="${repo_dir}/.tmp"
+    printf 'temporary root must be an absolute path: %s\n' "${base}" >&2
+    exit 1
   fi
   if [[ -L "${base}" ]]; then
-    base="${repo_dir}/.tmp"
+    printf 'temporary root must not be a symlink: %s\n' "${base}" >&2
+    exit 1
   fi
   if [[ ! -d "${base}" || ! -w "${base}" ]]; then
-    base="${repo_dir}/.tmp"
+    printf 'temporary root is not a writable directory: %s\n' "${base}" >&2
+    exit 1
   fi
-  if [[ -L "${base}" ]]; then
-    base="/tmp"
+  if ! base="$(realpath "${base}")"; then
+    printf 'failed to resolve temporary root: %s\n' "${base}" >&2
+    exit 1
   fi
   mkdir -p "${base}"
   printf '%s\n' "${base}"

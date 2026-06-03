@@ -425,6 +425,42 @@ class InstallLocalTest(unittest.TestCase):
             self.assertIn("refusing to follow symlink during install", result.stderr)
             self.assertFalse((outside / "bin" / "speed-of-cinnamon").exists())
 
+    def test_install_local_rejects_relative_tmpdir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo_root = self._copy_installable_minimal_repo(tmp_path)
+            home = tmp_path / "home"
+            home.mkdir()
+
+            result = self._run_install_local(
+                repo_root,
+                home,
+                {"TMPDIR": "bad-relative"},
+            )
+
+            self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+            self.assertIn("temporary root must be an absolute path", result.stderr)
+
+    def test_install_local_rejects_symlinked_tmpdir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo_root = self._copy_installable_minimal_repo(tmp_path)
+            home = tmp_path / "home"
+            home.mkdir()
+            bad_tmp_root = tmp_path / "unsafe-tmp"
+            bad_tmp_target = tmp_path / "tmp-target"
+            bad_tmp_target.mkdir()
+            bad_tmp_root.symlink_to(bad_tmp_target, target_is_directory=True)
+
+            result = self._run_install_local(
+                repo_root,
+                home,
+                {"TMPDIR": str(bad_tmp_root)},
+            )
+
+            self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+            self.assertIn("temporary root must not be a symlink", result.stderr)
+
     def test_installed_wrapper_uses_install_path_not_runtime_home(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

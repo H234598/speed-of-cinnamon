@@ -616,6 +616,34 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('$\'\\n\'', verify_snap)
         self.assertIn('snap file path contains control characters', verify_snap)
 
+    def test_build_snap_and_verify_rpm_guard_paths_against_canonical_repo_dir(self) -> None:
+        build_snap = (REPO_ROOT / "scripts" / "build-snap.sh").read_text(encoding="utf-8")
+        verify_rpm = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(encoding="utf-8")
+
+        self.assertIn('repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"', build_snap)
+        self.assertIn('repo_tmp_abs="$(realpath "${repo_tmp_root}")"', build_snap)
+        self.assertIn('if [[ "${repo_tmp_abs}" == "${repo_dir}" || "${repo_tmp_abs}" == "${repo_dir}/"* ]]; then', build_snap)
+        self.assertIn('repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"', verify_rpm)
+        self.assertIn('if ! rpm_path="$(realpath "${rpm_path}")"; then', verify_rpm)
+        self.assertIn('if [[ -L "${rpm_path}" || ! -f "${rpm_path}" || ! ( "${rpm_path}" == "${repo_dir}/dist/rpmbuild/"*".rpm" ||', verify_rpm)
+
+    def test_temp_root_resolution_is_fail_closed_in_build_dist_and_install_local(self) -> None:
+        build_dist = (REPO_ROOT / "scripts" / "build-dist.sh").read_text(encoding="utf-8")
+        install_local = (REPO_ROOT / "scripts" / "install-local.sh").read_text(encoding="utf-8")
+
+        self.assertIn('work_root="${TMPDIR:-/tmp}"', build_dist)
+        self.assertIn('printf \'temporary root must be an absolute path:', build_dist)
+        self.assertIn('temporary root must be an absolute path:', build_dist)
+        self.assertIn('printf \'temporary root must not be a symlink:', build_dist)
+        self.assertIn('printf \'failed to resolve temporary root:', build_dist)
+        self.assertNotIn("${repo_dir}/.tmp", build_dist)
+
+        self.assertIn('local base="${TMPDIR:-/tmp}"', install_local)
+        self.assertIn('temporary root must be an absolute path:', install_local)
+        self.assertIn('printf \'temporary root must not be a symlink:', install_local)
+        self.assertIn('printf \'failed to resolve temporary root:', install_local)
+        self.assertNotIn("${repo_dir}/.tmp", install_local)
+
     def test_tag_release_workflow_publishes_verified_assets(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         publisher = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
