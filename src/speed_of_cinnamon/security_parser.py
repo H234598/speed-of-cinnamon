@@ -35,16 +35,20 @@ _IBAN_RE = re.compile(r"\b[A-Za-z]{2}\d{2}(?:[ -]?[A-Z0-9]){11,30}\b", re.IGNORE
 _PHONE_RE = re.compile(
     r"(?<!\d)(?:\+\d[\d\s().-]{7,20}\d|(?:\(?\d{2,5}\)?[\s.-]){1,3}\d{3,}|\d{10,15})(?!\d)"
 )
-_TOKEN_RE = re.compile(
-    r"(?i)\b(?:token|api[_-]?key|api\s+key|secret|apikey|bearer)\b\s*(?::|=)\s*[^,;\s]+"
-)
 _SPOKEN_SENSITIVE_LABEL_PATTERN = (
     r"(?:token|api[_-]?key|api\s+key|secret|apikey|bearer|password|passwort|kennwort|"
     r"passcode|iban|name|adresse|anschrift|address|kundennummer|kundennr|kunden-nr|ssn|tax\s+id)"
 )
+_SECRET_VALUE_PATTERN = (
+    r"(?:\"[^\n\"]{1,20000}\"|'[^\n']{1,20000}'|"
+    rf"(?:(?!\s+(?:(?:und|and)\s+)?(?:meine|my\s+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)[^\n]){{1,20000}})"
+)
+_TOKEN_RE = re.compile(
+    r"(?i)\b(?:token|api[_-]?key|api\s+key|secret|apikey|bearer)\b\s*(?::|=)\s*"
+    + _SECRET_VALUE_PATTERN
+)
 _SPOKEN_SENSITIVE_VALUE_PATTERN = (
-    r"(?:\"[^\n\"]{1,10000}\"|'[^\n']{1,10000}'|"
-    rf"(?:(?!\s+(?:(?:und|and)\s+)?(?:meine|my\s+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)[^,;\n.?!]){{1,10000}})"
+    _SECRET_VALUE_PATTERN
 )
 _SPOKEN_NAME_VALUE_PATTERN = (
     rf"(?:(?!\s+(?:und|and)\b)(?!\s+(?:(?:und|and)\s+)?(?:meine|my\s+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)[^,;\n.?!]){{1,10000}}"
@@ -55,10 +59,9 @@ _BARE_SENSITIVE_STATUS_WORD_PATTERN = (
 )
 _BARE_SENSITIVE_WORD_VALUE_PATTERN = (
     rf"(?!(?:{_BARE_SENSITIVE_STATUS_WORD_PATTERN})\b)"
-    r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]{1,120}"
+    r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]{1,20000}"
     rf"(?:\s+(?!(?:(?:und|and)\s+)?(?:meine|my\s+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)"
-    rf"(?!(?:{_BARE_SENSITIVE_STATUS_WORD_PATTERN})\b)"
-    r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]{0,120})*\b"
+    r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]{0,20000})*\b"
 )
 _VERBAL_TOKEN_RE = re.compile(
     r"(?i)\b(?:token|api[_-]?key|api\s+key|secret|apikey|bearer)\b\s+"
@@ -79,7 +82,7 @@ _BARE_TOKEN_WORD_RE = re.compile(
 )
 _PASSWORD_RE = re.compile(
     r"(?i)\b(?:password|passwort|kennwort|passcode)\b\s*[:=]\s*"
-    r"(?:\"[^\n\"]{1,120}\"|'[^\n']{1,120}'|[^,;\n.?!]{1,120})"
+    + _SECRET_VALUE_PATTERN
 )
 _VERBAL_PASSWORD_RE = re.compile(
     r"(?i)\b(?:password|passwort|kennwort|passcode)\b\s+"

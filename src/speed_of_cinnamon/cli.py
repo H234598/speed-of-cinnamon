@@ -1874,13 +1874,20 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
                 state = store.read()
             if trimmed_audio_path is not None:
                 remove_file(str(trimmed_audio_path), suffix=".flac")
+            stabilized_audio_deleted = False
             if stabilized_audio_path is not None:
-                remove_file(str(stabilized_audio_path), suffix=stabilized_audio_path.suffix)
+                stabilized_audio_deleted = remove_file(str(stabilized_audio_path), suffix=stabilized_audio_path.suffix)
             error_update: dict[str, object] = {
                 "status": "error",
                 "stopped_at": now_iso(),
                 "error": error_text,
             }
+            if (
+                stabilized_audio_path is not None
+                and str(state.audio_path or "") == str(stabilized_audio_path)
+                and (stabilized_audio_deleted or _recording_artifact_stat(stabilized_audio_path) is None)
+            ):
+                error_update["audio_path"] = ""
             error_delete_audio_path: Path | None = None
             error_delete_log_path: str | None = None
             if not keep_recording_artifacts:
@@ -1903,7 +1910,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
                 remove_file(str(error_delete_audio_path), suffix=audio_suffix)
             if error_delete_log_path is not None:
                 remove_file(error_delete_log_path, suffix=".log")
-        raise RuntimeError(error_text)
+        raise RuntimeError(str(error_update.get("error", error_text)) if state_marked_finalizing else error_text)
     finally:
         _release_finalization_lock(lock_path)
 

@@ -102,6 +102,16 @@ class SecurityParserTest(unittest.TestCase):
         self.assertNotIn("cd", sanitized)
         self.assertGreaterEqual(count, 1)
 
+    def test_apply_security_mode_masks_labeled_multisegment_and_long_password_values(self) -> None:
+        long_password = "a" * 1500
+        sanitized, count = apply_security_mode(f"token: abc def und password: {long_password}", [])
+
+        self.assertIn("[redacted token]", sanitized)
+        self.assertIn("[redacted password]", sanitized)
+        self.assertNotIn("abc def", sanitized)
+        self.assertNotIn(long_password, sanitized)
+        self.assertGreaterEqual(count, 2)
+
     def test_apply_security_mode_masks_spoken_secret_values(self) -> None:
         sanitized, count = apply_security_mode("mein Passwort ist ab cd und token is: abc123", [])
 
@@ -163,6 +173,15 @@ class SecurityParserTest(unittest.TestCase):
         self.assertNotIn("blau", sanitized)
         self.assertNotIn("gruen", sanitized)
         self.assertIn("token invalid bleibt", sanitized)
+        self.assertGreaterEqual(count, 2)
+
+    def test_apply_security_mode_masks_bare_secret_words_past_conjunctions(self) -> None:
+        sanitized, count = apply_security_mode("token alpha und beta und password rot und blau", [])
+
+        self.assertIn("[redacted token]", sanitized)
+        self.assertIn("[redacted password]", sanitized)
+        self.assertNotIn("alpha und beta", sanitized)
+        self.assertNotIn("rot und blau", sanitized)
         self.assertGreaterEqual(count, 2)
 
     def test_apply_security_mode_masks_long_bare_spoken_word_secret_values(self) -> None:
