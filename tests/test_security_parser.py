@@ -82,12 +82,12 @@ class SecurityParserTest(unittest.TestCase):
         self.assertEqual(sanitized, "token xxyyyy und [redacted blacklist item]! Und noch [redacted blacklist item].")
 
     def test_apply_blacklist_mode_masks_entries_with_non_word_boundaries(self) -> None:
-        text = "Compiler C++ und @token bleiben nicht sichtbar, aber XC++Y ist ein anderes Wort."
+        text = "Compiler C++ and @token stay hidden, but XC++Y stays visible."
         sanitized, count = apply_blacklist_mode(text, ["C++", "@token"])
         self.assertEqual(count, 2)
         self.assertEqual(
             sanitized,
-            "Compiler [redacted blacklist item] und [redacted blacklist item] bleiben nicht sichtbar, aber XC++Y ist ein anderes Wort.",
+            "Compiler [redacted blacklist item] and [redacted blacklist item] stay hidden, but XC++Y stays visible.",
         )
 
     def test_update_blacklist_file_deduplicates_and_persists(self) -> None:
