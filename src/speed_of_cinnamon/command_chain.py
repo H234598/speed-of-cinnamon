@@ -317,7 +317,7 @@ def run_command_chain(
                 stdout_size = _filesize(stdout_file)
                 stderr_size = _filesize(stderr_file)
 
-                if stdout_size > max_output_chars:
+                if stdout_size + stderr_size > max_output_chars:
                     raise CommandChainError(f"{label} command output exceeded {max_output_chars} bytes")
 
                 if proc.returncode != 0:

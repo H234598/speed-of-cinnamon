@@ -265,6 +265,19 @@ class CommandChainTest(unittest.TestCase):
             with self.assertRaisesRegex(CommandChainError, "output exceeded"):
                 run_command_chain([("cmd",)], "", label="post-process", max_output_chars=5)
 
+    def test_run_command_chain_rejects_large_stderr_output(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            stderr_file = kwargs["stderr"]
+            stderr_file.write(b"x" * 10)
+            return subprocess.CompletedProcess(["cmd"], 0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
+            mock.patch("speed_of_cinnamon.command_chain.subprocess.run", side_effect=fake_run),
+        ):
+            with self.assertRaisesRegex(CommandChainError, "output exceeded"):
+                run_command_chain([("cmd",)], "", label="post-process", max_output_chars=5)
+
     def test_run_command_chain_redacts_failed_command_output(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             stdout_file = kwargs["stdout"]
