@@ -1393,6 +1393,11 @@ class TranscriberTest(unittest.TestCase):
         mocked_open_http_request.assert_not_called()
 
     def test_openai_compatible_api_rejects_cross_origin_redirect(self) -> None:
+        _validate_same_origin_redirect(
+            "https://api.openai.com/v1/audio/transcriptions",
+            "https://api.openai.com:443/v1/audio/transcriptions?request=next",
+            field_name="OpenAI-compatible speech request",
+        )
         with self.assertRaisesRegex(TranscriptionError, "redirect target changes origin"):
             _validate_same_origin_redirect(
                 "https://api.openai.com/v1/audio/transcriptions",
@@ -1412,6 +1417,53 @@ class TranscriberTest(unittest.TestCase):
                     backend="openai-compatible",
                     openai_compatible_model="gpt-4o-transcribe",
                     openai_compatible_url="ftp://127.0.0.1:8000/v1",
+                )
+
+    def test_openai_compatible_api_rejects_url_userinfo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with self.assertRaisesRegex(TranscriptionError, "must not contain userinfo"):
+                transcribe(
+                    audio,
+                    "en",
+                    Path(tmp) / "sample.txt",
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-transcribe",
+                    openai_compatible_url="https://user:secret@example.com/v1",
+                )
+
+    def test_openai_compatible_api_rejects_url_query_or_fragment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            for url in (
+                "https://api.openai.com/v1?token=secret",
+                "https://api.openai.com/v1#token",
+            ):
+                with self.subTest(url=url):
+                    with self.assertRaisesRegex(TranscriptionError, "must not contain query or fragment"):
+                        transcribe(
+                            audio,
+                            "en",
+                            Path(tmp) / "sample.txt",
+                            backend="openai-compatible",
+                            openai_compatible_model="gpt-4o-transcribe",
+                            openai_compatible_url=url,
+                        )
+
+    def test_openai_compatible_api_rejects_invalid_url_port(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with self.assertRaisesRegex(TranscriptionError, "has invalid port"):
+                transcribe(
+                    audio,
+                    "en",
+                    Path(tmp) / "sample.txt",
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-transcribe",
+                    openai_compatible_url="https://api.openai.com:bad/v1",
                 )
 
     def test_openai_compatible_api_rejects_null_byte_in_url(self) -> None:

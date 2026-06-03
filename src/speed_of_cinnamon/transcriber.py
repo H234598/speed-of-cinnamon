@@ -489,6 +489,10 @@ def _read_private_file_bytes(path: Path, *, field_name: str) -> bytes:
     if nofollow_flag is None:
         raise TranscriptionError(f"secure {field_name} open is not supported on this platform")
     try:
+        assert_no_symlink_ancestors(path, field_name=field_name)
+    except RuntimeError as exc:
+        raise TranscriptionError(f"failed to read {field_name}: {path}") from exc
+    try:
         fd = os.open(path, os.O_RDONLY | nofollow_flag)
     except OSError as exc:
         raise TranscriptionError(f"failed to read {field_name}: {path}") from exc
@@ -1007,6 +1011,7 @@ def transcribe_with_openai_compatible_api(
     flex_processing: bool = True,
     write_transcript: bool = True,
 ) -> str:
+    audio_path = validate_audio_file(audio_path)
     if _contains_escaped_null(model):
         raise TranscriptionError("OpenAI-compatible speech model contains invalid null byte")
     if _contains_http_header_control_chars(model):
