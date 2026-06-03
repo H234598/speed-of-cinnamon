@@ -744,6 +744,27 @@ class TranscriberTest(unittest.TestCase):
             command = mocked_run.call_args.args[0]
             self.assertEqual(command, ["/usr/bin/pwcpp", "-m", str(model), "--language", "de", "-otxt", str(audio)])
 
+    def test_whisper_cpp_removes_generated_text_path_when_not_writing(self) -> None:
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            text.write_text("hallo cinnamon\n", encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text = Path(tmp) / "sample.txt"
+            model = Path(tmp) / "ggml-base.bin"
+            model.write_bytes(b"model")
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.resolve_whisper_cpp_command", return_value="whisper-cli"),
+                mock.patch("speed_of_cinnamon.transcriber.shutil.which", return_value="/usr/bin/whisper-cli"),
+                mock.patch("speed_of_cinnamon.transcriber.subprocess.run", side_effect=fake_run),
+            ):
+                result = transcribe_with_whisper_cpp(audio, "de", text, str(model), write_transcript=False)
+
+            self.assertEqual(result, "hallo cinnamon")
+            self.assertFalse(text.exists())
+
     def test_command_stdout_is_saved_as_transcript(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"

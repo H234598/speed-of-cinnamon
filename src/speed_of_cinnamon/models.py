@@ -791,6 +791,8 @@ def default_ctranslate2_model_path(language: str = "") -> str:
 
 
 def _model_is_downloaded(model: ModelSpec, path: Path) -> bool:
+    if path.is_symlink():
+        return False
     if model.files:
         return path.is_dir() and all(
             (path / _validated_catalog_path_fragment(filename, field_name="model file path")).is_file()
@@ -1014,6 +1016,11 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
                 if previous_cache_entry_exists and previous_cache_entry is not None:
                     _model_checksum_cache[str(path)] = dict(previous_cache_entry)
                     _write_model_checksum_cache()
+            else:
+                try:
+                    _remove_model_backup_path(path)
+                except OSError as cleanup_exc:
+                    raise ModelError(f"failed to remove partially installed model file after download failure: {path}") from cleanup_exc
         elif backup_path is not None and not path.exists():
             try:
                 os.replace(backup_path, path)
@@ -1036,8 +1043,6 @@ def remove_model(name: str) -> dict[str, object]:
     path = model_path(model)
     root = _model_root(model)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
-    _clear_model_checksum_cache(path)
-    _clear_model_checksum_cache(tmp_path)
     removed = False
     removed_tmp = False
     if path.is_symlink():
@@ -1059,6 +1064,10 @@ def remove_model(name: str) -> dict[str, object]:
         removed_tmp = True
     except FileNotFoundError:
         pass
+    if removed:
+        _clear_model_checksum_cache(path)
+    if removed_tmp:
+        _clear_model_checksum_cache(tmp_path)
     return {
         **asdict(model),
         "status": "done",

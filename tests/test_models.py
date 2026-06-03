@@ -508,6 +508,30 @@ class ModelsTest(unittest.TestCase):
             self.assertNotIn(str(path), models._model_checksum_cache)
             self.assertTrue(payload["removed"])
 
+    def test_remove_model_preserves_checksum_cache_when_delete_fails(self) -> None:
+        spec = models.ModelSpec(
+            name="cache-delete-fails",
+            filename="ggml-cache-delete-fails.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(b"cache delete fails").hexdigest(),
+            description="cache delete fails",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", True),
+            mock.patch.object(models, "CATALOG", (spec,)),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"cache delete fails")
+            models._set_model_checksum_cache(path, spec.sha1, path.stat())
+            with mock.patch("speed_of_cinnamon.models.Path.unlink", side_effect=OSError("delete failed")):
+                with self.assertRaises(OSError):
+                    models.remove_model("cache-delete-fails")
+            self.assertIn(str(path), models._model_checksum_cache)
+
     def test_list_models_reports_catalog_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}):
             payload = models.list_models()
@@ -582,6 +606,34 @@ class ModelsTest(unittest.TestCase):
         self.assertEqual(payload["downloaded"], True)
         self.assertTrue(payload["verified"])
         self.assertIn("already downloaded", second_payload["message"])
+
+    def test_multifile_model_symlink_path_is_not_downloaded(self) -> None:
+        data = b"small model file"
+        spec = models.ModelSpec(
+            name="ct2-symlink-status",
+            filename="ct2-symlink-status",
+            size="2 KiB",
+            sha1="",
+            description="ct2 symlink status",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-symlink-status",
+            files=("config.json",),
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+        ):
+            path = models.model_path(spec)
+            target = Path(tmp) / "outside"
+            target.mkdir()
+            (target / "config.json").write_bytes(data)
+            path.parent.mkdir(parents=True)
+            path.symlink_to(target)
+
+            with self.assertRaisesRegex(RuntimeError, "must not pass through a symlink"):
+                models.model_status(spec, verify=True)
 
     def test_download_model_rejects_multifile_catalog_without_repo_id(self) -> None:
         spec = models.ModelSpec(
@@ -1223,6 +1275,30 @@ class ModelsTest(unittest.TestCase):
 
             self.assertEqual(path.read_bytes(), old_data)
             self.assertEqual(models._model_checksum_cache[str(path)]["checksum"], old_checksum)
+
+    def test_download_model_removes_new_file_when_cache_update_fails_without_backup(self) -> None:
+        new_data = b"new model"
+        spec = models.ModelSpec(
+            name="cache-update-fails-without-backup",
+            filename="ggml-cache-update-fails-without-backup.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(new_data).hexdigest(),
+            description="cache update failure without backup",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", True),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(new_data)),
+        ):
+            path = models.model_path(spec)
+            with mock.patch("speed_of_cinnamon.models._set_model_checksum_cache", side_effect=models.ModelError("cache fail")):
+                with self.assertRaisesRegex(models.ModelError, "cache fail"):
+                    models.download_model("cache-update-fails-without-backup", force=True)
+
+            self.assertFalse(path.exists())
 
     def test_download_model_reports_backup_cleanup_failure_after_success(self) -> None:
         old_data = b"old model"

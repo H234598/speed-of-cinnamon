@@ -701,8 +701,21 @@ def transcribe_with_whisper_cpp(
     _run_limited_process(invocation)
     if generated_path.exists():
         if generated_path == text_path:
-            text = _read_text_file(generated_path).strip()
-            _assert_text_length(text, field_name="transcript")
+            try:
+                text = _read_text_file(generated_path).strip()
+                _assert_text_length(text, field_name="transcript")
+            except Exception:
+                if not write_transcript:
+                    try:
+                        generated_path.unlink()
+                    except OSError:
+                        pass
+                raise
+            if not write_transcript:
+                try:
+                    generated_path.unlink()
+                except OSError:
+                    pass
             return text
         primary_error: BaseException | None = None
         try:

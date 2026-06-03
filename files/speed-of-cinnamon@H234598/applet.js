@@ -3636,8 +3636,10 @@ MyApplet.prototype = {
       this._finishEmptyRelistenDone(payload);
       return;
     }
-    this.autoRelistenPending = false;
-    this.autoRelistenPendingToken = "";
+    if (!this.isCommandRunning) {
+      this.autoRelistenPending = false;
+      this.autoRelistenPendingToken = "";
+    }
     let message = payload.message || status;
     let transcript = typeof payload.transcript === "string" ? payload.transcript : this.lastTranscript || "";
     this._setStatus(status, message, transcript);
@@ -4232,7 +4234,7 @@ MyApplet.prototype = {
       this._setStatus(this.status, _("No transcript yet"), this.lastTranscript);
       return;
     }
-    this.clipboard.set_text(St.ClipboardType.CLIPBOARD, this._preparedTranscriptText(this.lastTranscript));
+    this.clipboard.set_text(St.ClipboardType.CLIPBOARD, this._preparedTranscriptText(this.lastTranscript, true));
     this._setStatus("done", _("Copied last transcript"), this.lastTranscript);
   },
 
@@ -4274,7 +4276,7 @@ MyApplet.prototype = {
     if (!text) {
       return;
     }
-    this.clipboard.set_text(St.ClipboardType.CLIPBOARD, this._preparedTranscriptText(text));
+    this.clipboard.set_text(St.ClipboardType.CLIPBOARD, this._preparedTranscriptText(text, true));
     this._setStatus("done", _("Copied transcript"), text);
   },
 

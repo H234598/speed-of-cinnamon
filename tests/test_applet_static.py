@@ -402,6 +402,16 @@ class AppletStaticTest(unittest.TestCase):
         self.assertLess(reset_index, restart_index)
         self.assertLess(restart_index, status_index)
 
+    def test_auto_relisten_pending_token_is_not_cleared_during_running_command(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        apply_index = source.index("_applyPayload: function(payload)")
+        maybe_index = source.index("this._maybeAutoTranscribeRecorded(payload);", apply_index)
+        guarded_reset = source.index("if (!this.isCommandRunning) {", apply_index)
+        reset_index = source.index("this.autoRelistenPending = false;", guarded_reset)
+
+        self.assertLess(guarded_reset, maybe_index)
+        self.assertLess(reset_index, maybe_index)
+
     def test_spawn_callbacks_ignore_removed_applet(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
@@ -950,6 +960,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("copyItem.connect(\"activate\", () => this._copyHistoryTranscript(transcript.text || \"\"))", source)
         self.assertIn("_insertHistoryTranscript: function(text)", source)
         self.assertIn("this._insertTranscriptText(text);", source)
+        self.assertIn("this._preparedTranscriptText(text, true)", source)
+        self.assertIn("this._preparedTranscriptText(this.lastTranscript, true)", source)
 
     def test_cleanup_can_be_previewed_before_deleting_files(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

@@ -324,7 +324,22 @@ def _is_openai_api_endpoint(endpoint: str) -> bool:
 
 def _is_flex_service_tier_rejected(detail: str) -> bool:
     normalized = detail.lower()
-    return "service_tier" in normalized and ("invalid" in normalized or "unsupported" in normalized)
+    if "service_tier" not in normalized and "service tier" not in normalized:
+        return False
+    rejected_terms = (
+        "bad",
+        "disabled",
+        "invalid",
+        "not available",
+        "not enabled",
+        "not recognized",
+        "not supported",
+        "rejected",
+        "unknown",
+        "unrecognized",
+        "unsupported",
+    )
+    return any(term in normalized for term in rejected_terms)
 
 
 def _validate_openai_compatible_http_url(url: str) -> str:
