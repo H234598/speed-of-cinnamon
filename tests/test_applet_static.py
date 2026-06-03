@@ -1015,7 +1015,9 @@ class AppletStaticTest(unittest.TestCase):
             '      if (knownTextTargets[target] || target.indexOf("text/") === 0) {\n        sawTextTarget = true;\n        continue;\n      }\n      return true;',
             source,
         )
-        self.assertIn('if (method === "clipboard-paste" && canPasteWithKeyboard && this._clipboardHasNonTextPayload()) {', source)
+        self.assertIn('if (method === "clipboard-paste" && !canPasteWithKeyboard) {', source)
+        self.assertIn('this._setStatus("error", _("Clipboard-paste requires a keyboard helper (xdotool or wtype)"), transcript);', source)
+        self.assertIn('if (method === "clipboard-paste" && this._clipboardHasNonTextPayload()) {', source)
         self.assertIn('this._setStatus("error", _("Clipboard contains non-text data; skipping automatic paste"), transcript);', source)
         self.assertIn('this._clipboardTargetList("xclip", ["-selection", "clipboard", "-t", "TARGETS", "-out"])', source)
         self.assertIn('this._clipboardTargetList("xsel", ["--clipboard", "--output", "--target", "TARGETS"])', source)

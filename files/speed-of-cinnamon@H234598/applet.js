@@ -4279,7 +4279,11 @@ MyApplet.prototype = {
       }
       return false;
     }
-    if (method === "clipboard-paste" && canPasteWithKeyboard && this._clipboardHasNonTextPayload()) {
+    if (method === "clipboard-paste" && !canPasteWithKeyboard) {
+      this._setStatus("error", _("Clipboard-paste requires a keyboard helper (xdotool or wtype)"), transcript);
+      return false;
+    }
+    if (method === "clipboard-paste" && this._clipboardHasNonTextPayload()) {
       this._setStatus("error", _("Clipboard contains non-text data; skipping automatic paste"), transcript);
       return false;
     }
