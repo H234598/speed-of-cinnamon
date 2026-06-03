@@ -73,6 +73,26 @@ class PathsTest(unittest.TestCase):
             ):
                 self.assertEqual(paths.xdg_cache_home(), Path("/tmp") / f"{paths.APP_ID}-{os.getuid()}" / ".cache")
 
+    def test_safe_home_path_rejects_symlinked_private_temp_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            real_home = base / "real-home"
+            real_home.mkdir()
+            home_link = base / "home-link"
+            home_link.symlink_to(real_home, target_is_directory=True)
+            temp_root = base / "temp"
+            temp_root.mkdir()
+            target = base / "target"
+            target.mkdir()
+            private_link = temp_root / f"{paths.APP_ID}-{os.getuid()}"
+            private_link.symlink_to(target, target_is_directory=True)
+
+            with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=home_link), mock.patch(
+                "speed_of_cinnamon.paths.tempfile.gettempdir", return_value=str(temp_root)
+            ):
+                with self.assertRaises(RuntimeError):
+                    paths.xdg_cache_home()
+
     def test_xdg_paths_accept_absolute_non_symlink_roots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import stat as stat_module
 import tempfile
 from pathlib import Path
 
@@ -59,11 +60,23 @@ def _private_runtime_temp_root() -> Path:
     if private_root.is_symlink():
         raise RuntimeError(f"temporary directory must not be a symlink: {private_root}")
     private_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    private_root.chmod(0o700)
+    open_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(private_root, open_flags)
+    except OSError as exc:
+        raise RuntimeError(f"temporary directory is not safe: {private_root}") from exc
+    try:
+        file_stat = os.fstat(fd)
+        if not stat_module.S_ISDIR(file_stat.st_mode):
+            raise RuntimeError(f"temporary directory is not a directory: {private_root}")
+        if hasattr(os, "getuid") and file_stat.st_uid != os.getuid():
+            raise RuntimeError(f"temporary directory is not owned by the current user: {private_root}")
+        os.fchmod(fd, 0o700)
+        file_stat = os.fstat(fd)
+    finally:
+        os.close(fd)
     assert_no_symlink_ancestors(private_root, field_name="temporary directory")
-    if hasattr(os, "getuid") and private_root.stat().st_uid != os.getuid():
-        raise RuntimeError(f"temporary directory is not owned by the current user: {private_root}")
-    if private_root.stat().st_mode & 0o077:
+    if file_stat.st_mode & 0o077:
         raise RuntimeError(f"temporary directory is not private: {private_root}")
     return private_root
 
