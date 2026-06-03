@@ -113,7 +113,7 @@ class SecurityParserTest(unittest.TestCase):
 
     def test_apply_security_mode_masks_unaccented_german_spoken_labels(self) -> None:
         sanitized, count = apply_security_mode(
-            "ich heisse Max Mustermann und token heisst abc123 und passwort heisse blau",
+            "ich heisst Max Mustermann und token heisst abc123 und passwort heisse blau",
             [],
         )
 

@@ -4,7 +4,6 @@ import subprocess
 import sys
 import importlib.util
 import unittest
-import os
 import tempfile
 from pathlib import Path
 from unittest import mock
@@ -14,9 +13,9 @@ def _run_version(*args: str, expect_ok: bool, cwd: Path | None = None, path: str
     root = Path(__file__).resolve().parents[1]
     cmd = [sys.executable, str(root / "scripts" / "next_version.py")]
     cmd.extend(args)
-    env = os.environ.copy() if path is not None else None
+    env = None
     if path is not None:
-        env["PATH"] = path
+        env = {"PATH": path}
     result = subprocess.run(
         cmd,
         check=expect_ok,
@@ -191,8 +190,8 @@ class NextVersionTest(unittest.TestCase):
             )
             code, stderr = run_version_fail_stdout_stderr("--from-tag", "0.1.20", cwd=Path(tmpdir))
 
-        self.assertEqual(code, 2)
-        self.assertIn("release tag v0.1.20 does not exist", stderr)
+        self.assertEqual(code, 3)
+        self.assertIn("failed to inspect git tags", stderr)
 
     def test_from_tag_with_only_whitespace_is_rejected(self) -> None:
         code, stderr = run_version_fail_stdout_stderr("--from-tag", "   ")

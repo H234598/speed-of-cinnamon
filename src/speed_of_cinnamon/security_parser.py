@@ -99,7 +99,7 @@ _LABELED_NAME_RE = re.compile(
     r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß-]+){0,3}"
 )
 _NAME_RE = re.compile(
-    r"(?i)\b(?:mein\s+name\s+ist|ich\s+(?:heiße|heisse|heise)|name\s+is|my\s+name\s+is)\s+"
+    r"(?i)\b(?:mein\s+name\s+ist|ich\s+(?:heiße|heisse|heise|heisst)|name\s+is|my\s+name\s+is)\s+"
     r"([A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]*(?:\s+[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]*){0,3})"
 )
 _BANK_DATA_RE = re.compile(

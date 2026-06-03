@@ -1647,6 +1647,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         return {"status": "finalizing", "message": "finalization already in progress"}
 
     state_marked_finalizing = False
+    written_text_path: Path | None = None
     try:
         state = store.read()
         _raise_if_state_unreadable(state)
@@ -1697,7 +1698,6 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         done_log_path = state.log_path
         trimmed_audio_path: Path | None = None
         stabilized_audio_path: Path | None = None
-        written_text_path: Path | None = None
         remove_original_after_state_update = False
         audio_suffix = ""
         audio_path = validate_audio_file(audio_path)
@@ -1870,9 +1870,8 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             if written_text_path is not None:
                 error_update["transcript"] = ""
                 error_update["transcript_path"] = ""
-            store.update(**error_update)
-            if written_text_path is not None:
                 remove_file(str(written_text_path), suffix=".txt")
+            store.update(**error_update)
             if error_delete_audio_path is not None:
                 remove_file(str(error_delete_audio_path), suffix=audio_suffix)
             if error_delete_log_path is not None:
