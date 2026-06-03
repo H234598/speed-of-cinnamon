@@ -153,16 +153,16 @@ Successful GitHub Actions runs upload:
 For manual release validation/publication, use workflow dispatch:
 
 ```bash
-gh workflow run release.yml -f tag=v0.1.2 -f build_snap=false -f build_generic_rpm=true
-gh workflow run release.yml -f tag=v0.1.2 -f build_generic_rpm=false
-gh workflow run release.yml -f tag=v0.1.2 -f build_snap=false -f build_generic_rpm=false -f run_workflow_lint=false
-gh workflow run release.yml -f tag=v0.1.2 -f build_snap=false -f run_workflow_lint=false
+gh workflow run release.yml -f tag=vX.Y.Z -f build_snap=false -f build_generic_rpm=true
+gh workflow run release.yml -f tag=vX.Y.Z -f build_generic_rpm=false
+gh workflow run release.yml -f tag=vX.Y.Z -f build_snap=false -f build_generic_rpm=false -f run_workflow_lint=false
+gh workflow run release.yml -f tag=vX.Y.Z -f build_snap=false -f run_workflow_lint=false
 ```
 
 For real publishing with the same package set used by tag-triggered releases, use:
 
 ```bash
-gh workflow run release.yml -f tag=v0.1.2 -f build_snap=false
+gh workflow run release.yml -f tag=vX.Y.Z -f build_snap=false
 ```
 
 Tag-triggered releases skip Snap generation by default. Use `build_snap=true` only when the release runner has a working

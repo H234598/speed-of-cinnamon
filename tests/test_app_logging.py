@@ -32,9 +32,10 @@ class AppLoggingTest(unittest.TestCase):
             self.assertEqual(len(log_files), 1)
             payload = json.loads(log_files[0].read_text(encoding="utf-8").strip())
             self.assertEqual(payload["api_key"], "[redacted]")
-            self.assertEqual(payload["command"], "doctor")
+            self.assertEqual(payload["command"], "[redacted]")
             self.assertEqual(payload["command_template"], "[redacted]")
             self.assertEqual(payload["transcript"], "[redacted]")
+            self.assertNotIn("doctor", json.dumps(payload))
             self.assertNotIn("sk-secret", json.dumps(payload))
             self.assertNotIn("abc123", json.dumps(payload))
 

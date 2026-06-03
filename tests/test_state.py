@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import os
 import tempfile
 import unittest
@@ -70,6 +71,30 @@ class StateStoreTest(unittest.TestCase):
         self.assertEqual(loaded.pid, 123)
         self.assertEqual(loaded.language, "de")
 
+    def test_update_reads_after_lock_to_avoid_lost_update(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = StateStore(Path(tmp) / "state.json")
+            lock_acquired = False
+            original_read = StateStore.read
+
+            def fake_flock(fd: int, operation: int) -> None:
+                nonlocal lock_acquired
+                if operation == fcntl.LOCK_EX:
+                    lock_acquired = True
+
+            def guarded_read(target: StateStore) -> RecordingState:
+                self.assertTrue(lock_acquired)
+                return original_read(target)
+
+            with (
+                mock.patch("speed_of_cinnamon.state.fcntl.flock", side_effect=fake_flock),
+                mock.patch.object(StateStore, "read", guarded_read),
+            ):
+                state = store.update(status="recording", language="de")
+
+        self.assertEqual(state.status, "recording")
+        self.assertEqual(state.language, "de")
+
     def test_update_returns_persisted_timestamp(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")
@@ -110,6 +135,14 @@ class StateStoreTest(unittest.TestCase):
                 for args, kwargs in mocked_open.call_args_list
             )
         )
+
+    def test_write_creates_parent_without_pathlib_mkdir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "nested" / "state.json"
+            with mock.patch.object(Path, "mkdir", side_effect=AssertionError("unsafe mkdir")):
+                StateStore(path).write(RecordingState(status="done"))
+
+            self.assertEqual(StateStore(path).read().status, "done")
 
     @mock.patch("speed_of_cinnamon.path_safety.os.chmod")
     def test_write_does_not_chmod_target_path_after_replace(self, mocked_chmod: mock.Mock) -> None:

@@ -246,8 +246,6 @@ def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
 
 def _is_sensitive_key(key: str) -> bool:
     lowered = key.lower()
-    if lowered == "command":
-        return False
     return _SENSITIVE_KEY_RE.search(lowered) is not None
 
 

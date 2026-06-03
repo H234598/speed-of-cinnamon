@@ -341,6 +341,23 @@ class PostProcessorTest(unittest.TestCase):
         with self.assertRaisesRegex(PostProcessError, "model is required"):
             post_process_text("hello", "en", backend="ollama")
 
+    def test_ollama_backend_redacts_sensitive_remote_error(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.postprocessor._open_http_request",
+            return_value=FakeResponse({"error": "Bearer sk-secret private transcript"}),
+        ):
+            with self.assertRaises(PostProcessError) as caught:
+                post_process_text(
+                    "private transcript",
+                    "en",
+                    backend="ollama",
+                    ollama_model="llama3.2:3b",
+                )
+        message = str(caught.exception)
+        self.assertIn("[redacted remote error]", message)
+        self.assertNotIn("sk-secret", message)
+        self.assertNotIn("private transcript", message)
+
     def test_openai_compatible_messages_include_context_vocabulary_and_text(self) -> None:
         messages = build_openai_compatible_messages(
             "hallo cinnamon",
@@ -440,6 +457,24 @@ class PostProcessorTest(unittest.TestCase):
                 openai_compatible_model="local",
                 openai_compatible_url="ftp://127.0.0.1:8000/v1",
             )
+
+    def test_openai_compatible_backend_redacts_sensitive_remote_error(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.postprocessor._open_http_request",
+            return_value=FakeResponse({"error": {"message": "token=abc123 private transcript"}}),
+        ):
+            with self.assertRaises(PostProcessError) as caught:
+                post_process_text(
+                    "private transcript",
+                    "en",
+                    backend="openai-compatible",
+                    openai_compatible_model="local",
+                    openai_compatible_url="http://127.0.0.1:8000/v1",
+                )
+        message = str(caught.exception)
+        self.assertIn("[redacted remote error]", message)
+        self.assertNotIn("abc123", message)
+        self.assertNotIn("private transcript", message)
 
     def test_endpoint_builders_normalize_without_duplicate_behavior_change(self) -> None:
         self.assertEqual(_ollama_endpoint("http://127.0.0.1:11434/", "/api/generate"), "http://127.0.0.1:11434/api/generate")

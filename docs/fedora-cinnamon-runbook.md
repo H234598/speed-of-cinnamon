@@ -58,7 +58,7 @@ archive and checksum, plus `speed-of-cinnamon-rpm-<commit>` with the Fedora noar
 `speed-of-cinnamon-generic-rpm-<commit>` with the generic noarch RPM and source RPM, and
 `speed-of-cinnamon-snap-<commit>` with the Snap package.
 
-Pushing a version tag that matches `pyproject.toml`, for example `v0.1.0`, runs the release workflow. It validates workflow
+Pushing a version tag that matches `pyproject.toml`, for example `vX.Y.Z`, runs the release workflow. It validates workflow
 YAML in a dedicated lint step, then repeats the normal checks and publishes a GitHub Release with the source archive,
 checksum, Fedora noarch RPM, generic noarch RPM, and their source RPMs. Tag-triggered releases skip Snap generation by
 default because the GitHub-hosted release runner does not consistently provide a usable Snap build environment. The same

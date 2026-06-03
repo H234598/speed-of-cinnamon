@@ -55,6 +55,20 @@ class SettingsExportTest(unittest.TestCase):
             )
         )
 
+    def test_read_export_rejects_hardlinked_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            hardlink = Path(tmp) / "hardlinked-settings-export.json"
+            path.write_text('{"app":"speed-of-cinnamon","version":2,"created_at":"","speed_of_cinnamon_version":"",'
+                            '"settings":{"language":"en","max-seconds":30},'
+                            '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}', encoding="utf-8")
+            try:
+                os.link(path, hardlink)
+            except OSError as exc:
+                self.skipTest(f"hardlinks unavailable: {exc}")
+            with self.assertRaisesRegex(SettingsExportError, "must not be hardlinked"):
+                read_export(hardlink)
+
     def test_read_export_rejects_escaped_null_path(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "invalid null byte"):
             read_export(Path("settings\\\\x00.json"))
@@ -384,6 +398,14 @@ class SettingsExportTest(unittest.TestCase):
                 for args, kwargs in mocked_open.call_args_list
             )
         )
+
+    def test_write_export_creates_parent_without_pathlib_mkdir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "nested" / "settings-export.json"
+            with mock.patch.object(Path, "mkdir", side_effect=AssertionError("unsafe mkdir")):
+                write_export(path, {"language": "en"})
+
+            self.assertTrue(path.exists())
 
     def test_write_export_sets_private_permissions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

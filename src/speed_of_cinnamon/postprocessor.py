@@ -451,6 +451,34 @@ def _openai_compatible_model_supports_text_polishing(name: str) -> bool:
     return not any(term in normalized for term in OPENAI_COMPATIBLE_TEXT_MODEL_EXCLUDED_TERMS)
 
 
+def _sanitize_remote_error_detail(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "remote error"
+    text = text.replace("\r", "\\r").replace("\n", "\\n").replace("\x00", "\\x00")
+    lowered = text.lower()
+    sensitive_hints = (
+        "authorization",
+        "bearer ",
+        "api_key",
+        "apikey",
+        "password",
+        "prompt",
+        "secret",
+        "sess-",
+        "sk-",
+        "token",
+        "transcript",
+    )
+    if any(hint in lowered for hint in sensitive_hints):
+        return "[redacted remote error]"
+    if "://" in text and "@" in text:
+        return "[redacted remote error]"
+    if len(text) > 160:
+        return text[:157] + "..."
+    return text
+
+
 def list_openai_compatible_models(
     url: str = DEFAULT_OPENAI_COMPATIBLE_URL,
     timeout: int = 5,
@@ -468,17 +496,18 @@ def list_openai_compatible_models(
         finally:
             with suppress(Exception):
                 exc.close()
-        detail = _openai_compatible_error_detail(raw_error) or exc.reason or str(exc)
+        detail = _sanitize_remote_error_detail(_openai_compatible_error_detail(raw_error) or exc.reason or str(exc))
         return {
             "available": False,
             "models": [],
             "message": f"OpenAI-compatible API failed ({exc.code}) at {endpoint}: {detail}",
         }
     except OSError as exc:
+        detail = _sanitize_remote_error_detail(str(exc))
         return {
             "available": False,
             "models": [],
-            "message": f"OpenAI-compatible API is not reachable at {(url or DEFAULT_OPENAI_COMPATIBLE_URL).rstrip('/')}: {exc}",
+            "message": f"OpenAI-compatible API is not reachable at {(url or DEFAULT_OPENAI_COMPATIBLE_URL).rstrip('/')}: {detail}",
         }
     except PostProcessError as exc:
         return {
@@ -547,7 +576,7 @@ def post_process_with_ollama(
         with _open_http_request(request, timeout=180, field_name="ollama post-process request") as response:
             raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
     except OSError as exc:
-        raise PostProcessError(f"Ollama request failed: {exc}") from exc
+        raise PostProcessError(f"Ollama request failed: {_sanitize_remote_error_detail(exc)}") from exc
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -555,7 +584,7 @@ def post_process_with_ollama(
     if not isinstance(data, dict):
         raise PostProcessError("Ollama response must be a JSON object")
     if data.get("error"):
-        raise PostProcessError(f"Ollama failed: {data['error']}")
+        raise PostProcessError(f"Ollama failed: {_sanitize_remote_error_detail(data['error'])}")
     processed = str(data.get("response") or "").strip()
     processed = _assert_text_length(processed, field_name="post-process output")
     if not processed:
@@ -681,7 +710,7 @@ def post_process_with_openai_compatible(
         finally:
             with suppress(Exception):
                 exc.close()
-        detail = _openai_compatible_error_detail(raw_error) or exc.reason or str(exc)
+        detail = _sanitize_remote_error_detail(_openai_compatible_error_detail(raw_error) or exc.reason or str(exc))
         if use_flex_processing and _is_flex_service_tier_rejected(detail):
             fallback_payload = dict(payload)
             fallback_payload.pop("service_tier", None)
@@ -695,14 +724,14 @@ def post_process_with_openai_compatible(
                 finally:
                     with suppress(Exception):
                         fallback_exc.close()
-                fallback_detail = _openai_compatible_error_detail(raw_error) or fallback_exc.reason or str(fallback_exc)
+                fallback_detail = _sanitize_remote_error_detail(_openai_compatible_error_detail(raw_error) or fallback_exc.reason or str(fallback_exc))
                 raise PostProcessError(f"OpenAI-compatible request failed ({fallback_exc.code}) at {endpoint}: {fallback_detail}") from fallback_exc
             except OSError as fallback_exc:
-                raise PostProcessError(f"OpenAI-compatible request failed: {fallback_exc}") from fallback_exc
+                raise PostProcessError(f"OpenAI-compatible request failed: {_sanitize_remote_error_detail(fallback_exc)}") from fallback_exc
         else:
             raise PostProcessError(f"OpenAI-compatible request failed ({exc.code}) at {endpoint}: {detail}") from exc
     except OSError as exc:
-        raise PostProcessError(f"OpenAI-compatible request failed: {exc}") from exc
+        raise PostProcessError(f"OpenAI-compatible request failed: {_sanitize_remote_error_detail(exc)}") from exc
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -712,7 +741,7 @@ def post_process_with_openai_compatible(
     if data.get("error"):
         error = data["error"]
         detail = str(error.get("message") or error) if isinstance(error, dict) else str(error)
-        raise PostProcessError(f"OpenAI-compatible server failed: {detail}")
+        raise PostProcessError(f"OpenAI-compatible server failed: {_sanitize_remote_error_detail(detail)}")
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices:
         raise PostProcessError("OpenAI-compatible server completed without choices")

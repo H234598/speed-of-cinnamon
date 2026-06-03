@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 import os
+import fcntl
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from .path_safety import (
     assert_no_symlink_ancestors,
     assert_safe_path_components,
+    ensure_directory_without_following_symlinks,
     read_text_without_following_symlinks,
     write_text_atomically_without_following_symlinks,
 )
@@ -76,6 +79,30 @@ class StateStore:
         assert_safe_path_components(path, field_name="state file path")
         assert_no_symlink_ancestors(path, field_name="state file path")
         self.path = path
+
+    @contextmanager
+    def _locked(self) -> Iterator[None]:
+        lock_path = self.path.with_name(f".{self.path.name}.lock")
+        assert_safe_path_components(lock_path, field_name="state lock path")
+        assert_no_symlink_ancestors(lock_path, field_name="state lock path")
+        nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+        if nofollow_flag is None:
+            raise RuntimeError("secure state lock open is not supported on this platform")
+        parent_fd = ensure_directory_without_following_symlinks(lock_path.parent, field_name="state lock directory")
+        try:
+            fd = os.open(lock_path.name, os.O_RDWR | os.O_CREAT | nofollow_flag, 0o600, dir_fd=parent_fd)
+        except OSError as exc:
+            os.close(parent_fd)
+            raise RuntimeError("failed to open state lock file") from exc
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+                os.close(parent_fd)
 
     @staticmethod
     def _sanitize_text_field(value: Any, *, field_name: str) -> str:
@@ -179,7 +206,10 @@ class StateStore:
         return RecordingState(**normalized)
 
     def write(self, state: RecordingState) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self._locked():
+            self._write_unlocked(state)
+
+    def _write_unlocked(self, state: RecordingState) -> None:
         payload = asdict(state)
         payload["updated_at"] = now_iso()
         normalized_payload = StateStore._normalize_state_data(payload)
@@ -196,13 +226,14 @@ class StateStore:
             raise RuntimeError(f"failed to persist state: {self.path}") from exc
 
     def update(self, **values: Any) -> RecordingState:
-        state = self.read()
-        state_fields = {state_field.name for state_field in fields(RecordingState)}
-        for key, value in values.items():
-            if key in state_fields:
-                setattr(state, key, value)
-        self.write(state)
-        return self.read()
+        with self._locked():
+            state = self.read()
+            state_fields = {state_field.name for state_field in fields(RecordingState)}
+            for key, value in values.items():
+                if key in state_fields:
+                    setattr(state, key, value)
+            self._write_unlocked(state)
+            return self.read()
 
 
 def process_is_alive(pid: int | None) -> bool:

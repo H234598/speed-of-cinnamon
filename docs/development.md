@@ -189,11 +189,11 @@ Successful runs upload:
 
 ## Release Publishing
 
-Pushing a version tag that matches `pyproject.toml`, for example `v0.1.0`, runs the release workflow:
+Pushing a version tag that matches `pyproject.toml`, for example `vX.Y.Z`, runs the release workflow:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag vX.Y.Z
+git push origin vX.Y.Z
 ```
 
 The release workflow has a dedicated workflow validation job and then runs the normal checks, verifies the source archive and

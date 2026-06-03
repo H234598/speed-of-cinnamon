@@ -14,7 +14,7 @@ from .paths import APP_ID
 from .recorder import MAX_RECORDING_SECONDS
 from .path_safety import (
     assert_no_symlink_ancestors,
-    open_directory_without_following_symlinks,
+    ensure_directory_without_following_symlinks,
     open_file_without_following_symlinks,
 )
 
@@ -169,6 +169,8 @@ def _read_text_capped_without_following_symlinks(path: Path) -> str:
     fd = open_file_without_following_symlinks(path, os.O_RDONLY, field_name="settings export path")
     try:
         file_stat = os.fstat(fd)
+        if file_stat.st_nlink > 1:
+            raise SettingsExportError("settings export must not be hardlinked")
         if file_stat.st_size > MAX_SETTINGS_EXPORT_BYTES:
             raise SettingsExportError(f"settings export is too large: {path}")
         with os.fdopen(fd, "r", encoding="utf-8") as handle:
@@ -283,8 +285,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
     rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     if len(rendered.encode("utf-8")) > MAX_SETTINGS_EXPORT_BYTES:
         raise SettingsExportError(f"settings export is too large: {path}")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    parent_fd = open_directory_without_following_symlinks(path.parent, field_name="settings export directory")
+    parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name="settings export directory")
     temp_name = ""
     try:
         temp_fd, temp_name = _create_private_temp_file(parent_fd, path.name)
