@@ -1069,19 +1069,31 @@ def _remove_recording_artifact(path_value: str | None) -> bool:
     return remove_file(path_value, suffix=".wav") or remove_file(path_value, suffix=".flac")
 
 
+def _recording_artifact_stat(path: Path) -> os.stat_result | None:
+    try:
+        file_stat = path.lstat()
+    except OSError:
+        return None
+    if not stat_module.S_ISREG(file_stat.st_mode):
+        return None
+    if getattr(file_stat, "st_nlink", 1) != 1:
+        return None
+    return file_stat
+
+
 def sorted_files(paths: list[Path]) -> list[Path]:
     entries: list[tuple[float, str, Path]] = []
     for path in paths:
-        try:
-            file_stat = path.stat()
-        except OSError:
+        file_stat = _recording_artifact_stat(path)
+        if file_stat is None:
             continue
-        if stat_module.S_ISREG(file_stat.st_mode):
-            entries.append((file_stat.st_mtime, path.name, path))
+        entries.append((file_stat.st_mtime, path.name, path))
     return [path for _, _, path in sorted(entries, reverse=True)]
 
 
 def delete_artifact(path: Path) -> bool:
+    if _recording_artifact_stat(path) is None:
+        return False
     try:
         path.unlink()
     except FileNotFoundError:
@@ -1125,11 +1137,8 @@ def recording_groups() -> list[dict[str, object]]:
     for path in directory.iterdir():
         if path.suffix not in RECORDING_ARTIFACT_EXTENSIONS:
             continue
-        try:
-            file_stat = path.stat()
-        except OSError:
-            continue
-        if not stat_module.S_ISREG(file_stat.st_mode):
+        file_stat = _recording_artifact_stat(path)
+        if file_stat is None:
             continue
         group = groups.setdefault(path.stem, {"stem": path.stem, "mtime": 0.0, "files": []})
         group["mtime"] = max(float(group["mtime"]), file_stat.st_mtime)
@@ -1147,11 +1156,7 @@ def recording_artifact_files() -> list[Path]:
     for path in directory.iterdir():
         if path.suffix not in RECORDING_ARTIFACT_EXTENSIONS:
             continue
-        try:
-            file_stat = path.stat()
-        except OSError:
-            continue
-        if stat_module.S_ISREG(file_stat.st_mode):
+        if _recording_artifact_stat(path) is not None:
             files.append(path)
     return files
 

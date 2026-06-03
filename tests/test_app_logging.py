@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import logging
 import tempfile
 import unittest
 from datetime import date
@@ -44,6 +45,39 @@ class AppLoggingTest(unittest.TestCase):
 
             log_files = list(log_dir.glob("speed-of-cinnamon-*.log"))
             self.assertEqual(log_files, [])
+
+    def test_file_handler_does_not_maintain_logs_on_every_emit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            handler = app_logging.SizeCappedJsonFileHandler(
+                log_dir / f"speed-of-cinnamon-{date.today().isoformat()}.log",
+                log_dir,
+            )
+            handler.setFormatter(app_logging.JsonLogFormatter())
+            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+            with mock.patch("speed_of_cinnamon.app_logging.maintain_logs") as mocked_maintain:
+                handler.emit(record)
+                handler.emit(record)
+                handler.close()
+
+        mocked_maintain.assert_not_called()
+
+    def test_file_handler_maintains_logs_immediately_after_rotation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            active = log_dir / f"speed-of-cinnamon-{date.today().isoformat()}.log"
+            active.write_bytes(b"x" * 90)
+            handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
+            handler.setFormatter(app_logging.JsonLogFormatter())
+            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "rotated", (), None)
+            with (
+                mock.patch("speed_of_cinnamon.app_logging.MAX_DAILY_LOG_BYTES", 100),
+                mock.patch("speed_of_cinnamon.app_logging.maintain_logs") as mocked_maintain,
+            ):
+                handler.emit(record)
+                handler.close()
+
+        mocked_maintain.assert_called_once_with(log_dir)
 
     def test_active_daily_log_rotates_at_one_file_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

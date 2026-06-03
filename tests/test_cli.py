@@ -1765,10 +1765,38 @@ class CliTest(unittest.TestCase):
             (recordings / "real.wav").write_bytes(b"audio")
             (recordings / "fake.wav").mkdir()
             (recordings / "fake.log").mkdir()
+            os.symlink(recordings / "real.wav", recordings / "link.wav")
+            try:
+                hardlink_source = Path(tmp) / "hardlink-source.wav"
+                hardlink_source.write_bytes(b"audio")
+                os.link(hardlink_source, recordings / "hardlink.wav")
+            except OSError:
+                pass
             with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
                 groups = cli.recording_groups()
         self.assertEqual(len(groups), 1)
         self.assertEqual(groups[0]["stem"], "real")
+
+    def test_delete_artifact_rejects_symlink_and_hardlink_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            real = recordings / "real.wav"
+            real.write_bytes(b"audio")
+            link = recordings / "link.wav"
+            os.symlink(real, link)
+            self.assertFalse(cli.delete_artifact(link))
+            self.assertTrue(link.is_symlink())
+
+            hardlink = recordings / "hardlink.wav"
+            try:
+                os.link(real, hardlink)
+            except OSError:
+                return
+
+            self.assertFalse(cli.delete_artifact(hardlink))
+            self.assertTrue(hardlink.exists())
+            self.assertTrue(real.exists())
 
     def test_prune_files_by_mtime_keeps_twenty_latest_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

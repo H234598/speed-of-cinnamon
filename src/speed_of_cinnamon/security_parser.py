@@ -13,6 +13,7 @@ from .path_safety import assert_no_symlink_ancestors, read_text_without_followin
 _MAX_BLACKLIST_ENTRY_CHARS = 120
 _MAX_BLACKLIST_ENTRIES = 1_000
 _MAX_BLACKLIST_FILE_BYTES = 1_000_000
+_MAX_BLACKLIST_PATTERN_BYTES = _MAX_BLACKLIST_ENTRY_CHARS * _MAX_BLACKLIST_ENTRIES
 
 
 _BLACKLIST_ADD_RE = re.compile(
@@ -62,10 +63,26 @@ def _compile_blacklist_pattern_cached(entries: tuple[str, ...]) -> re.Pattern[st
 
 
 def _compile_blacklist_pattern(entries: list[str]) -> re.Pattern[str] | None:
-    normalized: list[str] = [entry.strip() for entry in entries if entry and entry.strip()]
+    normalized: list[str] = []
+    total_bytes = 0
+    seen: set[str] = set()
+    for raw_entry in entries:
+        if isinstance(raw_entry, bool) or not isinstance(raw_entry, str):
+            continue
+        entry = _normalize_blacklist_entry(raw_entry)
+        if not entry or entry in seen:
+            continue
+        entry_bytes = len(entry.encode("utf-8"))
+        if normalized and total_bytes + entry_bytes > _MAX_BLACKLIST_PATTERN_BYTES:
+            break
+        normalized.append(entry)
+        seen.add(entry)
+        total_bytes += entry_bytes
+        if len(normalized) >= _MAX_BLACKLIST_ENTRIES:
+            break
     if not normalized:
         return None
-    pattern_key = tuple(sorted(set(normalized), key=len, reverse=True))
+    pattern_key = tuple(sorted(normalized, key=len, reverse=True))
     return _compile_blacklist_pattern_cached(pattern_key)
 
 

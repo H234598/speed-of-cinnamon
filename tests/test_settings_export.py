@@ -9,6 +9,8 @@ from pathlib import Path
 
 from speed_of_cinnamon.settings_export import (
     MAX_SETTINGS_EXPORT_BYTES,
+    MAX_SETTINGS_EXPORT_JSON_DEPTH,
+    MAX_SETTINGS_EXPORT_JSON_NODES,
     MAX_SETTINGS_TEXT_CHARS,
     MAX_SETTINGS_EXPORT_PATH_CHARS,
     MAX_TYPING_DELAY_MS,
@@ -96,6 +98,26 @@ class SettingsExportTest(unittest.TestCase):
             path = Path(tmp) / "settings-export.json"
             path.write_text("x" * (MAX_SETTINGS_EXPORT_BYTES + 1), encoding="utf-8")
             with self.assertRaisesRegex(SettingsExportError, "settings export is too large"):
+                read_export(path)
+
+    def test_read_export_rejects_deeply_nested_json_before_normalization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text("[" * (MAX_SETTINGS_EXPORT_JSON_DEPTH + 1) + "0" + "]" * (MAX_SETTINGS_EXPORT_JSON_DEPTH + 1), encoding="utf-8")
+            with self.assertRaisesRegex(SettingsExportError, "too deeply nested"):
+                read_export(path)
+
+    def test_read_export_rejects_overly_complex_json_before_normalization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            payload = {
+                "app": "speed-of-cinnamon",
+                "version": 2,
+                "settings": {f"k{index}": "" for index in range(MAX_SETTINGS_EXPORT_JSON_NODES + 1)},
+                "alarms": {"version": 2, "alarms": [], "last_checked_at": ""},
+            }
+            path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+            with self.assertRaisesRegex(SettingsExportError, "too complex"):
                 read_export(path)
 
     def test_sanitize_text_field_rejects_oversized_text_bytes(self) -> None:

@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from speed_of_cinnamon.security_parser import (
+    _MAX_BLACKLIST_ENTRIES,
     apply_blacklist_mode,
     apply_security_mode,
     parse_security_directives,
@@ -89,6 +90,21 @@ class SecurityParserTest(unittest.TestCase):
             sanitized,
             "Compiler [redacted blacklist item] and [redacted blacklist item] stay hidden, but XC++Y stays visible.",
         )
+
+    def test_apply_blacklist_mode_caps_direct_entries_before_regex_build(self) -> None:
+        blacklist = [f"secret-{index}" for index in range(_MAX_BLACKLIST_ENTRIES + 5)]
+        text = f"secret-0 secret-{_MAX_BLACKLIST_ENTRIES - 1} secret-{_MAX_BLACKLIST_ENTRIES}"
+        sanitized, count = apply_blacklist_mode(text, blacklist)
+
+        self.assertEqual(count, 2)
+        self.assertIn("[redacted blacklist item]", sanitized)
+        self.assertIn(f"secret-{_MAX_BLACKLIST_ENTRIES}", sanitized)
+
+    def test_apply_blacklist_mode_ignores_non_text_direct_entries(self) -> None:
+        sanitized, count = apply_blacklist_mode("visible geheim", ["geheim", True])  # type: ignore[list-item]
+
+        self.assertEqual(count, 1)
+        self.assertEqual(sanitized, "visible [redacted blacklist item]")
 
     def test_update_blacklist_file_deduplicates_and_persists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -18,6 +18,9 @@ EXPORT_VERSION = 2
 MAX_SETTINGS_EXPORT_BYTES = 1_000_000
 MAX_SETTINGS_TEXT_CHARS = 4_096
 MAX_SETTINGS_EXPORT_PATH_CHARS = 4_096
+MAX_SETTINGS_EXPORT_JSON_DEPTH = 24
+MAX_SETTINGS_EXPORT_JSON_TOKENS = 20_000
+MAX_SETTINGS_EXPORT_JSON_NODES = 10_000
 MAX_TYPING_DELAY_MS = 10_000
 DEFAULT_MAX_SECONDS = 30
 DEFAULT_TYPING_DELAY_MS = 8
@@ -94,6 +97,55 @@ def _contains_http_header_control_chars(text: str) -> bool:
         if ord(char) < 0x20 or ord(char) == 0x7F:
             return True
     return False
+
+
+def _assert_json_text_budget(text: str) -> None:
+    depth = 0
+    tokens = 0
+    in_string = False
+    escaped = False
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            continue
+        if char in "{[":
+            depth += 1
+            tokens += 1
+            if depth > MAX_SETTINGS_EXPORT_JSON_DEPTH:
+                raise SettingsExportError("settings export JSON is too deeply nested")
+        elif char in "}]":
+            depth -= 1
+        elif char in ":,":
+            tokens += 1
+        if tokens > MAX_SETTINGS_EXPORT_JSON_TOKENS:
+            raise SettingsExportError("settings export JSON is too complex")
+
+
+def _assert_json_value_budget(value: Any) -> None:
+    stack: list[tuple[Any, int]] = [(value, 1)]
+    nodes = 0
+    while stack:
+        item, depth = stack.pop()
+        nodes += 1
+        if nodes > MAX_SETTINGS_EXPORT_JSON_NODES:
+            raise SettingsExportError("settings export JSON is too complex")
+        if depth > MAX_SETTINGS_EXPORT_JSON_DEPTH:
+            raise SettingsExportError("settings export JSON is too deeply nested")
+        if isinstance(item, dict):
+            nodes += len(item)
+            if nodes > MAX_SETTINGS_EXPORT_JSON_NODES:
+                raise SettingsExportError("settings export JSON is too complex")
+            stack.extend((child, depth + 1) for child in item.values())
+        elif isinstance(item, list):
+            stack.extend((child, depth + 1) for child in item)
 
 
 def _sanitize_text_field(value: object, *, field_name: str) -> str:
@@ -231,10 +283,12 @@ def read_export(path: Path) -> dict[str, Any]:
         text = read_text_without_following_symlinks(path, field_name="settings export path")
         if _contains_escaped_null(text):
             raise SettingsExportError("settings export contains invalid null byte")
+        _assert_json_text_budget(text)
         payload = json.loads(text)
+        _assert_json_value_budget(payload)
     except FileNotFoundError as exc:
         raise SettingsExportError(f"settings export not found: {path}") from exc
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, RecursionError, UnicodeDecodeError) as exc:
         raise SettingsExportError(f"settings export could not be read: {path}") from exc
 
     if not isinstance(payload, dict):

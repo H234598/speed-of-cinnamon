@@ -8,6 +8,7 @@ import re
 import shutil
 import tempfile
 import string
+import time
 from itertools import islice
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -28,6 +29,7 @@ MAX_TOTAL_LOG_BYTES = 5_000_000
 COMPRESS_AFTER_DAYS = 3
 MAX_LOG_MESSAGE_CHARS = 320
 MAX_LOG_FIELD_CHARS = 160
+LOG_MAINTENANCE_INTERVAL_SECONDS = 60.0
 LOGGER_NAME = "speed_of_cinnamon"
 HOME_DIR = str(Path.home())
 
@@ -73,6 +75,7 @@ class SizeCappedJsonFileHandler(logging.Handler):
         self.path = path
         self.base_dir = base_dir
         self.stream: TextIO | None = None
+        self._next_maintenance_at = time.monotonic() + LOG_MAINTENANCE_INTERVAL_SECONDS
 
     def close(self) -> None:
         if self.stream is not None:
@@ -94,12 +97,15 @@ class SizeCappedJsonFileHandler(logging.Handler):
             if current_size is not None and current_size + len(encoded) > MAX_DAILY_LOG_BYTES:
                 self.close()
                 _rotate_active_if_needed(self.path, force=True)
+                rotated = True
+            else:
+                rotated = False
             self._open()
             if self.stream is None:
                 raise RuntimeError("failed to open log file")
             self.stream.write(line)
             self.stream.flush()
-            maintain_logs(self.base_dir)
+            self._maintain_after_emit(force=rotated)
         except Exception:
             self.handleError(record)
 
@@ -107,6 +113,13 @@ class SizeCappedJsonFileHandler(logging.Handler):
         if self.stream is None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.stream = open(self.path, "a", encoding="utf-8")
+
+    def _maintain_after_emit(self, *, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and now < self._next_maintenance_at:
+            return
+        maintain_logs(self.base_dir)
+        self._next_maintenance_at = now + LOG_MAINTENANCE_INTERVAL_SECONDS
 
 
 def validate_log_level(level: str) -> str:
