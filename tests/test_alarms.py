@@ -45,6 +45,16 @@ class AlarmTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "invalid null byte"):
             load_alarm_store(Path("alarms\\\\x00.json"))
 
+    def test_load_alarm_store_rejects_parent_traversal_path(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "unsafe path component"):
+            load_alarm_store(Path("../outside/alarms.json"))
+        with self.assertRaisesRegex(RuntimeError, "unsafe path component"):
+            load_alarm_store(Path("alarms/../alarms.json"))
+
+    def test_load_alarm_store_allows_current_directory_relative_path(self) -> None:
+        payload = load_alarm_store(Path("./missing-alarms.json"))
+        self.assertEqual(payload["alarms"], [])
+
     def test_load_alarm_store_rejects_oversized_path(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "path is invalid"):
             load_alarm_store(Path("a" * (MAX_ALARM_STORE_PATH_CHARS + 1)))
@@ -57,6 +67,22 @@ class AlarmTest(unittest.TestCase):
     def test_save_alarm_store_rejects_null_byte_path(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "invalid null byte"):
             save_alarm_store({}, Path("alarms\x00.json"))
+
+    def test_save_alarm_store_rejects_parent_traversal_path(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "unsafe path component"):
+            save_alarm_store({}, Path("../outside/alarms.json"))
+        with self.assertRaisesRegex(RuntimeError, "unsafe path component"):
+            save_alarm_store({}, Path("alarms/../alarms.json"))
+
+    def test_save_alarm_store_allows_current_directory_relative_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path.cwd()
+            try:
+                os.chdir(tmp)
+                save_alarm_store({}, Path("./alarms.json"))
+                self.assertTrue(Path("alarms.json").exists())
+            finally:
+                os.chdir(cwd)
 
     def test_save_alarm_store_rejects_oversized_path(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "path is invalid"):
@@ -613,6 +639,31 @@ class AlarmTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "failed to persist alarm store"):
                 save_alarm_store({}, path)
         mocked_replace.assert_called_once()
+
+    @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
+    def test_save_alarm_store_uses_secure_directory_relative_replace(self, mocked_open: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            save_alarm_store({}, path)
+
+        self.assertTrue(
+            any(
+                isinstance(args[0], str)
+                and args[0].startswith(f".{path.name}.")
+                and isinstance(args[1], int)
+                and args[1] & os.O_NOFOLLOW
+                and "dir_fd" in kwargs
+                for args, kwargs in mocked_open.call_args_list
+            )
+        )
+
+    @mock.patch("speed_of_cinnamon.path_safety.os.chmod")
+    def test_save_alarm_store_does_not_chmod_target_path_after_replace(self, mocked_chmod: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            save_alarm_store({}, path)
+
+        mocked_chmod.assert_not_called()
 
     def test_save_alarm_store_sets_private_permissions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

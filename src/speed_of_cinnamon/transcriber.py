@@ -212,10 +212,6 @@ def _write_text_atomic(path: Path, text: str) -> None:
         tmp_path = Path(handle.name)
     try:
         os.replace(tmp_path, path)
-        try:
-            path.chmod(0o600)
-        except OSError:
-            pass
     except OSError as exc:
         try:
             os.unlink(tmp_path)

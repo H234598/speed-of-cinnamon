@@ -906,27 +906,34 @@ def stop_process(pid: int, timeout_seconds: float = 5.0) -> None:
         raise RecorderError("timeout_seconds must be finite")
     if timeout_seconds <= 0:
         raise RecorderError("timeout_seconds must be positive")
-    _run_kill(["kill", "-INT", str(pid)], check_exit=False)
+    try:
+        process_target = f"-{pid}" if os.getpgid(pid) == pid else str(pid)
+    except ProcessLookupError:
+        return
+    except OSError as exc:
+        raise RecorderError(f"failed to inspect recorder process {pid}: {exc}") from exc
+
+    _run_kill(["kill", "-INT", "--", process_target], check_exit=False)
 
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         try:
-            _run_kill(["kill", "-0", str(pid)], check_exit=True)
+            _run_kill(["kill", "-0", "--", process_target], check_exit=True)
         except subprocess.CalledProcessError:
             return
         except RecorderError:
             raise
         time.sleep(0.1)
 
-    _run_kill(["kill", "-TERM", str(pid)], check_exit=False)
+    _run_kill(["kill", "-TERM", "--", process_target], check_exit=False)
 
     time.sleep(0.5)
     try:
-        _run_kill(["kill", "-0", str(pid)], check_exit=True)
+        _run_kill(["kill", "-0", "--", process_target], check_exit=True)
     except subprocess.CalledProcessError:
         return
 
     try:
-        _run_kill(["kill", "-KILL", str(pid)], check_exit=False)
+        _run_kill(["kill", "-KILL", "--", process_target], check_exit=False)
     except RecorderError as exc:
         raise RecorderError(f"failed to stop recorder process {pid}: {exc}") from exc

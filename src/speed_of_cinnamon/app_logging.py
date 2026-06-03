@@ -105,6 +105,7 @@ class SizeCappedJsonFileHandler(logging.Handler):
                 raise RuntimeError("failed to open log file")
             self.stream.write(line)
             self.stream.flush()
+            _enforce_total_size_limit(self.base_dir)
             self._maintain_after_emit(force=rotated)
         except Exception:
             self.handleError(record)

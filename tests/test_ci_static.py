@@ -350,6 +350,7 @@ class CiStaticTest(unittest.TestCase):
 
     def test_man_pages_and_wiki_are_packaged(self) -> None:
         spec = (REPO_ROOT / "packaging" / "speed-of-cinnamon.spec").read_text(encoding="utf-8")
+        generic_spec = (REPO_ROOT / "packaging" / "speed-of-cinnamon-generic.spec").read_text(encoding="utf-8")
         dist_verifier = (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(encoding="utf-8")
         rpm_verifier = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(encoding="utf-8")
         install_local = (REPO_ROOT / "scripts" / "install-local.sh").read_text(encoding="utf-8")
@@ -365,6 +366,11 @@ class CiStaticTest(unittest.TestCase):
 
         self.assertIn("install -m 0644 docs/man/speed-of-cinnamon.1", spec)
         self.assertIn("install -m 0644 docs/man/speed-of-cinnamon-alarms.1", spec)
+        for rpm_spec in (spec, generic_spec):
+            self.assertIn('find src/speed_of_cinnamon \\( -type l -o -type f -links +1 \\) -print -quit', rpm_spec)
+            self.assertIn('find files/speed-of-cinnamon@H234598 \\( -type l -o -type f -links +1 \\) -print -quit', rpm_spec)
+            self.assertIn("refusing unsafe python package source tree", rpm_spec)
+            self.assertIn("refusing unsafe applet source tree", rpm_spec)
         self.assertIn("%{_mandir}/man1/speed-of-cinnamon.1*", spec)
         self.assertIn("%{_mandir}/man1/speed-of-cinnamon-alarms.1*", spec)
         self.assertIn("speed-of-cinnamon\\.1(\\.gz)?", rpm_verifier)

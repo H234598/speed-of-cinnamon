@@ -18,6 +18,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("GLib.file_test(SYSTEM_CLI, GLib.FileTest.IS_EXECUTABLE)", source)
         self.assertIn('configured.charAt(0) === "/" && GLib.file_test(configured, GLib.FileTest.IS_EXECUTABLE)', source)
         self.assertIn('return "";', source)
+        self.assertNotIn('      return "";\n    }\n    if (GLib.file_test(DEFAULT_CLI, GLib.FileTest.IS_EXECUTABLE))', source)
         self.assertNotIn('return "speed-of-cinnamon";', source)
         self.assertNotIn("this.cliPath || DEFAULT_CLI", source)
 
@@ -520,6 +521,30 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('return [this._cliCommand(), "benchmark-models", String(audioPath || ""), "--language", String(this._currentLanguage()), "--json"]', source)
         self.assertIn("_benchmarkDownloadedModels(audioPath)", source)
         self.assertIn("BENCHMARK_COMMAND_TIMEOUT_MS", source)
+
+    def test_saved_diagnostics_does_not_copy_or_display_full_path(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn('_setStatus("done", _("Saved diagnostics"), this.lastTranscript)', source)
+        self.assertNotIn("payload.saved_path", source)
+        self.assertNotIn('Saved diagnostics: "', source)
+
+    def test_imported_settings_are_type_hardened_before_persistence(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("const BOOLEAN_IMPORT_SETTINGS = {", source)
+        self.assertIn("const IMPORT_TEXT_SETTINGS = {", source)
+        self.assertIn("const LANGUAGE_CODES = [", source)
+        self.assertIn("const TRANSCRIBER_METHODS = [", source)
+        self.assertIn("const POST_PROCESS_BACKENDS = [", source)
+        self.assertIn('typeof value === "boolean" ? value : Boolean(fallback)', source)
+        self.assertIn('key === "max-seconds"', source)
+        self.assertIn('key === "typing-delay-ms"', source)
+        self.assertIn("this._coerceImportedEnumSetting(value, LANGUAGE_CODES, fallback)", source)
+        self.assertIn("this._coerceImportedEnumSetting(value, RECORDER_METHODS, fallback)", source)
+        self.assertIn("this._coerceImportedEnumSetting(value, OUTPUT_METHODS, fallback)", source)
+        self.assertIn("this._coerceCliTextArg(value, IMPORT_TEXT_SETTINGS[key])", source)
+        self.assertIn("_coerceImportedEnumSetting: function(value, allowedValues, fallback)", source)
 
     def test_recording_status_shows_microphone_level(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

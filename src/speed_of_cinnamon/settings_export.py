@@ -295,10 +295,6 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                 pass
             handle.write(rendered)
         os.replace(temp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
-        try:
-            os.chmod(path.name, 0o600, dir_fd=parent_fd)
-        except OSError:
-            pass
     except OSError as exc:
         if temp_name:
             try:

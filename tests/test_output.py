@@ -576,6 +576,24 @@ class OutputTest(unittest.TestCase):
 
         self.assertEqual(calls, ["paste"])
 
+    def test_insert_text_rolls_back_duplicate_state_when_paste_fails(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
+            mock.patch(
+                "speed_of_cinnamon.output.paste_from_clipboard",
+                side_effect=[OutputError("paste failed"), None],
+            ) as mocked_paste,
+            mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=4.0),
+        ):
+            with self.assertRaisesRegex(OutputError, "paste failed"):
+                insert_text("wiederholung", "clipboard-paste")
+            self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
+
+        self.assertEqual(mocked_clipboard.call_count, 2)
+        self.assertEqual(mocked_paste.call_count, 2)
+
     def test_insert_text_clipboard_fails_closed_when_dedupe_state_cannot_persist(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,

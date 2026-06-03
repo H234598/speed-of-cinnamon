@@ -753,10 +753,6 @@ def _write_json_atomic(path: Path, payload: dict[str, object], *, max_bytes: int
         tmp_path = Path(handle.name)
     try:
         os.replace(tmp_path, path)
-        try:
-            path.chmod(0o600)
-        except OSError:
-            pass
     except OSError as exc:
         try:
             os.unlink(tmp_path)
@@ -777,10 +773,6 @@ def _write_text_atomic(path: Path, text: str) -> None:
         tmp_path = Path(handle.name)
     try:
         os.replace(tmp_path, path)
-        try:
-            path.chmod(0o600)
-        except OSError:
-            pass
     except OSError as exc:
         try:
             os.unlink(tmp_path)
@@ -807,10 +799,6 @@ def _prepare_private_file(path: Path, *, field_name: str) -> None:
                 os.fchmod(handle.fileno(), 0o600)
             except OSError:
                 pass
-        try:
-            path.chmod(0o600)
-        except OSError:
-            pass
     except OSError as exc:
         try:
             os.close(fd)
@@ -1190,6 +1178,7 @@ def prune_recording_groups(
     deleted_paths: list[str] = []
     failed_paths: list[str] = []
     skipped_active_paths: list[str] = []
+    skipped_group_paths: list[Path] = []
     cutoff = time.time() - max(0, max_age_days) * 24 * 60 * 60
     groups = recording_groups()
     grouped_artifacts: list[Path] = []
@@ -1201,10 +1190,12 @@ def prune_recording_groups(
             continue
         if not isinstance(files, list):
             continue
-        if any(path.resolve(strict=False) in active_paths for path in files):
-            skipped_active_paths.extend(str(path) for path in files)
+        group_paths = [path for path in files if isinstance(path, Path)]
+        if any(path.resolve(strict=False) in active_paths for path in group_paths):
+            skipped_group_paths.extend(group_paths)
+            skipped_active_paths.extend(str(path) for path in group_paths)
             continue
-        for path in files:
+        for path in group_paths:
             if dry_run:
                 planned_paths.append(str(path))
                 if path.suffix in {".wav", ".flac"}:
@@ -1233,7 +1224,7 @@ def prune_recording_groups(
     handled_paths = {
         Path(path).resolve(strict=False)
         for path in planned_paths + deleted_paths + failed_paths
-    }
+    } | {path.resolve(strict=False) for path in skipped_group_paths}
     remaining_artifacts = [
         path
         for path in grouped_artifacts

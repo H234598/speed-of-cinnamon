@@ -5,6 +5,7 @@ import hashlib
 import os
 import shutil
 import tempfile
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
@@ -27,6 +28,16 @@ _MODEL_CHECKSUM_CACHE_FILE = "model_checksums.json"
 _model_checksum_cache: dict[str, dict[str, int | str]] = {}
 _model_checksum_cache_loaded = False
 ENGLISH_LANGUAGE_CODES = {"", "en", "eng", "english"}
+MODEL_DOWNLOAD_REDIRECT_CODES = {301, 302, 303, 307, 308}
+MAX_MODEL_DOWNLOAD_REDIRECTS = 5
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req: object, fp: object, code: int, msg: str, headers: object, newurl: str) -> None:
+        return None
+
+
+_MODEL_DOWNLOAD_OPENER = urllib.request.build_opener(_NoRedirectHandler)
 
 
 def _contains_escaped_null(value: str) -> bool:
@@ -204,10 +215,6 @@ def _write_model_checksum_cache() -> None:
             tmp_path = Path(handle.name)
         try:
             os.replace(tmp_path, cache_path)
-            try:
-                cache_path.chmod(0o600)
-            except OSError:
-                pass
         except OSError:
             try:
                 tmp_path.unlink()
@@ -404,6 +411,52 @@ def _url_matches_allowed_base(url: str, allowed_url: str) -> bool:
         and parsed.netloc == allowed.netloc
         and parsed.path == allowed.path
     )
+
+
+def _model_download_redirect_target(exc: urllib.error.HTTPError, base_url: str) -> str | None:
+    if exc.code not in MODEL_DOWNLOAD_REDIRECT_CODES:
+        return None
+    headers = getattr(exc, "headers", None)
+    getter = getattr(headers, "get", None)
+    if not callable(getter):
+        getter = getattr(getattr(exc, "hdrs", None), "get", None)
+    if not callable(getter):
+        return None
+    location = getter("Location")
+    if not isinstance(location, str) or not location.strip():
+        return None
+    return urllib.parse.urljoin(base_url, location.strip())
+
+
+def _open_model_download_url(url: str, *, timeout: int = 30) -> object:
+    return _MODEL_DOWNLOAD_OPENER.open(url, timeout=timeout)
+
+
+def _open_model_download_response(
+    url: str,
+    *,
+    allowed_hosts: set[str],
+    allowed_urls: set[str] | None,
+) -> object:
+    current_url = url
+    for _ in range(MAX_MODEL_DOWNLOAD_REDIRECTS + 1):
+        try:
+            return _open_model_download_url(current_url, timeout=30)
+        except urllib.error.HTTPError as exc:
+            redirect_url = _model_download_redirect_target(exc, current_url)
+            if redirect_url is None:
+                raise ModelError(f"model download failed with HTTP status {exc.code}") from exc
+            redirect_url = _assert_download_url(
+                redirect_url,
+                field_name="model download redirect URL",
+                allowed_hosts=allowed_hosts,
+            )
+            if allowed_urls is not None and not any(
+                _url_matches_allowed_base(redirect_url, allowed_url) for allowed_url in allowed_urls
+            ):
+                raise ModelError("model download redirect URL is not allowed") from exc
+            current_url = redirect_url
+    raise ModelError("model download has too many redirects")
 
 
 class ModelError(RuntimeError):
@@ -769,9 +822,7 @@ def _download_url_to_file(url: str, tmp_dir: Path, size_limit: int, model_name: 
             os.fchmod(output.fileno(), 0o600)
         except OSError:
             pass
-        with urllib.request.urlopen(url, timeout=30) as response, (  # nosec B310
-            output
-        ):
+        with _open_model_download_response(url, allowed_hosts=allowed_hosts, allowed_urls=allowed_urls) as response, output:
             geturl = getattr(response, "geturl", None)
             if callable(geturl):
                 final_url = _assert_download_url(
@@ -844,10 +895,6 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                 os.replace(tmp_path, target)
             except OSError as exc:
                 raise ModelError(f"failed to persist downloaded model file: {target}") from exc
-            try:
-                target.chmod(0o600)
-            except OSError:
-                pass
         if downloaded_total > size_limit:
             raise ModelError(f"downloaded model too large for {model.name}: {downloaded_total} > {size_limit}")
         _assert_safe_model_directory(path)
@@ -893,14 +940,11 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
         checksum = sha1_file(tmp_path)
         if checksum != model.sha1:
             raise ModelError(f"downloaded checksum mismatch for {model.name}: {checksum}")
+        tmp_stat = tmp_path.stat()
         try:
             os.replace(tmp_path, path)
-            try:
-                path.chmod(0o600)
-            except OSError:
-                pass
             _clear_model_checksum_cache(tmp_path)
-            _set_model_checksum_cache(path, checksum, path.stat())
+            _set_model_checksum_cache(path, checksum, tmp_stat)
         except OSError as exc:
             raise ModelError(f"failed to persist downloaded model file: {path}") from exc
     except Exception:

@@ -335,6 +335,47 @@ def _record_clipboard_insertion(text: str, method: str) -> bool:
     return True
 
 
+def _clear_clipboard_dedup_state() -> None:
+    try:
+        path = _clipboard_dedup_state_path()
+    except RuntimeError:
+        return
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def _restore_clipboard_dedup_state(snapshot: tuple[str, float]) -> None:
+    text, at = snapshot
+    if text:
+        if not _write_clipboard_dedup_state(text, at):
+            _clear_clipboard_dedup_state()
+        return
+    _clear_clipboard_dedup_state()
+
+
+def _clipboard_insertion_snapshot() -> tuple[str, str, float]:
+    return _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
+
+
+def _restore_clipboard_insertion_snapshot(snapshot: tuple[str, str, float]) -> None:
+    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
+    _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION = snapshot
+
+
+def _reserve_clipboard_insertion_memory(text: str, method: str) -> tuple[str, str, float] | None:
+    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
+    cleaned = _normalize_clipboard_text(text)
+    if not cleaned:
+        return None
+    snapshot = _clipboard_insertion_snapshot()
+    _LAST_CLIPBOARD_TEXT = cleaned
+    _LAST_CLIPBOARD_METHOD = method
+    _LAST_CLIPBOARD_INSERTION = time.monotonic()
+    return snapshot
+
+
 def _validate_text_input(text: str) -> bytes:
     if not isinstance(text, str) or isinstance(text, bool):
         raise OutputError("text must be text")
@@ -626,24 +667,42 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
         lock_path = _begin_clipboard_insertion(text, method)
         if lock_path is None:
             return False
+        snapshot = _reserve_clipboard_insertion_memory(text, method)
+        if snapshot is None:
+            _release_clipboard_dedup_lock(lock_path)
+            return False
+        committed = False
         try:
             if not _record_clipboard_insertion(text, method):
                 return False
             set_clipboard(text)
+            committed = True
             return True
         finally:
+            if not committed:
+                _restore_clipboard_insertion_snapshot(snapshot)
             _release_clipboard_dedup_lock(lock_path)
     if method == "clipboard-paste":
         lock_path = _begin_clipboard_insertion(text, method)
         if lock_path is None:
             return False
+        snapshot = _reserve_clipboard_insertion_memory(text, method)
+        if snapshot is None:
+            _release_clipboard_dedup_lock(lock_path)
+            return False
+        committed = False
+        persistent_snapshot = _read_clipboard_dedup_state()
         try:
             if not _record_clipboard_insertion(text, method):
                 return False
             set_clipboard(text)
             paste_from_clipboard()
+            committed = True
             return True
         finally:
+            if not committed:
+                _restore_clipboard_insertion_snapshot(snapshot)
+                _restore_clipboard_dedup_state(persistent_snapshot)
             _release_clipboard_dedup_lock(lock_path)
     if method == "type":
         type_text(text, delay_ms)

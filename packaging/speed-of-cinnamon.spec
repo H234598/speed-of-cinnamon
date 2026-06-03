@@ -50,9 +50,17 @@ PY
 )"
 pydir="%{buildroot}%{_prefix}/lib/python${pyver}/site-packages"
 install -d "${pydir}"
+if find src/speed_of_cinnamon \( -type l -o -type f -links +1 \) -print -quit | grep -q .; then
+  echo "refusing unsafe python package source tree" >&2
+  exit 1
+fi
 cp -a src/speed_of_cinnamon "${pydir}/"
 
 install -d %{buildroot}%{_datadir}/cinnamon/applets/speed-of-cinnamon@H234598
+if find files/speed-of-cinnamon@H234598 \( -type l -o -type f -links +1 \) -print -quit | grep -q .; then
+  echo "refusing unsafe applet source tree" >&2
+  exit 1
+fi
 cp -a files/speed-of-cinnamon@H234598/. %{buildroot}%{_datadir}/cinnamon/applets/speed-of-cinnamon@H234598/
 
 install -d %{buildroot}%{_mandir}/man1

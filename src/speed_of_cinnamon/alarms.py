@@ -3,13 +3,17 @@ from __future__ import annotations
 import json
 import os
 import re
-import tempfile
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
 from .paths import alarms_file
-from .path_safety import assert_no_symlink_ancestors, read_text_without_following_symlinks
+from .path_safety import (
+    assert_no_symlink_ancestors,
+    assert_safe_path_components,
+    read_text_without_following_symlinks,
+    write_text_atomically_without_following_symlinks,
+)
 
 STORE_VERSION = 1
 DAY_CODES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
@@ -44,6 +48,7 @@ def _assert_clean_path(path: Path, *, field_name: str) -> None:
         raise RuntimeError(f"{field_name} path is invalid")
     if _contains_escaped_null(text):
         raise RuntimeError(f"{field_name} contains invalid null byte")
+    assert_safe_path_components(path, field_name=field_name)
     assert_no_symlink_ancestors(path, field_name=field_name)
 
 
@@ -274,20 +279,13 @@ def save_alarm_store(store: dict[str, Any], path: Path | None = None) -> None:
     rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     if len(rendered.encode("utf-8")) > MAX_ALARM_STORE_BYTES:
         raise RuntimeError("alarm store is too large")
-    with tempfile.NamedTemporaryFile("w", delete=False, dir=store_path.parent, encoding="utf-8") as handle:
-        try:
-            os.fchmod(handle.fileno(), 0o600)
-        except OSError:
-            pass
-        handle.write(rendered)
-        tmp_path = Path(handle.name)
     try:
-        os.replace(tmp_path, store_path)
+        write_text_atomically_without_following_symlinks(
+            store_path,
+            rendered,
+            field_name="alarm store path",
+        )
     except OSError as exc:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
         raise RuntimeError(f"failed to persist alarm store: {store_path}") from exc
 
 

@@ -1837,6 +1837,49 @@ class CliTest(unittest.TestCase):
         self.assertEqual(len(result["planned_paths"]), 1)
         self.assertTrue(str(recordings / "000.wav") in result["planned_paths"])
 
+    def test_prune_recording_groups_excludes_active_group_from_file_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            active_audio = recordings / "active.wav"
+            active_log = recordings / "active.log"
+            other_audio = recordings / "other.wav"
+            active_audio.write_bytes(b"audio")
+            active_log.write_text("log", encoding="utf-8")
+            other_audio.write_bytes(b"audio")
+            os.utime(active_audio, (200, 200))
+            os.utime(active_log, (200, 200))
+            os.utime(other_audio, (100, 100))
+            active_group = {active_audio.resolve(strict=False), active_log.resolve(strict=False)}
+
+            def _prune_files_by_mtime(
+                paths: list[Path],
+                keep: int,
+                active_paths: set[Path],
+                dry_run: bool,
+            ) -> dict[str, object]:
+                self.assertTrue(active_group.isdisjoint({path.resolve(strict=False) for path in paths}))
+                return {
+                    "planned_paths": [],
+                    "deleted_paths": [],
+                    "failed_paths": [],
+                    "skipped_active_paths": [],
+                }
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.prune_files_by_mtime", side_effect=_prune_files_by_mtime),
+            ):
+                result = cli.prune_recording_groups(
+                    keep=0,
+                    active_paths={active_audio.resolve(strict=False)},
+                    dry_run=True,
+                    max_age_days=36500,
+                )
+
+        self.assertIn(str(active_audio), result["skipped_active_paths"])
+        self.assertIn(str(active_log), result["skipped_active_paths"])
+
     def test_cleanup_dry_run_does_not_delete_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"

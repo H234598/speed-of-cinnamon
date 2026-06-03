@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from .path_safety import assert_no_symlink_ancestors, read_text_without_following_symlinks
+from .path_safety import (
+    assert_no_symlink_ancestors,
+    assert_safe_path_components,
+    read_text_without_following_symlinks,
+    write_text_atomically_without_following_symlinks,
+)
 
 
 def now_iso() -> str:
@@ -69,6 +73,7 @@ class StateStore:
             raise RuntimeError("state file path is invalid")
         if _contains_escaped_null(text):
             raise RuntimeError("state file path contains invalid null byte")
+        assert_safe_path_components(path, field_name="state file path")
         assert_no_symlink_ancestors(path, field_name="state file path")
         self.path = path
 
@@ -181,20 +186,13 @@ class StateStore:
         rendered = json.dumps(normalized_payload, indent=2, sort_keys=True) + "\n"
         if len(rendered.encode("utf-8")) > MAX_STATE_FILE_BYTES:
             raise RuntimeError("state file is too large")
-        with tempfile.NamedTemporaryFile("w", delete=False, dir=self.path.parent, encoding="utf-8") as handle:
-            try:
-                os.fchmod(handle.fileno(), 0o600)
-            except OSError:
-                pass
-            handle.write(rendered)
-            tmp_path = Path(handle.name)
         try:
-            os.replace(tmp_path, self.path)
+            write_text_atomically_without_following_symlinks(
+                self.path,
+                rendered,
+                field_name="state file path",
+            )
         except OSError as exc:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
             raise RuntimeError(f"failed to persist state: {self.path}") from exc
 
     def update(self, **values: Any) -> RecordingState:

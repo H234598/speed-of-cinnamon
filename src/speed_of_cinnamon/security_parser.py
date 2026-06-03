@@ -193,10 +193,6 @@ def _write_blacklist(path: Path, entries: list[str]) -> None:
         except OSError:
             pass
         raise ValueError("failed to write blacklist file") from exc
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
 
 
 def _acquire_blacklist_lock(path: Path) -> int:

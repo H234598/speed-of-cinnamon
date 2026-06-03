@@ -864,14 +864,55 @@ class RecorderTest(unittest.TestCase):
             stop_process(1234, timeout_seconds=float("inf"))
 
     def test_stop_process_rejects_missing_kill_command(self) -> None:
-        with mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=OSError("missing")):
+        with (
+            mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
+            mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=OSError("missing")),
+        ):
             with self.assertRaisesRegex(RecorderError, "failed to run kill command"):
                 stop_process(1234, timeout_seconds=0.1)
 
     def test_stop_process_rejects_kill_timeout(self) -> None:
-        with mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="kill", timeout=1)):
+        with (
+            mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
+            mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="kill", timeout=1)),
+        ):
             with self.assertRaisesRegex(RecorderError, "kill command timed out"):
                 stop_process(1234, timeout_seconds=0.1)
+
+    def test_stop_process_signals_recorder_process_group(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
+            mock.patch(
+                "speed_of_cinnamon.recorder._run_kill",
+                side_effect=[None, subprocess.CalledProcessError(1, ["kill"])],
+            ) as mocked_kill,
+        ):
+            stop_process(1234, timeout_seconds=0.1)
+
+        self.assertEqual(mocked_kill.call_args_list[0].args[0], ["kill", "-INT", "--", "-1234"])
+        self.assertEqual(mocked_kill.call_args_list[1].args[0], ["kill", "-0", "--", "-1234"])
+
+    def test_stop_process_signals_pid_when_process_is_not_group_leader(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=999),
+            mock.patch(
+                "speed_of_cinnamon.recorder._run_kill",
+                side_effect=[None, subprocess.CalledProcessError(1, ["kill"])],
+            ) as mocked_kill,
+        ):
+            stop_process(1234, timeout_seconds=0.1)
+
+        self.assertEqual(mocked_kill.call_args_list[0].args[0], ["kill", "-INT", "--", "1234"])
+        self.assertEqual(mocked_kill.call_args_list[1].args[0], ["kill", "-0", "--", "1234"])
+
+    def test_stop_process_returns_when_process_is_already_gone(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.recorder.os.getpgid", side_effect=ProcessLookupError),
+            mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
+        ):
+            stop_process(1234, timeout_seconds=0.1)
+
+        mocked_kill.assert_not_called()
 
 
 if __name__ == "__main__":

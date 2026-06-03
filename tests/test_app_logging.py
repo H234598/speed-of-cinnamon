@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 import json
 import logging
+import os
 import tempfile
 import unittest
 from datetime import date
@@ -78,6 +79,31 @@ class AppLoggingTest(unittest.TestCase):
                 handler.close()
 
         mocked_maintain.assert_called_once_with(log_dir)
+
+    def test_file_handler_enforces_total_limit_without_full_maintenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            active = log_dir / f"speed-of-cinnamon-{date.today().isoformat()}.log"
+            oldest = log_dir / "speed-of-cinnamon-2026-06-01.log.gz"
+            newest = log_dir / "speed-of-cinnamon-2026-06-02.log.gz"
+            oldest.write_bytes(b"o" * 120)
+            newest.write_bytes(b"n" * 120)
+            os.utime(oldest, (100, 100))
+            os.utime(newest, (200, 200))
+            handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
+            handler.setFormatter(app_logging.JsonLogFormatter())
+            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "burst", (), None)
+            with (
+                mock.patch("speed_of_cinnamon.app_logging.MAX_TOTAL_LOG_BYTES", 300),
+                mock.patch("speed_of_cinnamon.app_logging.maintain_logs") as mocked_maintain,
+            ):
+                handler.emit(record)
+            handler.close()
+
+            mocked_maintain.assert_not_called()
+            self.assertFalse(oldest.exists())
+            self.assertTrue(newest.exists())
+            self.assertTrue(active.exists())
 
     def test_active_daily_log_rotates_at_one_file_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -35,6 +35,16 @@ class StateStoreTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "invalid null byte"):
             StateStore(Path("state\\\\x00.json"))
 
+    def test_state_store_rejects_parent_traversal_path(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "unsafe path component"):
+            StateStore(Path("../outside/state.json"))
+        with self.assertRaisesRegex(RuntimeError, "unsafe path component"):
+            StateStore(Path("state/../state.json"))
+
+    def test_state_store_allows_current_directory_relative_path(self) -> None:
+        store = StateStore(Path("./state.json"))
+        self.assertEqual(store.path, Path("state.json"))
+
     def test_state_store_rejects_oversized_path(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "state file path is invalid"):
             StateStore(Path("a" * (MAX_STATE_PATH_CHARS + 1)))
@@ -83,6 +93,31 @@ class StateStoreTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "failed to persist state:"):
                 store.write(store.read())
         mocked_replace.assert_called_once()
+
+    @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
+    def test_write_uses_secure_directory_relative_replace(self, mocked_open: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            StateStore(path).write(RecordingState(status="done"))
+
+        self.assertTrue(
+            any(
+                isinstance(args[0], str)
+                and args[0].startswith(f".{path.name}.")
+                and isinstance(args[1], int)
+                and args[1] & os.O_NOFOLLOW
+                and "dir_fd" in kwargs
+                for args, kwargs in mocked_open.call_args_list
+            )
+        )
+
+    @mock.patch("speed_of_cinnamon.path_safety.os.chmod")
+    def test_write_does_not_chmod_target_path_after_replace(self, mocked_chmod: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            StateStore(path).write(RecordingState(status="done"))
+
+        mocked_chmod.assert_not_called()
 
     def test_write_does_not_mutate_input_state_timestamp(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

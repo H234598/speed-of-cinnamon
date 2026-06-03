@@ -6,6 +6,7 @@ import io
 import os
 import tempfile
 import unittest
+import urllib.error
 from unittest import mock
 from pathlib import Path
 
@@ -48,6 +49,10 @@ class FakeRedirectResponse(FakeResponseWithLength):
 
     def geturl(self) -> str:
         return self._final_url
+
+
+def fake_redirect(url: str, location: str) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(url, 302, "Found", {"Location": location}, None)
 
 
 class ModelsTest(unittest.TestCase):
@@ -502,7 +507,7 @@ class ModelsTest(unittest.TestCase):
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
             mock.patch.object(models, "CATALOG", (spec,)),
-            mock.patch("speed_of_cinnamon.models.urllib.request.urlopen", return_value=FakeResponse(data)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
         ):
             payload = models.download_model("test")
             second_payload = models.download_model("test")
@@ -528,7 +533,7 @@ class ModelsTest(unittest.TestCase):
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
             mock.patch.object(models, "CATALOG", (spec,)),
-            mock.patch("speed_of_cinnamon.models.urllib.request.urlopen", side_effect=[
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", side_effect=[
                 FakeResponse(data),
                 FakeResponse(data),
                 FakeResponse(data),
@@ -581,8 +586,11 @@ class ModelsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(models.ModelError, "host is not allowed"):
                 with mock.patch(
-                    "speed_of_cinnamon.models.urllib.request.urlopen",
-                    return_value=FakeRedirectResponse(b"model", 5, "https://evil.example/model.bin"),
+                    "speed_of_cinnamon.models._open_model_download_url",
+                    side_effect=fake_redirect(
+                        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
+                        "https://evil.example/model.bin",
+                    ),
                 ):
                     models._download_url_to_file(
                         "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
@@ -605,12 +613,16 @@ class ModelsTest(unittest.TestCase):
 
     def test_download_url_allows_redirect_to_exact_allowed_url_with_query(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            response = FakeRedirectResponse(
-                b"model",
-                5,
-                "https://huggingface.co/wabisabisocial/whisper-tiny-german-ggml/resolve/main/ggml-tiny-de.bin?download=1",
-            )
-            with mock.patch("speed_of_cinnamon.models.urllib.request.urlopen", return_value=response):
+            with mock.patch(
+                "speed_of_cinnamon.models._open_model_download_url",
+                side_effect=[
+                    fake_redirect(
+                        models.TINY_DE_MODEL_URL,
+                        "https://huggingface.co/wabisabisocial/whisper-tiny-german-ggml/resolve/main/ggml-tiny-de.bin?download=1",
+                    ),
+                    FakeResponseWithLength(b"model", 5),
+                ],
+            ):
                 tmp_path, downloaded = models._download_url_to_file(
                     models.TINY_DE_MODEL_URL,
                     Path(tmp),
@@ -626,10 +638,9 @@ class ModelsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(models.ModelError, "redirect URL is not allowed"):
                 with mock.patch(
-                    "speed_of_cinnamon.models.urllib.request.urlopen",
-                    return_value=FakeRedirectResponse(
-                        b"model",
-                        5,
+                    "speed_of_cinnamon.models._open_model_download_url",
+                    side_effect=fake_redirect(
+                        models.TINY_DE_MODEL_URL,
                         "https://huggingface.co/other/repo/resolve/main/ggml-tiny-de.bin?download=1",
                     ),
                 ):
@@ -658,7 +669,7 @@ class ModelsTest(unittest.TestCase):
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
             mock.patch.object(models, "CATALOG", (spec,)),
-            mock.patch("speed_of_cinnamon.models.urllib.request.urlopen", return_value=FakeResponse(data)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
             mock.patch("speed_of_cinnamon.models.os.replace", side_effect=OSError("boom")),
         ):
             with self.assertRaisesRegex(models.ModelError, "failed to persist downloaded model file"):
@@ -677,7 +688,7 @@ class ModelsTest(unittest.TestCase):
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
             mock.patch.object(models, "CATALOG", (spec,)),
-            mock.patch("speed_of_cinnamon.models.urllib.request.urlopen", return_value=FakeResponse(data)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
         ):
             models.download_model("test")
             path = models.model_path(spec)
@@ -697,7 +708,7 @@ class ModelsTest(unittest.TestCase):
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
             mock.patch.object(models, "CATALOG", (spec,)),
-            mock.patch("speed_of_cinnamon.models.urllib.request.urlopen", return_value=FakeResponse(data)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
         ):
             path = models.model_path(spec)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -840,7 +851,7 @@ class ModelsTest(unittest.TestCase):
             mock.patch.object(models, "CATALOG", (spec,)),
             mock.patch.object(models, "MAX_MODEL_DOWNLOAD_BYTES", 2_000),
             mock.patch(
-                "speed_of_cinnamon.models.urllib.request.urlopen",
+                "speed_of_cinnamon.models._open_model_download_url",
                 return_value=FakeResponse(b"x" * 5_000),
             ),
         ):
@@ -863,7 +874,7 @@ class ModelsTest(unittest.TestCase):
             mock.patch.object(models, "CATALOG", (spec,)),
             mock.patch.object(models, "MAX_MODEL_DOWNLOAD_BYTES", 10_000),
             mock.patch(
-                "speed_of_cinnamon.models.urllib.request.urlopen",
+                "speed_of_cinnamon.models._open_model_download_url",
                 return_value=FakeResponseWithLength(data=data, content_length=10),
             ),
         ):
@@ -983,7 +994,7 @@ class ModelsTest(unittest.TestCase):
             mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
             mock.patch.object(models, "CATALOG", (spec,)),
             mock.patch(
-                "speed_of_cinnamon.models.urllib.request.urlopen",
+                "speed_of_cinnamon.models._open_model_download_url",
                 return_value=FakeResponseWithLength(data=data, content_length=-1),
             ),
         ):
@@ -1005,7 +1016,7 @@ class ModelsTest(unittest.TestCase):
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
             mock.patch.object(models, "CATALOG", (spec,)),
-            mock.patch("speed_of_cinnamon.models.urllib.request.urlopen", return_value=FakeResponse(data)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
         ):
             with self.assertRaisesRegex(models.ModelError, "failed to persist downloaded model file"):
                 models.download_model("test")

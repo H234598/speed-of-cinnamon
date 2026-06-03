@@ -159,6 +159,56 @@ const RECORDER_METHODS = [
   "parecord",
   "arecord"
 ];
+const LANGUAGE_CODES = [
+  "ar", "zh", "cs", "da", "en", "fi", "de", "fr", "el", "hi",
+  "it", "ja", "ko", "nl", "no", "pl", "pt", "ru", "es", "sv",
+  "tr", "uk"
+];
+const TRANSCRIBER_METHODS = [
+  "auto",
+  "whisper",
+  "faster-whisper",
+  "whisper-cpp",
+  "openai-compatible",
+  "command"
+];
+const POST_PROCESS_BACKENDS = [
+  "none",
+  "command",
+  "ollama",
+  "openai-compatible"
+];
+const BOOLEAN_IMPORT_SETTINGS = {
+  "show-panel-label": true,
+  "auto-transcribe-timeout": true,
+  "auto-relisten": true,
+  "keep-recording-artifacts": true,
+  "notify-recording": true,
+  "notify-complete": true,
+  "notify-error": true,
+  "append-space": true,
+  "sanitize-special-chars": true,
+  "openai-compatible-flex-processing": true
+};
+const IMPORT_TEXT_SETTINGS = {
+  "toggle-keybinding": "toggle keybinding",
+  "primary-language-keybinding": "primary language keybinding",
+  "secondary-language-keybinding": "secondary language keybinding",
+  "input-device": "input device",
+  "personal-context": "personal context",
+  "vocabulary": "vocabulary",
+  "auto-paste-window-title": "auto-paste window title",
+  "whisper-model": "whisper model",
+  "transcriber-command": "transcriber command",
+  "post-process-command": "post-process command",
+  "ollama-url": "ollama URL",
+  "ollama-model": "ollama model",
+  "openai-compatible-url": "openai-compatible URL",
+  "openai-compatible-model": "openai-compatible model",
+  "openai-compatible-text-model": "openai-compatible text model",
+  "openai-compatible-api-key": "openai-compatible API key",
+  "post-process-prompt": "post-process prompt"
+};
 const RECORDING_LIMIT_SECONDS = [
   15,
   30,
@@ -1019,7 +1069,6 @@ MyApplet.prototype = {
       if (configured.charAt(0) === "/" && GLib.file_test(configured, GLib.FileTest.IS_EXECUTABLE)) {
         return configured;
       }
-      return "";
     }
     if (GLib.file_test(DEFAULT_CLI, GLib.FileTest.IS_EXECUTABLE)) {
       return DEFAULT_CLI;
@@ -1953,11 +2002,7 @@ MyApplet.prototype = {
         this._setStatus("error", payload.error, this.lastTranscript);
         return;
       }
-      let path = payload.saved_path || "";
-      if (path) {
-        this.clipboard.set_text(St.ClipboardType.CLIPBOARD, path);
-      }
-      this._setStatus("done", _("Saved diagnostics: ") + path, this.lastTranscript);
+      this._setStatus("done", _("Saved diagnostics"), this.lastTranscript);
     });
   },
 
@@ -3397,15 +3442,44 @@ MyApplet.prototype = {
   },
 
   _coerceImportedSetting: function(key, value, fallback) {
-    if (!Object.prototype.hasOwnProperty.call(CLI_TEXT_SETTINGS, key)) {
-      return value;
+    if (Object.prototype.hasOwnProperty.call(BOOLEAN_IMPORT_SETTINGS, key)) {
+      return typeof value === "boolean" ? value : Boolean(fallback);
+    }
+    if (key === "max-seconds") {
+      return typeof value === "number" ? this._normalizeRecordingLimit(value) : this._normalizeRecordingLimit(fallback);
+    }
+    if (key === "typing-delay-ms") {
+      return typeof value === "number" ? this._normalizeTypingDelayMs(value) : this._normalizeTypingDelayMs(fallback);
+    }
+    if (key === "language" || key === "secondary-language") {
+      return this._coerceImportedEnumSetting(value, LANGUAGE_CODES, fallback);
+    }
+    if (key === "recorder") {
+      return this._coerceImportedEnumSetting(value, RECORDER_METHODS, fallback);
+    }
+    if (key === "insert-method") {
+      return this._coerceImportedEnumSetting(value, OUTPUT_METHODS, fallback);
+    }
+    if (key === "transcriber") {
+      return this._coerceImportedEnumSetting(value, TRANSCRIBER_METHODS, fallback);
+    }
+    if (key === "post-process-backend") {
+      return this._coerceImportedEnumSetting(value, POST_PROCESS_BACKENDS, fallback);
+    }
+    if (!Object.prototype.hasOwnProperty.call(IMPORT_TEXT_SETTINGS, key)) {
+      return fallback;
     }
     try {
-      return this._coerceCliTextArg(value, CLI_TEXT_SETTINGS[key]);
+      return this._coerceCliTextArg(value, IMPORT_TEXT_SETTINGS[key]);
     } catch (err) {
       global.logError(err);
       return fallback;
     }
+  },
+
+  _coerceImportedEnumSetting: function(value, allowedValues, fallback) {
+    let normalized = String(value || "").trim();
+    return allowedValues.indexOf(normalized) >= 0 ? normalized : fallback;
   },
 
   _isAllowedCliCommand: function(command) {
