@@ -102,6 +102,14 @@ jobs:
           python -m pip install --disable-pip-version-check --no-cache-dir bandit==1.9.4
           sudo apt-get update
           sudo apt-get install -y cpio rpm shellcheck
+          actionlint_version="1.7.12"
+          actionlint_archive="actionlint_${actionlint_version}_linux_amd64.tar.gz"
+          actionlint_sha256="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+          curl -fsSLo "/tmp/${actionlint_archive}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${actionlint_version}/${actionlint_archive}"
+          printf '%s  %s\n' "${actionlint_sha256}" "/tmp/${actionlint_archive}" | sha256sum -c -
+          tar -xzf "/tmp/${actionlint_archive}" -C /tmp actionlint
+          sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
           if [[ "${BUILD_SNAP}" == "1" ]]; then
             if ! command -v -- snapcraft >/dev/null 2>&1; then
               if command -v -- snap >/dev/null 2>&1; then

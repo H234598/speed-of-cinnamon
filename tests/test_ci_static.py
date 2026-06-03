@@ -768,6 +768,8 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("workflow-lint:", workflow)
         self.assertIn('version="1.7.12"', workflow)
         self.assertIn("rhysd/actionlint/releases/download/v${version}", workflow)
+        self.assertIn('actionlint_version="1.7.12"', workflow)
+        self.assertIn("rhysd/actionlint/releases/download/v${actionlint_version}", workflow)
         self.assertIn("Verify release tag provenance", workflow)
         self.assertIn('git rev-list -n 1 "${tag}^{commit}"', workflow)
         self.assertIn("security-scan:", workflow)
