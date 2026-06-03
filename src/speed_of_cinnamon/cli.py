@@ -1170,6 +1170,15 @@ def _recording_artifact_stat(path: Path) -> os.stat_result | None:
     return file_stat
 
 
+def _is_inflight_recording_artifact(path: Path) -> bool:
+    if not isinstance(path, Path):
+        return False
+    if path.suffix.lower() not in RECORDING_ARTIFACT_EXTENSIONS:
+        return False
+    stem = path.stem.lower()
+    return ".trimmed-" in stem or ".encoded-" in stem
+
+
 def sorted_files(paths: list[Path]) -> list[Path]:
     entries: list[tuple[float, str, Path]] = []
     for path in paths:
@@ -1197,6 +1206,7 @@ def prune_files_by_mtime(paths: list[Path], keep: int, active_paths: set[Path], 
     deleted_paths: list[str] = []
     failed_paths: list[str] = []
     skipped_active: list[str] = []
+    paths = [path for path in paths if not _is_inflight_recording_artifact(path)]
     candidates = sorted_files(paths)[max(keep, 0) :]
     for path in candidates:
         normalized = path.resolve(strict=False)
@@ -1224,6 +1234,8 @@ def recording_groups() -> list[dict[str, object]]:
     if not directory.exists():
         return []
     for path in directory.iterdir():
+        if _is_inflight_recording_artifact(path):
+            continue
         if path.suffix.lower() not in RECORDING_ARTIFACT_EXTENSIONS:
             continue
         file_stat = _recording_artifact_stat(path)
@@ -1243,6 +1255,8 @@ def recording_artifact_files() -> list[Path]:
         return []
     files: list[Path] = []
     for path in directory.iterdir():
+        if _is_inflight_recording_artifact(path):
+            continue
         if path.suffix.lower() not in RECORDING_ARTIFACT_EXTENSIONS:
             continue
         if _recording_artifact_stat(path) is not None:

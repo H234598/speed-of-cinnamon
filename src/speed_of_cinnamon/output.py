@@ -437,13 +437,54 @@ def _record_clipboard_insertion(text: str, method: str) -> bool:
         _LAST_CLIPBOARD_METHOD = method
         return True
     now = time.time()
-    now_monotonic = time.monotonic()
     if not _write_clipboard_dedup_state(cleaned, now):
         return False
     _LAST_CLIPBOARD_TEXT = cleaned
-    _LAST_CLIPBOARD_INSERTION = now_monotonic
+    _LAST_CLIPBOARD_INSERTION = time.monotonic()
     _LAST_CLIPBOARD_METHOD = method
     return True
+
+
+def _commit_clipboard_insertion(text: str, method: str) -> bool:
+    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
+    cleaned = _normalize_clipboard_text(text)
+    if not cleaned:
+        if text != "":
+            return False
+        _LAST_CLIPBOARD_TEXT = cleaned
+        _LAST_CLIPBOARD_METHOD = method
+        _LAST_CLIPBOARD_INSERTION = time.monotonic()
+        return True
+    if not _write_clipboard_dedup_state(cleaned, time.time()):
+        return False
+    _LAST_CLIPBOARD_TEXT = cleaned
+    _LAST_CLIPBOARD_METHOD = method
+    _LAST_CLIPBOARD_INSERTION = time.monotonic()
+    return True
+
+
+def _clear_clipboard_insertion_memory() -> None:
+    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
+    _LAST_CLIPBOARD_TEXT = ""
+    _LAST_CLIPBOARD_METHOD = None
+    _LAST_CLIPBOARD_INSERTION = 0.0
+
+
+def _restore_clipboard_insertion_snapshot(snapshot: tuple[str, str, float]) -> None:
+    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
+    _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION = snapshot
+
+
+def _reserve_clipboard_insertion_memory(text: str, method: str) -> tuple[str, str, float] | None:
+    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
+    cleaned = _normalize_clipboard_text(text)
+    if not cleaned and text != "":
+        return None
+    snapshot = _clipboard_insertion_snapshot()
+    _LAST_CLIPBOARD_TEXT = cleaned
+    _LAST_CLIPBOARD_METHOD = method
+    _LAST_CLIPBOARD_INSERTION = time.monotonic()
+    return snapshot
 
 
 def _clear_clipboard_dedup_state() -> None:
@@ -468,23 +509,6 @@ def _restore_clipboard_dedup_state(snapshot: tuple[str, float]) -> None:
 
 def _clipboard_insertion_snapshot() -> tuple[str, str, float]:
     return _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
-
-
-def _restore_clipboard_insertion_snapshot(snapshot: tuple[str, str, float]) -> None:
-    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
-    _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION = snapshot
-
-
-def _reserve_clipboard_insertion_memory(text: str, method: str) -> tuple[str, str, float] | None:
-    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
-    cleaned = _normalize_clipboard_text(text)
-    if not cleaned and text != "":
-        return None
-    snapshot = _clipboard_insertion_snapshot()
-    _LAST_CLIPBOARD_TEXT = cleaned
-    _LAST_CLIPBOARD_METHOD = method
-    _LAST_CLIPBOARD_INSERTION = time.monotonic()
-    return snapshot
 
 
 def _validate_text_input(text: str) -> bytes:
@@ -949,9 +973,9 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
             return False
         committed = False
         try:
-            if not _record_clipboard_insertion(text, method):
-                return False
             set_clipboard(text)
+            if not _commit_clipboard_insertion(text, method):
+                return False
             committed = True
             return True
         finally:
@@ -972,8 +996,6 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
         clipboard_snapshot_available = False
         clipboard_snapshot = ""
         try:
-            if not _record_clipboard_insertion(text, method):
-                return False
             if _clipboard_has_non_text_payload():
                 raise OutputError("refusing to overwrite non-text clipboard for automatic paste")
             clipboard_snapshot_available, clipboard_snapshot = _read_text_clipboard_snapshot()
@@ -981,6 +1003,8 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
                 raise OutputError("refusing automatic paste without readable text clipboard snapshot")
             set_clipboard(text)
             paste_from_clipboard()
+            if not _commit_clipboard_insertion(text, method):
+                return False
             committed = True
             return True
         finally:

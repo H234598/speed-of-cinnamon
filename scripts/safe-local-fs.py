@@ -3,12 +3,24 @@ from __future__ import annotations
 
 import argparse
 import errno
+import hashlib
 import os
 import secrets
 import shlex
 import shutil
 import sys
 from pathlib import Path
+
+
+def _source_file_signature(stat_result: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        stat_result.st_dev,
+        stat_result.st_ino,
+        stat_result.st_mode,
+        stat_result.st_size,
+        stat_result.st_mtime_ns,
+        stat_result.st_nlink,
+    )
 
 
 def fail(message: str) -> None:
@@ -202,11 +214,37 @@ def cmd_copy_file(args: argparse.Namespace) -> None:
     assert src_fd is not None
     try:
         _check_leaf(src_fd, src_name, src, action=args.action, kind="file", must_exist=True)
+        source_checked = _lstat_at(src_fd, src_name)
+        if source_checked is None:
+            fail(f"source file missing during {args.action}: {src}")
+        source_digest = _hash_file(src)
         with os.fdopen(os.open(src_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=src_fd), "rb") as handle:
+            source_before = os.fstat(handle.fileno())
+            if _source_file_signature(source_checked) != _source_file_signature(source_before):
+                fail(f"source changed during {args.action}: {src}")
             data = handle.read()
+            source_after_fd = os.fstat(handle.fileno())
+        source_after = _lstat_at(src_fd, src_name)
+        if source_after is None:
+            fail(f"source file missing during {args.action}: {src}")
+        if _source_file_signature(source_before) != _source_file_signature(source_after_fd):
+            fail(f"source changed during {args.action}: {src}")
+        if _source_file_signature(source_before) != _source_file_signature(source_after):
+            fail(f"source changed during {args.action}: {src}")
+        if hashlib.sha256(data).hexdigest() != source_digest:
+            fail(f"source changed during {args.action}: {src}")
     finally:
         os.close(src_fd)
     _write_bytes_atomic(dst, data, int(args.mode, 8), action=args.action)
+
+
+def _hash_file(path: Path) -> str:
+    hasher = hashlib.sha256()
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, "rb", closefd=True) as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 def cmd_assert_file(args: argparse.Namespace) -> None:
@@ -241,21 +279,39 @@ def _reject_unsafe_tree(tree: Path, label: str) -> None:
                 fail(f"refusing to install hardlinked {label}: {path}")
 
 
-def _tree_signature(tree: Path) -> dict[str, tuple[int, int, int, int]]:
-    signature: dict[str, tuple[int, int, int, int]] = {}
+def _tree_signature(tree: Path) -> dict[str, tuple[int, int, int, int, int, str]]:
+    signature: dict[str, tuple[int, int, int, int, int, str]] = {}
     root_stat = tree.lstat()
-    signature["."] = (root_stat.st_dev, root_stat.st_ino, root_stat.st_mode, root_stat.st_mtime_ns)
+    signature["."] = (
+        root_stat.st_dev,
+        root_stat.st_ino,
+        root_stat.st_mode,
+        root_stat.st_size,
+        root_stat.st_nlink,
+        "",
+    )
     for root, dirs, files in os.walk(tree):
         root_path = Path(root)
         for name in [*dirs, *files]:
             path = root_path / name
-            stat_result = path.lstat()
+            try:
+                stat_result = path.lstat()
+            except OSError as exc:
+                fail(f"failed to inspect source tree during signature: {path}: {exc}")
             rel_path = str(path.relative_to(tree))
+            digest = ""
+            if stat_is_file_no_follow(stat_result.st_mode):
+                try:
+                    digest = _hash_file(path)
+                except OSError as exc:
+                    fail(f"failed to hash source tree during signature: {path}: {exc}")
             signature[rel_path] = (
                 stat_result.st_dev,
                 stat_result.st_ino,
                 stat_result.st_mode,
-                stat_result.st_mtime_ns,
+                stat_result.st_size,
+                stat_result.st_nlink,
+                digest,
             )
     return signature
 

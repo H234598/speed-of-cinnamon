@@ -211,15 +211,81 @@ class InstallLocalTest(unittest.TestCase):
             source.mkdir()
             (source / "payload.txt").write_text("safe\n", encoding="utf-8")
             real_copytree = module.shutil.copytree
+            original_stat = (source / "payload.txt").stat()
 
             def copytree_with_source_mutation(src: Path, dst: Path, **kwargs: object) -> Path:
-                (source / "payload.txt").write_text("changed\n", encoding="utf-8")
+                (source / "payload.txt").write_text("muted\n", encoding="utf-8")
+                os.utime(source / "payload.txt", (original_stat.st_atime, original_stat.st_mtime))
                 return real_copytree(src, dst, **kwargs)
 
             args = module.argparse.Namespace(action="install", source=str(source), target=str(target), label="tree")
             with mock.patch.object(module.shutil, "copytree", side_effect=copytree_with_source_mutation):
                 with self.assertRaisesRegex(SystemExit, "1"):
                     module.cmd_install_tree(args)
+
+            self.assertFalse(target.exists())
+
+    def test_safe_fs_copy_file_rejects_in_place_source_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = self._load_safe_fs_module()
+            root = Path(tmp)
+            source = root / "source.txt"
+            target = root / "target.txt"
+            source.write_text("safe\n", encoding="utf-8")
+            real_open = module.os.open
+            mutated = False
+
+            def open_and_mutate(*args: object, **kwargs: object) -> int:
+                nonlocal mutated
+                fd = real_open(*args, **kwargs)
+                if (
+                    not mutated
+                    and args
+                    and args[0] == source.name
+                    and kwargs.get("dir_fd") is not None
+                    and (args[1] & module.os.O_NOFOLLOW)
+                ):
+                    source.write_text("muted\n", encoding="utf-8")
+                    mutated = True
+                return fd
+
+            args = module.argparse.Namespace(action="install", src=str(source), dst=str(target), mode="0600")
+            with mock.patch.object(module.os, "open", side_effect=open_and_mutate):
+                with self.assertRaisesRegex(SystemExit, "1"):
+                    module.cmd_copy_file(args)
+
+            self.assertFalse(target.exists())
+
+    def test_safe_fs_copy_file_rejects_source_exchange_during_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = self._load_safe_fs_module()
+            root = Path(tmp)
+            source = root / "source.txt"
+            replacement = root / "replacement.txt"
+            target = root / "target.txt"
+            source.write_text("safe\n", encoding="utf-8")
+            replacement.write_text("evil\n", encoding="utf-8")
+            real_open = module.os.open
+            mutated = False
+
+            def open_and_replace(*args: object, **kwargs: object) -> int:
+                nonlocal mutated
+                fd = real_open(*args, **kwargs)
+                if (
+                    not mutated
+                    and args
+                    and args[0] == source.name
+                    and kwargs.get("dir_fd") is not None
+                    and (args[1] & module.os.O_NOFOLLOW)
+                ):
+                    replacement.replace(source)
+                    mutated = True
+                return fd
+
+            args = module.argparse.Namespace(action="install", src=str(source), dst=str(target), mode="0600")
+            with mock.patch.object(module.os, "open", side_effect=open_and_replace):
+                with self.assertRaisesRegex(SystemExit, "1"):
+                    module.cmd_copy_file(args)
 
             self.assertFalse(target.exists())
 

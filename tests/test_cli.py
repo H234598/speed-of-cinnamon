@@ -2047,6 +2047,23 @@ class CliTest(unittest.TestCase):
         self.assertEqual({group["stem"] for group in groups}, {"upper"})
         self.assertEqual({path.name for path in files}, {"upper.WAV", "upper.FLAC", "upper.LOG"})
 
+    def test_recording_artifact_scanners_exclude_inflight_temporary_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            (recordings / "keep.wav").write_bytes(b"audio")
+            (recordings / "keep.trimmed-123.flac").write_bytes(b"audio")
+            (recordings / "keep.encoded-456.flac").write_bytes(b"audio")
+            (recordings / "session.log").write_bytes(b"log")
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
+                groups = cli.recording_groups()
+                files = cli.recording_artifact_files()
+                cap = cli.prune_recording_groups(keep=1, active_paths=set(), dry_run=True, max_age_days=36500)
+        self.assertEqual({group["stem"] for group in groups}, {"keep", "session"})
+        self.assertEqual({path.name for path in files}, {"keep.wav", "session.log"})
+        self.assertNotIn(str(recordings / "keep.trimmed-123.flac"), cap["planned_paths"])
+        self.assertNotIn(str(recordings / "keep.encoded-456.flac"), cap["planned_paths"])
+
     def test_recording_groups_ignores_non_regular_recording_entries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
@@ -2185,6 +2202,30 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["deleted_transcripts"], 0)
         self.assertEqual(payload["would_delete_transcripts"], 1)
         self.assertTrue(old_exists)
+
+    def test_cleanup_does_not_delete_inflight_temp_recording_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            old_regular = recordings / "old.wav"
+            old_temp = recordings / "old.trimmed-abc.flac"
+            old_regular.write_bytes(b"audio")
+            old_temp.write_bytes(b"audio")
+            os.utime(old_regular, (100, 100))
+            os.utime(old_temp, (100, 100))
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["cleanup", "--keep-transcripts", "0", "--keep-recordings", "0", "--json"])
+            payload = json.loads(stdout.getvalue())
+            old_regular_exists = old_regular.exists()
+            old_temp_exists = old_temp.exists()
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["deleted_recordings"], 1)
+        self.assertFalse(old_regular_exists)
+        self.assertTrue(old_temp_exists)
 
     def test_cleanup_rejects_boolean_recording_counts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
