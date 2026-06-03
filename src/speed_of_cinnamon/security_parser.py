@@ -38,20 +38,20 @@ _PHONE_RE = re.compile(
 _TOKEN_RE = re.compile(
     r"(?i)\b(?:token|api[_-]?key|api\s+key|secret|apikey|bearer)\b\s*(?::|=)\s*[^,;\s]+"
 )
-_SPOKEN_SECRET_LABEL_PATTERN = (
+_SPOKEN_SENSITIVE_LABEL_PATTERN = (
     r"(?:token|api[_-]?key|api\s+key|secret|apikey|bearer|password|passwort|kennwort|"
     r"passcode|iban|name|adresse|anschrift|address|kundennummer|kundennr|kunden-nr|ssn|tax\s+id)"
 )
-_SPOKEN_SECRET_VALUE_PATTERN = (
+_SPOKEN_SENSITIVE_VALUE_PATTERN = (
     r"(?:\"[^\n\"]{1,120}\"|'[^\n']{1,120}'|"
-    rf"(?:(?!\s+(?:(?:und|and)\s+)?(?:meine|my\s+)?{_SPOKEN_SECRET_LABEL_PATTERN}\b)[^,;\n.?!]){{1,120}})"
+    rf"(?:(?!\s+(?:(?:und|and)\s+)?(?:meine|my\s+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)[^,;\n.?!]){{1,120}})"
 )
 _VERBAL_TOKEN_RE = re.compile(
     r"(?i)\b(?:token|api[_-]?key|api\s+key|secret|apikey|bearer)\b\s+"
     r"(?:ist|is|lautet|hei[ßs]t)\s+"
     r"(?!(?:invalid|required|missing|too|contains?|fehlt|leer|ung[üu]ltig)\b)"
-    rf"(?!(?:{_SPOKEN_SECRET_LABEL_PATTERN})\s*[:=])"
-    + _SPOKEN_SECRET_VALUE_PATTERN
+    rf"(?!(?:{_SPOKEN_SENSITIVE_LABEL_PATTERN})\s*[:=])"
+    + _SPOKEN_SENSITIVE_VALUE_PATTERN
 )
 _BARE_TOKEN_RE = re.compile(
     r"(?i)\b(?:token|api[_-]?key|api\s+key|secret|apikey|bearer)\b\s+"
@@ -67,8 +67,8 @@ _VERBAL_PASSWORD_RE = re.compile(
     r"(?i)\b(?:password|passwort|kennwort|passcode)\b\s+"
     r"(?:ist|is|lautet|hei[ßs]t)\s+"
     r"(?!(?:invalid|required|missing|too|contains?|fehlt|leer|ung[üu]ltig)\b)"
-    rf"(?!(?:{_SPOKEN_SECRET_LABEL_PATTERN})\s*[:=])"
-    + _SPOKEN_SECRET_VALUE_PATTERN
+    rf"(?!(?:{_SPOKEN_SENSITIVE_LABEL_PATTERN})\s*[:=])"
+    + _SPOKEN_SENSITIVE_VALUE_PATTERN
 )
 _ACCESS_TOKEN_RE = re.compile(r"(?i)\b(?:sk|sess|ghp|gho|xox[pb]-|hf|pat)[A-Za-z0-9_\-]{12,}\b")
 _URL_CRED_RE = re.compile(r"[a-z][a-z0-9+.-]*://[^\s/@:]+:[^\s/@]+@")
