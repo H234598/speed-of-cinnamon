@@ -105,6 +105,14 @@ Use `Auto-Paste` to choose one or more target-window title markers such as `code
 
 Accent replacement is a compatibility fallback for direct typing. Saved transcripts stay unchanged.
 
+### Security and blacklist
+
+Sensitive tokens can be masked before text is inserted or saved. The local blacklist file is:
+
+`~/.local/share/speed-of-cinnamon/blacklist.txt`
+
+Matches are normalized and deduplicated on load. Say `blacklisteintrag: <term>` while dictating to add new words. The applet hides redacted terms and reports how many matches were removed.
+
 ## Target Window
 
 When dictation starts through the global shortcut or panel menu, the applet remembers Cinnamon's currently focused

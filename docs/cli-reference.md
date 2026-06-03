@@ -189,6 +189,15 @@ speed-of-cinnamon transcribe-file ~/Downloads/Testaufnahme.flac \
   --json
 ```
 
+## Security: Blacklist and redaction
+
+`transcribe-file` and `toggle`/`finalize` run a blacklist and sensitive-token redaction stage before output is returned or inserted.
+
+- Configure entries in `~/.local/share/speed-of-cinnamon/blacklist.txt`.
+- Entries are normalized (`trim`, punctuation cleanup, case-insensitive dedupe) and duplicates are ignored.
+- Use the directive `blacklisteintrag: <entry>` to add terms during dictation.
+- Add `--json` to inspect `security.blacklist_hits` and `security.blacklist_added`.
+
 ## Voice Models
 
 ```bash

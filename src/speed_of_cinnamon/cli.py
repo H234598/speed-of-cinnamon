@@ -1074,10 +1074,16 @@ def _normalize_text_models_payload(payload: object) -> dict[str, object]:
 
 def active_artifact_paths(state: RecordingState) -> set[Path]:
     paths: set[Path] = set()
-    audio_path = _safe_recording_artifact_path(state.audio_path, suffix=".wav")
-    if audio_path is None:
-        audio_path = _safe_recording_artifact_path(state.audio_path, suffix=".flac")
-    log_path = _safe_recording_artifact_path(state.log_path, suffix=".log")
+    audio_path = _safe_recording_artifact_path(
+        state.audio_path,
+        suffix=(".wav", ".flac"),
+        require_recordings_dir=True,
+    )
+    if audio_path is not None and _recording_artifact_stat(audio_path) is None:
+        audio_path = None
+    log_path = _safe_recording_artifact_path(state.log_path, suffix=".log", require_recordings_dir=True)
+    if log_path is not None and _recording_artifact_stat(log_path) is None:
+        log_path = None
     if audio_path:
         paths.add(audio_path)
     if log_path:
@@ -1088,13 +1094,17 @@ def active_artifact_paths(state: RecordingState) -> set[Path]:
     return paths
 
 
-def _enforce_recording_artifact_cap(state: RecordingState | None) -> dict[str, object]:
+def _enforce_recording_artifact_cap(
+    state: RecordingState | None,
+    active_paths: set[Path] | None = None,
+) -> dict[str, object]:
     if state is None:
         return {"deleted_paths": [], "failed_paths": []}
+    active_paths = set(active_artifact_paths(state)) | (active_paths or set())
     return prune_files_by_mtime(
         recording_artifact_files(),
         MAX_TEMP_RECORDING_FILES,
-        active_artifact_paths(state),
+        active_paths,
         dry_run=False,
     )
 
@@ -1180,19 +1190,18 @@ def _stabilize_recording_artifact_path(artifact_path: Path) -> Path:
         return artifact_path
     try:
         assert_no_symlink_ancestors(stable_path, field_name="recording artifact path")
-        if stable_path.exists() or stable_path.is_symlink():
-            raise RuntimeError(f"stable recording artifact already exists: {stable_path}")
-        os.link(artifact_path, stable_path, follow_symlinks=False)
+        if stable_path.exists() and _recording_artifact_stat(stable_path) is None:
+            raise RuntimeError(f"stable recording artifact is not a safe regular file: {stable_path}")
         try:
-            artifact_path.unlink()
-        except OSError:
-            try:
-                stable_path.unlink()
-            except OSError:
-                pass
+            os.replace(artifact_path, stable_path)
+        except OSError as exc:
+            if stable_path.exists() and stable_path.is_symlink():
+                raise RuntimeError(f"stable recording artifact is not a safe regular file: {stable_path}") from exc
+            if stable_path.exists() and _recording_artifact_stat(stable_path) is None:
+                raise RuntimeError(f"stable recording artifact is not a safe regular file: {stable_path}") from exc
             raise
         return stable_path
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
         raise RuntimeError(f"failed to stabilize recording artifact path: {exc}") from exc
 
 
@@ -1244,7 +1253,6 @@ def prune_files_by_mtime(paths: list[Path], keep: int, active_paths: set[Path], 
     deleted_paths: list[str] = []
     failed_paths: list[str] = []
     skipped_active: list[str] = []
-    paths = [path for path in paths if not _is_inflight_recording_artifact(path)]
     candidates = sorted_files(paths)[max(keep, 0) :]
     for path in candidates:
         normalized = path.resolve(strict=False)
@@ -1272,8 +1280,6 @@ def recording_groups() -> list[dict[str, object]]:
     if not directory.exists():
         return []
     for path in directory.iterdir():
-        if _is_inflight_recording_artifact(path):
-            continue
         if path.suffix.lower() not in RECORDING_ARTIFACT_EXTENSIONS:
             continue
         file_stat = _recording_artifact_stat(path)
@@ -1293,8 +1299,6 @@ def recording_artifact_files() -> list[Path]:
         return []
     files: list[Path] = []
     for path in directory.iterdir():
-        if _is_inflight_recording_artifact(path):
-            continue
         if path.suffix.lower() not in RECORDING_ARTIFACT_EXTENSIONS:
             continue
         if _recording_artifact_stat(path) is not None:
@@ -1534,10 +1538,22 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         if not state.audio_path:
             store.update(status="error", stopped_at=state.stopped_at or now_iso(), error="no recording is available")
             raise RuntimeError("no recording is available")
-        audio_path = _safe_recording_artifact_path(state.audio_path, suffix=(".wav", ".flac"), require_recordings_dir=False)
+        audio_path = _safe_recording_artifact_path(state.audio_path, suffix=(".wav", ".flac"), require_recordings_dir=True)
         if not audio_path:
             store.update(status="error", stopped_at=state.stopped_at or now_iso(), error="recording audio path is invalid")
             raise RuntimeError("recording audio path is invalid")
+        try:
+            audio_path.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            if _recording_artifact_stat(audio_path) is None:
+                store.update(
+                    status="error",
+                    stopped_at=state.stopped_at or now_iso(),
+                    error="recording audio path is not a safe regular file",
+                )
+                raise RuntimeError("recording audio path is not a safe regular file")
 
         chosen_language = state.language or args.language or "en"
         language = _validate_pipeline_text_args(args, language=chosen_language)
@@ -1559,7 +1575,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             state_marked_finalizing = True
         audio_deleted = False
         log_deleted = False
-        done_audio_path = state.audio_path
+        done_audio_path = str(audio_path)
         done_log_path = state.log_path
         trimmed_audio_path: Path | None = None
         audio_path = validate_audio_file(audio_path)
@@ -1567,7 +1583,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         silence = detect_silent_recording(audio_path)
         if silence.silent:
             if not keep_recording_artifacts:
-                audio_deleted = remove_file(state.audio_path, suffix=audio_suffix)
+                audio_deleted = remove_file(str(audio_path), suffix=audio_suffix)
                 log_deleted = remove_file(state.log_path, suffix=".log")
                 done_audio_path = None
                 done_log_path = None
@@ -1638,13 +1654,14 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         inserted = bool(text_to_insert) and bool(insert_text(text_to_insert, args.insert_method, typing_delay_ms))
 
         if not keep_recording_artifacts:
-            audio_deleted = remove_file(state.audio_path, suffix=audio_suffix)
+            audio_deleted = remove_file(str(audio_path), suffix=audio_suffix)
             log_deleted = remove_file(state.log_path, suffix=".log")
             done_audio_path = None
             done_log_path = None
         elif trimmed_audio_path is not None:
             done_audio_path = str(_stabilize_recording_artifact_path(trimmed_audio_path))
-            remove_file(state.audio_path, suffix=audio_suffix)
+            if done_audio_path != str(audio_path):
+                remove_file(str(audio_path), suffix=audio_suffix)
         else:
             if audio_path.suffix.lower() == ".wav":
                 try:
@@ -1653,8 +1670,8 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
                     done_audio_path = str(audio_path)
                 else:
                     done_audio_path = str(_stabilize_recording_artifact_path(converted_audio_path))
-                    if done_audio_path != state.audio_path:
-                        remove_file(state.audio_path, suffix=audio_suffix)
+                    if done_audio_path != str(audio_path):
+                        remove_file(str(audio_path), suffix=audio_suffix)
             else:
                 done_audio_path = str(audio_path)
 
@@ -1671,7 +1688,12 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         state.audio_path = done_audio_path
         state.log_path = done_log_path
         state.transcript_path = str(text_path)
-        artifact_cleanup = _enforce_recording_artifact_cap(state)
+        artifact_cleanup_active_paths: set[Path] = set()
+        if trimmed_audio_path is not None:
+            artifact_cleanup_active_paths.add(trimmed_audio_path)
+        if audio_path is not None:
+            artifact_cleanup_active_paths.add(audio_path)
+        artifact_cleanup = _enforce_recording_artifact_cap(state, artifact_cleanup_active_paths)
         return {
             "status": done.status,
             "message": "transcription completed",

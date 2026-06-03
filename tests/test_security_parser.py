@@ -171,3 +171,25 @@ class SecurityParserTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 update_blacklist_file(path, ["nein"])
             self.assertEqual(target.read_text(encoding="utf-8"), "bestehen")
+
+    def test_load_blacklist_file_normalizes_and_deduplicates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            path.write_text(
+                "\n".join(
+                    [
+                        "  geheim! ",
+                        "GEHEIM",
+                        "  ",
+                        "geheim ",
+                        "test_token! ",
+                        "",
+                        "\x00bad",
+                        "Test   Token",
+                    ],
+                ),
+                encoding="utf-8",
+            )
+            entries = load_blacklist_file(path)
+
+        self.assertEqual(entries, ["geheim", "test_token", "Test Token"])
