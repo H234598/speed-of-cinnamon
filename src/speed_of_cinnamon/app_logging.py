@@ -39,7 +39,12 @@ _MONTHLY_GZ_RE = re.compile(r"^speed-of-cinnamon-(\d{4}-\d{2})\.log\.gz$")
 _TOKEN_RE = re.compile(r"(?i)\b(bearer|token|api[_-]?key|secret|password)\b\s*[:=]\s*[^,\s;]+")
 _BEARER_RE = re.compile(r"(?i)\bbearer\s+[^,\s;]+")
 _OPENAI_KEY_RE = re.compile(r"\b(?:sk|sess)-[A-Za-z0-9_\-]{12,}\b")
+_SHORT_API_KEY_RE = re.compile(r"\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b")
 _URL_CREDENTIAL_RE = re.compile(r"([a-z][a-z0-9+.-]*://)([^/@\s:]+):([^/@\s]+)@")
+_ERROR_DETAIL_RE = re.compile(
+    r"(?i)(?:\b(?:stdout|stderr)\s*:|\b(?:raw\s+)?transcript\s*(?::|\b(?:text|words|payload|for)\b)|\bprompt\s*:|command\s+output\s*:|backend\s+output\s*:)"
+)
+_ERROR_SECRET_WORD_RE = re.compile(r"(?i)\bsecret\b")
 _SANITIZE_HINT_RE = re.compile(
     r"(?i)(?:\b(?:bearer|token|api[_-]?key|secret|password)\b\s*[:=]\s*[^,\s;]+|\bbearer\s+[^,\s;]+|\b(?:sk|sess)-[A-Za-z0-9_\-]{12,}\b|[a-z][a-z0-9+.-]*://[^/@\s:]+:[^/@\s]+@)"
 )
@@ -241,6 +246,20 @@ def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
     if len(text) > max_chars:
         return text[:max_chars] + "...[truncated]"
     return text
+
+
+def sanitize_error_message(error: object, *, max_chars: int = MAX_LOG_MESSAGE_CHARS) -> str:
+    if isinstance(error, bool) or not isinstance(error, str):
+        return "[invalid]"
+    if _ERROR_DETAIL_RE.search(error):
+        return "[redacted error details]"
+    sanitized = sanitize_text(error, max_chars=max_chars)
+    sanitized = _SHORT_API_KEY_RE.sub("[redacted]", sanitized)
+    if _ERROR_SECRET_WORD_RE.search(sanitized) and sanitized == error:
+        return "[redacted error details]"
+    if len(sanitized) > max_chars:
+        return sanitized[:max_chars] + "...[truncated]"
+    return sanitized
 
 
 def _is_sensitive_key(key: str) -> bool:

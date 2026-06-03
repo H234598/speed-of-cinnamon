@@ -861,6 +861,28 @@ class TranscriberTest(unittest.TestCase):
         self.assertEqual(captured_env["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/run/user/1000/bus")
         self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
+    def test_run_limited_process_returns_redacted_exit_code_error(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            stdout = kwargs["stdout"]
+            stderr = kwargs["stderr"]
+            stdout.write(b"secret transcript text\n")
+            stderr.write(b"Bearer sk-secret token=abc123\n")
+            command = args[0] if args else kwargs["args"]
+            return subprocess.CompletedProcess(command, 17, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch("speed_of_cinnamon.transcriber.shutil.which", return_value="/usr/bin/whisper"),
+            mock.patch("speed_of_cinnamon.transcriber.subprocess.run", side_effect=fake_run),
+        ):
+            with self.assertRaisesRegex(TranscriptionError, "transcriber command failed: exit code 17") as raised:
+                _run_limited_process(["whisper", "audio"])
+
+        message = str(raised.exception)
+        self.assertNotIn("secret transcript", message)
+        self.assertNotIn("Bearer", message)
+        self.assertNotIn("sk-secret", message)
+        self.assertNotIn("token=abc123", message)
+
     def test_filtered_environment_skips_non_text_environment_values(self) -> None:
         from speed_of_cinnamon.transcriber import _filtered_environment as transcriber_filtered_environment
 

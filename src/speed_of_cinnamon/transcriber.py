@@ -397,9 +397,7 @@ def _run_limited_process(command: list[str] | tuple[str, ...], *, timeout: int =
                 )
 
             if proc.returncode != 0:
-                stderr = _read_file_head(stderr_file, MAX_TRANSCRIBER_ERROR_CHARS).strip()
-                stdout = _read_file_head(stdout_file, MAX_TRANSCRIBER_ERROR_CHARS).strip()
-                raise TranscriptionError(stderr or stdout or f"transcriber backend failed: {command[0]}")
+                raise TranscriptionError(f"transcriber command failed: exit code {proc.returncode}")
     except subprocess.TimeoutExpired as exc:
         raise TranscriptionError(f"transcription backend timed out after {timeout}s") from exc
     except OSError as exc:

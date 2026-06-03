@@ -14,6 +14,16 @@ from speed_of_cinnamon import app_logging
 
 
 class AppLoggingTest(unittest.TestCase):
+    def test_sanitize_error_message_redacts_tokens_and_commands(self) -> None:
+        self.assertEqual(
+            app_logging.sanitize_error_message("Bearer sk-secret token=abc123", max_chars=120),
+            "Bearer [redacted] token=[redacted]",
+        )
+        self.assertEqual(
+            app_logging.sanitize_error_message("backend stderr: secret transcript words", max_chars=120),
+            "[redacted error details]",
+        )
+
     def test_log_event_redacts_sensitive_fields_and_tokens(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

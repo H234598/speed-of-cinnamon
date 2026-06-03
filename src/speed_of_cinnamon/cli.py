@@ -28,7 +28,7 @@ from .alarms import (
     save_alarm_store,
     set_alarm_enabled,
 )
-from .app_logging import DEFAULT_LOG_LEVEL, LOG_LEVELS, configure_logging, log_event
+from .app_logging import DEFAULT_LOG_LEVEL, LOG_LEVELS, configure_logging, log_event, sanitize_error_message
 from .doctor import parse_settings_json, report as doctor_report
 from .models import (
     CATALOG,
@@ -630,6 +630,12 @@ def print_result(payload: dict[str, object], json_output: bool) -> None:
         print(f"{APP_NAME}: {message}")
 
 
+def _redact_error_for_user(error: object) -> str:
+    if isinstance(error, bool) or not isinstance(error, str):
+        return "[invalid]"
+    return sanitize_error_message(error, max_chars=MAX_LOG_EXCERPT_CHARS)
+
+
 def append_space_if_needed(text: str, append_space: bool) -> str:
     if isinstance(text, bool) or not isinstance(text, str):
         raise RuntimeError("text must be text")
@@ -1072,7 +1078,11 @@ def _normalize_text_models_payload(payload: object) -> dict[str, object]:
     }
 
 
-def active_artifact_paths(state: RecordingState) -> set[Path]:
+def active_artifact_paths(
+    state: RecordingState,
+    *,
+    state_path: Path | None = None,
+) -> set[Path]:
     paths: set[Path] = set()
     audio_path = _safe_recording_artifact_path(
         state.audio_path,
@@ -1091,6 +1101,8 @@ def active_artifact_paths(state: RecordingState) -> set[Path]:
     path = normalized_path(state.transcript_path)
     if path:
         paths.add(path)
+    if state_path is not None and state.status == "finalizing":
+        paths.update(_finalizing_inflight_artifact_paths(state_path, state))
     return paths
 
 
@@ -1215,6 +1227,49 @@ def _recording_artifact_stat(path: Path) -> os.stat_result | None:
     if getattr(file_stat, "st_nlink", 1) != 1:
         return None
     return file_stat
+
+
+def _is_finalization_lock_active(state_path: Path) -> bool:
+    lock_path = _finalization_lock_path(state_path)
+    owner_pid = _read_finalization_lock_pid(lock_path)
+    if not owner_pid:
+        return False
+    if not process_is_alive(owner_pid):
+        return False
+    owner_identity = _read_finalization_lock_identity(lock_path)
+    if owner_identity is None:
+        return True
+    current_identity = _finalization_lock_identity_for_pid(owner_pid)
+    return current_identity is None or current_identity == owner_identity
+
+
+def _inflight_recording_artifact_paths(audio_path: Path) -> set[Path]:
+    if not isinstance(audio_path, Path):
+        return set()
+    if audio_path.suffix.lower() not in {".wav", ".flac"}:
+        return set()
+    artifact_paths: set[Path] = set()
+    for marker in (".trimmed-", ".encoded-"):
+        for suffix in (".wav", ".flac"):
+            for path in audio_path.parent.glob(f"{audio_path.stem}{marker}*{suffix}"):
+                artifact_paths.add(path)
+    return artifact_paths
+
+
+def _finalizing_inflight_artifact_paths(state_path: Path, state: RecordingState) -> set[Path]:
+    if not _is_finalization_lock_active(state_path):
+        return set()
+    if state.status != "finalizing":
+        return set()
+
+    in_flight_paths: set[Path] = set()
+    audio_path = _safe_recording_artifact_path(state.audio_path, suffix=(".wav", ".flac"), require_recordings_dir=True)
+    if audio_path is None:
+        return set()
+    if audio_path.suffix.lower() in {".wav", ".flac"}:
+        in_flight_paths.add(transcript_dir() / f"{audio_path.stem}.txt")
+    in_flight_paths.update(_inflight_recording_artifact_paths(audio_path))
+    return in_flight_paths
 
 
 def _is_inflight_recording_artifact(path: Path) -> bool:
@@ -1708,7 +1763,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             "log_deleted": log_deleted,
         }
     except Exception as exc:
-        error_text = str(exc)
+        error_text = _redact_error_for_user(str(exc))
         # Refresh state once more on error so the most recent status is persisted.
         if state_marked_finalizing:
             state = store.read()
@@ -2095,8 +2150,9 @@ def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
         max_value=MAX_RECORDING_MAX_AGE_DAYS,
     )
     dry_run = _coerce_bool(args.dry_run, field_name="dry-run")
-    state = build_store(args).read()
-    active_paths = active_artifact_paths(state)
+    store = build_store(args)
+    state = store.read()
+    active_paths = active_artifact_paths(state, state_path=store.path)
     transcript_result = prune_files_by_mtime(
         list(transcript_dir().glob("*.txt")),
         keep_transcripts,
@@ -2609,6 +2665,8 @@ def run(argv: list[str] | None = None) -> int:
         json_output = _coerce_bool(getattr(args, "json", False), field_name="json")
         log_event("info", "command_start", command=command_name)
         payload = args.handler(args)
+        if "error" in payload and payload["error"] is not None:
+            payload["error"] = _redact_error_for_user(payload["error"])
         status = str(payload.get("status", "ok"))
         if payload.get("error"):
             log_event(
@@ -2617,21 +2675,22 @@ def run(argv: list[str] | None = None) -> int:
                 command=command_name,
                 status=status,
                 error_type="payload",
-                error_message=str(payload.get("error", "")),
+                error_message=_redact_error_for_user(payload.get("error", "")),
             )
         else:
             log_event("info", "command_done", command=command_name, status=status)
         print_result(payload, json_output)
         return 0 if not payload.get("error") else 1
     except Exception as exc:
+        error_message = _redact_error_for_user(str(exc))
         log_event(
             "error",
             "command_exception",
             command=command_name,
             error_type=exc.__class__.__name__,
-            error_message=str(exc),
+            error_message=error_message,
         )
-        payload = {"status": "error", "error": str(exc)}
+        payload = {"status": "error", "error": error_message}
         print_result(payload, json_output)
         return 1
 

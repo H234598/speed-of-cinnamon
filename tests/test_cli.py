@@ -2256,7 +2256,14 @@ class CliTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
                 redirect_stdout(stdout),
             ):
-                code = cli.run(["cleanup", "--keep-transcripts", "0", "--keep-recordings", "0", "--json"])
+                code = cli.run([
+                    "cleanup",
+                    "--keep-transcripts",
+                    "0",
+                    "--keep-recordings",
+                    "0",
+                    "--json",
+                ])
             payload = json.loads(stdout.getvalue())
             old_regular_exists = old_regular.exists()
             old_temp_exists = old_temp.exists()
@@ -2264,6 +2271,139 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["deleted_recordings"], 2)
         self.assertFalse(old_regular_exists)
         self.assertFalse(old_temp_exists)
+
+    def test_cleanup_skips_inflight_trimmed_encoded_artifacts_during_active_finalization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            transcripts = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcripts.mkdir(parents=True)
+            active_audio = recordings / "active.wav"
+            active_log = recordings / "active.log"
+            active_trimmed = recordings / "active.trimmed-final.flac"
+            active_encoded = recordings / "active.encoded-final.flac"
+            active_transcript = transcripts / "active.txt"
+            stale_audio = recordings / "stale.wav"
+            stale_txt = transcripts / "stale.txt"
+            active_audio.write_bytes(b"audio")
+            active_log.write_text("log", encoding="utf-8")
+            active_trimmed.write_bytes(b"trimmed")
+            active_encoded.write_bytes(b"encoded")
+            active_transcript.write_text("active", encoding="utf-8")
+            stale_audio.write_bytes(b"stale")
+            stale_txt.write_text("stale", encoding="utf-8")
+            os.utime(active_audio, (100, 100))
+            os.utime(active_log, (100, 100))
+            os.utime(active_trimmed, (100, 100))
+            os.utime(active_encoded, (100, 100))
+            os.utime(active_transcript, (100, 100))
+            os.utime(stale_audio, (100, 100))
+            os.utime(stale_txt, (100, 100))
+
+            state_file = Path(tmp) / "state.json"
+            StateStore(state_file).write(
+                RecordingState(status="finalizing", audio_path=str(active_audio), log_path=str(active_log))
+            )
+            lock_path = cli._finalization_lock_path(state_file)
+            lock_path.write_text(f"{os.getpid()}\n", encoding="ascii")
+
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "cleanup",
+                    "--state-file",
+                    str(state_file),
+                    "--keep-transcripts",
+                    "0",
+                    "--keep-recordings",
+                    "0",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+
+            stale_audio_exists = stale_audio.exists()
+            stale_transcript_exists = stale_txt.exists()
+            active_audio_exists = active_audio.exists()
+            active_log_exists = active_log.exists()
+            active_trimmed_exists = active_trimmed.exists()
+            active_encoded_exists = active_encoded.exists()
+            active_transcript_exists = active_transcript.exists()
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["deleted_recordings"], 1)
+        self.assertEqual(payload["deleted_transcripts"], 1)
+        self.assertFalse(stale_audio_exists)
+        self.assertFalse(stale_transcript_exists)
+        self.assertIn(str(active_trimmed), payload["skipped_active_paths"])
+        self.assertIn(str(active_encoded), payload["skipped_active_paths"])
+        self.assertIn(str(active_audio), payload["skipped_active_paths"])
+        self.assertIn(str(active_transcript), payload["skipped_active_paths"])
+        self.assertTrue(active_audio_exists)
+        self.assertTrue(active_log_exists)
+        self.assertTrue(active_trimmed_exists)
+        self.assertTrue(active_encoded_exists)
+        self.assertTrue(active_transcript_exists)
+
+    def test_cleanup_deletes_temporary_recording_artifacts_without_live_finalization_signal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            transcripts = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcripts.mkdir(parents=True)
+            active_audio = recordings / "active.wav"
+            active_log = recordings / "active.log"
+            active_trimmed = recordings / "active.trimmed-final.flac"
+            active_encoded = recordings / "active.encoded-final.flac"
+            active_transcript = transcripts / "active.txt"
+            active_audio.write_bytes(b"audio")
+            active_log.write_text("log", encoding="utf-8")
+            active_trimmed.write_bytes(b"trimmed")
+            active_encoded.write_bytes(b"encoded")
+            active_transcript.write_text("active", encoding="utf-8")
+            os.utime(active_audio, (100, 100))
+            os.utime(active_log, (100, 100))
+            os.utime(active_trimmed, (100, 100))
+            os.utime(active_encoded, (100, 100))
+            os.utime(active_transcript, (100, 100))
+
+            state_file = Path(tmp) / "state.json"
+            StateStore(state_file).write(
+                RecordingState(status="finalizing", audio_path=str(active_audio), log_path=str(active_log))
+            )
+
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "cleanup",
+                    "--state-file",
+                    str(state_file),
+                    "--keep-transcripts",
+                    "0",
+                    "--keep-recordings",
+                    "0",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+
+            active_audio_exists = active_audio.exists()
+            active_log_exists = active_log.exists()
+            active_trimmed_exists = active_trimmed.exists()
+            active_encoded_exists = active_encoded.exists()
+            active_transcript_exists = active_transcript.exists()
+        self.assertEqual(code, 0)
+        self.assertIn(str(active_trimmed), payload["deleted_paths"])
+        self.assertIn(str(active_encoded), payload["deleted_paths"])
+        self.assertIn(str(active_transcript), payload["deleted_paths"])
+        self.assertTrue(active_audio_exists)
+        self.assertTrue(active_log_exists)
+        self.assertFalse(active_trimmed_exists)
+        self.assertFalse(active_encoded_exists)
+        self.assertFalse(active_transcript_exists)
 
     def test_finalize_rejects_state_audio_path_outside_recordings_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4552,6 +4692,58 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(final_state.status, "error")
         self.assertIn("missing or empty", final_state.error)
+
+    @mock.patch("speed_of_cinnamon.cli.command_status", side_effect=RuntimeError("command failed: Bearer sk-secret token=abc123"))
+    @mock.patch("speed_of_cinnamon.cli.log_event")
+    def test_cli_run_redacts_exception_error_message(self, mocked_log_event: mock.Mock, mocked_command_status: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tempfile.gettempdir()}), redirect_stdout(stdout):
+            code = cli.run(["status", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("status", payload)
+        self.assertIn("error", payload)
+        self.assertNotIn("sk-secret", payload["error"])
+        self.assertNotIn("token=abc123", payload["error"])
+        error_log_calls = [
+            call
+            for call in mocked_log_event.call_args_list
+            if call.args and len(call.args) > 1 and call.args[1] == "command_exception"
+        ]
+        self.assertEqual(len(error_log_calls), 1)
+        logged_error = error_log_calls[0].kwargs["error_message"]
+        self.assertNotIn("sk-secret", logged_error)
+        self.assertNotIn("token=abc123", logged_error)
+
+    @mock.patch("speed_of_cinnamon.cli.transcribe", side_effect=RuntimeError("openai key sk-leak token=abc123"))
+    def test_finalize_redacts_error_for_state_persistence(self, mocked_transcribe: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            audio = recordings / "recording.wav"
+            log = recordings / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(io.StringIO()):
+                code = cli.run([
+                    "stop",
+                    "--state-file",
+                    str(state_file),
+                    "--insert-method",
+                    "none",
+                    "--json",
+                ])
+            final_state = store.read()
+        self.assertEqual(code, 1)
+        self.assertEqual(final_state.status, "error")
+        self.assertNotIn("sk-leak", final_state.error)
+        self.assertNotIn("token=abc123", final_state.error)
+        self.assertNotIn("Bearer", final_state.error)
+        self.assertIn("openai key", final_state.error)
 
     def test_finalize_rejects_transcript_write_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
