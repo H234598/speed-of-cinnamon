@@ -208,56 +208,58 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
     except OSError:
         return None
-    now = time.time()
-    try:
-        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
+    for _attempt in range(2):
+        now = time.time()
         try:
-            existing = lock_path.stat()
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            try:
+                existing = lock_path.lstat()
+            except OSError:
+                return None
+            if not stat_module.S_ISREG(existing.st_mode):
+                return None
+            owner_pid = _read_finalization_lock_pid(lock_path)
+            if owner_pid is not None and process_is_alive(owner_pid):
+                return None
+            if owner_pid is None and now - existing.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS:
+                return None
+            try:
+                current = lock_path.lstat()
+            except OSError:
+                return None
+            if (current.st_dev, current.st_ino) != (existing.st_dev, existing.st_ino):
+                return None
+            try:
+                lock_path.unlink()
+            except OSError:
+                return None
+            continue
         except OSError:
             return None
-        if not stat_module.S_ISREG(existing.st_mode):
-            return None
-        owner_pid = _read_finalization_lock_pid(lock_path)
-        if owner_pid is not None:
-            if process_is_alive(owner_pid):
-                return None
-            try:
-                lock_path.unlink()
-            except OSError:
-                return None
-            return _acquire_finalization_lock(state_path)
-        if now - existing.st_mtime > MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS:
-            try:
-                lock_path.unlink()
-            except OSError:
-                return None
-            return _acquire_finalization_lock(state_path)
-        return None
-    except OSError:
-        return None
 
-    try:
-        os.write(fd, f"{os.getpid()}\n".encode("ascii"))
-    except OSError:
+        try:
+            os.write(fd, f"{os.getpid()}\n".encode("ascii"))
+        except OSError:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
+            return None
         try:
             os.close(fd)
         except OSError:
-            pass
-        try:
-            lock_path.unlink()
-        except OSError:
-            pass
-        return None
-    try:
-        os.close(fd)
-    except OSError:
-        try:
-            lock_path.unlink()
-        except OSError:
-            pass
-        return None
-    return lock_path
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
+            return None
+        return lock_path
+    return None
 
 
 def _release_finalization_lock(lock_path: Path | None) -> None:

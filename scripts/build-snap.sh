@@ -40,6 +40,7 @@ for tool in python3 snapcraft mktemp rm mkdir find realpath stat chmod; do
 done
 snap_dir="${repo_dir}/snap"
 safe_fs="${repo_dir}/scripts/safe-local-fs.py"
+safe_fs_cmd=(python3 "${safe_fs}")
 
 if ! snapcraft --version >/dev/null 2>&1; then
   printf 'snapcraft is installed but did not execute successfully.\n' >&2
@@ -59,7 +60,8 @@ if [[ -L "${snap_dir}/snapcraft.yaml" ]]; then
   printf 'snapcraft manifest must not be a symlink: %s\n' "${snap_dir}/snapcraft.yaml" >&2
   exit 1
 fi
-require_regular_source_file "${snap_dir}/snapcraft.yaml" "snapcraft manifest"
+snapcraft_file="${snap_dir}/snapcraft.yaml"
+require_regular_source_file "${snapcraft_file}" "snapcraft manifest"
 require_regular_source_file "${safe_fs}" "safe local filesystem helper"
 
 version="$(
@@ -88,29 +90,34 @@ if [[ -L "${repo_tmp_root}" ]]; then
   repo_tmp_root="/tmp"
 fi
 mkdir -p "${repo_tmp_root}"
+repo_tmp_abs="$(realpath "${repo_tmp_root}")"
+if [[ "${repo_tmp_abs}" == "${repo_dir}" || "${repo_tmp_abs}" == "${repo_dir}/"* ]]; then
+  printf 'snap temporary root must be outside repository: %s\n' "${repo_tmp_root}" >&2
+  exit 1
+fi
 
-snapcraft_file="${snap_dir}/snapcraft.yaml"
-snapcraft_mode="$(stat -c '%a' "${snapcraft_file}")"
-snapcraft_backup="$(mktemp "${repo_tmp_root}/speed-of-cinnamon-snapcraft-XXXXXX")"
-python3 "${safe_fs}" copy-file build-snap "${snapcraft_file}" "${snapcraft_backup}" "${snapcraft_mode}"
+snap_workspace="$(mktemp -d "${repo_tmp_root}/speed-of-cinnamon-snap-tree-XXXXXX")"
+snapcraft_file_rendered="${snap_workspace}/snap/snapcraft.yaml"
+snap_workspace_dist="${snap_workspace}/dist/snap"
 tmp_output=""
-snapcraft_rendered=""
 cleanup_tmpdir() {
   if [[ -n "${tmp_output}" && -f "${tmp_output}" ]]; then
     rm -f -- "${tmp_output}"
   fi
-  if [[ -n "${snapcraft_rendered}" && -f "${snapcraft_rendered}" ]]; then
-    rm -f -- "${snapcraft_rendered}"
-  fi
-  if [[ -f "${snapcraft_backup}" ]]; then
-    python3 "${safe_fs}" copy-file build-snap "${snapcraft_backup}" "${snapcraft_file}" "${snapcraft_mode}"
-    rm -f -- "${snapcraft_backup}"
+  if [[ -n "${snap_workspace}" ]]; then
+    rm -rf -- "${snap_workspace}"
   fi
 }
 trap cleanup_tmpdir EXIT
 
-snapcraft_rendered="$(mktemp "${repo_tmp_root}/speed-of-cinnamon-snapcraft-rendered-XXXXXX")"
-python3 - "${snapcraft_file}" "${snapcraft_rendered}" "${version}" "${snapcraft_base}" <<'PYCODE'
+if ! "${safe_fs_cmd[@]}" install-tree build-snap "${repo_dir}" "${snap_workspace}" "snap temporary source tree"; then
+  printf 'failed to prepare temporary snap workspace: %s\n' "${snap_workspace}" >&2
+  exit 1
+fi
+rm -rf -- "${snap_workspace_dist}"
+mkdir -p "${snap_workspace_dist}"
+
+python3 - "${snapcraft_file}" "${snapcraft_file_rendered}" "${version}" "${snapcraft_base}" <<'PYCODE'
 import pathlib
 import sys
 
@@ -137,13 +144,13 @@ if not base_replaced:
     raise SystemExit("snapcraft base field not found")
 output_path.write_text("\n".join(out) + "\n", encoding="utf-8")
 PYCODE
-chmod "${snapcraft_mode}" "${snapcraft_rendered}"
-if ! python3 "${safe_fs}" replace build-snap "${snapcraft_rendered}" "${snapcraft_file}" --src-kind file; then
-  printf 'failed to apply rendered snapcraft.yaml: %s\n' "${snapcraft_file}" >&2
+snapcraft_mode="$(stat -c '%a' "${snapcraft_file}")"
+chmod "${snapcraft_mode}" "${snapcraft_file_rendered}"
+
+if ! ( cd "${snap_workspace}" && umask 022 && snapcraft pack --destructive-mode ); then
+  printf 'snapcraft build failed.\n' >&2
   exit 1
 fi
-rm -f -- "${snapcraft_rendered}"
-snapcraft_rendered=""
 
 dist_parent="${repo_dir}/dist"
 if [[ -L "${dist_parent}" ]]; then
@@ -172,8 +179,8 @@ fi
 
 tmp_output="$(mktemp "${repo_tmp_root}/speed-of-cinnamon-snap-output-XXXXXX")"
 
-( umask 022 && snapcraft pack --destructive-mode )
 {
+  find "${snap_workspace_dist}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -type f -print0
   find "${dist_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -type f -print0
   find "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -type f -print0
 } | sort -z > "${tmp_output}"
@@ -190,7 +197,9 @@ for path in "${snap_files[@]}"; do
     exit 1
   fi
   absolute="$(realpath "${path}")"
-  if [[ "${absolute}" != "${dist_dir}/speed-of-cinnamon_${version}_"* && "${absolute}" != "${repo_dir}/speed-of-cinnamon_${version}_"* ]]; then
+  if [[ "${absolute}" != "${snap_workspace_dist}/speed-of-cinnamon_${version}_"* &&
+        "${absolute}" != "${dist_dir}/speed-of-cinnamon_${version}_"* &&
+        "${absolute}" != "${repo_dir}/speed-of-cinnamon_${version}_"* ]]; then
     printf 'snap package path is unexpected: %s\n' "${path}" >&2
     exit 1
   fi

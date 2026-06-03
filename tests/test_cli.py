@@ -3200,6 +3200,25 @@ class CliTest(unittest.TestCase):
             finally:
                 cli._release_finalization_lock(acquired)
 
+    def test_finalization_lock_does_not_delete_replaced_stale_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            lock_path.write_text("12345\n", encoding="ascii")
+
+            def replace_lock(_path: Path) -> int:
+                lock_path.unlink()
+                lock_path.write_text(f"{os.getpid()}\n", encoding="ascii")
+                return 12345
+
+            with (
+                mock.patch("speed_of_cinnamon.cli._read_finalization_lock_pid", side_effect=replace_lock),
+                mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=False),
+            ):
+                self.assertIsNone(cli._acquire_finalization_lock(state_file))
+
+            self.assertEqual(lock_path.read_text(encoding="ascii").strip(), str(os.getpid()))
+
     def test_finalization_lock_reclaims_old_pidless_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "state.json"

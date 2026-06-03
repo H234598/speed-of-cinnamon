@@ -895,6 +895,7 @@ class OutputTest(unittest.TestCase):
         self.assertFalse(output_module._clipboard_targets_contain_non_text_payload("text/html\ntext/plain\n"))
         self.assertFalse(output_module._clipboard_targets_contain_non_text_payload("text/plain;charset=UTF-16\n"))
         self.assertFalse(output_module._clipboard_targets_contain_non_text_payload("text/rtf\n"))
+        self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("image/png\ntext/plain\n"))
         self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("image/bmp\n"))
         self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("application/x-qt-image\n"))
         self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("x-special/gnome-copied-files\n"))
@@ -1010,6 +1011,26 @@ class OutputTest(unittest.TestCase):
 
                 self.assertIsNone(_acquire_clipboard_dedup_lock())
                 self.assertTrue(lock_path.exists())
+
+    def test_clipboard_dedupe_lock_does_not_delete_replaced_stale_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):
+                lock_path = output_module.state_dir() / output_module.CLIPBOARD_DEDUP_LOCK_FILE
+                lock_path.parent.mkdir(parents=True, exist_ok=True)
+                lock_path.write_text("12345\n", encoding="utf-8")
+
+                def replace_lock(_path: Path) -> int:
+                    lock_path.unlink()
+                    lock_path.write_text(f"{os.getpid()}\n", encoding="utf-8")
+                    return 12345
+
+                with (
+                    mock.patch("speed_of_cinnamon.output._read_clipboard_dedup_lock_pid", side_effect=replace_lock),
+                    mock.patch("speed_of_cinnamon.output._clipboard_lock_pid_is_running", return_value=False),
+                ):
+                    self.assertIsNone(_acquire_clipboard_dedup_lock())
+
+                self.assertEqual(lock_path.read_text(encoding="utf-8").strip(), str(os.getpid()))
 
     def test_type_text_with_invalid_delay_clamps_to_zero(self) -> None:
         calls: list[list[str]] = []

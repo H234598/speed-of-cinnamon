@@ -84,5 +84,5 @@ safe_fs remove uninstall "${bin_path}" --kind file
 safe_fs remove uninstall "${man_dir}/speed-of-cinnamon.1" --kind file
 safe_fs remove uninstall "${man_dir}/speed-of-cinnamon-alarms.1" --kind file
 safe_fs remove uninstall "${python_dir}" --kind dir
-safe_fs rmdir uninstall "${app_data}" --ignore-non-empty || true
+safe_fs rmdir uninstall "${app_data}" --ignore-non-empty
 printf 'Removed %s applet, backend wrapper, local Python package, and local man pages.\n' "${uuid}"

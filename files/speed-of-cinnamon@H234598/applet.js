@@ -3404,10 +3404,11 @@ MyApplet.prototype = {
       if (value.indexOf("\u0000") >= 0) {
         throw new Error("Backend command argument contains invalid bytes");
       }
-      if (value.length > MAX_CLI_ARG_BYTES) {
+      let valueBytes = ByteArray.fromString(value).length;
+      if (valueBytes > MAX_CLI_ARG_BYTES) {
         throw new Error("Backend command argument is too large");
       }
-      totalBytes += value.length;
+      totalBytes += valueBytes;
       normalized.push(value);
     }
     if (totalBytes > MAX_CLI_COMMAND_BYTES) {
@@ -4026,6 +4027,7 @@ MyApplet.prototype = {
         sawTextTarget = true;
         continue;
       }
+      return true;
     }
     return !sawTextTarget;
   },

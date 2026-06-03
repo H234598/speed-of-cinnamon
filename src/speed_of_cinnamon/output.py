@@ -310,20 +310,22 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError:
         return None
-    now = time.time()
-    try:
-        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
+    for _attempt in range(2):
+        now = time.time()
         try:
-            existing = path.lstat()
-        except OSError:
-            return None
-        if not stat.S_ISREG(existing.st_mode):
-            return None
-        owner_pid = _read_clipboard_dedup_lock_pid(path)
-        if owner_pid is not None and _clipboard_lock_pid_is_running(owner_pid):
-            return None
-        if owner_pid is not None or now - existing.st_mtime > MAX_DUPLICATE_LOCK_SECONDS:
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            try:
+                existing = path.lstat()
+            except OSError:
+                return None
+            if not stat.S_ISREG(existing.st_mode):
+                return None
+            owner_pid = _read_clipboard_dedup_lock_pid(path)
+            if owner_pid is not None and _clipboard_lock_pid_is_running(owner_pid):
+                return None
+            if owner_pid is None and now - existing.st_mtime <= MAX_DUPLICATE_LOCK_SECONDS:
+                return None
             try:
                 current = path.lstat()
             except OSError:
@@ -334,27 +336,27 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                 path.unlink()
             except OSError:
                 return None
-            return _acquire_clipboard_dedup_lock()
-        return None
-    except OSError:
-        return None
-    try:
-        os.write(fd, f"{os.getpid()}\n".encode("ascii"))
-    except OSError:
+            continue
+        except OSError:
+            return None
+        try:
+            os.write(fd, f"{os.getpid()}\n".encode("ascii"))
+        except OSError:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            return None
         try:
             os.close(fd)
         except OSError:
             pass
-        try:
-            path.unlink()
-        except OSError:
-            pass
-        return None
-    try:
-        os.close(fd)
-    except OSError:
-        pass
-    return path
+        return path
+    return None
 
 
 def _release_clipboard_dedup_lock(path: Path | None) -> None:
@@ -735,6 +737,7 @@ def _clipboard_targets_contain_non_text_payload(targets: str) -> bool:
         if target in known_text_targets or target.startswith("text/"):
             saw_text_target = True
             continue
+        return True
     return not saw_text_target
 
 

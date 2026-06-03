@@ -760,9 +760,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (i === 0) {", source)
         self.assertIn("value = value.trim();", source)
         self.assertIn("if (value.indexOf(\"\\u0000\") >= 0) {", source)
-        self.assertIn("if (value.length > MAX_CLI_ARG_BYTES) {", source)
+        self.assertIn("let valueBytes = ByteArray.fromString(value).length;", source)
+        self.assertIn("if (valueBytes > MAX_CLI_ARG_BYTES) {", source)
         self.assertIn("let totalBytes = 0;", source)
-        self.assertIn("totalBytes += value.length;", source)
+        self.assertIn("totalBytes += valueBytes;", source)
         self.assertIn("if (totalBytes > MAX_CLI_COMMAND_BYTES) {", source)
         self.assertIn("if (String(args[0] || \"\").trim() === \"\") {", source)
         self.assertIn("_isAllowedCliCommand: function(command) {", source)
@@ -1008,6 +1009,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('target.indexOf("text/") === 0', source)
         self.assertIn(
             '    }\n    return !sawTextTarget;\n  },\n\n  _clipboardHasNonTextPayload',
+            source,
+        )
+        self.assertIn(
+            '      if (knownTextTargets[target] || target.indexOf("text/") === 0) {\n        sawTextTarget = true;\n        continue;\n      }\n      return true;',
             source,
         )
         self.assertIn('if (method === "clipboard-paste" && canPasteWithKeyboard && this._clipboardHasNonTextPayload()) {', source)

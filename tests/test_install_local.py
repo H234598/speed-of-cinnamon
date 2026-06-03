@@ -319,6 +319,27 @@ class InstallLocalTest(unittest.TestCase):
             self.assertTrue(model_file.exists())
             self.assertTrue(alarm_file.exists())
 
+    def test_uninstall_local_preserves_non_empty_data_dir_with_ignore_non_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            home = tmp_path / "home"
+            home.mkdir()
+            install_result = self._run_install_local(REPO_ROOT, home)
+            self.assertEqual(install_result.returncode, 0, msg=install_result.stdout + install_result.stderr)
+
+            data_dir = home / ".local" / "share" / "speed-of-cinnamon"
+            models_dir = data_dir / "models" / "whisper.cpp"
+            alarm_file = data_dir / "alarms.json"
+            models_dir.mkdir(parents=True)
+            alarm_file.write_text("[]\n", encoding="utf-8")
+            (models_dir / "ggml-base.bin").write_text("model\n", encoding="utf-8")
+
+            uninstall_result = self._run_uninstall_local(REPO_ROOT, home)
+
+            self.assertEqual(uninstall_result.returncode, 0, msg=uninstall_result.stdout + uninstall_result.stderr)
+            self.assertTrue(models_dir.exists())
+            self.assertTrue(alarm_file.exists())
+
     def test_uninstall_local_refuses_symlinked_home_ancestor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
