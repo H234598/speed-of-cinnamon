@@ -65,6 +65,7 @@ MAX_DUPLICATE_TEXT_SECONDS = 2.5
 MAX_DUPLICATE_LOCK_SECONDS = 30.0
 CLIPBOARD_DEDUP_STATE_FILE = "clipboard-last.json"
 CLIPBOARD_DEDUP_LOCK_FILE = ".clipboard-last.lock"
+_CLIPBOARD_DEDUP_PENDING_FIELD = "pending"
 _CLIPBOARD_FINGERPRINT_HEX_CHARS = frozenset("0123456789abcdef")
 
 _LAST_CLIPBOARD_TEXT: str = ""
@@ -219,42 +220,51 @@ def _read_clipboard_dedup_state() -> tuple[str, float]:
 
 
 def _read_trusted_clipboard_dedup_state() -> tuple[bool, tuple[str, float]]:
+    trusted, snapshot, _pending = _read_clipboard_dedup_state_entry()
+    return trusted, snapshot
+
+
+def _read_clipboard_dedup_state_entry() -> tuple[bool, tuple[str, float], bool]:
     try:
         path = _clipboard_dedup_state_path()
     except RuntimeError:
-        return False, ("", 0.0)
+        return False, ("", 0.0), False
     if not path.exists() and not path.is_symlink():
-        return True, ("", 0.0)
+        return True, ("", 0.0), False
     try:
         raw = read_text_without_following_symlinks(path, field_name="clipboard dedupe state")
     except FileNotFoundError:
-        return True, ("", 0.0)
+        return True, ("", 0.0), False
     except OSError:
-        return False, ("", 0.0)
+        return False, ("", 0.0), False
     try:
         payload = json.loads(raw)
     except (TypeError, ValueError):
-        return False, ("", 0.0)
+        return False, ("", 0.0), False
     if not isinstance(payload, dict):
-        return False, ("", 0.0)
+        return False, ("", 0.0), False
     at_value = payload.get("at")
     if not isinstance(at_value, (int, float)) or isinstance(at_value, bool):
-        return False, ("", 0.0)
+        return False, ("", 0.0), False
+    pending_raw = payload.get(_CLIPBOARD_DEDUP_PENDING_FIELD, False)
+    if pending_raw is not False and not isinstance(pending_raw, bool):
+        return False, ("", 0.0), False
+    pending = bool(pending_raw)
     fingerprint_value = payload.get("sha256")
     if "sha256" in payload:
         if not _is_clipboard_text_fingerprint(fingerprint_value):
-            return False, ("", 0.0)
-        return True, (str(fingerprint_value).lower(), float(at_value))
+            return False, ("", 0.0), False
+        return True, (str(fingerprint_value).lower(), float(at_value)), pending
 
     text_value = payload.get("text")
     if not isinstance(text_value, str) or text_value is None or isinstance(text_value, bool):
-        return False, ("", 0.0)
+        return False, ("", 0.0), False
     if not text_value:
-        return False, ("", 0.0)
+        return False, ("", 0.0), False
     fingerprint = _clipboard_text_fingerprint(text_value)
     if not _write_clipboard_dedup_fingerprint_state(fingerprint, float(at_value)):
-        return False, ("", 0.0)
-    return True, (fingerprint, float(at_value))
+        return False, ("", 0.0), False
+    return True, (fingerprint, float(at_value)), False
 
 
 def _write_clipboard_dedup_state(text: str, at: float) -> bool:
@@ -263,7 +273,7 @@ def _write_clipboard_dedup_state(text: str, at: float) -> bool:
     return _write_clipboard_dedup_fingerprint_state(_clipboard_text_fingerprint(text), at)
 
 
-def _write_clipboard_dedup_fingerprint_state(fingerprint: str, at: float) -> bool:
+def _write_clipboard_dedup_fingerprint_state(fingerprint: str, at: float, *, pending: bool = False) -> bool:
     if not _is_clipboard_text_fingerprint(fingerprint):
         return False
     try:
@@ -278,12 +288,15 @@ def _write_clipboard_dedup_fingerprint_state(fingerprint: str, at: float) -> boo
     try:
         fd, temp_name = tempfile.mkstemp(prefix="clipboard-dedupe-", suffix=".tmp", dir=str(path.parent))
         temp_path = Path(temp_name)
+        payload = {"sha256": fingerprint, "at": at}
+        if pending:
+            payload[_CLIPBOARD_DEDUP_PENDING_FIELD] = True
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             try:
                 os.fchmod(handle.fileno(), 0o600)
             except OSError:
                 pass
-            json.dump({"sha256": fingerprint, "at": at}, handle)
+            json.dump(payload, handle)
             handle.write("\n")
         assert_no_symlink_ancestors(path, field_name="clipboard dedupe state")
         os.replace(temp_path, path)
@@ -538,10 +551,10 @@ def _clear_clipboard_dedup_state() -> None:
         pass
 
 
-def _restore_clipboard_dedup_state(snapshot: tuple[str, float]) -> None:
+def _restore_clipboard_dedup_state(snapshot: tuple[str, float], *, pending: bool = False) -> None:
     fingerprint, at = snapshot
     if fingerprint:
-        if not _write_clipboard_dedup_fingerprint_state(fingerprint, at):
+        if not _write_clipboard_dedup_fingerprint_state(fingerprint, at, pending=pending):
             _clear_clipboard_dedup_state()
         return
     _clear_clipboard_dedup_state()
@@ -938,6 +951,7 @@ def _should_skip_clipboard_duplicate(
     *,
     persistent_snapshot: tuple[str, float] | None = None,
     persistent_state_trusted: bool | None = None,
+    pending_state: bool | None = None,
 ) -> bool:
     global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
     if not isinstance(text, str) or isinstance(text, bool):
@@ -954,6 +968,8 @@ def _should_skip_clipboard_duplicate(
         return True
     cached_fingerprint, cached_at = persistent_snapshot
     fingerprint = _clipboard_text_fingerprint(cleaned)
+    if pending_state:
+        return fingerprint == cached_fingerprint
     if fingerprint == cached_fingerprint and 0 <= (now_wall - cached_at) <= MAX_DUPLICATE_TEXT_SECONDS:
         return True
     now = time.monotonic()
@@ -975,23 +991,28 @@ def _should_skip_clipboard_memory_duplicate(text: str, method: str) -> bool:
     )
 
 
-def _begin_clipboard_insertion(text: str, method: str) -> tuple[Path, tuple[str, float]] | None:
+def _begin_clipboard_insertion(text: str, method: str) -> tuple[Path, tuple[str, float], bool] | None:
     if _should_skip_clipboard_memory_duplicate(text, method):
         return None
     lock_path = _acquire_clipboard_dedup_lock()
     if lock_path is None:
         return None
     try:
-        persistent_state_trusted, persistent_snapshot = _read_trusted_clipboard_dedup_state()
+        (
+            persistent_state_trusted,
+            persistent_snapshot,
+            persistent_state_pending,
+        ) = _read_clipboard_dedup_state_entry()
         if _should_skip_clipboard_duplicate(
             text,
             method,
             persistent_snapshot=persistent_snapshot,
             persistent_state_trusted=persistent_state_trusted,
+            pending_state=persistent_state_pending,
         ):
             _release_clipboard_dedup_lock(lock_path)
             return None
-        return lock_path, persistent_snapshot
+        return lock_path, persistent_snapshot, persistent_state_pending
     except Exception:
         _release_clipboard_dedup_lock(lock_path)
         raise
@@ -1007,7 +1028,7 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
         insertion = _begin_clipboard_insertion(text, method)
         if insertion is None:
             return False
-        lock_path, persistent_snapshot = insertion
+        lock_path, persistent_snapshot, persistent_snapshot_pending = insertion
         snapshot = _reserve_clipboard_insertion_memory(text, method)
         if snapshot is None:
             _release_clipboard_dedup_lock(lock_path)
@@ -1025,13 +1046,13 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
             if not committed:
                 if not operation_performed:
                     _restore_clipboard_insertion_snapshot(snapshot)
-                    _restore_clipboard_dedup_state(persistent_snapshot)
+                    _restore_clipboard_dedup_state(persistent_snapshot, pending=persistent_snapshot_pending)
             _release_clipboard_dedup_lock(lock_path)
     if method == "clipboard-paste":
         insertion = _begin_clipboard_insertion(text, method)
         if insertion is None:
             return False
-        lock_path, persistent_snapshot = insertion
+        lock_path, persistent_snapshot, persistent_snapshot_pending = insertion
         snapshot = _reserve_clipboard_insertion_memory(text, method)
         if snapshot is None:
             _release_clipboard_dedup_lock(lock_path)
@@ -1046,6 +1067,12 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
             clipboard_snapshot_available, clipboard_snapshot = _read_text_clipboard_snapshot()
             if not clipboard_snapshot_available:
                 raise OutputError("refusing automatic paste without readable text clipboard snapshot")
+            if not _write_clipboard_dedup_fingerprint_state(
+                _clipboard_text_fingerprint(_normalize_clipboard_text(text)),
+                time.time(),
+                pending=True,
+            ):
+                raise OutputError("failed to reserve clipboard-paste insertion state")
             set_clipboard(text)
             paste_from_clipboard()
             operation_performed = True
@@ -1063,7 +1090,7 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
                     except OutputError as exc:
                         rollback_error = exc
                 _restore_clipboard_insertion_snapshot(snapshot)
-                _restore_clipboard_dedup_state(persistent_snapshot)
+                _restore_clipboard_dedup_state(persistent_snapshot, pending=persistent_snapshot_pending)
             _release_clipboard_dedup_lock(lock_path)
             if rollback_error is not None:
                 raise OutputError("failed to restore previous clipboard after paste failure") from rollback_error

@@ -60,7 +60,7 @@ else
   tag="v${input_tag}"
 fi
 
-if [[ ! "${tag}" =~ ^v[0-9]+(\.[0-9]+){0,2}([0-9A-Za-z.+-]*)?$ ]]; then
+if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   printf 'release tag %s is invalid\n' "${tag}" >&2
   exit 1
 fi
@@ -69,6 +69,11 @@ required_tools=(git python3 realpath awk sha256sum grep stat mktemp chmod)
 if [[ "${dry_run}" == "false" ]]; then
   required_tools+=(gh)
 fi
+release_is_mutated="false"
+release_publish_complete="false"
+existing_release="false"
+existing_was_draft="false"
+created_release="false"
 safe_fs="${repo_dir}/scripts/safe-local-fs.py"
 safe_fs_cmd=(python3 "${safe_fs}")
 
@@ -201,16 +206,38 @@ rollback_release_state() {
   local tag=$1
   local repo=$2
   local existing_release=$3
-  local existing_was_draft=$4
   local created_release=$5
 
   if [[ "${created_release}" == "true" ]]; then
     gh release delete "${tag}" --repo "${repo}" --yes >/dev/null 2>&1 || true
     return
   fi
-  if [[ "${existing_release}" == "true" && "${existing_was_draft}" != "true" ]]; then
-    gh release edit "${tag}" --repo "${repo}" --draft=false >/dev/null 2>&1 || true
+  if [[ "${existing_release}" == "true" ]]; then
+    return
   fi
+}
+
+mark_release_mutation() {
+  release_is_mutated="true"
+}
+
+publish_release_succeeded() {
+  release_publish_complete="true"
+}
+
+cleanup_release_state() {
+  local rollback_release_tag=${tag-}
+  local rollback_repo=${repo-}
+  local existing_release_state=${existing_release-false}
+  local existing_draft_state=${existing_was_draft-false}
+  local created_release_state=${created_release-false}
+  local was_mutated=${release_is_mutated-false}
+  local publish_complete=${release_publish_complete-false}
+
+  if [[ "${dry_run}" == "true" || "${publish_complete}" == "true" || "${was_mutated}" != "true" || -z "${rollback_release_tag}" || -z "${rollback_repo}" ]]; then
+    return
+  fi
+  rollback_release_state "${rollback_release_tag}" "${rollback_repo}" "${existing_release_state}" "${existing_draft_state}" "${created_release_state}"
 }
 
 require_one "source archive" "${source_archives[@]}"
@@ -377,6 +404,7 @@ fi
 mkdir -p "${notes_tmp_root}"
 notes_file="$(mktemp "${notes_tmp_root}/speed-of-cinnamon-release-notes-XXXXXX")"
 cleanup_notes() {
+  cleanup_release_state
   rm -f -- "${notes_file}"
   if [[ -n "${staging_dir}" ]]; then
     rm -rf -- "${staging_dir}"
@@ -413,10 +441,6 @@ if [[ -z "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]]; then
   printf 'GH_TOKEN or GITHUB_TOKEN must be set to publish a release.\n' >&2
   exit 1
 fi
-
-existing_release="false"
-existing_was_draft="false"
-created_release="false"
 if gh release view "${tag}" --repo "${repo}" >/dev/null 2>&1; then
   existing_release="true"
   existing_was_draft="$(gh release view "${tag}" --repo "${repo}" --json isDraft --jq '.isDraft')"
@@ -433,6 +457,7 @@ if gh release view "${tag}" --repo "${repo}" >/dev/null 2>&1; then
     --title "Speed of Cinnamon ${tag}" \
     --notes-file "${notes_file}" \
     --draft
+  mark_release_mutation
 else
   created_release="true"
   gh release create "${tag}" \
@@ -441,10 +466,10 @@ else
     --notes-file "${notes_file}" \
     --verify-tag \
     --draft
+  mark_release_mutation
 fi
 
 if ! gh release upload "${tag}" "${upload_refs[@]}" --repo "${repo}"; then
-  rollback_release_state "${tag}" "${repo}" "${existing_release}" "${existing_was_draft}" "${created_release}"
   printf 'failed to upload one or more release assets.\n' >&2
   exit 1
 fi
@@ -454,7 +479,7 @@ if ! gh release edit "${tag}" \
     --title "Speed of Cinnamon ${tag}" \
     --notes-file "${notes_file}" \
     --draft=false; then
-  rollback_release_state "${tag}" "${repo}" "${existing_release}" "${existing_was_draft}" "${created_release}"
   printf 'failed to publish release after uploading assets.\n' >&2
   exit 1
 fi
+publish_release_succeeded

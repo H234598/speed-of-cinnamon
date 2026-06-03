@@ -198,6 +198,7 @@ fi
 tmp_output="$(mktemp "${repo_tmp_root}/speed-of-cinnamon-snap-output-XXXXXX")"
 
 {
+  find "${snap_workspace}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -type f -print0
   find "${snap_workspace_dist}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -type f -print0
   find "${dist_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -type f -print0
   find "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -type f -print0
@@ -215,7 +216,8 @@ for path in "${snap_files[@]}"; do
     exit 1
   fi
   absolute="$(realpath "${path}")"
-  if [[ "${absolute}" != "${snap_workspace_dist}/speed-of-cinnamon_${version}_"* &&
+  if [[ "${absolute}" != "${snap_workspace}/speed-of-cinnamon_${version}_"* &&
+        "${absolute}" != "${snap_workspace_dist}/speed-of-cinnamon_${version}_"* &&
         "${absolute}" != "${dist_dir}/speed-of-cinnamon_${version}_"* &&
         "${absolute}" != "${repo_dir}/speed-of-cinnamon_${version}_"* ]]; then
     printf 'snap package path is unexpected: %s\n' "${path}" >&2

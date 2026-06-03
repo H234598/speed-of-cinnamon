@@ -426,7 +426,7 @@ class CiStaticTest(unittest.TestCase):
 
         self.assertIn('tags:\n      - "v*.*.*"', workflow)
         checkout_ref = "ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}"
-        self.assertEqual(workflow.count(checkout_ref), 3)
+        self.assertEqual(workflow.count(checkout_ref), 4)
         self.assertIn("with:\n      ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}", workflow)
         self.assertIn("format('refs/tags/{0}', inputs.tag)", workflow)
         self.assertNotIn("if [[ ! \"${tag}\" =~ ^v[0-9]+(\\.[0-9]+){0,2}([0-9A-Za-z.+-]*)?$ ]]", workflow)
@@ -463,10 +463,14 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("release asset already exists", publish_script)
         self.assertIn("--draft", publish_script)
         self.assertIn("gh release edit \"${tag}\" \\", publish_script)
-        self.assertIn("rollback_release_state()", publish_script)
-        self.assertIn('rollback_release_state "${tag}" "${repo}" "${existing_release}" "${existing_was_draft}" "${created_release}"', publish_script)
+        self.assertIn("cleanup_release_state() {", publish_script)
+        self.assertIn("mark_release_mutation()", publish_script)
+        self.assertIn("publish_release_succeeded()", publish_script)
+        self.assertIn("rollback_release_state", publish_script)
         self.assertIn('gh release delete "${tag}" --repo "${repo}" --yes', publish_script)
-        self.assertIn('gh release edit "${tag}" --repo "${repo}" --draft=false', publish_script)
+        self.assertIn('gh release edit "${tag}" \\', publish_script)
+        self.assertIn("--draft=false", publish_script)
+        self.assertNotIn('gh release edit "${tag}" --repo "${repo}" --draft=false >/dev/null 2>&1 || true', publish_script)
 
     def test_release_scripts_use_safe_local_fs_for_risky_mutations(self) -> None:
         build_rpm = (REPO_ROOT / "scripts" / "build-rpm.sh").read_text(encoding="utf-8")
@@ -474,7 +478,8 @@ class CiStaticTest(unittest.TestCase):
         uninstall_local = (REPO_ROOT / "scripts" / "uninstall-local.sh").read_text(encoding="utf-8")
 
         self.assertIn('safe_fs_cmd=(python3 "${safe_fs}")', build_rpm)
-        self.assertIn('if ! "${safe_fs_cmd[@]}" install-tree build-rpm "${stage_topdir}" "${final_topdir}" "RPM build directory"; then', build_rpm)
+        self.assertIn("activate_with_finalize_lock() {", build_rpm)
+        self.assertIn('[sys.executable, safe_fs, "install-tree", "build-rpm", staging_path, final_path, "RPM build directory"]', build_rpm)
         self.assertIn('require_regular_source_file "${tarball}" "tarball source"', build_rpm)
         self.assertIn('require_regular_source_file "${spec_source}" "spec source"', build_rpm)
         self.assertIn('if ! "${safe_fs_cmd[@]}" copy-file build-rpm "${tarball}" "${stage_topdir}/SOURCES/$(basename "${tarball}")" 0644; then', build_rpm)
@@ -512,6 +517,13 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("failed to publish release after uploading assets.", publish_script)
         self.assertIn('--draft', publish_script)
         self.assertIn("--draft=false", publish_script)
+        self.assertIn("trap cleanup_notes EXIT", publish_script)
+
+    def test_publish_script_rejects_only_strict_semver_tag(self) -> None:
+        publish_script = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
+
+        self.assertIn('if [[ ! "${tag}" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then', publish_script)
+        self.assertNotIn("^(\\.[0-9]+){0,2}([0-9A-Za-z.+-]*)?$", publish_script)
 
     def test_publish_script_resolves_repository_from_verified_checkout(self) -> None:
         publish_script = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
@@ -802,10 +814,12 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('- "v*.*.*"', workflow)
         self.assertIn("workflow_dispatch:", workflow)
         self.assertIn("run_workflow_lint:", workflow)
+        self.assertIn("spelling-lint:", workflow)
+        self.assertIn("crate-ci/typos", workflow)
         self.assertIn("permissions:\n  contents: read", workflow)
-        self.assertIn("publish:\n    needs:\n      - workflow-lint\n      - security-scan", workflow)
+        self.assertIn("publish:\n    needs:\n      - workflow-lint\n      - spelling-lint\n      - security-scan", workflow)
         self.assertIn(
-            "publish:\n    needs:\n      - workflow-lint\n      - security-scan\n    permissions:\n      contents: write",
+            "publish:\n    needs:\n      - workflow-lint\n      - spelling-lint\n      - security-scan\n    permissions:\n      contents: write",
             workflow,
         )
         self.assertIn("actions: none", workflow)
@@ -824,7 +838,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("security-scan:", workflow)
         self.assertIn("uses: ./.github/workflows/security-scan.yml", workflow)
         self.assertIn("with:\n      ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}", workflow)
-        self.assertIn("needs:\n      - workflow-lint\n      - security-scan", workflow)
+        self.assertIn("needs:\n      - workflow-lint\n      - spelling-lint\n      - security-scan", workflow)
         self.assertIn('ACTIONLINT_STRICT: "true"', workflow)
         self.assertIn("fetch-depth: 0", workflow)
         self.assertIn("run: gh --version", workflow)

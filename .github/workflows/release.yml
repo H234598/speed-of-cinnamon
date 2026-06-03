@@ -53,6 +53,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
       - name: Install actionlint
         run: |
           version="1.7.12"
@@ -80,10 +81,22 @@ jobs:
     uses: ./.github/workflows/security-scan.yml
     with:
       ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+  spelling-lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check spelling
+        uses: crate-ci/typos@f8a58b6b53f2279f71eb605f03a4ae4d10608f45
+        with:
+          config: ./typos.toml
 
   publish:
     needs:
       - workflow-lint
+      - spelling-lint
       - security-scan
     permissions:
       contents: write
