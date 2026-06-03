@@ -1535,7 +1535,7 @@ MyApplet.prototype = {
     }
     let title = String(this._windowProbeValue(this.targetWindow, "get_title") || "").toLowerCase();
     for (let marker of markers) {
-      if (title.indexOf(marker.toLowerCase()) >= 0 && this._windowIdentityMatchesAutoPaste(marker)) {
+      if (title.indexOf(marker.toLowerCase()) >= 0 && this._markerAllowsAutoPasteIdentity(marker)) {
         return true;
       }
     }
@@ -3920,6 +3920,17 @@ MyApplet.prototype = {
       }
     }
     return false;
+  },
+
+  _markerAllowsAutoPasteIdentity: function(marker) {
+    let key = String(marker || "").trim().toLowerCase();
+    if (!key) {
+      return false;
+    }
+    if (!AUTO_PASTE_IDENTITY_MARKERS[key]) {
+      return true;
+    }
+    return this._windowIdentityMatchesAutoPaste(marker);
   },
 
   _isTerminalTargetWindow: function() {

@@ -1076,7 +1076,10 @@ def remove_model(name: str) -> dict[str, object]:
         pass
     except OSError as exc:
         if removed:
-            _clear_model_checksum_cache(path)
+            try:
+                _clear_model_checksum_cache(path)
+            except ModelError:
+                pass
         raise ModelError(f"failed to remove temporary model file: {tmp_path}") from exc
     if removed:
         _clear_model_checksum_cache(path)

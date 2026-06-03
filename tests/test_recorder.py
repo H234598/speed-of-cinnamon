@@ -592,6 +592,19 @@ class RecorderTest(unittest.TestCase):
             self.assertEqual(log_path.read_text(encoding="utf-8"), "previous content")
         mocked_popen.assert_called_once()
 
+    @mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=OSError("boom"))
+    def test_start_recorder_keeps_existing_empty_log_file_when_start_fails(self, mocked_popen: mock.Mock) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "session.log"
+            log_path.write_text("", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
+                with self.assertRaisesRegex(RecorderError, "failed to start noop"):
+                    start_recorder(command, log_path)
+            self.assertTrue(log_path.exists())
+            self.assertEqual(log_path.read_text(encoding="utf-8"), "")
+        mocked_popen.assert_called_once()
+
     def test_run_pactl_command_rejects_empty_command(self) -> None:
         with self.assertRaisesRegex(RecorderError, "empty pactl command"):
             _run_pactl_command([], required=True)

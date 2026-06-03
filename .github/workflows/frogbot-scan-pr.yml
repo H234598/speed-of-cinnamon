@@ -47,6 +47,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
 
       - uses: jfrog/frogbot@5d9c42c30f1169d8be4ba5510b40e75ffcbbc2a9  # v2.21.2
         env:

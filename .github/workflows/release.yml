@@ -98,7 +98,7 @@ jobs:
           python-version: "3.12"
       - name: Install release tooling
         run: |
-          python -m pip install --disable-pip-version-check --no-cache-dir bandit
+          python -m pip install --disable-pip-version-check --no-cache-dir bandit==1.9.4
           sudo apt-get update
           sudo apt-get install -y cpio rpm shellcheck
           if [[ "${BUILD_SNAP}" == "1" ]]; then

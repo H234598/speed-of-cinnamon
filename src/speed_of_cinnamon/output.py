@@ -724,7 +724,7 @@ def paste_from_clipboard() -> None:
     wtype = _which("wtype")
     if wtype:
         _run_with_input(
-            ["wtype", "-M", "ctrl", "v", "-m", "ctrl"],
+            ["wtype", "-M", "ctrl", "-M", "shift", "v", "-m", "shift", "-m", "ctrl"],
             "",
             timeout=MAX_PASTE_TIMEOUT_SECONDS,
             resolved_command=wtype,

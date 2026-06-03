@@ -915,7 +915,7 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
         )
     except OSError as exc:
         try:
-            if not existed_before or preserved_size == 0:
+            if not existed_before:
                 os.unlink(log_path)
         except OSError:
             pass

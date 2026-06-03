@@ -608,8 +608,21 @@ def transcribe_with_openai_whisper(
     generated = output_dir / f"{audio_path.stem}.txt"
     if generated.exists():
         if generated == text_path:
-            text = _read_text_file(generated).strip()
-            _assert_text_length(text, field_name="transcript")
+            try:
+                text = _read_text_file(generated).strip()
+                _assert_text_length(text, field_name="transcript")
+            except Exception:
+                if not write_transcript:
+                    try:
+                        generated.unlink()
+                    except OSError:
+                        pass
+                raise
+            if not write_transcript:
+                try:
+                    generated.unlink()
+                except OSError:
+                    pass
             return text
         primary_error: BaseException | None = None
         try:

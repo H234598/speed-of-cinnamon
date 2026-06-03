@@ -394,7 +394,7 @@ class CiStaticTest(unittest.TestCase):
 
         codacy_workflow = (REPO_ROOT / ".github" / "workflows" / "codacy.yml").read_text(encoding="utf-8")
         self.assertIn("runs-on: ubuntu-24.04", codacy_workflow)
-        self.assertIn("python -m pip install --disable-pip-version-check --no-cache-dir 'bandit[sarif]'", codacy_workflow)
+        self.assertIn("python -m pip install --disable-pip-version-check --no-cache-dir 'bandit[sarif]==1.9.4'", codacy_workflow)
         self.assertIn("python -m bandit -q -r src/speed_of_cinnamon -x tests -f sarif -o results.sarif --exit-zero", codacy_workflow)
         self.assertIn("uses: github/codeql-action/upload-sarif@a6fd1787519fd23e68309fad43738e41a6ff2a9d # v4", codacy_workflow)
         self.assertNotIn("codacy/codacy-analysis-cli-action", codacy_workflow)
@@ -407,7 +407,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("timeout-minutes: 10", security_workflow)
         self.assertIn("python-security:", security_workflow)
         self.assertIn("shell-security:", security_workflow)
-        self.assertIn("run: python -m pip install --disable-pip-version-check --no-cache-dir bandit", security_workflow)
+        self.assertIn("run: python -m pip install --disable-pip-version-check --no-cache-dir bandit==1.9.4", security_workflow)
         self.assertIn("run: make python-security-scan", security_workflow)
         self.assertIn("run: make shell-security-scan", security_workflow)
         self.assertIn("run: |\n          sudo apt-get update\n          sudo apt-get install -y --no-install-recommends shellcheck", security_workflow)
@@ -440,6 +440,12 @@ class CiStaticTest(unittest.TestCase):
         publish_script = (REPO_ROOT / "scripts" / "publish-wiki.sh").read_text(encoding="utf-8")
         self.assertIn("failed to clone wiki repository", publish_script)
         self.assertNotIn("git -C \"${work_dir}/wiki\" init", publish_script)
+
+    def test_frogbot_checkouts_do_not_persist_credentials(self) -> None:
+        for workflow_name in ("frogbot-scan-and-fix.yml", "frogbot-scan-pr.yml"):
+            workflow = (REPO_ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+            self.assertIn("uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6", workflow)
+            self.assertIn("persist-credentials: false", workflow)
 
     def test_frogbot_pr_scan_does_not_use_pull_request_target(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "frogbot-scan-pr.yml").read_text(encoding="utf-8")
@@ -597,7 +603,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("- name: Install release tooling", workflow)
         self.assertIn("run: |", workflow)
         self.assertIn("sudo apt-get update", workflow)
-        self.assertIn("python -m pip install --disable-pip-version-check --no-cache-dir bandit", workflow)
+        self.assertIn("python -m pip install --disable-pip-version-check --no-cache-dir bandit==1.9.4", workflow)
         self.assertIn("sudo apt-get install -y cpio rpm shellcheck", workflow)
         self.assertIn("snap install snapcraft --classic", workflow)
         self.assertIn("run: make check", workflow)

@@ -461,6 +461,24 @@ class OutputTest(unittest.TestCase):
         self.assertEqual(which_calls.count("xdotool"), 1)
         self.assertEqual(which_calls.count("wtype"), 0)
 
+    def test_paste_from_clipboard_uses_shift_paste_for_wtype(self) -> None:
+        def fake_which(command: str, path: str | None = None) -> str | None:
+            del path
+            return "/usr/bin/wtype" if command == "wtype" else None
+
+        with (
+            mock.patch("speed_of_cinnamon.output.shutil.which", side_effect=fake_which),
+            mock.patch("speed_of_cinnamon.output._run_with_input") as mocked_run,
+        ):
+            paste_from_clipboard()
+
+        mocked_run.assert_called_once_with(
+            ["wtype", "-M", "ctrl", "-M", "shift", "v", "-m", "shift", "-m", "ctrl"],
+            "",
+            timeout=10,
+            resolved_command="/usr/bin/wtype",
+        )
+
     def test_active_window_paste_key_uses_shift_for_terminal_class(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             command = args[0] if args else kwargs["args"]
