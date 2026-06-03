@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import stat
@@ -64,6 +65,7 @@ MAX_DUPLICATE_TEXT_SECONDS = 2.5
 MAX_DUPLICATE_LOCK_SECONDS = 30.0
 CLIPBOARD_DEDUP_STATE_FILE = "clipboard-last.json"
 CLIPBOARD_DEDUP_LOCK_FILE = ".clipboard-last.lock"
+_CLIPBOARD_FINGERPRINT_HEX_CHARS = frozenset("0123456789abcdef")
 
 _LAST_CLIPBOARD_TEXT: str = ""
 _LAST_CLIPBOARD_METHOD: str | None = None
@@ -193,6 +195,16 @@ def _read_file_head(file: io.BufferedRandom, max_chars: int) -> str:
     return text
 
 
+def _clipboard_text_fingerprint(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def _is_clipboard_text_fingerprint(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        return False
+    return len(value) == 64 and all(char in _CLIPBOARD_FINGERPRINT_HEX_CHARS for char in value.lower())
+
+
 def _clipboard_dedup_state_path() -> Path:
     path = state_dir() / CLIPBOARD_DEDUP_STATE_FILE
     assert_no_symlink_ancestors(path, field_name="clipboard dedupe state")
@@ -225,19 +237,34 @@ def _read_trusted_clipboard_dedup_state() -> tuple[bool, tuple[str, float]]:
         return False, ("", 0.0)
     if not isinstance(payload, dict):
         return False, ("", 0.0)
-    text_value = payload.get("text")
     at_value = payload.get("at")
-    if not isinstance(text_value, str) or text_value is None or isinstance(text_value, bool):
-        return False, ("", 0.0)
     if not isinstance(at_value, (int, float)) or isinstance(at_value, bool):
+        return False, ("", 0.0)
+    fingerprint_value = payload.get("sha256")
+    if "sha256" in payload:
+        if not _is_clipboard_text_fingerprint(fingerprint_value):
+            return False, ("", 0.0)
+        return True, (str(fingerprint_value).lower(), float(at_value))
+
+    text_value = payload.get("text")
+    if not isinstance(text_value, str) or text_value is None or isinstance(text_value, bool):
         return False, ("", 0.0)
     if not text_value:
         return False, ("", 0.0)
-    return True, (text_value, float(at_value))
+    fingerprint = _clipboard_text_fingerprint(text_value)
+    if not _write_clipboard_dedup_fingerprint_state(fingerprint, float(at_value)):
+        return False, ("", 0.0)
+    return True, (fingerprint, float(at_value))
 
 
 def _write_clipboard_dedup_state(text: str, at: float) -> bool:
     if not text:
+        return False
+    return _write_clipboard_dedup_fingerprint_state(_clipboard_text_fingerprint(text), at)
+
+
+def _write_clipboard_dedup_fingerprint_state(fingerprint: str, at: float) -> bool:
+    if not _is_clipboard_text_fingerprint(fingerprint):
         return False
     try:
         path = _clipboard_dedup_state_path()
@@ -256,7 +283,7 @@ def _write_clipboard_dedup_state(text: str, at: float) -> bool:
                 os.fchmod(handle.fileno(), 0o600)
             except OSError:
                 pass
-            json.dump({"text": text, "at": at}, handle)
+            json.dump({"sha256": fingerprint, "at": at}, handle)
             handle.write("\n")
         assert_no_symlink_ancestors(path, field_name="clipboard dedupe state")
         os.replace(temp_path, path)
@@ -515,9 +542,9 @@ def _clear_clipboard_dedup_state() -> None:
 
 
 def _restore_clipboard_dedup_state(snapshot: tuple[str, float]) -> None:
-    text, at = snapshot
-    if text:
-        if not _write_clipboard_dedup_state(text, at):
+    fingerprint, at = snapshot
+    if fingerprint:
+        if not _write_clipboard_dedup_fingerprint_state(fingerprint, at):
             _clear_clipboard_dedup_state()
         return
     _clear_clipboard_dedup_state()
@@ -928,8 +955,9 @@ def _should_skip_clipboard_duplicate(
         persistent_state_trusted, persistent_snapshot = _read_trusted_clipboard_dedup_state()
     if not persistent_state_trusted:
         return True
-    cached_text, cached_at = persistent_snapshot
-    if cleaned == cached_text and 0 <= (now_wall - cached_at) <= MAX_DUPLICATE_TEXT_SECONDS:
+    cached_fingerprint, cached_at = persistent_snapshot
+    fingerprint = _clipboard_text_fingerprint(cleaned)
+    if fingerprint == cached_fingerprint and 0 <= (now_wall - cached_at) <= MAX_DUPLICATE_TEXT_SECONDS:
         return True
     now = time.monotonic()
     if (

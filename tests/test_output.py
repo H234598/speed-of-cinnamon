@@ -59,8 +59,38 @@ class OutputTest(unittest.TestCase):
             mode = path.stat().st_mode & 0o777
 
         self.assertTrue(written)
-        self.assertEqual(json.loads(content), {"text": "secret text", "at": 123.0})
+        self.assertNotIn("secret text", content)
+        self.assertEqual(
+            json.loads(content),
+            {"sha256": output_module._clipboard_text_fingerprint("secret text"), "at": 123.0},
+        )
         self.assertEqual(mode, 0o600)
+
+    def test_clipboard_dedup_state_migrates_legacy_plaintext_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp)
+            path = state_root / output_module.CLIPBOARD_DEDUP_STATE_FILE
+            path.write_text(json.dumps({"text": "legacy secret", "at": 42.0}), encoding="utf-8")
+            with mock.patch("speed_of_cinnamon.output.state_dir", return_value=state_root):
+                trusted, snapshot = output_module._read_trusted_clipboard_dedup_state()
+                content = path.read_text(encoding="utf-8")
+
+        expected = output_module._clipboard_text_fingerprint("legacy secret")
+        self.assertTrue(trusted)
+        self.assertEqual(snapshot, (expected, 42.0))
+        self.assertNotIn("legacy secret", content)
+        self.assertEqual(json.loads(content), {"sha256": expected, "at": 42.0})
+
+    def test_clipboard_dedup_state_rejects_invalid_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp)
+            path = state_root / output_module.CLIPBOARD_DEDUP_STATE_FILE
+            path.write_text(json.dumps({"sha256": "not-a-valid-fingerprint", "at": 42.0}), encoding="utf-8")
+            with mock.patch("speed_of_cinnamon.output.state_dir", return_value=state_root):
+                trusted, snapshot = output_module._read_trusted_clipboard_dedup_state()
+
+        self.assertFalse(trusted)
+        self.assertEqual(snapshot, ("", 0.0))
 
     def test_clipboard_dedup_state_fails_closed_when_tempfile_creation_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -777,7 +807,10 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
         ):
             self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
-            self.assertEqual(output_module._read_clipboard_dedup_state(), ("wiederholung", 9.5))
+            self.assertEqual(
+                output_module._read_clipboard_dedup_state(),
+                (output_module._clipboard_text_fingerprint("wiederholung"), 9.5),
+            )
             self.assertEqual(mocked_clipboard.call_count, 1)
             self.assertEqual(mocked_paste.call_count, 1)
 
@@ -1030,7 +1063,10 @@ class OutputTest(unittest.TestCase):
             state_path = Path(tmp) / "speed-of-cinnamon" / output_module.CLIPBOARD_DEDUP_STATE_FILE
             target_path = Path(tmp) / "target-state.json"
             state_path.parent.mkdir(parents=True)
-            target_path.write_text(json.dumps({"text": "secure text", "at": 1.0}), encoding="utf-8")
+            target_path.write_text(
+                json.dumps({"sha256": output_module._clipboard_text_fingerprint("secure text"), "at": 1.0}),
+                encoding="utf-8",
+            )
             state_path.symlink_to(target_path)
             self.assertFalse(insert_text("secure text", "clipboard-paste"))
 
