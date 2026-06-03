@@ -576,6 +576,30 @@ class OutputTest(unittest.TestCase):
 
         self.assertEqual(calls, ["paste"])
 
+    def test_insert_text_clipboard_fails_closed_when_dedupe_state_cannot_persist(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output._write_clipboard_dedup_state", return_value=False),
+            mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
+        ):
+            self.assertFalse(insert_text("secure text", "clipboard"))
+
+        mocked_clipboard.assert_not_called()
+
+    def test_insert_text_clipboard_paste_fails_closed_when_dedupe_state_cannot_persist(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output._write_clipboard_dedup_state", return_value=False),
+            mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
+            mock.patch("speed_of_cinnamon.output.paste_from_clipboard") as mocked_paste,
+        ):
+            self.assertFalse(insert_text("secure text", "clipboard-paste"))
+
+        mocked_clipboard.assert_not_called()
+        mocked_paste.assert_not_called()
+
     def test_clipboard_dedupe_lock_blocks_parallel_insert(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):

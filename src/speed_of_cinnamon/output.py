@@ -627,8 +627,9 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
         if lock_path is None:
             return False
         try:
+            if not _record_clipboard_insertion(text, method):
+                return False
             set_clipboard(text)
-            _record_clipboard_insertion(text, method)
             return True
         finally:
             _release_clipboard_dedup_lock(lock_path)
@@ -637,9 +638,10 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
         if lock_path is None:
             return False
         try:
+            if not _record_clipboard_insertion(text, method):
+                return False
             set_clipboard(text)
             paste_from_clipboard()
-            _record_clipboard_insertion(text, method)
             return True
         finally:
             _release_clipboard_dedup_lock(lock_path)
