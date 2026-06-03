@@ -149,6 +149,29 @@ class InstallLocalTest(unittest.TestCase):
             self.assertTrue(marker.exists())
             self.assertEqual(marker.read_text(encoding="utf-8"), "old install\n")
 
+    def test_install_local_removes_new_targets_when_late_activation_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo_root = self._copy_installable_minimal_repo(tmp_path)
+            home = tmp_path / "home"
+            home.mkdir()
+            bad_target = home / ".local" / "share" / "man" / "man1" / "speed-of-cinnamon.1"
+            bad_target.parent.mkdir(parents=True)
+            bad_target.symlink_to(tmp_path / "payload")
+
+            result = self._run_install_local(repo_root, home)
+
+            self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+            self.assertIn("refusing to follow symlink during install", result.stderr)
+            self.assertFalse(
+                (home / ".local" / "share" / "cinnamon" / "applets" / "speed-of-cinnamon@H234598").exists()
+            )
+            self.assertFalse(
+                (home / ".local" / "share" / "speed-of-cinnamon" / "python" / "speed_of_cinnamon").exists()
+            )
+            self.assertFalse((home / ".local" / "bin" / "speed-of-cinnamon").exists())
+            self.assertTrue(bad_target.is_symlink())
+
     def test_install_local_refuses_hardlinked_man_page_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

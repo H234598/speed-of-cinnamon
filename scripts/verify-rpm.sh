@@ -55,9 +55,18 @@ if [[ ! -f "${rpm_path}" || ! ( "${rpm_path}" == "${repo_dir}/dist/rpmbuild/"*".
   printf 'RPM package not found: %s\n' "${rpm_path}" >&2
   exit 1
 fi
+if [[ -L "${rpm_path}" || ! -f "${rpm_path}" || "$(stat -c '%F' "${rpm_path}")" != "regular file" ]]; then
+  printf 'RPM package must be a regular file: %s\n' "${rpm_path}" >&2
+  exit 1
+fi
 rpm_path="$(realpath "${rpm_path}")"
-if [[ -L "${rpm_path}" || ! -f "${rpm_path}" || ! ( "${rpm_path}" == "${repo_dir}/dist/rpmbuild/"*".rpm" || "${rpm_path}" == "${repo_dir}/dist/rpmbuild-generic/"*".rpm" ) ]]; then
+if [[ -L "${rpm_path}" || ! -f "${rpm_path}" || ! ( "${rpm_path}" == "${repo_dir}/dist/rpmbuild/"*".rpm" || "${rpm_path}" == "${repo_dir}/dist/rpmbuild-generic/"*".rpm" ) || "$(stat -c '%F' "${rpm_path}")" != "regular file" ]]; then
   printf 'RPM package not valid: %s\n' "${rpm_path}" >&2
+  exit 1
+fi
+rpm_link_count="$(stat -c '%h' "${rpm_path}")"
+if [[ "${rpm_link_count}" -ne 1 ]]; then
+  printf 'RPM package must not be hardlinked: %s\n' "${rpm_path}" >&2
   exit 1
 fi
 

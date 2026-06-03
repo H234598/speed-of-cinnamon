@@ -110,11 +110,26 @@ cleanup_tmpdir() {
 }
 trap cleanup_tmpdir EXIT
 
-if ! "${safe_fs_cmd[@]}" install-tree build-snap "${repo_dir}" "${snap_workspace}" "snap temporary source tree"; then
+if ! "${safe_fs_cmd[@]}" install-tree build-snap "${repo_dir}/snap" "${snap_workspace}/snap" "snap source tree"; then
   printf 'failed to prepare temporary snap workspace: %s\n' "${snap_workspace}" >&2
   exit 1
 fi
-rm -rf -- "${snap_workspace_dist}"
+if ! "${safe_fs_cmd[@]}" install-tree build-snap "${repo_dir}/src" "${snap_workspace}/src" "Python source tree"; then
+  printf 'failed to prepare temporary snap workspace: %s\n' "${snap_workspace}" >&2
+  exit 1
+fi
+if ! "${safe_fs_cmd[@]}" copy-file build-snap "${repo_dir}/pyproject.toml" "${snap_workspace}/pyproject.toml" 0644; then
+  printf 'failed to prepare temporary snap workspace: %s\n' "${snap_workspace}" >&2
+  exit 1
+fi
+if ! "${safe_fs_cmd[@]}" copy-file build-snap "${repo_dir}/README.md" "${snap_workspace}/README.md" 0644; then
+  printf 'failed to prepare temporary snap workspace: %s\n' "${snap_workspace}" >&2
+  exit 1
+fi
+if ! rm -rf -- "${snap_workspace_dist}"; then
+  printf 'failed to prepare temporary snap workspace: %s\n' "${snap_workspace}" >&2
+  exit 1
+fi
 mkdir -p "${snap_workspace_dist}"
 
 python3 - "${snapcraft_file}" "${snapcraft_file_rendered}" "${version}" "${snapcraft_base}" <<'PYCODE'

@@ -95,23 +95,19 @@ class TranscriberTest(unittest.TestCase):
                 "x" * (MAX_VOCABULARY_CHARS + 1),
             )
 
-    @mock.patch(
-        "speed_of_cinnamon.transcriber.write_text_atomically_without_following_symlinks",
-        side_effect=OSError("disk full"),
-    )
-    def test_transcribe_rejects_transcript_write_failure(self, mocked_write: mock.Mock) -> None:
+    def test_transcribe_does_not_persist_raw_transcript(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
             audio.write_bytes(b"audio")
             text = Path(tmp) / "sample.txt"
-            with self.assertRaisesRegex(TranscriptionError, "failed to write transcript file"):
-                transcribe(
-                    audio,
-                    "en",
-                    text,
-                    "printf hello",
-                )
-        mocked_write.assert_called_once()
+            result = transcribe(
+                audio,
+                "en",
+                text,
+                "printf hello",
+            )
+            self.assertEqual(result, "hello")
+            self.assertFalse(text.exists())
 
     def test_transcribe_rejects_symlinked_transcript_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1075,9 +1071,8 @@ class TranscriberTest(unittest.TestCase):
             audio.write_bytes(b"not really wav but enough for command-template test")
             text = Path(tmp) / "sample.txt"
             result = transcribe(audio, "en", text, "printf 'hello cinnamon'")
-            saved = text.read_text(encoding="utf-8").strip()
         self.assertEqual(result, "hello cinnamon")
-        self.assertEqual(saved, "hello cinnamon")
+        self.assertFalse(text.exists())
 
     def test_command_receives_personalization_environment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1134,7 +1129,7 @@ class TranscriberTest(unittest.TestCase):
         self.assertEqual(normalize_backend("faster-whisper"), "faster-whisper")
         self.assertEqual(normalize_backend(""), "auto")
 
-    def test_transcribe_with_openai_compatible_api_posts_audio_and_writes_transcript(self) -> None:
+    def test_transcribe_with_openai_compatible_api_posts_audio(self) -> None:
         class Response:
             def __enter__(self):
                 return self
@@ -1171,9 +1166,8 @@ class TranscriberTest(unittest.TestCase):
                     openai_compatible_url="http://127.0.0.1:8000/v1",
                     openai_compatible_api_key="secret",
                 )
-            written = text_path.read_text(encoding="utf-8").strip()
         self.assertEqual(result, "hello api")
-        self.assertEqual(written, "hello api")
+        self.assertFalse(text_path.exists())
         self.assertEqual(captured["url"], "http://127.0.0.1:8000/v1/audio/transcriptions")
         headers = captured["headers"]
         self.assertEqual(headers["Authorization"], "Bearer secret")
@@ -1185,7 +1179,7 @@ class TranscriberTest(unittest.TestCase):
         self.assertIn(b"de", data)
         self.assertNotIn(b'name="service_tier"', data)
 
-    def test_transcribe_with_openai_compatible_api_writes_transcript_once(self) -> None:
+    def test_transcribe_with_openai_compatible_api_does_not_write_transcript(self) -> None:
         class Response:
             def __enter__(self):
                 return self
@@ -1218,7 +1212,7 @@ class TranscriberTest(unittest.TestCase):
                 )
 
         self.assertEqual(result, "hello api")
-        mocked_write.assert_called_once_with(text_path, "hello api\n")
+        mocked_write.assert_not_called()
 
     def test_openai_compatible_api_adds_flex_for_openai_transcription(self) -> None:
         class Response:

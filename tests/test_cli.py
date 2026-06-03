@@ -596,14 +596,16 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["transcript"], "")
         self.assertNotIn("blacklist anzeigen", payload["transcript"])
 
+    @mock.patch("speed_of_cinnamon.cli._apply_security_mask_only")
     @mock.patch("speed_of_cinnamon.cli._apply_security_post_processing")
     @mock.patch("speed_of_cinnamon.cli.post_process_text")
     @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
-    def test_transcribe_file_runs_security_post_processing_before_remote_post_processing(
+    def test_transcribe_file_runs_security_post_processing_before_post_processing(
         self,
         mocked_validate: mock.Mock,
         mocked_post: mock.Mock,
         mocked_security: mock.Mock,
+        mocked_mask: mock.Mock,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "input.wav"
@@ -614,11 +616,16 @@ class CliTest(unittest.TestCase):
                 call_order.append("security")
                 return ("sicher", {"blacklist_added": [], "blacklist_opened": False, "redacted_words": [], "blacklist_hits": 0})
 
+            def mask_side_effect(text: str) -> tuple[str, dict[str, object]]:
+                call_order.append("mask")
+                return (text, {"blacklist_added": [], "blacklist_opened": False, "redacted_words": [], "blacklist_hits": 0})
+
             def post_process_side_effect(*args: object, **kwargs: object) -> str:
                 call_order.append("post")
                 return args[0]
 
             mocked_security.side_effect = security_side_effect
+            mocked_mask.side_effect = mask_side_effect
             mocked_post.side_effect = post_process_side_effect
             mocked_validate.return_value = audio
             stdout = io.StringIO()
@@ -637,7 +644,7 @@ class CliTest(unittest.TestCase):
                     "--json",
                 ])
         self.assertEqual(code, 0)
-        self.assertEqual(call_order, ["security", "post"])
+        self.assertEqual(call_order, ["security", "post", "mask"])
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["transcript"], "sicher")
 
@@ -685,14 +692,16 @@ class CliTest(unittest.TestCase):
         mocked_update.assert_not_called()
         mocked_open.assert_not_called()
 
+    @mock.patch("speed_of_cinnamon.cli._apply_security_mask_only")
     @mock.patch("speed_of_cinnamon.cli._apply_security_post_processing")
     @mock.patch("speed_of_cinnamon.cli.post_process_text")
     @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
-    def test_transcribe_file_runs_security_post_processing_after_local_post_processing(
+    def test_transcribe_file_runs_security_post_processing_after_post_processing(
         self,
         mocked_validate: mock.Mock,
         mocked_post: mock.Mock,
         mocked_security: mock.Mock,
+        mocked_mask: mock.Mock,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "input.wav"
@@ -701,13 +710,18 @@ class CliTest(unittest.TestCase):
 
             def security_side_effect(text: str) -> tuple[str, dict[str, object]]:
                 call_order.append("security")
-                return ("nach", {"blacklist_added": [], "blacklist_opened": False, "redacted_words": [], "blacklist_hits": 0})
+                return ("vor", {"blacklist_added": [], "blacklist_opened": False, "redacted_words": [], "blacklist_hits": 0})
+
+            def mask_side_effect(text: str) -> tuple[str, dict[str, object]]:
+                call_order.append("mask")
+                return (text, {"blacklist_added": [], "blacklist_opened": False, "redacted_words": [], "blacklist_hits": 0})
 
             def post_process_side_effect(*args: object, **kwargs: object) -> str:
                 call_order.append("post")
                 return "nach"
 
             mocked_security.side_effect = security_side_effect
+            mocked_mask.side_effect = mask_side_effect
             mocked_post.side_effect = post_process_side_effect
             mocked_validate.return_value = audio
             stdout = io.StringIO()
@@ -726,9 +740,60 @@ class CliTest(unittest.TestCase):
                     "--json",
                 ])
         self.assertEqual(code, 0)
-        self.assertEqual(call_order, ["post", "security"])
+        self.assertEqual(call_order, ["security", "post", "mask"])
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["transcript"], "nach")
+
+    @mock.patch("speed_of_cinnamon.cli._process_transcript")
+    @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="roher text")
+    @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
+    def test_command_transcribe_file_writes_only_final_text(
+        self,
+        mocked_validate: mock.Mock,
+        mocked_transcribe: mock.Mock,
+        mocked_process: mock.Mock,
+    ) -> None:
+        mocked_process.return_value = (
+            "final",
+            {
+                "blacklist_added": [],
+                "blacklist_opened": False,
+                "redacted_words": [],
+                "blacklist_hits": 0,
+            },
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            text_dir = Path(tmp) / "transcripts"
+            text_dir.mkdir()
+            mocked_validate.return_value = audio
+            mocked_transcribe.return_value = "roher text"
+            stdout = io.StringIO()
+            expected_path = text_dir / "input.txt"
+            with (
+                mock.patch("speed_of_cinnamon.cli.transcript_dir", return_value=text_dir),
+                mock.patch("speed_of_cinnamon.cli._write_text_atomic") as mocked_write,
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf roher text",
+                    "--post-process-backend",
+                    "none",
+                    "--json",
+                ])
+
+        self.assertEqual(code, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["transcript"], "final")
+        self.assertEqual(payload["transcript_path"], str(expected_path))
+        mocked_write.assert_called_once_with(expected_path, "final\n")
 
     def test_is_remote_post_process_backend(self) -> None:
         self.assertTrue(cli._is_remote_post_process_backend("openai-compatible"))

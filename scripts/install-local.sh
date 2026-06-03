@@ -52,6 +52,7 @@ done
 safe_fs() {
   python3 "${repo_dir}/scripts/safe-local-fs.py" "$@"
 }
+safe_fs_cmd=(python3 "${repo_dir}/scripts/safe-local-fs.py")
 
 reject_unsafe_tree() {
   local tree="$1"
@@ -91,54 +92,136 @@ reject_symlink_ancestors() {
   done
 }
 
-write_backend_wrapper() {
-  local wrapper_path="${bin_dir}/speed-of-cinnamon"
+resolve_tmp_root() {
+  local base="${TMPDIR:-/tmp}"
 
-  reject_symlink_ancestors "${wrapper_path}" "install"
-  if [[ -L "${bin_dir}" || -L "${wrapper_path}" ]]; then
-    printf 'refusing to follow symlink during install: %s\n' "${wrapper_path}" >&2
-    exit 1
+  if [[ ! "${base}" == /* ]]; then
+    base="${repo_dir}/.tmp"
   fi
-  if ! safe_fs write-wrapper install "${wrapper_path}" "${app_data}/python"; then
-    printf 'failed to install backend wrapper: %s\n' "${wrapper_path}" >&2
-    exit 1
+  if [[ -L "${base}" ]]; then
+    base="${repo_dir}/.tmp"
   fi
+  if [[ ! -d "${base}" || ! -w "${base}" ]]; then
+    base="${repo_dir}/.tmp"
+  fi
+  if [[ -L "${base}" ]]; then
+    base="/tmp"
+  fi
+  mkdir -p "${base}"
+  printf '%s\n' "${base}"
 }
 
-for target in "${applet_target}" "${app_data}" "${bin_dir}" "${man_dir}"; do
-  reject_symlink_ancestors "${target}" "install"
+write_staging_dir() {
+  local source_root="$1"
+  local tmp_root="$2"
+
+  local stage_root
+  stage_root="${tmp_root}/speed-of-cinnamon-install-staging"
+  safe_fs mkdirs install "${tmp_root}"
+  safe_fs mkdirs install "${stage_root}"
+  safe_fs mkdirs install "${stage_root}/speed-of-cinnamon/share"
+  safe_fs mkdirs install "${stage_root}/speed-of-cinnamon/python"
+  safe_fs mkdirs install "${stage_root}/speed-of-cinnamon/bin"
+  safe_fs mkdirs install "${stage_root}/man/man1"
+
+  if ! safe_fs install-tree install "${source_root}/files/${uuid}" "${stage_root}/speed-of-cinnamon/share/${uuid}" "applet"; then
+    printf 'failed to stage applet installation files\n' >&2
+    exit 1
+  fi
+  if ! safe_fs install-tree install "${source_root}/src/speed_of_cinnamon" "${stage_root}/speed-of-cinnamon/python/speed_of_cinnamon" "python package"; then
+    printf 'failed to stage Python package\n' >&2
+    exit 1
+  fi
+
+  if ! safe_fs write-wrapper install "${stage_root}/speed-of-cinnamon/bin/speed-of-cinnamon" "${app_data}/python"; then
+    printf 'failed to stage backend wrapper\n' >&2
+    exit 1
+  fi
+
+  if ! safe_fs copy-file install "${source_root}/docs/man/speed-of-cinnamon.1" "${stage_root}/man/man1/speed-of-cinnamon.1" 0644; then
+    printf 'failed to stage man page\n' >&2
+    exit 1
+  fi
+  if ! safe_fs copy-file install "${source_root}/docs/man/speed-of-cinnamon-alarms.1" "${stage_root}/man/man1/speed-of-cinnamon-alarms.1" 0644; then
+    printf 'failed to stage man page\n' >&2
+    exit 1
+  fi
+
+  printf '%s\n' "${stage_root}"
+}
+
+activate_staged() {
+  local source="$1"
+  local target="$2"
+  local kind="$3"
+  local label="$4"
+  local backup_path="${rollback_root}/.${label}"
+  local had_existing=0
+
   if [[ -L "${target}" ]]; then
+    rollback_staged_items
     printf 'refusing to follow symlink during install: %s\n' "${target}" >&2
     exit 1
   fi
-done
 
-install_tree_staged() {
-  local source_tree="$1"
-  local target_tree="$2"
-  local label="$3"
-  local parent="${target_tree%/*}"
+  if [[ -e "${target}" ]]; then
+    if ! "${safe_fs_cmd[@]}" replace install "${target}" "${backup_path}" --src-kind "${kind}"; then
+      rollback_staged_items
+      printf 'failed to back up existing %s\n' "${label}" >&2
+      exit 1
+    fi
+    had_existing=1
+    activated_targets+=("${target}")
+    activated_backups+=("${backup_path}")
+    activated_kinds+=("${kind}")
+    activated_had_existing+=("1")
+  fi
 
-  if [[ -z "${parent}" || "${parent}" == "${target_tree}" ]]; then
-    printf 'invalid install target for %s: %s\n' "${label}" "${target_tree}" >&2
+  if ! "${safe_fs_cmd[@]}" replace install "${source}" "${target}" --src-kind "${kind}"; then
+    if [[ "${had_existing}" == "0" ]]; then
+      if ! "${safe_fs_cmd[@]}" remove install "${target}" --kind "${kind}"; then
+        printf 'rollback failed for %s\n' "${target}" >&2
+      fi
+    fi
+    rollback_staged_items
+    printf 'failed to activate staged %s\n' "${label}" >&2
     exit 1
   fi
-  if [[ -L "${parent}" || -L "${target_tree}" ]]; then
-    printf 'refusing to follow symlink during install: %s\n' "${target_tree}" >&2
-    exit 1
-  fi
-  reject_symlink_ancestors "${target_tree}" "install"
-  safe_fs mkdirs install "${parent}"
-  reject_symlink_ancestors "${target_tree}" "install"
-  if [[ -L "${parent}" || -L "${target_tree}" ]]; then
-    printf 'refusing to follow symlink during install: %s\n' "${target_tree}" >&2
-    exit 1
-  fi
-  reject_unsafe_tree "${source_tree}" "${label} source tree"
 
-  if ! safe_fs install-tree install "${source_tree}" "${target_tree}" "${label}"; then
-    printf 'failed to activate staged %s install: %s\n' "${label}" "${target_tree}" >&2
-    exit 1
+  if [[ "${had_existing}" == "0" ]]; then
+    activated_targets+=("${target}")
+    activated_backups+=("")
+    activated_kinds+=("${kind}")
+    activated_had_existing+=("0")
+  fi
+}
+
+rollback_staged_items() {
+  local target
+  local backup
+  local kind
+  local index
+
+  for ((index = ${#activated_targets[@]} - 1; index >= 0; index--)); do
+    target="${activated_targets[index]}"
+    backup="${activated_backups[index]}"
+    kind="${activated_kinds[index]}"
+
+    if [[ "${activated_had_existing[index]}" == "1" ]]; then
+      if ! "${safe_fs_cmd[@]}" replace install "${backup}" "${target}" --src-kind "${kind}"; then
+        printf 'rollback failed for %s\n' "${target}" >&2
+      fi
+    else
+      if ! "${safe_fs_cmd[@]}" remove install "${target}" --kind "${kind}"; then
+        printf 'rollback failed for %s\n' "${target}" >&2
+      fi
+    fi
+  done
+}
+
+install_workspace_cleanup() {
+  if [[ -n "${staged_workspace}" && -d "${staged_workspace}" ]]; then
+    rm -rf -- "${staged_workspace}"
   fi
 }
 
@@ -150,16 +233,32 @@ safe_fs mkdirs install "${man_dir}"
 for target in "${applet_target}" "${app_data}" "${bin_dir}" "${man_dir}"; do
   reject_symlink_ancestors "${target}" "install"
 done
-install_tree_staged "${repo_dir}/files/${uuid}" "${applet_target}" "applet"
-install_tree_staged "${repo_dir}/src/speed_of_cinnamon" "${app_data}/python/speed_of_cinnamon" "python package"
 
+reject_unsafe_tree "${repo_dir}/files/${uuid}" "applet source tree"
+reject_unsafe_tree "${repo_dir}/src/speed_of_cinnamon" "python package source tree"
 reject_unsafe_file "${repo_dir}/docs/man/speed-of-cinnamon.1" "man page source"
 reject_unsafe_file "${repo_dir}/docs/man/speed-of-cinnamon-alarms.1" "man page source"
 
-write_backend_wrapper
+temp_root="$(resolve_tmp_root)"
+staged_workspace="$(mktemp -d "${temp_root}/speed-of-cinnamon-install-stage-XXXXXX")"
+rollback_root="${staged_workspace}/rollback"
+safe_fs mkdirs install "${rollback_root}"
+safe_fs mkdirs install "${rollback_root}"
+trap install_workspace_cleanup EXIT
 
-safe_fs copy-file install "${repo_dir}/docs/man/speed-of-cinnamon.1" "${man_dir}/speed-of-cinnamon.1" 0644
-safe_fs copy-file install "${repo_dir}/docs/man/speed-of-cinnamon-alarms.1" "${man_dir}/speed-of-cinnamon-alarms.1" 0644
+staging_root="$(write_staging_dir "${repo_dir}" "${staged_workspace}")"
+
+activated_targets=()
+activated_backups=()
+activated_kinds=()
+activated_had_existing=()
+wrapper_target="${bin_dir}/speed-of-cinnamon"
+
+activate_staged "${staging_root}/speed-of-cinnamon/share/${uuid}" "${applet_target}" "dir" "applet"
+activate_staged "${staging_root}/speed-of-cinnamon/python/speed_of_cinnamon" "${app_data}/python/speed_of_cinnamon" "dir" "python-package"
+activate_staged "${staging_root}/speed-of-cinnamon/bin/speed-of-cinnamon" "${wrapper_target}" "file" "wrapper"
+activate_staged "${staging_root}/man/man1/speed-of-cinnamon.1" "${man_dir}/speed-of-cinnamon.1" "file" "man-page"
+activate_staged "${staging_root}/man/man1/speed-of-cinnamon-alarms.1" "${man_dir}/speed-of-cinnamon-alarms.1" "file" "man-page-alarms"
 
 printf 'Installed %s to %s\n' "${uuid}" "${applet_target}"
 printf 'Installed backend command to %s/speed-of-cinnamon\n' "${bin_dir}"

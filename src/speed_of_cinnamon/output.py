@@ -247,9 +247,10 @@ def _write_clipboard_dedup_state(text: str, at: float) -> bool:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError:
         return False
-    fd, temp_name = tempfile.mkstemp(prefix="clipboard-dedupe-", suffix=".tmp", dir=str(path.parent))
-    temp_path = Path(temp_name)
+    temp_path: Path | None = None
     try:
+        fd, temp_name = tempfile.mkstemp(prefix="clipboard-dedupe-", suffix=".tmp", dir=str(path.parent))
+        temp_path = Path(temp_name)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             try:
                 os.fchmod(handle.fileno(), 0o600)
@@ -260,10 +261,11 @@ def _write_clipboard_dedup_state(text: str, at: float) -> bool:
         assert_no_symlink_ancestors(path, field_name="clipboard dedupe state")
         os.replace(temp_path, path)
     except (OSError, RuntimeError):
-        try:
-            temp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         return False
     return True
 

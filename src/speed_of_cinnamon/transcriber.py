@@ -1329,5 +1329,4 @@ def transcribe(
     text = text.strip()
     _reject_placeholder_transcript(text, language)
     _assert_text_length(text, field_name="transcript")
-    _write_text_atomic(text_path, text + "\n")
     return text

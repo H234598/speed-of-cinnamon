@@ -62,6 +62,17 @@ class OutputTest(unittest.TestCase):
         self.assertEqual(json.loads(content), {"text": "secret text", "at": 123.0})
         self.assertEqual(mode, 0o600)
 
+    def test_clipboard_dedup_state_fails_closed_when_tempfile_creation_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp)
+            with (
+                mock.patch("speed_of_cinnamon.output.state_dir", return_value=state_root),
+                mock.patch("speed_of_cinnamon.output.tempfile.mkstemp", side_effect=OSError("full")),
+            ):
+                written = output_module._write_clipboard_dedup_state("secret text", 123.0)
+
+        self.assertFalse(written)
+
     def test_set_clipboard_prefers_xclip(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which") as mocked_which,

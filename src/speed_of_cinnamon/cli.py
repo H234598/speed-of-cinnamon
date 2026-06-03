@@ -751,6 +751,32 @@ def _apply_security_mask_only(text: str) -> tuple[str, dict[str, object]]:
     }
 
 
+def _process_transcript(
+    text: str,
+    args: argparse.Namespace,
+    language: str,
+) -> tuple[str, dict[str, object]]:
+    post_process_backend = _effective_post_process_backend(args.post_process_backend, args.post_process_command)
+    text, security_post_processing = _apply_security_post_processing(text)
+    text = post_process_text(
+        text,
+        language,
+        args.post_process_command,
+        args.personal_context,
+        args.vocabulary,
+        post_process_backend,
+        args.ollama_model,
+        args.ollama_url,
+        args.post_process_prompt,
+        _openai_compatible_post_process_model(args),
+        args.openai_compatible_url,
+        getattr(args, "openai_compatible_api_key", ""),
+        getattr(args, "openai_compatible_flex_processing", True),
+    )
+    text, final_security_post_processing = _apply_security_mask_only(text)
+    return text, _merge_security_post_processing(security_post_processing, final_security_post_processing)
+
+
 def build_store(args: argparse.Namespace) -> StateStore:
     state_path = normalized_path(args.state_file)
     if not state_path:
@@ -1546,31 +1572,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             if trimmed_audio_path is not None and not keep_recording_artifacts:
                 remove_file(str(trimmed_audio_path), suffix=".flac")
 
-        post_process_backend = _effective_post_process_backend(args.post_process_backend, args.post_process_command)
-        if _is_remote_post_process_backend(post_process_backend):
-            text, security_post_processing = _apply_security_post_processing(text)
-        else:
-            security_post_processing = _empty_security_post_processing()
-        text = post_process_text(
-            text,
-            language,
-            args.post_process_command,
-            args.personal_context,
-            args.vocabulary,
-            post_process_backend,
-            args.ollama_model,
-            args.ollama_url,
-            args.post_process_prompt,
-            _openai_compatible_post_process_model(args),
-            args.openai_compatible_url,
-            getattr(args, "openai_compatible_api_key", ""),
-            getattr(args, "openai_compatible_flex_processing", True),
-        )
-        if _is_remote_post_process_backend(post_process_backend):
-            text, post_remote_security = _apply_security_mask_only(text)
-            security_post_processing = _merge_security_post_processing(security_post_processing, post_remote_security)
-        else:
-            text, security_post_processing = _apply_security_post_processing(text)
+        text, security_post_processing = _process_transcript(text, args, language)
         _write_text_atomic(text_path, text.strip() + "\n")
         append_space = _coerce_bool(args.append_space, field_name="append_space")
         sanitize_special_chars = _coerce_bool(
@@ -2258,31 +2260,7 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         vocabulary=args.vocabulary,
         **_openai_compatible_transcribe_kwargs(args, normalized_transcriber),
     )
-    post_process_backend = _effective_post_process_backend(args.post_process_backend, args.post_process_command)
-    if _is_remote_post_process_backend(post_process_backend):
-        text, security_post_processing = _apply_security_post_processing(text)
-    else:
-        security_post_processing = _empty_security_post_processing()
-    text = post_process_text(
-        text,
-        args.language,
-        args.post_process_command,
-        args.personal_context,
-        args.vocabulary,
-        post_process_backend,
-        args.ollama_model,
-        args.ollama_url,
-        args.post_process_prompt,
-        _openai_compatible_post_process_model(args),
-        args.openai_compatible_url,
-        getattr(args, "openai_compatible_api_key", ""),
-        getattr(args, "openai_compatible_flex_processing", True),
-    )
-    if _is_remote_post_process_backend(post_process_backend):
-        text, post_remote_security = _apply_security_mask_only(text)
-        security_post_processing = _merge_security_post_processing(security_post_processing, post_remote_security)
-    else:
-        text, security_post_processing = _apply_security_post_processing(text)
+    text, security_post_processing = _process_transcript(text, args, args.language)
     _write_text_atomic(text_path, text.strip() + "\n")
     return {
         "status": "done",
