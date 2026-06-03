@@ -1000,7 +1000,37 @@ class OutputTest(unittest.TestCase):
         mocked_clipboard.assert_not_called()
         mocked_paste.assert_not_called()
 
-    def test_clipboard_dedupe_lock_does_not_steal_live_owner(self) -> None:
+    def test_clipboard_dedupe_lock_does_not_reclaim_recent_pid_only_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):
+                lock_path = output_module.state_dir() / output_module.CLIPBOARD_DEDUP_LOCK_FILE
+                lock_path.parent.mkdir(parents=True, exist_ok=True)
+                lock_path.write_text(f"{os.getpid()}\n", encoding="utf-8")
+                old = output_module.time.time() - (output_module.MAX_DUPLICATE_LOCK_SECONDS - 1)
+                os.utime(lock_path, (old, old))
+
+                self.assertIsNone(_acquire_clipboard_dedup_lock())
+                self.assertTrue(lock_path.exists())
+
+    def test_clipboard_dedupe_lock_does_not_reclaim_live_owner_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):
+                lock_path = output_module.state_dir() / output_module.CLIPBOARD_DEDUP_LOCK_FILE
+                lock_path.parent.mkdir(parents=True, exist_ok=True)
+                lock_path.write_text("12345\nowner-identity\n", encoding="utf-8")
+
+                def fake_identity(pid: int) -> str | None:
+                    return "owner-identity" if pid == 12345 else "self-identity"
+
+                with (
+                    mock.patch("speed_of_cinnamon.output._clipboard_lock_pid_is_running", return_value=True),
+                    mock.patch("speed_of_cinnamon.output._clipboard_lock_identity_for_pid", side_effect=fake_identity),
+                ):
+                    self.assertIsNone(_acquire_clipboard_dedup_lock())
+
+                self.assertEqual(lock_path.read_text(encoding="utf-8"), "12345\nowner-identity\n")
+
+    def test_clipboard_dedupe_lock_reclaims_stale_pid_only_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):
                 lock_path = output_module.state_dir() / output_module.CLIPBOARD_DEDUP_LOCK_FILE
@@ -1009,8 +1039,26 @@ class OutputTest(unittest.TestCase):
                 old = output_module.time.time() - output_module.MAX_DUPLICATE_LOCK_SECONDS - 10
                 os.utime(lock_path, (old, old))
 
-                self.assertIsNone(_acquire_clipboard_dedup_lock())
-                self.assertTrue(lock_path.exists())
+                acquired = _acquire_clipboard_dedup_lock()
+                try:
+                    self.assertEqual(acquired, lock_path)
+                    self.assertIn(str(os.getpid()), lock_path.read_text(encoding="utf-8").splitlines()[0])
+                finally:
+                    _release_clipboard_dedup_lock(acquired)
+
+    def test_clipboard_dedupe_lock_reclaims_pid_with_identity_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):
+                lock_path = output_module.state_dir() / output_module.CLIPBOARD_DEDUP_LOCK_FILE
+                lock_path.parent.mkdir(parents=True, exist_ok=True)
+                lock_path.write_text(f"{os.getpid()}\nnot-current-identity\n", encoding="utf-8")
+
+                acquired = _acquire_clipboard_dedup_lock()
+                try:
+                    self.assertEqual(acquired, lock_path)
+                    self.assertIn(str(os.getpid()), lock_path.read_text(encoding="utf-8").splitlines()[0])
+                finally:
+                    _release_clipboard_dedup_lock(acquired)
 
     def test_clipboard_dedupe_lock_does_not_delete_replaced_stale_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

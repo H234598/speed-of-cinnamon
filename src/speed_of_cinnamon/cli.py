@@ -55,7 +55,11 @@ from .paths import (
     state_dir,
     transcript_dir,
 )
-from .path_safety import assert_no_symlink_ancestors, write_text_atomically_without_following_symlinks
+from .path_safety import (
+    assert_no_symlink_ancestors,
+    read_text_without_following_symlinks,
+    write_text_atomically_without_following_symlinks,
+)
 from .postprocessor import (
     DEFAULT_OLLAMA_URL,
     DEFAULT_OPENAI_COMPATIBLE_MODEL,
@@ -185,17 +189,57 @@ def _read_finalization_lock_pid(lock_path: Path) -> int | None:
         return None
     try:
         with os.fdopen(fd, "rb") as handle:
-            raw = handle.read(64)
+            raw = handle.read(512)
     except OSError:
         return None
     try:
-        text = raw.decode("ascii").strip()
+        text = raw.decode("ascii")
     except UnicodeDecodeError:
         return None
-    if not text.isdigit():
+    text = text.splitlines()
+    if not text:
         return None
-    pid = int(text)
+    first = text[0].strip()
+    if not first.isdigit():
+        return None
+    pid = int(first)
     return pid if pid > 0 else None
+
+
+def _finalization_lock_identity_for_pid(pid: int) -> str | None:
+    if pid <= 0:
+        return None
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    try:
+        close = raw.rindex(")")
+        rest = raw[close + 2 :].split()
+    except ValueError:
+        return None
+    if len(rest) < 20:
+        return None
+    try:
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    start_time = rest[19]
+    if not boot_id or not start_time:
+        return None
+    return f"{boot_id}:{start_time}"
+
+
+def _read_finalization_lock_identity(lock_path: Path) -> str | None:
+    try:
+        raw = read_text_without_following_symlinks(lock_path, field_name="finalization lock")
+    except (OSError, RuntimeError, UnicodeDecodeError):
+        return None
+    lines = raw.splitlines()
+    if len(lines) < 2:
+        return None
+    identity = lines[1].strip()
+    return identity or None
 
 
 def _acquire_finalization_lock(state_path: Path) -> Path | None:
@@ -220,8 +264,16 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
             if not stat_module.S_ISREG(existing.st_mode):
                 return None
             owner_pid = _read_finalization_lock_pid(lock_path)
+            owner_identity = _read_finalization_lock_identity(lock_path)
             if owner_pid is not None and process_is_alive(owner_pid):
-                return None
+                if owner_identity is not None:
+                    owner_current_identity = _finalization_lock_identity_for_pid(owner_pid)
+                    if owner_current_identity is not None and owner_identity == owner_current_identity:
+                        return None
+                    if owner_current_identity is None and now - existing.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS:
+                        return None
+                elif now - existing.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS:
+                    return None
             if owner_pid is None and now - existing.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS:
                 return None
             try:
@@ -239,7 +291,11 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
             return None
 
         try:
-            os.write(fd, f"{os.getpid()}\n".encode("ascii"))
+            identity = _finalization_lock_identity_for_pid(os.getpid())
+            if identity is None:
+                os.write(fd, f"{os.getpid()}\n".encode("ascii"))
+            else:
+                os.write(fd, f"{os.getpid()}\n{identity}\n".encode("ascii"))
         except OSError:
             try:
                 os.close(fd)
@@ -1142,7 +1198,7 @@ def recording_groups() -> list[dict[str, object]]:
     if not directory.exists():
         return []
     for path in directory.iterdir():
-        if path.suffix not in RECORDING_ARTIFACT_EXTENSIONS:
+        if path.suffix.lower() not in RECORDING_ARTIFACT_EXTENSIONS:
             continue
         file_stat = _recording_artifact_stat(path)
         if file_stat is None:
@@ -1161,7 +1217,7 @@ def recording_artifact_files() -> list[Path]:
         return []
     files: list[Path] = []
     for path in directory.iterdir():
-        if path.suffix not in RECORDING_ARTIFACT_EXTENSIONS:
+        if path.suffix.lower() not in RECORDING_ARTIFACT_EXTENSIONS:
             continue
         if _recording_artifact_stat(path) is not None:
             files.append(path)
@@ -1174,7 +1230,7 @@ def _add_recording_artifact_counts(paths: list[str], recording_result: dict[str,
     recording_count = _coerce_int(recording_result[recording_key], field_name=recording_key)
     log_count = _coerce_int(recording_result[log_key], field_name=log_key)
     for path_text in paths:
-        suffix = Path(path_text).suffix
+        suffix = Path(path_text).suffix.lower()
         if suffix in {".wav", ".flac"}:
             recording_count += 1
         elif suffix == ".log":
@@ -1217,16 +1273,18 @@ def prune_recording_groups(
         for path in group_paths:
             if dry_run:
                 planned_paths.append(str(path))
-                if path.suffix in {".wav", ".flac"}:
+                suffix = path.suffix.lower()
+                if suffix in {".wav", ".flac"}:
                     planned_recordings += 1
-                elif path.suffix == ".log":
+                elif suffix == ".log":
                     planned_logs += 1
                 continue
             if delete_artifact(path):
                 deleted_paths.append(str(path))
-                if path.suffix in {".wav", ".flac"}:
+                suffix = path.suffix.lower()
+                if suffix in {".wav", ".flac"}:
                     deleted_recordings += 1
-                elif path.suffix == ".log":
+                elif suffix == ".log":
                     deleted_logs += 1
             else:
                 failed_paths.append(str(path))
@@ -1596,10 +1654,12 @@ def remove_file(path_value: str | None, *, suffix: str | None = None) -> bool:
     if suffix:
         try:
             path = validate_recording_path(Path(path_value), suffix=suffix, require_recordings_dir=True)
-        except (RecorderError, ValueError, OSError):
+        except (RecorderError, RuntimeError, ValueError, OSError):
             return False
     else:
         path = Path(path_value)
+    if _recording_artifact_stat(path) is None:
+        return False
     try:
         path.unlink()
     except FileNotFoundError:

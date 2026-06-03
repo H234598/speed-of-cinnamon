@@ -1948,6 +1948,40 @@ class CliTest(unittest.TestCase):
         self.assertTrue(audio_exists)
         self.assertTrue(log_exists)
 
+    def test_cleanup_counts_are_case_insensitive_for_recording_suffixes(self) -> None:
+        result = {
+            "planned_recordings": 0,
+            "planned_logs": 0,
+            "deleted_recordings": 0,
+            "deleted_logs": 0,
+        }
+        cli._add_recording_artifact_counts(
+            [
+                "/tmp/session.WAV",
+                "/tmp/session.FLAC",
+                "/tmp/session.LOG",
+                "/tmp/session.txt",
+            ],
+            result,
+            "planned",
+        )
+        self.assertEqual(result["planned_recordings"], 2)
+        self.assertEqual(result["planned_logs"], 1)
+
+    def test_recording_artifact_scanners_match_suffixes_case_insensitively(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            (recordings / "upper.WAV").write_bytes(b"audio")
+            (recordings / "upper.FLAC").write_bytes(b"audio")
+            (recordings / "upper.LOG").write_bytes(b"log")
+            (recordings / "ignore.txt").write_bytes(b"text")
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
+                groups = cli.recording_groups()
+                files = cli.recording_artifact_files()
+        self.assertEqual({group["stem"] for group in groups}, {"upper"})
+        self.assertEqual({path.name for path in files}, {"upper.WAV", "upper.FLAC", "upper.LOG"})
+
     def test_recording_groups_ignores_non_regular_recording_entries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
@@ -3126,6 +3160,28 @@ class CliTest(unittest.TestCase):
     def test_remove_file_rejects_null_path(self) -> None:
         self.assertFalse(cli.remove_file("x\x00.wav", suffix=".wav"))
 
+    def test_remove_file_rejects_hardlink_recording(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            original = Path(tmp) / "recording.wav"
+            original.write_bytes(b"audio")
+            try:
+                hardlink = Path(tmp) / "recording-copy.wav"
+                os.link(original, hardlink)
+            except OSError:
+                return
+            self.assertFalse(cli.remove_file(str(hardlink), suffix=".wav"))
+            self.assertTrue(hardlink.exists())
+            self.assertTrue(original.exists())
+
+    def test_remove_file_rejects_symlink_recording(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            original = Path(tmp) / "recording.wav"
+            original.write_bytes(b"audio")
+            symlink = Path(tmp) / "recording-link.wav"
+            symlink.symlink_to(original)
+            self.assertFalse(cli.remove_file(str(symlink), suffix=".wav"))
+            self.assertTrue(symlink.is_symlink())
+
     def test_stop_with_invalid_pid_type_is_hardened(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "processing.wav"
@@ -3180,12 +3236,32 @@ class CliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "state.json"
             lock_path = cli._finalization_lock_path(state_file)
-            lock_path.write_text(f"{os.getpid()}\n", encoding="ascii")
-            os.utime(lock_path, (1, 1))
+            identity = cli._finalization_lock_identity_for_pid(os.getpid())
+            self.assertIsNotNone(identity)
+            identity_line = f"{identity}\n" if identity else ""
+            lock_path.write_text(f"{os.getpid()}\n{identity_line}", encoding="ascii")
 
             acquired = cli._acquire_finalization_lock(state_file)
 
         self.assertIsNone(acquired)
+
+    def test_finalization_lock_does_not_reclaim_live_foreign_owner_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            lock_path.write_text("12345\nowner-identity\n", encoding="ascii")
+
+            def fake_identity(pid: int) -> str | None:
+                return "owner-identity" if pid == 12345 else "self-identity"
+
+            with (
+                mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=True),
+                mock.patch("speed_of_cinnamon.cli._finalization_lock_identity_for_pid", side_effect=fake_identity),
+            ):
+                acquired = cli._acquire_finalization_lock(state_file)
+
+            self.assertIsNone(acquired)
+            self.assertEqual(lock_path.read_text(encoding="ascii"), "12345\nowner-identity\n")
 
     def test_finalization_lock_reclaims_dead_owner(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3196,7 +3272,7 @@ class CliTest(unittest.TestCase):
             acquired = cli._acquire_finalization_lock(state_file)
             try:
                 self.assertEqual(acquired, lock_path)
-                self.assertEqual(lock_path.read_text(encoding="ascii").strip(), str(os.getpid()))
+                self.assertEqual(lock_path.read_text(encoding="ascii").splitlines()[0], str(os.getpid()))
             finally:
                 cli._release_finalization_lock(acquired)
 
@@ -3204,7 +3280,7 @@ class CliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "state.json"
             lock_path = cli._finalization_lock_path(state_file)
-            lock_path.write_text("12345\n", encoding="ascii")
+            lock_path.write_text("12345\nforeign-identity\n", encoding="ascii")
 
             def replace_lock(_path: Path) -> int:
                 lock_path.unlink()
@@ -3219,6 +3295,34 @@ class CliTest(unittest.TestCase):
 
             self.assertEqual(lock_path.read_text(encoding="ascii").strip(), str(os.getpid()))
 
+    def test_finalization_lock_reclaims_stale_pid_only_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            lock_path.write_text(f"{os.getpid()}\n", encoding="ascii")
+            old = time.time() - cli.MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS - 1
+            os.utime(lock_path, (old, old))
+
+            acquired = cli._acquire_finalization_lock(state_file)
+            try:
+                self.assertEqual(acquired, lock_path)
+                self.assertEqual(lock_path.read_text(encoding="ascii").splitlines()[0], str(os.getpid()))
+            finally:
+                cli._release_finalization_lock(acquired)
+
+    def test_finalization_lock_reclaims_identity_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            lock_path.write_text(f"{os.getpid()}\nother-identity\n", encoding="ascii")
+
+            acquired = cli._acquire_finalization_lock(state_file)
+            try:
+                self.assertEqual(acquired, lock_path)
+                self.assertEqual(lock_path.read_text(encoding="ascii").splitlines()[0], str(os.getpid()))
+            finally:
+                cli._release_finalization_lock(acquired)
+
     def test_finalization_lock_reclaims_old_pidless_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "state.json"
@@ -3230,7 +3334,7 @@ class CliTest(unittest.TestCase):
             acquired = cli._acquire_finalization_lock(state_file)
             try:
                 self.assertEqual(acquired, lock_path)
-                self.assertEqual(lock_path.read_text(encoding="ascii").strip(), str(os.getpid()))
+                self.assertEqual(lock_path.read_text(encoding="ascii").splitlines()[0], str(os.getpid()))
             finally:
                 cli._release_finalization_lock(acquired)
 

@@ -288,6 +288,33 @@ def _clipboard_lock_pid_is_running(pid: int) -> bool:
     return True
 
 
+def _clipboard_lock_identity_for_pid(pid: int) -> str | None:
+    if pid <= 0:
+        return None
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    try:
+        close = raw.rindex(")")
+        rest = raw[close + 2 :].split()
+    except ValueError:
+        return None
+    if len(rest) < 20:
+        return None
+    boot_id = None
+    try:
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not boot_id:
+        return None
+    start_time = rest[19]
+    if not start_time:
+        return None
+    return f"{boot_id}:{start_time}"
+
+
 def _read_clipboard_dedup_lock_pid(path: Path) -> int | None:
     try:
         raw = read_text_without_following_symlinks(path, field_name="clipboard dedupe lock")
@@ -299,6 +326,18 @@ def _read_clipboard_dedup_lock_pid(path: Path) -> int | None:
     except ValueError:
         return None
     return pid if pid > 0 else None
+
+
+def _read_clipboard_dedup_lock_identity(path: Path) -> str | None:
+    try:
+        raw = read_text_without_following_symlinks(path, field_name="clipboard dedupe lock")
+    except (OSError, RuntimeError, UnicodeDecodeError):
+        return None
+    lines = raw.splitlines()
+    if len(lines) < 2:
+        return None
+    identity = lines[1].strip()
+    return identity or None
 
 
 def _acquire_clipboard_dedup_lock() -> Path | None:
@@ -322,8 +361,16 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
             if not stat.S_ISREG(existing.st_mode):
                 return None
             owner_pid = _read_clipboard_dedup_lock_pid(path)
+            owner_identity = _read_clipboard_dedup_lock_identity(path)
             if owner_pid is not None and _clipboard_lock_pid_is_running(owner_pid):
-                return None
+                if owner_identity is not None:
+                    owner_current_identity = _clipboard_lock_identity_for_pid(owner_pid)
+                    if owner_current_identity is not None and owner_identity == owner_current_identity:
+                        return None
+                    if owner_current_identity is None and now - existing.st_mtime <= MAX_DUPLICATE_LOCK_SECONDS:
+                        return None
+                elif now - existing.st_mtime <= MAX_DUPLICATE_LOCK_SECONDS:
+                    return None
             if owner_pid is None and now - existing.st_mtime <= MAX_DUPLICATE_LOCK_SECONDS:
                 return None
             try:
@@ -340,7 +387,11 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
         except OSError:
             return None
         try:
-            os.write(fd, f"{os.getpid()}\n".encode("ascii"))
+            identity = _clipboard_lock_identity_for_pid(os.getpid())
+            if identity is None:
+                os.write(fd, f"{os.getpid()}\n".encode("ascii"))
+            else:
+                os.write(fd, f"{os.getpid()}\n{identity}\n".encode("ascii"))
         except OSError:
             try:
                 os.close(fd)

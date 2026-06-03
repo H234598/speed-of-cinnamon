@@ -1345,6 +1345,67 @@ class TranscriberTest(unittest.TestCase):
         self.assertIn(b'name="service_tier"', requests[0].data)
         self.assertNotIn(b'name="service_tier"', requests[1].data)
 
+    def test_openai_compatible_api_uses_bytearray_body_for_fallback_request(self) -> None:
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self, size: int = -1) -> bytes:
+                if getattr(self, "_read", False):
+                    return b""
+                self._read = True
+                return b'{"text":"hello fallback"}'
+
+        requests: list[object] = []
+
+        def fake_open_http_request(request: object, *, timeout: int = 0, field_name: str = "") -> Response:
+            requests.append(request)
+            if len(requests) == 1:
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    400,
+                    "Bad Request",
+                    {},
+                    io.BytesIO(b'{"error":{"message":"Invalid service_tier argument","type":"invalid_request_error"}}'),
+                )
+            return Response()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            with mock.patch("speed_of_cinnamon.transcriber._open_http_request", side_effect=fake_open_http_request):
+                result = transcribe(
+                    audio,
+                    "de",
+                    text_path,
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-transcribe",
+                    openai_compatible_url="https://api.openai.com/v1",
+                    openai_compatible_api_key="secret",
+                )
+        self.assertEqual(result, "hello fallback")
+        self.assertEqual(len(requests), 2)
+        self.assertIsInstance(requests[0].data, bytearray)
+        self.assertIsInstance(requests[1].data, bytearray)
+        self.assertIn(b"audio", requests[0].data)
+        self.assertIn(b"audio", requests[1].data)
+
+    def test_multipart_form_data_returns_bytearray_without_final_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio_path = Path(tmp) / "sample.wav"
+            audio_path.write_bytes(b"audio")
+            body, _boundary = _multipart_form_data(
+                {"model": "whisper-1", "language": "en", "response_format": "json"},
+                "file",
+                audio_path,
+            )
+        self.assertIsInstance(body, bytearray)
+        self.assertIn(b"audio", body)
+
     def test_multipart_form_data_rejects_symlink_audio_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "target.wav"

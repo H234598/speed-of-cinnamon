@@ -970,13 +970,21 @@ def _sanitize_remote_error_detail(value: object) -> str:
     return text
 
 
-def _multipart_form_data(fields: dict[str, str], file_field: str, file_path: Path) -> tuple[bytes, str]:
+def _multipart_form_data(
+    fields: dict[str, str],
+    file_field: str,
+    file_path: Path,
+) -> tuple[bytearray, str]:
     boundary = "speed-of-cinnamon-" + uuid.uuid4().hex
     body = bytearray()
     file_name = file_path.name
     if "\r" in file_name or "\n" in file_name:
         raise TranscriptionError("audio file name contains invalid newline")
     file_name = file_name.replace("\\", "\\\\").replace('"', '\\"')
+    try:
+        file_bytes = _read_private_file_bytes(file_path, field_name="audio file for API upload")
+    except TranscriptionError as exc:
+        raise TranscriptionError(str(exc)) from exc
     for key, value in fields.items():
         if _contains_multipart_control_chars(key) or _contains_multipart_control_chars(value):
             raise TranscriptionError("multipart form field contains invalid control character")
@@ -991,13 +999,11 @@ def _multipart_form_data(fields: dict[str, str], file_field: str, file_path: Pat
             "Content-Type: application/octet-stream\r\n\r\n"
         ).encode("utf-8")
     )
-    try:
-        body.extend(_read_private_file_bytes(file_path, field_name="audio file for API upload"))
-    except TranscriptionError as exc:
-        raise TranscriptionError(str(exc)) from exc
+    body.extend(file_bytes)
+    del file_bytes
     body.extend(b"\r\n")
     body.extend(f"--{boundary}--\r\n".encode("utf-8"))
-    return bytes(body), boundary
+    return body, boundary
 
 
 def transcribe_with_openai_compatible_api(
