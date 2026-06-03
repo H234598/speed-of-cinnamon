@@ -1893,10 +1893,8 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             if not keep_recording_artifacts:
                 if audio_suffix and _recording_artifact_stat(audio_path) is not None:
                     error_delete_audio_path = audio_path
-                    error_update["audio_path"] = ""
                 if state.log_path:
                     error_delete_log_path = state.log_path
-                    error_update["log_path"] = ""
             if written_text_path is not None:
                 try:
                     _remove_transcript_file(written_text_path)
@@ -1907,9 +1905,11 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
                     error_update["transcript_path"] = ""
             store.update(**error_update)
             if error_delete_audio_path is not None:
-                remove_file(str(error_delete_audio_path), suffix=audio_suffix)
+                if remove_file(str(error_delete_audio_path), suffix=audio_suffix):
+                    store.update(audio_path="")
             if error_delete_log_path is not None:
-                remove_file(error_delete_log_path, suffix=".log")
+                if remove_file(error_delete_log_path, suffix=".log"):
+                    store.update(log_path="")
         raise RuntimeError(str(error_update.get("error", error_text)) if state_marked_finalizing else error_text)
     finally:
         _release_finalization_lock(lock_path)
