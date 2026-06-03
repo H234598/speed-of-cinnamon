@@ -591,6 +591,11 @@ class CiStaticTest(unittest.TestCase):
 
     def test_parallel_build_dist_does_not_corrupt_archive(self) -> None:
         build_dist = REPO_ROOT / "scripts" / "build-dist.sh"
+        build_dist_source = build_dist.read_text(encoding="utf-8")
+        self.assertIn('staging_checksum="$(mktemp "${dist_dir}/.${package}.tar.gz.sha256.XXXXXX")"', build_dist_source)
+        self.assertIn('printf \'%s  %s\\n\' "${checksum_value}" "${package}.tar.gz" > "${staging_checksum}"', build_dist_source)
+        self.assertIn('mv -T -- "${staging_checksum}" "${final_checksum}"', build_dist_source)
+        self.assertNotIn('> "${final_checksum}"', build_dist_source)
 
         def run_build() -> tuple[int, str]:
             proc = subprocess.run(

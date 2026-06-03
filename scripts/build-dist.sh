@@ -6,7 +6,7 @@ IFS=$'\n\t'
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_dir}"
 
-for tool in python3 tar sha256sum mktemp cp find rm git; do
+for tool in python3 tar sha256sum mktemp cp find rm git mv; do
   if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found.\n' "${tool}" >&2
     exit 1
@@ -59,7 +59,15 @@ if [[ -L "${work_root}" ]]; then
 fi
 mkdir -p "${work_root}"
 work_dir="$(mktemp -d "${work_root}/speed-of-cinnamon-build-dist-XXXXXX")"
+staging_tarball=""
+staging_checksum=""
 cleanup() {
+  if [[ -n "${staging_tarball}" ]]; then
+    rm -f -- "${staging_tarball}"
+  fi
+  if [[ -n "${staging_checksum}" ]]; then
+    rm -f -- "${staging_checksum}"
+  fi
   rm -rf -- "${work_dir}"
 }
 trap cleanup EXIT
@@ -129,13 +137,16 @@ EOF
 final_tarball="${dist_dir}/${package}.tar.gz"
 final_checksum="${final_tarball}.sha256"
 staging_tarball="$(mktemp "${dist_dir}/.${package}.tar.gz.XXXXXX")"
-trap 'rm -f "${staging_tarball}"' EXIT
 
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@0" -C "${work_dir}" -czf "${staging_tarball}" "${package}"
-mv "${staging_tarball}" "${final_tarball}"
+mv -T -- "${staging_tarball}" "${final_tarball}"
+staging_tarball=""
 checksum_value="$(sha256sum "${final_tarball}")"
 checksum_value="${checksum_value%% *}"
-printf '%s  %s\n' "${checksum_value}" "${package}.tar.gz" > "${final_checksum}"
+staging_checksum="$(mktemp "${dist_dir}/.${package}.tar.gz.sha256.XXXXXX")"
+printf '%s  %s\n' "${checksum_value}" "${package}.tar.gz" > "${staging_checksum}"
+mv -T -- "${staging_checksum}" "${final_checksum}"
+staging_checksum=""
 
 printf 'Built %s\n' "${final_tarball}" >&2
 printf '%s\n' "${final_tarball}"
