@@ -32,7 +32,9 @@ _BLACKLIST_SHOW_RE = re.compile(
 
 _EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 _IBAN_RE = re.compile(r"\b[A-Za-z]{2}\d{2}(?:[ -]?[A-Z0-9]){11,30}\b", re.IGNORECASE)
-_PHONE_RE = re.compile(r"(?:(?<!\d)\+?\d[\d\s().-]{7,20}\d(?!\d))")
+_PHONE_RE = re.compile(
+    r"(?<!\d)(?:\+\d[\d\s().-]{7,20}\d|(?:\(?\d{2,5}\)?[\s.-]){1,3}\d{3,}|\d{10,15})(?!\d)"
+)
 _TOKEN_RE = re.compile(
     r"(?i)\b(?:token|api[_-]?key|api\s+key|secret|apikey|bearer)\b\s*(?::|=)\s*[^,;\s]+"
 )
@@ -51,9 +53,9 @@ _URL_CRED_RE = re.compile(r"[a-z][a-z0-9+.-]*://[^\s/@:]+:[^\s/@]+@")
 _CREDIT_CARD_RE = re.compile(r"\b(?:\d[ -]*?){13,19}\b")
 _LABELED_NAME_RE = re.compile(
     r"(?i)\b(?:name|voller\s+name|full\s+name)\b\s*[:=]\s*"
-    r"[A-ZÄÖÜ][A-ZÄÖÜa-zäöüß-]+"
+    r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß-]+"
     r"(?:\s+(?!(?:adresse|anschrift|address|kundennummer|kundennr|kunden-nr|ssn|tax\s+id)\b)"
-    r"[A-ZÄÖÜ][A-ZÄÖÜa-zäöüß-]+){0,3}"
+    r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß-]+){0,3}"
 )
 _NAME_RE = re.compile(
     r"(?i)\b(?:mein\s+name\s+ist|ich\s+hei[ßss]e|name\s+is|my\s+name\s+is)\s+"

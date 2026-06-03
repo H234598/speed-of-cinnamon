@@ -127,6 +127,18 @@ class SecurityParserTest(unittest.TestCase):
         self.assertEqual(sanitized, "Der token ist invalid und fehlt.")
         self.assertEqual(count, 0)
 
+    def test_apply_security_mode_does_not_mask_iso_dates_as_phone_numbers(self) -> None:
+        sanitized, count = apply_security_mode("Release am 2026-06-03 bleibt sichtbar.", [])
+
+        self.assertEqual(sanitized, "Release am 2026-06-03 bleibt sichtbar.")
+        self.assertEqual(count, 0)
+
+    def test_apply_security_mode_masks_lowercase_labeled_names(self) -> None:
+        sanitized, count = apply_security_mode("name: max mustermann", [])
+
+        self.assertEqual(sanitized, "[redacted name]")
+        self.assertEqual(count, 1)
+
     def test_apply_security_mode_masks_blacklist_items_case_insensitive(self) -> None:
         text = "Das GeHeIm hier steht. Und noch GEHEIM."
         sanitized, count = apply_security_mode(text, ["geheim"])

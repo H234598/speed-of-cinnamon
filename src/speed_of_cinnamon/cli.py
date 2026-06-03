@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import heapq
 import io
 import json
@@ -1284,9 +1285,10 @@ def _inflight_recording_artifact_paths(audio_path: Path) -> set[Path]:
     if audio_path.suffix.lower() not in {".wav", ".flac"}:
         return set()
     artifact_paths: set[Path] = set()
+    escaped_stem = glob.escape(audio_path.stem)
     for marker in (".trimmed-", ".encoded-"):
         for suffix in (".wav", ".flac"):
-            for path in audio_path.parent.glob(f"{audio_path.stem}{marker}*{suffix}"):
+            for path in audio_path.parent.glob(f"{escaped_stem}{marker}*{suffix}"):
                 artifact_paths.add(path)
     return artifact_paths
 
@@ -1602,6 +1604,7 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
         input_device=args.input_device,
     )
     store.write(state)
+    _enforce_recording_artifact_cap(state)
     return {
         "status": "recording",
         "message": "recording started",

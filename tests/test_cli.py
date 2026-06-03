@@ -2378,6 +2378,20 @@ class CliTest(unittest.TestCase):
         self.assertTrue(active_encoded_exists)
         self.assertTrue(active_transcript_exists)
 
+    def test_inflight_recording_artifact_paths_escape_glob_metacharacters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp)
+            active_audio = recordings / "active[abc].wav"
+            active_trimmed = recordings / "active[abc].trimmed-final.flac"
+            unrelated_trimmed = recordings / "activea.trimmed-final.flac"
+            active_audio.write_bytes(b"audio")
+            active_trimmed.write_bytes(b"trimmed")
+            unrelated_trimmed.write_bytes(b"unrelated")
+
+            paths = cli._inflight_recording_artifact_paths(active_audio)
+
+        self.assertEqual(paths, {active_trimmed})
+
     def test_cleanup_deletes_temporary_recording_artifacts_without_live_finalization_signal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
@@ -4558,6 +4572,35 @@ class CliTest(unittest.TestCase):
             mode = audio_path.stat().st_mode & 0o777
         self.assertEqual(code, 0)
         self.assertEqual(mode, 0o600)
+
+    def test_start_enforces_recording_artifact_cap_after_successful_start(self) -> None:
+        proc = mock.Mock()
+        proc.pid = 23456
+        proc.poll.return_value = None
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            for index in range(cli.MAX_TEMP_RECORDING_FILES + 3):
+                artifact = recordings / f"old-{index:02d}.wav"
+                artifact.write_bytes(b"old")
+                os.utime(artifact, (index, index))
+            state_file = Path(tmp) / "state.json"
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.choose_recorder", return_value=RecorderCommand("test-recorder", [])),
+                mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=proc),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["start", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            remaining = list(recordings.glob("*.wav")) + list(recordings.glob("*.flac")) + list(recordings.glob("*.log"))
+            audio_exists = Path(payload["audio_path"]).exists()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "recording")
+        self.assertLessEqual(len(remaining), cli.MAX_TEMP_RECORDING_FILES)
+        self.assertTrue(audio_exists)
 
     def test_start_auto_falls_back_when_first_recorder_exits_immediately(self) -> None:
         failed_proc = mock.Mock()

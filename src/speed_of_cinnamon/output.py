@@ -896,8 +896,11 @@ def paste_from_clipboard() -> None:
     xdotool_error: OutputError | None = None
     xdotool = _which("xdotool")
     if xdotool:
-        paste_key = _active_window_paste_key(xdotool_available=True, xdotool_command=xdotool)
         try:
+            paste_key = _active_window_paste_key(xdotool_available=True, xdotool_command=xdotool)
+        except OutputError as exc:
+            xdotool_error = exc
+        else:
             _run_with_input(
                 ["xdotool", "key", "--clearmodifiers", paste_key],
                 "",
@@ -905,8 +908,6 @@ def paste_from_clipboard() -> None:
                 resolved_command=xdotool,
             )
             return
-        except OutputError as exc:
-            xdotool_error = exc
     wtype = _which("wtype")
     if wtype:
         if xdotool_error is not None:
