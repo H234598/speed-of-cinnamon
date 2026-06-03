@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import fcntl
 import json
 import os
 import tempfile
@@ -231,6 +232,39 @@ class AlarmTest(unittest.TestCase):
 
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["due"][0]["scheduled_at"], "2026-06-01T09:00")
+
+    def test_add_alarm_reads_store_after_lock_to_avoid_lost_update(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            injected = False
+
+            def fake_flock(fd: int, operation: int) -> None:
+                nonlocal injected
+                if operation == fcntl.LOCK_EX and not injected:
+                    injected = True
+                    save_alarm_store(
+                        {
+                            "last_checked_at": "",
+                            "alarms": [
+                                {
+                                    "id": "concurrent",
+                                    "name": "Concurrent",
+                                    "hour": 8,
+                                    "minute": 0,
+                                    "days": ["mon"],
+                                    "enabled": True,
+                                    "urgency": "normal",
+                                }
+                            ],
+                        },
+                        path,
+                    )
+
+            with mock.patch("speed_of_cinnamon.alarms.fcntl.flock", side_effect=fake_flock):
+                add_alarm("09:00", name="Morning", days="mon", path=path)
+            payload = load_alarm_store(path)
+
+        self.assertEqual([alarm["name"] for alarm in payload["alarms"]], ["Concurrent", "Morning"])
 
     def test_due_check_with_zero_catch_up_skips_past_alarm(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

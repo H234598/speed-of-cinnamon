@@ -3,14 +3,17 @@ from __future__ import annotations
 import json
 import os
 import re
+import fcntl
+from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .paths import alarms_file
 from .path_safety import (
     assert_no_symlink_ancestors,
     assert_safe_path_components,
+    ensure_directory_without_following_symlinks,
     read_text_without_following_symlinks,
     write_text_atomically_without_following_symlinks,
 )
@@ -50,6 +53,38 @@ def _assert_clean_path(path: Path, *, field_name: str) -> None:
         raise RuntimeError(f"{field_name} contains invalid null byte")
     assert_safe_path_components(path, field_name=field_name)
     assert_no_symlink_ancestors(path, field_name=field_name)
+
+
+def _alarm_store_path(path: Path | None = None) -> Path:
+    if path is not None and not isinstance(path, Path):
+        raise RuntimeError("alarm store path must be a path")
+    return path or alarms_file()
+
+
+@contextmanager
+def _locked_alarm_store(path: Path | None = None) -> Iterator[Path]:
+    store_path = _alarm_store_path(path)
+    _assert_clean_path(store_path, field_name="alarm store")
+    lock_path = store_path.with_name(f".{store_path.name}.lock")
+    _assert_clean_path(lock_path, field_name="alarm store lock")
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise RuntimeError("secure alarm store lock open is not supported on this platform")
+    parent_fd = ensure_directory_without_following_symlinks(lock_path.parent, field_name="alarm store lock directory")
+    try:
+        fd = os.open(lock_path.name, os.O_RDWR | os.O_CREAT | nofollow_flag, 0o600, dir_fd=parent_fd)
+    except OSError as exc:
+        os.close(parent_fd)
+        raise RuntimeError("failed to open alarm store lock file") from exc
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield store_path
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+            os.close(parent_fd)
 
 
 def _contains_escaped_null(value: str) -> bool:
@@ -374,34 +409,33 @@ def add_alarm(
         raise ValueError("urgency must be text")
     if not isinstance(enabled, bool):
         raise ValueError("enabled must be a boolean")
-    if path is not None and not isinstance(path, Path):
-        raise RuntimeError("alarm store path must be a path")
     hour, minute = parse_alarm_time(alarm_time)
     normalized_urgency = urgency.strip().lower()
     if normalized_urgency not in URGENCIES:
         raise ValueError(f"urgency must be one of: {', '.join(sorted(URGENCIES))}")
-    store = load_alarm_store(path)
-    alarm = normalize_alarm(
-        {
-            "id": next_alarm_id(store, hour, minute),
-            "name": name,
-            "hour": hour,
-            "minute": minute,
-            "days": parse_repeat_days(days),
-            "enabled": enabled,
-            "urgency": normalized_urgency,
-        }
-    )
-    store["alarms"].append(alarm)
-    store["alarms"] = sorted(
-        store["alarms"],
-        key=lambda item: (
-            _coerce_alarm_component(item.get("hour", 0), field_name="alarm hour"),
-            _coerce_alarm_component(item.get("minute", 0), field_name="alarm minute"),
-            str(item.get("id", "")),
-        ),
-    )
-    save_alarm_store(store, path)
+    with _locked_alarm_store(path) as store_path:
+        store = load_alarm_store(store_path)
+        alarm = normalize_alarm(
+            {
+                "id": next_alarm_id(store, hour, minute),
+                "name": name,
+                "hour": hour,
+                "minute": minute,
+                "days": parse_repeat_days(days),
+                "enabled": enabled,
+                "urgency": normalized_urgency,
+            }
+        )
+        store["alarms"].append(alarm)
+        store["alarms"] = sorted(
+            store["alarms"],
+            key=lambda item: (
+                _coerce_alarm_component(item.get("hour", 0), field_name="alarm hour"),
+                _coerce_alarm_component(item.get("minute", 0), field_name="alarm minute"),
+                str(item.get("id", "")),
+            ),
+        )
+        save_alarm_store(store, store_path)
     return alarm_public_payload(alarm)
 
 
@@ -411,11 +445,12 @@ def remove_alarm(alarm_id: str, path: Path | None = None) -> dict[str, Any]:
     normalized_alarm_id = _sanitize_text_field(alarm_id, field_name="alarm id", max_chars=MAX_ALARM_ID_CHARS)
     if not normalized_alarm_id:
         raise ValueError("alarm id is required")
-    store = load_alarm_store(path)
-    before = len(store["alarms"])
-    store["alarms"] = [alarm for alarm in store["alarms"] if str(alarm.get("id")) != normalized_alarm_id]
-    removed = len(store["alarms"]) != before
-    save_alarm_store(store, path)
+    with _locked_alarm_store(path) as store_path:
+        store = load_alarm_store(store_path)
+        before = len(store["alarms"])
+        store["alarms"] = [alarm for alarm in store["alarms"] if str(alarm.get("id")) != normalized_alarm_id]
+        removed = len(store["alarms"]) != before
+        save_alarm_store(store, store_path)
     return {
         "status": "done",
         "removed": removed,
@@ -429,21 +464,20 @@ def set_alarm_enabled(alarm_id: str, enabled: bool, path: Path | None = None) ->
         raise ValueError("alarm id must be text")
     if not isinstance(enabled, bool):
         raise ValueError("enabled must be a boolean")
-    if path is not None and not isinstance(path, Path):
-        raise RuntimeError("alarm store path must be a path")
     normalized_alarm_id = _sanitize_text_field(alarm_id, field_name="alarm id", max_chars=MAX_ALARM_ID_CHARS)
     if not normalized_alarm_id:
         raise ValueError("alarm id is required")
-    store = load_alarm_store(path)
-    changed = False
-    selected: dict[str, Any] | None = None
-    for alarm in store["alarms"]:
-        if str(alarm.get("id")) == normalized_alarm_id:
-            alarm["enabled"] = enabled
-            changed = True
-            selected = alarm
-            break
-    save_alarm_store(store, path)
+    with _locked_alarm_store(path) as store_path:
+        store = load_alarm_store(store_path)
+        changed = False
+        selected: dict[str, Any] | None = None
+        for alarm in store["alarms"]:
+            if str(alarm.get("id")) == normalized_alarm_id:
+                alarm["enabled"] = enabled
+                changed = True
+                selected = alarm
+                break
+        save_alarm_store(store, store_path)
     return {
         "status": "done",
         "changed": changed,
@@ -512,6 +546,23 @@ def check_due_alarms(
 ) -> dict[str, Any]:
     mark = _coerce_required_bool(mark, field_name="mark")
     current = (now or now_local()).replace(second=0, microsecond=0)
+    if mark:
+        with _locked_alarm_store(path) as store_path:
+            return _check_due_alarms_locked(
+                path=store_path,
+                current=current,
+                mark=mark,
+                catch_up_minutes=catch_up_minutes,
+            )
+    return _check_due_alarms_locked(path=path, current=current, mark=mark, catch_up_minutes=catch_up_minutes)
+
+
+def _check_due_alarms_locked(
+    path: Path | None,
+    current: datetime,
+    mark: bool,
+    catch_up_minutes: int,
+) -> dict[str, Any]:
     store = load_alarm_store(path)
     last_checked = parse_local_datetime(str(store.get("last_checked_at") or ""))
     if not isinstance(catch_up_minutes, int) or isinstance(catch_up_minutes, bool):
