@@ -10,6 +10,7 @@ extend-exclude = [
 
 [default.extend-words]
 H234598 = "H234598"
+adresse = "adresse"
 ba = "ba"
 ist = "ist"
 ser = "ser"
