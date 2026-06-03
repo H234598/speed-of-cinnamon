@@ -1974,13 +1974,25 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
     discarded_audio_path = state.audio_path
     audio_deleted = _remove_recording_artifact(discarded_audio_path)
     log_deleted = remove_file(state.log_path, suffix=".log")
-    if (discarded_audio_path and not audio_deleted) or (state.log_path and not log_deleted):
+    transcript_path = normalized_path(state.transcript_path)
+    transcript_deleted = True
+    if transcript_path is not None:
+        try:
+            transcript_deleted = _remove_transcript_file(transcript_path)
+        except RuntimeError:
+            transcript_deleted = False
+    if (
+        (discarded_audio_path and not audio_deleted)
+        or (state.log_path and not log_deleted)
+        or (state.transcript_path and not transcript_deleted)
+    ):
         error_message = "failed to discard recording artifacts"
         store.write(
             RecordingState(
                 status="error",
-                audio_path=state.audio_path,
-                log_path=state.log_path,
+                audio_path=state.audio_path if not audio_deleted else None,
+                log_path=state.log_path if not log_deleted else None,
+                transcript_path=state.transcript_path if not transcript_deleted else "",
                 stopped_at=now_iso(),
                 language=state.language,
                 recorder=state.recorder,
@@ -1995,6 +2007,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             "discarded_audio_path": discarded_audio_path,
             "audio_deleted": audio_deleted,
             "log_deleted": log_deleted,
+            "transcript_deleted": transcript_deleted,
         }
     store.write(
         RecordingState(
@@ -2013,6 +2026,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             "discarded_audio_path": discarded_audio_path,
             "audio_deleted": audio_deleted,
             "log_deleted": log_deleted,
+            "transcript_deleted": transcript_deleted,
         }
     return {"status": "idle", "message": "nothing to cancel"}
 

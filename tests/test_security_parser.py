@@ -132,7 +132,7 @@ class SecurityParserTest(unittest.TestCase):
         self.assertGreaterEqual(count, 3)
 
     def test_apply_security_mode_masks_long_spoken_secrets_and_names_without_tail_leaks(self) -> None:
-        long_secret = "a" * 180
+        long_secret = "a" * 1500
         long_name = (
             "Anna Berta Carla Dora Elsa Frieda Greta Helga Ida Julia Karin Laura Maria Nora "
             "Olga Paula Rosa Sabine Tina Ulla Vera"
@@ -147,6 +147,12 @@ class SecurityParserTest(unittest.TestCase):
         self.assertNotIn(long_name, sanitized)
         self.assertNotIn(long_secret, sanitized)
         self.assertGreaterEqual(count, 2)
+
+    def test_apply_security_mode_does_not_mask_common_negative_status_phrases(self) -> None:
+        sanitized, count = apply_security_mode("password is not set und token ist nicht gesetzt.", [])
+
+        self.assertEqual(sanitized, "password is not set und token ist nicht gesetzt.")
+        self.assertEqual(count, 0)
 
     def test_apply_security_mode_masks_bare_spoken_word_secret_values(self) -> None:
         sanitized, count = apply_security_mode("token ab cd und password blau gruen, aber token invalid bleibt.", [])

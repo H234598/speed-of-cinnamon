@@ -43,15 +43,15 @@ _SPOKEN_SENSITIVE_LABEL_PATTERN = (
     r"passcode|iban|name|adresse|anschrift|address|kundennummer|kundennr|kunden-nr|ssn|tax\s+id)"
 )
 _SPOKEN_SENSITIVE_VALUE_PATTERN = (
-    r"(?:\"[^\n\"]{1,1000}\"|'[^\n']{1,1000}'|"
-    rf"(?:(?!\s+(?:(?:und|and)\s+)?(?:meine|my\s+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)[^,;\n.?!]){{1,1000}})"
+    r"(?:\"[^\n\"]{1,10000}\"|'[^\n']{1,10000}'|"
+    rf"(?:(?!\s+(?:(?:und|and)\s+)?(?:meine|my\s+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)[^,;\n.?!]){{1,10000}})"
 )
 _SPOKEN_NAME_VALUE_PATTERN = (
-    rf"(?:(?!\s+(?:und|and)\b)(?!\s+(?:(?:und|and)\s+)?(?:meine|my\s+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)[^,;\n.?!]){{1,1000}}"
+    rf"(?:(?!\s+(?:und|and)\b)(?!\s+(?:(?:und|and)\s+)?(?:meine|my\s+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)[^,;\n.?!]){{1,10000}}"
 )
 _BARE_SENSITIVE_STATUS_WORD_PATTERN = (
     r"(?:ist|is|war|was|are|were|missing|invalid|required|too|contains?|fehlt|leer|ung[üu]ltig|"
-    r"muss|darf|soll|active|aktiv|gesetzt|needed|erforderlich|und|and)"
+    r"muss|darf|soll|active|aktiv|gesetzt|set|needed|erforderlich|not|nicht|kein|keine|keinen|und|and)"
 )
 _BARE_SENSITIVE_WORD_VALUE_PATTERN = (
     rf"(?!(?:{_BARE_SENSITIVE_STATUS_WORD_PATTERN})\b)"

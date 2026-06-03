@@ -4807,8 +4807,76 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["message"], "failed to discard recording artifacts")
         self.assertFalse(payload["audio_deleted"])
         self.assertFalse(payload["log_deleted"])
+        self.assertTrue(payload["transcript_deleted"])
         self.assertTrue(audio_exists)
         self.assertTrue(log_exists)
+
+    def test_cancel_removes_transcript_artifact_before_idle_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            transcripts = tmp_path / "speed-of-cinnamon" / "transcripts"
+            recordings.mkdir(parents=True)
+            transcripts.mkdir(parents=True)
+            audio = recordings / "recording.wav"
+            log = recordings / "recording.log"
+            transcript = transcripts / "recording.txt"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            transcript.write_text("secret", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="error", audio_path=str(audio), log_path=str(log), transcript_path=str(transcript)))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "idle")
+        self.assertTrue(payload["audio_deleted"])
+        self.assertTrue(payload["log_deleted"])
+        self.assertTrue(payload["transcript_deleted"])
+        self.assertFalse(transcript.exists())
+        self.assertEqual(final_state.transcript_path, "")
+
+    def test_cancel_error_state_only_keeps_failed_artifact_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            transcripts = tmp_path / "speed-of-cinnamon" / "transcripts"
+            recordings.mkdir(parents=True)
+            transcripts.mkdir(parents=True)
+            audio = recordings / "recording.wav"
+            log = recordings / "recording.log"
+            transcript = transcripts / "recording.txt"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            transcript.write_text("secret", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="error", audio_path=str(audio), log_path=str(log), transcript_path=str(transcript)))
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli._remove_recording_artifact", return_value=True),
+                mock.patch("speed_of_cinnamon.cli.remove_file", return_value=False),
+                mock.patch("speed_of_cinnamon.cli._remove_transcript_file", return_value=True),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "error")
+        self.assertTrue(payload["audio_deleted"])
+        self.assertFalse(payload["log_deleted"])
+        self.assertTrue(payload["transcript_deleted"])
+        self.assertIsNone(final_state.audio_path)
+        self.assertEqual(final_state.log_path, str(log))
+        self.assertEqual(final_state.transcript_path, "")
 
     def test_start_does_not_overwrite_expired_recording(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
