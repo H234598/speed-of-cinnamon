@@ -4747,6 +4747,29 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("sk-secret", logged_error)
         self.assertNotIn("token=abc123", logged_error)
 
+    @mock.patch("speed_of_cinnamon.cli.command_status", side_effect=RuntimeError("command failed: token abc123"))
+    @mock.patch("speed_of_cinnamon.cli.log_event")
+    def test_cli_run_redacts_bare_token_exception_error_message(
+        self, mocked_log_event: mock.Mock, mocked_command_status: mock.Mock
+    ) -> None:
+        stdout = io.StringIO()
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tempfile.gettempdir()}), redirect_stdout(stdout):
+            code = cli.run(["status", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("error", payload)
+        self.assertNotIn("token abc123", payload["error"])
+        self.assertNotIn("abc123", payload["error"])
+        error_log_calls = [
+            call
+            for call in mocked_log_event.call_args_list
+            if call.args and len(call.args) > 1 and call.args[1] == "command_exception"
+        ]
+        self.assertEqual(len(error_log_calls), 1)
+        logged_error = error_log_calls[0].kwargs["error_message"]
+        self.assertNotIn("token abc123", logged_error)
+        self.assertNotIn("abc123", logged_error)
+
     @mock.patch("speed_of_cinnamon.cli.transcribe", side_effect=RuntimeError("openai key sk-leak token=abc123"))
     def test_finalize_redacts_error_for_state_persistence(self, mocked_transcribe: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:

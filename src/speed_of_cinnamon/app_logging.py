@@ -37,6 +37,9 @@ _DAILY_LOG_RE = re.compile(r"^speed-of-cinnamon-(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\
 _DAILY_GZ_RE = re.compile(r"^speed-of-cinnamon-(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.log\.gz$")
 _MONTHLY_GZ_RE = re.compile(r"^speed-of-cinnamon-(\d{4}-\d{2})\.log\.gz$")
 _TOKEN_RE = re.compile(r"(?i)\b(bearer|token|api[_-]?key|secret|password)\b\s*[:=]\s*[^,\s;]+")
+_BARE_CREDENTIAL_RE = re.compile(
+    r"(?i)\b(token|api[_ -]?key|apikey|password|passwd|passphrase)\b\s+(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required)\b)[^,\s;]+"
+)
 _BEARER_RE = re.compile(r"(?i)\bbearer\s+[^,\s;]+")
 _OPENAI_KEY_RE = re.compile(r"\b(?:sk|sess)-[A-Za-z0-9_\-]{12,}\b")
 _SHORT_API_KEY_RE = re.compile(r"\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b")
@@ -46,7 +49,7 @@ _ERROR_DETAIL_RE = re.compile(
 )
 _ERROR_SECRET_WORD_RE = re.compile(r"(?i)\bsecret\b")
 _SANITIZE_HINT_RE = re.compile(
-    r"(?i)(?:\b(?:bearer|token|api[_-]?key|secret|password)\b\s*[:=]\s*[^,\s;]+|\bbearer\s+[^,\s;]+|\b(?:sk|sess)-[A-Za-z0-9_\-]{12,}\b|[a-z][a-z0-9+.-]*://[^/@\s:]+:[^/@\s]+@)"
+    r"(?i)(?:\b(?:bearer|token|api[_-]?key|secret|password)\b\s*[:=]\s*[^,\s;]+|\b(?:token|api[_ -]?key|apikey|password|passwd|passphrase)\b\s+(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required)\b)[^,\s;]+|\bbearer\s+[^,\s;]+|\b(?:sk|sess)-[A-Za-z0-9_\-]{12,}\b|[a-z][a-z0-9+.-]*://[^/@\s:]+:[^/@\s]+@)"
 )
 _SANITIZE_ESCAPE_TABLE = {
     ord("\r"): "\\r",
@@ -238,6 +241,7 @@ def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
         return value
     text = value.translate(_SANITIZE_ESCAPE_TABLE)
     text = _TOKEN_RE.sub(lambda match: f"{match.group(1)}=[redacted]", text)
+    text = _BARE_CREDENTIAL_RE.sub(lambda match: f"{match.group(1)}=[redacted]", text)
     text = _BEARER_RE.sub("Bearer [redacted]", text)
     text = _OPENAI_KEY_RE.sub("[redacted]", text)
     text = _URL_CREDENTIAL_RE.sub(r"\1[redacted]@", text)
@@ -252,6 +256,8 @@ def sanitize_error_message(error: object, *, max_chars: int = MAX_LOG_MESSAGE_CH
     if isinstance(error, bool) or not isinstance(error, str):
         return "[invalid]"
     if _ERROR_DETAIL_RE.search(error):
+        return "[redacted error details]"
+    if _BARE_CREDENTIAL_RE.search(error):
         return "[redacted error details]"
     sanitized = sanitize_text(error, max_chars=max(len(error), max_chars))
     sanitized = _SHORT_API_KEY_RE.sub("[redacted]", sanitized)

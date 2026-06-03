@@ -39,6 +39,14 @@ class AppLoggingTest(unittest.TestCase):
             "[redacted error details]",
         )
 
+    def test_sanitize_error_message_redacts_bare_credentials(self) -> None:
+        for message in ("token abc123", "password hunter2", "api key abc123"):
+            with self.subTest(message=message):
+                self.assertEqual(
+                    app_logging.sanitize_error_message(message, max_chars=120),
+                    "[redacted error details]",
+                )
+
     def test_log_event_redacts_sensitive_fields_and_tokens(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
@@ -51,6 +59,7 @@ class AppLoggingTest(unittest.TestCase):
                 command_template="printf secret",
                 transcript="do not log me",
                 error_message="Bearer sk-secret token=abc123",
+                details="token bare123",
             )
 
             log_files = list(log_dir.glob("speed-of-cinnamon-*.log"))
@@ -63,6 +72,7 @@ class AppLoggingTest(unittest.TestCase):
             self.assertNotIn("doctor", json.dumps(payload))
             self.assertNotIn("sk-secret", json.dumps(payload))
             self.assertNotIn("abc123", json.dumps(payload))
+            self.assertNotIn("bare123", json.dumps(payload))
 
     def test_info_is_not_logged_when_default_error_level_is_used(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
