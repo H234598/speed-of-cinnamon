@@ -1094,9 +1094,8 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                 os.close(target_parent_fd)
             downloaded_total += downloaded
             try:
-                _assert_model_path_for_atomic_replace(target, root, field_name="model file path")
-                os.replace(tmp_path, target)
-            except OSError as exc:
+                _replace_model_sibling_path(tmp_path, target, root, field_name="model file path")
+            except (OSError, ModelError) as exc:
                 raise ModelError(f"failed to persist downloaded model file: {target}") from exc
         if downloaded_total > size_limit:
             raise ModelError(f"downloaded model too large for {model.name}: {downloaded_total} > {size_limit}")
@@ -1114,18 +1113,17 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
             if backup_dir.exists() or backup_dir.is_symlink():
                 raise ModelError(f"model backup path already exists: {backup_dir}")
             try:
-                os.replace(path, backup_dir)
-            except OSError as exc:
+                _replace_model_sibling_path(path, backup_dir, root, field_name="model backup directory")
+            except (OSError, ModelError) as exc:
                 raise ModelError(f"failed to prepare existing model directory backup: {path}") from exc
             _assert_safe_model_directory(path)
         try:
-            _assert_model_path_for_atomic_replace(path, root, field_name="model path")
-            os.replace(tmp_dir, path)
-        except OSError as exc:
+            _replace_model_sibling_path(tmp_dir, path, root, field_name="model path")
+        except (OSError, ModelError) as exc:
             if backup_dir is not None:
                 try:
-                    os.replace(backup_dir, path)
-                except OSError as restore_exc:
+                    _replace_model_sibling_path(backup_dir, path, root, field_name="model path")
+                except (OSError, ModelError) as restore_exc:
                     if path.exists():
                         try:
                             _remove_model_backup_path(path)
@@ -1153,7 +1151,8 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
 
 
 def _restore_model_file_backup(path: Path, backup_path: Path) -> None:
-    os.replace(backup_path, path)
+    root = path.parent
+    _replace_model_sibling_path(backup_path, path, root, field_name="model backup path")
 
 
 def _remove_model_backup_path(backup_path: Path) -> None:
@@ -1220,9 +1219,9 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
                 _assert_path_within_model_root(backup_path, root)
                 if backup_path.exists() or backup_path.is_symlink():
                     raise ModelError(f"model backup path already exists: {backup_path}")
-                os.replace(path, backup_path)
+                _replace_model_sibling_path(path, backup_path, root, field_name="model backup path")
             _assert_model_path_for_atomic_replace(path, root, field_name="model path")
-            os.replace(tmp_path, path)
+            _replace_model_sibling_path(tmp_path, path, root, field_name="model path")
             replaced_path = True
             _clear_model_checksum_cache(tmp_path)
             _set_model_checksum_cache(path, checksum, tmp_stat)
@@ -1240,7 +1239,7 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
             if backup_path is not None:
                 try:
                     _restore_model_file_backup(path, backup_path)
-                except OSError as restore_exc:
+                except (OSError, ModelError) as restore_exc:
                     if path.exists():
                         try:
                             _remove_model_backup_path(path)
@@ -1257,8 +1256,8 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
                     raise ModelError(f"failed to remove partially installed model file after download failure: {path}") from cleanup_exc
         elif backup_path is not None and not path.exists():
             try:
-                os.replace(backup_path, path)
-            except OSError as restore_exc:
+                _restore_model_file_backup(path, backup_path)
+            except (OSError, ModelError) as restore_exc:
                 raise ModelError(f"failed to restore existing model file after download failure: {path}") from restore_exc
             if previous_cache_entry_exists and previous_cache_entry is not None:
                 _model_checksum_cache[str(path)] = dict(previous_cache_entry)

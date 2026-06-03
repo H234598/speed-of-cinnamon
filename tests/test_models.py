@@ -1205,16 +1205,15 @@ class ModelsTest(unittest.TestCase):
             path.mkdir(parents=True)
             (path / "old.txt").write_text("old model", encoding="utf-8")
 
-            def replace_or_fail(src: object, dst: object) -> None:
+            def replace_or_fail(src: object, dst: object, *args: object, **kwargs: object) -> None:
                 source = Path(src)
                 if (
-                    source.is_dir()
-                    and Path(dst) == path
+                    Path(dst).name == path.name
                     and source.name.startswith(f".{spec.filename}.")
                     and not source.name.endswith(".backup")
                 ):
                     raise OSError("disk full")
-                real_replace(src, dst)
+                real_replace(src, dst, *args, **kwargs)
 
             with mock.patch("speed_of_cinnamon.models.os.replace", side_effect=replace_or_fail):
                 with self.assertRaisesRegex(models.ModelError, "failed to persist downloaded model directory"):
@@ -1835,6 +1834,22 @@ class ModelsTest(unittest.TestCase):
                     models._restore_model_file_backup(path, backup)
             self.assertEqual(path.read_bytes(), old_data)
             self.assertEqual(backup.read_bytes(), new_data)
+
+    def test_replace_model_sibling_path_rejects_symlink_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            real = root / "real"
+            real.mkdir()
+            link = root / "link"
+            link.symlink_to(real, target_is_directory=True)
+            source = link / "source.bin"
+            target = link / "target.bin"
+            (real / "source.bin").write_bytes(b"model")
+
+            with self.assertRaisesRegex(models.ModelError, "must not pass through a symlink"):
+                models._replace_model_sibling_path(source, target, root, field_name="model path")
+
+            self.assertFalse((real / "target.bin").exists())
 
     def test_model_status_rejects_non_boolean_verify(self) -> None:
         with self.assertRaisesRegex(models.ModelError, "verify must be a boolean"):
