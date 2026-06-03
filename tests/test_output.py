@@ -1044,7 +1044,8 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output._write_clipboard_dedup_state", return_value=False),
             mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
         ):
-            self.assertFalse(insert_text("secure text", "clipboard"))
+            with self.assertRaisesRegex(OutputError, "failed to commit clipboard insertion state"):
+                insert_text("secure text", "clipboard")
 
         mocked_clipboard.assert_called_once_with("secure text")
 
@@ -1077,7 +1078,8 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output.time.time", return_value=21.0),
             mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
         ):
-            self.assertFalse(insert_text("secure text", "clipboard"))
+            with self.assertRaisesRegex(OutputError, "failed to commit clipboard insertion state"):
+                insert_text("secure text", "clipboard")
             self.assertFalse(insert_text("secure text", "clipboard"))
 
         mocked_clipboard.assert_called_once_with("secure text")
