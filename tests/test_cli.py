@@ -125,6 +125,33 @@ class CliTest(unittest.TestCase):
             self.assertTrue(audio_path.exists())
             self.assertFalse(log_path.exists())
 
+    def test_allocate_recording_artifacts_removes_partial_audio_after_prepare_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            root.mkdir(parents=True)
+            attempts = 0
+
+            def fake_prepare(path: Path, *, field_name: str, exclusive: bool = True) -> None:
+                nonlocal attempts
+                attempts += 1
+                path.write_bytes(b"partial")
+                if attempts == 1:
+                    raise RuntimeError("prepare failed")
+
+            with (
+                mock.patch("speed_of_cinnamon.cli.recordings_dir", return_value=root),
+                mock.patch("speed_of_cinnamon.cli.timestamp", side_effect=[
+                    "20260101-000000-000000",
+                    "20260101-000000-000001",
+                ]),
+                mock.patch("speed_of_cinnamon.cli._prepare_private_file", side_effect=fake_prepare),
+            ):
+                audio_path, log_path = cli._allocate_recording_artifacts()
+
+            self.assertFalse((root / "20260101-000000-000000.wav").exists())
+            self.assertEqual(audio_path.name, "20260101-000000-000001.wav")
+            self.assertEqual(log_path.name, "20260101-000000-000001.log")
+
     def test_write_json_atomic_rejects_symlink_parent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

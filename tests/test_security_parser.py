@@ -88,7 +88,7 @@ class SecurityParserTest(unittest.TestCase):
         text = "mein name ist Jean-Luc und IBAN DE44 5001 0517 5407 3249 31"
         sanitized, count = apply_security_mode(text, [])
 
-        self.assertIn("m[redacted name]", sanitized)
+        self.assertIn("[redacted name]", sanitized)
         self.assertIn("[redacted iban]", sanitized)
         self.assertNotIn("Jean-Luc", sanitized)
         self.assertNotIn("DE44 5001", sanitized)
@@ -113,7 +113,7 @@ class SecurityParserTest(unittest.TestCase):
 
     def test_apply_security_mode_masks_unaccented_german_spoken_labels(self) -> None:
         sanitized, count = apply_security_mode(
-            "ich heisst Max Mustermann und token heisst abc123 und passwort heisse blau",
+            "ich bin Max Mustermann und token heisst abc123 und passwort heisse blau",
             [],
         )
 

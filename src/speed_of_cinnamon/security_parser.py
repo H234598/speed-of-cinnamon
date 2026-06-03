@@ -99,7 +99,7 @@ _LABELED_NAME_RE = re.compile(
     r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß-]+){0,3}"
 )
 _NAME_RE = re.compile(
-    r"(?i)\b(?:mein\s+name\s+ist|ich\s+(?:heiße|heisse|heise|heisst)|name\s+is|my\s+name\s+is)\s+"
+    r"(?i)\b(?:mein\s+name\s+ist|ich\s+(?:heiße|heisse|heise|heisst|bin)|name\s+is|my\s+name\s+is)\s+"
     r"([A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]*(?:\s+[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]*){0,3})"
 )
 _BANK_DATA_RE = re.compile(
@@ -359,7 +359,7 @@ def _apply_name_redaction(text: str) -> tuple[str, int]:
     def _mask(match: re.Match[str]) -> str:
         nonlocal count
         count += 1
-        return match.group(0)[:1] + "[redacted name]"
+        return "[redacted name]"
 
     return _NAME_RE.sub(_mask, text), count
 

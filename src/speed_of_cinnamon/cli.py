@@ -968,11 +968,32 @@ def _allocate_recording_artifacts() -> tuple[Path, Path]:
         try:
             _prepare_private_file(audio_path, field_name="recording audio file")
         except RuntimeError:
+            if _recording_artifact_stat(audio_path) is not None:
+                remove_file(str(audio_path), suffix=".wav")
+            if _recording_artifact_stat(log_path) is not None:
+                remove_file(str(log_path), suffix=".log")
             if _recording_artifact_stat(audio_path) is not None or _recording_artifact_stat(log_path) is not None:
                 continue
             raise
         return audio_path, log_path
     raise RuntimeError("failed to allocate collision-free recording artifacts")
+
+
+def _remove_transcript_file(path: Path) -> bool:
+    if not isinstance(path, Path) or path.suffix.lower() != ".txt":
+        return False
+    try:
+        path.relative_to(transcript_dir())
+    except ValueError:
+        return False
+    try:
+        assert_no_symlink_ancestors(path, field_name="transcript file")
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False
+    return True
 
 
 def _require_json_path(path_value: str, *, field_name: str, default: Path | None = None) -> Path:
@@ -1870,7 +1891,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             if written_text_path is not None:
                 error_update["transcript"] = ""
                 error_update["transcript_path"] = ""
-                remove_file(str(written_text_path), suffix=".txt")
+                _remove_transcript_file(written_text_path)
             store.update(**error_update)
             if error_delete_audio_path is not None:
                 remove_file(str(error_delete_audio_path), suffix=audio_suffix)
