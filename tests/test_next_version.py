@@ -178,10 +178,10 @@ class NextVersionTest(unittest.TestCase):
             next_version.parse_version(None)  # type: ignore[arg-type]
 
     def test_from_tag_without_prefix_is_accepted(self) -> None:
-        self.assertEqual(run_version("--from-tag", "0.1.20"), "0.1.20")
+        self.assertEqual(run_version("--from-tag", "0.1.20"), run_version("--from-tag", "v0.1.20"))
 
     def test_from_tag_with_whitespace_is_accepted(self) -> None:
-        self.assertEqual(run_version("--from-tag", "  0.1.20  "), "0.1.20")
+        self.assertEqual(run_version("--from-tag", "  0.1.20  "), run_version("--from-tag", "v0.1.20"))
 
     def test_from_tag_with_only_whitespace_is_rejected(self) -> None:
         code, stderr = run_version_fail_stdout_stderr("--from-tag", "   ")
@@ -585,6 +585,45 @@ class NextVersionTest(unittest.TestCase):
             self.assertFalse(ensure_tag_exists.called)
             commits_since_tag.assert_called_once_with("v9.9.9")
             add_patches.assert_called_once_with((9, 9, 9), 2)
+
+    def test_main_uses_unprefixed_from_tag_when_tag_exists(self) -> None:
+        with (
+            mock.patch.object(next_version, "parse_args") as parse_args,
+            mock.patch.object(next_version, "tag_exists", return_value=True),
+            mock.patch.object(next_version, "commits_since_tag", return_value=7) as commits_since_tag,
+            mock.patch.object(next_version, "add_patches", return_value=(9, 9, 10)) as add_patches,
+            mock.patch.object(next_version, "print"),
+        ):
+            parse_args.return_value = mock.Mock(from_tag="9.9.9", add_commits=None, feature=False, breaking=False, base=None)
+            next_version.main()
+            commits_since_tag.assert_called_once_with("v9.9.9")
+            add_patches.assert_called_once_with((9, 9, 9), 7)
+
+    def test_main_unprefixed_from_tag_falls_back_for_current_missing_tag(self) -> None:
+        with (
+            mock.patch.object(next_version, "parse_args") as parse_args,
+            mock.patch.object(next_version, "read_current_version", return_value=(9, 9, 9)),
+            mock.patch.object(next_version, "tag_exists", return_value=False),
+            mock.patch.object(next_version, "commits_since_tag") as commits_since_tag,
+            mock.patch.object(next_version, "add_patches", return_value=(9, 9, 9)) as add_patches,
+            mock.patch.object(next_version, "print"),
+        ):
+            parse_args.return_value = mock.Mock(from_tag="9.9.9", add_commits=None, feature=False, breaking=False, base=None)
+            next_version.main()
+            self.assertFalse(commits_since_tag.called)
+            add_patches.assert_called_once_with((9, 9, 9), 0)
+
+    def test_main_prefixed_from_tag_missing_current_tag_errors(self) -> None:
+        with (
+            mock.patch.object(next_version, "parse_args") as parse_args,
+            mock.patch.object(next_version, "read_current_version", return_value=(9, 9, 9)),
+            mock.patch.object(next_version, "tag_exists", return_value=False),
+            mock.patch.object(next_version, "commits_since_tag") as commits_since_tag,
+        ):
+            parse_args.return_value = mock.Mock(from_tag="v9.9.9", add_commits=None, feature=False, breaking=False, base=None)
+            with self.assertRaises(next_version.UserInputError):
+                next_version.main()
+            self.assertFalse(commits_since_tag.called)
 
     def test_main_uses_add_commits_when_provided(self) -> None:
         with mock.patch.object(next_version, "parse_args") as parse_args, \

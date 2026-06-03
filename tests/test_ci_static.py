@@ -419,6 +419,8 @@ class CiStaticTest(unittest.TestCase):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
         self.assertIn('tags:\n      - "v*.*.*"', workflow)
+        self.assertIn("ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}", workflow)
+        self.assertIn("format('refs/tags/{0}', inputs.tag)", workflow)
         self.assertNotIn("if [[ ! \"${tag}\" =~ ^v[0-9]+(\\.[0-9]+){0,2}([0-9A-Za-z.+-]*)?$ ]]", workflow)
         self.assertIn('if [[ ! "${tag}" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then', workflow)
         self.assertIn("project_version=\"$(python3 -c 'import pathlib, tomllib;", workflow)
