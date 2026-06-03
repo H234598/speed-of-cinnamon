@@ -203,6 +203,18 @@ class RecorderTest(unittest.TestCase):
                     with self.assertRaisesRegex(RecorderError, "bad audio"):
                         trim_recording_silence(audio)
 
+    def test_trim_recording_silence_redacts_ffmpeg_path_error_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "secret-sample.wav"
+            audio.write_bytes(b"audio")
+            failed = subprocess.CompletedProcess(["ffmpeg"], 1, stdout=b"", stderr=f"failed {audio} token secret".encode())
+            with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
+                with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=failed):
+                    with self.assertRaisesRegex(RecorderError, "\\[redacted ffmpeg error\\]") as raised:
+                        trim_recording_silence(audio)
+            self.assertNotIn(str(audio), str(raised.exception))
+            self.assertNotIn("secret", str(raised.exception))
+
     def test_reencode_recording_to_flac_reports_ffmpeg_error_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
@@ -212,6 +224,18 @@ class RecorderTest(unittest.TestCase):
                 with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=failed):
                     with self.assertRaisesRegex(RecorderError, "encoder failed"):
                         reencode_recording_to_flac(audio)
+
+    def test_reencode_recording_to_flac_redacts_ffmpeg_path_error_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "secret-sample.wav"
+            audio.write_bytes(b"audio")
+            failed = subprocess.CompletedProcess(["ffmpeg"], 1, stdout=b"", stderr=f"failed {audio} token secret".encode())
+            with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
+                with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=failed):
+                    with self.assertRaisesRegex(RecorderError, "\\[redacted ffmpeg error\\]") as raised:
+                        reencode_recording_to_flac(audio)
+            self.assertNotIn(str(audio), str(raised.exception))
+            self.assertNotIn("secret", str(raised.exception))
 
     def test_detect_silent_recording_fails_open_when_ffmpeg_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

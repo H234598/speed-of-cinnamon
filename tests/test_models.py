@@ -1128,6 +1128,36 @@ class ModelsTest(unittest.TestCase):
             self.assertEqual(path.read_bytes(), old_data)
             self.assertEqual(models._model_checksum_cache[str(path)]["checksum"], old_checksum)
 
+    def test_download_model_restores_existing_file_when_cache_update_fails_after_replace(self) -> None:
+        old_data = b"old model"
+        new_data = b"new model"
+        old_checksum = hashlib.sha1(old_data).hexdigest()
+        spec = models.ModelSpec(
+            name="cache-update-fails-after-replace",
+            filename="ggml-cache-update-fails-after-replace.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(new_data).hexdigest(),
+            description="cache update failure after replace",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", True),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(new_data)),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            path.write_bytes(old_data)
+            models._set_model_checksum_cache(path, old_checksum, path.stat())
+
+            with mock.patch("speed_of_cinnamon.models._set_model_checksum_cache", side_effect=models.ModelError("cache fail")):
+                with self.assertRaisesRegex(models.ModelError, "cache fail"):
+                    models.download_model("cache-update-fails-after-replace", force=True)
+
+            self.assertEqual(path.read_bytes(), old_data)
+
     def test_model_status_rejects_non_boolean_verify(self) -> None:
         with self.assertRaisesRegex(models.ModelError, "verify must be a boolean"):
             models.model_status(models.CATALOG[0], verify="true")  # type: ignore[arg-type]

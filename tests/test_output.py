@@ -590,6 +590,7 @@ class OutputTest(unittest.TestCase):
                 side_effect=[OutputError("paste failed"), None],
             ) as mocked_paste,
             mock.patch("speed_of_cinnamon.output._read_text_clipboard", return_value=None),
+            mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(False, "")),
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
             mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=4.0),
         ):
@@ -604,7 +605,7 @@ class OutputTest(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
-            mock.patch("speed_of_cinnamon.output._read_text_clipboard", return_value="previous text"),
+            mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "previous text")),
             mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
             mock.patch(
@@ -616,6 +617,34 @@ class OutputTest(unittest.TestCase):
                 insert_text("new text", "clipboard-paste")
 
         self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["new text", "previous text"])
+
+    def test_insert_text_restores_empty_text_clipboard_when_paste_fails(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "")),
+            mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch(
+                "speed_of_cinnamon.output.paste_from_clipboard",
+                side_effect=OutputError("paste failed"),
+            ),
+        ):
+            with self.assertRaisesRegex(OutputError, "paste failed"):
+                insert_text("new text", "clipboard-paste")
+
+        self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["new text", ""])
+
+    def test_insert_text_clipboard_rolls_back_duplicate_state_when_set_clipboard_fails(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output.set_clipboard", side_effect=[OutputError("copy failed"), None]),
+            mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=10.0),
+        ):
+            with self.assertRaisesRegex(OutputError, "copy failed"):
+                insert_text("copy text", "clipboard")
+            self.assertTrue(insert_text("copy text", "clipboard"))
 
     def test_insert_text_refuses_to_overwrite_non_text_clipboard_when_paste_would_need_rollback(self) -> None:
         with (

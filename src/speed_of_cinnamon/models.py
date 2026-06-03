@@ -946,6 +946,7 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
     size_limit = _download_size_limit(model)
     tmp_path: Path | None = None
     replaced_path = False
+    backup_path: Path | None = None
     try:
         tmp_path, _ = _download_url_to_file(
             model.url,
@@ -959,6 +960,13 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
             raise ModelError(f"downloaded checksum mismatch for {model.name}: {checksum}")
         tmp_stat = tmp_path.stat()
         try:
+            if path.exists():
+                backup_path = path.with_name(f".{path.name}.{secrets.token_hex(8)}.backup")
+                assert_no_symlink_ancestors(backup_path, field_name="model backup path")
+                _assert_path_within_model_root(backup_path, root)
+                if backup_path.exists() or backup_path.is_symlink():
+                    raise ModelError(f"model backup path already exists: {backup_path}")
+                os.replace(path, backup_path)
             os.replace(tmp_path, path)
             replaced_path = True
             _clear_model_checksum_cache(tmp_path)
@@ -974,7 +982,17 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
                 pass
         if replaced_path:
             _clear_model_checksum_cache(path)
+            if backup_path is not None:
+                with suppress(Exception):
+                    path.unlink()
+                    os.replace(backup_path, path)
+        elif backup_path is not None and not path.exists():
+            with suppress(Exception):
+                os.replace(backup_path, path)
         raise
+    if backup_path is not None:
+        with suppress(Exception):
+            backup_path.unlink()
     return {**model_status(model, verify=True), "status": "done", "message": f"model downloaded: {path}"}
 
 

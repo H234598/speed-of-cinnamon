@@ -80,6 +80,27 @@ def _coerce_environment_value(name: str) -> str | None:
     return value
 
 
+def _sanitize_ffmpeg_error_detail(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = text.replace("\r", "\\r").replace("\n", "\\n").replace("\x00", "\\x00")
+    lowered = text.lower()
+    if (
+        "/" in text
+        or "\\" in text
+        or "://" in text
+        or "device" in lowered
+        or "token" in lowered
+        or "secret" in lowered
+        or "password" in lowered
+    ):
+        return "[redacted ffmpeg error]"
+    if len(text) > 160:
+        return text[:157] + "..."
+    return text
+
+
 def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
     env: dict[str, str] = {}
     for key in _BASE_ENV_KEYS:
@@ -304,6 +325,7 @@ def detect_silent_recording(audio_path: Path) -> SilenceDetectionResult:
             detail = stderr.decode("utf-8", errors="ignore").strip()
         else:
             detail = str(stderr).strip()
+        detail = _sanitize_ffmpeg_error_detail(detail)
         if detail and not _contains_escaped_null(detail):
             return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, f"ffmpeg silence detection failed: {detail}")
         return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, "ffmpeg silence detection failed")
@@ -428,18 +450,20 @@ def trim_recording_silence(
             trimmed_path.unlink(missing_ok=True)
         except OSError:
             pass
-        raise RecorderError(f"failed to trim silence from recording {audio_path}: {exc}") from exc
+        detail = _sanitize_ffmpeg_error_detail(exc)
+        raise RecorderError(f"failed to trim silence from recording: {detail or 'ffmpeg failed'}") from exc
     if proc.returncode != 0:
         detail = ""
         if proc.stderr:
             detail = proc.stderr.decode("utf-8", errors="ignore").strip()
             if _contains_escaped_null(detail):
                 detail = ""
+        detail = _sanitize_ffmpeg_error_detail(detail)
         try:
             trimmed_path.unlink(missing_ok=True)
         except OSError:
             pass
-        raise RecorderError(detail or f"ffmpeg silence trimming failed for {audio_path}")
+        raise RecorderError(detail or "ffmpeg silence trimming failed")
     if not trimmed_path.exists() or trimmed_path.stat().st_size == 0:
         try:
             trimmed_path.unlink(missing_ok=True)
@@ -493,18 +517,20 @@ def reencode_recording_to_flac(audio_path: Path) -> Path:
             encoded_path.unlink(missing_ok=True)
         except OSError:
             pass
-        raise RecorderError(f"failed to convert recording {audio_path} to FLAC: {exc}") from exc
+        detail = _sanitize_ffmpeg_error_detail(exc)
+        raise RecorderError(f"failed to convert recording to FLAC: {detail or 'ffmpeg failed'}") from exc
     if proc.returncode != 0:
         detail = ""
         if proc.stderr:
             detail = proc.stderr.decode("utf-8", errors="ignore").strip()
             if _contains_escaped_null(detail):
                 detail = ""
+        detail = _sanitize_ffmpeg_error_detail(detail)
         try:
             encoded_path.unlink(missing_ok=True)
         except OSError:
             pass
-        raise RecorderError(detail or f"ffmpeg FLAC conversion failed for {audio_path}")
+        raise RecorderError(detail or "ffmpeg FLAC conversion failed")
     if not encoded_path.exists() or encoded_path.stat().st_size == 0:
         try:
             encoded_path.unlink(missing_ok=True)

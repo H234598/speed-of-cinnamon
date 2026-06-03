@@ -594,6 +594,19 @@ def _read_text_clipboard() -> str | None:
     return None
 
 
+def _read_text_clipboard_snapshot() -> tuple[bool, str]:
+    xclip = _which("xclip")
+    if xclip:
+        return True, _run_stdout(["xclip", "-selection", "clipboard", "-out"], resolved_command=xclip)
+    xsel = _which("xsel")
+    if xsel:
+        return True, _run_stdout(["xsel", "--clipboard", "--output"], resolved_command=xsel)
+    wl_paste = _which("wl-paste")
+    if wl_paste:
+        return True, _run_stdout(["wl-paste"], resolved_command=wl_paste)
+    return False, ""
+
+
 def _clipboard_targets_contain_non_text_payload(targets: str) -> bool:
     ignored = {"targets", "multiple", "timestamp", "save_targets"}
     text_targets = {
@@ -755,6 +768,7 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
             _release_clipboard_dedup_lock(lock_path)
             return False
         committed = False
+        persistent_snapshot = _read_clipboard_dedup_state()
         try:
             if not _record_clipboard_insertion(text, method):
                 return False
@@ -764,6 +778,7 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
         finally:
             if not committed:
                 _restore_clipboard_insertion_snapshot(snapshot)
+                _restore_clipboard_dedup_state(persistent_snapshot)
             _release_clipboard_dedup_lock(lock_path)
     if method == "clipboard-paste":
         lock_path = _begin_clipboard_insertion(text, method)
@@ -775,20 +790,21 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
             return False
         committed = False
         persistent_snapshot = _read_clipboard_dedup_state()
-        clipboard_snapshot: str | None = None
+        clipboard_snapshot_available = False
+        clipboard_snapshot = ""
         try:
             if not _record_clipboard_insertion(text, method):
                 return False
-            clipboard_snapshot = _read_text_clipboard()
             if _clipboard_has_non_text_payload():
                 raise OutputError("refusing to overwrite non-text clipboard for automatic paste")
+            clipboard_snapshot_available, clipboard_snapshot = _read_text_clipboard_snapshot()
             set_clipboard(text)
             paste_from_clipboard()
             committed = True
             return True
         finally:
             if not committed:
-                if clipboard_snapshot is not None:
+                if clipboard_snapshot_available:
                     try:
                         set_clipboard(clipboard_snapshot)
                     except OutputError:
