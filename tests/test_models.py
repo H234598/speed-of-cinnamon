@@ -177,6 +177,37 @@ class ModelsTest(unittest.TestCase):
             self.assertNotIn("/does/not/exist.bin", models._model_checksum_cache)
             self.assertNotIn(str(path.with_name("bad.bin")), models._model_checksum_cache)
 
+    def test_model_checksum_cache_prunes_symlink_entries(self) -> None:
+        data = b"cached model"
+        spec = models.ModelSpec(
+            name="cache-prune-symlink",
+            filename="ggml-cache-prune-symlink.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(data).hexdigest(),
+            description="cache prune symlink",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            path = models.model_path(spec)
+            target = path.parent / "target.bin"
+            path.parent.mkdir(parents=True)
+            target.write_bytes(data)
+            path.symlink_to(target)
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(
+                json.dumps({str(path): {"checksum": spec.sha1, "size": len(data), "mtime_ns": 1}}),
+                encoding="utf-8",
+            )
+
+            models._load_model_checksum_cache()
+
+            self.assertNotIn(str(path), models._model_checksum_cache)
+
     def test_model_checksum_cache_rejects_invalid_checksum_entries(self) -> None:
         spec = models.ModelSpec(
             name="cache-invalid-checksum",

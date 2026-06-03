@@ -521,6 +521,7 @@ class OutputTest(unittest.TestCase):
             mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
             mock.patch("speed_of_cinnamon.output.set_clipboard"),
             mock.patch("speed_of_cinnamon.output.paste_from_clipboard"),
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
             mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=1.0),
         ):
             self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
@@ -532,6 +533,7 @@ class OutputTest(unittest.TestCase):
             mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
             mock.patch("speed_of_cinnamon.output.set_clipboard"),
             mock.patch("speed_of_cinnamon.output.paste_from_clipboard"),
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
             mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=1.0),
         ):
             self.assertTrue(insert_text("  wiederholung  ", "clipboard-paste"))
@@ -553,6 +555,7 @@ class OutputTest(unittest.TestCase):
             mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
             mock.patch("speed_of_cinnamon.output.set_clipboard"),
             mock.patch("speed_of_cinnamon.output.paste_from_clipboard"),
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
             mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=3.0),
         ):
             self.assertTrue(insert_text("wiederholung", "clipboard"))
@@ -570,6 +573,7 @@ class OutputTest(unittest.TestCase):
             mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
             mock.patch("speed_of_cinnamon.output.set_clipboard"),
             mock.patch("speed_of_cinnamon.output.paste_from_clipboard", side_effect=fake_paste),
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
             mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=3.0),
         ):
             self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
@@ -602,6 +606,7 @@ class OutputTest(unittest.TestCase):
             mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
             mock.patch("speed_of_cinnamon.output._read_text_clipboard", return_value="previous text"),
             mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
             mock.patch(
                 "speed_of_cinnamon.output.paste_from_clipboard",
                 side_effect=OutputError("paste failed"),
@@ -626,6 +631,26 @@ class OutputTest(unittest.TestCase):
 
         mocked_clipboard.assert_not_called()
         mocked_paste.assert_not_called()
+
+    def test_clipboard_targets_treat_rich_text_as_non_text_payload(self) -> None:
+        self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("text/html\ntext/plain\n"))
+        self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("text/rtf\n"))
+        self.assertFalse(output_module._clipboard_targets_contain_non_text_payload("UTF8_STRING\ntext/plain\n"))
+
+    def test_clipboard_non_text_detection_checks_xsel_targets(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run_stdout(argv: list[str], **_kwargs: object) -> str:
+            calls.append(argv)
+            return "image/png\n"
+
+        with (
+            mock.patch("speed_of_cinnamon.output._which", side_effect=lambda command: "/usr/bin/xsel" if command == "xsel" else None),
+            mock.patch("speed_of_cinnamon.output._run_stdout", side_effect=fake_run_stdout),
+        ):
+            self.assertTrue(output_module._clipboard_has_non_text_payload())
+
+        self.assertEqual(calls, [["xsel", "--clipboard", "--output", "--target", "TARGETS"]])
 
     def test_insert_text_fails_closed_when_dedupe_state_is_malformed(self) -> None:
         with (

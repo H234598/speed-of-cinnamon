@@ -183,7 +183,7 @@ def _prune_model_checksum_cache() -> None:
             removed = True
             continue
         try:
-            if not path.exists() or not path.is_file():
+            if path.is_symlink() or not path.exists() or not path.is_file():
                 _model_checksum_cache.pop(key, None)
                 removed = True
                 continue

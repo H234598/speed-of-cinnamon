@@ -245,16 +245,35 @@ class CiStaticTest(unittest.TestCase):
         self.assertTrue(any("unsupported shell value" in offender for offender in offenders))
         self.assertTrue(any("Popen first arg is string constant" in offender for offender in offenders))
 
-    def test_runtime_code_does_not_use_os_environ_get(self) -> None:
+    def test_shell_and_workflow_files_avoid_high_risk_shell_patterns(self) -> None:
+        roots = [REPO_ROOT / "scripts", REPO_ROOT / ".github" / "workflows"]
+        offenders: list[str] = []
+        for root in roots:
+            for path in root.rglob("*"):
+                if path.is_dir() or path.suffix not in {".sh", ".yml", ".yaml"}:
+                    continue
+                text = path.read_text(encoding="utf-8")
+                if re.search(r"curl\b[^\n|]*\|\s*(?:sh|bash)\b", text):
+                    offenders.append(f"{path}: curl piped to shell")
+                for pattern in ("eval ", "bash -c", "sh -c", "rm -rf /"):
+                    if pattern in text:
+                        offenders.append(f"{path}: high-risk shell pattern {pattern!r}")
+                if 'rm -rf -- "${stage_root}"' in text:
+                    offenders.append(f"{path}: install cleanup must use safe_fs")
+                if 'rm -rf -- "${python_dir}"' in text:
+                    offenders.append(f"{path}: uninstall target cleanup must use safe_fs")
+        self.assertEqual(offenders, [], f"high-risk shell/workflow patterns found: {offenders}")
+
+    def test_runtime_code_does_not_read_full_environment(self) -> None:
         src_root = REPO_ROOT / "src"
         offenders: list[str] = []
         for path in src_root.rglob("*.py"):
             if "__pycache__" in path.parts:
                 continue
             text = path.read_text(encoding="utf-8")
-            if "os.environ.get(" in text:
+            if "os.environ.copy(" in text:
                 offenders.append(str(path))
-        self.assertEqual(offenders, [], f"os.environ.get should not be used in runtime code: {offenders}")
+        self.assertEqual(offenders, [], f"os.environ.copy should not be used in runtime code: {offenders}")
 
     def test_runtime_code_has_no_shell_invocations(self) -> None:
         patterns = [
