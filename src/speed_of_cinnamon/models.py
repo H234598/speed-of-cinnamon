@@ -922,6 +922,11 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                 try:
                     os.replace(backup_dir, path)
                 except OSError as restore_exc:
+                    if path.exists():
+                        try:
+                            _remove_model_backup_path(path)
+                        except OSError:
+                            pass
                     raise ModelError(f"failed to restore existing model directory after download failure: {path}") from restore_exc
             raise ModelError(f"failed to persist downloaded model directory: {path}") from exc
         if backup_dir is not None:
@@ -1012,6 +1017,11 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
                 try:
                     _restore_model_file_backup(path, backup_path)
                 except OSError as restore_exc:
+                    if path.exists():
+                        try:
+                            _remove_model_backup_path(path)
+                        except OSError:
+                            pass
                     raise ModelError(f"failed to restore existing model file after download failure: {path}") from restore_exc
                 if previous_cache_entry_exists and previous_cache_entry is not None:
                     _model_checksum_cache[str(path)] = dict(previous_cache_entry)
@@ -1064,6 +1074,10 @@ def remove_model(name: str) -> dict[str, object]:
         removed_tmp = True
     except FileNotFoundError:
         pass
+    except OSError as exc:
+        if removed:
+            _clear_model_checksum_cache(path)
+        raise ModelError(f"failed to remove temporary model file: {tmp_path}") from exc
     if removed:
         _clear_model_checksum_cache(path)
     if removed_tmp:

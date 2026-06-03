@@ -871,15 +871,18 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
             committed = True
             return True
         finally:
+            rollback_error: OutputError | None = None
             if not committed:
                 if clipboard_snapshot_available:
                     try:
                         set_clipboard(clipboard_snapshot)
-                    except OutputError:
-                        pass
+                    except OutputError as exc:
+                        rollback_error = exc
                 _restore_clipboard_insertion_snapshot(snapshot)
                 _restore_clipboard_dedup_state(persistent_snapshot)
             _release_clipboard_dedup_lock(lock_path)
+            if rollback_error is not None:
+                raise OutputError("failed to restore previous clipboard after paste failure") from rollback_error
     if method == "type":
         type_text(text, delay_ms)
         return True

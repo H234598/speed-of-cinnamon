@@ -840,6 +840,26 @@ class AppletStaticTest(unittest.TestCase):
         restart_end = source.index("_preparedTranscriptText: function", restart_index)
         self.assertNotIn("this._resetAutoInsertFingerprint();", source[restart_index:restart_end])
 
+    def test_successful_relisten_restart_skips_done_status(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        silent_index = source.index("_finishSilentRelistenSkip: function(payload)")
+        silent_done_index = source.index('this._setStatus("done", payload.message || _("Silent recording skipped")', silent_index)
+        empty_index = source.index("_finishEmptyRelistenDone: function(payload)")
+        empty_done_index = source.index('this._setStatus("done", payload.message || _("Recording finished without transcript")', empty_index)
+
+        self.assertIn("if (this._finishPendingRelisten()) {\n      return;\n    }", source[silent_index:silent_done_index])
+        self.assertIn("if (this._finishPendingRelisten()) {\n      return;\n    }", source[empty_index:empty_done_index])
+
+    def test_failed_relisten_restart_clears_pending_token(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        finish_index = source.index("_finishPendingRelisten: function()")
+        return_index = source.index("return relistenStarted;", finish_index)
+        block = source[finish_index:return_index]
+
+        self.assertIn("this.autoRelistenPending = false;", block)
+        self.assertIn('this.autoRelistenPendingToken = "";', block)
+        self.assertNotIn("} else if (!shouldRelisten) {", block)
+
     def test_applet_uses_gio_for_desktop_links_and_folders(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
@@ -932,7 +952,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._reserveAutoInsertFingerprint(insertFingerprint)", source)
         self.assertIn("if (payload.inserted === true) {", source)
         self.assertIn("if (relistenStarted) {", source)
-        self.assertIn("} else if (!shouldRelisten) {", source)
+        self.assertIn("this.autoRelistenPending = false;", source)
+        self.assertIn('this.autoRelistenPendingToken = "";', source)
         self.assertIn("_finishSilentRelistenSkip: function(payload)", source)
         self.assertIn("_finishEmptyRelistenDone: function(payload)", source)
         self.assertIn('if (payload.status === "done" && payload.silence_detected)', source)

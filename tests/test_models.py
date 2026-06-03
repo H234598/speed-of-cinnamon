@@ -532,6 +532,41 @@ class ModelsTest(unittest.TestCase):
                     models.remove_model("cache-delete-fails")
             self.assertIn(str(path), models._model_checksum_cache)
 
+    def test_remove_model_clears_checksum_cache_when_tmp_delete_fails_after_main_delete(self) -> None:
+        spec = models.ModelSpec(
+            name="cache-tmp-delete-fails",
+            filename="ggml-cache-tmp-delete-fails.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(b"cache tmp delete fails").hexdigest(),
+            description="cache tmp delete fails",
+        )
+        real_unlink = Path.unlink
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", True),
+            mock.patch.object(models, "CATALOG", (spec,)),
+        ):
+            path = models.model_path(spec)
+            tmp_path = path.with_suffix(path.suffix + ".tmp")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"cache tmp delete fails")
+            tmp_path.write_bytes(b"tmp")
+            models._set_model_checksum_cache(path, spec.sha1, path.stat())
+
+            def unlink_or_fail(target: Path) -> None:
+                if target == tmp_path:
+                    raise OSError("tmp delete failed")
+                real_unlink(target)
+
+            with mock.patch("speed_of_cinnamon.models.Path.unlink", autospec=True, side_effect=unlink_or_fail):
+                with self.assertRaisesRegex(models.ModelError, "failed to remove temporary model file"):
+                    models.remove_model("cache-tmp-delete-fails")
+
+            self.assertFalse(path.exists())
+            self.assertNotIn(str(path), models._model_checksum_cache)
+
     def test_list_models_reports_catalog_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}):
             payload = models.list_models()

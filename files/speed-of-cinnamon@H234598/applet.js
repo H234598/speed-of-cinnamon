@@ -4024,13 +4024,10 @@ MyApplet.prototype = {
     if (shouldRelisten) {
       relistenStarted = this._restartRelistenRecording();
     }
+    this.autoRelistenPending = false;
+    this.autoRelistenPendingToken = "";
     if (relistenStarted) {
-      this.autoRelistenPending = false;
-      this.autoRelistenPendingToken = "";
       this.notificationSessionActive = true;
-    } else if (!shouldRelisten) {
-      this.autoRelistenPending = false;
-      this.autoRelistenPendingToken = "";
     }
     return relistenStarted;
   },
@@ -4108,12 +4105,16 @@ MyApplet.prototype = {
   },
 
   _finishSilentRelistenSkip: function(payload) {
-    this._finishPendingRelisten();
+    if (this._finishPendingRelisten()) {
+      return;
+    }
     this._setStatus("done", payload.message || _("Silent recording skipped"), this.lastTranscript);
   },
 
   _finishEmptyRelistenDone: function(payload) {
-    this._finishPendingRelisten();
+    if (this._finishPendingRelisten()) {
+      return;
+    }
     this._setStatus("done", payload.message || _("Recording finished without transcript"), this.lastTranscript);
   },
 

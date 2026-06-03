@@ -698,6 +698,26 @@ class OutputTest(unittest.TestCase):
 
         self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["new text", ""])
 
+    def test_insert_text_reports_clipboard_rollback_failure(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "previous")),
+            mock.patch(
+                "speed_of_cinnamon.output.set_clipboard",
+                side_effect=[None, OutputError("restore failed")],
+            ) as mocked_clipboard,
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch(
+                "speed_of_cinnamon.output.paste_from_clipboard",
+                side_effect=OutputError("paste failed"),
+            ),
+        ):
+            with self.assertRaisesRegex(OutputError, "failed to restore previous clipboard"):
+                insert_text("new text", "clipboard-paste")
+
+        self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["new text", "previous"])
+
     def test_insert_text_clipboard_rolls_back_duplicate_state_when_set_clipboard_fails(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,
