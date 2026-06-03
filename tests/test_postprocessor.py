@@ -4,6 +4,7 @@ import io
 import json
 import unittest
 import urllib.error
+import urllib.request
 from unittest import mock
 
 from speed_of_cinnamon.postprocessor import (
@@ -17,6 +18,7 @@ from speed_of_cinnamon.postprocessor import (
     _quote,
     _assert_text_length,
     _openai_compatible_headers,
+    _open_http_request,
     _validate_same_origin_redirect,
     _format_model_size,
     post_process_text,
@@ -741,6 +743,19 @@ class PostProcessorTest(unittest.TestCase):
     def test_openai_compatible_backend_requires_model(self) -> None:
         with self.assertRaisesRegex(PostProcessError, "model is required"):
             post_process_text("hello", "en", backend="openai-compatible")
+
+    def test_remote_post_process_http_opener_disables_environment_proxies(self) -> None:
+        request = urllib.request.Request("https://example.test/v1/chat/completions")
+        opener = mock.Mock()
+        sentinel = object()
+        opener.open.return_value = sentinel
+        with mock.patch("speed_of_cinnamon.postprocessor.urllib.request.build_opener", return_value=opener) as build_opener:
+            self.assertIs(_open_http_request(request, timeout=7, field_name="remote request"), sentinel)
+
+        handlers = build_opener.call_args.args
+        self.assertTrue(any(isinstance(handler, urllib.request.ProxyHandler) for handler in handlers))
+        self.assertTrue(any(getattr(handler, "proxies", None) == {} for handler in handlers))
+        opener.open.assert_called_once_with(request, timeout=7)
 
     def test_openai_compatible_empty_response_is_an_error(self) -> None:
         with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", return_value=FakeResponse({"choices": []})):

@@ -145,7 +145,21 @@ fi
 rm -f -- "${snapcraft_rendered}"
 snapcraft_rendered=""
 
-dist_dir="${repo_dir}/dist/snap"
+dist_parent="${repo_dir}/dist"
+if [[ -L "${dist_parent}" ]]; then
+  printf 'dist directory must not be a symlink: %s\n' "${dist_parent}" >&2
+  exit 1
+fi
+mkdir -p "${dist_parent}"
+if [[ -L "${dist_parent}" ]]; then
+  printf 'dist directory must not be a symlink: %s\n' "${dist_parent}" >&2
+  exit 1
+fi
+dist_dir="${dist_parent}/snap"
+if [[ -L "${dist_dir}" ]]; then
+  printf 'dist snap directory must not be a symlink: %s\n' "${dist_dir}" >&2
+  exit 1
+fi
 mkdir -p "${dist_dir}"
 if [[ -L "${dist_dir}" ]]; then
   printf 'dist snap directory must not be a symlink: %s\n' "${dist_dir}" >&2

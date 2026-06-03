@@ -4009,45 +4009,25 @@ MyApplet.prototype = {
       timestamp: true,
       save_targets: true,
     };
-    let textTargets = {
+    let knownTextTargets = {
       "compound_text": true,
-      "text/plain; charset=utf-8": true,
-      "text/plain; charset=utf8": true,
       text: true,
       string: true,
       utf8_string: true,
-      "text/plain": true,
-      "text/plain;charset=utf-8": true,
-      "text/plain;charset=utf8": true,
     };
-    let nonTextTargets = {
-      "application/x-qt-image": true,
-      "text/html": true,
-      "text/rtf": true,
-      "text/richtext": true,
-      "x-special/gnome-copied-files": true,
-    };
+    let sawTextTarget = false;
     let lines = String(targets || "").split("\n");
     for (let i = 0; i < lines.length; i++) {
       let target = String(lines[i]).trim().toLowerCase();
       if (!target || ignored[target]) {
         continue;
       }
-      if (textTargets[target]) {
+      if (knownTextTargets[target] || target.indexOf("text/") === 0) {
+        sawTextTarget = true;
         continue;
       }
-      if (
-        nonTextTargets[target]
-        || target.indexOf("text/") === 0
-        || target.indexOf("image/") === 0
-        || target.indexOf("audio/") === 0
-        || target.indexOf("video/") === 0
-      ) {
-        return true;
-      }
-      return true;
     }
-    return false;
+    return !sawTextTarget;
   },
 
   _clipboardHasNonTextPayload: function() {

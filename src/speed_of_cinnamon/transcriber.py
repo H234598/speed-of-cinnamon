@@ -339,7 +339,7 @@ class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 def _open_http_request(request: urllib.request.Request, *, timeout: int, field_name: str) -> object:
     _validate_http_request(request, field_name=field_name)
-    opener = urllib.request.build_opener(_SameOriginRedirectHandler)
+    opener = urllib.request.build_opener(_SameOriginRedirectHandler, urllib.request.ProxyHandler({}))
     return opener.open(request, timeout=timeout)  # nosec B310
 
 

@@ -274,6 +274,33 @@ def _clipboard_dedup_lock_path() -> Path:
     return path
 
 
+def _clipboard_lock_pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+    return True
+
+
+def _read_clipboard_dedup_lock_pid(path: Path) -> int | None:
+    try:
+        raw = read_text_without_following_symlinks(path, field_name="clipboard dedupe lock")
+    except (OSError, RuntimeError, UnicodeDecodeError):
+        return None
+    first_line = raw.splitlines()[0].strip() if raw.splitlines() else ""
+    try:
+        pid = int(first_line)
+    except ValueError:
+        return None
+    return pid if pid > 0 else None
+
+
 def _acquire_clipboard_dedup_lock() -> Path | None:
     try:
         path = _clipboard_dedup_lock_path()
@@ -293,7 +320,16 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
             return None
         if not stat.S_ISREG(existing.st_mode):
             return None
-        if now - existing.st_mtime > MAX_DUPLICATE_LOCK_SECONDS:
+        owner_pid = _read_clipboard_dedup_lock_pid(path)
+        if owner_pid is not None and _clipboard_lock_pid_is_running(owner_pid):
+            return None
+        if owner_pid is not None or now - existing.st_mtime > MAX_DUPLICATE_LOCK_SECONDS:
+            try:
+                current = path.lstat()
+            except OSError:
+                return None
+            if (current.st_dev, current.st_ino) != (existing.st_dev, existing.st_ino):
+                return None
             try:
                 path.unlink()
             except OSError:
@@ -685,27 +721,26 @@ def _read_text_clipboard_snapshot() -> tuple[bool, str]:
 
 def _clipboard_targets_contain_non_text_payload(targets: str) -> bool:
     ignored = {"targets", "multiple", "timestamp", "save_targets"}
-    text_targets = {
+    known_text_targets = {
         "compound_text",
-        "text/plain; charset=utf-8",
-        "text/plain; charset=utf8",
         "text",
         "string",
         "utf8_string",
-        "text/plain",
-        "text/plain;charset=utf-8",
-        "text/plain;charset=utf8",
     }
     saw_text_target = False
     for line in str(targets or "").splitlines():
         target = line.strip().lower()
         if not target or target in ignored:
             continue
-        if target in text_targets:
+        if target in known_text_targets or target.startswith("text/"):
             saw_text_target = True
             continue
-        return True
     return not saw_text_target
+
+
+def _clipboard_still_contains_inserted_text(text: str) -> bool:
+    available, current_text = _read_text_clipboard_snapshot()
+    return available and current_text == text
 
 
 def _clipboard_has_non_text_payload() -> bool:
@@ -897,12 +932,12 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
             if not committed:
                 if clipboard_snapshot_available:
                     try:
-                        set_clipboard(clipboard_snapshot)
+                        if _clipboard_still_contains_inserted_text(text):
+                            set_clipboard(clipboard_snapshot)
                     except OutputError as exc:
                         rollback_error = exc
-                if rollback_error is None:
-                    _restore_clipboard_insertion_snapshot(snapshot)
-                    _restore_clipboard_dedup_state(persistent_snapshot)
+                _restore_clipboard_insertion_snapshot(snapshot)
+                _restore_clipboard_dedup_state(persistent_snapshot)
             _release_clipboard_dedup_lock(lock_path)
             if rollback_error is not None:
                 raise OutputError("failed to restore previous clipboard after paste failure") from rollback_error

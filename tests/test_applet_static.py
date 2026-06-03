@@ -1000,17 +1000,14 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("return null;", source)
         self.assertIn("if (targets === null || targets === undefined) {", source)
         self.assertIn('if (String(targets || "").trim() === "") {', source)
-        self.assertIn("let nonTextTargets = {", source)
-        self.assertIn('"application/x-qt-image": true', source)
-        self.assertIn('"text/html": true', source)
-        self.assertIn('"text/rtf": true', source)
-        self.assertIn('"x-special/gnome-copied-files": true', source)
+        self.assertIn("let knownTextTargets = {", source)
+        self.assertIn("let sawTextTarget = false;", source)
         self.assertIn('target.indexOf("text/") === 0', source)
-        self.assertIn('target.indexOf("image/") === 0', source)
-        self.assertIn('target.indexOf("audio/") === 0', source)
-        self.assertIn('target.indexOf("video/") === 0', source)
+        self.assertIn("sawTextTarget = true;", source)
+        self.assertNotIn("let nonTextTargets = {", source)
+        self.assertIn('target.indexOf("text/") === 0', source)
         self.assertIn(
-            '      return true;\n    }\n    return false;\n  },\n\n  _clipboardHasNonTextPayload',
+            '    }\n    return !sawTextTarget;\n  },\n\n  _clipboardHasNonTextPayload',
             source,
         )
         self.assertIn('if (method === "clipboard-paste" && canPasteWithKeyboard && this._clipboardHasNonTextPayload()) {', source)

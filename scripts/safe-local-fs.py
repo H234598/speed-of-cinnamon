@@ -279,7 +279,7 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
         staged_tree = parent_path / stage_name / leaf
         if _tree_signature(source) != source_signature:
             fail(f"source tree changed during {args.action}: {source}")
-        shutil.copytree(source, staged_tree)
+        shutil.copytree(source, staged_tree, symlinks=True)
         if _tree_signature(source) != source_signature:
             fail(f"source tree changed during {args.action}: {source}")
         _reject_unsafe_tree(staged_tree, label)

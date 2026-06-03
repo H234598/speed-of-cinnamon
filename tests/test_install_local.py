@@ -189,15 +189,43 @@ class InstallLocalTest(unittest.TestCase):
             (source / "payload.txt").write_text("safe\n", encoding="utf-8")
             real_copytree = module.shutil.copytree
 
-            def copytree_with_source_mutation(src: Path, dst: Path) -> Path:
+            def copytree_with_source_mutation(src: Path, dst: Path, **kwargs: object) -> Path:
                 (source / "payload.txt").write_text("changed\n", encoding="utf-8")
-                return real_copytree(src, dst)
+                return real_copytree(src, dst, **kwargs)
 
             args = module.argparse.Namespace(action="install", source=str(source), target=str(target), label="tree")
             with mock.patch.object(module.shutil, "copytree", side_effect=copytree_with_source_mutation):
                 with self.assertRaisesRegex(SystemExit, "1"):
                     module.cmd_install_tree(args)
 
+            self.assertFalse(target.exists())
+
+    def test_safe_fs_install_tree_copies_with_symlink_preservation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = self._load_safe_fs_module()
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            outside = root / "outside.txt"
+            source.mkdir()
+            payload = source / "payload.txt"
+            payload.write_text("safe\n", encoding="utf-8")
+            outside.write_text("outside\n", encoding="utf-8")
+            real_copytree = module.shutil.copytree
+            seen: dict[str, bool] = {}
+
+            def copytree_with_symlink_race(src: Path, dst: Path, **kwargs: object) -> Path:
+                seen["symlinks"] = bool(kwargs.get("symlinks"))
+                payload.unlink()
+                payload.symlink_to(outside)
+                return real_copytree(src, dst, **kwargs)
+
+            args = module.argparse.Namespace(action="install", source=str(source), target=str(target), label="tree")
+            with mock.patch.object(module.shutil, "copytree", side_effect=copytree_with_symlink_race):
+                with self.assertRaisesRegex(SystemExit, "1"):
+                    module.cmd_install_tree(args)
+
+            self.assertTrue(seen.get("symlinks"))
             self.assertFalse(target.exists())
 
     def test_install_local_refuses_symlinked_home_ancestor(self) -> None:

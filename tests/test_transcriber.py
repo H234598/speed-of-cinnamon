@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import unittest
 import urllib.error
+import urllib.request
 from pathlib import Path
 from unittest import mock
 
@@ -24,6 +25,7 @@ from speed_of_cinnamon.transcriber import (
     _assert_text_length,
     _contains_escaped_null,
     _validate_same_origin_redirect,
+    _open_http_request,
     _quote,
     _write_text_atomic,
     validate_audio_file,
@@ -43,6 +45,19 @@ from speed_of_cinnamon.personalization import MAX_PERSONAL_CONTEXT_CHARS, MAX_VO
 
 
 class TranscriberTest(unittest.TestCase):
+    def test_openai_compatible_http_opener_disables_environment_proxies(self) -> None:
+        request = urllib.request.Request("https://example.test/v1/audio/transcriptions")
+        opener = mock.Mock()
+        sentinel = object()
+        opener.open.return_value = sentinel
+        with mock.patch("speed_of_cinnamon.transcriber.urllib.request.build_opener", return_value=opener) as build_opener:
+            self.assertIs(_open_http_request(request, timeout=7, field_name="speech request"), sentinel)
+
+        handlers = build_opener.call_args.args
+        self.assertTrue(any(isinstance(handler, urllib.request.ProxyHandler) for handler in handlers))
+        self.assertTrue(any(getattr(handler, "proxies", None) == {} for handler in handlers))
+        opener.open.assert_called_once_with(request, timeout=7)
+
     def test_template_quotes_placeholders(self) -> None:
         rendered = render_command_template(
             "tool --audio {audio} --lang {language} --text {text} --prompt {prompt}",
