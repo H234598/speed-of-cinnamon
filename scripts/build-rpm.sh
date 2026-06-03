@@ -32,6 +32,46 @@ require_regular_source_file() {
   fi
 }
 
+activate_with_finalize_lock() {
+  local lock_path=$1
+  local staging_path=$2
+  local final_path=$3
+
+  "${python_bin}" - "$lock_path" "$safe_fs" "$staging_path" "$final_path" <<'PY'
+import os
+import subprocess
+import sys
+
+try:
+    import fcntl
+except ModuleNotFoundError:
+    print("fcntl is required for safe RPM finalization", file=sys.stderr)
+    raise SystemExit(1)
+
+lock_path, safe_fs, staging_path, final_path = sys.argv[1:]
+lock_parent = os.path.dirname(lock_path)
+
+if os.path.islink(lock_parent):
+    print(f"finalization lock parent must not be a symlink: {lock_parent}", file=sys.stderr)
+    raise SystemExit(1)
+if os.path.islink(lock_path):
+    print(f"finalization lock must not be a symlink: {lock_path}", file=sys.stderr)
+    raise SystemExit(1)
+
+flags = os.O_CREAT | os.O_RDWR
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+
+lock_fd = os.open(lock_path, flags, 0o600)
+with os.fdopen(lock_fd, "r+", encoding="utf-8") as lock:
+    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    subprocess.run(
+        [sys.executable, safe_fs, "install-tree", "build-rpm", staging_path, final_path, "RPM build directory"],
+        check=True,
+    )
+PY
+}
+
 repo_tmp_root="${TMPDIR:-/tmp}"
 if [[ ! "${repo_tmp_root}" == /* ]]; then
   printf 'temporary root must be an absolute path: %s\n' "${repo_tmp_root}" >&2
@@ -113,7 +153,8 @@ if [[ -L "${dist_dir}" ]]; then
   exit 1
 fi
 mkdir -p "${dist_dir}"
-stage_topdir="$(mktemp -d "${dist_dir}/.$(basename "${final_topdir}").stage.XXXXXX")"
+dist_finalize_lock="${dist_dir}/.build-rpm.finalize.lock"
+stage_topdir="$(mktemp -d "${rpmbuild_tmpdir}/.$(basename "${final_topdir}").stage.XXXXXX")"
 spec_file="${stage_topdir}/SPECS/speed-of-cinnamon.spec"
 
 if [[ ! -f "${spec_source}" ]]; then
@@ -174,7 +215,7 @@ rpmbuild \
   --define "__brp_python_hardlink %{nil}" \
   -ba "${spec_file}"
 
-if ! "${safe_fs_cmd[@]}" install-tree build-rpm "${stage_topdir}" "${final_topdir}" "RPM build directory"; then
+if ! activate_with_finalize_lock "${dist_finalize_lock}" "${stage_topdir}" "${final_topdir}"; then
   printf 'failed to activate RPM build directory: %s\n' "${final_topdir}" >&2
   exit 1
 fi

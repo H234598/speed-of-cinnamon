@@ -23,40 +23,74 @@ _MAX_BLACKLIST_PATTERN_BYTES = _MAX_BLACKLIST_ENTRY_CHARS * _MAX_BLACKLIST_ENTRI
 _BLACKLIST_ADD_RE = re.compile(
     r"(?im)^\s*(?:blacklisteintrag|blacklist\s*eintrag)\b[\s:,-]*(.+?)\s*$",
 )
-_BLACKLIST_ADD_INLINE_RE = re.compile(
-    r"(?i)\b(?:blacklisteintrag|blacklist\s*eintrag)\b[\s:,-]*(.+?)\s*$",
-)
 _BLACKLIST_SHOW_RE = re.compile(
     r"(?im)^\s*(?:(?:bitte\s+)?(?:mir\s+)?(?:die\s+)?"
-    r"(?:blacklist|blackliste|sperrliste)\b[^\n]*\b(?:anzeigen|anzeige|öffnen|open|show|zeigen|zeige)\b[^\n]*"
-    r"|(?:bitte\s+)?(?:mir\s+)?(?:zeige|zeig|show|open|öffne)\s+[^\n]*"
-    r"\b(?:blacklist|blackliste|sperrliste)\b[^\n]*)\s*$",
+    r"(?:blacklist|blackliste|sperrliste)\s+(?:anzeigen|anzeige|öffnen|open|show|zeigen|zeige)"
+    r"|(?:bitte\s+)?(?:mir\s+)?(?:zeige|zeig|show|open|öffne)\s+(?:die\s+)?"
+    r"(?:blacklist|blackliste|sperrliste)(?:\s+(?:anzeigen|anzeige|öffnen|open|show|zeigen|zeige))?)\s*$",
 )
 
 _EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
-_IBAN_RE = re.compile(r"\b[A-Za-z]{2}\d{2}[A-Z0-9]{11,30}\b", re.IGNORECASE)
+_IBAN_RE = re.compile(r"\b[A-Za-z]{2}\d{2}(?:[ -]?[A-Z0-9]){11,30}\b", re.IGNORECASE)
 _PHONE_RE = re.compile(r"(?:(?<!\d)\+?\d[\d\s().-]{7,20}\d(?!\d))")
-_TOKEN_RE = re.compile(r"(?i)\b(?:token|api[_-]?key|secret|password|apikey|bearer)\b\s*[:=]\s*[^,;\s]+")
-_PASSWORD_RE = re.compile(r"(?i)\b(?:password|passwort|kennwort|passcode)\b\s*[:=]\s*[^,;\s]+")
+_TOKEN_RE = re.compile(
+    r"(?i)\b(?:token|api[_-]?key|api\s+key|secret|apikey|bearer)\b\s*(?::|=)\s*[^,;\s]+"
+)
+_BARE_TOKEN_RE = re.compile(
+    r"(?i)\b(?:token|api[_-]?key|api\s+key|secret|apikey|bearer)\b\s+"
+    r"(?!(?:ist|is|war|was|are|were|missing|invalid|required|too|contains?|muss|darf|soll)\b)"
+    r"(?=[A-Za-z0-9_./+=-]*\d|[A-Za-z0-9_./+=-]*[+/=_-][A-Za-z0-9_./+=-]*)"
+    r"[A-Za-z0-9_./+=-]{4,}"
+)
+_PASSWORD_RE = re.compile(
+    r"(?i)\b(?:password|passwort|kennwort|passcode)\b\s*[:=]\s*"
+    r"(?:\"[^\n\"]{1,120}\"|'[^\n']{1,120}'|[^,;\n.?!]{1,120})"
+)
 _ACCESS_TOKEN_RE = re.compile(r"(?i)\b(?:sk|sess|ghp|gho|xox[pb]-|hf|pat)[A-Za-z0-9_\-]{12,}\b")
 _URL_CRED_RE = re.compile(r"[a-z][a-z0-9+.-]*://[^\s/@:]+:[^\s/@]+@")
 _CREDIT_CARD_RE = re.compile(r"\b(?:\d[ -]*?){13,19}\b")
+_LABELED_NAME_RE = re.compile(
+    r"(?i)\b(?:name|voller\s+name|full\s+name)\b\s*[:=]\s*"
+    r"[A-ZÄÖÜ][A-ZÄÖÜa-zäöüß-]+"
+    r"(?:\s+(?!(?:adresse|anschrift|address|kundennummer|kundennr|kunden-nr|ssn|tax\s+id)\b)"
+    r"[A-ZÄÖÜ][A-ZÄÖÜa-zäöüß-]+){0,3}"
+)
 _NAME_RE = re.compile(
     r"(?i)\b(?:mein\s+name\s+ist|ich\s+hei[ßss]e|name\s+is|my\s+name\s+is)\s+"
-    r"([A-ZÄÖÜa-zäöüß]+(?:\s+[A-ZÄÖÜa-zäöüß]+){1,3})"
+    r"([A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]*(?:\s+[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]*){0,3})"
 )
 _BANK_DATA_RE = re.compile(
     r"(?i)\b(?:iban|kontodaten|kontonummer|kontonr|konto|bank\s+account|account\s+no|account\s+number)\b[^\n]{0,60}(\d{8,30})"
 )
+_ID_NUMBER_RE = re.compile(
+    r"(?i)\b(?:ssn|social\s+security(?:\s+number)?|sozialversicherungsnummer|"
+    r"steuer(?:identifikations)?nummer|tax\s+id)\b\s*[:=]?\s*[A-Z0-9][A-Z0-9 ._-]{5,24}"
+)
+_CUSTOMER_ID_RE = re.compile(
+    r"(?i)\b(?:kundennummer|kundennr|kunden-nr|customer(?:\s+(?:id|number))?|"
+    r"client\s+id|account\s+id)\b\s*[:=]?\s*[A-Z0-9][A-Z0-9._-]{3,}"
+)
+_ADDRESS_RE = re.compile(
+    r"(?i)\b(?:adresse|anschrift|address)\b\s*[:=]?\s*[^\n,;]{0,80}?"
+    r"(?:straße|strasse|street|st\.|road|rd\.|avenue|ave\.|weg|allee|platz)\s+"
+    r"\d+[A-ZÄÖÜa-zäöüß0-9 ._-]*?"
+    r"(?=$|[,;]|\s+(?:kundennummer|kundennr|kunden-nr|customer|client\s+id|account\s+id|ssn|"
+    r"social\s+security|steuer|tax\s+id)\b)"
+)
 
 _SENSITIVE_PATTERNS = [
     (_TOKEN_RE, "[redacted token]"),
+    (_BARE_TOKEN_RE, "[redacted token]"),
     (_PASSWORD_RE, "[redacted password]"),
     (_ACCESS_TOKEN_RE, "[redacted token]"),
     (_URL_CRED_RE, "[redacted credentials]"),
+    (_LABELED_NAME_RE, "[redacted name]"),
     (_EMAIL_RE, "[redacted email]"),
     (_IBAN_RE, "[redacted iban]"),
     (_BANK_DATA_RE, "[redacted bank data]"),
+    (_ADDRESS_RE, "[redacted address]"),
+    (_ID_NUMBER_RE, "[redacted id]"),
+    (_CUSTOMER_ID_RE, "[redacted customer id]"),
     (_PHONE_RE, "[redacted phone]"),
 ]
 
@@ -255,15 +289,6 @@ def parse_security_directives(text: str) -> SecurityParserResult:
             entry = _normalize_blacklist_entry(match_add.group(1))
             if entry and entry not in added:
                 added.append(entry)
-            continue
-        match_inline_add = _BLACKLIST_ADD_INLINE_RE.search(line)
-        if match_inline_add:
-            entry = _normalize_blacklist_entry(match_inline_add.group(1))
-            if entry and entry not in added:
-                added.append(entry)
-            kept_line = line[:match_inline_add.start()].strip()
-            if kept_line:
-                kept.append(kept_line)
             continue
         if _BLACKLIST_SHOW_RE.match(line):
             show_blacklist = True

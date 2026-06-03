@@ -989,12 +989,19 @@ class CiStaticTest(unittest.TestCase):
     def test_build_rpm_stages_topdir_before_replacing_previous_build(self) -> None:
         build_rpm = (REPO_ROOT / "scripts" / "build-rpm.sh").read_text(encoding="utf-8")
         self.assertIn('final_topdir="${repo_dir}/dist/rpmbuild"', build_rpm)
-        self.assertIn('stage_topdir="$(mktemp -d "${dist_dir}/.$(basename "${final_topdir}").stage.XXXXXX")"', build_rpm)
+        self.assertIn(
+            'stage_topdir="$(mktemp -d "${rpmbuild_tmpdir}/.$(basename "${final_topdir}").stage.XXXXXX")"',
+            build_rpm,
+        )
         self.assertIn('--define "_topdir ${stage_topdir}"', build_rpm)
         self.assertIn('safe_fs="${repo_dir}/scripts/safe-local-fs.py"', build_rpm)
         self.assertIn('require_regular_source_file "${safe_fs}" "safe local filesystem helper"', build_rpm)
         self.assertIn('safe_fs_cmd=(python3 "${safe_fs}")', build_rpm)
-        self.assertIn('"${safe_fs_cmd[@]}" install-tree build-rpm "${stage_topdir}" "${final_topdir}" "RPM build directory"', build_rpm)
+        self.assertIn('dist_finalize_lock="${dist_dir}/.build-rpm.finalize.lock"', build_rpm)
+        self.assertIn("activate_with_finalize_lock() {", build_rpm)
+        self.assertIn("import fcntl", build_rpm)
+        self.assertIn('activate_with_finalize_lock "${dist_finalize_lock}" "${stage_topdir}" "${final_topdir}"', build_rpm)
+        self.assertIn('[sys.executable, safe_fs, "install-tree", "build-rpm", staging_path, final_path, "RPM build directory"]', build_rpm)
         self.assertNotIn('mv -T -- "${stage_topdir}" "${final_topdir}"', build_rpm)
         self.assertNotIn('rm -rf "${topdir}"', build_rpm)
 

@@ -57,12 +57,19 @@ class SecurityParserTest(unittest.TestCase):
         self.assertEqual(directives.added_blacklist, ["geheim"])
         self.assertEqual(directives.text, "")
 
-    def test_parse_security_directives_strips_inline_add_from_output(self) -> None:
+    def test_parse_security_directives_does_not_treat_mixed_sentence_as_command(self) -> None:
         text = "Hallo blacklisteintrag: geheim"
         directives = parse_security_directives(text)
-        self.assertEqual(directives.added_blacklist, ["geheim"])
+        self.assertEqual(directives.added_blacklist, [])
         self.assertFalse(directives.show_blacklist)
-        self.assertEqual(directives.text, "Hallo")
+        self.assertEqual(directives.text, "Hallo blacklisteintrag: geheim")
+
+    def test_parse_security_directives_does_not_treat_show_with_trailing_dictation_as_command(self) -> None:
+        text = "Bitte zeige die Blacklist und dann weiter"
+        directives = parse_security_directives(text)
+        self.assertEqual(directives.added_blacklist, [])
+        self.assertFalse(directives.show_blacklist)
+        self.assertEqual(directives.text, text)
 
     def test_parse_security_directives_detects_show_phrase_with_open(self) -> None:
         text = "Bitte Blacklist öffnen"
@@ -76,6 +83,49 @@ class SecurityParserTest(unittest.TestCase):
         self.assertIn("[redacted token]", sanitized)
         self.assertIn("[redacted iban]", sanitized)
         self.assertGreater(count, 0)
+
+    def test_apply_security_mode_masks_spaced_iban_and_hyphenated_single_name(self) -> None:
+        text = "mein name ist Jean-Luc und IBAN DE44 5001 0517 5407 3249 31"
+        sanitized, count = apply_security_mode(text, [])
+
+        self.assertIn("m[redacted name]", sanitized)
+        self.assertIn("[redacted iban]", sanitized)
+        self.assertNotIn("Jean-Luc", sanitized)
+        self.assertNotIn("DE44 5001", sanitized)
+        self.assertGreaterEqual(count, 2)
+
+    def test_apply_security_mode_masks_multi_word_password_values(self) -> None:
+        sanitized, count = apply_security_mode("password: ab cd ist gesetzt.", [])
+
+        self.assertIn("[redacted password]", sanitized)
+        self.assertNotIn("ab", sanitized)
+        self.assertNotIn("cd", sanitized)
+        self.assertGreaterEqual(count, 1)
+
+    def test_apply_security_mode_masks_broader_personal_information(self) -> None:
+        text = (
+            "token abc123 Name: Max Mustermann Adresse: Hauptstraße 5 "
+            "Kundennummer K-12345 SSN 123-45-6789"
+        )
+        sanitized, count = apply_security_mode(text, [])
+
+        self.assertIn("[redacted token]", sanitized)
+        self.assertIn("[redacted name]", sanitized)
+        self.assertIn("[redacted address]", sanitized)
+        self.assertIn("[redacted customer id]", sanitized)
+        self.assertIn("[redacted id]", sanitized)
+        self.assertNotIn("abc123", sanitized)
+        self.assertNotIn("Max Mustermann", sanitized)
+        self.assertNotIn("Hauptstraße 5", sanitized)
+        self.assertNotIn("K-12345", sanitized)
+        self.assertNotIn("123-45-6789", sanitized)
+        self.assertGreaterEqual(count, 5)
+
+    def test_apply_security_mode_does_not_mask_plain_token_status_words(self) -> None:
+        sanitized, count = apply_security_mode("Der token ist invalid und fehlt.", [])
+
+        self.assertEqual(sanitized, "Der token ist invalid und fehlt.")
+        self.assertEqual(count, 0)
 
     def test_apply_security_mode_masks_blacklist_items_case_insensitive(self) -> None:
         text = "Das GeHeIm hier steht. Und noch GEHEIM."
