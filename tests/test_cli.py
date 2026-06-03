@@ -152,6 +152,24 @@ class CliTest(unittest.TestCase):
             self.assertEqual(audio_path.name, "20260101-000000-000001.wav")
             self.assertEqual(log_path.name, "20260101-000000-000001.log")
 
+    def test_allocate_recording_artifacts_fails_if_partial_audio_cleanup_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            root.mkdir(parents=True)
+
+            def fake_prepare(path: Path, *, field_name: str, exclusive: bool = True) -> None:
+                path.write_bytes(b"partial")
+                raise RuntimeError("prepare failed")
+
+            with (
+                mock.patch("speed_of_cinnamon.cli.recordings_dir", return_value=root),
+                mock.patch("speed_of_cinnamon.cli.timestamp", return_value="20260101-000000-000000"),
+                mock.patch("speed_of_cinnamon.cli._prepare_private_file", side_effect=fake_prepare),
+                mock.patch("speed_of_cinnamon.cli.remove_file", return_value=False),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "failed to clean partial recording audio file"):
+                    cli._allocate_recording_artifacts()
+
     def test_write_json_atomic_rejects_symlink_parent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4269,6 +4287,45 @@ class CliTest(unittest.TestCase):
                     cli.finalize_recording(args, store, store.read())
 
             self.assertEqual(list(transcript_root.glob("*.txt")), [])
+
+    def test_finalize_does_not_clear_transcript_state_if_transcript_delete_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            transcript_root = tmp_path / "speed-of-cinnamon" / "transcripts"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="finalizing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=True)
+            update_calls: list[dict[str, object]] = []
+            original_update = store.update
+
+            def tracking_update(**kwargs: object) -> RecordingState:
+                update_calls.append(kwargs)
+                return original_update(**kwargs)
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent")),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("skip trim")),
+                mock.patch("speed_of_cinnamon.cli.reencode_recording_to_flac", side_effect=cli.RecorderError("skip encode")),
+                mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.insert_text", side_effect=RuntimeError("paste failed")),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
+                mock.patch.object(store, "update", side_effect=tracking_update),
+                mock.patch("pathlib.Path.unlink", side_effect=OSError("unlink failed")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "failed to delete transcript file"):
+                    cli.finalize_recording(args, store, store.read())
+
+            self.assertTrue(list(transcript_root.glob("*.txt")))
+            self.assertFalse(any("transcript_path" in call and call["transcript_path"] == "" for call in update_calls))
 
     def test_finalize_can_keep_stabilized_trimmed_recording_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

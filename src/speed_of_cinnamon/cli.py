@@ -969,9 +969,11 @@ def _allocate_recording_artifacts() -> tuple[Path, Path]:
             _prepare_private_file(audio_path, field_name="recording audio file")
         except RuntimeError:
             if _recording_artifact_stat(audio_path) is not None:
-                remove_file(str(audio_path), suffix=".wav")
+                if not remove_file(str(audio_path), suffix=".wav"):
+                    raise RuntimeError(f"failed to clean partial recording audio file: {audio_path}") from None
             if _recording_artifact_stat(log_path) is not None:
-                remove_file(str(log_path), suffix=".log")
+                if not remove_file(str(log_path), suffix=".log"):
+                    raise RuntimeError(f"failed to clean partial recording log file: {log_path}") from None
             if _recording_artifact_stat(audio_path) is not None or _recording_artifact_stat(log_path) is not None:
                 continue
             raise
@@ -981,18 +983,18 @@ def _allocate_recording_artifacts() -> tuple[Path, Path]:
 
 def _remove_transcript_file(path: Path) -> bool:
     if not isinstance(path, Path) or path.suffix.lower() != ".txt":
-        return False
+        raise RuntimeError("transcript path must be a .txt path")
     try:
         path.relative_to(transcript_dir())
     except ValueError:
-        return False
+        raise RuntimeError(f"refusing to delete transcript outside transcript directory: {path}") from None
     try:
         assert_no_symlink_ancestors(path, field_name="transcript file")
         path.unlink()
     except FileNotFoundError:
         return False
-    except OSError:
-        return False
+    except OSError as exc:
+        raise RuntimeError(f"failed to delete transcript file: {path}") from exc
     return True
 
 

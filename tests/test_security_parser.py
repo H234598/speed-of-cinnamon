@@ -113,7 +113,7 @@ class SecurityParserTest(unittest.TestCase):
 
     def test_apply_security_mode_masks_unaccented_german_spoken_labels(self) -> None:
         sanitized, count = apply_security_mode(
-            "ich bin Max Mustermann und token heisst abc123 und passwort heisse blau",
+            "ich bin Max Mustermann und token heise abc123 und passwort heise blau",
             [],
         )
 
@@ -124,6 +124,20 @@ class SecurityParserTest(unittest.TestCase):
         self.assertNotIn("abc123", sanitized)
         self.assertNotIn("blau", sanitized)
         self.assertGreaterEqual(count, 3)
+
+    def test_apply_security_mode_masks_long_spoken_secrets_and_names_without_tail_leaks(self) -> None:
+        long_secret = "a" * 180
+        long_name = "Anna Berta Carla Dora Elsa Frieda Greta Helga Ida Julia"
+        sanitized, count = apply_security_mode(
+            f"mein name ist {long_name} und token heise {long_secret}.",
+            [],
+        )
+
+        self.assertIn("[redacted name]", sanitized)
+        self.assertIn("[redacted token]", sanitized)
+        self.assertNotIn(long_name, sanitized)
+        self.assertNotIn(long_secret, sanitized)
+        self.assertGreaterEqual(count, 2)
 
     def test_apply_security_mode_masks_bare_spoken_word_secret_values(self) -> None:
         sanitized, count = apply_security_mode("token ab cd und password blau gruen, aber token invalid bleibt.", [])

@@ -43,8 +43,8 @@ _SPOKEN_SENSITIVE_LABEL_PATTERN = (
     r"passcode|iban|name|adresse|anschrift|address|kundennummer|kundennr|kunden-nr|ssn|tax\s+id)"
 )
 _SPOKEN_SENSITIVE_VALUE_PATTERN = (
-    r"(?:\"[^\n\"]{1,120}\"|'[^\n']{1,120}'|"
-    rf"(?:(?!\s+(?:(?:und|and)\s+)?(?:meine|my\s+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)[^,;\n.?!]){{1,120}})"
+    r"(?:\"[^\n\"]{1,1000}\"|'[^\n']{1,1000}'|"
+    rf"(?:(?!\s+(?:(?:und|and)\s+)?(?:meine|my\s+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)[^,;\n.?!]){{1,1000}})"
 )
 _BARE_SENSITIVE_STATUS_WORD_PATTERN = (
     r"(?:ist|is|war|was|are|were|missing|invalid|required|too|contains?|fehlt|leer|ung[üu]ltig|"
@@ -59,7 +59,7 @@ _BARE_SENSITIVE_WORD_VALUE_PATTERN = (
 )
 _VERBAL_TOKEN_RE = re.compile(
     r"(?i)\b(?:token|api[_-]?key|api\s+key|secret|apikey|bearer)\b\s+"
-    r"(?:ist|is|lautet|heißt|heisst|heist|heisse)\s+"
+    r"(?:ist|is|lautet|heißt|heisst|heist|heisse|heise)\s+"
     rf"(?!(?:{_BARE_SENSITIVE_STATUS_WORD_PATTERN})\b)"
     rf"(?!(?:{_SPOKEN_SENSITIVE_LABEL_PATTERN})\s*[:=])"
     + _SPOKEN_SENSITIVE_VALUE_PATTERN
@@ -80,7 +80,7 @@ _PASSWORD_RE = re.compile(
 )
 _VERBAL_PASSWORD_RE = re.compile(
     r"(?i)\b(?:password|passwort|kennwort|passcode)\b\s+"
-    r"(?:ist|is|lautet|heißt|heisst|heist|heisse)\s+"
+    r"(?:ist|is|lautet|heißt|heisst|heist|heisse|heise)\s+"
     rf"(?!(?:{_BARE_SENSITIVE_STATUS_WORD_PATTERN})\b)"
     rf"(?!(?:{_SPOKEN_SENSITIVE_LABEL_PATTERN})\s*[:=])"
     + _SPOKEN_SENSITIVE_VALUE_PATTERN
@@ -96,11 +96,11 @@ _LABELED_NAME_RE = re.compile(
     r"(?i)\b(?:name|voller\s+name|full\s+name)\b\s*[:=]\s*"
     r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß-]+"
     r"(?:\s+(?!(?:adresse|anschrift|address|kundennummer|kundennr|kunden-nr|ssn|tax\s+id)\b)"
-    r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß-]+){0,3}"
+    r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß-]+){0,15}"
 )
 _NAME_RE = re.compile(
     r"(?i)\b(?:mein\s+name\s+ist|ich\s+(?:heiße|heisse|heise|heisst|bin)|name\s+is|my\s+name\s+is)\s+"
-    r"([A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]*(?:\s+[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]*){0,3})"
+    r"([A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]*(?:\s+[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]*){0,15})"
 )
 _BANK_DATA_RE = re.compile(
     r"(?i)\b(?:iban|kontodaten|kontonummer|kontonr|konto|bank\s+account|account\s+no|account\s+number)\b[^\n]{0,60}(\d{8,30})"
