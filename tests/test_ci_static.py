@@ -421,8 +421,8 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('tags:\n      - "v*.*.*"', workflow)
         self.assertNotIn("if [[ ! \"${tag}\" =~ ^v[0-9]+(\\.[0-9]+){0,2}([0-9A-Za-z.+-]*)?$ ]]", workflow)
         self.assertIn('if [[ ! "${tag}" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then', workflow)
-        self.assertIn("project_version=\"$(python3 - <<'PY'", workflow)
-        self.assertIn('path = pathlib.Path("pyproject.toml")', workflow)
+        self.assertIn("project_version=\"$(python3 -c 'import pathlib, tomllib;", workflow)
+        self.assertIn('pathlib.Path("pyproject.toml").read_text(encoding="utf-8")', workflow)
         self.assertIn('expected_tag="v${project_version}"', workflow)
         self.assertIn('if [[ "${tag}" != "${expected_tag}" ]]; then', workflow)
         self.assertIn(

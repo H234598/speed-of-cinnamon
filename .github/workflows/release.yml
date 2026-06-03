@@ -157,15 +157,7 @@ jobs:
             exit 1
           fi
 
-          project_version="$(python3 - <<'PY'
-import pathlib
-import tomllib
-
-path = pathlib.Path("pyproject.toml")
-data = tomllib.loads(path.read_text(encoding="utf-8"))
-print(data["project"]["version"])
-PY
-          )"
+          project_version="$(python3 -c 'import pathlib, tomllib; data = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8")); print(data["project"]["version"])')"
           expected_tag="v${project_version}"
 
           if [[ "${tag}" != "${expected_tag}" ]]; then
