@@ -916,8 +916,10 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
             os.replace(tmp_dir, path)
         except OSError as exc:
             if backup_dir is not None:
-                with suppress(Exception):
+                try:
                     os.replace(backup_dir, path)
+                except OSError as restore_exc:
+                    raise ModelError(f"failed to restore existing model directory after download failure: {path}") from restore_exc
             raise ModelError(f"failed to persist downloaded model directory: {path}") from exc
         if backup_dir is not None:
             shutil.rmtree(backup_dir, ignore_errors=True)
@@ -925,6 +927,12 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
     return {**model_status(model, verify=True), "status": "done", "message": f"model downloaded: {path}"}
+
+
+def _restore_model_file_backup(path: Path, backup_path: Path) -> None:
+    if path.exists():
+        path.unlink()
+    os.replace(backup_path, path)
 
 
 def download_model(name: str, force: bool = False) -> dict[str, object]:
@@ -983,16 +991,21 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
         if replaced_path:
             _clear_model_checksum_cache(path)
             if backup_path is not None:
-                with suppress(Exception):
-                    path.unlink()
-                    os.replace(backup_path, path)
+                try:
+                    _restore_model_file_backup(path, backup_path)
+                except OSError as restore_exc:
+                    raise ModelError(f"failed to restore existing model file after download failure: {path}") from restore_exc
         elif backup_path is not None and not path.exists():
-            with suppress(Exception):
+            try:
                 os.replace(backup_path, path)
+            except OSError as restore_exc:
+                raise ModelError(f"failed to restore existing model file after download failure: {path}") from restore_exc
         raise
     if backup_path is not None:
-        with suppress(Exception):
+        try:
             backup_path.unlink()
+        except OSError as cleanup_exc:
+            raise ModelError(f"failed to remove model backup after successful download: {backup_path}") from cleanup_exc
     return {**model_status(model, verify=True), "status": "done", "message": f"model downloaded: {path}"}
 
 

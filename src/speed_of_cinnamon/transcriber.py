@@ -605,14 +605,16 @@ def transcribe_with_openai_whisper(
     )
     generated = output_dir / f"{audio_path.stem}.txt"
     if generated.exists():
-        text = _read_text_file(generated).strip()
-        _assert_text_length(text, field_name="transcript")
-        if write_transcript:
-            _write_text_atomic(text_path, text + "\n")
         try:
-            generated.unlink()
-        except OSError as exc:
-            raise TranscriptionError("failed to remove generated transcript") from exc
+            text = _read_text_file(generated).strip()
+            _assert_text_length(text, field_name="transcript")
+            if write_transcript:
+                _write_text_atomic(text_path, text + "\n")
+        finally:
+            try:
+                generated.unlink()
+            except OSError as exc:
+                raise TranscriptionError("failed to remove generated transcript") from exc
         return text
     raise TranscriptionError("whisper completed but did not produce a transcript")
 

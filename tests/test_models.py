@@ -1159,6 +1159,42 @@ class ModelsTest(unittest.TestCase):
 
             self.assertEqual(path.read_bytes(), old_data)
 
+    def test_download_model_reports_backup_cleanup_failure_after_success(self) -> None:
+        old_data = b"old model"
+        new_data = b"new model"
+        spec = models.ModelSpec(
+            name="backup-cleanup-fails",
+            filename="ggml-backup-cleanup-fails.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(new_data).hexdigest(),
+            description="backup cleanup failure",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(new_data)),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            path.write_bytes(old_data)
+            with mock.patch("speed_of_cinnamon.models.Path.unlink", side_effect=OSError("cleanup failed")):
+                with self.assertRaisesRegex(models.ModelError, "failed to remove model backup"):
+                    models.download_model("backup-cleanup-fails", force=True)
+
+    def test_restore_model_file_backup_reports_restore_failure(self) -> None:
+        old_data = b"old model"
+        new_data = b"new model"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "model.bin"
+            backup = Path(tmp) / ".model.bin.backup"
+            path.write_bytes(old_data)
+            backup.write_bytes(new_data)
+
+            with mock.patch("speed_of_cinnamon.models.os.replace", side_effect=OSError("restore failed")):
+                with self.assertRaises(OSError):
+                    models._restore_model_file_backup(path, backup)
+
     def test_model_status_rejects_non_boolean_verify(self) -> None:
         with self.assertRaisesRegex(models.ModelError, "verify must be a boolean"):
             models.model_status(models.CATALOG[0], verify="true")  # type: ignore[arg-type]
