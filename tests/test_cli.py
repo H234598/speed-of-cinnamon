@@ -4325,6 +4325,9 @@ class CliTest(unittest.TestCase):
                     cli.finalize_recording(args, store, store.read())
 
             self.assertTrue(list(transcript_root.glob("*.txt")))
+            error_calls = [call for call in update_calls if call.get("status") == "error"]
+            self.assertEqual(len(error_calls), 1)
+            self.assertIn("failed to delete transcript file", str(error_calls[0]["error"]))
             self.assertFalse(any("transcript_path" in call and call["transcript_path"] == "" for call in update_calls))
 
     def test_finalize_can_keep_stabilized_trimmed_recording_artifact(self) -> None:
@@ -4800,8 +4803,8 @@ class CliTest(unittest.TestCase):
             audio_exists = audio.exists()
             log_exists = log.exists()
         self.assertEqual(code, 0)
-        self.assertEqual(payload["status"], "idle")
-        self.assertEqual(payload["message"], "recording discarded")
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["message"], "failed to discard recording artifacts")
         self.assertFalse(payload["audio_deleted"])
         self.assertFalse(payload["log_deleted"])
         self.assertTrue(audio_exists)

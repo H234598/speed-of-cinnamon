@@ -103,13 +103,19 @@ class SecurityParserTest(unittest.TestCase):
         self.assertGreaterEqual(count, 1)
 
     def test_apply_security_mode_masks_spoken_secret_values(self) -> None:
-        sanitized, count = apply_security_mode("mein Passwort ist ab cd und token is abc123", [])
+        sanitized, count = apply_security_mode("mein Passwort ist ab cd und token is: abc123", [])
 
         self.assertIn("[redacted password]", sanitized)
         self.assertIn("[redacted token]", sanitized)
         self.assertNotIn("ab cd", sanitized)
         self.assertNotIn("abc123", sanitized)
         self.assertGreaterEqual(count, 2)
+
+    def test_apply_security_mode_stops_spoken_name_at_plain_conjunction(self) -> None:
+        sanitized, count = apply_security_mode("mein name ist Anna und gehe jetzt weiter", [])
+
+        self.assertEqual(sanitized, "[redacted name] und gehe jetzt weiter")
+        self.assertEqual(count, 1)
 
     def test_apply_security_mode_masks_unaccented_german_spoken_labels(self) -> None:
         sanitized, count = apply_security_mode(

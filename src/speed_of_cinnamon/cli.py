@@ -1891,9 +1891,13 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
                     error_delete_log_path = state.log_path
                     error_update["log_path"] = ""
             if written_text_path is not None:
-                error_update["transcript"] = ""
-                error_update["transcript_path"] = ""
-                _remove_transcript_file(written_text_path)
+                try:
+                    _remove_transcript_file(written_text_path)
+                except RuntimeError as cleanup_exc:
+                    error_update["error"] = f"{error_text}; {cleanup_exc}"
+                else:
+                    error_update["transcript"] = ""
+                    error_update["transcript_path"] = ""
             store.update(**error_update)
             if error_delete_audio_path is not None:
                 remove_file(str(error_delete_audio_path), suffix=audio_suffix)
@@ -1970,6 +1974,28 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
     discarded_audio_path = state.audio_path
     audio_deleted = _remove_recording_artifact(discarded_audio_path)
     log_deleted = remove_file(state.log_path, suffix=".log")
+    if (discarded_audio_path and not audio_deleted) or (state.log_path and not log_deleted):
+        error_message = "failed to discard recording artifacts"
+        store.write(
+            RecordingState(
+                status="error",
+                audio_path=state.audio_path,
+                log_path=state.log_path,
+                stopped_at=now_iso(),
+                language=state.language,
+                recorder=state.recorder,
+                input_device=state.input_device,
+                max_seconds=state.max_seconds,
+                error=error_message,
+            )
+        )
+        return {
+            "status": "error",
+            "message": error_message,
+            "discarded_audio_path": discarded_audio_path,
+            "audio_deleted": audio_deleted,
+            "log_deleted": log_deleted,
+        }
     store.write(
         RecordingState(
             status="idle",
