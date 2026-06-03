@@ -769,7 +769,7 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertLess(fingerprint_index, relisten_index)
         self.assertIn("this.autoInsertFingerprints = [];", source)
-        self.assertIn("this._hasAutoInsertFingerprint(insertFingerprint)", source)
+        self.assertIn("this._hasAutoInsertFingerprint(fingerprint)", source)
         self.assertIn("if (payload.inserted === true) {", source)
         self.assertIn('payload.message || _("Transcript already inserted by backend")', source)
         self.assertIn("if (!this._reserveAutoInsertFingerprint(insertFingerprint))", source)
