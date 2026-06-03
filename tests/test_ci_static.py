@@ -415,6 +415,21 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("contents: read", security_workflow)
         self.assertNotIn("contents: write", security_workflow)
 
+    def test_release_workflow_validates_tag_against_pyproject_version(self) -> None:
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+        self.assertIn('tags:\n      - "v*.*.*"', workflow)
+        self.assertNotIn("if [[ ! \"${tag}\" =~ ^v[0-9]+(\\.[0-9]+){0,2}([0-9A-Za-z.+-]*)?$ ]]", workflow)
+        self.assertIn('if [[ ! "${tag}" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then', workflow)
+        self.assertIn("project_version=\"$(python3 - <<'PY'", workflow)
+        self.assertIn('path = pathlib.Path("pyproject.toml")', workflow)
+        self.assertIn('expected_tag="v${project_version}"', workflow)
+        self.assertIn('if [[ "${tag}" != "${expected_tag}" ]]; then', workflow)
+        self.assertIn(
+            'printf \'release tag mismatch: workflow triggered with %s but pyproject.toml is %s\\n\' "${tag}" "${expected_tag}" >&2',
+            workflow,
+        )
+
     def test_shell_scripts_have_security_preamble(self) -> None:
         offenders: list[str] = []
         for path in sorted((REPO_ROOT / "scripts").glob("*.sh")):
@@ -730,7 +745,7 @@ class CiStaticTest(unittest.TestCase):
         publisher = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
 
         self.assertIn('name: Release', workflow)
-        self.assertIn('- "v*"', workflow)
+        self.assertIn('- "v*.*.*"', workflow)
         self.assertIn("workflow_dispatch:", workflow)
         self.assertIn("run_workflow_lint:", workflow)
         self.assertIn("permissions:\n  contents: read", workflow)

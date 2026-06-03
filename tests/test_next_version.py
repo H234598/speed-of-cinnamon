@@ -166,6 +166,7 @@ class NextVersionTest(unittest.TestCase):
             "-1.2.3",
             "1.-2.3",
             "1.2.x",
+            "vv0.1.20",
         ]:
             with self.subTest(version=version):
                 code, stderr = run_version_fail_stdout_stderr("--base", version, "--add-commits", "0")
@@ -373,6 +374,15 @@ class NextVersionTest(unittest.TestCase):
         with self.assertRaises(next_version.UserInputError):
             next_version.normalize_tag(None)  # type: ignore[arg-type]
 
+    def test_normalize_tag_accepts_uppercase_v_and_canonicalizes(self) -> None:
+        self.assertEqual(next_version.normalize_tag("V0.1.20"), "v0.1.20")
+
+    def test_normalize_tag_rejects_double_prefix(self) -> None:
+        with self.assertRaises(next_version.UserInputError):
+            next_version.normalize_tag("vv0.1.20")
+        with self.assertRaises(next_version.UserInputError):
+            next_version.normalize_tag("VV0.1.20")
+
     def test_to_version_rejects_invalid_inputs(self) -> None:
         with self.assertRaises(next_version.UserInputError):
             next_version.to_version(-1, 0, 0)
@@ -394,6 +404,10 @@ class NextVersionTest(unittest.TestCase):
     def test_parse_version_rejects_negative_segments(self) -> None:
         with self.assertRaises(next_version.UserInputError):
             next_version.parse_version("1.-2.3")
+
+    def test_parse_version_rejects_double_prefix(self) -> None:
+        with self.assertRaises(next_version.UserInputError):
+            next_version.parse_version("Vv1.2.3")
 
     def test_commits_since_ref_parses_git_output(self) -> None:
         with mock.patch.object(

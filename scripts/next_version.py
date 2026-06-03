@@ -52,7 +52,12 @@ def _assert_version_tuple(value: tuple[int, int, int]) -> tuple[int, int, int]:
 def parse_version(value: str) -> tuple[int, int, int]:
     if not isinstance(value, str):
         raise UserInputError("invalid version format: value must be a string")
-    parts = value.strip().lstrip("vV").split(".")
+    value = value.strip()
+    if value.startswith(("v", "V")):
+        if len(value) > 1 and value[1] in ("v", "V"):
+            raise UserInputError(f"invalid version format: {value}")
+        value = value[1:]
+    parts = value.split(".")
     if len(parts) != 3:
         raise UserInputError(f"invalid version format: {value}")
     try:
@@ -68,7 +73,12 @@ def normalize_tag(tag: str) -> str:
     tag = tag.strip()
     if tag == "":
         raise UserInputError("tag must be a non-empty string")
-    return tag if tag.startswith("v") else f"v{tag}"
+    tag = tag.lower()
+    if tag.startswith("v"):
+        if tag.startswith("vv"):
+            raise UserInputError("tag may have at most one leading v")
+        return tag
+    return f"v{tag}"
 
 def to_version(major: int, minor: int, patch: int) -> str:
     major = _assert_non_negative_int("major", major)
