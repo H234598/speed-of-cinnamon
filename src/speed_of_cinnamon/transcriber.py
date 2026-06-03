@@ -7,6 +7,7 @@ import tempfile
 import io
 import json
 import os
+import stat as stat_module
 import uuid
 import urllib.parse
 import urllib.error
@@ -426,7 +427,7 @@ def validate_audio_file(path: Path) -> Path:
         stat_result = normalized.stat()
     except OSError as exc:
         raise TranscriptionError(f"audio file is missing or empty: {path}") from exc
-    if not normalized.is_file():
+    if not stat_module.S_ISREG(stat_result.st_mode):
         raise TranscriptionError(f"audio path is not a regular file: {path}")
     if normalized.suffix.lower() not in ALLOWED_AUDIO_EXTENSIONS:
         raise TranscriptionError(f"unsupported audio extension: {normalized.suffix}")

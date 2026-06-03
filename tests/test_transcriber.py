@@ -258,6 +258,14 @@ class TranscriberTest(unittest.TestCase):
         with self.assertRaisesRegex(TranscriptionError, "audio path must be a Path"):
             validate_audio_file("sample.wav")  # type: ignore[arg-type]
 
+    def test_validate_audio_file_rejects_directory_without_extra_is_file_stat(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio_dir = Path(tmp) / "sample.wav"
+            audio_dir.mkdir()
+            with mock.patch("pathlib.Path.is_file", side_effect=AssertionError("extra is_file stat")):
+                with self.assertRaisesRegex(TranscriptionError, "audio path is not a regular file"):
+                    validate_audio_file(audio_dir)
+
     def test_validate_audio_file_rejects_oversized_path_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ("😀" * ((MAX_AUDIO_PATH_CHARS // 4) + 1))
