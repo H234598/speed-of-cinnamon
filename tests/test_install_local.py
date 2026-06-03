@@ -131,6 +131,20 @@ class InstallLocalTest(unittest.TestCase):
                 (home / ".local" / "share" / "speed-of-cinnamon" / "python" / "speed_of_cinnamon" / "cli.py").exists()
             )
 
+    def test_install_local_reinstalls_existing_targets_without_cross_device_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            home = tmp_path / "home"
+            home.mkdir()
+            first = self._run_install_local(REPO_ROOT, home)
+            self.assertEqual(first.returncode, 0, msg=first.stdout + first.stderr)
+
+            second = self._run_install_local(REPO_ROOT, home)
+
+            self.assertEqual(second.returncode, 0, msg=second.stdout + second.stderr)
+            self.assertNotIn("Invalid cross-device link", second.stderr)
+            self.assertFalse(list((home / ".local" / "share" / "speed-of-cinnamon").glob("install-stage-*")))
+
     def test_install_local_preserves_existing_applet_when_staging_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

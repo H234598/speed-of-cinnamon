@@ -243,8 +243,8 @@ reject_unsafe_tree "${repo_dir}/src/speed_of_cinnamon" "python package source tr
 reject_unsafe_file "${repo_dir}/docs/man/speed-of-cinnamon.1" "man page source"
 reject_unsafe_file "${repo_dir}/docs/man/speed-of-cinnamon-alarms.1" "man page source"
 
-temp_root="$(resolve_tmp_root)"
-staged_workspace="$(mktemp -d "${temp_root}/speed-of-cinnamon-install-stage-XXXXXX")"
+resolve_tmp_root >/dev/null
+staged_workspace="$(mktemp -d "${app_data}/install-stage-XXXXXX")"
 rollback_root="${staged_workspace}/rollback"
 safe_fs mkdirs install "${rollback_root}"
 safe_fs mkdirs install "${rollback_root}"
