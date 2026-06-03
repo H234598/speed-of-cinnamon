@@ -190,10 +190,6 @@ class StateStore:
             tmp_path = Path(handle.name)
         try:
             os.replace(tmp_path, self.path)
-            try:
-                self.path.chmod(0o600)
-            except OSError:
-                pass
         except OSError as exc:
             try:
                 os.unlink(tmp_path)

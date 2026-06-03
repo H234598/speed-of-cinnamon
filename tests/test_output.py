@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import unittest
 import tempfile
+from pathlib import Path
 from typing import BinaryIO, cast
 from unittest import mock
 
@@ -41,6 +43,23 @@ class OutputTest(unittest.TestCase):
     def test_contains_escaped_null_rejects_bool(self) -> None:
         with self.assertRaisesRegex(OutputError, "value must be text"):
             _contains_escaped_null(True)  # type: ignore[arg-type]
+
+    def test_clipboard_dedup_state_writes_through_secure_temp_fd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp)
+            path = state_root / output_module.CLIPBOARD_DEDUP_STATE_FILE
+            with (
+                mock.patch("speed_of_cinnamon.output.state_dir", return_value=state_root),
+                mock.patch("speed_of_cinnamon.output.Path.open", side_effect=AssertionError("reopened temp path")),
+            ):
+                written = output_module._write_clipboard_dedup_state("secret text", 123.0)
+
+            content = path.read_text(encoding="utf-8")
+            mode = path.stat().st_mode & 0o777
+
+        self.assertTrue(written)
+        self.assertEqual(json.loads(content), {"text": "secret text", "at": 123.0})
+        self.assertEqual(mode, 0o600)
 
     def test_set_clipboard_prefers_xclip(self) -> None:
         with (

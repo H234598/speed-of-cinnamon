@@ -234,27 +234,23 @@ def _write_clipboard_dedup_state(text: str, at: float) -> bool:
     except OSError:
         return False
     fd, temp_name = tempfile.mkstemp(prefix="clipboard-dedupe-", suffix=".tmp", dir=str(path.parent))
-    os.close(fd)
     temp_path = Path(temp_name)
     try:
-        with temp_path.open("w", encoding="utf-8") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            try:
+                os.fchmod(handle.fileno(), 0o600)
+            except OSError:
+                pass
             json.dump({"text": text, "at": at}, handle)
             handle.write("\n")
-        try:
-            temp_path.chmod(0o600)
-        except OSError:
-            pass
+        assert_no_symlink_ancestors(path, field_name="clipboard dedupe state")
         os.replace(temp_path, path)
-    except OSError:
+    except (OSError, RuntimeError):
         try:
             temp_path.unlink(missing_ok=True)
         except OSError:
             pass
         return False
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
     return True
 
 

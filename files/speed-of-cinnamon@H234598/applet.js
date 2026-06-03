@@ -3868,6 +3868,7 @@ MyApplet.prototype = {
     let insertFingerprint = this._autoInsertFingerprint(payload, transcript);
     if (this._hasAutoInsertFingerprint(insertFingerprint)) {
       this._setStatus("done", payload.message || _("Transcript already inserted"), transcript);
+      this._finishPendingRelisten();
       return;
     }
     if (payload.inserted === true) {

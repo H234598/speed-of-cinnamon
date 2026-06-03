@@ -283,10 +283,6 @@ def save_alarm_store(store: dict[str, Any], path: Path | None = None) -> None:
         tmp_path = Path(handle.name)
     try:
         os.replace(tmp_path, store_path)
-        try:
-            store_path.chmod(0o600)
-        except OSError:
-            pass
     except OSError as exc:
         try:
             os.unlink(tmp_path)
