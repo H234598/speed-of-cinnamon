@@ -107,8 +107,8 @@ if find "${package_dir}" -type l -print -quit | grep -q .; then
   exit 1
 fi
 # shellcheck disable=SC2016
-if ! grep -Fq 'exec "$(command -v -- python3)" -m speed_of_cinnamon.cli "$@"' "${package_dir}/scripts/install-local.sh"; then
-  printf 'archive install-local wrapper does not invoke the expected CLI module.\n' >&2
+if ! grep -Fq 'exec "$(command -v -- python3)" -m speed_of_cinnamon.cli "$@"' "${package_dir}/scripts/safe-local-fs.py"; then
+  printf 'archive backend wrapper helper does not invoke the expected CLI module.\n' >&2
   exit 1
 fi
 
@@ -131,6 +131,7 @@ for path in \
   files/speed-of-cinnamon@H234598/metadata.json \
   files/speed-of-cinnamon@H234598/settings-schema.json \
   scripts/install-local.sh \
+  scripts/safe-local-fs.py \
   scripts/publish-github-release.sh \
   scripts/verify-authorship.sh \
   scripts/verify-rpm.sh \

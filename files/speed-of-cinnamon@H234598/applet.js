@@ -3097,7 +3097,10 @@ MyApplet.prototype = {
     if (this.postProcessBackend === "openai-compatible") {
       this.openaiCompatibleTextModel = String(model || "");
       this.settings.setValue("openai-compatible-text-model", this.openaiCompatibleTextModel);
-      this._writeExternalApiEnvFile();
+      if (!this._writeExternalApiEnvFile()) {
+        this._refreshTextModelMenu();
+        return;
+      }
     }
     this._refreshTextModelMenu();
     this._setStatus("ready", message, this.lastTranscript);
