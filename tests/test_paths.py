@@ -93,6 +93,24 @@ class PathsTest(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     paths.xdg_cache_home()
 
+    def test_safe_home_path_fails_closed_without_nofollow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            real_home = base / "real-home"
+            real_home.mkdir()
+            home_link = base / "home-link"
+            home_link.symlink_to(real_home, target_is_directory=True)
+            temp_root = base / "temp"
+            temp_root.mkdir()
+
+            with (
+                mock.patch("speed_of_cinnamon.paths.Path.home", return_value=home_link),
+                mock.patch("speed_of_cinnamon.paths.tempfile.gettempdir", return_value=str(temp_root)),
+                mock.patch("speed_of_cinnamon.paths.os.O_NOFOLLOW", None, create=True),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "secure temporary directory open is not supported"):
+                    paths.xdg_cache_home()
+
     def test_xdg_paths_accept_absolute_non_symlink_roots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):

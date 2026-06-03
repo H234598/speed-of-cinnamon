@@ -60,7 +60,10 @@ def _private_runtime_temp_root() -> Path:
     if private_root.is_symlink():
         raise RuntimeError(f"temporary directory must not be a symlink: {private_root}")
     private_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    open_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise RuntimeError("secure temporary directory open is not supported on this platform")
+    open_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow_flag
     try:
         fd = os.open(private_root, open_flags)
     except OSError as exc:
