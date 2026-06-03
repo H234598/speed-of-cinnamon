@@ -211,6 +211,13 @@ class CiStaticTest(unittest.TestCase):
 
         self.assertFalse(offenders, f"unsafe subprocess usage found: {offenders}")
 
+    def test_release_version_tests_do_not_execute_subprocess_with_shell_strings(self) -> None:
+        path = REPO_ROOT / "tests" / "test_next_version.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        offenders = _subprocess_security_offenders(path, tree)
+
+        self.assertFalse(offenders, f"unsafe subprocess usage found: {offenders}")
+
     def test_command_sequence_validation_accepts_supported_forms(self) -> None:
         allowed = ["[\"a\", \"b\"]", "(\"a\", \"b\")", "list([\"a\", \"b\"])", "tuple((\"a\", \"b\"))"]
         blocked = ["command", "tuple('a',)", "list()", "list('ab')", "tuple(command)"]
@@ -855,6 +862,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("workflow-lint:", workflow)
         self.assertIn('version="1.7.12"', workflow)
         self.assertIn("rhysd/actionlint/releases/download/v${version}", workflow)
+        self.assertIn("sha256sum -c -", workflow)
         self.assertIn('actionlint_version="1.7.12"', workflow)
         self.assertIn("rhysd/actionlint/releases/download/v${actionlint_version}", workflow)
         self.assertIn("Verify release tag provenance", workflow)

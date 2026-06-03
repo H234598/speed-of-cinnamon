@@ -98,6 +98,33 @@ class CliTest(unittest.TestCase):
 
             self.assertEqual(path.read_bytes(), b"old")
 
+    def test_ensure_private_text_file_keeps_existing_blacklist_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            path.write_text("geheim\n", encoding="utf-8")
+
+            cli._ensure_private_text_file(path)
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "geheim\n")
+
+    def test_allocate_recording_artifacts_retries_existing_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            root.mkdir(parents=True)
+            (root / "20260101-000000-000000.wav").write_bytes(b"old")
+            (root / "20260101-000000-000000.log").write_text("old", encoding="utf-8")
+
+            with (
+                mock.patch("speed_of_cinnamon.cli.recordings_dir", return_value=root),
+                mock.patch("speed_of_cinnamon.cli.timestamp", return_value="20260101-000000-000000"),
+            ):
+                audio_path, log_path = cli._allocate_recording_artifacts()
+
+            self.assertEqual(audio_path.name, "20260101-000000-000000-01.wav")
+            self.assertEqual(log_path.name, "20260101-000000-000000-01.log")
+            self.assertTrue(audio_path.exists())
+            self.assertFalse(log_path.exists())
+
     def test_write_json_atomic_rejects_symlink_parent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4152,6 +4179,39 @@ class CliTest(unittest.TestCase):
 
             self.assertTrue(audio.exists())
             self.assertTrue(log.exists())
+
+    def test_finalize_removes_written_transcript_if_insert_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            transcript_root = tmp_path / "speed-of-cinnamon" / "transcripts"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="finalizing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=True)
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent")),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("skip trim")),
+                mock.patch("speed_of_cinnamon.cli.reencode_recording_to_flac", side_effect=cli.RecorderError("skip encode")),
+                mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.insert_text", side_effect=RuntimeError("paste failed")),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "paste failed"):
+                    cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+            self.assertEqual(final_state.status, "error")
+            self.assertEqual(final_state.transcript, "")
+            self.assertEqual(final_state.transcript_path, "")
+            self.assertEqual(list(transcript_root.glob("*.txt")), [])
 
     def test_finalize_can_keep_stabilized_trimmed_recording_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

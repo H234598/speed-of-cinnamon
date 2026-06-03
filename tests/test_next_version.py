@@ -183,6 +183,17 @@ class NextVersionTest(unittest.TestCase):
     def test_from_tag_with_whitespace_is_accepted(self) -> None:
         self.assertEqual(next_version.normalize_tag("  0.1.20  "), next_version.normalize_tag("v0.1.20"))
 
+    def test_from_tag_matching_current_version_without_git_tag_still_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "pyproject.toml").write_text(
+                "[project]\nname = \"example\"\nversion = \"0.1.20\"\n",
+                encoding="utf-8",
+            )
+            code, stderr = run_version_fail_stdout_stderr("--from-tag", "0.1.20", cwd=Path(tmpdir))
+
+        self.assertEqual(code, 2)
+        self.assertIn("release tag v0.1.20 does not exist", stderr)
+
     def test_from_tag_with_only_whitespace_is_rejected(self) -> None:
         code, stderr = run_version_fail_stdout_stderr("--from-tag", "   ")
         self.assertEqual(code, 2)

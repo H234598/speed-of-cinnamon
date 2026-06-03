@@ -248,7 +248,7 @@
   "auto-paste-window-title": {
     "type": "entry",
     "description": "AutoPaste window title",
-    "tooltip": "Built-in presets require the title marker plus a matching known window identity; custom strings are title-only. Empty disables Auto-Paste. Max 4096 chars.",
+    "tooltip": "Built-in marker names require the title marker plus a matching known window identity; other custom strings are title-only. Empty disables Auto-Paste. Max 4096 chars.",
     "default": "codex"
   },
   "cli-path": {

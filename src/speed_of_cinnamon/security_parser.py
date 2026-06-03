@@ -59,7 +59,7 @@ _BARE_SENSITIVE_WORD_VALUE_PATTERN = (
 )
 _VERBAL_TOKEN_RE = re.compile(
     r"(?i)\b(?:token|api[_-]?key|api\s+key|secret|apikey|bearer)\b\s+"
-    r"(?:ist|is|lautet|heißt|heisst|heist)\s+"
+    r"(?:ist|is|lautet|heißt|heisst|heist|heisse)\s+"
     rf"(?!(?:{_BARE_SENSITIVE_STATUS_WORD_PATTERN})\b)"
     rf"(?!(?:{_SPOKEN_SENSITIVE_LABEL_PATTERN})\s*[:=])"
     + _SPOKEN_SENSITIVE_VALUE_PATTERN
@@ -80,7 +80,7 @@ _PASSWORD_RE = re.compile(
 )
 _VERBAL_PASSWORD_RE = re.compile(
     r"(?i)\b(?:password|passwort|kennwort|passcode)\b\s+"
-    r"(?:ist|is|lautet|heißt|heisst|heist)\s+"
+    r"(?:ist|is|lautet|heißt|heisst|heist|heisse)\s+"
     rf"(?!(?:{_BARE_SENSITIVE_STATUS_WORD_PATTERN})\b)"
     rf"(?!(?:{_SPOKEN_SENSITIVE_LABEL_PATTERN})\s*[:=])"
     + _SPOKEN_SENSITIVE_VALUE_PATTERN

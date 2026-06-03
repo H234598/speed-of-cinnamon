@@ -241,12 +241,9 @@ def main() -> int:
         if not from_tag_raw:
             raise UserInputError("from-tag must be a non-empty version")
         base = parse_version(from_tag_raw)
-        from_tag_has_prefix = from_tag_raw.startswith(("v", "V"))
         normalized_from_tag = normalize_tag(from_tag_raw)
         if tag_exists(normalized_from_tag):
             commits = commits_since_tag(normalized_from_tag)
-        elif not from_tag_has_prefix and base == read_current_version():
-            commits = 0
         else:
             raise UserInputError(f"release tag {normalized_from_tag} does not exist")
     elif a.base is not None:

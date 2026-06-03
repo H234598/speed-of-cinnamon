@@ -696,7 +696,7 @@ def prepare_output_text(text: str, append_space: bool, sanitize: bool) -> str:
 def _ensure_private_text_file(path: Path) -> None:
     assert_no_symlink_ancestors(path, field_name="blacklist file")
     path.parent.mkdir(parents=True, exist_ok=True)
-    _prepare_private_file(path, field_name="blacklist file")
+    _prepare_private_file(path, field_name="blacklist file", exclusive=False)
 
 
 def _open_blacklist_document() -> bool:
@@ -924,7 +924,7 @@ def _write_text_atomic(path: Path, text: str) -> None:
         raise RuntimeError(f"failed to write transcript file: {path}") from exc
 
 
-def _prepare_private_file(path: Path, *, field_name: str) -> None:
+def _prepare_private_file(path: Path, *, field_name: str, exclusive: bool = True) -> None:
     if not isinstance(path, Path):
         raise RuntimeError(f"{field_name} must be a path")
     assert_no_symlink_ancestors(path, field_name=field_name)
@@ -933,7 +933,12 @@ def _prepare_private_file(path: Path, *, field_name: str) -> None:
     if nofollow_flag is None:
         raise RuntimeError(f"secure {field_name} open is not supported on this platform")
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag, 0o600)
+        flags = os.O_WRONLY | os.O_CREAT | nofollow_flag
+        if exclusive:
+            flags |= os.O_EXCL
+        else:
+            flags |= os.O_APPEND
+        fd = os.open(path, flags, 0o600)
     except OSError as exc:
         raise RuntimeError(f"failed to prepare {field_name}: {path}") from exc
     try:
@@ -948,6 +953,26 @@ def _prepare_private_file(path: Path, *, field_name: str) -> None:
         except OSError:
             pass
         raise RuntimeError(f"failed to prepare {field_name}: {path}") from exc
+
+
+def _allocate_recording_artifacts() -> tuple[Path, Path]:
+    root = recordings_dir()
+    for attempt in range(100):
+        stem = timestamp()
+        if attempt:
+            stem = f"{stem}-{attempt:02d}"
+        audio_path = validate_recording_path(root / f"{stem}.wav", suffix=".wav", require_recordings_dir=True)
+        log_path = validate_recording_path(root / f"{stem}.log", suffix=".log", require_recordings_dir=True)
+        if _recording_artifact_stat(audio_path) is not None or _recording_artifact_stat(log_path) is not None:
+            continue
+        try:
+            _prepare_private_file(audio_path, field_name="recording audio file")
+        except RuntimeError:
+            if _recording_artifact_stat(audio_path) is not None or _recording_artifact_stat(log_path) is not None:
+                continue
+            raise
+        return audio_path, log_path
+    raise RuntimeError("failed to allocate collision-free recording artifacts")
 
 
 def _require_json_path(path_value: str, *, field_name: str, default: Path | None = None) -> Path:
@@ -1549,19 +1574,15 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
             "message": "recording exited before audio was saved",
         }
 
-    stamp = timestamp()
-    audio_path = recordings_dir() / f"{stamp}.wav"
-    log_path = recordings_dir() / f"{stamp}.log"
+    audio_path, log_path = _allocate_recording_artifacts()
     max_seconds = _coerce_int(args.max_seconds, field_name="max-seconds", max_value=MAX_RECORDING_SECONDS)
-    audio_path = validate_recording_path(audio_path, suffix=".wav", require_recordings_dir=True)
-    log_path = validate_recording_path(log_path, suffix=".log", require_recordings_dir=True)
 
     def reset_recording_artifacts() -> None:
+        nonlocal audio_path, log_path
         remove_file(str(audio_path), suffix=".wav")
         remove_file(str(log_path), suffix=".log")
-        _prepare_private_file(audio_path, field_name="recording audio file")
+        audio_path, log_path = _allocate_recording_artifacts()
 
-    _prepare_private_file(audio_path, field_name="recording audio file")
     recorder_preferences = ["pw-record", "parecord", "arecord"] if args.recorder == "auto" else [args.recorder]
     startup_errors: list[str] = []
     command: RecorderCommand | None = None
@@ -1676,6 +1697,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         done_log_path = state.log_path
         trimmed_audio_path: Path | None = None
         stabilized_audio_path: Path | None = None
+        written_text_path: Path | None = None
         remove_original_after_state_update = False
         audio_suffix = ""
         audio_path = validate_audio_file(audio_path)
@@ -1744,6 +1766,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
 
         text, security_post_processing = _process_transcript(text, args, language)
         _write_text_atomic(text_path, text.strip() + "\n")
+        written_text_path = text_path
         append_space = _coerce_bool(args.append_space, field_name="append_space")
         sanitize_special_chars = _coerce_bool(
             args.sanitize_special_chars,
@@ -1844,7 +1867,12 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
                 if state.log_path:
                     error_delete_log_path = state.log_path
                     error_update["log_path"] = ""
+            if written_text_path is not None:
+                error_update["transcript"] = ""
+                error_update["transcript_path"] = ""
             store.update(**error_update)
+            if written_text_path is not None:
+                remove_file(str(written_text_path), suffix=".txt")
             if error_delete_audio_path is not None:
                 remove_file(str(error_delete_audio_path), suffix=audio_suffix)
             if error_delete_log_path is not None:
