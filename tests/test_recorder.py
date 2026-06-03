@@ -145,12 +145,28 @@ class RecorderTest(unittest.TestCase):
         self.assertLess(frame_count, 3200)
         self.assertEqual(first_frame, 12000)
 
-    def test_trim_recording_leading_silence_truncates_fractional_start_frame(self) -> None:
+    def test_trim_recording_leading_silence_keeps_speech_on_fractional_start_frame(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
             self._write_wav(audio, [0, 12000])
 
             trimmed = trim_recording_leading_silence(audio, 1.6 / 16000)
+            try:
+                with wave.open(str(trimmed), "rb") as handle:
+                    first_frame = int.from_bytes(handle.readframes(1), "little", signed=True)
+                    frame_count = handle.getnframes()
+            finally:
+                trimmed.unlink(missing_ok=True)
+
+        self.assertEqual(frame_count, 1)
+        self.assertEqual(first_frame, 12000)
+
+    def test_trim_recording_leading_silence_rounds_near_integer_start_frame(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            self._write_wav(audio, [0, 0, 12000])
+
+            trimmed = trim_recording_leading_silence(audio, (2 - 1e-10) / 16000)
             try:
                 with wave.open(str(trimmed), "rb") as handle:
                     first_frame = int.from_bytes(handle.readframes(1), "little", signed=True)

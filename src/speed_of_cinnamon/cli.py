@@ -1345,12 +1345,16 @@ def prune_files_by_mtime(paths: list[Path], keep: int, active_paths: set[Path], 
     deleted_paths: list[str] = []
     failed_paths: list[str] = []
     skipped_active: list[str] = []
-    candidates = sorted_files(paths)[max(keep, 0) :]
-    for path in candidates:
+    inactive_paths: list[Path] = []
+    normalized_active_paths = {path.resolve(strict=False) for path in active_paths}
+    for path in sorted_files(paths):
         normalized = path.resolve(strict=False)
-        if normalized in active_paths:
+        if normalized in normalized_active_paths:
             skipped_active.append(str(path))
             continue
+        inactive_paths.append(path)
+    inactive_keep = max(max(keep, 0) - len(skipped_active), 0)
+    for path in inactive_paths[inactive_keep:]:
         if dry_run:
             planned_paths.append(str(path))
             continue
@@ -1679,8 +1683,6 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         silence = detect_silent_recording(audio_path)
         if silence.silent:
             if not keep_recording_artifacts:
-                audio_deleted = remove_file(str(audio_path), suffix=audio_suffix)
-                log_deleted = remove_file(state.log_path, suffix=".log")
                 done_audio_path = None
                 done_log_path = None
             state.audio_path = done_audio_path
@@ -1697,6 +1699,9 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
                 inserted=False,
                 error="",
             )
+            if not keep_recording_artifacts:
+                audio_deleted = remove_file(str(audio_path), suffix=audio_suffix)
+                log_deleted = remove_file(state.log_path, suffix=".log")
             return {
                 "status": done.status,
                 "message": "silent recording skipped",
@@ -1825,12 +1830,20 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
                 "stopped_at": now_iso(),
                 "error": error_text,
             }
+            error_delete_audio_path: Path | None = None
+            error_delete_log_path: str | None = None
             if not keep_recording_artifacts:
-                if audio_suffix and remove_file(str(audio_path), suffix=audio_suffix):
+                if audio_suffix and _recording_artifact_stat(audio_path) is not None:
+                    error_delete_audio_path = audio_path
                     error_update["audio_path"] = ""
-                if remove_file(state.log_path, suffix=".log"):
+                if state.log_path:
+                    error_delete_log_path = state.log_path
                     error_update["log_path"] = ""
             store.update(**error_update)
+            if error_delete_audio_path is not None:
+                remove_file(str(error_delete_audio_path), suffix=audio_suffix)
+            if error_delete_log_path is not None:
+                remove_file(error_delete_log_path, suffix=".log")
         raise RuntimeError(error_text)
     finally:
         _release_finalization_lock(lock_path)

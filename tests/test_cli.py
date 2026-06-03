@@ -2007,6 +2007,23 @@ class CliTest(unittest.TestCase):
         self.assertTrue(newest_audio_exists)
         self.assertEqual(remaining_recordings, 20)
 
+    def test_prune_recording_files_keeps_cap_when_active_artifacts_are_protected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = []
+            for index in range(22):
+                path = root / f"recording-{index:02d}.wav"
+                path.write_bytes(b"audio")
+                os.utime(path, (index, index))
+                paths.append(path)
+            active = {paths[0].resolve(strict=False)}
+
+            result = cli.prune_files_by_mtime(paths, keep=20, active_paths=active, dry_run=True)
+
+        self.assertEqual(len(result["planned_paths"]), 2)
+        self.assertIn(str(paths[0]), result["skipped_active_paths"])
+        self.assertNotIn(str(paths[0]), result["planned_paths"])
+
     def test_cleanup_prunes_recording_groups_older_than_one_week(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -4043,6 +4060,31 @@ class CliTest(unittest.TestCase):
             if final_audio_path.suffix == ".flac":
                 self.assertFalse(audio.exists())
             self.assertEqual(final_state.log_path, str(log))
+
+    def test_finalize_silent_recording_keeps_artifacts_if_state_update_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="finalizing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=False)
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=cli.SilenceDetectionResult(True, True, 2.0, 2.0, 0.0, 2.0, "silent")),
+                mock.patch.object(store, "update", side_effect=RuntimeError("state write failed")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "state write failed"):
+                    cli.finalize_recording(args, store, store.read())
+
+            self.assertTrue(audio.exists())
+            self.assertTrue(log.exists())
 
     def test_finalize_can_keep_stabilized_trimmed_recording_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

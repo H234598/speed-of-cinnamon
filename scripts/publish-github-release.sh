@@ -75,6 +75,7 @@ existing_release="false"
 existing_was_draft="false"
 existing_was_prerelease="false"
 existing_release_title=""
+existing_release_title_captured="false"
 existing_notes_file=""
 created_release="false"
 uploaded_asset_names=()
@@ -223,7 +224,7 @@ rollback_release_state() {
       gh release delete-asset "${tag}" "${asset_name}" --repo "${repo}" --yes >/dev/null 2>&1 || true
     done
     edit_args=(gh release edit "${tag}" --repo "${repo}")
-    if [[ -n "${existing_release_title}" ]]; then
+    if [[ "${existing_release_title_captured}" == "true" ]]; then
       edit_args+=(--title "${existing_release_title}")
     fi
     if [[ -n "${existing_notes_file}" && -f "${existing_notes_file}" ]]; then
@@ -478,6 +479,7 @@ if gh release view "${tag}" --repo "${repo}" >/dev/null 2>&1; then
   existing_was_prerelease="$(gh release view "${tag}" --repo "${repo}" --json isPrerelease --jq '.isPrerelease')"
   existing_assets="$(gh release view "${tag}" --repo "${repo}" --json assets --jq '.assets[].name')"
   existing_release_title="$(gh release view "${tag}" --repo "${repo}" --json name --jq '.name // empty')"
+  existing_release_title_captured="true"
   existing_notes_file="$(mktemp "${notes_tmp_root}/speed-of-cinnamon-existing-release-notes-XXXXXX")"
   if ! gh release view "${tag}" --repo "${repo}" --json body --jq '.body // ""' > "${existing_notes_file}"; then
     printf 'failed to snapshot existing release notes for rollback: %s\n' "${tag}" >&2

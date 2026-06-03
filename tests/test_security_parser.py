@@ -122,6 +122,20 @@ class SecurityParserTest(unittest.TestCase):
         self.assertIn("token invalid bleibt", sanitized)
         self.assertGreaterEqual(count, 2)
 
+    def test_apply_security_mode_masks_long_bare_spoken_word_secret_values(self) -> None:
+        phrase = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima"
+        sanitized, count = apply_security_mode(f"token {phrase}, danach weiter.", [])
+
+        self.assertIn("[redacted token]", sanitized)
+        self.assertNotIn(phrase, sanitized)
+        self.assertGreaterEqual(count, 1)
+
+    def test_apply_security_mode_does_not_mask_spoken_token_status_values(self) -> None:
+        sanitized, count = apply_security_mode("token ist aktiv und password is gesetzt.", [])
+
+        self.assertEqual(sanitized, "token ist aktiv und password is gesetzt.")
+        self.assertEqual(count, 0)
+
     def test_apply_security_mode_masks_broader_personal_information(self) -> None:
         text = (
             "token abc123 Name: Max Mustermann Adresse: Hauptstraße 5 "

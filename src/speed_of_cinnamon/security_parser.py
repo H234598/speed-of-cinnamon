@@ -55,12 +55,12 @@ _BARE_SENSITIVE_WORD_VALUE_PATTERN = (
     r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]{1,120}"
     rf"(?:\s+(?!(?:(?:und|and)\s+)?(?:meine|my\s+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)"
     rf"(?!(?:{_BARE_SENSITIVE_STATUS_WORD_PATTERN})\b)"
-    r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]{0,120}){0,8}\b"
+    r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]{0,120})*\b"
 )
 _VERBAL_TOKEN_RE = re.compile(
     r"(?i)\b(?:token|api[_-]?key|api\s+key|secret|apikey|bearer)\b\s+"
     r"(?:ist|is|lautet|hei[ßs]t)\s+"
-    r"(?!(?:invalid|required|missing|too|contains?|fehlt|leer|ung[üu]ltig)\b)"
+    rf"(?!(?:{_BARE_SENSITIVE_STATUS_WORD_PATTERN})\b)"
     rf"(?!(?:{_SPOKEN_SENSITIVE_LABEL_PATTERN})\s*[:=])"
     + _SPOKEN_SENSITIVE_VALUE_PATTERN
 )
@@ -81,7 +81,7 @@ _PASSWORD_RE = re.compile(
 _VERBAL_PASSWORD_RE = re.compile(
     r"(?i)\b(?:password|passwort|kennwort|passcode)\b\s+"
     r"(?:ist|is|lautet|hei[ßs]t)\s+"
-    r"(?!(?:invalid|required|missing|too|contains?|fehlt|leer|ung[üu]ltig)\b)"
+    rf"(?!(?:{_BARE_SENSITIVE_STATUS_WORD_PATTERN})\b)"
     rf"(?!(?:{_SPOKEN_SENSITIVE_LABEL_PATTERN})\s*[:=])"
     + _SPOKEN_SENSITIVE_VALUE_PATTERN
 )

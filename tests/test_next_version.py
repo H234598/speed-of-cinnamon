@@ -75,7 +75,7 @@ class NextVersionTest(unittest.TestCase):
 
     def test_feature_increase_moves_minor(self) -> None:
         self.assertEqual(
-            run_version("--base", "0.1.25", "--feature"),
+            run_version("--base", "0.1.25", "--add-commits", "0", "--feature"),
             "0.2.25",
         )
 

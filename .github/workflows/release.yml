@@ -15,11 +15,6 @@ on:
         required: false
         default: false
         type: boolean
-      run_workflow_lint:
-        description: "Run GitHub workflow lint before publishing"
-        required: false
-        default: true
-        type: boolean
       build_snap:
         description: "Build snap package"
         required: false
@@ -64,15 +59,8 @@ jobs:
           tar -xzf "/tmp/${archive}" -C /tmp actionlint
           sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
       - name: Lint GitHub workflows
-        run: |
-          if [[ "${RUN_WORKFLOW_LINT}" != "true" ]]; then
-            echo 'Skipping workflow lint (run_workflow_lint=false).'
-            exit 0
-          fi
-
-          make lint-workflows
+        run: make lint-workflows
         env:
-          RUN_WORKFLOW_LINT: ${{ github.event_name != 'workflow_dispatch' || inputs.run_workflow_lint }}
           ACTIONLINT_STRICT: "true"
 
   security-scan:
