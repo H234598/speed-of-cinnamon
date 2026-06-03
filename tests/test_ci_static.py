@@ -633,6 +633,13 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("RPM expansion contains unsupported symlink entries.", rpm_verifier)
         self.assertIn("RPM expansion contains unsupported hardlink entries.", rpm_verifier)
         self.assertIn("RPM package must be a regular file", rpm_verifier)
+        self.assertIn('safe_fs="${repo_dir}/scripts/safe-local-fs.py"', rpm_verifier)
+        self.assertIn('"${safe_fs_cmd[@]}" copy-file verify-rpm "${rpm_path}" "${rpm_snapshot}" 0644', rpm_verifier)
+        self.assertIn('rpm_snapshot="${tmp_dir}/speed-of-cinnamon-verify.rpm"', rpm_verifier)
+        self.assertIn('rpm -qp --qf', rpm_verifier)
+        self.assertIn('"${rpm_snapshot}" > "${metadata_file}"', rpm_verifier)
+        self.assertIn('rpm -qpl "${rpm_snapshot}" > "${file_list}"', rpm_verifier)
+        self.assertIn('rpm2cpio "${rpm_snapshot}" | cpio -idmu --no-absolute-filenames --quiet', rpm_verifier)
         self.assertIn("python3 -m compileall -q", rpm_verifier)
         build_rpm = (REPO_ROOT / "scripts" / "build-rpm.sh").read_text(encoding="utf-8")
         self.assertIn('py_auto_byte_compile 0', build_rpm)
@@ -707,6 +714,20 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"', verify_rpm)
         self.assertIn('if ! rpm_path="$(realpath "${rpm_path}")"; then', verify_rpm)
         self.assertIn('if [[ -L "${rpm_path}" || ! -f "${rpm_path}" || ! ( "${rpm_path}" == "${repo_dir}/dist/rpmbuild/"*".rpm" ||', verify_rpm)
+
+    def test_verify_rpm_uses_private_snapshot_for_rpm_tooling(self) -> None:
+        verify_rpm = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(encoding="utf-8")
+        snapshot_copy = verify_rpm.index('"${safe_fs_cmd[@]}" copy-file verify-rpm "${rpm_path}" "${rpm_snapshot}" 0644')
+        metadata_check = verify_rpm.index('"${rpm_snapshot}" > "${metadata_file}"')
+        file_list_check = verify_rpm.index('rpm -qpl "${rpm_snapshot}" > "${file_list}"')
+        extraction_check = verify_rpm.index('rpm2cpio "${rpm_snapshot}" | cpio -idmu --no-absolute-filenames --quiet')
+
+        self.assertLess(snapshot_copy, metadata_check)
+        self.assertLess(snapshot_copy, file_list_check)
+        self.assertLess(snapshot_copy, extraction_check)
+        self.assertNotIn('rpm -qp --qf \'name=%{NAME}\\nversion=%{VERSION}\\narch=%{ARCH}\\npackager=%{PACKAGER}\\nvendor=%{VENDOR}\\nurl=%{URL}\\n\' "${rpm_path}"', verify_rpm)
+        self.assertNotIn('rpm -qpl "${rpm_path}"', verify_rpm)
+        self.assertNotIn('rpm2cpio "${rpm_path}"', verify_rpm)
 
     def test_temp_root_resolution_is_fail_closed_in_build_dist_and_install_local(self) -> None:
         build_dist = (REPO_ROOT / "scripts" / "build-dist.sh").read_text(encoding="utf-8")

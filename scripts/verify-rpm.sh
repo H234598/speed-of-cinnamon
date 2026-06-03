@@ -24,6 +24,13 @@ for tool in rpm rpm2cpio cpio python3 realpath; do
   fi
 done
 
+safe_fs="${repo_dir}/scripts/safe-local-fs.py"
+if [[ -L "${safe_fs}" || ! -f "${safe_fs}" || "$(stat -c '%F' "${safe_fs}")" != "regular file" ]]; then
+  printf 'safe local filesystem helper is invalid: %s\n' "${safe_fs}" >&2
+  exit 1
+fi
+safe_fs_cmd=(python3 "${safe_fs}")
+
 rpm_candidates=()
 if [[ $# -eq 1 ]]; then
   rpm_path="${1}"
@@ -102,8 +109,22 @@ cleanup_tmpdir() {
 }
 trap cleanup_tmpdir EXIT
 
+rpm_snapshot="${tmp_dir}/speed-of-cinnamon-verify.rpm"
+if ! "${safe_fs_cmd[@]}" copy-file verify-rpm "${rpm_path}" "${rpm_snapshot}" 0644; then
+  printf 'failed to snapshot RPM package for verification: %s\n' "${rpm_path}" >&2
+  exit 1
+fi
+if [[ -L "${rpm_snapshot}" || ! -f "${rpm_snapshot}" || "$(stat -c '%F' "${rpm_snapshot}")" != "regular file" ]]; then
+  printf 'RPM snapshot must be a regular file: %s\n' "${rpm_snapshot}" >&2
+  exit 1
+fi
+if [[ "$(stat -c '%h' "${rpm_snapshot}")" -ne 1 ]]; then
+  printf 'RPM snapshot must not be hardlinked: %s\n' "${rpm_snapshot}" >&2
+  exit 1
+fi
+
 metadata_file="${tmp_dir}/rpm-metadata.txt"
-rpm -qp --qf 'name=%{NAME}\nversion=%{VERSION}\narch=%{ARCH}\npackager=%{PACKAGER}\nvendor=%{VENDOR}\nurl=%{URL}\n' "${rpm_path}" > "${metadata_file}"
+rpm -qp --qf 'name=%{NAME}\nversion=%{VERSION}\narch=%{ARCH}\npackager=%{PACKAGER}\nvendor=%{VENDOR}\nurl=%{URL}\n' "${rpm_snapshot}" > "${metadata_file}"
 grep -Fxq 'name=speed-of-cinnamon' "${metadata_file}"
 grep -Fxq 'arch=noarch' "${metadata_file}"
 grep -Fxq 'packager=H234598 <54270221+H234598@users.noreply.github.com>' "${metadata_file}"
@@ -118,7 +139,7 @@ required_files=(
 )
 file_list="${tmp_dir}/rpm-files.txt"
 
-rpm -qpl "${rpm_path}" > "${file_list}"
+rpm -qpl "${rpm_snapshot}" > "${file_list}"
 python3 - <<'PY' "${file_list}"
 from pathlib import Path
 import sys
@@ -182,7 +203,7 @@ done
 
 (
   cd "${tmp_dir}"
-  rpm2cpio "${rpm_path}" | cpio -idmu --no-absolute-filenames --quiet
+  rpm2cpio "${rpm_snapshot}" | cpio -idmu --no-absolute-filenames --quiet
 )
 
 if find "${tmp_dir}" -type l -print -quit | grep -q .; then
