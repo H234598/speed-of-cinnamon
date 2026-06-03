@@ -58,7 +58,7 @@ def _compile_blacklist_pattern_cached(entries: tuple[str, ...]) -> re.Pattern[st
     if not entries:
         return None
     escaped = "|".join(re.escape(entry) for entry in entries)
-    return re.compile(rf"(?i)\b(?:{escaped})\b")
+    return re.compile(rf"(?i)(?<!\w)(?:{escaped})(?!\w)")
 
 
 def _compile_blacklist_pattern(entries: list[str]) -> re.Pattern[str] | None:
@@ -268,7 +268,7 @@ def parse_security_directives(text: str) -> SecurityParserResult:
         kept.append(line)
 
     if saw_directive and any(line.strip() for line in kept):
-        return SecurityParserResult(text=text.strip(), added_blacklist=[], show_blacklist=False)
+        return SecurityParserResult(text="\n".join(kept).strip(), added_blacklist=[], show_blacklist=False)
     return SecurityParserResult(text="\n".join(kept).strip(), added_blacklist=added, show_blacklist=show_blacklist)
 
 

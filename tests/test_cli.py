@@ -462,6 +462,7 @@ class CliTest(unittest.TestCase):
             final_state = store.read()
         mocked_update.assert_not_called()
         self.assertGreaterEqual(mocked_security.call_count, 1)
+        mocked_security.assert_any_call("Hallo", [])
         self.assertEqual(payload["security"]["blacklist_added"], [])
         self.assertEqual(payload["transcript"], "redacted")
         self.assertEqual(final_state.transcript, "redacted")

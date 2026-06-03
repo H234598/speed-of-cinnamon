@@ -29,7 +29,7 @@ class SecurityParserTest(unittest.TestCase):
         directives = parse_security_directives(text)
         self.assertEqual(directives.added_blacklist, [])
         self.assertFalse(directives.show_blacklist)
-        self.assertEqual(directives.text, text)
+        self.assertEqual(directives.text, "Hallo\nnoch")
 
     def test_parse_security_directives_trims_punctuation_from_add_entry(self) -> None:
         text = "blacklisteintrag: geheim!"
@@ -80,6 +80,15 @@ class SecurityParserTest(unittest.TestCase):
         sanitized, count = apply_blacklist_mode(text, ["geheim"])
         self.assertEqual(count, 2)
         self.assertEqual(sanitized, "token xxyyyy und [redacted blacklist item]! Und noch [redacted blacklist item].")
+
+    def test_apply_blacklist_mode_masks_entries_with_non_word_boundaries(self) -> None:
+        text = "Compiler C++ und @token bleiben nicht sichtbar, aber XC++Y ist ein anderes Wort."
+        sanitized, count = apply_blacklist_mode(text, ["C++", "@token"])
+        self.assertEqual(count, 2)
+        self.assertEqual(
+            sanitized,
+            "Compiler [redacted blacklist item] und [redacted blacklist item] bleiben nicht sichtbar, aber XC++Y ist ein anderes Wort.",
+        )
 
     def test_update_blacklist_file_deduplicates_and_persists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
