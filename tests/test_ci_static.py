@@ -403,6 +403,12 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("name: Security Scan", security_workflow)
         self.assertIn("workflow_call:", security_workflow)
         self.assertIn("workflow_dispatch:", security_workflow)
+        self.assertIn("inputs:\n      ref:\n        required: false\n        type: string", security_workflow)
+        self.assertIn(
+            'workflow_dispatch:\n    inputs:\n      ref:\n        description: "Git ref to scan"\n        required: false\n        type: string',
+            security_workflow,
+        )
+        self.assertEqual(security_workflow.count("ref: ${{ inputs.ref || github.ref }}"), 2)
         self.assertIn("timeout-minutes: 15", security_workflow)
         self.assertIn("timeout-minutes: 10", security_workflow)
         self.assertIn("python-security:", security_workflow)
@@ -420,7 +426,8 @@ class CiStaticTest(unittest.TestCase):
 
         self.assertIn('tags:\n      - "v*.*.*"', workflow)
         checkout_ref = "ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}"
-        self.assertEqual(workflow.count(checkout_ref), 2)
+        self.assertEqual(workflow.count(checkout_ref), 3)
+        self.assertIn("with:\n      ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}", workflow)
         self.assertIn("format('refs/tags/{0}', inputs.tag)", workflow)
         self.assertNotIn("if [[ ! \"${tag}\" =~ ^v[0-9]+(\\.[0-9]+){0,2}([0-9A-Za-z.+-]*)?$ ]]", workflow)
         self.assertIn('if [[ ! "${tag}" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then', workflow)
@@ -775,6 +782,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('git rev-list -n 1 "${tag}^{commit}"', workflow)
         self.assertIn("security-scan:", workflow)
         self.assertIn("uses: ./.github/workflows/security-scan.yml", workflow)
+        self.assertIn("with:\n      ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}", workflow)
         self.assertIn("needs:\n      - workflow-lint\n      - security-scan", workflow)
         self.assertIn('ACTIONLINT_STRICT: "true"', workflow)
         self.assertIn("fetch-depth: 0", workflow)

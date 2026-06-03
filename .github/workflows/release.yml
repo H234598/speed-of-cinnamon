@@ -78,6 +78,8 @@ jobs:
   security-scan:
     needs: workflow-lint
     uses: ./.github/workflows/security-scan.yml
+    with:
+      ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
 
   publish:
     needs:
