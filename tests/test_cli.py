@@ -427,7 +427,7 @@ class CliTest(unittest.TestCase):
     @mock.patch("speed_of_cinnamon.cli.update_blacklist_file", return_value=["geheim"])
     @mock.patch("speed_of_cinnamon.cli.load_blacklist_file", return_value=[])
     @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
-    def test_finalize_applies_blacklist_directives_and_security_mode(
+    def test_finalize_ignores_mixed_blacklist_directives_and_applies_security_mode(
         self,
         mocked_validate: mock.Mock,
         mocked_load: mock.Mock,
@@ -460,9 +460,9 @@ class CliTest(unittest.TestCase):
                 payload = cli.finalize_recording(args, store, store.read())
 
             final_state = store.read()
-        mocked_update.assert_called_once_with(mock.ANY, ["geheim"])
+        mocked_update.assert_not_called()
         self.assertGreaterEqual(mocked_security.call_count, 1)
-        self.assertEqual(payload["security"]["blacklist_added"], ["geheim"])
+        self.assertEqual(payload["security"]["blacklist_added"], [])
         self.assertEqual(payload["transcript"], "redacted")
         self.assertEqual(final_state.transcript, "redacted")
         mocked_insert.assert_called_once_with("redacted", "none", 0)
@@ -522,11 +522,11 @@ class CliTest(unittest.TestCase):
             stdout = io.StringIO()
             with (
                 mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
-                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="blacklist anzeigen\nHallo"),
-                mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="blacklist anzeigen\nHallo"),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="blacklist anzeigen"),
+                mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="blacklist anzeigen"),
                 mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
                 mock.patch("speed_of_cinnamon.cli._open_blacklist_document", return_value=True),
-                mock.patch("speed_of_cinnamon.cli.apply_security_mode", return_value=("Hallo", 0)),
+                mock.patch("speed_of_cinnamon.cli.apply_security_mode", return_value=("", 0)),
                 redirect_stdout(stdout),
             ):
                 code = cli.run([
@@ -542,7 +542,7 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertTrue(payload["security"]["blacklist_opened"])
-        self.assertEqual(payload["transcript"], "Hallo")
+        self.assertEqual(payload["transcript"], "")
         self.assertNotIn("blacklist anzeigen", payload["transcript"])
 
     @mock.patch("speed_of_cinnamon.cli.apply_security_mode")
