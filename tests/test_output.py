@@ -537,6 +537,16 @@ class OutputTest(unittest.TestCase):
 
         mocked_clipboard.assert_called_once_with("")
 
+    def test_insert_text_allows_whitespace_only_clipboard_text(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
+        ):
+            self.assertTrue(insert_text(" \t\n", "clipboard"))
+
+        mocked_clipboard.assert_called_once_with(" \t\n")
+
     def test_insert_text_avoids_duplicate_clipboard_insertion_with_whitespace_variation(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -643,6 +653,34 @@ class OutputTest(unittest.TestCase):
 
         self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["new text", "previous text"])
 
+    def test_insert_text_restores_text_clipboard_snapshot_without_stripping(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, " previous text \n")),
+            mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch(
+                "speed_of_cinnamon.output.paste_from_clipboard",
+                side_effect=OutputError("paste failed"),
+            ),
+        ):
+            with self.assertRaisesRegex(OutputError, "paste failed"):
+                insert_text("new text", "clipboard-paste")
+
+        self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["new text", " previous text \n"])
+
+    def test_text_clipboard_snapshot_preserves_helper_whitespace(self) -> None:
+        proc = subprocess.CompletedProcess(["xclip"], 0, stdout=b" previous text \n\n", stderr=b"")
+        with (
+            mock.patch.object(output_module, "_which", side_effect=lambda name: "/usr/bin/xclip" if name == "xclip" else None),
+            mock.patch("speed_of_cinnamon.output.subprocess.run", return_value=proc),
+        ):
+            available, text = output_module._read_text_clipboard_snapshot()
+
+        self.assertTrue(available)
+        self.assertEqual(text, " previous text \n\n")
+
     def test_insert_text_restores_empty_text_clipboard_when_paste_fails(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -689,6 +727,9 @@ class OutputTest(unittest.TestCase):
     def test_clipboard_targets_treat_rich_text_as_non_text_payload(self) -> None:
         self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("text/html\ntext/plain\n"))
         self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("text/rtf\n"))
+        self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("image/bmp\n"))
+        self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("application/x-qt-image\n"))
+        self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("x-special/gnome-copied-files\n"))
         self.assertFalse(output_module._clipboard_targets_contain_non_text_payload("UTF8_STRING\ntext/plain\n"))
 
     def test_clipboard_non_text_detection_checks_xsel_targets(self) -> None:
@@ -716,6 +757,23 @@ class OutputTest(unittest.TestCase):
             state_path = Path(tmp) / "speed-of-cinnamon" / output_module.CLIPBOARD_DEDUP_STATE_FILE
             state_path.parent.mkdir(parents=True)
             state_path.write_text("{", encoding="utf-8")
+            self.assertFalse(insert_text("secure text", "clipboard-paste"))
+
+        mocked_clipboard.assert_not_called()
+        mocked_paste.assert_not_called()
+
+    def test_insert_text_fails_closed_when_dedupe_state_is_symlink(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
+            mock.patch("speed_of_cinnamon.output.paste_from_clipboard") as mocked_paste,
+        ):
+            state_path = Path(tmp) / "speed-of-cinnamon" / output_module.CLIPBOARD_DEDUP_STATE_FILE
+            target_path = Path(tmp) / "target-state.json"
+            state_path.parent.mkdir(parents=True)
+            target_path.write_text(json.dumps({"text": "secure text", "at": 1.0}), encoding="utf-8")
+            state_path.symlink_to(target_path)
             self.assertFalse(insert_text("secure text", "clipboard-paste"))
 
         mocked_clipboard.assert_not_called()

@@ -17,6 +17,7 @@ class CommandChainError(RuntimeError):
     pass
 
 
+_REDACTED_COMMAND_OUTPUT = "exit code {returncode}; command output redacted"
 _TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 _BASE_ENV_KEYS = {
     "HOME",
@@ -99,6 +100,12 @@ def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
         if _is_unsafe_env_var(key):
             env.pop(key, None)
     return env
+
+
+def _command_failure_detail(returncode: int, stdout_size: int, stderr_size: int) -> str:
+    if stdout_size or stderr_size:
+        return _REDACTED_COMMAND_OUTPUT.format(returncode=returncode)
+    return f"exit code {returncode}"
 
 
 FORBIDDEN_COMMAND_OPERATORS = {
@@ -314,13 +321,7 @@ def run_command_chain(
                     raise CommandChainError(f"{label} command output exceeded {max_output_chars} bytes")
 
                 if proc.returncode != 0:
-                    detail = ""
-                    if stderr_size:
-                        detail = _read_file_head(stderr_file, MAX_FILE_READ_FOR_ERROR_CHARS).strip()
-                    if not detail:
-                        detail = _read_file_head(stdout_file, MAX_FILE_READ_FOR_ERROR_CHARS).strip()
-                    if not detail:
-                        detail = f"exit code {proc.returncode}"
+                    detail = _command_failure_detail(proc.returncode, stdout_size, stderr_size)
                     raise CommandChainError(f"{label} command failed: {detail}")
 
                 segment_output = _read_file_head(stdout_file, max_output_chars).strip()

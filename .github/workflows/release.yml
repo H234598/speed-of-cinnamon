@@ -55,11 +55,8 @@ jobs:
       - name: Install actionlint
         run: |
           version="1.7.12"
-          archive="actionlint_${version}_linux_amd64.tar.gz"
-          curl -fsSLo "/tmp/${archive}" \
-            "https://github.com/rhysd/actionlint/releases/download/v${version}/${archive}"
-          tar -xzf "/tmp/${archive}" -C /tmp actionlint
-          sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
+          GOBIN="/tmp/actionlint-bin" go install "github.com/rhysd/actionlint/cmd/actionlint@v${version}"
+          sudo install -m 0755 /tmp/actionlint-bin/actionlint /usr/local/bin/actionlint
       - name: Lint GitHub workflows
         run: |
           if [[ "${RUN_WORKFLOW_LINT}" != "true" ]]; then
@@ -161,6 +158,16 @@ jobs:
             printf 'TAG\n'
           } >> "${GITHUB_OUTPUT}"
           echo "Resolved release tag: ${tag}"
+      - name: Verify release tag provenance
+        run: |
+          tag="${{ steps.release_tag.outputs.tag }}"
+          git fetch --force --tags --depth=1 origin "${tag}"
+          tag_commit="$(git rev-list -n 1 "${tag}^{commit}")"
+          head_commit="$(git rev-parse HEAD)"
+          if [[ "${tag_commit}" != "${head_commit}" ]]; then
+            printf 'release tag %s points to %s, but checkout is %s\n' "${tag}" "${tag_commit}" "${head_commit}" >&2
+            exit 1
+          fi
       - name: Verify project
         run: make check
       - name: Build and verify source archive

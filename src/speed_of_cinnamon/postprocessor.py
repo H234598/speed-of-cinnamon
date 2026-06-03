@@ -16,6 +16,7 @@ class PostProcessError(RuntimeError):
     pass
 
 
+REDACTED_LOCAL_COMMAND_ERROR = "post-process command failed: command output redacted"
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 DEFAULT_OPENAI_COMPATIBLE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_COMPATIBLE_MODEL = "gpt-4o-transcribe"
@@ -863,6 +864,8 @@ def post_process_text(
             or "timeout_seconds must be positive" in message
             or "command input contains invalid null byte" in message
         ):
+            if "command failed" in message or "command execution failed" in message:
+                raise PostProcessError(REDACTED_LOCAL_COMMAND_ERROR) from exc
             raise PostProcessError(message) from exc
         if "command output exceeded" in message:
             raise PostProcessError(f"post-process output is too large: {message}") from exc

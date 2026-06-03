@@ -317,7 +317,10 @@ def _release_clipboard_dedup_lock(path: Path | None) -> None:
 
 
 def _normalize_clipboard_text(text: str) -> str:
-    return " ".join(text.strip().split())
+    if text == "":
+        return ""
+    cleaned = " ".join(text.strip().split())
+    return cleaned or text
 
 
 def _record_clipboard_insertion(text: str, method: str) -> bool:
@@ -538,6 +541,59 @@ def _run_stdout(
     return text.strip()
 
 
+def _run_stdout_raw(
+    argv: list[str] | tuple[str, ...],
+    *,
+    timeout: int = MAX_EXEC_TIMEOUT_SECONDS,
+    resolved_command: str | None = None,
+) -> str | None:
+    if not isinstance(argv, (list, tuple)):
+        raise OutputError("argv must be a sequence")
+    if not all(isinstance(item, str) for item in argv):
+        raise OutputError("command arguments must be text")
+    if not argv:
+        raise OutputError("empty command is not allowed")
+    if not isinstance(timeout, int) or isinstance(timeout, bool):
+        raise OutputError("timeout must be an integer")
+    if timeout <= 0:
+        raise OutputError("timeout must be positive")
+    command = argv[0].strip()
+    if not command:
+        raise OutputError("command is empty")
+    if _contains_escaped_null(command) or any(_contains_escaped_null(arg) for arg in argv[1:]):
+        raise OutputError("command argument contains invalid null byte")
+    if _contains_http_header_control_chars(command) or any(
+        _contains_http_header_control_chars(arg) for arg in argv[1:]
+    ):
+        raise OutputError("command argument contains invalid control character")
+    runtime_command = resolved_command or _command_path(command)
+    try:
+        proc = subprocess.run(  # nosec B603
+            [runtime_command, *argv[1:]],
+            input=b"",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            shell=False,
+            env=_filtered_environment(),
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    output = proc.stdout or b""
+    error_output = proc.stderr or b""
+    if len(output) > MAX_OUTPUT_CHARS or len(error_output) > MAX_OUTPUT_CHARS:
+        return None
+    try:
+        text = output.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    if _contains_escaped_null(text):
+        return None
+    return text
+
+
 def _looks_like_terminal(value: str) -> bool:
     normalized = str(value or "").lower()
     return any(marker in normalized for marker in TERMINAL_WINDOW_MARKERS)
@@ -600,19 +656,25 @@ def _read_text_clipboard() -> str | None:
 def _read_text_clipboard_snapshot() -> tuple[bool, str]:
     xclip = _which("xclip")
     if xclip:
-        return True, _run_stdout(["xclip", "-selection", "clipboard", "-out"], resolved_command=xclip)
+        text = _run_stdout_raw(["xclip", "-selection", "clipboard", "-out"], resolved_command=xclip)
+        return (text is not None), text or ""
     xsel = _which("xsel")
     if xsel:
-        return True, _run_stdout(["xsel", "--clipboard", "--output"], resolved_command=xsel)
+        text = _run_stdout_raw(["xsel", "--clipboard", "--output"], resolved_command=xsel)
+        return (text is not None), text or ""
     wl_paste = _which("wl-paste")
     if wl_paste:
-        return True, _run_stdout(["wl-paste"], resolved_command=wl_paste)
+        text = _run_stdout_raw(["wl-paste"], resolved_command=wl_paste)
+        return (text is not None), text or ""
     return False, ""
 
 
 def _clipboard_targets_contain_non_text_payload(targets: str) -> bool:
     ignored = {"targets", "multiple", "timestamp", "save_targets"}
     text_targets = {
+        "compound_text",
+        "text/plain; charset=utf-8",
+        "text/plain; charset=utf8",
         "text",
         "string",
         "utf8_string",
@@ -624,12 +686,9 @@ def _clipboard_targets_contain_non_text_payload(targets: str) -> bool:
         target = line.strip().lower()
         if not target or target in ignored:
             continue
-        if target in text_targets or target.startswith("text/"):
-            if target in {"text/html", "text/rtf", "text/richtext"}:
-                return True
+        if target in text_targets:
             continue
-        if target.startswith("image/") or target in {"application/octet-stream"}:
-            return True
+        return True
     return False
 
 
@@ -694,8 +753,10 @@ def _clipboard_dedup_state_is_untrusted() -> bool:
         path = _clipboard_dedup_state_path()
     except RuntimeError:
         return True
+    if not path.exists() and not path.is_symlink():
+        return False
     try:
-        raw = path.read_text(encoding="utf-8")
+        raw = read_text_without_following_symlinks(path, field_name="clipboard dedupe state")
     except FileNotFoundError:
         return False
     except OSError:

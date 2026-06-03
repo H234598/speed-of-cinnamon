@@ -156,6 +156,19 @@ class PostProcessorTest(unittest.TestCase):
             with self.assertRaisesRegex(PostProcessError, "max_output_chars must not exceed"):
                 post_process_text("hello", "en", "cmd")
 
+    def test_post_process_redacts_local_command_failure_detail(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.postprocessor.run_command_chain",
+            side_effect=CommandChainError("post-process command failed: Bearer sk-secret private transcript"),
+        ):
+            with self.assertRaises(PostProcessError) as cm:
+                post_process_text("hello", "en", "cmd")
+
+        message = str(cm.exception)
+        self.assertIn("command output redacted", message)
+        self.assertNotIn("sk-secret", message)
+        self.assertNotIn("private transcript", message)
+
     def test_empty_output_is_an_error(self) -> None:
         with self.assertRaisesRegex(PostProcessError, "without output"):
             post_process_text("hello", "en", "true")

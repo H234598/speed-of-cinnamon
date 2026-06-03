@@ -265,6 +265,26 @@ class CommandChainTest(unittest.TestCase):
             with self.assertRaisesRegex(CommandChainError, "output exceeded"):
                 run_command_chain([("cmd",)], "", label="post-process", max_output_chars=5)
 
+    def test_run_command_chain_redacts_failed_command_output(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            stdout_file = kwargs["stdout"]
+            stderr_file = kwargs["stderr"]
+            stdout_file.write(b"transcript with sk-secret-token\n")
+            stderr_file.write(b"Bearer private-token\n")
+            return subprocess.CompletedProcess(["cmd"], 2, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
+            mock.patch("speed_of_cinnamon.command_chain.subprocess.run", side_effect=fake_run),
+        ):
+            with self.assertRaises(CommandChainError) as cm:
+                run_command_chain([("cmd",)], "", label="post-process")
+
+        message = str(cm.exception)
+        self.assertIn("post-process command failed: exit code 2; command output redacted", message)
+        self.assertNotIn("sk-secret-token", message)
+        self.assertNotIn("private-token", message)
+
     def test_run_command_chain_rejects_invalid_command_input_utf8(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "input is not valid UTF-8"):
             run_command_chain([("cmd",)], "\udcff", label="post-process")

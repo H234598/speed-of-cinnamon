@@ -605,16 +605,21 @@ def transcribe_with_openai_whisper(
     )
     generated = output_dir / f"{audio_path.stem}.txt"
     if generated.exists():
+        primary_error: BaseException | None = None
         try:
             text = _read_text_file(generated).strip()
             _assert_text_length(text, field_name="transcript")
             if write_transcript:
                 _write_text_atomic(text_path, text + "\n")
+        except BaseException as exc:
+            primary_error = exc
+            raise
         finally:
             try:
                 generated.unlink()
             except OSError as exc:
-                raise TranscriptionError("failed to remove generated transcript") from exc
+                if primary_error is None:
+                    raise TranscriptionError("failed to remove generated transcript") from exc
         return text
     raise TranscriptionError("whisper completed but did not produce a transcript")
 
@@ -693,15 +698,25 @@ def transcribe_with_whisper_cpp(
     invocation, generated_path = _whisper_cpp_invocation(command, audio_path, language, text_path, model_path)
     _run_limited_process(invocation)
     if generated_path.exists():
-        text = _read_text_file(generated_path).strip()
-        _assert_text_length(text, field_name="transcript")
-        if generated_path != text_path:
+        if generated_path == text_path:
+            text = _read_text_file(generated_path).strip()
+            _assert_text_length(text, field_name="transcript")
+            return text
+        primary_error: BaseException | None = None
+        try:
+            text = _read_text_file(generated_path).strip()
+            _assert_text_length(text, field_name="transcript")
             if write_transcript:
                 _write_text_atomic(text_path, text + "\n")
+        except BaseException as exc:
+            primary_error = exc
+            raise
+        finally:
             try:
                 generated_path.unlink()
-            except OSError:
-                pass
+            except OSError as exc:
+                if primary_error is None:
+                    raise TranscriptionError("failed to remove generated transcript") from exc
         return text
     raise TranscriptionError("whisper.cpp completed but did not produce a transcript")
 

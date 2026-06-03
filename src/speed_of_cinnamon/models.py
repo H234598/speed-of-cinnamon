@@ -922,7 +922,10 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                     raise ModelError(f"failed to restore existing model directory after download failure: {path}") from restore_exc
             raise ModelError(f"failed to persist downloaded model directory: {path}") from exc
         if backup_dir is not None:
-            shutil.rmtree(backup_dir, ignore_errors=True)
+            try:
+                shutil.rmtree(backup_dir)
+            except OSError as cleanup_exc:
+                raise ModelError(f"failed to remove model backup after successful download: {backup_dir}") from cleanup_exc
     except Exception:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
@@ -930,8 +933,6 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
 
 
 def _restore_model_file_backup(path: Path, backup_path: Path) -> None:
-    if path.exists():
-        path.unlink()
     os.replace(backup_path, path)
 
 
@@ -955,6 +956,8 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
     tmp_path: Path | None = None
     replaced_path = False
     backup_path: Path | None = None
+    previous_cache_entry: dict[str, int | str] | None = None
+    previous_cache_entry_exists = False
     try:
         tmp_path, _ = _download_url_to_file(
             model.url,
@@ -969,6 +972,11 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
         tmp_stat = tmp_path.stat()
         try:
             if path.exists():
+                _load_model_checksum_cache()
+                cached_entry = _model_checksum_cache.get(str(path))
+                if cached_entry is not None:
+                    previous_cache_entry = dict(cached_entry)
+                    previous_cache_entry_exists = True
                 backup_path = path.with_name(f".{path.name}.{secrets.token_hex(8)}.backup")
                 assert_no_symlink_ancestors(backup_path, field_name="model backup path")
                 _assert_path_within_model_root(backup_path, root)
@@ -995,11 +1003,17 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
                     _restore_model_file_backup(path, backup_path)
                 except OSError as restore_exc:
                     raise ModelError(f"failed to restore existing model file after download failure: {path}") from restore_exc
+                if previous_cache_entry_exists and previous_cache_entry is not None:
+                    _model_checksum_cache[str(path)] = dict(previous_cache_entry)
+                    _write_model_checksum_cache()
         elif backup_path is not None and not path.exists():
             try:
                 os.replace(backup_path, path)
             except OSError as restore_exc:
                 raise ModelError(f"failed to restore existing model file after download failure: {path}") from restore_exc
+            if previous_cache_entry_exists and previous_cache_entry is not None:
+                _model_checksum_cache[str(path)] = dict(previous_cache_entry)
+                _write_model_checksum_cache()
         raise
     if backup_path is not None:
         try:

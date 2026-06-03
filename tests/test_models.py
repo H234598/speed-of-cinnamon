@@ -749,6 +749,41 @@ class ModelsTest(unittest.TestCase):
             self.assertEqual((path / "old.txt").read_text(encoding="utf-8"), "old model")
             self.assertEqual(list(path.parent.glob(f".{spec.filename}.*.backup")), [])
 
+    def test_download_model_reports_multifile_backup_cleanup_failure_after_success(self) -> None:
+        data = b"small model file"
+        spec = models.ModelSpec(
+            name="ct2-backup-cleanup-fails",
+            filename="ct2-backup-cleanup-fails",
+            size="2 KiB",
+            sha1="",
+            description="ct2 backup cleanup failure",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-backup-cleanup-fails",
+            files=("config.json",),
+        )
+        real_rmtree = models.shutil.rmtree
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
+        ):
+            path = models.model_path(spec)
+            path.mkdir(parents=True)
+            (path / "old.txt").write_text("old model", encoding="utf-8")
+
+            def rmtree_or_fail(target: object, *args: object, **kwargs: object) -> None:
+                target_path = Path(target)
+                if target_path.name.endswith(".backup"):
+                    raise OSError("cleanup failed")
+                real_rmtree(target, *args, **kwargs)
+
+            with mock.patch("speed_of_cinnamon.models.shutil.rmtree", side_effect=rmtree_or_fail):
+                with self.assertRaisesRegex(models.ModelError, "failed to remove model backup"):
+                    models.download_model("ct2-backup-cleanup-fails", force=True)
+
     def test_download_model_sets_private_permissions(self) -> None:
         data = b"tiny model"
         spec = models.ModelSpec(
@@ -1158,6 +1193,7 @@ class ModelsTest(unittest.TestCase):
                     models.download_model("cache-update-fails-after-replace", force=True)
 
             self.assertEqual(path.read_bytes(), old_data)
+            self.assertEqual(models._model_checksum_cache[str(path)]["checksum"], old_checksum)
 
     def test_download_model_reports_backup_cleanup_failure_after_success(self) -> None:
         old_data = b"old model"
@@ -1194,6 +1230,8 @@ class ModelsTest(unittest.TestCase):
             with mock.patch("speed_of_cinnamon.models.os.replace", side_effect=OSError("restore failed")):
                 with self.assertRaises(OSError):
                     models._restore_model_file_backup(path, backup)
+            self.assertEqual(path.read_bytes(), old_data)
+            self.assertEqual(backup.read_bytes(), new_data)
 
     def test_model_status_rejects_non_boolean_verify(self) -> None:
         with self.assertRaisesRegex(models.ModelError, "verify must be a boolean"):
