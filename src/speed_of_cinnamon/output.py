@@ -342,6 +342,22 @@ def _read_clipboard_dedup_lock_identity(path: Path) -> str | None:
     return identity or None
 
 
+def _same_clipboard_lock_snapshot(first: os.stat_result, second: os.stat_result) -> bool:
+    return (
+        first.st_dev,
+        first.st_ino,
+        first.st_size,
+        first.st_mtime_ns,
+        first.st_ctime_ns,
+    ) == (
+        second.st_dev,
+        second.st_ino,
+        second.st_size,
+        second.st_mtime_ns,
+        second.st_ctime_ns,
+    )
+
+
 def _acquire_clipboard_dedup_lock() -> Path | None:
     try:
         path = _clipboard_dedup_lock_path()
@@ -379,7 +395,7 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                 current = path.lstat()
             except OSError:
                 return None
-            if (current.st_dev, current.st_ino) != (existing.st_dev, existing.st_ino):
+            if not _same_clipboard_lock_snapshot(existing, current):
                 return None
             try:
                 path.unlink()

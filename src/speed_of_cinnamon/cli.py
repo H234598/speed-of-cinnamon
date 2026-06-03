@@ -242,6 +242,25 @@ def _read_finalization_lock_identity(lock_path: Path) -> str | None:
     return identity or None
 
 
+def _same_finalization_lock_snapshot(
+    first: os.stat_result,
+    second: os.stat_result,
+) -> bool:
+    return (
+        first.st_dev,
+        first.st_ino,
+        first.st_size,
+        first.st_mtime_ns,
+        first.st_ctime_ns,
+    ) == (
+        second.st_dev,
+        second.st_ino,
+        second.st_size,
+        second.st_mtime_ns,
+        second.st_ctime_ns,
+    )
+
+
 def _acquire_finalization_lock(state_path: Path) -> Path | None:
     lock_path = _finalization_lock_path(state_path)
     try:
@@ -280,7 +299,7 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                 current = lock_path.lstat()
             except OSError:
                 return None
-            if (current.st_dev, current.st_ino) != (existing.st_dev, existing.st_ino):
+            if not _same_finalization_lock_snapshot(existing, current):
                 return None
             try:
                 lock_path.unlink()
