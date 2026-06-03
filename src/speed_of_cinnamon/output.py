@@ -578,6 +578,22 @@ def set_clipboard(text: str) -> str:
     raise OutputError("no clipboard helper found; install xclip, xsel, or wl-clipboard")
 
 
+def _read_text_clipboard() -> str | None:
+    xclip = _which("xclip")
+    if xclip:
+        text = _run_stdout(["xclip", "-selection", "clipboard", "-out"], resolved_command=xclip)
+        return text or None
+    xsel = _which("xsel")
+    if xsel:
+        text = _run_stdout(["xsel", "--clipboard", "--output"], resolved_command=xsel)
+        return text or None
+    wl_paste = _which("wl-paste")
+    if wl_paste:
+        text = _run_stdout(["wl-paste"], resolved_command=wl_paste)
+        return text or None
+    return None
+
+
 def paste_from_clipboard() -> None:
     xdotool = _which("xdotool")
     if xdotool:
@@ -618,6 +634,32 @@ def type_text(text: str, delay_ms: int) -> None:
     )
 
 
+def _clipboard_dedup_state_is_untrusted() -> bool:
+    try:
+        path = _clipboard_dedup_state_path()
+    except RuntimeError:
+        return True
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return True
+    if not isinstance(payload, dict):
+        return True
+    text_value = payload.get("text")
+    at_value = payload.get("at")
+    if not isinstance(text_value, str) or isinstance(text_value, bool) or not text_value:
+        return True
+    if not isinstance(at_value, (int, float)) or isinstance(at_value, bool):
+        return True
+    return False
+
+
 def _should_skip_clipboard_duplicate(text: str, method: str) -> bool:
     global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
     if not isinstance(text, str) or isinstance(text, bool):
@@ -628,6 +670,8 @@ def _should_skip_clipboard_duplicate(text: str, method: str) -> bool:
     if not cleaned:
         return False
     now_wall = time.time()
+    if _clipboard_dedup_state_is_untrusted():
+        return True
     cached_text, cached_at = _read_clipboard_dedup_state()
     if cleaned == cached_text and 0 <= (now_wall - cached_at) <= MAX_DUPLICATE_TEXT_SECONDS:
         return True
@@ -692,15 +736,22 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
             return False
         committed = False
         persistent_snapshot = _read_clipboard_dedup_state()
+        clipboard_snapshot: str | None = None
         try:
             if not _record_clipboard_insertion(text, method):
                 return False
+            clipboard_snapshot = _read_text_clipboard()
             set_clipboard(text)
             paste_from_clipboard()
             committed = True
             return True
         finally:
             if not committed:
+                if clipboard_snapshot is not None:
+                    try:
+                        set_clipboard(clipboard_snapshot)
+                    except OutputError:
+                        pass
                 _restore_clipboard_insertion_snapshot(snapshot)
                 _restore_clipboard_dedup_state(persistent_snapshot)
             _release_clipboard_dedup_lock(lock_path)

@@ -585,6 +585,7 @@ class OutputTest(unittest.TestCase):
                 "speed_of_cinnamon.output.paste_from_clipboard",
                 side_effect=[OutputError("paste failed"), None],
             ) as mocked_paste,
+            mock.patch("speed_of_cinnamon.output._read_text_clipboard", return_value=None),
             mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=4.0),
         ):
             with self.assertRaisesRegex(OutputError, "paste failed"):
@@ -593,6 +594,37 @@ class OutputTest(unittest.TestCase):
 
         self.assertEqual(mocked_clipboard.call_count, 2)
         self.assertEqual(mocked_paste.call_count, 2)
+
+    def test_insert_text_restores_previous_text_clipboard_when_paste_fails(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output._read_text_clipboard", return_value="previous text"),
+            mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
+            mock.patch(
+                "speed_of_cinnamon.output.paste_from_clipboard",
+                side_effect=OutputError("paste failed"),
+            ),
+        ):
+            with self.assertRaisesRegex(OutputError, "paste failed"):
+                insert_text("new text", "clipboard-paste")
+
+        self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["new text", "previous text"])
+
+    def test_insert_text_fails_closed_when_dedupe_state_is_malformed(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
+            mock.patch("speed_of_cinnamon.output.paste_from_clipboard") as mocked_paste,
+        ):
+            state_path = Path(tmp) / "speed-of-cinnamon" / output_module.CLIPBOARD_DEDUP_STATE_FILE
+            state_path.parent.mkdir(parents=True)
+            state_path.write_text("{", encoding="utf-8")
+            self.assertFalse(insert_text("secure text", "clipboard-paste"))
+
+        mocked_clipboard.assert_not_called()
+        mocked_paste.assert_not_called()
 
     def test_insert_text_clipboard_fails_closed_when_dedupe_state_cannot_persist(self) -> None:
         with (
