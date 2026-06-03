@@ -1,4 +1,4 @@
-.PHONY: check test coverage lint lint-workflows python-security-scan shell-security-scan security-scan verify-authorship smoke-doctor smoke-backend release-dry-run release dist dist-check rpm rpm-check rpm-generic rpm-generic-check snap snap-check release-validate-flags install-local uninstall-local clean version-next
+.PHONY: check test coverage lint lint-workflows lint-workflows-check python-security-scan shell-security-scan security-scan verify-authorship smoke-doctor smoke-backend release-dry-run release dist dist-check rpm rpm-check rpm-generic rpm-generic-check snap snap-check release-validate-flags install-local uninstall-local clean version-next
 SHELL := /usr/bin/env bash
 
 PYTHON := $(shell command -v python3 2>/dev/null | awk 'NR==1 {print}')
@@ -12,7 +12,7 @@ PROJECT_VERSION := $(shell $(PYTHON) -c 'import tomllib, pathlib; print(tomllib.
 SNAP_BUILD ?= 1
 BUILD_GENERIC_RPM ?= 1
 
-check: test lint verify-authorship smoke-doctor security-scan
+check: test lint lint-workflows-check verify-authorship smoke-doctor security-scan
 
 test:
 	PYTHONPATH=src $(PYTHON) -m unittest discover -s tests
@@ -26,6 +26,22 @@ lint:
 	find src tests -name '*.py' -print0 | xargs -0 $(PYTHON) -m py_compile
 	$(PYTHON) -m json.tool files/speed-of-cinnamon@H234598/metadata.json >/dev/null
 	$(PYTHON) -m json.tool files/speed-of-cinnamon@H234598/settings-schema.json >/dev/null
+
+lint-workflows-check:
+	@if [ "$${GITHUB_ACTIONS:-false}" = "true" ]; then \
+	  export ACTIONLINT_STRICT=true; \
+	else \
+	  export ACTIONLINT_STRICT=false; \
+	fi; \
+	./scripts/lint-workflows.sh \
+	|| { \
+	  rc=$$?; \
+	  if [ "$${GITHUB_ACTIONS:-false}" = "true" ]; then \
+	    exit $$rc; \
+	  fi; \
+	  printf 'workflow lint skipped locally; install actionlint for strict checks.\n'; \
+	  exit 0; \
+	}
 
 lint-workflows:
 	./scripts/lint-workflows.sh
@@ -87,19 +103,19 @@ release: release-validate-flags dist-check rpm rpm-check
 dist:
 	./scripts/build-dist.sh
 
-dist-check:
+dist-check: release-validate-flags
 	tarball="$$(./scripts/build-dist.sh)" && ./scripts/verify-dist.sh "$$tarball"
 
-rpm:
+rpm: release-validate-flags
 	./scripts/build-rpm.sh
 
-rpm-generic:
+rpm-generic: release-validate-flags
 	./scripts/build-rpm.sh generic
 
-rpm-generic-check:
+rpm-generic-check: release-validate-flags
 	./scripts/verify-rpm.sh dist/rpmbuild-generic/RPMS/noarch/speed-of-cinnamon-"$(PROJECT_VERSION)"-*.noarch.rpm
 
-rpm-check:
+rpm-check: release-validate-flags
 	./scripts/verify-rpm.sh
 
 snap: release-validate-flags

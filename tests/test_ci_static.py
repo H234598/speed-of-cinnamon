@@ -490,6 +490,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("override PYTHON := $(PYTHON)", makefile)
         self.assertIn("$(error python3 is required)", makefile)
         self.assertIn("verify-authorship:\n\t./scripts/verify-authorship.sh", makefile)
+        self.assertIn("check: test lint lint-workflows-check verify-authorship smoke-doctor security-scan", makefile)
         self.assertIn("python-security-scan:\n\tbandit -q -r src/speed_of_cinnamon -x tests", makefile)
         self.assertIn("shell-security-scan:\n\tshellcheck scripts/*.sh", makefile)
         self.assertIn("security-scan: python-security-scan shell-security-scan", makefile)
@@ -501,6 +502,37 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("check_forbidden_names()", verifier)
         self.assertIn("check_git_identity()", verifier)
         self.assertNotIn("check_mailmap", verifier)
+
+    def test_makefile_release_validation_gate(self) -> None:
+        makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn("release-validate-flags", makefile)
+        self.assertRegex(
+            makefile,
+            r"(?m)^dist-check:\s*release-validate-flags$",
+            "dist-check must validate release flags before running",
+        )
+        self.assertRegex(makefile, r"(?m)^rpm:\s*release-validate-flags$", "rpm must validate release flags before running")
+        self.assertRegex(
+            makefile, r"(?m)^rpm-check:\s*release-validate-flags$", "rpm-check must validate release flags before running"
+        )
+        self.assertRegex(
+            makefile, r"(?m)^rpm-generic:\s*release-validate-flags$", "rpm-generic must validate release flags before running"
+        )
+        self.assertRegex(
+            makefile,
+            r"(?m)^rpm-generic-check:\s*release-validate-flags$",
+            "rpm-generic-check must validate release flags before running",
+        )
+
+    def test_makefile_lint_workflows_check_in_check_target(self) -> None:
+        makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn("lint-workflows-check:", makefile)
+        self.assertIn("lint-workflows-check", makefile)
+
+        self.assertIn("\t@if [ \"$${GITHUB_ACTIONS:-false}\" = \"true\" ]; then \\", makefile)
+        self.assertIn("\t  if [ \"$${GITHUB_ACTIONS:-false}\" = \"true\" ]; then \\", makefile)
+        self.assertIn("./scripts/lint-workflows.sh \\", makefile)
+        self.assertIn("workflow lint skipped locally; install actionlint for strict checks.", makefile)
 
     def test_man_pages_and_wiki_are_packaged(self) -> None:
         spec = (REPO_ROOT / "packaging" / "speed-of-cinnamon.spec").read_text(encoding="utf-8")

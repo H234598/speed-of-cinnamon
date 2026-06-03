@@ -26,7 +26,8 @@ over `scripts/*.sh`. `make security-scan` runs both local scans.
 - Cinnamon `metadata.json` and `settings-schema.json` validation,
 - authorship and metadata verification,
 - backend doctor smoke check,
-- repository security scan.
+- repository security scan,
+- workflow linting (best-effort locally, fail-closed in CI).
 
 The authorship guard checks the expected GitHub repo URL, commit author/committer identity, applet metadata, Python
 project metadata, RPM spec metadata, and forbidden upstream author markers in tracked text files.
@@ -50,6 +51,11 @@ Default local mode keeps a YAML fallback when actionlint is unavailable:
 ```bash
 ./scripts/lint-workflows.sh
 ```
+
+`make check` runs `lint-workflows-check`, which calls workflow linting with:
+
+- strict mode in CI (`GITHUB_ACTIONS=true`) so workflow issues or missing actionlint fail the CI check,
+- non-strict mode locally so missing optional tooling does not fail local checks; it reports a skip hint instead.
 
 ## Backend Smoke
 
