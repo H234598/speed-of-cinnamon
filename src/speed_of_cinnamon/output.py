@@ -913,7 +913,7 @@ def paste_from_clipboard() -> None:
         if xdotool_error is not None:
             log_event("warning", "clipboard_paste_xdotool_failed_falling_back_to_wtype", error=str(xdotool_error))
         _run_with_input(
-            ["wtype", "-M", "ctrl", "-M", "shift", "v", "-m", "shift", "-m", "ctrl"],
+            ["wtype", "-M", "ctrl", "v", "-m", "ctrl"],
             "",
             timeout=MAX_PASTE_TIMEOUT_SECONDS,
             resolved_command=wtype,
@@ -970,7 +970,7 @@ def _should_skip_clipboard_duplicate(
     cached_fingerprint, cached_at = persistent_snapshot
     fingerprint = _clipboard_text_fingerprint(cleaned)
     if pending_state:
-        return fingerprint == cached_fingerprint
+        return fingerprint == cached_fingerprint and 0 <= (now_wall - cached_at) <= MAX_DUPLICATE_TEXT_SECONDS
     if fingerprint == cached_fingerprint and 0 <= (now_wall - cached_at) <= MAX_DUPLICATE_TEXT_SECONDS:
         return True
     now = time.monotonic()

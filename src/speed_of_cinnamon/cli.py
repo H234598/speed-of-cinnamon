@@ -1682,6 +1682,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         audio_suffix = audio_path.suffix.lower()
         silence = detect_silent_recording(audio_path)
         if silence.silent:
+            cleanup_log_path = state.log_path
             if not keep_recording_artifacts:
                 done_audio_path = None
                 done_log_path = None
@@ -1701,7 +1702,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             )
             if not keep_recording_artifacts:
                 audio_deleted = remove_file(str(audio_path), suffix=audio_suffix)
-                log_deleted = remove_file(state.log_path, suffix=".log")
+                log_deleted = remove_file(cleanup_log_path, suffix=".log")
             return {
                 "status": done.status,
                 "message": "silent recording skipped",
@@ -1754,9 +1755,11 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         typing_delay_ms = _coerce_int(args.typing_delay_ms, field_name="typing-delay-ms", max_value=MAX_TYPING_DELAY_MS)
         inserted = bool(text_to_insert) and bool(insert_text(text_to_insert, args.insert_method, typing_delay_ms))
 
+        cleanup_audio_path: Path | None = None
+        cleanup_log_path: str | None = None
         if not keep_recording_artifacts:
-            audio_deleted = remove_file(str(audio_path), suffix=audio_suffix)
-            log_deleted = remove_file(state.log_path, suffix=".log")
+            cleanup_audio_path = audio_path
+            cleanup_log_path = state.log_path
             done_audio_path = None
             done_log_path = None
         elif trimmed_audio_path is not None:
@@ -1790,6 +1793,10 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         )
         if remove_original_after_state_update:
             remove_file(str(audio_path), suffix=audio_suffix)
+        if cleanup_audio_path is not None:
+            audio_deleted = remove_file(str(cleanup_audio_path), suffix=audio_suffix)
+        if cleanup_log_path is not None:
+            log_deleted = remove_file(cleanup_log_path, suffix=".log")
         state.audio_path = done_audio_path
         state.log_path = done_log_path
         state.transcript_path = str(text_path)

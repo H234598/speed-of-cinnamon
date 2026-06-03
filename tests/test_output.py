@@ -503,7 +503,7 @@ class OutputTest(unittest.TestCase):
         self.assertEqual(which_calls.count("xdotool"), 1)
         self.assertEqual(which_calls.count("wtype"), 0)
 
-    def test_paste_from_clipboard_uses_shift_paste_for_wtype(self) -> None:
+    def test_paste_from_clipboard_uses_generic_paste_for_wtype(self) -> None:
         def fake_which(command: str, path: str | None = None) -> str | None:
             del path
             return "/usr/bin/wtype" if command == "wtype" else None
@@ -515,7 +515,7 @@ class OutputTest(unittest.TestCase):
             paste_from_clipboard()
 
         mocked_run.assert_called_once_with(
-            ["wtype", "-M", "ctrl", "-M", "shift", "v", "-m", "shift", "-m", "ctrl"],
+            ["wtype", "-M", "ctrl", "v", "-m", "ctrl"],
             "",
             timeout=10,
             resolved_command="/usr/bin/wtype",
@@ -570,7 +570,7 @@ class OutputTest(unittest.TestCase):
             error="xdotool unavailable",
         )
         mocked_run.assert_called_once_with(
-            ["wtype", "-M", "ctrl", "-M", "shift", "v", "-m", "shift", "-m", "ctrl"],
+            ["wtype", "-M", "ctrl", "v", "-m", "ctrl"],
             "",
             timeout=10,
             resolved_command="/usr/bin/wtype",
@@ -902,7 +902,7 @@ class OutputTest(unittest.TestCase):
             self.assertEqual(output_module._read_clipboard_dedup_state(), initial_state)
             self.assertEqual(mocked_clipboard.call_count, 2)
 
-    def test_insert_text_skips_pending_duplicate_when_stale_lock_is_recovered(self) -> None:
+    def test_insert_text_ignores_expired_pending_duplicate_when_stale_lock_is_recovered(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):
                 state_root = Path(tmp) / "speed-of-cinnamon"
@@ -926,14 +926,15 @@ class OutputTest(unittest.TestCase):
                 os.utime(lock_path, (stale, stale))
 
                 with (
+                    mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
                     mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "wiederholung")),
                     mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
                     mock.patch("speed_of_cinnamon.output.paste_from_clipboard") as mocked_paste,
                 ):
-                    self.assertFalse(insert_text("wiederholung", "clipboard-paste"))
+                    self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
 
-            mocked_clipboard.assert_not_called()
-            mocked_paste.assert_not_called()
+            mocked_clipboard.assert_called_once_with("wiederholung")
+            mocked_paste.assert_called_once()
 
     def test_insert_text_fails_closed_without_readable_text_clipboard_snapshot(self) -> None:
         with (
