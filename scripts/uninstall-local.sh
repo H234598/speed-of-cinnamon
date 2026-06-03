@@ -35,7 +35,27 @@ if [[ "${HOME}" == "/" ]]; then
   printf 'Refusing to run uninstall from root home directory.\n' >&2
   exit 1
 fi
-for target in "${applet_dir}" "${bin_path}" "${man_dir}" "${python_dir}"; do
+reject_symlink_ancestors() {
+  local path="$1"
+  local action="$2"
+  local parent="${path%/*}"
+  local next
+
+  while [[ -n "${parent}" && "${parent}" != "${path}" && "${parent}" != "/" ]]; do
+    if [[ -L "${parent}" ]]; then
+      printf 'refusing to follow symlink during %s: %s\n' "${action}" "${parent}" >&2
+      exit 1
+    fi
+    next="${parent%/*}"
+    if [[ "${next}" == "${parent}" ]]; then
+      break
+    fi
+    parent="${next}"
+  done
+}
+
+for target in "${applet_dir}" "${bin_path}" "${man_dir}" "${python_dir}" "${app_data}"; do
+  reject_symlink_ancestors "${target}" "uninstall"
   if [[ -L "${target}" ]]; then
     printf 'refusing to follow symlink during uninstall: %s\n' "${target}" >&2
     exit 1

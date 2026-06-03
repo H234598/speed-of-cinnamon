@@ -137,6 +137,21 @@ class InstallLocalTest(unittest.TestCase):
             self.assertTrue(marker.exists())
             self.assertEqual(marker.read_text(encoding="utf-8"), "old install\n")
 
+    def test_install_local_refuses_symlinked_home_ancestor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            home = tmp_path / "home"
+            outside = tmp_path / "outside"
+            home.mkdir()
+            outside.mkdir()
+            (home / ".local").symlink_to(outside, target_is_directory=True)
+
+            result = self._run_install_local(REPO_ROOT, home)
+
+            self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+            self.assertIn("refusing to follow symlink during install", result.stderr)
+            self.assertFalse((outside / "bin" / "speed-of-cinnamon").exists())
+
     def test_installed_wrapper_uses_install_path_not_runtime_home(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -189,6 +204,24 @@ class InstallLocalTest(unittest.TestCase):
             self.assertFalse((home / ".local" / "share" / "man" / "man1" / "speed-of-cinnamon-alarms.1").exists())
             self.assertTrue(model_file.exists())
             self.assertTrue(alarm_file.exists())
+
+    def test_uninstall_local_refuses_symlinked_home_ancestor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            home = tmp_path / "home"
+            outside = tmp_path / "outside"
+            home.mkdir()
+            outside.mkdir()
+            (home / ".local").symlink_to(outside, target_is_directory=True)
+            protected = outside / "share" / "speed-of-cinnamon" / "python" / "protected.txt"
+            protected.parent.mkdir(parents=True)
+            protected.write_text("keep\n", encoding="utf-8")
+
+            result = self._run_uninstall_local(REPO_ROOT, home)
+
+            self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+            self.assertIn("refusing to follow symlink during uninstall", result.stderr)
+            self.assertTrue(protected.exists())
 
 
 class SmokeBackendTest(unittest.TestCase):

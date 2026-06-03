@@ -73,7 +73,27 @@ reject_unsafe_file() {
   fi
 }
 
+reject_symlink_ancestors() {
+  local path="$1"
+  local action="$2"
+  local parent="${path%/*}"
+  local next
+
+  while [[ -n "${parent}" && "${parent}" != "${path}" && "${parent}" != "/" ]]; do
+    if [[ -L "${parent}" ]]; then
+      printf 'refusing to follow symlink during %s: %s\n' "${action}" "${parent}" >&2
+      exit 1
+    fi
+    next="${parent%/*}"
+    if [[ "${next}" == "${parent}" ]]; then
+      break
+    fi
+    parent="${next}"
+  done
+}
+
 for target in "${applet_target}" "${app_data}" "${bin_dir}" "${man_dir}"; do
+  reject_symlink_ancestors "${target}" "install"
   if [[ -L "${target}" ]]; then
     printf 'refusing to follow symlink during install: %s\n' "${target}" >&2
     exit 1
@@ -98,7 +118,13 @@ install_tree_staged() {
     printf 'refusing to follow symlink during install: %s\n' "${target_tree}" >&2
     exit 1
   fi
+  reject_symlink_ancestors "${target_tree}" "install"
   mkdir -p "${parent}"
+  reject_symlink_ancestors "${target_tree}" "install"
+  if [[ -L "${parent}" || -L "${target_tree}" ]]; then
+    printf 'refusing to follow symlink during install: %s\n' "${target_tree}" >&2
+    exit 1
+  fi
   reject_unsafe_tree "${source_tree}" "${label} source tree"
 
   stage_root="$(mktemp -d "${parent}/.${name}.install.XXXXXX")"
@@ -136,6 +162,9 @@ install_tree_staged() {
 }
 
 mkdir -p "$(dirname "${applet_target}")" "${app_data}" "${app_data}/python" "${bin_dir}" "${man_dir}"
+for target in "${applet_target}" "${app_data}" "${bin_dir}" "${man_dir}"; do
+  reject_symlink_ancestors "${target}" "install"
+done
 install_tree_staged "${repo_dir}/files/${uuid}" "${applet_target}" "applet"
 install_tree_staged "${repo_dir}/src/speed_of_cinnamon" "${app_data}/python/speed_of_cinnamon" "python package"
 

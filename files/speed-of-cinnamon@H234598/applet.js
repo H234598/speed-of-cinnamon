@@ -3866,16 +3866,20 @@ MyApplet.prototype = {
   _finishAppletTextInsert: function(payload) {
     let transcript = String(payload.transcript || "");
     let insertFingerprint = this._autoInsertFingerprint(payload, transcript);
-    if (this._hasAutoInsertFingerprint(insertFingerprint)) {
+    if (!this._reserveAutoInsertFingerprint(insertFingerprint)) {
       this._setStatus("done", payload.message || _("Transcript already inserted"), transcript);
       this._finishPendingRelisten();
       return;
     }
+    let inserted = false;
     if (payload.inserted === true) {
-      this._rememberAutoInsertFingerprint(insertFingerprint);
+      inserted = true;
       this._setStatus("done", payload.message || _("Transcript already inserted by backend"), transcript);
     } else if (this._insertTranscriptText(transcript)) {
-      this._rememberAutoInsertFingerprint(insertFingerprint);
+      inserted = true;
+    }
+    if (!inserted) {
+      this._forgetAutoInsertFingerprint(insertFingerprint);
     }
     this._finishPendingRelisten();
   },
@@ -3927,6 +3931,17 @@ MyApplet.prototype = {
     return this.autoInsertFingerprints && this.autoInsertFingerprints.indexOf(fingerprint) >= 0;
   },
 
+  _reserveAutoInsertFingerprint: function(fingerprint) {
+    if (!fingerprint) {
+      return true;
+    }
+    if (this._hasAutoInsertFingerprint(fingerprint)) {
+      return false;
+    }
+    this._rememberAutoInsertFingerprint(fingerprint);
+    return true;
+  },
+
   _rememberAutoInsertFingerprint: function(fingerprint) {
     if (!fingerprint) {
       return;
@@ -3940,6 +3955,21 @@ MyApplet.prototype = {
     }
     while (this.autoInsertFingerprints.length > 20) {
       this.autoInsertFingerprints.shift();
+    }
+  },
+
+  _forgetAutoInsertFingerprint: function(fingerprint) {
+    if (!fingerprint || !this.autoInsertFingerprints) {
+      return;
+    }
+    let index = this.autoInsertFingerprints.indexOf(fingerprint);
+    if (index >= 0) {
+      this.autoInsertFingerprints.splice(index, 1);
+    }
+    if (this.autoInsertFingerprint === fingerprint) {
+      this.autoInsertFingerprint = this.autoInsertFingerprints.length > 0
+        ? this.autoInsertFingerprints[this.autoInsertFingerprints.length - 1]
+        : "";
     }
   },
 
