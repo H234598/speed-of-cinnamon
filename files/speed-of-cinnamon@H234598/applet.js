@@ -3980,10 +3980,10 @@ MyApplet.prototype = {
 
   _clipboardTargetsContainNonTextPayload: function(targets) {
     if (targets === null || targets === undefined) {
-      return false;
+      return true;
     }
     if (String(targets || "").trim() === "") {
-      return false;
+      return true;
     }
     let ignored = {
       targets: true,

@@ -857,6 +857,116 @@ class ModelsTest(unittest.TestCase):
             "model path safety check should run after no-follow parent creation",
         )
 
+    def test_download_model_uses_fd_based_temporary_file_for_single_file_download(self) -> None:
+        data = b"tiny model"
+        spec = models.ModelSpec(
+            name="test-single-tdir",
+            filename="ggml-test-single-tdir.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(data).hexdigest(),
+            description="test single-file temporary dir fd creation",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
+        ):
+            open_parent_calls: list[int] = []
+            temporary_file_calls: list[tuple[int, str]] = []
+
+            original_open_parent = models._open_model_parent_directory
+            original_temp_file = models._create_temporary_file_in_parent_directory
+
+            def record_open_parent(path_arg: Path, root_arg: Path, field_name: str = "model path") -> int:
+                parent_fd = original_open_parent(path_arg, root_arg, field_name=field_name)
+                open_parent_calls.append(parent_fd)
+                return parent_fd
+
+            def record_temp_file(parent_fd: int, *, prefix: str) -> tuple[str, int]:
+                temporary_file_calls.append((parent_fd, prefix))
+                return original_temp_file(parent_fd, prefix=prefix)
+
+            with (
+                mock.patch.object(models, "_open_model_parent_directory", side_effect=record_open_parent),
+                mock.patch.object(models, "_create_temporary_file_in_parent_directory", side_effect=record_temp_file),
+            ):
+                models.download_model("test-single-tdir")
+
+        self.assertEqual(len(temporary_file_calls), 1, "single-file download should use secure temporary-file helper once")
+        self.assertIn(temporary_file_calls[0][0], open_parent_calls)
+
+    def test_download_model_removes_fd_temporary_file_when_response_too_large(self) -> None:
+        spec = models.ModelSpec(
+            name="test-single-tdir-too-large",
+            filename="ggml-test-single-tdir-too-large.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(b"tiny model").hexdigest(),
+            description="test failed single-file temporary cleanup",
+        )
+        oversized_content_length = models.MODEL_SIZE_SLACK_BYTES + 2048
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch(
+                "speed_of_cinnamon.models._open_model_download_url",
+                return_value=FakeResponseWithLength(b"", oversized_content_length),
+            ),
+        ):
+            path = models.model_path(spec)
+
+            with self.assertRaisesRegex(models.ModelError, "downloaded model too large"):
+                models.download_model("test-single-tdir-too-large")
+
+            self.assertTrue(path.parent.exists())
+            self.assertEqual([], list(path.parent.iterdir()))
+
+    def test_download_directory_model_uses_fd_based_temporary_directory(self) -> None:
+        data = b"small model file"
+        spec = models.ModelSpec(
+            name="ct2-directory-tdir",
+            filename="ct2-directory-tdir",
+            size="2 KiB",
+            sha1="",
+            description="test directory temporary dir fd creation",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-directory-tdir",
+            files=("config.json",),
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
+        ):
+            open_parent_calls: list[int] = []
+            temporary_directory_calls: list[tuple[int, str]] = []
+
+            original_open_parent = models._open_model_parent_directory
+            original_temp_directory = models._create_temporary_directory_in_parent_directory
+
+            def record_open_parent(path_arg: Path, root_arg: Path, field_name: str = "model path") -> int:
+                parent_fd = original_open_parent(path_arg, root_arg, field_name=field_name)
+                open_parent_calls.append(parent_fd)
+                return parent_fd
+
+            def record_temp_directory(parent_fd: int, *, prefix: str) -> str:
+                temporary_directory_calls.append((parent_fd, prefix))
+                return original_temp_directory(parent_fd, prefix=prefix)
+
+            with (
+                mock.patch.object(models, "_open_model_parent_directory", side_effect=record_open_parent),
+                mock.patch.object(models, "_create_temporary_directory_in_parent_directory", side_effect=record_temp_directory),
+                mock.patch.object(models.tempfile, "mkdtemp", side_effect=AssertionError("mkdtemp should not be used for model temp directory")),
+            ):
+                models.download_model("ct2-directory-tdir")
+
+        self.assertEqual(len(temporary_directory_calls), 1, "directory download should use secure temporary-directory helper once")
+        self.assertGreaterEqual(len(open_parent_calls), 1, "directory download should open at least one model parent")
+        self.assertIn(temporary_directory_calls[0][0], open_parent_calls)
+
     def test_multifile_model_symlink_path_is_not_downloaded(self) -> None:
         data = b"small model file"
         spec = models.ModelSpec(

@@ -695,6 +695,11 @@ def _assert_model_parent_for_atomic_replace(path: Path, root: Path, *, field_nam
 
 
 def _ensure_model_parent_directory(path: Path, root: Path, *, field_name: str = "model path") -> None:
+    parent_fd = _open_model_parent_directory(path, root, field_name=field_name)
+    os.close(parent_fd)
+
+
+def _open_model_parent_directory(path: Path, root: Path, *, field_name: str = "model path") -> int:
     _assert_model_parent_for_atomic_replace(path, root, field_name=field_name)
     try:
         parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name=f"{field_name} parent")
@@ -702,8 +707,10 @@ def _ensure_model_parent_directory(path: Path, root: Path, *, field_name: str = 
         raise ModelError(f"{field_name} parent is not safe: {path.parent}") from exc
     try:
         _assert_model_parent_for_atomic_replace(path, root, field_name=field_name)
-    finally:
+    except (ModelError, OSError, RuntimeError) as exc:
         os.close(parent_fd)
+        raise ModelError(f"{field_name} parent is not safe: {path.parent}") from exc
+    return parent_fd
 
 
 def model_download_urls(model: ModelSpec) -> list[tuple[str, str]]:
@@ -854,10 +861,53 @@ def _model_is_verified(model: ModelSpec, path: Path, checksum: str = "") -> bool
 
 
 def _download_url_to_file(url: str, tmp_dir: Path, size_limit: int, model_name: str, *, prefix: str) -> tuple[Path, int]:
-    try:
-        assert_no_symlink_ancestors(tmp_dir, field_name="model temporary directory")
-    except RuntimeError as exc:
-        raise ModelError(str(exc)) from exc
+    return _download_url_to_file_with_fd(url, tmp_dir, None, size_limit, model_name, prefix=prefix)
+
+
+def _create_temporary_file_in_parent_directory(parent_fd: int, *, prefix: str) -> tuple[str, int]:
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise OSError("secure temporary file creation is not supported for model downloads")
+    for _ in range(100):
+        temporary_name = f"{prefix}{secrets.token_hex(8)}.tmp"
+        try:
+            fd = os.open(
+                temporary_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag,
+                0o600,
+                dir_fd=parent_fd,
+            )
+            return temporary_name, fd
+        except FileExistsError:
+            continue
+    raise OSError("failed to create temporary model file in parent directory")
+
+
+def _create_temporary_directory_in_parent_directory(parent_fd: int, *, prefix: str) -> str:
+    for _ in range(100):
+        temporary_name = f"{prefix}{secrets.token_hex(8)}"
+        try:
+            os.mkdir(temporary_name, 0o700, dir_fd=parent_fd)
+            return temporary_name
+        except FileExistsError:
+            continue
+    raise OSError("failed to create temporary model directory in parent directory")
+
+
+def _download_url_to_file_with_fd(
+    url: str,
+    tmp_dir: Path,
+    tmp_dir_fd: int | None,
+    size_limit: int,
+    model_name: str,
+    *,
+    prefix: str,
+) -> tuple[Path, int]:
+    if tmp_dir_fd is None:
+        try:
+            assert_no_symlink_ancestors(tmp_dir, field_name="model temporary directory")
+        except RuntimeError as exc:
+            raise ModelError(str(exc)) from exc
     allowed_hosts = {"huggingface.co"}
     allowed_urls = {TINY_DE_MODEL_URL} if model_name == "tiny-de" else None
     url = _assert_download_url(
@@ -866,40 +916,92 @@ def _download_url_to_file(url: str, tmp_dir: Path, size_limit: int, model_name: 
         allowed_hosts=allowed_hosts,
         allowed_urls=allowed_urls,
     )
-    with tempfile.NamedTemporaryFile("wb", delete=False, dir=tmp_dir, prefix=prefix) as output:
-        tmp_path = Path(output.name)
-        try:
-            os.fchmod(output.fileno(), 0o600)
-        except OSError:
-            pass
-        with _open_model_download_response(url, allowed_hosts=allowed_hosts, allowed_urls=allowed_urls) as response, output:
-            geturl = getattr(response, "geturl", None)
-            if callable(geturl):
-                final_url = _assert_download_url(
-                    geturl(),
-                    field_name="model download redirect URL",
-                    allowed_hosts=allowed_hosts,
-                )
-                if allowed_urls is not None and not any(
-                    _url_matches_allowed_base(final_url, allowed_url) for allowed_url in allowed_urls
-                ):
-                    raise ModelError("model download redirect URL is not allowed")
-            content_length = _read_content_length(response)
-            if content_length is not None and content_length > size_limit:
-                raise ModelError(f"downloaded model too large for {model_name}: {content_length} > {size_limit}")
+    temporary_name: str | None = None
+    tmp_path: Path | None = None
+    try:
+        if tmp_dir_fd is None:
+            with tempfile.NamedTemporaryFile("wb", delete=False, dir=tmp_dir, prefix=prefix) as output:
+                tmp_path = Path(output.name)
+                try:
+                    os.fchmod(output.fileno(), 0o600)
+                except OSError:
+                    pass
+                with _open_model_download_response(
+                    url, allowed_hosts=allowed_hosts, allowed_urls=allowed_urls
+                ) as response:
+                    geturl = getattr(response, "geturl", None)
+                    if callable(geturl):
+                        final_url = _assert_download_url(
+                            geturl(),
+                            field_name="model download redirect URL",
+                            allowed_hosts=allowed_hosts,
+                        )
+                        if allowed_urls is not None and not any(
+                            _url_matches_allowed_base(final_url, allowed_url) for allowed_url in allowed_urls
+                        ):
+                            raise ModelError("model download redirect URL is not allowed")
+                    content_length = _read_content_length(response)
+                    if content_length is not None and content_length > size_limit:
+                        raise ModelError(f"downloaded model too large for {model_name}: {content_length} > {size_limit}")
 
-            downloaded = 0
-            while True:
-                chunk = response.read(MAX_MODEL_DOWNLOAD_CHUNK_BYTES)
-                if not chunk:
-                    break
-                downloaded += len(chunk)
-                if downloaded > size_limit:
-                    raise ModelError(f"downloaded model too large for {model_name}: {downloaded} > {size_limit}")
-                output.write(chunk)
-            if content_length is not None and downloaded != content_length:
-                raise ModelError(f"downloaded model size mismatch for {model_name}: {downloaded} != {content_length}")
-    return tmp_path, downloaded
+                    downloaded = 0
+                    while True:
+                        chunk = response.read(MAX_MODEL_DOWNLOAD_CHUNK_BYTES)
+                        if not chunk:
+                            break
+                        downloaded += len(chunk)
+                        if downloaded > size_limit:
+                            raise ModelError(f"downloaded model too large for {model_name}: {downloaded} > {size_limit}")
+                        output.write(chunk)
+                    if content_length is not None and downloaded != content_length:
+                        raise ModelError(
+                            f"downloaded model size mismatch for {model_name}: {downloaded} != {content_length}"
+                        )
+            return tmp_path, downloaded
+
+        temporary_name, tmp_fd = _create_temporary_file_in_parent_directory(tmp_dir_fd, prefix=prefix)
+        tmp_path = tmp_dir / temporary_name
+        with os.fdopen(tmp_fd, "wb") as output:
+            try:
+                os.fchmod(output.fileno(), 0o600)
+            except OSError:
+                pass
+            with _open_model_download_response(url, allowed_hosts=allowed_hosts, allowed_urls=allowed_urls) as response:
+                geturl = getattr(response, "geturl", None)
+                if callable(geturl):
+                    final_url = _assert_download_url(
+                        geturl(),
+                        field_name="model download redirect URL",
+                        allowed_hosts=allowed_hosts,
+                    )
+                    if allowed_urls is not None and not any(
+                        _url_matches_allowed_base(final_url, allowed_url) for allowed_url in allowed_urls
+                    ):
+                        raise ModelError("model download redirect URL is not allowed")
+                content_length = _read_content_length(response)
+                if content_length is not None and content_length > size_limit:
+                    raise ModelError(f"downloaded model too large for {model_name}: {content_length} > {size_limit}")
+
+                downloaded = 0
+                while True:
+                    chunk = response.read(MAX_MODEL_DOWNLOAD_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    downloaded += len(chunk)
+                    if downloaded > size_limit:
+                        raise ModelError(f"downloaded model too large for {model_name}: {downloaded} > {size_limit}")
+                    output.write(chunk)
+                if content_length is not None and downloaded != content_length:
+                    raise ModelError(f"downloaded model size mismatch for {model_name}: {downloaded} != {content_length}")
+        return tmp_path, downloaded
+    except Exception:
+        if tmp_dir_fd is not None and temporary_name is not None:
+            with suppress(OSError):
+                os.unlink(temporary_name, dir_fd=tmp_dir_fd)
+        elif tmp_path is not None:
+            with suppress(OSError):
+                tmp_path.unlink()
+        raise
 
 
 def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict[str, object]:
@@ -909,45 +1011,56 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
         status = model_status(model, verify=True)
         if status["verified"]:
             return {**status, "status": "done", "message": f"model already downloaded: {path}"}
-    _ensure_model_parent_directory(path, root, field_name="model path")
+    parent_fd = _open_model_parent_directory(path, root, field_name="model path")
     _assert_model_path_for_atomic_replace(path, root, field_name="model path")
-    tmp_dir = Path(tempfile.mkdtemp(prefix=f".{model.filename}.", dir=path.parent))
+    tmp_dir: Path | None = None
     try:
-        assert_no_symlink_ancestors(tmp_dir, field_name="model temporary directory")
-    except RuntimeError as exc:
-        raise ModelError(str(exc)) from exc
-    size_limit = _download_size_limit(model)
-    if model.files and not model.repo_id:
-        raise ModelError(f"model catalog entry {model.name} is missing repo_id for multi-file download")
-
-    def _assert_safe_model_directory(target: Path) -> None:
         try:
-            assert_no_symlink_ancestors(target, field_name="model path")
+            tmp_dir = path.parent / _create_temporary_directory_in_parent_directory(
+                parent_fd, prefix=f".{model.filename}."
+            )
+        except OSError as exc:
+            raise ModelError(str(exc)) from exc
+        try:
+            assert_no_symlink_ancestors(tmp_dir, field_name="model temporary directory")
         except RuntimeError as exc:
             raise ModelError(str(exc)) from exc
-        _assert_path_within_model_root(target, root)
-        if not target.parent.exists() or not target.parent.is_dir():
-            raise ModelError(f"model path parent is not a directory: {target.parent}")
-        if target.exists():
-            if target.is_symlink():
-                raise ModelError(f"model path must not be a symlink: {target}")
-            if not target.is_dir():
-                raise ModelError(f"model path must be a directory: {target}")
 
-    try:
+        size_limit = _download_size_limit(model)
+        if model.files and not model.repo_id:
+            raise ModelError(f"model catalog entry {model.name} is missing repo_id for multi-file download")
+
+        def _assert_safe_model_directory(target: Path) -> None:
+            try:
+                assert_no_symlink_ancestors(target, field_name="model path")
+            except RuntimeError as exc:
+                raise ModelError(str(exc)) from exc
+            _assert_path_within_model_root(target, root)
+            if not target.parent.exists() or not target.parent.is_dir():
+                raise ModelError(f"model path parent is not a directory: {target.parent}")
+            if target.exists():
+                if target.is_symlink():
+                    raise ModelError(f"model path must not be a symlink: {target}")
+                if not target.is_dir():
+                    raise ModelError(f"model path must be a directory: {target}")
+
         downloaded_total = 0
         for filename, url in model_download_urls(model):
             target = tmp_dir / filename
-            _assert_model_parent_for_atomic_replace(target, root, field_name="model file path")
             target.parent.mkdir(parents=True, exist_ok=True)
             _assert_model_path_for_atomic_replace(target, root, field_name="model file path")
-            tmp_path, downloaded = _download_url_to_file(
-                url,
-                target.parent,
-                size_limit,
-                model.name,
-                prefix=f".{target.name}.",
-            )
+            target_parent_fd = _open_model_parent_directory(target, root, field_name="model file path")
+            try:
+                tmp_path, downloaded = _download_url_to_file_with_fd(
+                    url,
+                    target.parent,
+                    target_parent_fd,
+                    size_limit,
+                    model.name,
+                    prefix=f".{target.name}.",
+                )
+            finally:
+                os.close(target_parent_fd)
             downloaded_total += downloaded
             try:
                 _assert_model_path_for_atomic_replace(target, root, field_name="model file path")
@@ -1000,8 +1113,11 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                 except OSError:
                     raise ModelError(f"failed to remove model backup after successful download: {backup_dir}") from cleanup_exc
     except Exception:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        if tmp_dir is not None:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
+    finally:
+        os.close(parent_fd)
     return {**model_status(model, verify=True), "status": "done", "message": f"model downloaded: {path}"}
 
 
@@ -1040,13 +1156,18 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
     previous_cache_entry: dict[str, int | str] | None = None
     previous_cache_entry_exists = False
     try:
-        tmp_path, _ = _download_url_to_file(
-            model.url,
-            path.parent,
-            size_limit,
-            model.name,
-            prefix=f".{path.name}.",
-        )
+        parent_fd = _open_model_parent_directory(path, root, field_name="model path")
+        try:
+            tmp_path, _ = _download_url_to_file_with_fd(
+                model.url,
+                path.parent,
+                parent_fd,
+                size_limit,
+                model.name,
+                prefix=f".{path.name}.",
+            )
+        finally:
+            os.close(parent_fd)
         checksum = sha1_file(tmp_path)
         if checksum != model.sha1:
             raise ModelError(f"downloaded checksum mismatch for {model.name}: {checksum}")

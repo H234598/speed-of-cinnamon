@@ -1008,6 +1008,15 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._clipboardTargetList("xsel", ["--clipboard", "--output", "--target", "TARGETS"])', source)
         self.assertIn('this._clipboardTargetList("wl-paste", ["--list-types"])', source)
 
+    def test_applet_blocks_auto_paste_when_clipboard_targets_unknown_or_empty(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn(
+            'if (targets === null || targets === undefined) {\n      return true;\n    }\n    if (String(targets || "").trim() === "") {\n      return true;',
+            source,
+        )
+        self.assertIn("return true;", source)
+
     def test_history_entries_can_be_copied_or_inserted(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
