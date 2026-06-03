@@ -1009,7 +1009,7 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
             paste_from_clipboard()
             operation_performed = True
             if not _commit_clipboard_insertion(text, method):
-                return False
+                raise OutputError("failed to commit clipboard-paste insertion state")
             committed = True
             return True
         finally:

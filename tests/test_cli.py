@@ -1699,6 +1699,22 @@ class CliTest(unittest.TestCase):
         ))
         mocked_insert.assert_called_once_with("Grusse ", "clipboard", 8)
 
+    @mock.patch("speed_of_cinnamon.cli.insert_text", side_effect=RuntimeError("failed to commit clipboard-paste insertion state"))
+    def test_insert_text_command_reports_clipboard_paste_commit_failure(self, mocked_insert: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run([
+                "insert-text",
+                "hello",
+                "--insert-method",
+                "clipboard-paste",
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("failed to commit clipboard-paste insertion state", payload["error"])
+
     def test_settings_export_import_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             export_path = Path(tmp) / "settings.json"

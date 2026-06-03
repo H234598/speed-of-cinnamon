@@ -956,7 +956,8 @@ class OutputTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=17.0),
                 mock.patch("speed_of_cinnamon.output.time.time", return_value=17.0),
             ):
-                self.assertFalse(insert_text("wiederholung", "clipboard-paste"))
+                with self.assertRaisesRegex(OutputError, "failed to commit clipboard-paste insertion state"):
+                    insert_text("wiederholung", "clipboard-paste")
                 self.assertFalse(insert_text("wiederholung", "clipboard-paste"))
             final_state = output_module._read_clipboard_dedup_state()
 
@@ -1061,7 +1062,8 @@ class OutputTest(unittest.TestCase):
             ),
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
         ):
-            self.assertFalse(insert_text("secure text", "clipboard-paste"))
+            with self.assertRaisesRegex(OutputError, "failed to commit clipboard-paste insertion state"):
+                insert_text("secure text", "clipboard-paste")
             self.assertFalse(insert_text("secure text", "clipboard-paste"))
 
         self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["secure text"])
