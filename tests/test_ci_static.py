@@ -435,6 +435,8 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("--json assets", publish_script)
         self.assertIn(".assets[].name", publish_script)
         self.assertIn("release asset already exists", publish_script)
+        self.assertIn("--draft", publish_script)
+        self.assertIn("gh release edit \"${tag}\" \\", publish_script)
 
     def test_release_scripts_use_safe_local_fs_for_risky_mutations(self) -> None:
         build_rpm = (REPO_ROOT / "scripts" / "build-rpm.sh").read_text(encoding="utf-8")
@@ -445,6 +447,8 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('if ! "${safe_fs_cmd[@]}" install-tree build-rpm "${stage_topdir}" "${final_topdir}" "RPM build directory"; then', build_rpm)
         self.assertIn('require_regular_source_file "${tarball}" "tarball source"', build_rpm)
         self.assertIn('require_regular_source_file "${spec_source}" "spec source"', build_rpm)
+        self.assertIn('if ! "${safe_fs_cmd[@]}" copy-file build-rpm "${tarball}" "${stage_topdir}/SOURCES/$(basename "${tarball}")" 0644; then', build_rpm)
+        self.assertIn('if ! "${safe_fs_cmd[@]}" copy-file build-rpm "${spec_source}" "${spec_file}" 0644; then', build_rpm)
         self.assertNotIn('mv -T -- "${stage_topdir}" "${final_topdir}"', build_rpm)
         self.assertIn('safe_fs_cmd=(python3 "${safe_fs}")', build_snap)
         self.assertIn('snap_workspace="$(mktemp -d "${repo_tmp_root}/speed-of-cinnamon-snap-tree-XXXXXX")"', build_snap)
@@ -473,6 +477,9 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('verify_asset_path "${staged_path}"', publish_script)
         self.assertIn("chmod 0444 -- \"${staged_path}\"", publish_script)
         self.assertIn('gh release upload "${tag}" "${upload_refs[@]}" --repo "${repo}"', publish_script)
+        self.assertIn('if ! gh release upload "${tag}" "${upload_refs[@]}" --repo "${repo}"; then', publish_script)
+        self.assertIn('--draft', publish_script)
+        self.assertIn("--draft=false", publish_script)
 
     def test_wiki_publish_does_not_bootstrap_after_clone_failure(self) -> None:
         publish_script = (REPO_ROOT / "scripts" / "publish-wiki.sh").read_text(encoding="utf-8")

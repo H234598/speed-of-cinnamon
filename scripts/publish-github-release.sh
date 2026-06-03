@@ -380,13 +380,23 @@ if gh release view "${tag}" --repo "${repo}" >/dev/null 2>&1; then
     --repo "${repo}" \
     --title "Speed of Cinnamon ${tag}" \
     --notes-file "${notes_file}" \
-    --draft=false
+    --draft
 else
   gh release create "${tag}" \
     --repo "${repo}" \
     --title "Speed of Cinnamon ${tag}" \
     --notes-file "${notes_file}" \
-    --verify-tag
+    --verify-tag \
+    --draft
 fi
 
-gh release upload "${tag}" "${upload_refs[@]}" --repo "${repo}"
+if ! gh release upload "${tag}" "${upload_refs[@]}" --repo "${repo}"; then
+  printf 'failed to upload one or more release assets.\n' >&2
+  exit 1
+fi
+
+gh release edit "${tag}" \
+  --repo "${repo}" \
+  --title "Speed of Cinnamon ${tag}" \
+  --notes-file "${notes_file}" \
+  --draft=false

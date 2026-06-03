@@ -124,7 +124,10 @@ require_regular_source_file "${tarball}" "tarball source"
 require_regular_source_file "${spec_source}" "spec source"
 
 mkdir -p "${stage_topdir}"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
-cp "${tarball}" "${stage_topdir}/SOURCES/"
+if ! "${safe_fs_cmd[@]}" copy-file build-rpm "${tarball}" "${stage_topdir}/SOURCES/$(basename "${tarball}")" 0644; then
+  printf 'failed to copy tarball source into RPM staging: %s\n' "${tarball}" >&2
+  exit 1
+fi
 
 version="$(
   "${python_bin}" - "${repo_dir}" <<'PY'
@@ -142,7 +145,10 @@ if [[ -z "${version}" || ! "${version}" =~ ^[0-9]+(\.[0-9]+){0,2}([0-9A-Za-z.+-]
   exit 1
 fi
 
-cp "${spec_source}" "${spec_file}"
+if ! "${safe_fs_cmd[@]}" copy-file build-rpm "${spec_source}" "${spec_file}" 0644; then
+  printf 'failed to copy spec source into RPM staging: %s\n' "${spec_source}" >&2
+  exit 1
+fi
 "${python_bin}" - <<'PY' "${spec_file}" "${version}"
 from pathlib import Path
 import re
