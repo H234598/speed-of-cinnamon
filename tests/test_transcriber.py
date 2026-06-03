@@ -1079,7 +1079,7 @@ class TranscriberTest(unittest.TestCase):
             audio = Path(tmp) / "sample.wav"
             audio.write_bytes(b"audio")
             text = Path(tmp) / "sample.txt"
-            text.write_text("bestehendes transkript", encoding="utf-8")
+            text.write_text("existing transcript", encoding="utf-8")
             model = Path(tmp) / "ggml-base.bin"
             model.write_bytes(b"model")
             with (
@@ -1090,7 +1090,7 @@ class TranscriberTest(unittest.TestCase):
                 with self.assertRaisesRegex(TranscriptionError, "failed to read generated transcript"):
                     transcribe_with_whisper_cpp(audio, "de", text, str(model))
 
-            self.assertEqual(text.read_text(encoding="utf-8"), "bestehendes transkript")
+            self.assertEqual(text.read_text(encoding="utf-8"), "existing transcript")
 
     def test_whisper_cpp_preserves_existing_text_path_on_validation_error_when_writing(self) -> None:
         def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:

@@ -1652,6 +1652,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         done_audio_path = str(audio_path)
         done_log_path = state.log_path
         trimmed_audio_path: Path | None = None
+        audio_suffix = ""
         audio_path = validate_audio_file(audio_path)
         audio_suffix = audio_path.suffix.lower()
         silence = detect_silent_recording(audio_path)
@@ -1788,7 +1789,19 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             state = store.read()
             if not isinstance(state, RecordingState):
                 state = store.read()
-            store.update(status="error", stopped_at=now_iso(), error=error_text)
+            if trimmed_audio_path is not None:
+                remove_file(str(trimmed_audio_path), suffix=".flac")
+            error_update: dict[str, object] = {
+                "status": "error",
+                "stopped_at": now_iso(),
+                "error": error_text,
+            }
+            if not keep_recording_artifacts:
+                if audio_suffix and remove_file(str(audio_path), suffix=audio_suffix):
+                    error_update["audio_path"] = ""
+                if remove_file(state.log_path, suffix=".log"):
+                    error_update["log_path"] = ""
+            store.update(**error_update)
         raise RuntimeError(error_text)
     finally:
         _release_finalization_lock(lock_path)

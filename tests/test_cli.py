@@ -477,7 +477,7 @@ class CliTest(unittest.TestCase):
     @mock.patch("speed_of_cinnamon.cli.update_blacklist_file", return_value=["geheim"])
     @mock.patch("speed_of_cinnamon.cli.load_blacklist_file", return_value=[])
     @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
-    def test_finalize_ignores_mixed_blacklist_directives_and_applies_security_mode(
+    def test_finalize_applies_mixed_blacklist_directives_and_security_mode(
         self,
         mocked_validate: mock.Mock,
         mocked_load: mock.Mock,
@@ -510,10 +510,10 @@ class CliTest(unittest.TestCase):
                 payload = cli.finalize_recording(args, store, store.read())
 
             final_state = store.read()
-        mocked_update.assert_not_called()
+        mocked_update.assert_called_once_with(mock.ANY, ["geheim"])
         self.assertGreaterEqual(mocked_security.call_count, 1)
-        mocked_security.assert_any_call("Hallo", [])
-        self.assertEqual(payload["security"]["blacklist_added"], [])
+        mocked_security.assert_any_call("Hallo", ["geheim"])
+        self.assertEqual(payload["security"]["blacklist_added"], ["geheim"])
         self.assertEqual(payload["transcript"], "redacted")
         self.assertEqual(final_state.transcript, "redacted")
         mocked_insert.assert_called_once_with("redacted", "none", 0)
@@ -739,7 +739,7 @@ class CliTest(unittest.TestCase):
 
             def security_side_effect(text: str) -> tuple[str, dict[str, object]]:
                 call_order.append("security")
-                return ("vor", {"blacklist_added": [], "blacklist_opened": False, "redacted_words": [], "blacklist_hits": 0})
+                return ("before", {"blacklist_added": [], "blacklist_opened": False, "redacted_words": [], "blacklist_hits": 0})
 
             def mask_side_effect(text: str) -> tuple[str, dict[str, object]]:
                 call_order.append("mask")
@@ -4793,12 +4793,56 @@ class CliTest(unittest.TestCase):
                     "--json",
                 ])
             final_state = store.read()
+            audio_exists = audio.exists()
+            log_exists = log.exists()
         self.assertEqual(code, 1)
         self.assertEqual(final_state.status, "error")
         self.assertNotIn("sk-leak", final_state.error)
         self.assertNotIn("token=abc123", final_state.error)
         self.assertNotIn("Bearer", final_state.error)
         self.assertIn("openai key", final_state.error)
+        self.assertFalse(audio_exists)
+        self.assertFalse(log_exists)
+        self.assertEqual(final_state.audio_path, "")
+        self.assertEqual(final_state.log_path, "")
+
+    def test_finalize_removes_unstabilized_trimmed_artifact_on_error_when_keeping_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            original = recordings_root / "recording.wav"
+            trimmed = recordings_root / "recording.trimmed-error.flac"
+            log = recordings_root / "recording.log"
+            original.write_bytes(b"audio")
+            trimmed.write_bytes(b"trimmed-audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(original), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=True)
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=original),
+                mock.patch(
+                    "speed_of_cinnamon.cli.detect_silent_recording",
+                    return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent"),
+                ),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", return_value=trimmed),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.post_process_text", side_effect=RuntimeError("post failed")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "post failed"):
+                    cli.finalize_recording(args, store, store.read())
+            final_state = store.read()
+            original_exists = original.exists()
+            trimmed_exists = trimmed.exists()
+            log_exists = log.exists()
+
+        self.assertEqual(final_state.status, "error")
+        self.assertTrue(original_exists)
+        self.assertFalse(trimmed_exists)
+        self.assertTrue(log_exists)
 
     def test_finalize_rejects_transcript_write_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
