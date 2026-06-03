@@ -65,10 +65,12 @@ if [[ ! "${tag}" =~ ^v[0-9]+(\.[0-9]+){0,2}([0-9A-Za-z.+-]*)?$ ]]; then
   exit 1
 fi
 
-required_tools=(git python3 realpath awk sha256sum grep)
+required_tools=(git python3 realpath awk sha256sum grep stat mktemp chmod)
 if [[ "${dry_run}" == "false" ]]; then
   required_tools+=(gh)
 fi
+safe_fs="${repo_dir}/scripts/safe-local-fs.py"
+safe_fs_cmd=(python3 "${safe_fs}")
 
 for tool in "${required_tools[@]}"; do
   if ! command -v -- "${tool}" >/dev/null 2>&1; then
@@ -131,6 +133,22 @@ require_one() {
   fi
 }
 
+require_regular_source_file() {
+  local path=$1
+  local label=$2
+  local link_count
+
+  if [[ ! -f "${path}" || -L "${path}" ]]; then
+    printf '%s must be a regular file: %s\n' "${label}" "${path}" >&2
+    exit 1
+  fi
+  link_count="$(stat -c '%h' "${path}")"
+  if [[ "${link_count}" -ne 1 ]]; then
+    printf '%s must not be hardlinked: %s\n' "${label}" "${path}" >&2
+    exit 1
+  fi
+}
+
 verify_asset_path() {
   local asset=$1
   local absolute
@@ -186,50 +204,70 @@ fi
 for asset in "${assets[@]}"; do
   verify_asset_path "${asset}"
 done
+require_regular_source_file "${safe_fs}" "safe local filesystem helper"
 
 staging_dir=""
-upload_refs=("${assets[@]}")
-if [[ "${skip_generic}" != "true" ]]; then
-  staging_dir="$(mktemp -d "${repo_dir}/dist/release-upload-XXXXXX")"
-  if [[ -z "${staging_dir}" ]]; then
-    printf 'failed to create staging directory for upload assets.\n' >&2
-    exit 1
-  fi
-  for generic_asset in "${generic_rpms[@]}" "${generic_srpms[@]}"; do
-    staged_path="${staging_dir}/$(generic_asset_label "${generic_asset}")"
-    cp -f -- "${generic_asset}" "${staged_path}"
-
-    for idx in "${!upload_refs[@]}"; do
-      if [[ "${upload_refs[idx]}" == "${generic_asset}" ]]; then
-        upload_refs[idx]="${staged_path}"
-      fi
-    done
-  done
+upload_refs=()
+source_archive_ref=""
+checksum_ref=""
+rpm_ref=""
+srpm_ref=""
+snap_ref=""
+staging_dir="$(mktemp -d "${repo_dir}/dist/release-upload-XXXXXX")"
+if [[ -z "${staging_dir}" ]]; then
+  printf 'failed to create staging directory for upload assets.\n' >&2
+  exit 1
 fi
 
-for asset in "${upload_refs[@]}"; do
-  verify_asset_path "${asset}"
+for asset in "${assets[@]}"; do
+  if ! asset_abs="$(realpath "${asset}")"; then
+    printf 'failed to resolve release asset for staging: %s\n' "${asset}" >&2
+    exit 1
+  fi
+  staged_name="$(basename "${asset}")"
+  for generic_asset in "${generic_rpms[@]}" "${generic_srpms[@]}"; do
+    if [[ "${asset}" == "${generic_asset}" ]]; then
+      staged_name="$(generic_asset_label "${asset}")"
+      break
+    fi
+  done
+  staged_path="${staging_dir}/${staged_name}"
+  if ! "${safe_fs_cmd[@]}" copy-file publish "${asset_abs}" "${staged_path}" 0644; then
+    printf 'failed to stage release asset for upload: %s\n' "${asset}" >&2
+    exit 1
+  fi
+  chmod 0444 -- "${staged_path}"
+  upload_refs+=("${staged_path}")
+  verify_asset_path "${staged_path}"
+  if [[ "${asset}" == "${source_archives[0]}" ]]; then
+    source_archive_ref="${staged_path}"
+  elif [[ "${asset}" == "${checksums[0]}" ]]; then
+    checksum_ref="${staged_path}"
+  elif [[ "${asset}" == "${rpms[0]}" ]]; then
+    rpm_ref="${staged_path}"
+  elif [[ "${asset}" == "${srpms[0]}" ]]; then
+    srpm_ref="${staged_path}"
+  elif [[ "${skip_snap}" != "true" && "${asset}" == "${snaps[0]}" ]]; then
+    snap_ref="${staged_path}"
+  fi
 done
+if [[ -z "${source_archive_ref}" || -z "${checksum_ref}" || -z "${rpm_ref}" || -z "${srpm_ref}" ]]; then
+  printf 'failed to stage required release assets.\n' >&2
+  exit 1
+fi
 
 generic_rpm_label="[not built in this run (build_generic_rpm=false)]"
 generic_src_label="[not built in this run (build_generic_rpm=false)]"
 snap_label="[not built in this run (SNAP_BUILD=0)]"
 for asset_ref in "${upload_refs[@]}"; do
-  case "${asset_ref}" in
-    "${staging_dir}/"*)
-      staged_name="$(basename "${asset_ref}")"
-      if [[ "${staged_name}" == speed-of-cinnamon-generic-*.noarch.rpm ]]; then
-        generic_rpm_label="${staged_name}"
-      elif [[ "${staged_name}" == speed-of-cinnamon-generic-*.src.rpm ]]; then
-        generic_src_label="${staged_name}"
-      fi
-      ;;
-    dist/snap/*)
-      if [[ "${skip_snap}" != "true" ]]; then
-        snap_label="$(basename "${asset_ref}")"
-      fi
-      ;;
-  esac
+  staged_name="$(basename "${asset_ref}")"
+  if [[ "${staged_name}" == speed-of-cinnamon-generic-*.noarch.rpm ]]; then
+    generic_rpm_label="${staged_name}"
+  elif [[ "${staged_name}" == speed-of-cinnamon-generic-*.src.rpm ]]; then
+    generic_src_label="${staged_name}"
+  elif [[ "${skip_snap}" != "true" && "${asset_ref}" == "${snap_ref}" ]]; then
+    snap_label="${staged_name}"
+  fi
 done
 repo="${GITHUB_REPOSITORY:-H234598/speed-of-cinnamon}"
 if [[ ! "${repo}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
@@ -243,43 +281,51 @@ if [[ ! "${commit}" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
   exit 1
 fi
 
-checksum="$(awk 'NF {print $1; exit}' "${checksums[0]}")"
+checksum="$(awk 'NF {print $1; exit}' "${checksum_ref}")"
 if [[ ! "${checksum}" =~ ^[0-9A-Fa-f]{64}$ ]]; then
   printf 'invalid sha256 checksum: %s\n' "${checksum}" >&2
   exit 1
 fi
-checksum_target="$(awk 'NF {print $2; exit}' "${checksums[0]}")"
+checksum_target="$(awk 'NF {print $2; exit}' "${checksum_ref}")"
 if [[ -z "${checksum_target}" ]]; then
-  printf 'checksum file missing target path: %s\n' "${checksums[0]}" >&2
+  printf 'checksum file missing target path: %s\n' "${checksum_ref}" >&2
   exit 1
 fi
-if [[ "${checksum_target##*/}" != "$(basename "${source_archives[0]}")" ]]; then
-  printf 'checksum file target mismatch (%s) for %s\n' "${checksum_target}" "${source_archives[0]}" >&2
+if [[ "${checksum_target##*/}" != "$(basename "${source_archive_ref}")" ]]; then
+  printf 'checksum file target mismatch (%s) for %s\n' "${checksum_target}" "${source_archive_ref}" >&2
   exit 1
 fi
-checksum_dir="$(dirname "${checksums[0]}")"
-checksum_file="$(basename "${checksums[0]}")"
-if ! (cd "${repo_dir}/${checksum_dir}" && sha256sum --check --strict --status "${checksum_file}"); then
-  printf 'checksum verification failed for %s\n' "${source_archives[0]}" >&2
+checksum_dir="$(dirname "${checksum_ref}")"
+checksum_file="$(basename "${checksum_ref}")"
+if ! (cd "${checksum_dir}" && sha256sum --check --strict --status "${checksum_file}"); then
+  printf 'checksum verification failed for %s\n' "${source_archive_ref}" >&2
   exit 1
 fi
-if ! sha256sum "${source_archives[0]}" | awk '{print $1}' | grep -Fxq "${checksum}"; then
-  printf 'checksum mismatch for %s\n' "${source_archives[0]}" >&2
+if ! sha256sum "${source_archive_ref}" | awk '{print $1}' | grep -Fxq "${checksum}"; then
+  printf 'checksum mismatch for %s\n' "${source_archive_ref}" >&2
   exit 1
 fi
 
 notes_tmp_root="${TMPDIR:-/tmp}"
 if [[ ! "${notes_tmp_root}" == /* ]]; then
-  notes_tmp_root="/tmp"
+  printf 'temporary root must be an absolute path: %s\n' "${notes_tmp_root}" >&2
+  exit 1
 fi
 if [[ -L "${notes_tmp_root}" ]]; then
-  notes_tmp_root="${repo_dir}/.tmp"
+  printf 'temporary root must not be a symlink: %s\n' "${notes_tmp_root}" >&2
+  exit 1
 fi
 if [[ ! -d "${notes_tmp_root}" || ! -w "${notes_tmp_root}" ]]; then
-  notes_tmp_root="${repo_dir}/.tmp"
+  printf 'temporary root is not a writable directory: %s\n' "${notes_tmp_root}" >&2
+  exit 1
 fi
 if [[ -L "${notes_tmp_root}" ]]; then
-  notes_tmp_root="/tmp"
+  printf 'temporary root must not be a symlink: %s\n' "${notes_tmp_root}" >&2
+  exit 1
+fi
+if ! notes_tmp_root="$(realpath "${notes_tmp_root}")"; then
+  printf 'failed to resolve temporary root: %s\n' "${notes_tmp_root}" >&2
+  exit 1
 fi
 mkdir -p "${notes_tmp_root}"
 notes_file="$(mktemp "${notes_tmp_root}/speed-of-cinnamon-release-notes-XXXXXX")"
@@ -298,10 +344,10 @@ Cinnamon-native voice typing for Fedora Cinnamon.
 Built from commit ${commit}.
 
 Assets:
-- Source archive: $(basename "${source_archives[0]}")
+- Source archive: $(basename "${source_archive_ref}")
 - Source archive SHA-256: ${checksum}
-- Fedora noarch RPM: $(basename "${rpms[0]}")
-- Source RPM: $(basename "${srpms[0]}")
+- Fedora noarch RPM: $(basename "${rpm_ref}")
+- Source RPM: $(basename "${srpm_ref}")
 - Generic noarch RPM: ${generic_rpm_label}
 - Source RPM (generic): ${generic_src_label}
 - Snap package: ${snap_label}

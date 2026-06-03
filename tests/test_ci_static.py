@@ -460,6 +460,20 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('safe_fs rmdir uninstall "${app_data}" --ignore-non-empty', uninstall_local)
         self.assertNotIn('safe_fs rmdir uninstall "${app_data}" --ignore-non-empty || true', uninstall_local)
 
+    def test_publish_script_stages_all_assets_before_release_upload(self) -> None:
+        publish_script = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
+
+        self.assertIn("upload_refs=()", publish_script)
+        self.assertIn('for asset in "${assets[@]}"; do', publish_script)
+        self.assertIn('staged_path="${staging_dir}/${staged_name}"', publish_script)
+        self.assertIn('if [[ "${asset}" == "${generic_asset}" ]]; then', publish_script)
+        self.assertIn('staged_name="$(generic_asset_label "${asset}")"', publish_script)
+        self.assertIn('asset_abs="$(realpath "${asset}")"', publish_script)
+        self.assertIn('copy-file publish "${asset_abs}" "${staged_path}" 0644', publish_script)
+        self.assertIn('verify_asset_path "${staged_path}"', publish_script)
+        self.assertIn("chmod 0444 -- \"${staged_path}\"", publish_script)
+        self.assertIn('gh release upload "${tag}" "${upload_refs[@]}" --repo "${repo}"', publish_script)
+
     def test_wiki_publish_does_not_bootstrap_after_clone_failure(self) -> None:
         publish_script = (REPO_ROOT / "scripts" / "publish-wiki.sh").read_text(encoding="utf-8")
         self.assertIn("failed to clone wiki repository", publish_script)
@@ -481,7 +495,7 @@ class CiStaticTest(unittest.TestCase):
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
         verifier = (REPO_ROOT / "scripts" / "verify-authorship.sh").read_text(encoding="utf-8")
 
-        self.assertIn("check: test lint verify-authorship smoke-doctor security-scan", makefile)
+        self.assertIn("check: test lint lint-workflows-check verify-authorship smoke-doctor security-scan", makefile)
         self.assertIn("coverage:", makefile)
         self.assertIn("coverage run --source=src/speed_of_cinnamon", makefile)
         self.assertIn("coverage lcov -o reports/lcov.info", makefile)
@@ -676,6 +690,34 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('printf \'failed to resolve temporary root:', install_local)
         self.assertNotIn("${repo_dir}/.tmp", install_local)
 
+    def test_tmp_root_resolves_fail_closed_in_build_and_verify_rpm(self) -> None:
+        build_rpm = (REPO_ROOT / "scripts" / "build-rpm.sh").read_text(encoding="utf-8")
+        verify_rpm = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(encoding="utf-8")
+
+        self.assertIn('repo_tmp_root="${TMPDIR:-/tmp}"', build_rpm)
+        self.assertIn('temporary root must be an absolute path:', build_rpm)
+        self.assertIn('temporary root must not be a symlink:', build_rpm)
+        self.assertIn('temporary root is not a writable directory:', build_rpm)
+        self.assertIn('failed to resolve temporary root:', build_rpm)
+        self.assertNotIn("${repo_dir}/.tmp", build_rpm)
+
+        self.assertIn('tmp_root="${TMPDIR:-/tmp}"', verify_rpm)
+        self.assertIn('temporary root must be an absolute path:', verify_rpm)
+        self.assertIn('temporary root must not be a symlink:', verify_rpm)
+        self.assertIn('temporary root is not a writable directory:', verify_rpm)
+        self.assertIn('failed to resolve temporary root:', verify_rpm)
+        self.assertNotIn("${repo_dir}/.tmp", verify_rpm)
+
+    def test_tmp_root_resolves_fail_closed_for_release_notes(self) -> None:
+        publish_script = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
+
+        self.assertIn('notes_tmp_root="${TMPDIR:-/tmp}"', publish_script)
+        self.assertIn('temporary root must be an absolute path:', publish_script)
+        self.assertIn('temporary root must not be a symlink:', publish_script)
+        self.assertIn('temporary root is not a writable directory:', publish_script)
+        self.assertIn('failed to resolve temporary root:', publish_script)
+        self.assertNotIn("${repo_dir}/.tmp", publish_script)
+
     def test_tag_release_workflow_publishes_verified_assets(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         publisher = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
@@ -746,7 +788,7 @@ class CiStaticTest(unittest.TestCase):
             'snaps=(dist/snap/speed-of-cinnamon_"${version}"_*.snap)' in publisher
             or 'snaps=(dist/snap/speed-of-cinnamon_${version}_*.snap)' in publisher
         )
-        self.assertIn("required_tools=(git python3 realpath awk sha256sum grep)", publisher)
+        self.assertIn("required_tools=(git python3 realpath awk sha256sum grep stat mktemp chmod)", publisher)
         self.assertIn("if [[ \"${dry_run}\" == \"false\" ]]; then", publisher)
         self.assertIn("required_tools+=(gh)", publisher)
         self.assertIn("skip_generic=", publisher)
@@ -760,7 +802,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("asset must not be a symlink", publisher)
         self.assertIn("checksum_target", publisher)
         self.assertIn("checksum file target mismatch", publisher)
-        self.assertIn('checksum_dir="$(dirname "${checksums[0]}")"', publisher)
+        self.assertIn('checksum_dir="$(dirname "${checksum_ref}")"', publisher)
         self.assertIn('sha256sum --check --strict --status "${checksum_file}"', publisher)
         self.assertIn("checksum mismatch for", publisher)
         self.assertIn("gh release create", publisher)

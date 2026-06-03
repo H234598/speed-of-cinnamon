@@ -34,19 +34,20 @@ require_regular_source_file() {
 
 repo_tmp_root="${TMPDIR:-/tmp}"
 if [[ ! "${repo_tmp_root}" == /* ]]; then
-  repo_tmp_root="/tmp"
+  printf 'temporary root must be an absolute path: %s\n' "${repo_tmp_root}" >&2
+  exit 1
 fi
 if [[ -L "${repo_tmp_root}" ]]; then
-  repo_tmp_root="${repo_dir}/.tmp"
-fi
-if [[ -L "${repo_tmp_root}" ]]; then
-  repo_tmp_root="/tmp"
+  printf 'temporary root must not be a symlink: %s\n' "${repo_tmp_root}" >&2
+  exit 1
 fi
 if [[ ! -d "${repo_tmp_root}" || ! -w "${repo_tmp_root}" ]]; then
-  repo_tmp_root="${repo_dir}/.tmp"
+  printf 'temporary root is not a writable directory: %s\n' "${repo_tmp_root}" >&2
+  exit 1
 fi
-if [[ -L "${repo_tmp_root}" ]]; then
-  repo_tmp_root="/tmp"
+if ! repo_tmp_root="$(realpath "${repo_tmp_root}")"; then
+  printf 'failed to resolve temporary root: %s\n' "${repo_tmp_root}" >&2
+  exit 1
 fi
 mkdir -p "${repo_tmp_root}"
 

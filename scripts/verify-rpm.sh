@@ -75,16 +75,24 @@ fi
 
 tmp_root="${TMPDIR:-/tmp}"
 if [[ ! "${tmp_root}" == /* ]]; then
-  tmp_root="/tmp"
+  printf 'temporary root must be an absolute path: %s\n' "${tmp_root}" >&2
+  exit 1
 fi
 if [[ -L "${tmp_root}" ]]; then
-  tmp_root="${repo_dir}/.tmp"
+  printf 'temporary root must not be a symlink: %s\n' "${tmp_root}" >&2
+  exit 1
 fi
 if [[ ! -d "${tmp_root}" || ! -w "${tmp_root}" ]]; then
-  tmp_root="${repo_dir}/.tmp"
+  printf 'temporary root is not a writable directory: %s\n' "${tmp_root}" >&2
+  exit 1
 fi
 if [[ -L "${tmp_root}" ]]; then
-  tmp_root="${repo_dir}/.tmp"
+  printf 'temporary root must not be a symlink: %s\n' "${tmp_root}" >&2
+  exit 1
+fi
+if ! tmp_root="$(realpath "${tmp_root}")"; then
+  printf 'failed to resolve temporary root: %s\n' "${tmp_root}" >&2
+  exit 1
 fi
 mkdir -p "${tmp_root}"
 
