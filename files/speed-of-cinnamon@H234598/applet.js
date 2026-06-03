@@ -3870,19 +3870,30 @@ MyApplet.prototype = {
       this._setStatus("done", payload.message || _("Transcript already inserted"), transcript);
       return;
     }
-    if (this._insertTranscriptText(transcript)) {
+    if (payload.inserted === true) {
+      this._rememberAutoInsertFingerprint(insertFingerprint);
+      this._setStatus("done", payload.message || _("Transcript already inserted by backend"), transcript);
+    } else if (this._insertTranscriptText(transcript)) {
       this._rememberAutoInsertFingerprint(insertFingerprint);
     }
+    this._finishPendingRelisten();
+  },
+
+  _finishPendingRelisten: function() {
     let shouldRelisten = this.autoRelistenPending;
-    this.autoRelistenPending = false;
-    this.autoRelistenPendingToken = "";
     let relistenStarted = false;
     if (shouldRelisten) {
       relistenStarted = this._restartRelistenRecording();
     }
     if (relistenStarted) {
+      this.autoRelistenPending = false;
+      this.autoRelistenPendingToken = "";
       this.notificationSessionActive = true;
+    } else if (!shouldRelisten) {
+      this.autoRelistenPending = false;
+      this.autoRelistenPendingToken = "";
     }
+    return relistenStarted;
   },
 
   _autoInsertFingerprint: function(payload, transcript) {
@@ -3932,31 +3943,13 @@ MyApplet.prototype = {
   },
 
   _finishSilentRelistenSkip: function(payload) {
-    let shouldRelisten = this.autoRelistenPending;
-    this.autoRelistenPending = false;
-    this.autoRelistenPendingToken = "";
-    let relistenStarted = false;
-    if (shouldRelisten) {
-      relistenStarted = this._restartRelistenRecording();
-    }
+    this._finishPendingRelisten();
     this._setStatus("done", payload.message || _("Silent recording skipped"), this.lastTranscript);
-    if (relistenStarted) {
-      this.notificationSessionActive = true;
-    }
   },
 
   _finishEmptyRelistenDone: function(payload) {
-    let shouldRelisten = this.autoRelistenPending;
-    this.autoRelistenPending = false;
-    this.autoRelistenPendingToken = "";
-    let relistenStarted = false;
-    if (shouldRelisten) {
-      relistenStarted = this._restartRelistenRecording();
-    }
+    this._finishPendingRelisten();
     this._setStatus("done", payload.message || _("Recording finished without transcript"), this.lastTranscript);
-    if (relistenStarted) {
-      this.notificationSessionActive = true;
-    }
   },
 
   _insertTranscriptText: function(transcript) {

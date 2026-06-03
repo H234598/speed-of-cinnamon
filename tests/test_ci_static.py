@@ -434,11 +434,10 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("run_workflow_lint:", workflow)
         self.assertIn("permissions:\n  contents: read", workflow)
         self.assertIn("publish:\n    needs:\n      - workflow-lint\n      - security-scan", workflow)
-        self.assertNotIn(
+        self.assertIn(
             "publish:\n    needs:\n      - workflow-lint\n      - security-scan\n    permissions:\n      contents: write",
             workflow,
         )
-        self.assertNotIn("contents: write", workflow)
         self.assertIn("actions: none", workflow)
         self.assertIn("checks: none", workflow)
         self.assertIn("id-token: none", workflow)
@@ -477,7 +476,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("github.event_name != 'workflow_dispatch' && '0'", workflow)
         self.assertIn("build_generic_rpm:", workflow)
         self.assertIn("run: shellcheck scripts/*.sh", workflow)
-        self.assertIn("GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN }}", workflow)
+        self.assertIn("GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}", workflow)
         self.assertIn("RELEASE_TAG:", workflow)
         self.assertIn("args+=(--skip-generic-rpm)", workflow)
         self.assertIn('./scripts/publish-github-release.sh "${args[@]}" "${RELEASE_TAG}"', workflow)

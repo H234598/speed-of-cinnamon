@@ -45,18 +45,35 @@ def _xdg_path(environment_variable: str, default: Path) -> Path:
     return candidate.resolve(strict=False)
 
 
+def _private_runtime_temp_root() -> Path:
+    temp_root = Path(tempfile.gettempdir())
+    if not temp_root.is_absolute():
+        temp_root = Path("/tmp")  # nosec B108
+    try:
+        assert_no_symlink_ancestors(temp_root, field_name="temporary directory")
+    except RuntimeError:
+        temp_root = Path("/tmp")  # nosec B108
+        assert_no_symlink_ancestors(temp_root, field_name="temporary directory")
+    uid = os.getuid() if hasattr(os, "getuid") else os.getpid()
+    private_root = temp_root / f"{APP_ID}-{uid}"
+    if private_root.is_symlink():
+        raise RuntimeError(f"temporary directory must not be a symlink: {private_root}")
+    private_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    private_root.chmod(0o700)
+    assert_no_symlink_ancestors(private_root, field_name="temporary directory")
+    if hasattr(os, "getuid") and private_root.stat().st_uid != os.getuid():
+        raise RuntimeError(f"temporary directory is not owned by the current user: {private_root}")
+    if private_root.stat().st_mode & 0o077:
+        raise RuntimeError(f"temporary directory is not private: {private_root}")
+    return private_root
+
+
 def _safe_home_path(*parts: str) -> Path:
     candidate = Path.home().joinpath(*parts)
     try:
         assert_no_symlink_ancestors(candidate, field_name="home path")
     except RuntimeError:
-        temp_root = Path(tempfile.gettempdir())
-        try:
-            assert_no_symlink_ancestors(temp_root, field_name="temporary directory")
-        except RuntimeError:
-            # Last-resort non-symlink fallback; no temp file is created here.
-            temp_root = Path("/tmp")  # nosec B108
-        return temp_root.joinpath(*parts)
+        return _private_runtime_temp_root().joinpath(*parts)
     return candidate
 
 

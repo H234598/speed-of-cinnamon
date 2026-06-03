@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import os
 from pathlib import Path
 from unittest import mock
 
@@ -43,11 +44,17 @@ class PathsTest(unittest.TestCase):
             real_home.mkdir()
             symlink_home = base / "home-link"
             symlink_home.symlink_to(real_home, target_is_directory=True)
+            temp_root = base / "temp"
+            temp_root.mkdir()
+            private_root = temp_root / f"{paths.APP_ID}-{os.getuid()}"
 
-            with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=symlink_home):
-                self.assertEqual(paths.xdg_data_home(), Path("/tmp") / ".local" / "share")
-                self.assertEqual(paths.xdg_state_home(), Path("/tmp") / ".local" / "state")
-                self.assertEqual(paths.xdg_cache_home(), Path("/tmp") / ".cache")
+            with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=symlink_home), mock.patch(
+                "speed_of_cinnamon.paths.tempfile.gettempdir", return_value=str(temp_root)
+            ):
+                self.assertEqual(paths.xdg_data_home(), private_root / ".local" / "share")
+                self.assertEqual(paths.xdg_state_home(), private_root / ".local" / "state")
+                self.assertEqual(paths.xdg_cache_home(), private_root / ".cache")
+                self.assertEqual(private_root.stat().st_mode & 0o077, 0)
 
     def test_safe_home_path_falls_back_to_tmp_when_tempdir_is_symlinked(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -64,7 +71,7 @@ class PathsTest(unittest.TestCase):
             with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=home_link), mock.patch(
                 "speed_of_cinnamon.paths.tempfile.gettempdir", return_value=str(temp_link)
             ):
-                self.assertEqual(paths.xdg_cache_home(), Path("/tmp") / ".cache")
+                self.assertEqual(paths.xdg_cache_home(), Path("/tmp") / f"{paths.APP_ID}-{os.getuid()}" / ".cache")
 
     def test_xdg_paths_accept_absolute_non_symlink_roots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

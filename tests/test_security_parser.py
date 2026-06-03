@@ -16,11 +16,18 @@ from speed_of_cinnamon.security_parser import (
 
 class SecurityParserTest(unittest.TestCase):
     def test_parse_security_directives_extracts_blacklist_entries_and_show_command(self) -> None:
-        text = "blacklisteintrag: geheim\nHallo\nBlacklist anzeigen\nnoch"
+        text = "blacklisteintrag: geheim\nBlacklist anzeigen"
         directives = parse_security_directives(text)
         self.assertEqual(directives.added_blacklist, ["geheim"])
         self.assertTrue(directives.show_blacklist)
-        self.assertEqual(directives.text, "Hallo\nnoch")
+        self.assertEqual(directives.text, "")
+
+    def test_parse_security_directives_ignores_mixed_dictation_side_effects(self) -> None:
+        text = "blacklisteintrag: geheim\nHallo\nBlacklist anzeigen\nnoch"
+        directives = parse_security_directives(text)
+        self.assertEqual(directives.added_blacklist, [])
+        self.assertFalse(directives.show_blacklist)
+        self.assertEqual(directives.text, text)
 
     def test_parse_security_directives_trims_punctuation_from_add_entry(self) -> None:
         text = "blacklisteintrag: geheim!"

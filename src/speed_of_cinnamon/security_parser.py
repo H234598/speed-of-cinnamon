@@ -211,19 +211,24 @@ def parse_security_directives(text: str) -> SecurityParserResult:
     kept: list[str] = []
     added: list[str] = []
     show_blacklist = False
+    saw_directive = False
 
     for line in lines:
         match_add = _BLACKLIST_ADD_RE.match(line)
         if match_add:
+            saw_directive = True
             entry = _normalize_blacklist_entry(match_add.group(1))
             if entry and entry not in added:
                 added.append(entry)
             continue
         if _BLACKLIST_SHOW_RE.match(line):
+            saw_directive = True
             show_blacklist = True
             continue
         kept.append(line)
 
+    if saw_directive and any(line.strip() for line in kept):
+        return SecurityParserResult(text=text.strip(), added_blacklist=[], show_blacklist=False)
     return SecurityParserResult(text="\n".join(kept).strip(), added_blacklist=added, show_blacklist=show_blacklist)
 
 
