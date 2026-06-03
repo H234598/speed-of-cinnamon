@@ -132,7 +132,7 @@ if ! rm -rf -- "${snap_workspace_dist}"; then
 fi
 mkdir -p "${snap_workspace_dist}"
 
-python3 - "${snapcraft_file}" "${snapcraft_file_rendered}" "${version}" "${snapcraft_base}" <<'PYCODE'
+python3 - "${snapcraft_file_rendered}" "${snapcraft_file_rendered}" "${version}" "${snapcraft_base}" <<'PYCODE'
 import pathlib
 import sys
 

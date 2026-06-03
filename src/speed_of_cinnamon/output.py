@@ -971,17 +971,20 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
         if snapshot is None:
             _release_clipboard_dedup_lock(lock_path)
             return False
+        operation_performed = False
         committed = False
         try:
             set_clipboard(text)
+            operation_performed = True
             if not _commit_clipboard_insertion(text, method):
                 return False
             committed = True
             return True
         finally:
             if not committed:
-                _restore_clipboard_insertion_snapshot(snapshot)
-                _restore_clipboard_dedup_state(persistent_snapshot)
+                if not operation_performed:
+                    _restore_clipboard_insertion_snapshot(snapshot)
+                    _restore_clipboard_dedup_state(persistent_snapshot)
             _release_clipboard_dedup_lock(lock_path)
     if method == "clipboard-paste":
         insertion = _begin_clipboard_insertion(text, method)
@@ -992,6 +995,7 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
         if snapshot is None:
             _release_clipboard_dedup_lock(lock_path)
             return False
+        operation_performed = False
         committed = False
         clipboard_snapshot_available = False
         clipboard_snapshot = ""
@@ -1003,6 +1007,7 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
                 raise OutputError("refusing automatic paste without readable text clipboard snapshot")
             set_clipboard(text)
             paste_from_clipboard()
+            operation_performed = True
             if not _commit_clipboard_insertion(text, method):
                 return False
             committed = True
@@ -1010,14 +1015,15 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
         finally:
             rollback_error: OutputError | None = None
             if not committed:
-                if clipboard_snapshot_available:
-                    try:
-                        if _clipboard_still_contains_inserted_text(text):
-                            set_clipboard(clipboard_snapshot)
-                    except OutputError as exc:
-                        rollback_error = exc
-                _restore_clipboard_insertion_snapshot(snapshot)
-                _restore_clipboard_dedup_state(persistent_snapshot)
+                if not operation_performed:
+                    if clipboard_snapshot_available:
+                        try:
+                            if _clipboard_still_contains_inserted_text(text):
+                                set_clipboard(clipboard_snapshot)
+                        except OutputError as exc:
+                            rollback_error = exc
+                    _restore_clipboard_insertion_snapshot(snapshot)
+                    _restore_clipboard_dedup_state(persistent_snapshot)
             _release_clipboard_dedup_lock(lock_path)
             if rollback_error is not None:
                 raise OutputError("failed to restore previous clipboard after paste failure") from rollback_error

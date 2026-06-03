@@ -279,17 +279,20 @@ def _reject_unsafe_tree(tree: Path, label: str) -> None:
                 fail(f"refusing to install hardlinked {label}: {path}")
 
 
-def _tree_signature(tree: Path) -> dict[str, tuple[int, int, int, int, int, str]]:
-    signature: dict[str, tuple[int, int, int, int, int, str]] = {}
+def _tree_signature(tree: Path, *, include_identity: bool = True) -> dict[str, tuple[object, ...]]:
+    signature: dict[str, tuple[object, ...]] = {}
     root_stat = tree.lstat()
-    signature["."] = (
-        root_stat.st_dev,
-        root_stat.st_ino,
-        root_stat.st_mode,
-        root_stat.st_size,
-        root_stat.st_nlink,
-        "",
-    )
+    if include_identity:
+        signature["."] = (
+            root_stat.st_dev,
+            root_stat.st_ino,
+            root_stat.st_mode,
+            root_stat.st_size,
+            root_stat.st_nlink,
+            "",
+        )
+    else:
+        signature["."] = (0, 0, root_stat.st_mode, 0, "")
     for root, dirs, files in os.walk(tree):
         root_path = Path(root)
         for name in [*dirs, *files]:
@@ -305,14 +308,18 @@ def _tree_signature(tree: Path) -> dict[str, tuple[int, int, int, int, int, str]
                     digest = _hash_file(path)
                 except OSError as exc:
                     fail(f"failed to hash source tree during signature: {path}: {exc}")
-            signature[rel_path] = (
-                stat_result.st_dev,
-                stat_result.st_ino,
-                stat_result.st_mode,
-                stat_result.st_size,
-                stat_result.st_nlink,
-                digest,
-            )
+            if include_identity:
+                signature[rel_path] = (
+                    stat_result.st_dev,
+                    stat_result.st_ino,
+                    stat_result.st_mode,
+                    stat_result.st_size,
+                    stat_result.st_nlink,
+                    digest,
+                )
+            else:
+                size = stat_result.st_size if stat_is_file_no_follow(stat_result.st_mode) else 0
+                signature[rel_path] = (0, 0, stat_result.st_mode, size, digest)
     return signature
 
 
@@ -321,7 +328,7 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
     target = _validate_absolute(args.target, "target tree")
     label = str(args.label or "tree")
     _reject_unsafe_tree(source, f"{label} source tree")
-    source_signature = _tree_signature(source)
+    source_signature = _tree_signature(source, include_identity=False)
     parent_fd, leaf = _open_parent(target, action=args.action, create=True)
     assert parent_fd is not None
     token = secrets.token_hex(8)
@@ -333,11 +340,13 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
     try:
         os.mkdir(stage_name, 0o700, dir_fd=parent_fd)
         staged_tree = parent_path / stage_name / leaf
-        if _tree_signature(source) != source_signature:
+        if _tree_signature(source, include_identity=False) != source_signature:
             fail(f"source tree changed during {args.action}: {source}")
         shutil.copytree(source, staged_tree, symlinks=True)
-        if _tree_signature(source) != source_signature:
+        if _tree_signature(source, include_identity=False) != source_signature:
             fail(f"source tree changed during {args.action}: {source}")
+        if _tree_signature(staged_tree, include_identity=False) != source_signature:
+            fail(f"staged copy changed during {args.action}: {target}")
         _reject_unsafe_tree(staged_tree, label)
         _check_leaf(parent_fd, stage_name, parent_path / stage_name, action=args.action, kind="dir", must_exist=True)
         stage_fd = os.open(stage_name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
@@ -402,6 +411,24 @@ def cmd_remove(args: argparse.Namespace) -> None:
             os.unlink(leaf, dir_fd=parent_fd)
         else:
             fail(f"unsupported remove kind: {args.kind}")
+    finally:
+        os.close(parent_fd)
+
+
+def cmd_remove_leaf(args: argparse.Namespace) -> None:
+    path = _validate_absolute(args.path, "path")
+    parent_fd, leaf = _open_parent(path, action=args.action, missing_ok=True)
+    if parent_fd is None:
+        return
+    try:
+        stat_result = _lstat_at(parent_fd, leaf)
+        if stat_result is None:
+            return
+        mode = stat_result.st_mode
+        if stat_is_dir_no_follow(mode):
+            shutil.rmtree(leaf, dir_fd=parent_fd)
+        else:
+            os.unlink(leaf, dir_fd=parent_fd)
     finally:
         os.close(parent_fd)
 
@@ -477,6 +504,11 @@ def build_parser() -> argparse.ArgumentParser:
     remove.add_argument("path")
     remove.add_argument("--kind", choices=("file", "dir"), required=True)
     remove.set_defaults(func=cmd_remove)
+
+    remove_leaf = subparsers.add_parser("remove-leaf")
+    remove_leaf.add_argument("action")
+    remove_leaf.add_argument("path")
+    remove_leaf.set_defaults(func=cmd_remove_leaf)
 
     rmdir = subparsers.add_parser("rmdir")
     rmdir.add_argument("action")

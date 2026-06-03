@@ -939,6 +939,33 @@ class OutputTest(unittest.TestCase):
         mocked_clipboard.assert_not_called()
         mocked_paste.assert_not_called()
 
+    def test_insert_text_keeps_memory_reservation_when_dedupe_state_cannot_persist_after_paste(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):
+            self.assertTrue(output_module._write_clipboard_dedup_state("previous state", 1.0))
+            initial_state = output_module._read_clipboard_dedup_state()
+            with (
+                mock.patch("speed_of_cinnamon.output._write_clipboard_dedup_state", return_value=False),
+                mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
+                mock.patch("speed_of_cinnamon.output.paste_from_clipboard") as mocked_paste,
+                mock.patch("speed_of_cinnamon.output._read_text_clipboard", return_value="previous text"),
+                mock.patch(
+                    "speed_of_cinnamon.output._read_text_clipboard_snapshot",
+                    return_value=(True, "previous text"),
+                ),
+                mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+                mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=17.0),
+                mock.patch("speed_of_cinnamon.output.time.time", return_value=17.0),
+            ):
+                self.assertFalse(insert_text("wiederholung", "clipboard-paste"))
+                self.assertFalse(insert_text("wiederholung", "clipboard-paste"))
+            final_state = output_module._read_clipboard_dedup_state()
+
+        self.assertEqual(mocked_clipboard.call_count, 1)
+        self.assertEqual(mocked_paste.call_count, 1)
+        self.assertEqual(final_state, initial_state)
+        self.assertEqual(output_module._LAST_CLIPBOARD_TEXT, "wiederholung")
+        self.assertEqual(output_module._LAST_CLIPBOARD_METHOD, "clipboard-paste")
+
     def test_clipboard_targets_treat_rich_text_as_non_text_payload(self) -> None:
         self.assertTrue(output_module._clipboard_targets_contain_non_text_payload(""))
         self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("TARGETS\nTIMESTAMP\n"))
@@ -1030,14 +1057,28 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output._read_text_clipboard", return_value="secure text"),
             mock.patch(
                 "speed_of_cinnamon.output._read_text_clipboard_snapshot",
-                side_effect=[(True, "old clipboard"), (True, "secure text")],
+                return_value=(True, "old clipboard"),
             ),
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
         ):
             self.assertFalse(insert_text("secure text", "clipboard-paste"))
+            self.assertFalse(insert_text("secure text", "clipboard-paste"))
 
-        self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["secure text", "old clipboard"])
+        self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["secure text"])
         mocked_paste.assert_called_once()
+
+    def test_insert_text_does_not_restore_dedupe_state_when_paste_set_succeeds_but_commit_fails(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output._write_clipboard_dedup_state", return_value=False),
+            mock.patch("speed_of_cinnamon.output.time.time", return_value=21.0),
+            mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
+        ):
+            self.assertFalse(insert_text("secure text", "clipboard"))
+            self.assertFalse(insert_text("secure text", "clipboard"))
+
+        mocked_clipboard.assert_called_once_with("secure text")
 
     def test_clipboard_dedupe_lock_blocks_parallel_insert(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

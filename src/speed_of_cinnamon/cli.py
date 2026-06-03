@@ -1158,6 +1158,44 @@ def _remove_recording_artifact(path_value: str | None) -> bool:
     return remove_file(path_value, suffix=".wav") or remove_file(path_value, suffix=".flac")
 
 
+def _stabilize_recording_artifact_path(artifact_path: Path) -> Path:
+    if not isinstance(artifact_path, Path):
+        raise RuntimeError("recording artifact path is invalid")
+    if artifact_path.suffix.lower() not in {".wav", ".flac"}:
+        raise RuntimeError("recording artifact path has invalid suffix")
+    if _recording_artifact_stat(artifact_path) is None:
+        raise RuntimeError("recording artifact path is not a safe regular file")
+    stem = artifact_path.stem
+    lower_stem = stem.lower()
+    marker_stem = stem
+    for marker in (".trimmed-", ".encoded-"):
+        index = lower_stem.find(marker)
+        if index >= 0:
+            marker_stem = stem[:index]
+            break
+    if marker_stem == stem:
+        return artifact_path
+    stable_path = artifact_path.with_name(f"{marker_stem}{artifact_path.suffix}")
+    if stable_path == artifact_path:
+        return artifact_path
+    try:
+        assert_no_symlink_ancestors(stable_path, field_name="recording artifact path")
+        if stable_path.exists() or stable_path.is_symlink():
+            raise RuntimeError(f"stable recording artifact already exists: {stable_path}")
+        os.link(artifact_path, stable_path, follow_symlinks=False)
+        try:
+            artifact_path.unlink()
+        except OSError:
+            try:
+                stable_path.unlink()
+            except OSError:
+                pass
+            raise
+        return stable_path
+    except OSError as exc:
+        raise RuntimeError(f"failed to stabilize recording artifact path: {exc}") from exc
+
+
 def _recording_artifact_stat(path: Path) -> os.stat_result | None:
     try:
         file_stat = path.lstat()
@@ -1605,7 +1643,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             done_audio_path = None
             done_log_path = None
         elif trimmed_audio_path is not None:
-            done_audio_path = str(trimmed_audio_path)
+            done_audio_path = str(_stabilize_recording_artifact_path(trimmed_audio_path))
             remove_file(state.audio_path, suffix=audio_suffix)
         else:
             if audio_path.suffix.lower() == ".wav":
@@ -1614,7 +1652,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
                 except RecorderError:
                     done_audio_path = str(audio_path)
                 else:
-                    done_audio_path = str(converted_audio_path)
+                    done_audio_path = str(_stabilize_recording_artifact_path(converted_audio_path))
                     if done_audio_path != state.audio_path:
                         remove_file(state.audio_path, suffix=audio_suffix)
             else:

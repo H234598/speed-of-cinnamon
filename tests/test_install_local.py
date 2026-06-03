@@ -172,6 +172,77 @@ class InstallLocalTest(unittest.TestCase):
             self.assertFalse((home / ".local" / "bin" / "speed-of-cinnamon").exists())
             self.assertTrue(bad_target.is_symlink())
 
+    def test_install_local_removes_new_targets_when_late_activation_fails_and_active_target_is_swapped_to_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo_root = self._copy_installable_minimal_repo(tmp_path)
+            home = tmp_path / "home"
+            home.mkdir()
+            bad_target = home / ".local" / "share" / "man" / "man1" / "speed-of-cinnamon.1"
+            bad_target.parent.mkdir(parents=True)
+            bad_target.symlink_to(tmp_path / "payload")
+
+            swap_state = tmp_path / "swap-state"
+            swap_payload = tmp_path / "swap-payload"
+            swap_payload.write_text("swap", encoding="utf-8")
+            real_python = shutil.which("python3")
+            assert real_python is not None
+            fake_bin = tmp_path / "fake-bin"
+            fake_bin.mkdir()
+            fake_python = fake_bin / "python3"
+            fake_python.write_text(
+                f"#!{real_python}\n"
+                "import os\n"
+                "import subprocess\n"
+                "import sys\n"
+                "from pathlib import Path\n"
+                "\n"
+                "real_python = os.environ[\"SPEED_OF_CINNAMON_REAL_PYTHON3\"]\n"
+                "wrapper_target = os.environ[\"SPEED_OF_CINNAMON_SWAP_WRAPPER\"]\n"
+                "swap_payload = os.environ[\"SPEED_OF_CINNAMON_SWAP_TARGET\"]\n"
+                "state_file = Path(os.environ[\"SPEED_OF_CINNAMON_SWAP_STATE\"])\n"
+                "\n"
+                "result = subprocess.run([real_python, *sys.argv[1:]])\n"
+                "if (\n"
+                "    result.returncode == 0\n"
+                "    and len(sys.argv) > 5\n"
+                "    and sys.argv[1].endswith(\"safe-local-fs.py\")\n"
+                "    and sys.argv[2] == \"replace\"\n"
+                "    and sys.argv[5] == wrapper_target\n"
+                "    and not state_file.exists()\n"
+                "):\n"
+                "    state_file.write_text(\"swapped\", encoding=\"utf-8\")\n"
+                "    Path(wrapper_target).unlink(missing_ok=True)\n"
+                "    os.symlink(swap_payload, wrapper_target)\n"
+                "sys.exit(result.returncode)\n",
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o700)
+
+            result = self._run_install_local(
+                repo_root,
+                home,
+                {
+                    "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                    "SPEED_OF_CINNAMON_REAL_PYTHON3": real_python,
+                    "SPEED_OF_CINNAMON_SWAP_WRAPPER": str(home / ".local" / "bin" / "speed-of-cinnamon"),
+                    "SPEED_OF_CINNAMON_SWAP_TARGET": str(swap_payload),
+                    "SPEED_OF_CINNAMON_SWAP_STATE": str(swap_state),
+                },
+            )
+
+            self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+            self.assertIn("refusing to follow symlink during install", result.stderr)
+            self.assertTrue(swap_state.exists())
+            self.assertEqual(swap_state.read_text(encoding="utf-8"), "swapped")
+            self.assertFalse(
+                (home / ".local" / "share" / "cinnamon" / "applets" / "speed-of-cinnamon@H234598").exists()
+            )
+            self.assertFalse(
+                (home / ".local" / "share" / "speed-of-cinnamon" / "python" / "speed_of_cinnamon").exists()
+            )
+            self.assertFalse((home / ".local" / "bin" / "speed-of-cinnamon").exists())
+
     def test_install_local_refuses_hardlinked_man_page_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -220,6 +291,28 @@ class InstallLocalTest(unittest.TestCase):
 
             args = module.argparse.Namespace(action="install", source=str(source), target=str(target), label="tree")
             with mock.patch.object(module.shutil, "copytree", side_effect=copytree_with_source_mutation):
+                with self.assertRaisesRegex(SystemExit, "1"):
+                    module.cmd_install_tree(args)
+
+            self.assertFalse(target.exists())
+
+    def test_safe_fs_install_tree_rejects_staged_payload_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = self._load_safe_fs_module()
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir()
+            (source / "payload.txt").write_text("safe\n", encoding="utf-8")
+            real_copytree = module.shutil.copytree
+
+            def copytree_with_staged_payload_corruption(src: Path, dst: Path, **kwargs: object) -> Path:
+                result = real_copytree(src, dst, **kwargs)
+                (dst / "payload.txt").write_text("evaded\n", encoding="utf-8")
+                return result
+
+            args = module.argparse.Namespace(action="install", source=str(source), target=str(target), label="tree")
+            with mock.patch.object(module.shutil, "copytree", side_effect=copytree_with_staged_payload_corruption):
                 with self.assertRaisesRegex(SystemExit, "1"):
                     module.cmd_install_tree(args)
 

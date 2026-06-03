@@ -212,7 +212,7 @@ rollback_staged_items() {
         printf 'rollback failed for %s\n' "${target}" >&2
       fi
     else
-      if ! "${safe_fs_cmd[@]}" remove install "${target}" --kind "${kind}"; then
+      if ! "${safe_fs_cmd[@]}" remove-leaf install "${target}"; then
         printf 'rollback failed for %s\n' "${target}" >&2
       fi
     fi
