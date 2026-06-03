@@ -127,7 +127,10 @@ class SecurityParserTest(unittest.TestCase):
 
     def test_apply_security_mode_masks_long_spoken_secrets_and_names_without_tail_leaks(self) -> None:
         long_secret = "a" * 180
-        long_name = "Anna Berta Carla Dora Elsa Frieda Greta Helga Ida Julia"
+        long_name = (
+            "Anna Berta Carla Dora Elsa Frieda Greta Helga Ida Julia Karin Laura Maria Nora "
+            "Olga Paula Rosa Sabine Tina Ulla Vera"
+        )
         sanitized, count = apply_security_mode(
             f"mein name ist {long_name} und token heise {long_secret}.",
             [],

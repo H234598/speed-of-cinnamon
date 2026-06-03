@@ -46,6 +46,9 @@ _SPOKEN_SENSITIVE_VALUE_PATTERN = (
     r"(?:\"[^\n\"]{1,1000}\"|'[^\n']{1,1000}'|"
     rf"(?:(?!\s+(?:(?:und|and)\s+)?(?:meine|my\s+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)[^,;\n.?!]){{1,1000}})"
 )
+_SPOKEN_NAME_VALUE_PATTERN = (
+    rf"(?:(?!\s+(?:(?:und|and)\s+)?(?:meine|my\s+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)[^,;\n.?!]){{1,1000}}"
+)
 _BARE_SENSITIVE_STATUS_WORD_PATTERN = (
     r"(?:ist|is|war|was|are|were|missing|invalid|required|too|contains?|fehlt|leer|ung[üu]ltig|"
     r"muss|darf|soll|active|aktiv|gesetzt|needed|erforderlich|und|and)"
@@ -94,13 +97,11 @@ _URL_CRED_RE = re.compile(r"[a-z][a-z0-9+.-]*://[^\s/@:]+:[^\s/@]+@")
 _CREDIT_CARD_RE = re.compile(r"\b(?:\d[ -]*?){13,19}\b")
 _LABELED_NAME_RE = re.compile(
     r"(?i)\b(?:name|voller\s+name|full\s+name)\b\s*[:=]\s*"
-    r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß-]+"
-    r"(?:\s+(?!(?:adresse|anschrift|address|kundennummer|kundennr|kunden-nr|ssn|tax\s+id)\b)"
-    r"[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß-]+){0,15}"
+    + _SPOKEN_NAME_VALUE_PATTERN
 )
 _NAME_RE = re.compile(
     r"(?i)\b(?:mein\s+name\s+ist|ich\s+(?:heiße|heisse|heise|heisst|bin)|name\s+is|my\s+name\s+is)\s+"
-    r"([A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]*(?:\s+[A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß'-]*){0,15})"
+    + _SPOKEN_NAME_VALUE_PATTERN
 )
 _BANK_DATA_RE = re.compile(
     r"(?i)\b(?:iban|kontodaten|kontonummer|kontonr|konto|bank\s+account|account\s+no|account\s+number)\b[^\n]{0,60}(\d{8,30})"
