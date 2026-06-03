@@ -23,6 +23,7 @@ const DEFAULT_OPENAI_COMPATIBLE_MODEL = "gpt-4o-transcribe";
 const DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL = "gpt-4o-mini";
 const LEGACY_OPENAI_COMPATIBLE_URL = "http://127.0.0.1:8000/v1";
 const PASTE_FOCUS_DELAY_MS = 120;
+const PASTE_SUBMIT_DELAY_MS = 120;
 const ALARM_CHECK_SECONDS = 60;
 const MAX_CLI_ARG_BYTES = 4096;
 const MAX_CLI_ARG_COUNT = 128;
@@ -3821,10 +3822,8 @@ MyApplet.prototype = {
   _pasteClipboardAfterFocus: function(sendEnter) {
     let pasteKey = this._isTerminalTargetWindow() ? "ctrl+shift+v" : "ctrl+v";
     let args = ["xdotool", "key", "--clearmodifiers", pasteKey];
-    if (sendEnter) {
-      args.push("Return");
-    }
-    this._spawnKeyboardAfterFocus(args);
+    let followUpArgs = sendEnter ? ["xdotool", "key", "--clearmodifiers", "Return"] : null;
+    this._spawnKeyboardAfterFocus(args, followUpArgs);
   },
 
   _typeTextAfterFocus: function(text) {
@@ -3849,12 +3848,24 @@ MyApplet.prototype = {
     return value;
   },
 
-  _spawnKeyboardAfterFocus: function(args) {
+  _spawnKeyboardAfterFocus: function(args, followUpArgs) {
     this._clearPasteTimer();
     this.pasteTimer = Mainloop.timeout_add(PASTE_FOCUS_DELAY_MS, () => {
       this.pasteTimer = 0;
       try {
         Util.spawn(this._coerceSpawnArgs(args));
+        if (followUpArgs) {
+          this.pasteTimer = Mainloop.timeout_add(PASTE_SUBMIT_DELAY_MS, () => {
+            this.pasteTimer = 0;
+            try {
+              Util.spawn(this._coerceSpawnArgs(followUpArgs));
+            } catch (err) {
+              global.logError(err);
+              this._setStatus("error", _("Keyboard insert failed") + ": " + String(err), this.lastTranscript);
+            }
+            return false;
+          });
+        }
       } catch (err) {
         global.logError(err);
         this._setStatus("error", _("Keyboard insert failed") + ": " + String(err), this.lastTranscript);
@@ -3992,9 +4003,17 @@ MyApplet.prototype = {
       this._setStatus("done", _("Insertion disabled"), transcript);
       return true;
     }
+    if (text === "") {
+      this._setStatus("done", _("No transcript text to insert"), transcript);
+      return true;
+    }
     if (method === "type") {
       if (GLib.find_program_in_path("xdotool")) {
         let restored = this._restoreTargetWindowForPaste();
+        if (!restored) {
+          this._setStatus("error", _("Target window unavailable for direct typing"), transcript);
+          return false;
+        }
         if (this._typeTextAfterFocus(text)) {
           this._setStatus("done", restored ? _("Typed into target window") : _("Typed text"), transcript);
           return true;
@@ -4011,6 +4030,10 @@ MyApplet.prototype = {
     }
     if (GLib.find_program_in_path("xdotool")) {
       let restored = this._restoreTargetWindowForPaste();
+      if (!restored) {
+        this._setStatus("done", _("Copied to clipboard; target window unavailable for automatic paste"), transcript);
+        return true;
+      }
       this._pasteClipboardAfterFocus(submitWithReturn);
       this._setStatus("done", restored ? _("Copied and pasted into target window") : _("Copied and pasted"), transcript);
       return true;

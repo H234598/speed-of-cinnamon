@@ -735,7 +735,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("value = value.replace(/\\u0000/g, \"\");", source)
         self.assertIn('if (value.length > MAX_TYPE_COMMAND_CHARS) {', source)
         self.assertIn("Text too long for keyboard typing", source)
-        self.assertIn("_spawnKeyboardAfterFocus: function(args) {", source)
+        self.assertIn("_spawnKeyboardAfterFocus: function(args, followUpArgs) {", source)
         self.assertIn("Util.spawn(this._coerceSpawnArgs(args));", source)
 
     def test_doctor_check_deduplicates_overlapping_cli_calls(self) -> None:
@@ -752,6 +752,7 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         self.assertIn("const PASTE_FOCUS_DELAY_MS = 120;", source)
+        self.assertIn("const PASTE_SUBMIT_DELAY_MS = 120;", source)
         self.assertIn("this.targetWindow = null;", source)
         self.assertIn("this._rememberFocusedWindow();", source)
         self.assertIn("global.display ? global.display.focus_window : null", source)
@@ -759,6 +760,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("Main.activateWindow(this.targetWindow, global.get_current_time())", source)
         self.assertIn("this._restoreTargetWindowForPaste()", source)
         self.assertIn('this._pasteClipboardAfterFocus(submitWithReturn)', source)
+        self.assertIn('this._setStatus("done", _("Copied to clipboard; target window unavailable for automatic paste"), transcript);', source)
+        self.assertIn('this._setStatus("error", _("Target window unavailable for direct typing"), transcript);', source)
+        self.assertIn('this._setStatus("done", _("No transcript text to insert"), transcript);', source)
+        self.assertIn("Mainloop.timeout_add(PASTE_SUBMIT_DELAY_MS", source)
         self.assertIn("Copied and pasted into target window", source)
 
     def test_applet_checks_insert_fingerprint_before_relisten_restart(self) -> None:
@@ -899,8 +904,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_isTerminalTargetWindow: function()", source)
         self.assertIn('let pasteKey = this._isTerminalTargetWindow() ? "ctrl+shift+v" : "ctrl+v";', source)
         self.assertIn('["xdotool", "key", "--clearmodifiers", pasteKey]', source)
-        self.assertIn('if (sendEnter) {', source)
-        self.assertIn('args.push("Return");', source)
+        self.assertIn('let followUpArgs = sendEnter ? ["xdotool", "key", "--clearmodifiers", "Return"] : null;', source)
+        self.assertIn("this._spawnKeyboardAfterFocus(args, followUpArgs);", source)
 
     def test_history_entries_can_be_copied_or_inserted(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
