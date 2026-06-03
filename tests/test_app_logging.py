@@ -81,7 +81,7 @@ class AppLoggingTest(unittest.TestCase):
 
         mocked_maintain.assert_called_once_with(log_dir)
 
-    def test_file_handler_enforces_total_limit_without_full_maintenance(self) -> None:
+    def test_file_handler_does_not_scan_total_limit_on_every_emit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             active = log_dir / f"speed-of-cinnamon-{date.today().isoformat()}.log"
@@ -97,11 +97,35 @@ class AppLoggingTest(unittest.TestCase):
             with (
                 mock.patch("speed_of_cinnamon.app_logging.MAX_TOTAL_LOG_BYTES", 300),
                 mock.patch("speed_of_cinnamon.app_logging.maintain_logs") as mocked_maintain,
+                mock.patch("speed_of_cinnamon.app_logging._enforce_total_size_limit") as mocked_total_enforce,
             ):
                 handler.emit(record)
             handler.close()
 
             mocked_maintain.assert_not_called()
+            mocked_total_enforce.assert_not_called()
+            self.assertTrue(oldest.exists())
+            self.assertTrue(newest.exists())
+            self.assertTrue(active.exists())
+
+    def test_file_handler_enforces_total_limit_during_maintenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            active = log_dir / f"speed-of-cinnamon-{date.today().isoformat()}.log"
+            oldest = log_dir / "speed-of-cinnamon-2026-06-01.log.gz"
+            newest = log_dir / "speed-of-cinnamon-2026-06-02.log.gz"
+            oldest.write_bytes(b"o" * 120)
+            newest.write_bytes(b"n" * 120)
+            os.utime(oldest, (100, 100))
+            os.utime(newest, (200, 200))
+            handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
+            handler._next_maintenance_at = 0.0
+            handler.setFormatter(app_logging.JsonLogFormatter())
+            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "burst", (), None)
+            with mock.patch("speed_of_cinnamon.app_logging.MAX_TOTAL_LOG_BYTES", 300):
+                handler.emit(record)
+            handler.close()
+
             self.assertFalse(oldest.exists())
             self.assertTrue(newest.exists())
             self.assertTrue(active.exists())
@@ -208,6 +232,24 @@ class AppLoggingTest(unittest.TestCase):
             self.assertIn("may-30", content)
             self.assertIn("may-31", content)
 
+    def test_maintain_logs_merge_retain_existing_archive_on_replace_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            old_archive = log_dir / "speed-of-cinnamon-2026-05.log.gz"
+            old_daily = log_dir / "speed-of-cinnamon-2026-05-30.log"
+            old_daily.write_text("may-30\n", encoding="utf-8")
+            with gzip.open(old_archive, "wt", encoding="utf-8") as handle:
+                handle.write("legacy\n")
+
+            with mock.patch.object(app_logging.Path, "replace", side_effect=PermissionError("replace failed")):
+                with self.assertRaises(PermissionError, msg="replace failure"):
+                    app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
+
+            self.assertTrue(old_archive.exists())
+            with gzip.open(old_archive, "rt", encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "legacy\n")
+            self.assertTrue(old_daily.exists())
+
     def test_maintain_logs_ignores_preexisting_monthly_tmp_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
@@ -225,6 +267,22 @@ class AppLoggingTest(unittest.TestCase):
             self.assertTrue(archive.exists())
             with gzip.open(archive, "rt", encoding="utf-8") as handle:
                 self.assertIn("may-30", handle.read())
+
+    def test_gzip_file_keeps_source_when_replace_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "source.log"
+            target = log_dir / "target.log.gz"
+            source.write_text("content\n", encoding="utf-8")
+
+            with mock.patch.object(app_logging.Path, "replace", side_effect=PermissionError("replace failed")):
+                with self.assertRaises(PermissionError, msg="replace failure"):
+                    app_logging._gzip_file(source, target)
+
+            self.assertTrue(source.exists())
+            self.assertEqual(source.read_text(encoding="utf-8"), "content\n")
+            self.assertFalse(target.exists())
+            self.assertEqual(list(log_dir.glob("*.tmp")), [])
 
     def test_maintain_logs_deletes_oldest_files_over_total_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

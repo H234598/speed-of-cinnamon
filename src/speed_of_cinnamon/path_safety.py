@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import secrets
 from pathlib import Path
+from typing import Any
 
 
 def _safe_path_parts(path: Path, *, field_name: str) -> tuple[str, ...]:
@@ -130,22 +131,21 @@ def read_text_without_following_symlinks(path: Path, *, field_name: str = "path"
     except OSError as exc:
         raise OSError(str(exc)) from exc
     try:
-        with os.fdopen(fd, "r", encoding=encoding) as handle:
-            return handle.read()
+        handle = os.fdopen(fd, "r", encoding=encoding)
     except OSError:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
+        os.close(fd)
         raise
+    with handle:
+        return handle.read()
 
 
-def write_text_atomically_without_following_symlinks(
+def _write_atomically_without_following_symlinks(
     path: Path,
-    text: str,
+    payload: str | bytes,
     *,
-    field_name: str = "path",
-    encoding: str = "utf-8",
+    field_name: str,
+    mode: str,
+    encoding: str | None,
 ) -> None:
     if not isinstance(path, Path):
         raise RuntimeError(f"{field_name} must be a path")
@@ -165,12 +165,20 @@ def write_text_atomically_without_following_symlinks(
                 continue
         else:
             raise OSError(f"failed to create temporary file for {field_name}")
-        with os.fdopen(fd, "w", encoding=encoding) as handle:
+        handle_kwargs: dict[str, Any] = {}
+        if encoding is not None:
+            handle_kwargs["encoding"] = encoding
+        try:
+            handle = os.fdopen(fd, mode, **handle_kwargs)
+        except OSError:
+            os.close(fd)
+            raise
+        with handle:
             try:
                 os.fchmod(handle.fileno(), 0o600)
             except OSError:
                 pass
-            handle.write(text)
+            handle.write(payload)
         os.replace(temp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
     except OSError:
         if temp_name:
@@ -181,3 +189,34 @@ def write_text_atomically_without_following_symlinks(
         raise
     finally:
         os.close(parent_fd)
+
+
+def write_text_atomically_without_following_symlinks(
+    path: Path,
+    text: str,
+    *,
+    field_name: str = "path",
+    encoding: str = "utf-8",
+) -> None:
+    _write_atomically_without_following_symlinks(
+        path,
+        text,
+        field_name=field_name,
+        mode="w",
+        encoding=encoding,
+    )
+
+
+def write_bytes_atomically_without_following_symlinks(
+    path: Path,
+    data: bytes,
+    *,
+    field_name: str = "path",
+) -> None:
+    _write_atomically_without_following_symlinks(
+        path,
+        data,
+        field_name=field_name,
+        mode="wb",
+        encoding=None,
+    )

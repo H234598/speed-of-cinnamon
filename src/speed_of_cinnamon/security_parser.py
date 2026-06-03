@@ -3,11 +3,15 @@ from __future__ import annotations
 import functools
 import fcntl
 import os
-import tempfile
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from .path_safety import assert_no_symlink_ancestors, read_text_without_following_symlinks
+from .path_safety import (
+    assert_no_symlink_ancestors,
+    ensure_directory_without_following_symlinks,
+    read_text_without_following_symlinks,
+    write_text_atomically_without_following_symlinks,
+)
 
 
 _MAX_BLACKLIST_ENTRY_CHARS = 120
@@ -158,50 +162,16 @@ def _write_blacklist(path: Path, entries: list[str]) -> None:
         path = _safe_blacklist_path(path)
     except RuntimeError as exc:
         raise ValueError("blacklist file path is not safe") from exc
-    if not entries:
-        if not path.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            fd, temp_name = tempfile.mkstemp(prefix=f"{path.stem}.", suffix=".tmp", dir=str(path.parent))
-            temp_path = Path(temp_name)
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    try:
-                        os.fchmod(handle.fileno(), 0o600)
-                    except OSError:
-                        pass
-                assert_no_symlink_ancestors(path, field_name="blacklist file")
-                os.replace(temp_path, path)
-            except (OSError, RuntimeError):
-                try:
-                    temp_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                raise
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temp_name = tempfile.mkstemp(prefix=f"{path.stem}.", suffix=".tmp", dir=str(path.parent))
-    temp_path = Path(temp_name)
+    rendered = "\n".join(entries) + "\n" if entries else ""
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            try:
-                os.fchmod(handle.fileno(), 0o600)
-            except OSError:
-                pass
-            handle.write("\n".join(entries) + "\n")
-        assert_no_symlink_ancestors(path, field_name="blacklist file")
-        os.replace(temp_path, path)
+        write_text_atomically_without_following_symlinks(path, rendered, field_name="blacklist file")
     except (OSError, RuntimeError) as exc:
-        try:
-            temp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
         raise ValueError("failed to write blacklist file") from exc
 
 
 def _acquire_blacklist_lock(path: Path) -> int:
     if not isinstance(path, Path):
         raise ValueError("blacklist file path is not safe")
-    path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_name(f".{path.name}.lock")
     try:
         assert_no_symlink_ancestors(lock_path, field_name="blacklist lock file")
@@ -211,8 +181,13 @@ def _acquire_blacklist_lock(path: Path) -> int:
     if nofollow_flag is None:
         raise ValueError("secure blacklist lock open is not supported on this platform")
     try:
-        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | nofollow_flag, 0o600)
+        parent_fd = ensure_directory_without_following_symlinks(lock_path.parent, field_name="blacklist lock directory")
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("blacklist lock file path is not safe") from exc
+    try:
+        fd = os.open(lock_path.name, os.O_RDWR | os.O_CREAT | nofollow_flag, 0o600, dir_fd=parent_fd)
     except OSError as exc:
+        os.close(parent_fd)
         raise ValueError("failed to open blacklist lock file") from exc
     try:
         try:
@@ -223,6 +198,8 @@ def _acquire_blacklist_lock(path: Path) -> int:
     except OSError as exc:
         os.close(fd)
         raise ValueError("failed to lock blacklist file") from exc
+    finally:
+        os.close(parent_fd)
     return fd
 
 

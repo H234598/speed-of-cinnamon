@@ -105,6 +105,45 @@ class ModelsTest(unittest.TestCase):
             )
             self.assertIn(spec.sha1, cache_path.read_text(encoding="utf-8"))
 
+    def test_model_status_verify_recomputes_checksum_without_cache(self) -> None:
+        data = b"verification content"
+        spec = models.ModelSpec(
+            name="status-verify-fresh-checksum",
+            filename="ggml-status-verify-fresh.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(data).hexdigest(),
+            description="verify bypass cache",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            path.write_bytes(data)
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        str(path): {
+                            "checksum": hashlib.sha1(b"stale").hexdigest(),
+                            "size": len(data),
+                            "mtime_ns": path.stat().st_mtime_ns,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(models, "_cached_or_computed_sha1", side_effect=AssertionError("cache path/metadata should be bypassed")):
+                status = models.model_status(spec, verify=True)
+
+            self.assertTrue(status["verified"])
+            self.assertEqual(status["checksum"], spec.sha1)
+
     def test_model_checksum_cache_recovers_from_invalid_json(self) -> None:
         data = b"cached model"
         spec = models.ModelSpec(
@@ -368,6 +407,29 @@ class ModelsTest(unittest.TestCase):
             models._write_model_checksum_cache()
             self.assertEqual(models._model_checksum_cache, {})
             self.assertFalse(cache_path.exists())
+
+    def test_write_model_checksum_cache_rejects_symlink_parent_after_path_resolution(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            root = Path(tmp)
+            real = root / "real"
+            real.mkdir()
+            link = root / "link"
+            link.symlink_to(real, target_is_directory=True)
+            cache_path = link / "model_checksums.json"
+            models._model_checksum_cache["model.bin"] = {
+                "checksum": "a" * 40,
+                "size": 1,
+                "mtime_ns": 1,
+            }
+
+            with mock.patch.object(models, "_model_checksum_cache_path", return_value=cache_path):
+                models._write_model_checksum_cache()
+
+            self.assertFalse((real / "model_checksums.json").exists())
 
     def test_set_model_checksum_cache_rejects_invalid_checksum(self) -> None:
         stat = os.stat_result((0, 0, 0, 0, 0, 0, 12, 0, 0, 0))
@@ -1418,6 +1480,21 @@ class ModelsTest(unittest.TestCase):
 
     def test_model_supports_language_rejects_escaped_null_path(self) -> None:
         self.assertFalse(models.model_supports_language("a\\x00.bin", "de"))
+
+    def test_catalog_path_lookup_uses_filename_index_without_model_path_scan(self) -> None:
+        spec = models.ModelSpec(
+            name="indexed",
+            filename="ggml-indexed.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(b"indexed").hexdigest(),
+            description="indexed model",
+        )
+        with (
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models.model_path", side_effect=AssertionError("unexpected scan")),
+        ):
+            self.assertIs(models._catalog_model_for_path("/tmp/ggml-indexed.bin"), spec)
+            self.assertEqual(models.model_backend_for_path("ggml-indexed.bin"), spec.backend)
 
     def test_unknown_model_raises_clear_error(self) -> None:
         with self.assertRaisesRegex(models.ModelError, "unknown model"):

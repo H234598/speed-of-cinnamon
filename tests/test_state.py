@@ -102,6 +102,15 @@ class StateStoreTest(unittest.TestCase):
             self.assertNotEqual(state.updated_at, "")
             self.assertEqual(state.updated_at, store.read().updated_at)
 
+    def test_update_avoids_second_read_after_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = StateStore(Path(tmp) / "state.json")
+            with mock.patch.object(store, "read", wraps=store.read) as mocked_read:
+                state = store.update(status="recording")
+
+        self.assertEqual(state.status, "recording")
+        mocked_read.assert_called_once()
+
     def test_state_roundtrip_preserves_text_whitespace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")

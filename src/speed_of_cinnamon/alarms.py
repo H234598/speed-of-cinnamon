@@ -450,7 +450,8 @@ def remove_alarm(alarm_id: str, path: Path | None = None) -> dict[str, Any]:
         before = len(store["alarms"])
         store["alarms"] = [alarm for alarm in store["alarms"] if str(alarm.get("id")) != normalized_alarm_id]
         removed = len(store["alarms"]) != before
-        save_alarm_store(store, store_path)
+        if removed:
+            save_alarm_store(store, store_path)
     return {
         "status": "done",
         "removed": removed,
@@ -473,11 +474,13 @@ def set_alarm_enabled(alarm_id: str, enabled: bool, path: Path | None = None) ->
         selected: dict[str, Any] | None = None
         for alarm in store["alarms"]:
             if str(alarm.get("id")) == normalized_alarm_id:
-                alarm["enabled"] = enabled
-                changed = True
                 selected = alarm
+                if alarm.get("enabled") != enabled:
+                    alarm["enabled"] = enabled
+                    changed = True
                 break
-        save_alarm_store(store, store_path)
+        if changed:
+            save_alarm_store(store, store_path)
     return {
         "status": "done",
         "changed": changed,

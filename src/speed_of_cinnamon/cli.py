@@ -55,7 +55,7 @@ from .paths import (
     state_dir,
     transcript_dir,
 )
-from .path_safety import assert_no_symlink_ancestors
+from .path_safety import assert_no_symlink_ancestors, write_text_atomically_without_following_symlinks
 from .postprocessor import (
     DEFAULT_OLLAMA_URL,
     DEFAULT_OPENAI_COMPATIBLE_MODEL,
@@ -434,6 +434,11 @@ def _effective_post_process_backend(backend: str, command_template: str) -> str:
     return normalized
 
 
+def _is_remote_post_process_backend(backend: str) -> bool:
+    normalized = (backend or "none").strip().lower().replace("_", "-")
+    return normalized in {"ollama", "openai-compatible", "openai"}
+
+
 def _openai_compatible_transcribe_kwargs(args: argparse.Namespace, backend: str) -> dict[str, object]:
     if backend != "openai-compatible":
         return {}
@@ -649,6 +654,45 @@ def _apply_security_post_processing(text: str) -> tuple[str, dict[str, object]]:
     }
 
 
+def _empty_security_post_processing() -> dict[str, object]:
+    return {"blacklist_added": [], "blacklist_opened": False, "redacted_words": [], "blacklist_hits": 0}
+
+
+def _merge_security_post_processing(left: dict[str, object], right: dict[str, object]) -> dict[str, object]:
+    left_added = left.get("blacklist_added", [])
+    right_added = right.get("blacklist_added", [])
+    left_redacted = left.get("redacted_words", 0)
+    right_redacted = right.get("redacted_words", 0)
+    return {
+        "blacklist_added": [
+            item
+            for item in [*(left_added if isinstance(left_added, list) else []), *(right_added if isinstance(right_added, list) else [])]
+            if isinstance(item, str)
+        ],
+        "blacklist_opened": bool(left.get("blacklist_opened")) or bool(right.get("blacklist_opened")),
+        "redacted_words": int(left_redacted if isinstance(left_redacted, int) and not isinstance(left_redacted, bool) else 0)
+        + int(right_redacted if isinstance(right_redacted, int) and not isinstance(right_redacted, bool) else 0),
+        "blacklist_hits": int(left.get("blacklist_hits") or 0) + int(right.get("blacklist_hits") or 0),
+    }
+
+
+def _apply_security_mask_only(text: str) -> tuple[str, dict[str, object]]:
+    directives = parse_security_directives(text)
+    entries = load_blacklist_file(blacklist_file())
+    sanitized, redactions = apply_security_mode(directives.text, entries)
+    _, blacklist_hits = apply_blacklist_mode(directives.text, entries)
+    if blacklist_hits > 0:
+        second_pass, second_pass_redactions = apply_security_mode(sanitized, entries)
+        sanitized = second_pass
+        redactions += second_pass_redactions
+    return sanitized, {
+        "blacklist_added": [],
+        "blacklist_opened": False,
+        "redacted_words": redactions,
+        "blacklist_hits": blacklist_hits,
+    }
+
+
 def build_store(args: argparse.Namespace) -> StateStore:
     state_path = normalized_path(args.state_file)
     if not state_path:
@@ -741,42 +785,16 @@ def _write_json_atomic(path: Path, payload: dict[str, object], *, max_bytes: int
     content = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     if len(content.encode("utf-8")) > max_bytes:
         raise RuntimeError(f"output JSON is too large (max {max_bytes} bytes)")
-    assert_no_symlink_ancestors(path, field_name="JSON output path")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
-        try:
-            os.fchmod(handle.fileno(), 0o600)
-        except OSError:
-            pass
-        handle.write(content)
-        tmp_path = Path(handle.name)
     try:
-        os.replace(tmp_path, path)
-    except OSError as exc:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        write_text_atomically_without_following_symlinks(path, content, field_name="JSON output path")
+    except (OSError, RuntimeError) as exc:
         raise RuntimeError(f"failed to write JSON output: {path}") from exc
 
 
 def _write_text_atomic(path: Path, text: str) -> None:
-    assert_no_symlink_ancestors(path, field_name="text output path")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
-        try:
-            os.fchmod(handle.fileno(), 0o600)
-        except OSError:
-            pass
-        handle.write(text)
-        tmp_path = Path(handle.name)
     try:
-        os.replace(tmp_path, path)
-    except OSError as exc:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        write_text_atomically_without_following_symlinks(path, text, field_name="text output path")
+    except (OSError, RuntimeError) as exc:
         raise RuntimeError(f"failed to write transcript file: {path}") from exc
 
 
@@ -1468,13 +1486,18 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             if trimmed_audio_path is not None and not keep_recording_artifacts:
                 remove_file(str(trimmed_audio_path), suffix=".flac")
 
+        post_process_backend = _effective_post_process_backend(args.post_process_backend, args.post_process_command)
+        if _is_remote_post_process_backend(post_process_backend):
+            text, security_post_processing = _apply_security_post_processing(text)
+        else:
+            security_post_processing = _empty_security_post_processing()
         text = post_process_text(
             text,
             language,
             args.post_process_command,
             args.personal_context,
             args.vocabulary,
-            _effective_post_process_backend(args.post_process_backend, args.post_process_command),
+            post_process_backend,
             args.ollama_model,
             args.ollama_url,
             args.post_process_prompt,
@@ -1483,7 +1506,11 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             getattr(args, "openai_compatible_api_key", ""),
             getattr(args, "openai_compatible_flex_processing", True),
         )
-        text, security_post_processing = _apply_security_post_processing(text)
+        if _is_remote_post_process_backend(post_process_backend):
+            text, post_remote_security = _apply_security_mask_only(text)
+            security_post_processing = _merge_security_post_processing(security_post_processing, post_remote_security)
+        else:
+            text, security_post_processing = _apply_security_post_processing(text)
         _write_text_atomic(text_path, text.strip() + "\n")
         append_space = _coerce_bool(args.append_space, field_name="append_space")
         sanitize_special_chars = _coerce_bool(
@@ -2169,13 +2196,18 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         vocabulary=args.vocabulary,
         **_openai_compatible_transcribe_kwargs(args, normalized_transcriber),
     )
+    post_process_backend = _effective_post_process_backend(args.post_process_backend, args.post_process_command)
+    if _is_remote_post_process_backend(post_process_backend):
+        text, security_post_processing = _apply_security_post_processing(text)
+    else:
+        security_post_processing = _empty_security_post_processing()
     text = post_process_text(
         text,
         args.language,
         args.post_process_command,
         args.personal_context,
         args.vocabulary,
-        _effective_post_process_backend(args.post_process_backend, args.post_process_command),
+        post_process_backend,
         args.ollama_model,
         args.ollama_url,
         args.post_process_prompt,
@@ -2184,7 +2216,11 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         getattr(args, "openai_compatible_api_key", ""),
         getattr(args, "openai_compatible_flex_processing", True),
     )
-    text, security_post_processing = _apply_security_post_processing(text)
+    if _is_remote_post_process_backend(post_process_backend):
+        text, post_remote_security = _apply_security_mask_only(text)
+        security_post_processing = _merge_security_post_processing(security_post_processing, post_remote_security)
+    else:
+        text, security_post_processing = _apply_security_post_processing(text)
     _write_text_atomic(text_path, text.strip() + "\n")
     return {
         "status": "done",

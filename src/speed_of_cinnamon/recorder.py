@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .paths import recordings_dir
-from .path_safety import assert_no_symlink_ancestors
+from .path_safety import assert_no_symlink_ancestors, ensure_directory_without_following_symlinks
 
 
 class RecorderError(RuntimeError):
@@ -354,6 +354,10 @@ def trim_recording_leading_silence(audio_path: Path, leading_silence_seconds: fl
         raise RecorderError("leading silence seconds must be numeric")
     if leading_silence_seconds <= 0:
         return audio_path
+    try:
+        audio_path = validate_recording_path(audio_path, suffix=".wav")
+    except RuntimeError as exc:
+        raise RecorderError(str(exc)) from exc
     try:
         with wave.open(str(audio_path), "rb") as source:
             frame_rate = source.getframerate()
@@ -865,9 +869,23 @@ def _open_recorder_log_file(log_path: Path) -> io.BufferedWriter:
     if nofollow_flag is None:
         raise RecorderError("secure log file open is not supported on this platform")
     try:
-        fd = os.open(log_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | nofollow_flag, 0o600)
+        parent_fd = ensure_directory_without_following_symlinks(
+            log_path.parent,
+            field_name="recorder log directory",
+        )
     except OSError as exc:
         raise RecorderError(f"failed to open recorder log file {log_path}: {exc}") from exc
+    try:
+        fd = os.open(
+            log_path.name,
+            os.O_WRONLY | os.O_APPEND | os.O_CREAT | nofollow_flag,
+            0o600,
+            dir_fd=parent_fd,
+        )
+    except OSError as exc:
+        raise RecorderError(f"failed to open recorder log file {log_path}: {exc}") from exc
+    finally:
+        os.close(parent_fd)
     try:
         return os.fdopen(fd, "ab")
     except OSError as exc:
@@ -897,7 +915,6 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
     log_path = validate_recording_path(log_path, suffix=".log")
     existed_before = log_path.exists()
     preserved_size = log_path.stat().st_size if existed_before else 0
-    log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = _open_recorder_log_file(log_path)
     try:
         try:

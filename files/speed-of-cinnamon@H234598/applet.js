@@ -57,6 +57,7 @@ const CLI_TEXT_SETTINGS = {
 };
 const MAX_TYPE_COMMAND_CHARS = 4000;
 const MAX_SPAWN_JSON_BYTES = 262144;
+const MAX_SPAWN_TEXT_BYTES = 262144;
 const MIN_RECORDING_SECONDS = 0;
 const MAX_RECORDING_SECONDS = 3600;
 const DEFAULT_RECORDING_SECONDS = 30;
@@ -2767,13 +2768,16 @@ MyApplet.prototype = {
 
   _writeExternalApiEnvFile: function() {
     let path = this._externalApiEnvPath();
-    GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o700);
-    GLib.file_set_contents(path, this._externalApiEnvContent());
     try {
+      GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o700);
+      GLib.file_set_contents(path, this._externalApiEnvContent());
       Gio.File.new_for_path(path).set_attribute_uint32("unix::mode", 0o600, Gio.FileQueryInfoFlags.NONE, null);
     } catch (err) {
       global.logError(err);
+      this._setStatus("error", _("External API config file could not be written"), this.lastTranscript);
+      return false;
     }
+    return true;
   },
 
   _syncExternalApiConfigOnStartup: function() {
@@ -2800,16 +2804,17 @@ MyApplet.prototype = {
 
   _ensureExternalApiEnvFile: function() {
     let path = this._externalApiEnvPath();
-    GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o700);
-    if (!GLib.file_test(path, GLib.FileTest.EXISTS)) {
-      GLib.file_set_contents(path, this._externalApiEnvContent());
-      try {
+    try {
+      GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o700);
+      if (!GLib.file_test(path, GLib.FileTest.EXISTS)) {
+        GLib.file_set_contents(path, this._externalApiEnvContent());
         Gio.File.new_for_path(path).set_attribute_uint32("unix::mode", 0o600, Gio.FileQueryInfoFlags.NONE, null);
-      } catch (err) {
-        global.logError(err);
+      } else {
+        this._migrateExternalApiEnvFile(path);
       }
-    } else {
-      this._migrateExternalApiEnvFile(path);
+    } catch (err) {
+      global.logError(err);
+      this._setStatus("error", _("External API config file could not be written"), this.lastTranscript);
     }
     return path;
   },
@@ -2843,7 +2848,12 @@ MyApplet.prototype = {
       migrated += suffix + "OPENAI_COMPATIBLE_TEXT_MODEL=" + this._externalApiEnvValue(this.openaiCompatibleTextModel, DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL) + "\n";
     }
     if (migrated !== text) {
-      GLib.file_set_contents(path, migrated);
+      try {
+        GLib.file_set_contents(path, migrated);
+      } catch (err) {
+        global.logError(err);
+        this._setStatus("error", _("External API config file could not be written"), this.lastTranscript);
+      }
     }
   },
 
@@ -3604,7 +3614,12 @@ MyApplet.prototype = {
         if (done) {
           return;
         }
-        finalize(stdout);
+        let output = String(stdout || "");
+        if (output.length > MAX_SPAWN_TEXT_BYTES) {
+          finalize("");
+          return;
+        }
+        finalize(output);
       });
     } catch (err) {
       global.logError(err);
@@ -4004,6 +4019,9 @@ MyApplet.prototype = {
     };
     let nonTextTargets = {
       "application/x-qt-image": true,
+      "text/html": true,
+      "text/rtf": true,
+      "text/richtext": true,
       "x-special/gnome-copied-files": true,
     };
     let lines = String(targets || "").split("\n");
@@ -4012,17 +4030,19 @@ MyApplet.prototype = {
       if (!target || ignored[target]) {
         continue;
       }
-      if (textTargets[target] || target.indexOf("text/") === 0) {
+      if (textTargets[target]) {
         continue;
       }
       if (
         nonTextTargets[target]
+        || target.indexOf("text/") === 0
         || target.indexOf("image/") === 0
         || target.indexOf("audio/") === 0
         || target.indexOf("video/") === 0
       ) {
         return true;
       }
+      return true;
     }
     return false;
   },
@@ -4040,7 +4060,7 @@ MyApplet.prototype = {
       let targets = this._clipboardTargetList("wl-paste", ["--list-types"]);
       return this._clipboardTargetsContainNonTextPayload(targets);
     }
-    return false;
+    return true;
   },
 
   _pasteClipboardAfterFocus: function(sendEnter) {
@@ -4064,9 +4084,9 @@ MyApplet.prototype = {
       }
     }
     if (!args) {
-      return;
+      return false;
     }
-    this._spawnKeyboardAfterFocus(args, followUpArgs);
+    return this._spawnKeyboardAfterFocus(args, followUpArgs);
   },
 
   _typeTextAfterFocus: function(text) {
@@ -4075,8 +4095,7 @@ MyApplet.prototype = {
     if (typedText === null) {
       return false;
     }
-    this._spawnKeyboardAfterFocus(["xdotool", "type", "--clearmodifiers", "--delay", String(delay), "--", typedText]);
-    return true;
+    return this._spawnKeyboardAfterFocus(["xdotool", "type", "--clearmodifiers", "--delay", String(delay), "--", typedText]);
   },
 
   _coerceTypeText: function(text) {
@@ -4093,28 +4112,35 @@ MyApplet.prototype = {
 
   _spawnKeyboardAfterFocus: function(args, followUpArgs) {
     this._clearPasteTimer();
-    this.pasteTimer = Mainloop.timeout_add(PASTE_FOCUS_DELAY_MS, () => {
-      this.pasteTimer = 0;
-      try {
-        Util.spawn(this._coerceSpawnArgs(args));
-        if (followUpArgs) {
-          this.pasteTimer = Mainloop.timeout_add(PASTE_SUBMIT_DELAY_MS, () => {
-            this.pasteTimer = 0;
-            try {
-              Util.spawn(this._coerceSpawnArgs(followUpArgs));
-            } catch (err) {
-              global.logError(err);
-              this._setStatus("error", _("Keyboard insert failed") + ": " + String(err), this.lastTranscript);
-            }
-            return false;
-          });
+    try {
+      this.pasteTimer = Mainloop.timeout_add(PASTE_FOCUS_DELAY_MS, () => {
+        this.pasteTimer = 0;
+        try {
+          Util.spawn(this._coerceSpawnArgs(args));
+          if (followUpArgs) {
+            this.pasteTimer = Mainloop.timeout_add(PASTE_SUBMIT_DELAY_MS, () => {
+              this.pasteTimer = 0;
+              try {
+                Util.spawn(this._coerceSpawnArgs(followUpArgs));
+              } catch (err) {
+                global.logError(err);
+                this._setStatus("error", _("Keyboard insert failed") + ": " + String(err), this.lastTranscript);
+              }
+              return false;
+            });
+          }
+        } catch (err) {
+          global.logError(err);
+          this._setStatus("error", _("Keyboard insert failed") + ": " + String(err), this.lastTranscript);
         }
-      } catch (err) {
-        global.logError(err);
-        this._setStatus("error", _("Keyboard insert failed") + ": " + String(err), this.lastTranscript);
-      }
+        return false;
+      });
+    } catch (err) {
+      global.logError(err);
+      this._setStatus("error", _("Keyboard insert failed") + ": " + String(err), this.lastTranscript);
       return false;
-    });
+    }
+    return true;
   },
 
   _finishAppletTextInsert: function(payload) {
@@ -4268,7 +4294,7 @@ MyApplet.prototype = {
       }
       return false;
     }
-    if (method === "clipboard-paste" && this._clipboardHasNonTextPayload()) {
+    if (method === "clipboard-paste" && canPasteWithKeyboard && this._clipboardHasNonTextPayload()) {
       this._setStatus("error", _("Clipboard contains non-text data; skipping automatic paste"), transcript);
       return false;
     }
@@ -4283,8 +4309,11 @@ MyApplet.prototype = {
         this._setStatus("done", _("Copied to clipboard; target window unavailable for automatic paste"), transcript);
         return true;
       }
-      this._pasteClipboardAfterFocus(submitWithReturn);
-      this._setStatus("done", restored ? _("Copied and pasted into target window") : _("Copied and pasted"), transcript);
+      if (this._pasteClipboardAfterFocus(submitWithReturn)) {
+        this._setStatus("done", restored ? _("Copied and pasted into target window") : _("Copied and pasted"), transcript);
+      } else {
+        this._setStatus("done", _("Copied to clipboard; automatic paste could not be started"), transcript);
+      }
       return true;
     } else {
       this._setStatus("done", _("Copied to clipboard; install xdotool or wtype for automatic paste"), transcript);

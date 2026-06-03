@@ -481,9 +481,28 @@ class AlarmTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "alarm id must be text"):
             remove_alarm(123)  # type: ignore[arg-type]
 
+    def test_remove_alarm_does_not_rewrite_store_when_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            with mock.patch("speed_of_cinnamon.alarms.save_alarm_store") as mocked_save:
+                result = remove_alarm("missing", path)
+
+        self.assertFalse(result["removed"])
+        mocked_save.assert_not_called()
+
     def test_set_alarm_enabled_rejects_empty_id(self) -> None:
         with self.assertRaisesRegex(ValueError, "alarm id is required"):
             set_alarm_enabled(" \t", False)
+
+    def test_set_alarm_enabled_does_not_rewrite_store_when_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            alarm = add_alarm("09:00", path=path)
+            with mock.patch("speed_of_cinnamon.alarms.save_alarm_store") as mocked_save:
+                result = set_alarm_enabled(str(alarm["id"]), True, path)
+
+        self.assertFalse(result["changed"])
+        mocked_save.assert_not_called()
 
     def test_set_alarm_enabled_rejects_null_byte_id(self) -> None:
         with self.assertRaisesRegex(ValueError, "alarm id contains invalid null byte"):

@@ -15,7 +15,12 @@ from pathlib import Path
 from typing import Any
 
 from .paths import ctranslate2_models_dir, models_dir
-from .path_safety import assert_no_symlink_ancestors, ensure_directory_without_following_symlinks, read_text_without_following_symlinks
+from .path_safety import (
+    assert_no_symlink_ancestors,
+    ensure_directory_without_following_symlinks,
+    read_text_without_following_symlinks,
+    write_text_atomically_without_following_symlinks,
+)
 
 HUGGING_FACE_BASE_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
 TINY_DE_MODEL_URL = "https://huggingface.co/wabisabisocial/whisper-tiny-german-ggml/resolve/main/ggml-tiny-de.bin"
@@ -201,11 +206,6 @@ def _prune_model_checksum_cache() -> None:
 def _write_model_checksum_cache() -> None:
     cache_path = _model_checksum_cache_path()
     try:
-        assert_no_symlink_ancestors(cache_path, field_name="model checksum cache path")
-    except RuntimeError as exc:
-        raise ModelError(str(exc)) from exc
-    try:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
         rendered = json.dumps(_model_checksum_cache, indent=2, sort_keys=True) + "\n"
         if len(rendered.encode("utf-8")) > MAX_MODEL_CHECKSUM_JSON_BYTES:
             _model_checksum_cache.clear()
@@ -214,22 +214,12 @@ def _write_model_checksum_cache() -> None:
             except OSError:
                 pass
             return
-        with tempfile.NamedTemporaryFile("w", delete=False, dir=cache_path.parent, encoding="utf-8") as handle:
-            try:
-                os.fchmod(handle.fileno(), 0o600)
-            except OSError:
-                pass
-            handle.write(rendered)
-            tmp_path = Path(handle.name)
-        try:
-            os.replace(tmp_path, cache_path)
-        except OSError:
-            try:
-                tmp_path.unlink()
-            except OSError:
-                pass
-            return
-    except OSError:
+        write_text_atomically_without_following_symlinks(
+            cache_path,
+            rendered,
+            field_name="model checksum cache path",
+        )
+    except (OSError, RuntimeError):
         return
 
 
@@ -617,16 +607,32 @@ CATALOG: tuple[ModelSpec, ...] = (
     ),
 )
 
+_catalog_index_source: tuple[ModelSpec, ...] | None = None
+_catalog_name_index: dict[str, ModelSpec] = {}
+_catalog_lower_name_index: dict[str, ModelSpec] = {}
+_catalog_filename_index: dict[str, ModelSpec] = {}
+
+
+def _catalog_indexes() -> tuple[dict[str, ModelSpec], dict[str, ModelSpec], dict[str, ModelSpec]]:
+    global _catalog_index_source, _catalog_name_index, _catalog_lower_name_index, _catalog_filename_index
+    if _catalog_index_source is not CATALOG:
+        _catalog_name_index = {model.name: model for model in CATALOG}
+        _catalog_lower_name_index = {model.name.lower(): model for model in CATALOG}
+        _catalog_filename_index = {model.filename.lower(): model for model in CATALOG}
+        _catalog_index_source = CATALOG
+    return _catalog_name_index, _catalog_lower_name_index, _catalog_filename_index
+
 
 def catalog_by_name() -> dict[str, ModelSpec]:
-    return {model.name: model for model in CATALOG}
+    names, _lower_names, _filenames = _catalog_indexes()
+    return dict(names)
 
 
 def resolve_model(name: str) -> ModelSpec:
     if isinstance(name, bool) or not isinstance(name, str):
         raise ModelError("model name must be text")
     key = (name or "").strip()
-    models = catalog_by_name()
+    models, _lower_names, _filenames = _catalog_indexes()
     if key in models:
         return models[key]
     raise ModelError(f"unknown model: {name}")
@@ -713,6 +719,18 @@ def _open_model_parent_directory(path: Path, root: Path, *, field_name: str = "m
     return parent_fd
 
 
+def _replace_model_sibling_path(source: Path, target: Path, root: Path, *, field_name: str = "model path") -> None:
+    if source.parent != target.parent:
+        raise ModelError(f"{field_name} source and target must share a parent directory")
+    parent_fd = _open_model_parent_directory(target, root, field_name=field_name)
+    try:
+        _assert_model_path_for_atomic_replace(source, root, field_name=f"{field_name} source")
+        _assert_model_path_for_atomic_replace(target, root, field_name=field_name)
+        os.replace(source.name, target.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
 def model_download_urls(model: ModelSpec) -> list[tuple[str, str]]:
     filename = _validated_catalog_path_fragment(model.filename, field_name="model filename")
     if model.files:
@@ -751,9 +769,10 @@ def model_path_is_english_only(path: str | Path) -> bool:
     if not isinstance(path, (str, Path)):
         return False
     filename = Path(path).name.lower()
-    for model in CATALOG:
-        if filename == model.filename.lower() or filename == model.name.lower():
-            return model_name_is_english_only(model.name)
+    _models, lower_names, filenames = _catalog_indexes()
+    model = filenames.get(filename) or lower_names.get(filename)
+    if model is not None:
+        return model_name_is_english_only(model.name)
     return ".en." in filename or filename.endswith(".en.bin")
 
 
@@ -763,14 +782,8 @@ def _catalog_model_for_path(path: str | Path) -> ModelSpec | None:
     except (TypeError, ValueError):
         return None
     filename = normalized.name.lower()
-    for model in CATALOG:
-        if (
-            filename == model.filename.lower()
-            or filename == model.name.lower()
-            or str(normalized) == str(model_path(model))
-        ):
-            return model
-    return None
+    _models, lower_names, filenames = _catalog_indexes()
+    return filenames.get(filename) or lower_names.get(filename)
 
 
 def model_backend_for_path(path: str | Path) -> str:
@@ -793,13 +806,31 @@ def sha1_file(path: Path) -> str:
     return _cached_or_computed_sha1(path)
 
 
+def _sha1_file_without_cache(path: Path) -> str:
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise ModelError("secure model file open is not supported on this platform")
+    try:
+        fd = os.open(path, os.O_RDONLY | nofollow_flag)
+    except OSError as exc:
+        raise ModelError(str(exc)) from exc
+    try:
+        with os.fdopen(fd, "rb") as handle:
+            digest = hashlib.sha1(usedforsecurity=False)
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+            return digest.hexdigest()
+    except OSError as exc:
+        raise ModelError(str(exc)) from exc
+
+
 def model_status(model: ModelSpec, verify: bool = False) -> dict[str, object]:
     if not isinstance(verify, bool):
         raise ModelError("verify must be a boolean")
     path = model_path(model)
     exists = path.exists()
     downloaded = _model_is_downloaded(model, path)
-    checksum = sha1_file(path) if verify and downloaded and path.is_file() and model.sha1 else ""
+    checksum = _sha1_file_without_cache(path) if verify and downloaded and path.is_file() and model.sha1 else ""
     return {
         **asdict(model),
         "url": model.url,

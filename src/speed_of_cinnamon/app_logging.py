@@ -105,7 +105,6 @@ class SizeCappedJsonFileHandler(logging.Handler):
                 raise RuntimeError("failed to open log file")
             self.stream.write(line)
             self.stream.flush()
-            _enforce_total_size_limit(self.base_dir)
             self._maintain_after_emit(force=rotated)
         except Exception:
             self.handleError(record)
@@ -335,8 +334,6 @@ def _merge_old_months(directory: Path, today: date) -> None:
                         continue
                     _assert_regular_unlinked_file(path, field_name="monthly log source")
                     _copy_log_content(path, output)
-            if archive.exists():
-                archive.unlink()
             tmp_archive.replace(archive)
         except Exception:
             try:
@@ -364,8 +361,8 @@ def _gzip_file(source: Path, target: Path) -> None:
     try:
         with open(source, "rb") as input_file, gzip.open(tmp_target, "wb") as output_file:
             shutil.copyfileobj(input_file, output_file)
-        source.unlink()
         tmp_target.replace(target)
+        source.unlink()
     except Exception:
         try:
             tmp_target.unlink()

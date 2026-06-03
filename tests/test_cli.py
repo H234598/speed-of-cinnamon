@@ -42,6 +42,56 @@ class CliTest(unittest.TestCase):
             mode = path.stat().st_mode & 0o777
             self.assertEqual(mode, 0o600)
 
+    @mock.patch(
+        "speed_of_cinnamon.cli.write_text_atomically_without_following_symlinks",
+        side_effect=OSError("out of space"),
+    )
+    def test_write_json_atomic_reports_writer_failure(
+        self,
+        mocked_write: mock.Mock,
+    ) -> None:
+        with self.assertRaisesRegex(RuntimeError, "failed to write JSON output"):
+            cli._write_json_atomic(Path("/tmp/security.json"), {"status": "ok"}, max_bytes=10_000)
+        mocked_write.assert_called_once()
+
+    @mock.patch(
+        "speed_of_cinnamon.cli.write_text_atomically_without_following_symlinks",
+        side_effect=OSError("out of space"),
+    )
+    def test_write_text_atomic_reports_writer_failure(
+        self,
+        mocked_write: mock.Mock,
+    ) -> None:
+        with self.assertRaisesRegex(RuntimeError, "failed to write transcript file"):
+            cli._write_text_atomic(Path("/tmp/security.txt"), "private")
+        mocked_write.assert_called_once()
+
+    def test_write_text_atomic_rejects_symlink_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            real = root / "real"
+            real.mkdir()
+            link = root / "link"
+            link.symlink_to(real, target_is_directory=True)
+
+            with self.assertRaisesRegex(RuntimeError, "failed to write transcript file"):
+                cli._write_text_atomic(link / "security.txt", "private")
+
+            self.assertFalse((real / "security.txt").exists())
+
+    def test_write_json_atomic_rejects_symlink_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            real = root / "real"
+            real.mkdir()
+            link = root / "link"
+            link.symlink_to(real, target_is_directory=True)
+
+            with self.assertRaisesRegex(RuntimeError, "failed to write JSON output"):
+                cli._write_json_atomic(link / "security.json", {"status": "ok"}, max_bytes=10_000)
+
+            self.assertFalse((real / "security.json").exists())
+
     def test_version_option_prints_current_version(self) -> None:
         parser = cli.build_parser()
         stdout = io.StringIO()
@@ -545,6 +595,145 @@ class CliTest(unittest.TestCase):
         self.assertTrue(payload["security"]["blacklist_opened"])
         self.assertEqual(payload["transcript"], "")
         self.assertNotIn("blacklist anzeigen", payload["transcript"])
+
+    @mock.patch("speed_of_cinnamon.cli._apply_security_post_processing")
+    @mock.patch("speed_of_cinnamon.cli.post_process_text")
+    @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
+    def test_transcribe_file_runs_security_post_processing_before_remote_post_processing(
+        self,
+        mocked_validate: mock.Mock,
+        mocked_post: mock.Mock,
+        mocked_security: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            call_order: list[str] = []
+
+            def security_side_effect(text: str) -> tuple[str, dict[str, object]]:
+                call_order.append("security")
+                return ("sicher", {"blacklist_added": [], "blacklist_opened": False, "redacted_words": [], "blacklist_hits": 0})
+
+            def post_process_side_effect(*args: object, **kwargs: object) -> str:
+                call_order.append("post")
+                return args[0]
+
+            mocked_security.side_effect = security_side_effect
+            mocked_post.side_effect = post_process_side_effect
+            mocked_validate.return_value = audio
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="roher text"),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--post-process-backend",
+                    "openai-compatible",
+                    "--ollama-model",
+                    "llama3.2:3b",
+                    "--json",
+                ])
+        self.assertEqual(code, 0)
+        self.assertEqual(call_order, ["security", "post"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["transcript"], "sicher")
+
+    @mock.patch("speed_of_cinnamon.cli._open_blacklist_document")
+    @mock.patch("speed_of_cinnamon.cli.update_blacklist_file")
+    @mock.patch("speed_of_cinnamon.cli.load_blacklist_file", return_value=["geheim"])
+    @mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="blacklisteintrag: modellwort\nblacklist anzeigen\ntoken: abc123 und geheim")
+    @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
+    def test_transcribe_file_masks_remote_post_processing_output_after_model(
+        self,
+        mocked_validate: mock.Mock,
+        _mocked_post: mock.Mock,
+        _mocked_load: mock.Mock,
+        mocked_update: mock.Mock,
+        mocked_open: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            mocked_validate.return_value = audio
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="roher text"),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--post-process-backend",
+                    "openai-compatible",
+                    "--json",
+                ])
+
+        self.assertEqual(code, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertNotIn("abc123", payload["transcript"])
+        self.assertNotIn("geheim", payload["transcript"])
+        self.assertNotIn("modellwort", payload["transcript"])
+        self.assertNotIn("blacklisteintrag", payload["transcript"])
+        self.assertNotIn("blacklist anzeigen", payload["transcript"])
+        self.assertIn("[redacted token]", payload["transcript"])
+        self.assertIn("[redacted blacklist item]", payload["transcript"])
+        self.assertEqual(payload["security"]["blacklist_hits"], 1)
+        mocked_update.assert_not_called()
+        mocked_open.assert_not_called()
+
+    @mock.patch("speed_of_cinnamon.cli._apply_security_post_processing")
+    @mock.patch("speed_of_cinnamon.cli.post_process_text")
+    @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
+    def test_transcribe_file_runs_security_post_processing_after_local_post_processing(
+        self,
+        mocked_validate: mock.Mock,
+        mocked_post: mock.Mock,
+        mocked_security: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            call_order: list[str] = []
+
+            def security_side_effect(text: str) -> tuple[str, dict[str, object]]:
+                call_order.append("security")
+                return ("nach", {"blacklist_added": [], "blacklist_opened": False, "redacted_words": [], "blacklist_hits": 0})
+
+            def post_process_side_effect(*args: object, **kwargs: object) -> str:
+                call_order.append("post")
+                return "nach"
+
+            mocked_security.side_effect = security_side_effect
+            mocked_post.side_effect = post_process_side_effect
+            mocked_validate.return_value = audio
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="roher text"),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--post-process-backend",
+                    "command",
+                    "--post-process-command",
+                    "cat",
+                    "--json",
+                ])
+        self.assertEqual(code, 0)
+        self.assertEqual(call_order, ["post", "security"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["transcript"], "nach")
+
+    def test_is_remote_post_process_backend(self) -> None:
+        self.assertTrue(cli._is_remote_post_process_backend("openai-compatible"))
+        self.assertTrue(cli._is_remote_post_process_backend("openai"))
+        self.assertFalse(cli._is_remote_post_process_backend("command"))
 
     @mock.patch("speed_of_cinnamon.cli.apply_security_mode")
     @mock.patch("speed_of_cinnamon.cli.apply_blacklist_mode", return_value=("Hallo geheim", 1))
@@ -2375,6 +2564,32 @@ class CliTest(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 1)
         self.assertIn("failed to write JSON output", payload["error"])
+
+    def test_diagnostics_save_rejects_symlink_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            real = root / "real"
+            real.mkdir()
+            link = root / "link"
+            link.symlink_to(real, target_is_directory=True)
+            output = link / "diagnostics.json"
+            state_file = root / "state.json"
+            StateStore(state_file).write(RecordingState(status="done", transcript="private words"))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "diagnostics",
+                    "--state-file",
+                    str(state_file),
+                    "--output",
+                    str(output),
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 1)
+        self.assertIn("diagnostics output must not pass through a symlink", payload["error"])
+        self.assertFalse((real / "diagnostics.json").exists())
 
     def test_diagnostics_rejects_overlong_output_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

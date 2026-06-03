@@ -209,7 +209,7 @@ class StateStore:
         with self._locked():
             self._write_unlocked(state)
 
-    def _write_unlocked(self, state: RecordingState) -> None:
+    def _write_unlocked(self, state: RecordingState) -> RecordingState:
         payload = asdict(state)
         payload["updated_at"] = now_iso()
         normalized_payload = StateStore._normalize_state_data(payload)
@@ -224,6 +224,7 @@ class StateStore:
             )
         except OSError as exc:
             raise RuntimeError(f"failed to persist state: {self.path}") from exc
+        return RecordingState(**normalized_payload)
 
     def update(self, **values: Any) -> RecordingState:
         with self._locked():
@@ -232,8 +233,7 @@ class StateStore:
             for key, value in values.items():
                 if key in state_fields:
                     setattr(state, key, value)
-            self._write_unlocked(state)
-            return self.read()
+            return self._write_unlocked(state)
 
 
 def process_is_alive(pid: int | None) -> bool:

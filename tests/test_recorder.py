@@ -145,6 +145,18 @@ class RecorderTest(unittest.TestCase):
         self.assertLess(frame_count, 3200)
         self.assertEqual(first_frame, 12000)
 
+    def test_trim_recording_leading_silence_rejects_symlink_recording_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            real_root = Path(tmp) / "real"
+            link_root = Path(tmp) / "link"
+            real_root.mkdir()
+            link_root.symlink_to(real_root, target_is_directory=True)
+            audio = link_root / "sample.wav"
+            self._write_wav(audio, [0, 12000, 0, 12000])
+
+            with self.assertRaisesRegex(RecorderError, "recording artifact path must not pass through a symlink"):
+                trim_recording_leading_silence(audio, 0.1)
+
     def test_trim_recording_silence_converts_to_flac(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
@@ -476,11 +488,17 @@ class RecorderTest(unittest.TestCase):
         fake_log_file = mock.Mock()
         fake_log_file.fileno.return_value = 11
 
-        def fake_os_open(path: Path, flags: int, mode: int = 0o600) -> int:
-            captured["path"] = path
-            captured["flags"] = flags
-            captured["mode"] = mode
-            return 11
+        next_fd = 10
+
+        def fake_os_open(path: Path | str, flags: int, mode: int = 0o600, **kwargs: object) -> int:
+            nonlocal next_fd
+            next_fd += 1
+            if path == log_path.name:
+                captured["path"] = path
+                captured["flags"] = flags
+                captured["mode"] = mode
+                captured["dir_fd"] = kwargs.get("dir_fd")
+            return next_fd
 
         with tempfile.TemporaryDirectory() as tmp:
             log_path = Path(tmp) / "session.log"
@@ -488,6 +506,7 @@ class RecorderTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
                 mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
                 mock.patch("speed_of_cinnamon.recorder.os.open", side_effect=fake_os_open),
+                mock.patch("speed_of_cinnamon.recorder.os.close"),
                 mock.patch("speed_of_cinnamon.recorder.os.fdopen", return_value=fake_log_file),
                 mock.patch("speed_of_cinnamon.recorder.os.fchmod"),
                 mock.patch("speed_of_cinnamon.recorder.subprocess.Popen") as mocked_popen,
@@ -495,8 +514,9 @@ class RecorderTest(unittest.TestCase):
                 mocked_popen.return_value = mock.Mock()
                 start_recorder(command, log_path)
 
-        self.assertEqual(captured["path"], log_path)
+        self.assertEqual(captured["path"], log_path.name)
         self.assertEqual(captured["mode"], 0o600)
+        self.assertIsInstance(captured["dir_fd"], int)
         self.assertTrue(captured["flags"] & os.O_APPEND)
         self.assertTrue(captured["flags"] & os.O_CREAT)
         self.assertTrue(captured["flags"] & os.O_NOFOLLOW)
@@ -518,6 +538,25 @@ class RecorderTest(unittest.TestCase):
                     start_recorder(command, log_path)
 
             self.assertEqual(target.read_bytes(), b"foreign-data")
+
+    def test_start_recorder_rejects_symlink_log_parent_after_validation(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            real = base / "foreign"
+            real.mkdir()
+            link = base / "logs"
+            link.symlink_to(real, target_is_directory=True)
+            log_path = link / "session.log"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.validate_recording_path", return_value=log_path),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+            ):
+                with self.assertRaisesRegex(RecorderError, "failed to open recorder log file"):
+                    start_recorder(command, log_path)
+
+            self.assertFalse((real / "session.log").exists())
 
     def test_start_recorder_rejects_non_text_argument(self) -> None:
         command = RecorderCommand(name="noop", argv=["true", 1])  # type: ignore[list-item]

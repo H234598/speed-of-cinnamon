@@ -677,6 +677,23 @@ class OutputTest(unittest.TestCase):
 
         self.assertEqual(calls, ["paste"])
 
+    def test_insert_text_reads_persistent_clipboard_dedupe_state_once(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "")),
+            mock.patch("speed_of_cinnamon.output.set_clipboard"),
+            mock.patch("speed_of_cinnamon.output.paste_from_clipboard"),
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch(
+                "speed_of_cinnamon.output._read_trusted_clipboard_dedup_state",
+                wraps=output_module._read_trusted_clipboard_dedup_state,
+            ) as mocked_read,
+        ):
+            self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
+
+        self.assertEqual(mocked_read.call_count, 1)
+
     def test_insert_text_rolls_back_duplicate_state_when_paste_fails(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -794,6 +811,8 @@ class OutputTest(unittest.TestCase):
                 insert_text("new text", "clipboard-paste")
 
         self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["new text", "previous"])
+        self.assertEqual(output_module._LAST_CLIPBOARD_TEXT, "new text")
+        self.assertEqual(output_module._LAST_CLIPBOARD_METHOD, "clipboard-paste")
 
     def test_insert_text_clipboard_rolls_back_duplicate_state_when_set_clipboard_fails(self) -> None:
         with (
@@ -851,6 +870,10 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output._which", side_effect=lambda command: "/usr/bin/xclip" if command == "xclip" else None),
             mock.patch("speed_of_cinnamon.output._run_stdout", return_value=""),
         ):
+            self.assertTrue(output_module._clipboard_has_non_text_payload())
+
+    def test_clipboard_non_text_detection_fails_closed_without_target_helpers(self) -> None:
+        with mock.patch("speed_of_cinnamon.output._which", return_value=None):
             self.assertTrue(output_module._clipboard_has_non_text_payload())
 
     def test_insert_text_fails_closed_when_dedupe_state_is_malformed(self) -> None:

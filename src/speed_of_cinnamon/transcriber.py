@@ -25,7 +25,13 @@ from .postprocessor import (
     MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
     MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
 )
-from .path_safety import assert_no_symlink_ancestors, open_file_without_following_symlinks, read_text_without_following_symlinks
+from .path_safety import (
+    assert_no_symlink_ancestors,
+    open_file_without_following_symlinks,
+    read_text_without_following_symlinks,
+    write_bytes_atomically_without_following_symlinks,
+    write_text_atomically_without_following_symlinks,
+)
 
 
 TRANSCRIBE_COMMAND_TIMEOUT_SECONDS = 900
@@ -201,24 +207,9 @@ def _write_text_atomic(path: Path, text: str) -> None:
         raise TranscriptionError("path must be a Path")
     if isinstance(text, bool) or not isinstance(text, str):
         raise TranscriptionError("text must be text")
-    assert_no_symlink_ancestors(path, field_name="transcript path")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path: Path | None = None
     try:
-        with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
-            try:
-                os.fchmod(handle.fileno(), 0o600)
-            except OSError:
-                pass
-            tmp_path = Path(handle.name)
-            handle.write(text)
-        os.replace(tmp_path, path)
-    except OSError as exc:
-        if tmp_path is not None:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+        write_text_atomically_without_following_symlinks(path, text, field_name="transcript path")
+    except (OSError, RuntimeError) as exc:
         raise TranscriptionError(f"failed to write transcript file: {path}") from exc
 
 
@@ -275,27 +266,13 @@ def _snapshot_existing_file(path: Path) -> bytes | None:
 
 
 def _restore_existing_file_snapshot(path: Path, snapshot: bytes) -> None:
-    tmp_path: Path | None = None
     try:
-        try:
-            assert_no_symlink_ancestors(path, field_name="existing transcript path")
-        except RuntimeError as exc:
-            raise TranscriptionError(str(exc)) from exc
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile("wb", delete=False, dir=path.parent, prefix=f".{path.name}.") as handle:
-            tmp_path = Path(handle.name)
-            try:
-                os.fchmod(handle.fileno(), 0o600)
-            except OSError:
-                pass
-            handle.write(snapshot)
-        os.replace(tmp_path, path)
-    except OSError as exc:
-        if tmp_path is not None:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+        write_bytes_atomically_without_following_symlinks(
+            path,
+            snapshot,
+            field_name="existing transcript path",
+        )
+    except (OSError, RuntimeError) as exc:
         raise TranscriptionError(f"failed to restore existing transcript file: {path}") from exc
 
 
@@ -579,7 +556,26 @@ def transcribe_with_template(
     personal_context: str = "",
     vocabulary: str = "",
 ) -> str:
+    should_read_text_file = "{text}" in template
+    existing_snapshot = (
+        _snapshot_existing_file(text_path)
+        if should_read_text_file and text_path.exists()
+        else None
+    )
     command = render_command_template(template, audio_path, language, text_path, personal_context, vocabulary)
+    def restore_text_path() -> None:
+        if not should_read_text_file:
+            return
+        if existing_snapshot is not None:
+            _restore_existing_file_snapshot(text_path, existing_snapshot)
+            return
+        try:
+            text_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
     try:
         segments = split_command_chain(command, label="transcriber")
         output = run_command_chain(
@@ -592,6 +588,7 @@ def transcribe_with_template(
             vocabulary=vocabulary,
         )
     except CommandChainError as exc:
+        restore_text_path()
         message = str(exc)
         if message.startswith("invalid transcriber") or message.startswith("unsupported shell operator in transcriber"):
             raise TranscriptionError(message) from exc
@@ -626,10 +623,14 @@ def transcribe_with_template(
             raise TranscriptionError(message) from exc
         raise TranscriptionError(f"transcriber command failed: {message}") from exc
 
-    if "{text}" in template and text_path.exists():
-        output = _read_text_file(text_path)
-        return _assert_text_length(output.strip(), field_name="transcript file text")
-    return _assert_text_length(output, field_name="transcript")
+    try:
+        if should_read_text_file and text_path.exists():
+            output = _read_text_file(text_path)
+            return _assert_text_length(output.strip(), field_name="transcript file text")
+        return _assert_text_length(output, field_name="transcript")
+    except Exception:
+        restore_text_path()
+        raise
 
 
 def transcribe_with_openai_whisper(
@@ -663,12 +664,11 @@ def transcribe_with_openai_whisper(
                 text = _read_text_file(generated).strip()
                 _assert_text_length(text, field_name="transcript")
             except Exception:
-                if not write_transcript:
-                    if existing_snapshot is not None:
-                        _restore_existing_file_snapshot(generated, existing_snapshot)
+                if existing_snapshot is not None:
+                    _restore_existing_file_snapshot(generated, existing_snapshot)
+                else:
                     try:
-                        if existing_snapshot is None:
-                            generated.unlink()
+                        generated.unlink()
                     except OSError:
                         pass
                 raise
@@ -780,12 +780,11 @@ def transcribe_with_whisper_cpp(
                 text = _read_text_file(generated_path).strip()
                 _assert_text_length(text, field_name="transcript")
             except Exception:
-                if not write_transcript:
+                if existing_snapshot is not None:
+                    _restore_existing_file_snapshot(generated_path, existing_snapshot)
+                else:
                     try:
-                        if existing_snapshot is not None:
-                            _restore_existing_file_snapshot(generated_path, existing_snapshot)
-                        else:
-                            generated_path.unlink()
+                        generated_path.unlink()
                     except OSError:
                         pass
                 raise

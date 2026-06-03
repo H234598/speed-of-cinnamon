@@ -200,27 +200,40 @@ def _clipboard_dedup_state_path() -> Path:
 
 
 def _read_clipboard_dedup_state() -> tuple[str, float]:
+    trusted, snapshot = _read_trusted_clipboard_dedup_state()
+    if not trusted:
+        return "", 0.0
+    return snapshot
+
+
+def _read_trusted_clipboard_dedup_state() -> tuple[bool, tuple[str, float]]:
     try:
         path = _clipboard_dedup_state_path()
     except RuntimeError:
-        return "", 0.0
-    if not path.exists():
-        return "", 0.0
+        return False, ("", 0.0)
+    if not path.exists() and not path.is_symlink():
+        return True, ("", 0.0)
     try:
-        payload = json.loads(read_text_without_following_symlinks(path, field_name="clipboard dedupe state"))
-    except (OSError, ValueError):
-        return "", 0.0
+        raw = read_text_without_following_symlinks(path, field_name="clipboard dedupe state")
+    except FileNotFoundError:
+        return True, ("", 0.0)
+    except OSError:
+        return False, ("", 0.0)
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return False, ("", 0.0)
     if not isinstance(payload, dict):
-        return "", 0.0
+        return False, ("", 0.0)
     text_value = payload.get("text")
     at_value = payload.get("at")
     if not isinstance(text_value, str) or text_value is None or isinstance(text_value, bool):
-        return "", 0.0
+        return False, ("", 0.0)
     if not isinstance(at_value, (int, float)) or isinstance(at_value, bool):
-        return "", 0.0
+        return False, ("", 0.0)
     if not text_value:
-        return "", 0.0
-    return text_value, float(at_value)
+        return False, ("", 0.0)
+    return True, (text_value, float(at_value))
 
 
 def _write_clipboard_dedup_state(text: str, at: float) -> bool:
@@ -708,7 +721,7 @@ def _clipboard_has_non_text_payload() -> bool:
     if wl_paste:
         targets = _run_stdout(["wl-paste", "--list-types"], resolved_command=wl_paste)
         return _clipboard_targets_contain_non_text_payload(targets)
-    return False
+    return True
 
 
 def paste_from_clipboard() -> None:
@@ -760,34 +773,17 @@ def type_text(text: str, delay_ms: int) -> None:
 
 
 def _clipboard_dedup_state_is_untrusted() -> bool:
-    try:
-        path = _clipboard_dedup_state_path()
-    except RuntimeError:
-        return True
-    if not path.exists() and not path.is_symlink():
-        return False
-    try:
-        raw = read_text_without_following_symlinks(path, field_name="clipboard dedupe state")
-    except FileNotFoundError:
-        return False
-    except OSError:
-        return True
-    try:
-        payload = json.loads(raw)
-    except (TypeError, ValueError):
-        return True
-    if not isinstance(payload, dict):
-        return True
-    text_value = payload.get("text")
-    at_value = payload.get("at")
-    if not isinstance(text_value, str) or isinstance(text_value, bool) or not text_value:
-        return True
-    if not isinstance(at_value, (int, float)) or isinstance(at_value, bool):
-        return True
-    return False
+    trusted, _snapshot = _read_trusted_clipboard_dedup_state()
+    return not trusted
 
 
-def _should_skip_clipboard_duplicate(text: str, method: str) -> bool:
+def _should_skip_clipboard_duplicate(
+    text: str,
+    method: str,
+    *,
+    persistent_snapshot: tuple[str, float] | None = None,
+    persistent_state_trusted: bool | None = None,
+) -> bool:
     global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
     if not isinstance(text, str) or isinstance(text, bool):
         raise OutputError("text must be text")
@@ -797,9 +793,11 @@ def _should_skip_clipboard_duplicate(text: str, method: str) -> bool:
     if not cleaned:
         return False
     now_wall = time.time()
-    if _clipboard_dedup_state_is_untrusted():
+    if persistent_snapshot is None or persistent_state_trusted is None:
+        persistent_state_trusted, persistent_snapshot = _read_trusted_clipboard_dedup_state()
+    if not persistent_state_trusted:
         return True
-    cached_text, cached_at = _read_clipboard_dedup_state()
+    cached_text, cached_at = persistent_snapshot
     if cleaned == cached_text and 0 <= (now_wall - cached_at) <= MAX_DUPLICATE_TEXT_SECONDS:
         return True
     now = time.monotonic()
@@ -812,17 +810,32 @@ def _should_skip_clipboard_duplicate(text: str, method: str) -> bool:
     return False
 
 
-def _begin_clipboard_insertion(text: str, method: str) -> Path | None:
-    if _should_skip_clipboard_duplicate(text, method):
+def _should_skip_clipboard_memory_duplicate(text: str, method: str) -> bool:
+    return _should_skip_clipboard_duplicate(
+        text,
+        method,
+        persistent_snapshot=("", 0.0),
+        persistent_state_trusted=True,
+    )
+
+
+def _begin_clipboard_insertion(text: str, method: str) -> tuple[Path, tuple[str, float]] | None:
+    if _should_skip_clipboard_memory_duplicate(text, method):
         return None
     lock_path = _acquire_clipboard_dedup_lock()
     if lock_path is None:
         return None
     try:
-        if _should_skip_clipboard_duplicate(text, method):
+        persistent_state_trusted, persistent_snapshot = _read_trusted_clipboard_dedup_state()
+        if _should_skip_clipboard_duplicate(
+            text,
+            method,
+            persistent_snapshot=persistent_snapshot,
+            persistent_state_trusted=persistent_state_trusted,
+        ):
             _release_clipboard_dedup_lock(lock_path)
             return None
-        return lock_path
+        return lock_path, persistent_snapshot
     except Exception:
         _release_clipboard_dedup_lock(lock_path)
         raise
@@ -835,15 +848,15 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
     if method == "none":
         return False
     if method == "clipboard":
-        lock_path = _begin_clipboard_insertion(text, method)
-        if lock_path is None:
+        insertion = _begin_clipboard_insertion(text, method)
+        if insertion is None:
             return False
+        lock_path, persistent_snapshot = insertion
         snapshot = _reserve_clipboard_insertion_memory(text, method)
         if snapshot is None:
             _release_clipboard_dedup_lock(lock_path)
             return False
         committed = False
-        persistent_snapshot = _read_clipboard_dedup_state()
         try:
             if not _record_clipboard_insertion(text, method):
                 return False
@@ -856,15 +869,15 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
                 _restore_clipboard_dedup_state(persistent_snapshot)
             _release_clipboard_dedup_lock(lock_path)
     if method == "clipboard-paste":
-        lock_path = _begin_clipboard_insertion(text, method)
-        if lock_path is None:
+        insertion = _begin_clipboard_insertion(text, method)
+        if insertion is None:
             return False
+        lock_path, persistent_snapshot = insertion
         snapshot = _reserve_clipboard_insertion_memory(text, method)
         if snapshot is None:
             _release_clipboard_dedup_lock(lock_path)
             return False
         committed = False
-        persistent_snapshot = _read_clipboard_dedup_state()
         clipboard_snapshot_available = False
         clipboard_snapshot = ""
         try:
@@ -887,8 +900,9 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
                         set_clipboard(clipboard_snapshot)
                     except OutputError as exc:
                         rollback_error = exc
-                _restore_clipboard_insertion_snapshot(snapshot)
-                _restore_clipboard_dedup_state(persistent_snapshot)
+                if rollback_error is None:
+                    _restore_clipboard_insertion_snapshot(snapshot)
+                    _restore_clipboard_dedup_state(persistent_snapshot)
             _release_clipboard_dedup_lock(lock_path)
             if rollback_error is not None:
                 raise OutputError("failed to restore previous clipboard after paste failure") from rollback_error

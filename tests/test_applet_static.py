@@ -103,6 +103,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("OPENAI_COMPATIBLE_API_KEY=", source)
         self.assertIn("_writeExternalApiEnvFile: function()", source)
         self.assertIn("GLib.file_set_contents(path, this._externalApiEnvContent());", source)
+        self.assertIn('this._setStatus("error", _("External API config file could not be written"), this.lastTranscript);', source)
         self.assertIn("_migrateExternalApiEnvFile: function(path)", source)
         self.assertIn('"OPENAI_COMPATIBLE_URL=" + LEGACY_OPENAI_COMPATIBLE_URL', source)
         self.assertIn('migrated.replace("OPENAI_COMPATIBLE_MODEL=", "OPENAI_COMPATIBLE_STT_MODEL=")', source)
@@ -749,6 +750,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("const MAX_TEXT_INSERT_CHARS = 120000;", source)
         self.assertIn("const MAX_TYPE_COMMAND_CHARS = 4000;", source)
         self.assertIn("const MAX_SPAWN_JSON_BYTES = 262144;", source)
+        self.assertIn("const MAX_SPAWN_TEXT_BYTES = 262144;", source)
         self.assertIn("const CLI_COMMAND_TIMEOUT_MS = 300000;", source)
         self.assertIn("_coerceSpawnArgs: function(args) {", source)
         self.assertIn("if (!Array.isArray(args)) {", source)
@@ -765,6 +767,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_isAllowedCliCommand: function(command) {", source)
         self.assertIn("_parseSpawnOutput: function(stdout) {", source)
         self.assertIn("if (output.length > MAX_SPAWN_JSON_BYTES) {", source)
+        self.assertIn("if (output.length > MAX_SPAWN_TEXT_BYTES) {", source)
         self.assertIn("if (!parsed || typeof parsed !== \"object\" || Array.isArray(parsed)) {", source)
         self.assertIn("let callbackFn = typeof callback === \"function\" ? callback : function() {};", source)
         self.assertIn("let done = false;", source)
@@ -983,7 +986,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('["wtype", "-M", "ctrl", "v", "-m", "ctrl"]', source)
         self.assertIn('if (sendEnter) {', source)
         self.assertIn('followUpArgs = ["wtype", "-k", "Return"];', source)
-        self.assertIn("this._spawnKeyboardAfterFocus(args, followUpArgs);", source)
+        self.assertIn("return this._spawnKeyboardAfterFocus(args, followUpArgs);", source)
+        self.assertIn("return false;", source)
+        self.assertIn("return true;", source)
 
     def test_applet_checks_clipboard_targets_before_overwriting_clipboard_for_auto_paste(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -996,17 +1001,27 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (String(targets || "").trim() === "") {', source)
         self.assertIn("let nonTextTargets = {", source)
         self.assertIn('"application/x-qt-image": true', source)
+        self.assertIn('"text/html": true', source)
+        self.assertIn('"text/rtf": true', source)
         self.assertIn('"x-special/gnome-copied-files": true', source)
         self.assertIn('target.indexOf("text/") === 0', source)
         self.assertIn('target.indexOf("image/") === 0', source)
         self.assertIn('target.indexOf("audio/") === 0', source)
         self.assertIn('target.indexOf("video/") === 0', source)
-        self.assertIn("return false;", source)
-        self.assertIn('if (method === "clipboard-paste" && this._clipboardHasNonTextPayload()) {', source)
+        self.assertIn(
+            '      return true;\n    }\n    return false;\n  },\n\n  _clipboardHasNonTextPayload',
+            source,
+        )
+        self.assertIn('if (method === "clipboard-paste" && canPasteWithKeyboard && this._clipboardHasNonTextPayload()) {', source)
         self.assertIn('this._setStatus("error", _("Clipboard contains non-text data; skipping automatic paste"), transcript);', source)
         self.assertIn('this._clipboardTargetList("xclip", ["-selection", "clipboard", "-t", "TARGETS", "-out"])', source)
         self.assertIn('this._clipboardTargetList("xsel", ["--clipboard", "--output", "--target", "TARGETS"])', source)
         self.assertIn('this._clipboardTargetList("wl-paste", ["--list-types"])', source)
+        self.assertIn(
+            'this._clipboardTargetList("wl-paste", ["--list-types"]);\n      return this._clipboardTargetsContainNonTextPayload(targets);\n    }\n    return true;',
+            source,
+        )
+        self.assertIn('Copied to clipboard; automatic paste could not be started', source)
 
     def test_applet_blocks_auto_paste_when_clipboard_targets_unknown_or_empty(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
