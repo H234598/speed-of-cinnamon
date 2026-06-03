@@ -1,5 +1,5 @@
 Name:           speed-of-cinnamon
-Version:        0.1.31
+Version:        0.1.32
 Release:        2%{?dist}
 Summary:        Cinnamon-native voice typing helper for Fedora Cinnamon
 
