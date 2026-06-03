@@ -3953,10 +3953,119 @@ MyApplet.prototype = {
     return false;
   },
 
+  _clipboardTargetList: function(program, args) {
+    args = args || [];
+    let command = [program];
+    for (let i = 0; i < args.length; i++) {
+      command.push(args[i]);
+    }
+    let result;
+    try {
+      let normalizedArgs = this._coerceSpawnArgs(command);
+      result = GLib.spawn_sync(
+        null,
+        normalizedArgs,
+        null,
+        GLib.SpawnFlags.SEARCH_PATH | GLib.SpawnFlags.STDOUT_PIPE | GLib.SpawnFlags.STDERR_PIPE,
+        null
+      );
+      if (!Array.isArray(result) || result.length < 4 || !result[0] || result[3] !== 0) {
+        return null;
+      }
+      return ByteArray.toString(result[1] || []);
+    } catch (err) {
+      return null;
+    }
+  },
+
+  _clipboardTargetsContainNonTextPayload: function(targets) {
+    if (targets === null || targets === undefined) {
+      return false;
+    }
+    if (String(targets || "").trim() === "") {
+      return false;
+    }
+    let ignored = {
+      targets: true,
+      multiple: true,
+      timestamp: true,
+      save_targets: true,
+    };
+    let textTargets = {
+      "compound_text": true,
+      "text/plain; charset=utf-8": true,
+      "text/plain; charset=utf8": true,
+      text: true,
+      string: true,
+      utf8_string: true,
+      "text/plain": true,
+      "text/plain;charset=utf-8": true,
+      "text/plain;charset=utf8": true,
+    };
+    let nonTextTargets = {
+      "application/x-qt-image": true,
+      "x-special/gnome-copied-files": true,
+    };
+    let lines = String(targets || "").split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      let target = String(lines[i]).trim().toLowerCase();
+      if (!target || ignored[target]) {
+        continue;
+      }
+      if (textTargets[target] || target.indexOf("text/") === 0) {
+        continue;
+      }
+      if (
+        nonTextTargets[target]
+        || target.indexOf("image/") === 0
+        || target.indexOf("audio/") === 0
+        || target.indexOf("video/") === 0
+      ) {
+        return true;
+      }
+    }
+    return false;
+  },
+
+  _clipboardHasNonTextPayload: function() {
+    if (GLib.find_program_in_path("xclip")) {
+      let targets = this._clipboardTargetList("xclip", ["-selection", "clipboard", "-t", "TARGETS", "-out"]);
+      return this._clipboardTargetsContainNonTextPayload(targets);
+    }
+    if (GLib.find_program_in_path("xsel")) {
+      let targets = this._clipboardTargetList("xsel", ["--clipboard", "--output", "--target", "TARGETS"]);
+      return this._clipboardTargetsContainNonTextPayload(targets);
+    }
+    if (GLib.find_program_in_path("wl-paste")) {
+      let targets = this._clipboardTargetList("wl-paste", ["--list-types"]);
+      return this._clipboardTargetsContainNonTextPayload(targets);
+    }
+    return false;
+  },
+
   _pasteClipboardAfterFocus: function(sendEnter) {
-    let pasteKey = this._isTerminalTargetWindow() ? "ctrl+shift+v" : "ctrl+v";
-    let args = ["xdotool", "key", "--clearmodifiers", pasteKey];
-    let followUpArgs = sendEnter ? ["xdotool", "key", "--clearmodifiers", "Return"] : null;
+    let terminalPaste = this._isTerminalTargetWindow();
+    let hasXdotool = GLib.find_program_in_path("xdotool");
+    let hasWtype = GLib.find_program_in_path("wtype");
+    let args = null;
+    let followUpArgs = null;
+    if (hasXdotool) {
+      let pasteKey = terminalPaste ? "ctrl+shift+v" : "ctrl+v";
+      args = ["xdotool", "key", "--clearmodifiers", pasteKey];
+      if (sendEnter) {
+        followUpArgs = ["xdotool", "key", "--clearmodifiers", "Return"];
+      }
+    } else if (hasWtype) {
+      args = terminalPaste
+        ? ["wtype", "-M", "ctrl", "-M", "shift", "v", "-m", "shift", "-m", "ctrl"]
+        : ["wtype", "-M", "ctrl", "v", "-m", "ctrl"];
+      if (sendEnter) {
+        followUpArgs = ["wtype", "-k", "Return"];
+      }
+    }
+    if (!args) {
+      return;
+    }
     this._spawnKeyboardAfterFocus(args, followUpArgs);
   },
 
@@ -4132,7 +4241,8 @@ MyApplet.prototype = {
   _insertTranscriptText: function(transcript) {
     let method = this._normalizeOutputMethod(this.insertMethod);
     let autoPasteEnter = this._windowTitleMatchesAutoPaste();
-    let submitWithReturn = autoPasteEnter && method === "clipboard-paste" && GLib.find_program_in_path("xdotool");
+    let canPasteWithKeyboard = GLib.find_program_in_path("xdotool") || GLib.find_program_in_path("wtype");
+    let submitWithReturn = autoPasteEnter && method === "clipboard-paste" && canPasteWithKeyboard;
     let text = this._preparedTranscriptText(transcript, submitWithReturn);
     if (method === "none") {
       this._setStatus("done", _("Insertion disabled"), transcript);
@@ -4158,12 +4268,16 @@ MyApplet.prototype = {
       }
       return false;
     }
+    if (method === "clipboard-paste" && this._clipboardHasNonTextPayload()) {
+      this._setStatus("error", _("Clipboard contains non-text data; skipping automatic paste"), transcript);
+      return false;
+    }
     this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
     if (method === "clipboard") {
       this._setStatus("done", _("Copied to clipboard"), transcript);
       return true;
     }
-    if (GLib.find_program_in_path("xdotool")) {
+    if (canPasteWithKeyboard) {
       let restored = this._restoreTargetWindowForPaste();
       if (!restored) {
         this._setStatus("done", _("Copied to clipboard; target window unavailable for automatic paste"), transcript);
@@ -4173,7 +4287,7 @@ MyApplet.prototype = {
       this._setStatus("done", restored ? _("Copied and pasted into target window") : _("Copied and pasted"), transcript);
       return true;
     } else {
-      this._setStatus("done", _("Copied to clipboard; install xdotool for automatic paste"), transcript);
+      this._setStatus("done", _("Copied to clipboard; install xdotool or wtype for automatic paste"), transcript);
       return true;
     }
   },

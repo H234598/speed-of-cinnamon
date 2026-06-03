@@ -25,7 +25,7 @@ from .postprocessor import (
     MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
     MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
 )
-from .path_safety import assert_no_symlink_ancestors, read_text_without_following_symlinks
+from .path_safety import assert_no_symlink_ancestors, open_file_without_following_symlinks, read_text_without_following_symlinks
 
 
 TRANSCRIBE_COMMAND_TIMEOUT_SECONDS = 900
@@ -251,6 +251,52 @@ def _read_text_file(path: Path) -> str:
     if _contains_escaped_null(text):
         raise TranscriptionError(f"failed to read generated transcript: {path}")
     return text
+
+
+def _snapshot_existing_file(path: Path) -> bytes | None:
+    try:
+        assert_no_symlink_ancestors(path, field_name="existing transcript path")
+    except RuntimeError as exc:
+        raise TranscriptionError(str(exc)) from exc
+    if not path.exists():
+        return None
+    try:
+        fd = open_file_without_following_symlinks(path, os.O_RDONLY, field_name="existing transcript path")
+    except OSError as exc:
+        raise TranscriptionError(f"failed to snapshot existing transcript file: {path}") from exc
+    try:
+        with os.fdopen(fd, "rb") as handle:
+            data = handle.read(MAX_TRANSCRIPT_TEXT_CHARS + 1)
+    except OSError as exc:
+        raise TranscriptionError(f"failed to snapshot existing transcript file: {path}") from exc
+    if len(data) > MAX_TRANSCRIPT_TEXT_CHARS:
+        raise TranscriptionError(f"existing transcript file is too large: {path}")
+    return data
+
+
+def _restore_existing_file_snapshot(path: Path, snapshot: bytes) -> None:
+    tmp_path: Path | None = None
+    try:
+        try:
+            assert_no_symlink_ancestors(path, field_name="existing transcript path")
+        except RuntimeError as exc:
+            raise TranscriptionError(str(exc)) from exc
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("wb", delete=False, dir=path.parent, prefix=f".{path.name}.") as handle:
+            tmp_path = Path(handle.name)
+            try:
+                os.fchmod(handle.fileno(), 0o600)
+            except OSError:
+                pass
+            handle.write(snapshot)
+        os.replace(tmp_path, path)
+    except OSError as exc:
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+        raise TranscriptionError(f"failed to restore existing transcript file: {path}") from exc
 
 
 def _read_response_text(response: object, max_bytes: int = MAX_TRANSCRIBER_JSON_BYTES) -> str:
@@ -593,6 +639,8 @@ def transcribe_with_openai_whisper(
     except TranscriptionError as exc:
         raise TranscriptionError("OpenAI whisper command is not installed") from exc
     output_dir = text_path.parent
+    generated = output_dir / f"{audio_path.stem}.txt"
+    existing_snapshot = _snapshot_existing_file(generated) if generated == text_path else None
     _run_limited_process(
         [
             "whisper",
@@ -605,7 +653,6 @@ def transcribe_with_openai_whisper(
             str(output_dir),
         ],
     )
-    generated = output_dir / f"{audio_path.stem}.txt"
     if generated.exists():
         if generated == text_path:
             try:
@@ -613,16 +660,22 @@ def transcribe_with_openai_whisper(
                 _assert_text_length(text, field_name="transcript")
             except Exception:
                 if not write_transcript:
+                    if existing_snapshot is not None:
+                        _restore_existing_file_snapshot(generated, existing_snapshot)
                     try:
-                        generated.unlink()
+                        if existing_snapshot is None:
+                            generated.unlink()
                     except OSError:
                         pass
                 raise
             if not write_transcript:
-                try:
-                    generated.unlink()
-                except OSError:
-                    pass
+                if existing_snapshot is not None:
+                    _restore_existing_file_snapshot(generated, existing_snapshot)
+                else:
+                    try:
+                        generated.unlink()
+                    except OSError:
+                        pass
             return text
         primary_error: BaseException | None = None
         try:
@@ -715,6 +768,7 @@ def transcribe_with_whisper_cpp(
         raise TranscriptionError("whisper.cpp command is not installed")
 
     invocation, generated_path = _whisper_cpp_invocation(command, audio_path, language, text_path, model_path)
+    existing_snapshot = _snapshot_existing_file(text_path) if generated_path == text_path else None
     _run_limited_process(invocation)
     if generated_path.exists():
         if generated_path == text_path:
@@ -724,15 +778,21 @@ def transcribe_with_whisper_cpp(
             except Exception:
                 if not write_transcript:
                     try:
-                        generated_path.unlink()
+                        if existing_snapshot is not None:
+                            _restore_existing_file_snapshot(generated_path, existing_snapshot)
+                        else:
+                            generated_path.unlink()
                     except OSError:
                         pass
                 raise
             if not write_transcript:
-                try:
-                    generated_path.unlink()
-                except OSError:
-                    pass
+                if existing_snapshot is not None:
+                    _restore_existing_file_snapshot(generated_path, existing_snapshot)
+                else:
+                    try:
+                        generated_path.unlink()
+                    except OSError:
+                        pass
             return text
         primary_error: BaseException | None = None
         try:

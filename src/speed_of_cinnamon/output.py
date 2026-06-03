@@ -10,6 +10,7 @@ import os
 import time
 from pathlib import Path
 
+from .app_logging import log_event
 from .path_safety import assert_no_symlink_ancestors, read_text_without_following_symlinks
 from .paths import state_dir
 
@@ -711,18 +712,24 @@ def _clipboard_has_non_text_payload() -> bool:
 
 
 def paste_from_clipboard() -> None:
+    xdotool_error: OutputError | None = None
     xdotool = _which("xdotool")
     if xdotool:
         paste_key = _active_window_paste_key(xdotool_available=True, xdotool_command=xdotool)
-        _run_with_input(
-            ["xdotool", "key", "--clearmodifiers", paste_key],
-            "",
-            timeout=MAX_PASTE_TIMEOUT_SECONDS,
-            resolved_command=xdotool,
-        )
-        return
+        try:
+            _run_with_input(
+                ["xdotool", "key", "--clearmodifiers", paste_key],
+                "",
+                timeout=MAX_PASTE_TIMEOUT_SECONDS,
+                resolved_command=xdotool,
+            )
+            return
+        except OutputError as exc:
+            xdotool_error = exc
     wtype = _which("wtype")
     if wtype:
+        if xdotool_error is not None:
+            log_event("warning", "clipboard_paste_xdotool_failed_falling_back_to_wtype", error=str(xdotool_error))
         _run_with_input(
             ["wtype", "-M", "ctrl", "-M", "shift", "v", "-m", "shift", "-m", "ctrl"],
             "",
@@ -730,7 +737,9 @@ def paste_from_clipboard() -> None:
             resolved_command=wtype,
         )
         return
-    raise OutputError("no keyboard helper found; install xdotool on Cinnamon X11")
+    if xdotool_error is not None:
+        raise xdotool_error
+    raise OutputError("no keyboard helper found; install xdotool or wtype")
 
 
 def type_text(text: str, delay_ms: int) -> None:

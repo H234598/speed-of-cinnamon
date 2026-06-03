@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .paths import ctranslate2_models_dir, models_dir
-from .path_safety import assert_no_symlink_ancestors, read_text_without_following_symlinks
+from .path_safety import assert_no_symlink_ancestors, ensure_directory_without_following_symlinks, read_text_without_following_symlinks
 
 HUGGING_FACE_BASE_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
 TINY_DE_MODEL_URL = "https://huggingface.co/wabisabisocial/whisper-tiny-german-ggml/resolve/main/ggml-tiny-de.bin"
@@ -97,7 +97,10 @@ def _is_valid_cache_entry(entry: Any) -> bool:
 
 def _model_checksum_cache_path() -> Path:
     path = models_dir() / _MODEL_CHECKSUM_CACHE_FILE
-    assert_no_symlink_ancestors(path, field_name="model checksum cache path")
+    try:
+        assert_no_symlink_ancestors(path, field_name="model checksum cache path")
+    except RuntimeError as exc:
+        raise ModelError(str(exc)) from exc
     return path
 
 
@@ -197,7 +200,10 @@ def _prune_model_checksum_cache() -> None:
 
 def _write_model_checksum_cache() -> None:
     cache_path = _model_checksum_cache_path()
-    assert_no_symlink_ancestors(cache_path, field_name="model checksum cache path")
+    try:
+        assert_no_symlink_ancestors(cache_path, field_name="model checksum cache path")
+    except RuntimeError as exc:
+        raise ModelError(str(exc)) from exc
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         rendered = json.dumps(_model_checksum_cache, indent=2, sort_keys=True) + "\n"
@@ -646,7 +652,10 @@ def model_path(model: ModelSpec) -> Path:
         path = ctranslate2_models_dir() / filename
     else:
         path = models_dir() / filename
-    assert_no_symlink_ancestors(path, field_name="model path")
+    try:
+        assert_no_symlink_ancestors(path, field_name="model path")
+    except RuntimeError as exc:
+        raise ModelError(str(exc)) from exc
     return path
 
 
@@ -661,6 +670,40 @@ def _assert_path_within_model_root(path: Path, root: Path, *, field_name: str = 
         raise ModelError("model root must be a path")
     if not path.is_relative_to(root):
         raise ModelError(f"{field_name} is outside the model directory: {path}")
+
+
+def _assert_model_path_for_atomic_replace(path: Path, root: Path, *, field_name: str = "model path") -> None:
+    if path.is_symlink():
+        raise ModelError(f"{field_name} must not be a symlink: {path}")
+    try:
+        assert_no_symlink_ancestors(path, field_name=field_name)
+    except RuntimeError as exc:
+        raise ModelError(str(exc)) from exc
+    _assert_path_within_model_root(path, root, field_name=field_name)
+    if not path.parent.exists() or not path.parent.is_dir():
+        raise ModelError(f"{field_name} parent is not a directory: {path.parent}")
+
+
+def _assert_model_parent_for_atomic_replace(path: Path, root: Path, *, field_name: str = "model path") -> None:
+    try:
+        assert_no_symlink_ancestors(path, field_name=field_name)
+    except RuntimeError as exc:
+        raise ModelError(str(exc)) from exc
+    _assert_path_within_model_root(path, root, field_name=field_name)
+    if path.parent.exists() and not path.parent.is_dir():
+        raise ModelError(f"{field_name} parent is not a directory: {path.parent}")
+
+
+def _ensure_model_parent_directory(path: Path, root: Path, *, field_name: str = "model path") -> None:
+    _assert_model_parent_for_atomic_replace(path, root, field_name=field_name)
+    try:
+        parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name=f"{field_name} parent")
+    except (OSError, RuntimeError) as exc:
+        raise ModelError(f"{field_name} parent is not safe: {path.parent}") from exc
+    try:
+        _assert_model_parent_for_atomic_replace(path, root, field_name=field_name)
+    finally:
+        os.close(parent_fd)
 
 
 def model_download_urls(model: ModelSpec) -> list[tuple[str, str]]:
@@ -811,7 +854,10 @@ def _model_is_verified(model: ModelSpec, path: Path, checksum: str = "") -> bool
 
 
 def _download_url_to_file(url: str, tmp_dir: Path, size_limit: int, model_name: str, *, prefix: str) -> tuple[Path, int]:
-    assert_no_symlink_ancestors(tmp_dir, field_name="model temporary directory")
+    try:
+        assert_no_symlink_ancestors(tmp_dir, field_name="model temporary directory")
+    except RuntimeError as exc:
+        raise ModelError(str(exc)) from exc
     allowed_hosts = {"huggingface.co"}
     allowed_urls = {TINY_DE_MODEL_URL} if model_name == "tiny-de" else None
     url = _assert_download_url(
@@ -857,22 +903,28 @@ def _download_url_to_file(url: str, tmp_dir: Path, size_limit: int, model_name: 
 
 
 def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict[str, object]:
-    assert_no_symlink_ancestors(path, field_name="model path")
     root = _model_root(model)
-    _assert_path_within_model_root(path, root)
+    _assert_model_parent_for_atomic_replace(path, root, field_name="model path")
     if path.exists() and not force:
         status = model_status(model, verify=True)
         if status["verified"]:
             return {**status, "status": "done", "message": f"model already downloaded: {path}"}
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_model_parent_directory(path, root, field_name="model path")
+    _assert_model_path_for_atomic_replace(path, root, field_name="model path")
     tmp_dir = Path(tempfile.mkdtemp(prefix=f".{model.filename}.", dir=path.parent))
-    assert_no_symlink_ancestors(tmp_dir, field_name="model temporary directory")
+    try:
+        assert_no_symlink_ancestors(tmp_dir, field_name="model temporary directory")
+    except RuntimeError as exc:
+        raise ModelError(str(exc)) from exc
     size_limit = _download_size_limit(model)
     if model.files and not model.repo_id:
         raise ModelError(f"model catalog entry {model.name} is missing repo_id for multi-file download")
 
     def _assert_safe_model_directory(target: Path) -> None:
-        assert_no_symlink_ancestors(target, field_name="model path")
+        try:
+            assert_no_symlink_ancestors(target, field_name="model path")
+        except RuntimeError as exc:
+            raise ModelError(str(exc)) from exc
         _assert_path_within_model_root(target, root)
         if not target.parent.exists() or not target.parent.is_dir():
             raise ModelError(f"model path parent is not a directory: {target.parent}")
@@ -886,7 +938,9 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
         downloaded_total = 0
         for filename, url in model_download_urls(model):
             target = tmp_dir / filename
+            _assert_model_parent_for_atomic_replace(target, root, field_name="model file path")
             target.parent.mkdir(parents=True, exist_ok=True)
+            _assert_model_path_for_atomic_replace(target, root, field_name="model file path")
             tmp_path, downloaded = _download_url_to_file(
                 url,
                 target.parent,
@@ -896,6 +950,7 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
             )
             downloaded_total += downloaded
             try:
+                _assert_model_path_for_atomic_replace(target, root, field_name="model file path")
                 os.replace(tmp_path, target)
             except OSError as exc:
                 raise ModelError(f"failed to persist downloaded model file: {target}") from exc
@@ -906,7 +961,11 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
         backup_dir: Path | None = None
         if path.exists():
             backup_dir = path.with_name(f".{path.name}.{secrets.token_hex(8)}.backup")
-            assert_no_symlink_ancestors(backup_dir, field_name="model backup directory")
+            _assert_model_path_for_atomic_replace(path, root, field_name="model path")
+            try:
+                assert_no_symlink_ancestors(backup_dir, field_name="model backup directory")
+            except RuntimeError as exc:
+                raise ModelError(str(exc)) from exc
             _assert_path_within_model_root(backup_dir, root)
             if backup_dir.exists() or backup_dir.is_symlink():
                 raise ModelError(f"model backup path already exists: {backup_dir}")
@@ -916,6 +975,7 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                 raise ModelError(f"failed to prepare existing model directory backup: {path}") from exc
             _assert_safe_model_directory(path)
         try:
+            _assert_model_path_for_atomic_replace(path, root, field_name="model path")
             os.replace(tmp_dir, path)
         except OSError as exc:
             if backup_dir is not None:
@@ -933,7 +993,12 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
             try:
                 _remove_model_backup_path(backup_dir)
             except OSError as cleanup_exc:
-                raise ModelError(f"failed to remove model backup after successful download: {backup_dir}") from cleanup_exc
+                orphan_path = backup_dir.with_name(f"{backup_dir.name}.{secrets.token_hex(8)}.orphan")
+                try:
+                    backup_dir.replace(orphan_path)
+                    _remove_model_backup_path(orphan_path)
+                except OSError:
+                    raise ModelError(f"failed to remove model backup after successful download: {backup_dir}") from cleanup_exc
     except Exception:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise
@@ -959,9 +1024,10 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
     root = _model_root(model)
     if model.files:
         return _download_directory_model(model, path, force)
-    assert_no_symlink_ancestors(path, field_name="model path")
     _assert_path_within_model_root(path, root)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _assert_model_parent_for_atomic_replace(path, root, field_name="model path")
+    _ensure_model_parent_directory(path, root, field_name="model path")
+    _assert_model_path_for_atomic_replace(path, root, field_name="model path")
     if path.exists() and not force:
         status = model_status(model, verify=True)
         if status["verified"]:
@@ -986,6 +1052,7 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
             raise ModelError(f"downloaded checksum mismatch for {model.name}: {checksum}")
         tmp_stat = tmp_path.stat()
         try:
+            _assert_model_path_for_atomic_replace(path, root, field_name="model path")
             if path.exists():
                 _load_model_checksum_cache()
                 cached_entry = _model_checksum_cache.get(str(path))
@@ -993,11 +1060,16 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
                     previous_cache_entry = dict(cached_entry)
                     previous_cache_entry_exists = True
                 backup_path = path.with_name(f".{path.name}.{secrets.token_hex(8)}.backup")
-                assert_no_symlink_ancestors(backup_path, field_name="model backup path")
+                _assert_model_path_for_atomic_replace(backup_path, root, field_name="model backup path")
+                try:
+                    assert_no_symlink_ancestors(backup_path, field_name="model backup path")
+                except RuntimeError as exc:
+                    raise ModelError(str(exc)) from exc
                 _assert_path_within_model_root(backup_path, root)
                 if backup_path.exists() or backup_path.is_symlink():
                     raise ModelError(f"model backup path already exists: {backup_path}")
                 os.replace(path, backup_path)
+            _assert_model_path_for_atomic_replace(path, root, field_name="model path")
             os.replace(tmp_path, path)
             replaced_path = True
             _clear_model_checksum_cache(tmp_path)

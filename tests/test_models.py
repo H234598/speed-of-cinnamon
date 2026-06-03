@@ -646,6 +646,133 @@ class ModelsTest(unittest.TestCase):
         self.assertEqual(payload["checksum"], spec.sha1)
         self.assertIn("already downloaded", second_payload["message"])
 
+    def test_download_model_rejects_target_symlink_before_final_replace(self) -> None:
+        data = b"tiny model"
+        spec = models.ModelSpec(
+            name="test-target-race",
+            filename="ggml-test-target-race.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(data).hexdigest(),
+            description="target symlink race test",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            marker = Path(tmp) / "model-target-race-marker"
+            called = {"armed": False}
+            original = models.assert_no_symlink_ancestors
+
+            def assert_no_with_race(check_path: Path, field_name: str = "path") -> None:
+                if (
+                    check_path == path
+                    and field_name == "model path"
+                    and not called["armed"]
+                    and not check_path.exists()
+                ):
+                    original(check_path, field_name=field_name)
+                    check_path.symlink_to(marker)
+                    called["armed"] = True
+                    return
+                original(check_path, field_name=field_name)
+
+            with mock.patch.object(models, "assert_no_symlink_ancestors", side_effect=assert_no_with_race):
+                with self.assertRaisesRegex(models.ModelError, "model path must not pass through a symlink"):
+                    models.download_model("test-target-race")
+
+    def test_download_model_rejects_directory_target_symlink_before_final_replace(self) -> None:
+        data = b"small model file"
+        spec = models.ModelSpec(
+            name="ct2-target-race",
+            filename="ct2-target-race",
+            size="2 KiB",
+            sha1="",
+            description="ct2 target symlink race test",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-target-race",
+            files=("config.json",),
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            marker = Path(tmp) / "ct2-target-race-marker"
+            called = {"armed": False}
+            original = models.assert_no_symlink_ancestors
+
+            def assert_no_with_race(check_path: Path, field_name: str = "path") -> None:
+                if check_path == path and field_name == "model path" and not called["armed"]:
+                    original(check_path, field_name=field_name)
+                    check_path.symlink_to(marker)
+                    called["armed"] = True
+                    return
+                original(check_path, field_name=field_name)
+
+            with mock.patch.object(models, "assert_no_symlink_ancestors", side_effect=assert_no_with_race):
+                with self.assertRaisesRegex(models.ModelError, "model path must not pass through a symlink"):
+                    models.download_model("ct2-target-race", force=True)
+
+    def test_download_directory_model_uses_nofollow_parent_creation(self) -> None:
+        data = b"small model file"
+        spec = models.ModelSpec(
+            name="ct2-parent-order",
+            filename="ct2-parent-order",
+            size="2 KiB",
+            sha1="",
+            description="ct2 parent safety order",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-parent-order",
+            files=("config.json",),
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
+        ):
+            path = models.model_path(spec)
+            events: list[str] = []
+
+            original_ensure_directory = models.ensure_directory_without_following_symlinks
+            original_assert_no_symlink_ancestors = models.assert_no_symlink_ancestors
+
+            def record_ensure_directory(directory: Path, field_name: str = "path") -> int:
+                if directory == path.parent:
+                    events.append("ensure-parent")
+                return original_ensure_directory(directory, field_name=field_name)
+
+            def record_assert_no_symlink_ancestors(check_path: Path, field_name: str = "path") -> None:
+                if field_name == "model path":
+                    events.append(f"assert-path-{check_path}")
+                return original_assert_no_symlink_ancestors(check_path, field_name=field_name)
+
+            with (
+                mock.patch.object(models, "ensure_directory_without_following_symlinks", side_effect=record_ensure_directory),
+                mock.patch.object(models, "assert_no_symlink_ancestors", side_effect=record_assert_no_symlink_ancestors),
+            ):
+                models.download_model("ct2-parent-order", force=True)
+
+        self.assertLess(
+            events.index(f"assert-path-{path}"),
+            events.index("ensure-parent"),
+            "directory model path safety check should run before no-follow parent creation",
+        )
+        self.assertLess(
+            events.index("ensure-parent"),
+            len(events) - 1 - list(reversed(events)).index(f"assert-path-{path}"),
+            "directory model path safety check should run after no-follow parent creation",
+        )
+
     def test_download_model_downloads_multifile_ctranslate2_model(self) -> None:
         data = b"small model file"
         spec = models.ModelSpec(
@@ -682,6 +809,54 @@ class ModelsTest(unittest.TestCase):
         self.assertTrue(payload["verified"])
         self.assertIn("already downloaded", second_payload["message"])
 
+    def test_download_model_uses_nofollow_parent_creation(self) -> None:
+        data = b"tiny model"
+        spec = models.ModelSpec(
+            name="test-parent-order",
+            filename="ggml-test-parent-order.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(data).hexdigest(),
+            description="test model parent safety order",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
+        ):
+            path = models.model_path(spec)
+            events: list[str] = []
+
+            original_ensure_directory = models.ensure_directory_without_following_symlinks
+            original_assert_no_symlink_ancestors = models.assert_no_symlink_ancestors
+
+            def record_ensure_directory(directory: Path, field_name: str = "path") -> int:
+                if directory == path.parent:
+                    events.append("ensure-parent")
+                return original_ensure_directory(directory, field_name=field_name)
+
+            def record_assert_no_symlink_ancestors(check_path: Path, field_name: str = "path") -> None:
+                if field_name == "model path":
+                    events.append(f"assert-path-{check_path}")
+                return original_assert_no_symlink_ancestors(check_path, field_name=field_name)
+
+            with (
+                mock.patch.object(models, "ensure_directory_without_following_symlinks", side_effect=record_ensure_directory),
+                mock.patch.object(models, "assert_no_symlink_ancestors", side_effect=record_assert_no_symlink_ancestors),
+            ):
+                models.download_model("test-parent-order")
+
+        self.assertLess(
+            events.index(f"assert-path-{path}"),
+            events.index("ensure-parent"),
+            "model path safety check should run before no-follow parent creation",
+        )
+        self.assertLess(
+            events.index("ensure-parent"),
+            len(events) - 1 - list(reversed(events)).index(f"assert-path-{path}"),
+            "model path safety check should run after no-follow parent creation",
+        )
+
     def test_multifile_model_symlink_path_is_not_downloaded(self) -> None:
         data = b"small model file"
         spec = models.ModelSpec(
@@ -707,7 +882,7 @@ class ModelsTest(unittest.TestCase):
             path.parent.mkdir(parents=True)
             path.symlink_to(target)
 
-            with self.assertRaisesRegex(RuntimeError, "must not pass through a symlink"):
+            with self.assertRaisesRegex(models.ModelError, "must not pass through a symlink"):
                 models.model_status(spec, verify=True)
 
     def test_download_model_rejects_multifile_catalog_without_repo_id(self) -> None:
@@ -903,13 +1078,49 @@ class ModelsTest(unittest.TestCase):
 
             def rmtree_or_fail(target: object, *args: object, **kwargs: object) -> None:
                 target_path = Path(target)
-                if target_path.name.endswith(".backup"):
+                if ".backup" in target_path.name:
                     raise OSError("cleanup failed")
                 real_rmtree(target, *args, **kwargs)
 
             with mock.patch("speed_of_cinnamon.models.shutil.rmtree", side_effect=rmtree_or_fail):
                 with self.assertRaisesRegex(models.ModelError, "failed to remove model backup"):
                     models.download_model("ct2-backup-cleanup-fails", force=True)
+
+    def test_download_model_recovers_multifile_backup_cleanup_failure(self) -> None:
+        data = b"small model file"
+        spec = models.ModelSpec(
+            name="ct2-backup-cleanup-recovered",
+            filename="ct2-backup-cleanup-recovered",
+            size="2 KiB",
+            sha1="",
+            description="ct2 backup cleanup recovery",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-backup-cleanup-recovered",
+            files=("config.json",),
+        )
+        real_rmtree = models.shutil.rmtree
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+
+            def rmtree_or_fail(target: object, *args: object, **kwargs: object) -> None:
+                target_path = Path(target)
+                if target_path.name.endswith(".backup"):
+                    raise OSError("cleanup failed")
+                real_rmtree(target, *args, **kwargs)
+
+            with mock.patch("speed_of_cinnamon.models.shutil.rmtree", side_effect=rmtree_or_fail):
+                payload = models.download_model("ct2-backup-cleanup-recovered", force=True)
+
+        self.assertEqual(payload["status"], "done")
+        self.assertEqual(list(path.parent.glob(f".{spec.filename}.*.backup")), [])
 
     def test_download_model_force_replaces_file_with_multifile_model(self) -> None:
         data = b"small model file"
@@ -1034,7 +1245,7 @@ class ModelsTest(unittest.TestCase):
             target.write_bytes(b"payload")
             path.symlink_to(target.resolve())
 
-            with self.assertRaisesRegex(RuntimeError, "must not pass through a symlink"):
+            with self.assertRaisesRegex(models.ModelError, "must not pass through a symlink"):
                 models.remove_model("test-symlink-remove")
 
     def test_default_model_path_uses_only_verified_catalog_files(self) -> None:

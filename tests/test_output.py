@@ -479,6 +479,62 @@ class OutputTest(unittest.TestCase):
             resolved_command="/usr/bin/wtype",
         )
 
+    def test_paste_from_clipboard_falls_back_to_wtype_on_xdotool_output_error(self) -> None:
+        def fake_which(command: str, path: str | None = None) -> str | None:
+            del path
+            if command == "xdotool":
+                return "/usr/bin/xdotool"
+            if command == "wtype":
+                return "/usr/bin/wtype"
+            return None
+
+        with (
+            mock.patch("speed_of_cinnamon.output.shutil.which", side_effect=fake_which),
+            mock.patch("speed_of_cinnamon.output._active_window_paste_key", return_value="ctrl+shift+v"),
+            mock.patch(
+                "speed_of_cinnamon.output._run_with_input",
+                side_effect=[OutputError("xdotool failed"), None],
+            ) as mocked_run,
+            mock.patch("speed_of_cinnamon.output.log_event") as mocked_log,
+        ):
+            paste_from_clipboard()
+
+        mocked_log.assert_called_once_with(
+            "warning",
+            "clipboard_paste_xdotool_failed_falling_back_to_wtype",
+            error="xdotool failed",
+        )
+        mocked_run.assert_has_calls(
+            [
+                mock.call(
+                    ["xdotool", "key", "--clearmodifiers", "ctrl+shift+v"],
+                    "",
+                    timeout=10,
+                    resolved_command="/usr/bin/xdotool",
+                ),
+                mock.call(
+                    ["wtype", "-M", "ctrl", "-M", "shift", "v", "-m", "shift", "-m", "ctrl"],
+                    "",
+                    timeout=10,
+                    resolved_command="/usr/bin/wtype",
+                ),
+            ],
+            any_order=False,
+        )
+
+    def test_paste_from_clipboard_reports_xdotool_error_without_wtype_fallback(self) -> None:
+        def fake_which(command: str, path: str | None = None) -> str | None:
+            del path
+            return "/usr/bin/xdotool" if command == "xdotool" else None
+
+        with (
+            mock.patch("speed_of_cinnamon.output.shutil.which", side_effect=fake_which),
+            mock.patch("speed_of_cinnamon.output._active_window_paste_key", return_value="ctrl+v"),
+            mock.patch("speed_of_cinnamon.output._run_with_input", side_effect=OutputError("xdotool failed")),
+        ):
+            with self.assertRaisesRegex(OutputError, "xdotool failed"):
+                paste_from_clipboard()
+
     def test_active_window_paste_key_uses_shift_for_terminal_class(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             command = args[0] if args else kwargs["args"]
