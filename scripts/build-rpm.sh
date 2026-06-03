@@ -5,6 +5,8 @@ IFS=$'\n\t'
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_dir}"
+safe_fs="${repo_dir}/scripts/safe-local-fs.py"
+safe_fs_cmd=(python3 "${safe_fs}")
 
 require_cmd() {
   local tool=$1
@@ -77,6 +79,7 @@ if [[ ! -x "${repo_dir}/scripts/build-dist.sh" ]]; then
   printf 'build-dist script is missing: %s\n' "${repo_dir}/scripts/build-dist.sh" >&2
   exit 1
 fi
+require_regular_source_file "${safe_fs}" "safe local filesystem helper"
 read -r tarball < <("${repo_dir}/scripts/build-dist.sh")
 if [[ -L "${tarball}" ]]; then
   printf 'build-dist output must not be a symlink: %s\n' "${tarball}" >&2
@@ -164,22 +167,11 @@ rpmbuild \
   --define "__brp_python_hardlink %{nil}" \
   -ba "${spec_file}"
 
-backup_topdir=""
-if [[ -e "${final_topdir}" ]]; then
-  backup_topdir="$(mktemp -d "${dist_dir}/.$(basename "${final_topdir}").backup.XXXXXX")"
-  rmdir -- "${backup_topdir}"
-  mv -T -- "${final_topdir}" "${backup_topdir}"
-fi
-if ! mv -T -- "${stage_topdir}" "${final_topdir}"; then
-  if [[ -n "${backup_topdir}" && -e "${backup_topdir}" && ! -e "${final_topdir}" ]]; then
-    mv -T -- "${backup_topdir}" "${final_topdir}" || true
-  fi
+if ! "${safe_fs_cmd[@]}" install-tree build-rpm "${stage_topdir}" "${final_topdir}" "RPM build directory"; then
   printf 'failed to activate RPM build directory: %s\n' "${final_topdir}" >&2
   exit 1
 fi
+rm -rf -- "${stage_topdir}"
 stage_topdir=""
-if [[ -n "${backup_topdir}" ]]; then
-  rm -rf -- "${backup_topdir}"
-fi
 
 find "${final_topdir}/RPMS" "${final_topdir}/SRPMS" -type f \( -name '*.rpm' -o -name '*.src.rpm' \) -print | sort

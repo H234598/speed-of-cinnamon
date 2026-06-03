@@ -5,8 +5,9 @@ IFS=$'\n\t'
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_dir}"
+safe_fs="${repo_dir}/scripts/safe-local-fs.py"
 
-for tool in python3 tar sha256sum mktemp cp find rm git mv; do
+for tool in python3 tar sha256sum mktemp cp find rm git stat; do
   if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found.\n' "${tool}" >&2
     exit 1
@@ -113,6 +114,7 @@ do
   require_unsafe_source "${repo_dir}/${path}" "distribution source"
   cp -a "${repo_dir}/${path}" "${work_dir}/${package}/"
 done
+require_unsafe_source "${safe_fs}" "safe local filesystem helper"
 
 find "${work_dir}/${package}" \
   -type d \( -name __pycache__ -o -name .pytest_cache -o -name .mypy_cache \) \
@@ -139,13 +141,13 @@ final_checksum="${final_tarball}.sha256"
 staging_tarball="$(mktemp "${dist_dir}/.${package}.tar.gz.XXXXXX")"
 
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@0" -C "${work_dir}" -czf "${staging_tarball}" "${package}"
-mv -T -- "${staging_tarball}" "${final_tarball}"
+python3 "${safe_fs}" replace build-dist "${staging_tarball}" "${final_tarball}" --src-kind file
 staging_tarball=""
 checksum_value="$(sha256sum "${final_tarball}")"
 checksum_value="${checksum_value%% *}"
 staging_checksum="$(mktemp "${dist_dir}/.${package}.tar.gz.sha256.XXXXXX")"
 printf '%s  %s\n' "${checksum_value}" "${package}.tar.gz" > "${staging_checksum}"
-mv -T -- "${staging_checksum}" "${final_checksum}"
+python3 "${safe_fs}" replace build-dist "${staging_checksum}" "${final_checksum}" --src-kind file
 staging_checksum=""
 
 printf 'Built %s\n' "${final_tarball}" >&2

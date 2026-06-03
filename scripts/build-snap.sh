@@ -35,10 +35,11 @@ require_regular_source_file() {
   fi
 }
 
-for tool in python3 snapcraft mktemp rm mkdir find realpath; do
+for tool in python3 snapcraft mktemp rm mkdir find realpath stat chmod; do
   require_cmd "${tool}"
 done
 snap_dir="${repo_dir}/snap"
+safe_fs="${repo_dir}/scripts/safe-local-fs.py"
 
 if ! snapcraft --version >/dev/null 2>&1; then
   printf 'snapcraft is installed but did not execute successfully.\n' >&2
@@ -59,6 +60,7 @@ if [[ -L "${snap_dir}/snapcraft.yaml" ]]; then
   exit 1
 fi
 require_regular_source_file "${snap_dir}/snapcraft.yaml" "snapcraft manifest"
+require_regular_source_file "${safe_fs}" "safe local filesystem helper"
 
 version="$(
   python3 - <<'PY'
@@ -88,28 +90,34 @@ fi
 mkdir -p "${repo_tmp_root}"
 
 snapcraft_file="${snap_dir}/snapcraft.yaml"
+snapcraft_mode="$(stat -c '%a' "${snapcraft_file}")"
 snapcraft_backup="$(mktemp "${repo_tmp_root}/speed-of-cinnamon-snapcraft-XXXXXX")"
-cp "${snapcraft_file}" "${snapcraft_backup}"
+python3 "${safe_fs}" copy-file build-snap "${snapcraft_file}" "${snapcraft_backup}" "${snapcraft_mode}"
 tmp_output=""
+snapcraft_rendered=""
 cleanup_tmpdir() {
   if [[ -n "${tmp_output}" && -f "${tmp_output}" ]]; then
     rm -f -- "${tmp_output}"
   fi
+  if [[ -n "${snapcraft_rendered}" && -f "${snapcraft_rendered}" ]]; then
+    rm -f -- "${snapcraft_rendered}"
+  fi
   if [[ -f "${snapcraft_backup}" ]]; then
-    mv -f -- "${snapcraft_backup}" "${snapcraft_file}"
+    python3 "${safe_fs}" copy-file build-snap "${snapcraft_backup}" "${snapcraft_file}" "${snapcraft_mode}"
     rm -f -- "${snapcraft_backup}"
   fi
 }
 trap cleanup_tmpdir EXIT
 
-python3 - "${snapcraft_file}" "${version}" "${snapcraft_base}" <<'PYCODE'
+snapcraft_rendered="$(mktemp "${repo_tmp_root}/speed-of-cinnamon-snapcraft-rendered-XXXXXX")"
+python3 - "${snapcraft_file}" "${snapcraft_rendered}" "${version}" "${snapcraft_base}" <<'PYCODE'
 import pathlib
-import tempfile
 import sys
 
 path = pathlib.Path(sys.argv[1])
-version = sys.argv[2]
-base = sys.argv[3]
+output_path = pathlib.Path(sys.argv[2])
+version = sys.argv[3]
+base = sys.argv[4]
 text = path.read_text(encoding="utf-8")
 out = []
 replaced = False
@@ -127,11 +135,15 @@ if not replaced:
     raise SystemExit("snapcraft version field not found")
 if not base_replaced:
     raise SystemExit("snapcraft base field not found")
-with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
-    handle.write("\n".join(out) + "\n")
-    tmp_path = pathlib.Path(handle.name)
-tmp_path.replace(path)
+output_path.write_text("\n".join(out) + "\n", encoding="utf-8")
 PYCODE
+chmod "${snapcraft_mode}" "${snapcraft_rendered}"
+if ! python3 "${safe_fs}" replace build-snap "${snapcraft_rendered}" "${snapcraft_file}" --src-kind file; then
+  printf 'failed to apply rendered snapcraft.yaml: %s\n' "${snapcraft_file}" >&2
+  exit 1
+fi
+rm -f -- "${snapcraft_rendered}"
+snapcraft_rendered=""
 
 dist_dir="${repo_dir}/dist/snap"
 mkdir -p "${dist_dir}"
@@ -139,7 +151,7 @@ if [[ -L "${dist_dir}" ]]; then
   printf 'dist snap directory must not be a symlink: %s\n' "${dist_dir}" >&2
   exit 1
 fi
-if find "${dist_dir}" "${repo_dir}" -maxdepth 1 -type f -name "speed-of-cinnamon_${version}_*.snap" -print -quit | grep -q .; then
+if find "${dist_dir}" "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -print -quit | grep -q .; then
   printf 'refusing to overwrite existing snap artifact for version %s\n' "${version}" >&2
   exit 1
 fi
@@ -180,6 +192,8 @@ for path in "${snap_files[@]}"; do
 done
 
 output_path="${dist_dir}/$(basename "${snap_files[0]}")"
-mv "${snap_files[0]}" "${output_path}"
+if [[ "$(realpath "${snap_files[0]}")" != "${output_path}" ]]; then
+  python3 "${safe_fs}" replace build-snap "${snap_files[0]}" "${output_path}" --src-kind file --dst-must-not-exist
+fi
 printf 'Built %s\n' "${output_path}" >&2
 printf '%s\n' "${output_path}"

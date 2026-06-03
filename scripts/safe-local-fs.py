@@ -157,7 +157,6 @@ def _write_bytes_atomic(dst: Path, data: bytes, mode: int, *, action: str) -> No
     assert parent_fd is not None
     tmp_name = f".{leaf}.{secrets.token_hex(8)}.tmp"
     fd: int | None = None
-    replaced = False
     tmp_stat: os.stat_result | None = None
     try:
         existing = _lstat_at(parent_fd, leaf)
@@ -171,7 +170,6 @@ def _write_bytes_atomic(dst: Path, data: bytes, mode: int, *, action: str) -> No
             os.fchmod(handle.fileno(), mode)
         tmp_stat = _lstat_at(parent_fd, tmp_name)
         os.replace(tmp_name, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
-        replaced = True
         if not _same_identity(tmp_stat, _lstat_at(parent_fd, leaf)):
             fail(f"destination changed during {action}: {dst}")
         _check_leaf(parent_fd, leaf, dst, action=action, kind="file", must_exist=True)
@@ -180,9 +178,6 @@ def _write_bytes_atomic(dst: Path, data: bytes, mode: int, *, action: str) -> No
             if fd is not None:
                 os.close(fd)
             os.unlink(tmp_name, dir_fd=parent_fd)
-        if replaced and _same_identity(tmp_stat, _lstat_at(parent_fd, leaf)):
-            with context_suppress():
-                os.unlink(leaf, dir_fd=parent_fd)
         raise
     finally:
         os.close(parent_fd)

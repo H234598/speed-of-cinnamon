@@ -166,16 +166,18 @@ class InstallLocalTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
             self.assertIn("refusing to use hardlinked man page source during install", result.stderr)
 
-    def test_safe_fs_atomic_write_removes_own_target_after_postcheck_failure(self) -> None:
+    def test_safe_fs_atomic_write_keeps_replaced_target_after_postcheck_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = self._load_safe_fs_module()
             target = Path(tmp) / "target.txt"
+            target.write_text("old\n", encoding="utf-8")
 
             with mock.patch.object(module, "_check_leaf", side_effect=RuntimeError("postcheck failed")):
                 with self.assertRaisesRegex(RuntimeError, "postcheck failed"):
-                    module._write_bytes_atomic(target, b"new", 0o600, action="install")
+                    module._write_bytes_atomic(target, b"restored\n", 0o600, action="install")
 
-            self.assertFalse(target.exists())
+            self.assertTrue(target.exists())
+            self.assertEqual(target.read_text(encoding="utf-8"), "restored\n")
 
     def test_safe_fs_install_tree_rejects_source_mutation_during_copy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

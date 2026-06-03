@@ -436,6 +436,20 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn(".assets[].name", publish_script)
         self.assertIn("release asset already exists", publish_script)
 
+    def test_release_scripts_use_safe_local_fs_for_risky_mutations(self) -> None:
+        build_rpm = (REPO_ROOT / "scripts" / "build-rpm.sh").read_text(encoding="utf-8")
+        build_snap = (REPO_ROOT / "scripts" / "build-snap.sh").read_text(encoding="utf-8")
+
+        self.assertIn('safe_fs_cmd=(python3 "${safe_fs}")', build_rpm)
+        self.assertIn('if ! "${safe_fs_cmd[@]}" install-tree build-rpm "${stage_topdir}" "${final_topdir}" "RPM build directory"; then', build_rpm)
+        self.assertIn('require_regular_source_file "${tarball}" "tarball source"', build_rpm)
+        self.assertIn('require_regular_source_file "${spec_source}" "spec source"', build_rpm)
+        self.assertNotIn('mv -T -- "${stage_topdir}" "${final_topdir}"', build_rpm)
+        self.assertIn('python3 "${safe_fs}" replace build-snap "${snapcraft_rendered}" "${snapcraft_file}" --src-kind file', build_snap)
+        self.assertIn('python3 "${safe_fs}" copy-file build-snap "${snapcraft_file}" "${snapcraft_backup}" "${snapcraft_mode}"', build_snap)
+        self.assertIn('python3 "${safe_fs}" replace build-snap "${snap_files[0]}" "${output_path}" --src-kind file --dst-must-not-exist', build_snap)
+        self.assertNotIn("mv -T", build_snap)
+
     def test_wiki_publish_does_not_bootstrap_after_clone_failure(self) -> None:
         publish_script = (REPO_ROOT / "scripts" / "publish-wiki.sh").read_text(encoding="utf-8")
         self.assertIn("failed to clone wiki repository", publish_script)
@@ -553,10 +567,17 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('if [[ -L "${snap_dir}" ]]; then', build_snap)
         self.assertIn('snap directory must not be a symlink', build_snap)
         self.assertIn('snapcraft_file="${snap_dir}/snapcraft.yaml"', build_snap)
-        self.assertIn('mv -f -- "${snapcraft_backup}" "${snapcraft_file}"', build_snap)
-        self.assertIn("NamedTemporaryFile", build_snap)
+        self.assertIn('safe_fs="${repo_dir}/scripts/safe-local-fs.py"', build_snap)
+        self.assertIn('require_regular_source_file "${safe_fs}" "safe local filesystem helper"', build_snap)
+        self.assertIn('python3 "${safe_fs}" copy-file build-snap "${snapcraft_file}" "${snapcraft_backup}" "${snapcraft_mode}"', build_snap)
+        self.assertIn('chmod "${snapcraft_mode}" "${snapcraft_rendered}"', build_snap)
+        self.assertIn('python3 "${safe_fs}" replace build-snap "${snapcraft_rendered}" "${snapcraft_file}" --src-kind file', build_snap)
+        self.assertIn('python3 "${safe_fs}" replace build-snap "${snap_files[0]}" "${output_path}" --src-kind file --dst-must-not-exist', build_snap)
+        self.assertNotIn('mv -f -- "${snapcraft_backup}" "${snapcraft_file}"', build_snap)
+        self.assertNotIn("mv -T", build_snap)
+        self.assertNotIn("NamedTemporaryFile", build_snap)
         self.assertIn('refusing to overwrite existing snap artifact for version', build_snap)
-        self.assertIn('if find "${dist_dir}" "${repo_dir}" -maxdepth 1 -type f -name "speed-of-cinnamon_${version}_*.snap" -print -quit | grep -q .; then', build_snap)
+        self.assertIn('if find "${dist_dir}" "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -print -quit | grep -q .; then', build_snap)
         self.assertNotIn('rm -f -- "${dist_dir}/speed-of-cinnamon_${version}"_*.snap', build_snap)
         self.assertNotIn('path.with_name(path.name + ".tmp")', build_snap)
         self.assertIn('snap_dir="${repo_dir}/dist/snap"', verify_snap)
@@ -759,15 +780,23 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('final_topdir="${repo_dir}/dist/rpmbuild"', build_rpm)
         self.assertIn('stage_topdir="$(mktemp -d "${dist_dir}/.$(basename "${final_topdir}").stage.XXXXXX")"', build_rpm)
         self.assertIn('--define "_topdir ${stage_topdir}"', build_rpm)
-        self.assertIn('mv -T -- "${stage_topdir}" "${final_topdir}"', build_rpm)
+        self.assertIn('safe_fs="${repo_dir}/scripts/safe-local-fs.py"', build_rpm)
+        self.assertIn('require_regular_source_file "${safe_fs}" "safe local filesystem helper"', build_rpm)
+        self.assertIn('safe_fs_cmd=(python3 "${safe_fs}")', build_rpm)
+        self.assertIn('"${safe_fs_cmd[@]}" install-tree build-rpm "${stage_topdir}" "${final_topdir}" "RPM build directory"', build_rpm)
+        self.assertNotIn('mv -T -- "${stage_topdir}" "${final_topdir}"', build_rpm)
         self.assertNotIn('rm -rf "${topdir}"', build_rpm)
 
     def test_parallel_build_dist_does_not_corrupt_archive(self) -> None:
         build_dist = REPO_ROOT / "scripts" / "build-dist.sh"
         build_dist_source = build_dist.read_text(encoding="utf-8")
+        self.assertIn('safe_fs="${repo_dir}/scripts/safe-local-fs.py"', build_dist_source)
+        self.assertIn('require_unsafe_source "${safe_fs}" "safe local filesystem helper"', build_dist_source)
         self.assertIn('staging_checksum="$(mktemp "${dist_dir}/.${package}.tar.gz.sha256.XXXXXX")"', build_dist_source)
         self.assertIn('printf \'%s  %s\\n\' "${checksum_value}" "${package}.tar.gz" > "${staging_checksum}"', build_dist_source)
-        self.assertIn('mv -T -- "${staging_checksum}" "${final_checksum}"', build_dist_source)
+        self.assertIn('python3 "${safe_fs}" replace build-dist "${staging_tarball}" "${final_tarball}" --src-kind file', build_dist_source)
+        self.assertIn('python3 "${safe_fs}" replace build-dist "${staging_checksum}" "${final_checksum}" --src-kind file', build_dist_source)
+        self.assertNotIn('mv -T -- "${staging_checksum}" "${final_checksum}"', build_dist_source)
         self.assertNotIn('> "${final_checksum}"', build_dist_source)
 
         def run_build() -> tuple[int, str]:
