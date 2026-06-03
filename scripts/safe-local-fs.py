@@ -141,7 +141,12 @@ def cmd_replace(args: argparse.Namespace) -> None:
     dst = _validate_absolute(args.dst, "destination path")
     src_fd, src_name = _open_parent(src, action=args.action)
     dst_fd, dst_name = _open_parent(dst, action=args.action)
-    assert src_fd is not None and dst_fd is not None
+    if src_fd is None or dst_fd is None:
+        if src_fd is not None:
+            os.close(src_fd)
+        if dst_fd is not None:
+            os.close(dst_fd)
+        fail(f"failed to open parent directory during {args.action}")
     try:
         _check_leaf(src_fd, src_name, src, action=args.action, kind=args.src_kind, must_exist=True)
         src_stat = _lstat_at(src_fd, src_name)
@@ -166,7 +171,8 @@ def cmd_replace(args: argparse.Namespace) -> None:
 
 def _write_bytes_atomic(dst: Path, data: bytes, mode: int, *, action: str) -> None:
     parent_fd, leaf = _open_parent(dst, action=action)
-    assert parent_fd is not None
+    if parent_fd is None:
+        fail(f"failed to open parent directory during {action}: {dst}")
     tmp_name = f".{leaf}.{secrets.token_hex(8)}.tmp"
     fd: int | None = None
     tmp_stat: os.stat_result | None = None
@@ -211,7 +217,8 @@ def cmd_copy_file(args: argparse.Namespace) -> None:
     src = _validate_absolute(args.src, "source file")
     dst = _validate_absolute(args.dst, "destination file")
     src_fd, src_name = _open_parent(src, action=args.action)
-    assert src_fd is not None
+    if src_fd is None:
+        fail(f"failed to open parent directory during {args.action}: {src}")
     try:
         _check_leaf(src_fd, src_name, src, action=args.action, kind="file", must_exist=True)
         source_checked = _lstat_at(src_fd, src_name)
@@ -250,7 +257,8 @@ def _hash_file(path: Path) -> str:
 def cmd_assert_file(args: argparse.Namespace) -> None:
     path = _validate_absolute(args.path, "file path")
     parent_fd, leaf = _open_parent(path, action=args.action)
-    assert parent_fd is not None
+    if parent_fd is None:
+        fail(f"failed to open parent directory during {args.action}: {path}")
     try:
         _check_leaf(parent_fd, leaf, path, action=args.action, kind="file", must_exist=True)
         stat_result = _lstat_at(parent_fd, leaf)
@@ -330,7 +338,8 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
     _reject_unsafe_tree(source, f"{label} source tree")
     source_signature = _tree_signature(source, include_identity=False)
     parent_fd, leaf = _open_parent(target, action=args.action, create=True)
-    assert parent_fd is not None
+    if parent_fd is None:
+        fail(f"failed to open parent directory during {args.action}: {target}")
     token = secrets.token_hex(8)
     stage_name = f".{leaf}.{token}.install"
     backup_name = f".{leaf}.{token}.backup"

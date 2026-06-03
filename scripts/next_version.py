@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-import subprocess
+import subprocess  # nosec B404
 from pathlib import Path
 try:
     import tomllib
@@ -93,7 +93,8 @@ def commits_since_ref(ref: str) -> int:
     if ref == "":
         raise UserInputError("ref must be a non-empty string")
     try:
-        result = subprocess.run(  # nosec B603,B607 - fixed git argv, shell=False, ref is validated as text.
+        # Fixed git argv, shell=False, ref is validated as text.
+        result = subprocess.run(  # nosec
             ["git", "rev-list", "--count", f"{ref}..HEAD"],
             check=True,
             text=True,
@@ -187,7 +188,8 @@ def tag_exists(tag: str) -> bool:
         raise UserInputError("tag must be a non-empty string")
     tag = normalize_tag(tag)
     try:
-        rc = subprocess.run(  # nosec B603,B607 - fixed git argv, shell=False, tag is normalized first.
+        # Fixed git argv, shell=False, tag is normalized first.
+        rc = subprocess.run(  # nosec
             ["git", "tag", "-l", tag],
             text=True,
             capture_output=True,
