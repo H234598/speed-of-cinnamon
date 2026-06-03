@@ -61,6 +61,12 @@ class PersonalizationTest(unittest.TestCase):
         self.assertIn("Context:\nUse project terms.", prompt)
         self.assertIn("Vocabulary:\n- PipeWire\n- Cinnamon", prompt)
 
+    def test_prompt_rejects_non_text_inputs(self) -> None:
+        with self.assertRaisesRegex(ValueError, "personal context must be text"):
+            build_personalization_prompt(123, "PipeWire")  # type: ignore[arg-type]
+        with self.assertRaisesRegex(ValueError, "vocabulary must be text"):
+            build_personalization_prompt("Use terms.", True)  # type: ignore[arg-type]
+
     def test_prompt_rejects_oversized_context(self) -> None:
         with self.assertRaisesRegex(ValueError, "personal context is too large"):
             build_personalization_prompt("x" * (MAX_PERSONAL_CONTEXT_CHARS + 1), "PipeWire")

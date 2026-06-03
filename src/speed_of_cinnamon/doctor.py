@@ -129,6 +129,17 @@ def _setting(settings: Mapping[str, object], key: str, default: str = "") -> str
     return normalized
 
 
+def _valid_http_url(value: str) -> bool:
+    if not isinstance(value, str) or isinstance(value, bool):
+        return False
+    normalized = value.strip()
+    if not normalized:
+        return False
+    if _contains_escaped_null(normalized) or _contains_http_header_control_chars(normalized):
+        return False
+    return normalized.startswith(("http://", "https://"))
+
+
 def _recorder_status(settings: Mapping[str, object], checks: Mapping[str, Check]) -> dict[str, object]:
     recorder = _setting(settings, "recorder", "auto").lower()
     recorder_names = ("pw-record", "parecord", "arecord")
@@ -263,6 +274,12 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
                 "ok": False,
                 "value": "openai-compatible",
                 "detail": "OpenAI-compatible speech model is required",
+            }
+        if not _valid_http_url(openai_compatible_url):
+            return {
+                "ok": False,
+                "value": "openai-compatible",
+                "detail": "OpenAI-compatible speech endpoint URL must use http:// or https://",
             }
         return {
             "ok": True,

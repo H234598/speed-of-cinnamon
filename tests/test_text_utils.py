@@ -16,6 +16,9 @@ class TextUtilsTest(unittest.TestCase):
     def test_sanitize_special_chars_filters_spanish_marks(self) -> None:
         self.assertEqual(sanitize_special_chars("¡Hola! ¿Listo?"), "Hola! Listo?")
 
+    def test_sanitize_special_chars_removes_null_and_control_characters(self) -> None:
+        self.assertEqual(sanitize_special_chars("ok\x00bad\rgood"), "okbadgood")
+
     def test_sanitize_special_chars_rejects_non_text(self) -> None:
         with self.assertRaises(ValueError):
             sanitize_special_chars(123)  # type: ignore[arg-type]

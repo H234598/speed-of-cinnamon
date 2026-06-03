@@ -37,6 +37,19 @@ class PathsTest(unittest.TestCase):
                 self.assertEqual(paths.xdg_state_home(), Path.home() / ".local" / "state")
                 self.assertEqual(paths.xdg_cache_home(), Path.home() / ".cache")
 
+    def test_ensure_runtime_dirs_rejects_symlinked_final_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            data_root = base / "data"
+            target = base / "target"
+            data_root.mkdir()
+            target.mkdir()
+            (data_root / paths.APP_ID).symlink_to(target, target_is_directory=True)
+
+            with mock.patch.dict(paths.os.environ, {"XDG_DATA_HOME": str(data_root), "XDG_STATE_HOME": str(base / "state"), "XDG_CACHE_HOME": str(base / "cache")}):
+                with self.assertRaises(OSError):
+                    paths.ensure_runtime_dirs()
+
     def test_safe_home_path_falls_back_when_home_is_symlinked(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

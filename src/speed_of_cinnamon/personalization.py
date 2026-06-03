@@ -110,6 +110,10 @@ def normalize_vocabulary(value: str = "") -> str:
 
 
 def build_personalization_prompt(personal_context: str = "", vocabulary: str = "") -> str:
+    if not isinstance(personal_context, str) or isinstance(personal_context, bool):
+        raise ValueError("personal context must be text")
+    if not isinstance(vocabulary, str) or isinstance(vocabulary, bool):
+        raise ValueError("vocabulary must be text")
     if len(personal_context) > MAX_PERSONAL_CONTEXT_CHARS:
         raise ValueError(f"personal context is too large (max {MAX_PERSONAL_CONTEXT_CHARS} characters)")
     if len(personal_context.encode("utf-8")) > MAX_PERSONAL_CONTEXT_CHARS:

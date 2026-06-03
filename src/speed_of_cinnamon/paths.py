@@ -5,7 +5,7 @@ import stat as stat_module
 import tempfile
 from pathlib import Path
 
-from .path_safety import assert_no_symlink_ancestors
+from .path_safety import assert_no_symlink_ancestors, ensure_directory_without_following_symlinks
 
 APP_ID = "speed-of-cinnamon"
 APP_NAME = "Speed of Cinnamon"
@@ -158,11 +158,15 @@ def alarms_file() -> Path:
 
 
 def ensure_runtime_dirs() -> None:
-    data_dir().mkdir(parents=True, exist_ok=True)
-    state_dir().mkdir(parents=True, exist_ok=True)
-    recordings_dir().mkdir(parents=True, exist_ok=True)
-    transcript_dir().mkdir(parents=True, exist_ok=True)
-    diagnostics_dir().mkdir(parents=True, exist_ok=True)
-    logs_dir().mkdir(parents=True, exist_ok=True)
-    models_dir().mkdir(parents=True, exist_ok=True)
-    ctranslate2_models_dir().mkdir(parents=True, exist_ok=True)
+    for directory in (
+        data_dir(),
+        state_dir(),
+        recordings_dir(),
+        transcript_dir(),
+        diagnostics_dir(),
+        logs_dir(),
+        models_dir(),
+        ctranslate2_models_dir(),
+    ):
+        fd = ensure_directory_without_following_symlinks(directory, field_name="runtime directory")
+        os.close(fd)

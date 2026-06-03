@@ -385,6 +385,18 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual(payload["configured"]["transcriber"]["value"], "openai-compatible")
         self.assertIn("https://api.example.test/v1", payload["configured"]["transcriber"]["detail"])
 
+    def test_external_api_transcriber_rejects_invalid_url(self) -> None:
+        payload = doctor.report({
+            "recorder": "auto",
+            "transcriber": "openai-compatible",
+            "openai-compatible-model": "whisper-large-v3",
+            "openai-compatible-url": "ftp://api.example.test/v1",
+            "insert-method": "none",
+        })
+
+        self.assertFalse(payload["configured"]["transcriber"]["ok"])
+        self.assertIn("must use http:// or https://", payload["configured"]["transcriber"]["detail"])
+
     def test_ollama_postprocessor_requires_model(self) -> None:
         tools = {"python3", "pw-record"}
         settings = {

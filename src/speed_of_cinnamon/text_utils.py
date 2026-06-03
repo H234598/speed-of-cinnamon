@@ -31,10 +31,12 @@ SAFE_CHAR_MAP = {
 def sanitize_special_chars(text: str) -> str:
     if not isinstance(text, str) or isinstance(text, bool):
         raise ValueError("text must be text")
-    if text.isascii():
+    if text.isascii() and all(char >= " " or char in "\n\t" for char in text):
         return text
     parts: list[str] = []
     for char in text:
+        if char < " " and char not in "\n\t":
+            continue
         if char in SAFE_CHAR_MAP:
             parts.append(SAFE_CHAR_MAP[char])
             continue
