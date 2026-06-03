@@ -1111,7 +1111,7 @@ class TranscriberTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "bad\nname.wav"
             audio.write_bytes(b"audio")
-            with self.assertRaisesRegex(TranscriptionError, "audio file name contains invalid newline"):
+            with self.assertRaisesRegex(TranscriptionError, "audio path contains invalid control character"):
                 transcribe(
                     audio,
                     "en",

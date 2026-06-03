@@ -6,6 +6,7 @@ import tempfile
 from typing import BinaryIO, cast
 from unittest import mock
 
+from speed_of_cinnamon import output as output_module
 from speed_of_cinnamon.output import (
     OutputError,
     MAX_OUTPUT_CHARS,
@@ -16,6 +17,8 @@ from speed_of_cinnamon.output import (
     _run_stdout,
     _validate_text_input,
     _active_window_paste_key,
+    _acquire_clipboard_dedup_lock,
+    _release_clipboard_dedup_lock,
     _looks_like_terminal,
     _run_with_input,
     insert_text,
@@ -26,6 +29,11 @@ from speed_of_cinnamon.output import (
 
 
 class OutputTest(unittest.TestCase):
+    def setUp(self) -> None:
+        output_module._LAST_CLIPBOARD_TEXT = ""
+        output_module._LAST_CLIPBOARD_METHOD = None
+        output_module._LAST_CLIPBOARD_INSERTION = 0.0
+
     def test_contains_escaped_null_rejects_non_text(self) -> None:
         with self.assertRaisesRegex(OutputError, "value must be text"):
             _contains_escaped_null(12)  # type: ignore[arg-type]
@@ -487,6 +495,84 @@ class OutputTest(unittest.TestCase):
     def test_insert_text_rejects_non_text_method(self) -> None:
         with self.assertRaisesRegex(OutputError, "method must be text"):
             insert_text("hello", 1)  # type: ignore[arg-type]
+
+    def test_insert_text_avoids_duplicate_clipboard_insertion(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output.set_clipboard"),
+            mock.patch("speed_of_cinnamon.output.paste_from_clipboard"),
+            mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=1.0),
+        ):
+            self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
+            self.assertFalse(insert_text("wiederholung", "clipboard-paste"))
+
+    def test_insert_text_avoids_duplicate_clipboard_insertion_with_whitespace_variation(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output.set_clipboard"),
+            mock.patch("speed_of_cinnamon.output.paste_from_clipboard"),
+            mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=1.0),
+        ):
+            self.assertTrue(insert_text("  wiederholung  ", "clipboard-paste"))
+            self.assertFalse(insert_text("wiederholung", "clipboard-paste"))
+
+    def test_insert_text_avoids_duplicate_raw_clipboard_insertion(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output.set_clipboard"),
+            mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=2.0),
+        ):
+            self.assertTrue(insert_text("wiederholung", "clipboard"))
+            self.assertFalse(insert_text("wiederholung", "clipboard"))
+
+    def test_insert_text_avoids_duplicate_across_clipboard_methods(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output.set_clipboard"),
+            mock.patch("speed_of_cinnamon.output.paste_from_clipboard"),
+            mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=3.0),
+        ):
+            self.assertTrue(insert_text("wiederholung", "clipboard"))
+            self.assertFalse(insert_text("wiederholung", "clipboard-paste"))
+
+    def test_insert_text_reserves_duplicate_state_before_paste(self) -> None:
+        calls: list[str] = []
+
+        def fake_paste() -> None:
+            calls.append("paste")
+            self.assertFalse(insert_text("wiederholung", "clipboard-paste"))
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output.set_clipboard"),
+            mock.patch("speed_of_cinnamon.output.paste_from_clipboard", side_effect=fake_paste),
+            mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=3.0),
+        ):
+            self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
+
+        self.assertEqual(calls, ["paste"])
+
+    def test_clipboard_dedupe_lock_blocks_parallel_insert(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):
+                lock_path = _acquire_clipboard_dedup_lock()
+                try:
+                    self.assertIsNotNone(lock_path)
+                    with (
+                        mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
+                        mock.patch("speed_of_cinnamon.output.paste_from_clipboard") as mocked_paste,
+                    ):
+                        self.assertFalse(insert_text("anderer text", "clipboard-paste"))
+                finally:
+                    _release_clipboard_dedup_lock(lock_path)
+
+        mocked_clipboard.assert_not_called()
+        mocked_paste.assert_not_called()
 
     def test_type_text_with_invalid_delay_clamps_to_zero(self) -> None:
         calls: list[list[str]] = []

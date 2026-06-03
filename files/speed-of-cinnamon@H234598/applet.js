@@ -253,6 +253,8 @@ MyApplet.prototype = {
     this.autoRelistenPending = false;
     this.autoRelistenPendingToken = "";
     this.autoRelistenSequence = 0;
+    this.autoInsertFingerprint = "";
+    this.autoInsertFingerprints = [];
     this.recordingStartedAtMs = 0;
     this.recordingMaxSeconds = 0;
     this.targetWindow = null;
@@ -1649,6 +1651,8 @@ MyApplet.prototype = {
     this.autoTranscribeRecordingKey = "";
     this.autoRelistenPending = false;
     this.autoRelistenPendingToken = "";
+    this.autoInsertFingerprint = "";
+    this.autoInsertFingerprints = [];
     this.recordingStartedAtMs = 0;
     this.recordingMaxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
     this.isCommandRunning = true;
@@ -3860,6 +3864,15 @@ MyApplet.prototype = {
   },
 
   _finishAppletTextInsert: function(payload) {
+    let transcript = String(payload.transcript || "");
+    let insertFingerprint = this._autoInsertFingerprint(payload, transcript);
+    if (this._hasAutoInsertFingerprint(insertFingerprint)) {
+      this._setStatus("done", payload.message || _("Transcript already inserted"), transcript);
+      return;
+    }
+    if (this._insertTranscriptText(transcript)) {
+      this._rememberAutoInsertFingerprint(insertFingerprint);
+    }
     let shouldRelisten = this.autoRelistenPending;
     this.autoRelistenPending = false;
     this.autoRelistenPendingToken = "";
@@ -3867,9 +3880,54 @@ MyApplet.prototype = {
     if (shouldRelisten) {
       relistenStarted = this._restartRelistenRecording();
     }
-    this._insertTranscriptText(payload.transcript);
     if (relistenStarted) {
       this.notificationSessionActive = true;
+    }
+  },
+
+  _autoInsertFingerprint: function(payload, transcript) {
+    let rawTranscript = String(transcript || "");
+    let marker = String(payload.audio_path || payload.audio || payload.transcript_path || "");
+    if (marker === "") {
+      marker = String(payload.started_at || payload.stopped_at || "");
+    }
+    if (marker === "") {
+      let digest = rawTranscript.slice(0, 64).replace(/\s+/g, " ").trim();
+      return "len:" + String(rawTranscript.length) + ":" + digest;
+    }
+    let compactMarker = String(marker).trim();
+    let digest = rawTranscript.slice(0, 64).replace(/\s+/g, " ").trim();
+    return compactMarker + "|" + String(rawTranscript.length) + "|" + digest;
+  },
+
+  _resetAutoInsertFingerprint: function() {
+    this.autoInsertFingerprint = "";
+    this.autoInsertFingerprints = [];
+  },
+
+  _hasAutoInsertFingerprint: function(fingerprint) {
+    if (!fingerprint) {
+      return false;
+    }
+    if (fingerprint === this.autoInsertFingerprint) {
+      return true;
+    }
+    return this.autoInsertFingerprints && this.autoInsertFingerprints.indexOf(fingerprint) >= 0;
+  },
+
+  _rememberAutoInsertFingerprint: function(fingerprint) {
+    if (!fingerprint) {
+      return;
+    }
+    this.autoInsertFingerprint = fingerprint;
+    if (!this.autoInsertFingerprints) {
+      this.autoInsertFingerprints = [];
+    }
+    if (this.autoInsertFingerprints.indexOf(fingerprint) < 0) {
+      this.autoInsertFingerprints.push(fingerprint);
+    }
+    while (this.autoInsertFingerprints.length > 20) {
+      this.autoInsertFingerprints.shift();
     }
   },
 

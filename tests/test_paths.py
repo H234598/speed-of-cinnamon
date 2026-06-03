@@ -66,6 +66,68 @@ class PathsTest(unittest.TestCase):
             ):
                 self.assertEqual(paths.xdg_cache_home(), Path("/tmp") / ".cache")
 
+    def test_xdg_paths_accept_absolute_non_symlink_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):
+                custom = Path(tmp) / "custom-data"
+                with mock.patch.dict(
+                    paths.os.environ,
+                    {
+                        "XDG_DATA_HOME": str(custom),
+                    },
+                ):
+                    self.assertEqual(paths.xdg_data_home(), custom)
+
+    def test_xdg_paths_reject_relative_roots(self) -> None:
+        with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):
+            with mock.patch.dict(
+                paths.os.environ,
+                {
+                    "XDG_DATA_HOME": "relative-data",
+                },
+            ):
+                self.assertEqual(paths.xdg_data_home(), Path("/home/example") / ".local" / "share")
+
+    def test_xdg_paths_reject_oversized_roots(self) -> None:
+        with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):
+            oversized = "/" + ("x" * (paths.MAX_XDG_PATH_CHARS + 1))
+            with mock.patch.dict(
+                paths.os.environ,
+                {
+                    "XDG_DATA_HOME": oversized,
+                },
+            ):
+                self.assertEqual(paths.xdg_data_home(), Path("/home/example") / ".local" / "share")
+
+    def test_xdg_paths_reject_null_roots(self) -> None:
+        with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):
+            with mock.patch.dict(
+                paths.os.environ,
+                {
+                    "XDG_DATA_HOME": "/tmp/root\\x00",
+                },
+            ):
+                self.assertEqual(paths.xdg_data_home(), Path("/home/example") / ".local" / "share")
+
+    def test_xdg_paths_accept_home_subdirectories(self) -> None:
+        with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):
+            data_root = Path("/home/example") / ".local"
+            allowed = data_root / "share" / "custom"
+            with mock.patch.dict(
+                paths.os.environ,
+                {
+                    "XDG_DATA_HOME": str(allowed),
+                },
+            ):
+                self.assertEqual(paths.xdg_data_home(), allowed)
+                with mock.patch.dict(
+                    paths.os.environ,
+                    {
+                        "XDG_DATA_HOME": str(allowed),
+                    },
+                ):
+                    self.assertEqual(paths.xdg_data_home(), allowed)
+
     def test_path_safety_rejects_non_path_inputs_before_path_methods(self) -> None:
         with self.assertRaises(RuntimeError):
             path_safety.assert_no_symlink_ancestors("not-a-path", field_name="input")

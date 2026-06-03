@@ -207,6 +207,9 @@ It also has manual inputs:
 - `build_generic_rpm=false` to skip generic RPM generation.
 - `run_workflow_lint=false` to skip workflow validation step.
 
+Publishing uses repository secret `RELEASE_GITHUB_TOKEN` (PAT or token with `contents: write`) for `gh release create` and
+`gh release upload`. For local dry-runs this secret is not required because `make release-dry-run` does not publish.
+
 For environments without `snapcraft`, run `make release-dry-run SNAP_BUILD=0` locally.
 To skip local generic RPM generation, use `make release-dry-run BUILD_GENERIC_RPM=0`.
 This keeps the release build and validation steps and skips only the publish/upload step for local dry-runs.

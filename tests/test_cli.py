@@ -6,6 +6,7 @@ import io
 import json
 import os
 import subprocess
+import time
 import tomllib
 import tempfile
 import unittest
@@ -419,6 +420,157 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("failed to write transcript file", payload["error"])
 
+    @mock.patch("speed_of_cinnamon.cli.insert_text")
+    @mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="redacted")
+    @mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="blacklisteintrag: geheim\nHallo")
+    @mock.patch("speed_of_cinnamon.cli.apply_security_mode", return_value=("redacted", 1))
+    @mock.patch("speed_of_cinnamon.cli.update_blacklist_file", return_value=["geheim"])
+    @mock.patch("speed_of_cinnamon.cli.load_blacklist_file", return_value=[])
+    @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
+    def test_finalize_applies_blacklist_directives_and_security_mode(
+        self,
+        mocked_validate: mock.Mock,
+        mocked_load: mock.Mock,
+        mocked_update: mock.Mock,
+        mocked_security: mock.Mock,
+        mocked_post_process: mock.Mock,
+        mocked_prepare: mock.Mock,
+        mocked_insert: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args()
+            silence = cli.SilenceDetectionResult(False, False, 4.0, 0.0, 3.0, 0.0, "speech detected")
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=silence),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="blacklisteintrag: geheim\nHallo"),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", return_value=audio),
+            ):
+                payload = cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+        mocked_update.assert_called_once_with(mock.ANY, ["geheim"])
+        self.assertGreaterEqual(mocked_security.call_count, 1)
+        self.assertEqual(payload["security"]["blacklist_added"], ["geheim"])
+        self.assertEqual(payload["transcript"], "redacted")
+        self.assertEqual(final_state.transcript, "redacted")
+        mocked_insert.assert_called_once_with("redacted", "none", 0)
+
+    @mock.patch("speed_of_cinnamon.cli.insert_text")
+    @mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="")
+    @mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="blacklisteintrag: geheim")
+    @mock.patch("speed_of_cinnamon.cli.apply_security_mode", return_value=("", 0))
+    @mock.patch("speed_of_cinnamon.cli.update_blacklist_file", return_value=["geheim"])
+    @mock.patch("speed_of_cinnamon.cli.load_blacklist_file", return_value=[])
+    @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
+    def test_finalize_blacklist_directive_is_not_copied(
+        self,
+        mocked_validate: mock.Mock,
+        mocked_load: mock.Mock,
+        mocked_update: mock.Mock,
+        mocked_security: mock.Mock,
+        mocked_post_process: mock.Mock,
+        mocked_prepare: mock.Mock,
+        mocked_insert: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(insert_method="clipboard-paste")
+            silence = cli.SilenceDetectionResult(True, False, 4.0, 0.0, 3.0, 0.0, "speech detected")
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=silence),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="blacklisteintrag: geheim"),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", return_value=audio),
+            ):
+                payload = cli.finalize_recording(args, store, store.read())
+
+        final_state = store.read()
+        self.assertEqual(payload["transcript"], "")
+        self.assertEqual(final_state.transcript, "")
+        self.assertEqual(payload["security"]["blacklist_added"], ["geheim"])
+        mocked_insert.assert_not_called()
+        mocked_prepare.assert_not_called()
+
+    @mock.patch("speed_of_cinnamon.cli.load_blacklist_file", return_value=[])
+    @mock.patch("speed_of_cinnamon.cli.trim_recording_silence", return_value=mock.ANY)
+    def test_transcribe_file_applies_security_directives(self, _mock_trim: mock.Mock, _mock_blacklist: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="blacklist anzeigen\nHallo"),
+                mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="blacklist anzeigen\nHallo"),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli._open_blacklist_document", return_value=True),
+                mock.patch("speed_of_cinnamon.cli.apply_security_mode", return_value=("Hallo", 0)),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf raw",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["security"]["blacklist_opened"])
+        self.assertEqual(payload["transcript"], "Hallo")
+        self.assertNotIn("blacklist anzeigen", payload["transcript"])
+
+    @mock.patch("speed_of_cinnamon.cli.apply_security_mode")
+    @mock.patch("speed_of_cinnamon.cli.apply_blacklist_mode", return_value=("Hallo geheim", 1))
+    @mock.patch("speed_of_cinnamon.cli.update_blacklist_file", return_value=["geheim"])
+    @mock.patch("speed_of_cinnamon.cli.load_blacklist_file", return_value=["geheim"])
+    def test_security_post_processing_runs_second_pass_for_blacklist_hits(
+        self,
+        mocked_load: mock.Mock,
+        mocked_update: mock.Mock,
+        mocked_blacklist: mock.Mock,
+        mocked_security: mock.Mock,
+    ) -> None:
+        mocked_security.side_effect = [
+            ("Hallo [redacted blacklist item]", 1),
+            ("Hallo [redacted blacklist item]", 0),
+        ]
+
+        sanitized, security = cli._apply_security_post_processing("Hallo geheim")
+
+        self.assertEqual(sanitized, "Hallo [redacted blacklist item]")
+        self.assertEqual(mocked_security.call_count, 2)
+        self.assertEqual(security["blacklist_hits"], 1)
+        self.assertEqual(security["blacklist_added"], [])
+        mocked_blacklist.assert_called_once_with("Hallo geheim", ["geheim"])
+        mocked_load.assert_called_once_with(mock.ANY)
+        mocked_update.assert_not_called()
+
     @mock.patch("speed_of_cinnamon.cli.list_input_sources")
     def test_list_inputs_outputs_sources(self, mocked_sources: mock.Mock) -> None:
         mocked_sources.return_value = [
@@ -454,6 +606,17 @@ class CliTest(unittest.TestCase):
         payload = json.loads(capture.getvalue())
         self.assertEqual(code, 1)
         self.assertIn("input source id must be text", payload["error"])
+
+    def test_open_blacklist_document_rejects_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "real.txt"
+            target.write_text("geheim")
+            link = Path(tmp) / "blacklist.txt"
+            os.symlink(target, link)
+            with mock.patch("speed_of_cinnamon.cli.blacklist_file", return_value=link):
+                opened = cli._open_blacklist_document()
+
+        self.assertFalse(opened)
 
     def test_models_lists_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1588,6 +1751,23 @@ class CliTest(unittest.TestCase):
         self.assertEqual(len(groups), 1)
         self.assertEqual(groups[0]["stem"], "real")
 
+    def test_prune_files_by_mtime_keeps_twenty_latest_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            for index in range(21):
+                audio = recordings / f"{index:03d}.wav"
+                audio.write_bytes(b"audio")
+                os.utime(audio, (100 + index, 100 + index))
+            files = [path for path in recordings.iterdir() if path.suffix == ".wav"]
+            ordered = sorted(files, key=lambda path: path.stat().st_mtime)
+            result = cli.prune_files_by_mtime(files, keep=cli.MAX_TEMP_RECORDING_FILES, active_paths=set(), dry_run=False)
+            remaining_files = len([path for path in files if path.exists()])
+
+        self.assertEqual(len(result["deleted_paths"]), 1)
+        self.assertIn(str(ordered[0]), result["deleted_paths"])
+        self.assertEqual(remaining_files, 20)
+
     def test_cleanup_dry_run_does_not_delete_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
@@ -2644,10 +2824,68 @@ class CliTest(unittest.TestCase):
                     "--transcriber-command",
                     "printf transcript",
                     "--json",
-                ])
+            ])
             payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 1)
         self.assertIn("state file could not be read", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.finalize_recording", return_value={"status": "done"})
+    def test_stop_sets_status_to_finalizing_before_finalization(self, mocked_finalize: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "processing.wav"
+            audio.write_bytes(b"audio")
+            state_file = Path(tmp) / "state.json"
+            StateStore(state_file).write(RecordingState(status="processing", audio_path=str(audio)))
+
+            args = self._build_finalize_args()
+            args.state_file = str(state_file)
+            result = cli.command_stop(args)
+            final_state = StateStore(state_file).read()
+
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(len(mocked_finalize.call_args_list), 1)
+        called_state = mocked_finalize.call_args.args[2]
+        self.assertEqual(called_state.status, "processing")
+        self.assertEqual(final_state.status, "processing")
+
+    def test_finalization_lock_does_not_reclaim_live_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            lock_path.write_text(f"{os.getpid()}\n", encoding="ascii")
+            os.utime(lock_path, (1, 1))
+
+            acquired = cli._acquire_finalization_lock(state_file)
+
+        self.assertIsNone(acquired)
+
+    def test_finalization_lock_reclaims_dead_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            lock_path.write_text("999999999\n", encoding="ascii")
+
+            acquired = cli._acquire_finalization_lock(state_file)
+            try:
+                self.assertEqual(acquired, lock_path)
+                self.assertEqual(lock_path.read_text(encoding="ascii").strip(), str(os.getpid()))
+            finally:
+                cli._release_finalization_lock(acquired)
+
+    def test_finalization_lock_reclaims_old_pidless_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            lock_path.write_text("", encoding="ascii")
+            old = time.time() - cli.MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS - 1
+            os.utime(lock_path, (old, old))
+
+            acquired = cli._acquire_finalization_lock(state_file)
+            try:
+                self.assertEqual(acquired, lock_path)
+                self.assertEqual(lock_path.read_text(encoding="ascii").strip(), str(os.getpid()))
+            finally:
+                cli._release_finalization_lock(acquired)
 
     def test_toggle_rejects_null_personal_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2898,17 +3136,19 @@ class CliTest(unittest.TestCase):
                 ])
             payload = json.loads(stdout.getvalue())
             final_state = store.read()
-            audio_exists = audio.exists()
             log_exists = log.exists()
-        self.assertEqual(code, 0)
-        self.assertEqual(payload["status"], "done")
-        self.assertTrue(payload["recording_artifacts_kept"])
-        self.assertFalse(payload["audio_deleted"])
-        self.assertFalse(payload["log_deleted"])
-        self.assertTrue(audio_exists)
-        self.assertTrue(log_exists)
-        self.assertEqual(final_state.audio_path, str(audio))
-        self.assertEqual(final_state.log_path, str(log))
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "done")
+            self.assertTrue(payload["recording_artifacts_kept"])
+            self.assertFalse(payload["audio_deleted"])
+            self.assertFalse(payload["log_deleted"])
+            self.assertTrue(log_exists)
+            final_audio_path = Path(final_state.audio_path)
+            self.assertIn(final_audio_path.suffix, {".wav", ".flac"})
+            self.assertTrue(final_audio_path.exists())
+            if final_audio_path.suffix == ".flac":
+                self.assertFalse(audio.exists())
+            self.assertEqual(final_state.log_path, str(log))
 
     def test_finalize_rejects_non_boolean_keep_recording_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2965,6 +3205,7 @@ class CliTest(unittest.TestCase):
         keep_recording_artifacts: bool | str = True,
         append_space: bool = False,
         sanitize_special_chars: bool = False,
+        insert_method: str = "none",
     ) -> argparse.Namespace:
         return argparse.Namespace(
             language="en",
@@ -2983,7 +3224,7 @@ class CliTest(unittest.TestCase):
             append_space=append_space,
             sanitize_special_chars=sanitize_special_chars,
             typing_delay_ms=0,
-            insert_method="none",
+            insert_method=insert_method,
             keep_recording_artifacts=keep_recording_artifacts,
             skip_silent_auto_relisten=False,
         )
@@ -3093,7 +3334,7 @@ class CliTest(unittest.TestCase):
             log = recordings_root / "speech.log"
             audio.write_bytes(b"audio")
             log.write_text("recorder log", encoding="utf-8")
-            trimmed = recordings_root / "speech.trimmed.wav"
+            trimmed = recordings_root / "speech.trimmed.flac"
             trimmed.write_bytes(b"audio")
             state_file = tmp_path / "state.json"
             store = StateStore(state_file)
@@ -3104,7 +3345,7 @@ class CliTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
                 mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
                 mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=silence),
-                mock.patch("speed_of_cinnamon.cli.trim_recording_leading_silence", return_value=trimmed) as mocked_trim,
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", return_value=trimmed) as mocked_trim,
                 mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript") as mocked_transcribe,
                 mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="transcript"),
                 mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="transcript"),
@@ -3114,7 +3355,7 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(payload["status"], "done")
         self.assertNotIn("silence_detected", payload)
-        mocked_trim.assert_called_once_with(audio, 1.0)
+        mocked_trim.assert_called_once_with(audio)
         self.assertEqual(mocked_transcribe.call_args.kwargs["audio_path"], trimmed)
 
     def test_finalize_transcribes_when_auto_relisten_silence_detection_fails_open(self) -> None:

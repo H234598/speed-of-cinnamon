@@ -364,7 +364,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let relistenStarted = false;', source)
         self.assertIn('if (shouldRelisten) {', source)
         self.assertIn('relistenStarted = this._restartRelistenRecording();', source)
-        self.assertIn('this._insertTranscriptText(payload.transcript);', source)
+        self.assertIn('this._insertTranscriptText(transcript)', source)
+        self.assertIn('this._rememberAutoInsertFingerprint(insertFingerprint);', source)
         self.assertIn('if (relistenStarted) {', source)
         self.assertIn('return true;', source)
         self.assertIn('return false;', source)
@@ -760,6 +761,22 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._pasteClipboardAfterFocus(submitWithReturn)', source)
         self.assertIn("Copied and pasted into target window", source)
 
+    def test_applet_checks_insert_fingerprint_before_relisten_restart(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        finish_index = source.index("_finishAppletTextInsert: function(payload) {")
+        fingerprint_index = source.index("let insertFingerprint = this._autoInsertFingerprint(payload, transcript);", finish_index)
+        relisten_index = source.index("let shouldRelisten = this.autoRelistenPending;", finish_index)
+
+        self.assertLess(fingerprint_index, relisten_index)
+        self.assertIn("this.autoInsertFingerprints = [];", source)
+        self.assertIn("this._hasAutoInsertFingerprint(insertFingerprint)", source)
+        self.assertIn("this._rememberAutoInsertFingerprint(insertFingerprint);", source)
+        self.assertIn("_hasAutoInsertFingerprint: function(fingerprint)", source)
+        self.assertIn("_rememberAutoInsertFingerprint: function(fingerprint)", source)
+        restart_index = source.index("_restartRelistenRecording: function() {")
+        restart_end = source.index("_preparedTranscriptText: function", restart_index)
+        self.assertNotIn("this._resetAutoInsertFingerprint();", source[restart_index:restart_end])
+
     def test_applet_uses_gio_for_desktop_links_and_folders(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
@@ -848,7 +865,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let relistenStarted = false;", source)
         self.assertIn("if (shouldRelisten) {", source)
         self.assertIn("relistenStarted = this._restartRelistenRecording();", source)
-        self.assertIn("this._insertTranscriptText(payload.transcript);", source)
+        self.assertIn("this._insertTranscriptText(transcript)", source)
+        self.assertIn("this._rememberAutoInsertFingerprint(insertFingerprint);", source)
         self.assertIn("if (relistenStarted) {", source)
         self.assertIn("_finishSilentRelistenSkip: function(payload)", source)
         self.assertIn("_finishEmptyRelistenDone: function(payload)", source)

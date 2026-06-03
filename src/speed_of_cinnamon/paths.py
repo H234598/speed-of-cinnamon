@@ -35,14 +35,14 @@ def _xdg_path(environment_variable: str, default: Path) -> Path:
         return default
     if _contains_escaped_null(normalized):
         return default
-    candidate = Path(normalized)
+    candidate = Path(normalized).expanduser()
     if not candidate.is_absolute():
         return default
     try:
         assert_no_symlink_ancestors(candidate, field_name=environment_variable)
     except RuntimeError:
         return default
-    return candidate
+    return candidate.resolve(strict=False)
 
 
 def _safe_home_path(*parts: str) -> Path:
@@ -114,6 +114,10 @@ def default_state_file() -> Path:
 
 def default_settings_export_file() -> Path:
     return data_dir() / "settings-export.json"
+
+
+def blacklist_file() -> Path:
+    return data_dir() / "blacklist.txt"
 
 
 def alarms_file() -> Path:

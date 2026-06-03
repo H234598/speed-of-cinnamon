@@ -49,6 +49,7 @@ from .paths import (
     default_settings_export_file,
     default_state_file,
     diagnostics_dir,
+    blacklist_file,
     ensure_runtime_dirs,
     recordings_dir,
     state_dir,
@@ -66,6 +67,13 @@ from .postprocessor import (
     list_openai_compatible_models,
     post_process_text,
 )
+from .security_parser import (
+    apply_security_mode,
+    apply_blacklist_mode,
+    load_blacklist_file,
+    parse_security_directives,
+    update_blacklist_file,
+)
 from .recorder import (
     RecorderCommand,
     SilenceDetectionResult,
@@ -73,9 +81,10 @@ from .recorder import (
     detect_silent_recording,
     list_input_sources,
     read_recording_level,
-    trim_recording_leading_silence,
+    reencode_recording_to_flac,
     start_recorder,
     stop_process,
+    trim_recording_silence,
 )
 from .recorder import MAX_RECORDING_SECONDS, RecorderError, validate_recording_path
 from .settings_export import read_export, write_export
@@ -89,6 +98,7 @@ DEFAULT_KEEP_TRANSCRIPTS = 100
 DEFAULT_KEEP_RECORDINGS = 20
 DEFAULT_RECORDING_MAX_AGE_DAYS = 7
 MAX_TEMP_RECORDING_FILES = 20
+RECORDING_ARTIFACT_EXTENSIONS = (".wav", ".flac", ".log")
 MAX_LOG_EXCERPT_CHARS = 2000
 MAX_TRANSCRIPT_HISTORY_TEXT_CHARS = 4_000
 MAX_HISTORY_LIMIT = 1_000
@@ -103,6 +113,7 @@ MAX_TRANSCRIBER_TEXT_CHARS = 65_535
 MAX_SETTINGS_JSON_CHARS = 250_000
 MAX_SETTINGS_FILE_BYTES = 1_000_000
 MAX_DIAGNOSTICS_JSON_BYTES = 1_000_000
+MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS = 5
 MAX_URL_CHARS = 2_048
 MAX_ALARM_CATCH_UP_MINUTES = 14_400
 DEFAULT_BENCHMARK_LANGUAGE = "de"
@@ -158,6 +169,104 @@ _DANGEROUS_ENV_KEYS = {
 
 def _which(command_name: str) -> str | None:
     return shutil.which(command_name, path=_TRUSTED_COMMAND_PATH)
+
+
+def _finalization_lock_path(state_path: Path) -> Path:
+    return Path(state_path).with_name(f".{state_path.name}.finalizing")
+
+
+def _read_finalization_lock_pid(lock_path: Path) -> int | None:
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        return None
+    try:
+        fd = os.open(str(lock_path), os.O_RDONLY | nofollow_flag)
+    except OSError:
+        return None
+    try:
+        with os.fdopen(fd, "rb") as handle:
+            raw = handle.read(64)
+    except OSError:
+        return None
+    try:
+        text = raw.decode("ascii").strip()
+    except UnicodeDecodeError:
+        return None
+    if not text.isdigit():
+        return None
+    pid = int(text)
+    return pid if pid > 0 else None
+
+
+def _acquire_finalization_lock(state_path: Path) -> Path | None:
+    lock_path = _finalization_lock_path(state_path)
+    try:
+        assert_no_symlink_ancestors(lock_path, field_name="finalization lock path")
+    except RuntimeError:
+        return None
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    now = time.time()
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        try:
+            existing = lock_path.stat()
+        except OSError:
+            return None
+        if not stat_module.S_ISREG(existing.st_mode):
+            return None
+        owner_pid = _read_finalization_lock_pid(lock_path)
+        if owner_pid is not None:
+            if process_is_alive(owner_pid):
+                return None
+            try:
+                lock_path.unlink()
+            except OSError:
+                return None
+            return _acquire_finalization_lock(state_path)
+        if now - existing.st_mtime > MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS:
+            try:
+                lock_path.unlink()
+            except OSError:
+                return None
+            return _acquire_finalization_lock(state_path)
+        return None
+    except OSError:
+        return None
+
+    try:
+        os.write(fd, f"{os.getpid()}\n".encode("ascii"))
+    except OSError:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+        return None
+    try:
+        os.close(fd)
+    except OSError:
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+        return None
+    return lock_path
+
+
+def _release_finalization_lock(lock_path: Path | None) -> None:
+    if not lock_path:
+        return
+    try:
+        lock_path.unlink()
+    except OSError:
+        pass
 
 
 def _is_unsafe_env_var(name: str) -> bool:
@@ -477,6 +586,75 @@ def prepare_output_text(text: str, append_space: bool, sanitize: bool) -> str:
         raise RuntimeError("sanitize must be a boolean")
     output = sanitize_special_chars(text) if sanitize else text
     return append_space_if_needed(output, append_space)
+
+
+def _ensure_private_text_file(path: Path) -> None:
+    assert_no_symlink_ancestors(path, field_name="blacklist file")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        try:
+            path.write_text("", encoding="utf-8")
+        except OSError as exc:
+            raise RuntimeError(f"failed to create text file: {path}") from exc
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
+def _open_blacklist_document() -> bool:
+    path = blacklist_file()
+    try:
+        assert_no_symlink_ancestors(path, field_name="blacklist file")
+    except RuntimeError:
+        return False
+    ensure_runtime_dirs()
+    _ensure_private_text_file(path)
+    xdg_open = _which("xdg-open")
+    if xdg_open:
+        try:
+            subprocess.Popen(  # nosec B603
+                [xdg_open, str(path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except OSError:
+            pass
+    gio_open = _which("gio")
+    if gio_open:
+        try:
+            subprocess.Popen(  # nosec B603
+                [gio_open, "open", str(path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except OSError:
+            pass
+    return False
+
+
+def _apply_security_post_processing(text: str) -> tuple[str, dict[str, object]]:
+    directives = parse_security_directives(text)
+    entries = load_blacklist_file(blacklist_file())
+    if directives.added_blacklist:
+        entries = update_blacklist_file(blacklist_file(), directives.added_blacklist)
+    blacklist_opened = False
+    if directives.show_blacklist:
+        blacklist_opened = _open_blacklist_document()
+    sanitized, redactions = apply_security_mode(directives.text, entries)
+    _, blacklist_hits = apply_blacklist_mode(directives.text, entries)
+    if directives.added_blacklist or blacklist_hits > 0:
+        second_pass, second_pass_redactions = apply_security_mode(sanitized, entries)
+        sanitized = second_pass
+        redactions += second_pass_redactions
+    return sanitized, {
+        "blacklist_added": directives.added_blacklist,
+        "blacklist_opened": blacklist_opened,
+        "redacted_words": redactions,
+        "blacklist_hits": blacklist_hits,
+    }
 
 
 def build_store(args: argparse.Namespace) -> StateStore:
@@ -816,6 +994,8 @@ def _normalize_text_models_payload(payload: object) -> dict[str, object]:
 def active_artifact_paths(state: RecordingState) -> set[Path]:
     paths: set[Path] = set()
     audio_path = _safe_recording_artifact_path(state.audio_path, suffix=".wav")
+    if audio_path is None:
+        audio_path = _safe_recording_artifact_path(state.audio_path, suffix=".flac")
     log_path = _safe_recording_artifact_path(state.log_path, suffix=".log")
     if audio_path:
         paths.add(audio_path)
@@ -827,10 +1007,21 @@ def active_artifact_paths(state: RecordingState) -> set[Path]:
     return paths
 
 
+def _enforce_recording_artifact_cap(state: RecordingState | None) -> dict[str, object]:
+    if state is None:
+        return {"deleted_paths": [], "failed_paths": []}
+    return prune_files_by_mtime(
+        recording_artifact_files(),
+        MAX_TEMP_RECORDING_FILES,
+        active_artifact_paths(state),
+        dry_run=False,
+    )
+
+
 def _safe_recording_artifact_path(
     value: str | None,
     *,
-    suffix: str,
+    suffix: str | tuple[str, ...],
     require_recordings_dir: bool = True,
 ) -> Path | None:
     if not value:
@@ -853,15 +1044,37 @@ def _raise_if_state_unreadable(state: RecordingState) -> None:
 
 
 def _recording_level_payload(state: RecordingState) -> dict[str, object] | None:
-    audio_path = _safe_recording_artifact_path(state.audio_path, suffix=".wav")
+    audio_path = _safe_recording_artifact_path(state.audio_path, suffix=(".wav", ".flac"))
     if not audio_path:
         if state.audio_path:
-            return {"ok": False, "percent": 0, "peak": 0.0, "rms": 0.0, "samples": 0, "detail": "recording audio path is invalid"}
+            return {
+                "ok": False,
+                "percent": 0,
+                "peak": 0.0,
+                "rms": 0.0,
+                "samples": 0,
+                "detail": "microphone level requires a readable recording artifact",
+            }
         return None
+    if audio_path.suffix.lower() == ".flac":
+        return {
+            "ok": False,
+            "percent": 0,
+            "peak": 0.0,
+            "rms": 0.0,
+            "samples": 0,
+            "detail": "microphone level is unavailable for FLAC artifacts",
+        }
     try:
         return asdict(read_recording_level(audio_path))
     except RecorderError as exc:
         return {"ok": False, "percent": 0, "peak": 0.0, "rms": 0.0, "samples": 0, "detail": str(exc)}
+
+
+def _remove_recording_artifact(path_value: str | None) -> bool:
+    if not path_value:
+        return False
+    return remove_file(path_value, suffix=".wav") or remove_file(path_value, suffix=".flac")
 
 
 def sorted_files(paths: list[Path]) -> list[Path]:
@@ -918,7 +1131,7 @@ def recording_groups() -> list[dict[str, object]]:
     if not directory.exists():
         return []
     for path in directory.iterdir():
-        if path.suffix not in {".wav", ".log"}:
+        if path.suffix not in RECORDING_ARTIFACT_EXTENSIONS:
             continue
         try:
             file_stat = path.stat()
@@ -940,7 +1153,7 @@ def recording_artifact_files() -> list[Path]:
         return []
     files: list[Path] = []
     for path in directory.iterdir():
-        if path.suffix not in {".wav", ".log"}:
+        if path.suffix not in RECORDING_ARTIFACT_EXTENSIONS:
             continue
         try:
             file_stat = path.stat()
@@ -958,7 +1171,7 @@ def _add_recording_artifact_counts(paths: list[str], recording_result: dict[str,
     log_count = _coerce_int(recording_result[log_key], field_name=log_key)
     for path_text in paths:
         suffix = Path(path_text).suffix
-        if suffix == ".wav":
+        if suffix in {".wav", ".flac"}:
             recording_count += 1
         elif suffix == ".log":
             log_count += 1
@@ -994,14 +1207,14 @@ def prune_recording_groups(
         for path in files:
             if dry_run:
                 planned_paths.append(str(path))
-                if path.suffix == ".wav":
+                if path.suffix in {".wav", ".flac"}:
                     planned_recordings += 1
                 elif path.suffix == ".log":
                     planned_logs += 1
                 continue
             if delete_artifact(path):
                 deleted_paths.append(str(path))
-                if path.suffix == ".wav":
+                if path.suffix in {".wav", ".flac"}:
                     deleted_recordings += 1
                 elif path.suffix == ".log":
                     deleted_logs += 1
@@ -1050,9 +1263,14 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
     store = build_store(args)
     current = store.read()
     _raise_if_state_unreadable(current)
+    if current.status == "finalizing":
+        return {
+            "status": "finalizing",
+            "message": "finalization in progress; wait for completion",
+        }
     if current.status == "recording":
         current_audio_path = _safe_recording_artifact_path(
-            current.audio_path, suffix=".wav", require_recordings_dir=False
+            current.audio_path, suffix=(".wav", ".flac"), require_recordings_dir=False
         )
         if _is_recording_process_alive(current.pid):
             return {
@@ -1156,33 +1374,61 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
 
 
 def finalize_recording(args: argparse.Namespace, store: StateStore, state: RecordingState) -> dict[str, object]:
-    if not state.audio_path:
-        raise RuntimeError("no recording is available")
-    audio_path = _safe_recording_artifact_path(state.audio_path, suffix=".wav", require_recordings_dir=False)
-    if not audio_path:
-        store.update(status="error", stopped_at=state.stopped_at or now_iso(), error="recording audio path is invalid")
-        raise RuntimeError("recording audio path is invalid")
-    chosen_language = state.language or args.language or "en"
-    language = _validate_pipeline_text_args(args, language=chosen_language)
-    normalized_transcriber = normalize_backend(args.transcriber)
+    lock_path = _acquire_finalization_lock(store.path)
+    if lock_path is None:
+        return {"status": "finalizing", "message": "finalization already in progress"}
+
+    state_marked_finalizing = False
     try:
-        audio_path = validate_audio_file(audio_path)
+        state = store.read()
+        _raise_if_state_unreadable(state)
+        if state.status in {"done", "error", "idle"}:
+            return {"status": state.status, "message": state.error or f"recording already {state.status}"}
+
+        if not state.audio_path:
+            store.update(status="error", stopped_at=state.stopped_at or now_iso(), error="no recording is available")
+            raise RuntimeError("no recording is available")
+        audio_path = _safe_recording_artifact_path(state.audio_path, suffix=(".wav", ".flac"), require_recordings_dir=False)
+        if not audio_path:
+            store.update(status="error", stopped_at=state.stopped_at or now_iso(), error="recording audio path is invalid")
+            raise RuntimeError("recording audio path is invalid")
+
+        chosen_language = state.language or args.language or "en"
+        language = _validate_pipeline_text_args(args, language=chosen_language)
+        normalized_transcriber = normalize_backend(args.transcriber)
+        keep_recording_artifacts = _coerce_bool(
+            getattr(args, "keep_recording_artifacts", False),
+            field_name="keep_recording_artifacts",
+        )
         _coerce_bool(getattr(args, "skip_silent_auto_relisten", False), field_name="skip_silent_auto_relisten")
+        if state.status != "finalizing":
+            state = store.update(
+                status="finalizing",
+                stopped_at=state.stopped_at or now_iso(),
+                error="",
+                inserted=False,
+            )
+            state_marked_finalizing = True
+        else:
+            state_marked_finalizing = True
+        audio_deleted = False
+        log_deleted = False
+        done_audio_path = state.audio_path
+        done_log_path = state.log_path
+        trimmed_audio_path: Path | None = None
+        audio_path = validate_audio_file(audio_path)
+        audio_suffix = audio_path.suffix.lower()
         silence = detect_silent_recording(audio_path)
         if silence.silent:
-            keep_recording_artifacts = _coerce_bool(
-                getattr(args, "keep_recording_artifacts", False),
-                field_name="keep_recording_artifacts",
-            )
-            audio_deleted = False
-            log_deleted = False
-            done_audio_path = state.audio_path
-            done_log_path = state.log_path
             if not keep_recording_artifacts:
-                audio_deleted = remove_file(state.audio_path, suffix=".wav")
+                audio_deleted = remove_file(state.audio_path, suffix=audio_suffix)
                 log_deleted = remove_file(state.log_path, suffix=".log")
                 done_audio_path = None
                 done_log_path = None
+            state.audio_path = done_audio_path
+            state.log_path = done_log_path
+            state.transcript_path = ""
+            artifact_cleanup = _enforce_recording_artifact_cap(state)
             done = store.update(
                 status="done",
                 stopped_at=state.stopped_at or now_iso(),
@@ -1199,6 +1445,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
                 "transcript": "",
                 "transcript_path": "",
                 "inserted": False,
+                "recording_artifact_cap": artifact_cleanup,
                 "language": language,
                 "recording_artifacts_kept": keep_recording_artifacts,
                 "audio_deleted": audio_deleted,
@@ -1207,18 +1454,17 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
                 "silence_duration_seconds": silence.silence_seconds,
                 "speech_duration_seconds": silence.speech_seconds,
             }
+
         text_path = transcript_dir() / f"{audio_path.stem}.txt"
-        transcription_audio_path = audio_path
-        trimmed_audio_path: Path | None = None
-        if silence.leading_silence_seconds > 0:
-            try:
-                trimmed_audio_path = trim_recording_leading_silence(audio_path, silence.leading_silence_seconds)
-                transcription_audio_path = trimmed_audio_path
-            except RecorderError:
-                transcription_audio_path = audio_path
+        transcript_audio_path = audio_path
+        try:
+            trimmed_audio_path = trim_recording_silence(audio_path)
+            transcript_audio_path = trimmed_audio_path
+        except RecorderError:
+            transcript_audio_path = audio_path
         try:
             text = transcribe(
-                audio_path=transcription_audio_path,
+                audio_path=transcript_audio_path,
                 language=language,
                 text_path=text_path,
                 command_template=args.transcriber_command,
@@ -1229,8 +1475,9 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
                 **_openai_compatible_transcribe_kwargs(args, normalized_transcriber),
             )
         finally:
-            if trimmed_audio_path is not None:
-                remove_file(str(trimmed_audio_path), suffix=".wav")
+            if trimmed_audio_path is not None and not keep_recording_artifacts:
+                remove_file(str(trimmed_audio_path), suffix=".flac")
+
         text = post_process_text(
             text,
             language,
@@ -1246,52 +1493,78 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             getattr(args, "openai_compatible_api_key", ""),
             getattr(args, "openai_compatible_flex_processing", True),
         )
+        text, security_post_processing = _apply_security_post_processing(text)
         _write_text_atomic(text_path, text.strip() + "\n")
         append_space = _coerce_bool(args.append_space, field_name="append_space")
         sanitize_special_chars = _coerce_bool(
             args.sanitize_special_chars,
             field_name="sanitize_special_chars",
         )
-        text_to_insert = prepare_output_text(text, append_space, sanitize_special_chars)
+        text_to_insert = ""
+        if text.strip():
+            text_to_insert = prepare_output_text(text, append_space, sanitize_special_chars)
         typing_delay_ms = _coerce_int(args.typing_delay_ms, field_name="typing-delay-ms", max_value=MAX_TYPING_DELAY_MS)
-        inserted = insert_text(text_to_insert, args.insert_method, typing_delay_ms)
+        inserted = bool(text_to_insert) and bool(insert_text(text_to_insert, args.insert_method, typing_delay_ms))
+
+        if not keep_recording_artifacts:
+            audio_deleted = remove_file(state.audio_path, suffix=audio_suffix)
+            log_deleted = remove_file(state.log_path, suffix=".log")
+            done_audio_path = None
+            done_log_path = None
+        elif trimmed_audio_path is not None:
+            done_audio_path = str(trimmed_audio_path)
+            remove_file(state.audio_path, suffix=audio_suffix)
+        else:
+            if audio_path.suffix.lower() == ".wav":
+                try:
+                    converted_audio_path = reencode_recording_to_flac(audio_path)
+                except RecorderError:
+                    done_audio_path = str(audio_path)
+                else:
+                    done_audio_path = str(converted_audio_path)
+                    if done_audio_path != state.audio_path:
+                        remove_file(state.audio_path, suffix=audio_suffix)
+            else:
+                done_audio_path = str(audio_path)
+
+        done = store.update(
+            status="done",
+            stopped_at=state.stopped_at or now_iso(),
+            audio_path=done_audio_path,
+            log_path=done_log_path,
+            transcript=text,
+            transcript_path=str(text_path),
+            inserted=inserted,
+            error="",
+        )
+        state.audio_path = done_audio_path
+        state.log_path = done_log_path
+        state.transcript_path = str(text_path)
+        artifact_cleanup = _enforce_recording_artifact_cap(state)
+        return {
+            "status": done.status,
+            "message": "transcription completed",
+            "transcript": text,
+            "transcript_path": str(text_path),
+            "inserted": inserted,
+            "security": security_post_processing,
+            "recording_artifact_cap": artifact_cleanup,
+            "language": language,
+            "recording_artifacts_kept": keep_recording_artifacts,
+            "audio_deleted": audio_deleted,
+            "log_deleted": log_deleted,
+        }
     except Exception as exc:
-        store.update(status="error", stopped_at=state.stopped_at or now_iso(), error=str(exc))
-        raise
-    keep_recording_artifacts = _coerce_bool(
-        getattr(args, "keep_recording_artifacts", False),
-        field_name="keep_recording_artifacts",
-    )
-    audio_deleted = False
-    log_deleted = False
-    done_audio_path = state.audio_path
-    done_log_path = state.log_path
-    if not keep_recording_artifacts:
-        audio_deleted = remove_file(state.audio_path, suffix=".wav")
-        log_deleted = remove_file(state.log_path, suffix=".log")
-        done_audio_path = None
-        done_log_path = None
-    done = store.update(
-        status="done",
-        stopped_at=state.stopped_at or now_iso(),
-        audio_path=done_audio_path,
-        log_path=done_log_path,
-        transcript=text,
-        transcript_path=str(text_path),
-        inserted=inserted,
-        error="",
-    )
-    return {
-        "status": done.status,
-        "message": "transcription completed",
-        "transcript": text,
-        "transcript_path": str(text_path),
-        "inserted": inserted,
-        "language": language,
-        "recording_artifacts_kept": keep_recording_artifacts,
-        "audio_deleted": audio_deleted,
-        "log_deleted": log_deleted,
-    }
+        error_text = str(exc)
+        # Refresh state once more on error so the most recent status is persisted.
+        if state_marked_finalizing:
+            state = store.read()
+            if not isinstance(state, RecordingState):
+                state = store.read()
+            store.update(status="error", stopped_at=now_iso(), error=error_text)
+        raise RuntimeError(error_text)
+    finally:
+        _release_finalization_lock(lock_path)
 
 
 def remove_file(path_value: str | None, *, suffix: str | None = None) -> bool:
@@ -1323,13 +1596,22 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
     state = store.read()
     _raise_if_state_unreadable(state)
     if state.status != "recording":
+        if state.status == "finalizing":
+            if state.audio_path:
+                return finalize_recording(args, store, state)
+            return {"status": "finalizing", "message": "finalization in progress"}
         if state.status in {"recorded", "processing"} and state.audio_path:
             return finalize_recording(args, store, state)
         return {"status": state.status, "message": "not recording"}
 
     if _is_recording_process_alive(state.pid):
         stop_process(_coerce_int(state.pid, field_name="state pid"))
-    state = store.update(status="processing", stopped_at=now_iso())
+    state = store.update(
+        status="recorded",
+        stopped_at=now_iso(),
+        error="",
+        inserted=False,
+    )
     return finalize_recording(args, store, state)
 
 
@@ -1338,11 +1620,16 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
     store = build_store(args)
     state = store.read()
     _raise_if_state_unreadable(state)
+    if state.status == "finalizing":
+        return {
+            "status": "finalizing",
+            "message": "finalization in progress; use cancel after completion",
+        }
     if state.status == "recording" and _is_recording_process_alive(state.pid):
         stop_process(_coerce_int(state.pid, field_name="state pid"))
 
     discarded_audio_path = state.audio_path
-    audio_deleted = remove_file(state.audio_path, suffix=".wav")
+    audio_deleted = _remove_recording_artifact(discarded_audio_path)
     log_deleted = remove_file(state.log_path, suffix=".log")
     store.write(
         RecordingState(
@@ -1354,7 +1641,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             max_seconds=state.max_seconds,
         )
     )
-    if state.status in {"recording", "recorded", "processing"} or discarded_audio_path:
+    if state.status in {"recording", "recorded", "processing", "finalizing"} or discarded_audio_path:
         return {
             "status": "idle",
             "message": "recording discarded",
@@ -1369,6 +1656,10 @@ def command_toggle(args: argparse.Namespace) -> dict[str, object]:
     store = build_store(args)
     state = store.read()
     _raise_if_state_unreadable(state)
+    if state.status == "finalizing":
+        if state.audio_path:
+            return finalize_recording(args, store, state)
+        return {"status": "finalizing", "message": "finalization in progress"}
     if state.status == "recording":
         if _is_recording_process_alive(state.pid):
             return command_stop(args)
@@ -1907,8 +2198,14 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         getattr(args, "openai_compatible_api_key", ""),
         getattr(args, "openai_compatible_flex_processing", True),
     )
+    text, security_post_processing = _apply_security_post_processing(text)
     _write_text_atomic(text_path, text.strip() + "\n")
-    return {"status": "done", "transcript": text, "transcript_path": str(text_path)}
+    return {
+        "status": "done",
+        "transcript": text,
+        "transcript_path": str(text_path),
+        "security": security_post_processing,
+    }
 
 
 def add_common_options(parser: argparse.ArgumentParser) -> None:
@@ -1958,7 +2255,7 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--keep-recording-artifacts",
         action="store_true",
-        help="keep temporary WAV/log files after successful transcription",
+        help="keep temporary FLAC/log files after successful transcription",
     )
     parser.add_argument(
         "--skip-silent-auto-relisten",

@@ -13,6 +13,8 @@ from speed_of_cinnamon.recorder import (
     RecorderCommand,
     RecorderError,
     SilenceDetectionResult,
+    SILENCE_DETECT_DURATION_SECONDS,
+    SILENCE_DETECT_NOISE,
     _ensure_file_head,
     _file_size,
     choose_recorder,
@@ -24,6 +26,8 @@ from speed_of_cinnamon.recorder import (
     parse_pactl_sources,
     read_recording_level,
     trim_recording_leading_silence,
+    trim_recording_silence,
+    reencode_recording_to_flac,
     start_recorder,
     stop_process,
     validate_recording_path,
@@ -58,6 +62,10 @@ class RecorderTest(unittest.TestCase):
             handle.setframerate(16000)
             handle.writeframes(b"".join(sample.to_bytes(2, "little", signed=True) for sample in samples))
 
+    def _ffmpeg_success_with_output(self, command: list[str]) -> subprocess.CompletedProcess[bytes]:
+        Path(command[-1]).write_bytes(b"audio")
+        return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
     def test_read_recording_level_reports_recent_peak(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
@@ -90,14 +98,14 @@ class RecorderTest(unittest.TestCase):
                 "[silencedetect @ 0x1] silence_start: 0\n"
             )
             completed = subprocess.CompletedProcess(["ffmpeg"], 0, stdout="", stderr=stderr)
-            with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
-                with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=completed) as mocked_run:
-                    result = detect_silent_recording(audio)
+        with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
+            with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=completed) as mocked_run:
+                result = detect_silent_recording(audio)
 
         self.assertEqual(result, SilenceDetectionResult(True, True, 2.0, 2.0, 0.0, 2.0, "silent recording"))
         argv = mocked_run.call_args.args[0]
         self.assertIn("-nostdin", argv)
-        self.assertIn("silencedetect=noise=-50dB:d=0.3", argv)
+        self.assertIn(f"silencedetect=noise={SILENCE_DETECT_NOISE}:d={SILENCE_DETECT_DURATION_SECONDS}", argv)
         self.assertNotIsInstance(argv, str)
 
     def test_detect_silent_recording_reports_leading_silence_seconds(self) -> None:
@@ -136,6 +144,74 @@ class RecorderTest(unittest.TestCase):
 
         self.assertLess(frame_count, 3200)
         self.assertEqual(first_frame, 12000)
+
+    def test_trim_recording_silence_converts_to_flac(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+
+            with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
+                with mock.patch(
+                    "speed_of_cinnamon.recorder.subprocess.run",
+                    side_effect=lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0]),
+                ) as mocked_run:
+                    trimmed = trim_recording_silence(audio)
+                    trimmed_exists = trimmed.exists()
+
+        self.assertEqual(trimmed.suffix, ".flac")
+        self.assertTrue(trimmed_exists)
+        mocked_run.assert_called_once()
+        argv = mocked_run.call_args.args[0]
+        self.assertIn("-c:a", argv)
+        self.assertIn("flac", argv)
+        expected = (
+            f"silenceremove=start_periods=1:start_duration={SILENCE_DETECT_DURATION_SECONDS}:"
+            f"start_threshold={SILENCE_DETECT_NOISE}:stop_periods=1:"
+            f"stop_duration={SILENCE_DETECT_DURATION_SECONDS}:stop_threshold={SILENCE_DETECT_NOISE}"
+        )
+        self.assertIn(
+            expected,
+            "".join(argv),
+        )
+
+    def test_reencode_recording_to_flac_uses_ffmpeg_flac_encoder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            completed = subprocess.CompletedProcess(["ffmpeg"], 0, stdout=b"", stderr=b"")
+            with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
+                with mock.patch(
+                    "speed_of_cinnamon.recorder.subprocess.run",
+                    side_effect=lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0]),
+                ) as mocked_run:
+                    output = reencode_recording_to_flac(audio)
+                    output_exists = output.exists()
+
+        self.assertEqual(output.suffix, ".flac")
+        self.assertTrue(output_exists)
+        argv = mocked_run.call_args.args[0]
+        self.assertIn("-c:a", argv)
+        self.assertIn("flac", argv)
+
+    def test_trim_recording_silence_reports_ffmpeg_error_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            failed = subprocess.CompletedProcess(["ffmpeg"], 1, stdout=b"", stderr=b"bad audio")
+            with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
+                with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=failed):
+                    with self.assertRaisesRegex(RecorderError, "bad audio"):
+                        trim_recording_silence(audio)
+
+    def test_reencode_recording_to_flac_reports_ffmpeg_error_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            failed = subprocess.CompletedProcess(["ffmpeg"], 1, stdout=b"", stderr=b"encoder failed")
+            with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
+                with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=failed):
+                    with self.assertRaisesRegex(RecorderError, "encoder failed"):
+                        reencode_recording_to_flac(audio)
 
     def test_detect_silent_recording_fails_open_when_ffmpeg_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -273,6 +349,14 @@ class RecorderTest(unittest.TestCase):
             self.assertEqual(valid.suffix, ".wav")
             with self.assertRaises(RecorderError):
                 validate_recording_path(Path(tmp) / "outside.wav", suffix=".wav", require_recordings_dir=True)
+
+    def test_validate_recording_path_accepts_wav_or_flac_suffix_tuple(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
+                audio = Path(tmp) / "sample.flac"
+                audio.write_bytes(b"audio")
+                valid = validate_recording_path(audio, suffix=(".wav", ".flac"))
+            self.assertEqual(valid.suffix, ".flac")
 
     def test_start_recorder_rejects_invalid_log_suffix(self) -> None:
         command = RecorderCommand(name="noop", argv=["true"])

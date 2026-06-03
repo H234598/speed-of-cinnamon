@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import json
 import shutil
+import stat
 import subprocess  # nosec B404
 import tempfile
 import io
 import os
+import time
 from pathlib import Path
 
-from .path_safety import assert_no_symlink_ancestors
+from .path_safety import assert_no_symlink_ancestors, read_text_without_following_symlinks
+from .paths import state_dir
 
 
 class OutputError(RuntimeError):
@@ -55,6 +59,14 @@ MAX_PASTE_TIMEOUT_SECONDS = 10
 MAX_TYPE_TIMEOUT_SECONDS = 30
 MAX_EXEC_TIMEOUT_SECONDS = 10
 MAX_TYPE_DELAY_MS = 10_000
+MAX_DUPLICATE_TEXT_SECONDS = 2.5
+MAX_DUPLICATE_LOCK_SECONDS = 30.0
+CLIPBOARD_DEDUP_STATE_FILE = "clipboard-last.json"
+CLIPBOARD_DEDUP_LOCK_FILE = ".clipboard-last.lock"
+
+_LAST_CLIPBOARD_TEXT: str = ""
+_LAST_CLIPBOARD_METHOD: str | None = None
+_LAST_CLIPBOARD_INSERTION: float = 0.0
 
 
 def _is_unsafe_env_var(name: str) -> bool:
@@ -178,6 +190,153 @@ def _read_file_head(file: io.BufferedRandom, max_chars: int) -> str:
     if _contains_escaped_null(text):
         raise OutputError("command output contains invalid null byte")
     return text
+
+
+def _clipboard_dedup_state_path() -> Path:
+    path = state_dir() / CLIPBOARD_DEDUP_STATE_FILE
+    assert_no_symlink_ancestors(path, field_name="clipboard dedupe state")
+    return path
+
+
+def _read_clipboard_dedup_state() -> tuple[str, float]:
+    try:
+        path = _clipboard_dedup_state_path()
+    except RuntimeError:
+        return "", 0.0
+    if not path.exists():
+        return "", 0.0
+    try:
+        payload = json.loads(read_text_without_following_symlinks(path, field_name="clipboard dedupe state"))
+    except (OSError, ValueError):
+        return "", 0.0
+    if not isinstance(payload, dict):
+        return "", 0.0
+    text_value = payload.get("text")
+    at_value = payload.get("at")
+    if not isinstance(text_value, str) or text_value is None or isinstance(text_value, bool):
+        return "", 0.0
+    if not isinstance(at_value, (int, float)) or isinstance(at_value, bool):
+        return "", 0.0
+    if not text_value:
+        return "", 0.0
+    return text_value, float(at_value)
+
+
+def _write_clipboard_dedup_state(text: str, at: float) -> bool:
+    if not text:
+        return False
+    try:
+        path = _clipboard_dedup_state_path()
+    except RuntimeError:
+        return False
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    fd, temp_name = tempfile.mkstemp(prefix="clipboard-dedupe-", suffix=".tmp", dir=str(path.parent))
+    os.close(fd)
+    temp_path = Path(temp_name)
+    try:
+        with temp_path.open("w", encoding="utf-8") as handle:
+            json.dump({"text": text, "at": at}, handle)
+            handle.write("\n")
+        try:
+            temp_path.chmod(0o600)
+        except OSError:
+            pass
+        os.replace(temp_path, path)
+    except OSError:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return True
+
+
+def _clipboard_dedup_lock_path() -> Path:
+    path = state_dir() / CLIPBOARD_DEDUP_LOCK_FILE
+    assert_no_symlink_ancestors(path, field_name="clipboard dedupe lock")
+    return path
+
+
+def _acquire_clipboard_dedup_lock() -> Path | None:
+    try:
+        path = _clipboard_dedup_lock_path()
+    except RuntimeError:
+        return None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    now = time.time()
+    try:
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        try:
+            existing = path.lstat()
+        except OSError:
+            return None
+        if not stat.S_ISREG(existing.st_mode):
+            return None
+        if now - existing.st_mtime > MAX_DUPLICATE_LOCK_SECONDS:
+            try:
+                path.unlink()
+            except OSError:
+                return None
+            return _acquire_clipboard_dedup_lock()
+        return None
+    except OSError:
+        return None
+    try:
+        os.write(fd, f"{os.getpid()}\n".encode("ascii"))
+    except OSError:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return None
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    return path
+
+
+def _release_clipboard_dedup_lock(path: Path | None) -> None:
+    if path is None:
+        return
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def _normalize_clipboard_text(text: str) -> str:
+    return " ".join(text.strip().split())
+
+
+def _record_clipboard_insertion(text: str, method: str) -> bool:
+    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
+    cleaned = _normalize_clipboard_text(text)
+    if not cleaned:
+        return False
+    now = time.time()
+    now_monotonic = time.monotonic()
+    if not _write_clipboard_dedup_state(cleaned, now):
+        return False
+    _LAST_CLIPBOARD_TEXT = cleaned
+    _LAST_CLIPBOARD_INSERTION = now_monotonic
+    _LAST_CLIPBOARD_METHOD = method
+    return True
 
 
 def _validate_text_input(text: str) -> bytes:
@@ -422,6 +581,45 @@ def type_text(text: str, delay_ms: int) -> None:
     )
 
 
+def _should_skip_clipboard_duplicate(text: str, method: str) -> bool:
+    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
+    if not isinstance(text, str) or isinstance(text, bool):
+        raise OutputError("text must be text")
+    if method not in {"clipboard", "clipboard-paste"}:
+        return False
+    cleaned = _normalize_clipboard_text(text)
+    if not cleaned:
+        return False
+    now_wall = time.time()
+    cached_text, cached_at = _read_clipboard_dedup_state()
+    if cleaned == cached_text and 0 <= (now_wall - cached_at) <= MAX_DUPLICATE_TEXT_SECONDS:
+        return True
+    now = time.monotonic()
+    if (
+        cleaned == _LAST_CLIPBOARD_TEXT
+        and method == _LAST_CLIPBOARD_METHOD
+        and (now - _LAST_CLIPBOARD_INSERTION) <= MAX_DUPLICATE_TEXT_SECONDS
+    ):
+        return True
+    return False
+
+
+def _begin_clipboard_insertion(text: str, method: str) -> Path | None:
+    if _should_skip_clipboard_duplicate(text, method):
+        return None
+    lock_path = _acquire_clipboard_dedup_lock()
+    if lock_path is None:
+        return None
+    try:
+        if _should_skip_clipboard_duplicate(text, method):
+            _release_clipboard_dedup_lock(lock_path)
+            return None
+        return lock_path
+    except Exception:
+        _release_clipboard_dedup_lock(lock_path)
+        raise
+
+
 def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
     if not isinstance(method, str) or isinstance(method, bool):
         raise OutputError("method must be text")
@@ -429,12 +627,26 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
     if method == "none":
         return False
     if method == "clipboard":
-        set_clipboard(text)
-        return True
+        lock_path = _begin_clipboard_insertion(text, method)
+        if lock_path is None:
+            return False
+        try:
+            set_clipboard(text)
+            _record_clipboard_insertion(text, method)
+            return True
+        finally:
+            _release_clipboard_dedup_lock(lock_path)
     if method == "clipboard-paste":
-        set_clipboard(text)
-        paste_from_clipboard()
-        return True
+        lock_path = _begin_clipboard_insertion(text, method)
+        if lock_path is None:
+            return False
+        try:
+            set_clipboard(text)
+            paste_from_clipboard()
+            _record_clipboard_insertion(text, method)
+            return True
+        finally:
+            _release_clipboard_dedup_lock(lock_path)
     if method == "type":
         type_text(text, delay_ms)
         return True

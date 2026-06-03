@@ -143,11 +143,13 @@ MAX_PACTL_TIMEOUT_SECONDS = 10
 MAX_RECORDING_LEVEL_BYTES = 128_000
 WAV_HEADER_SCAN_BYTES = 512
 DEFAULT_WAV_DATA_OFFSET = 44
-SILENCE_DETECT_NOISE = "-50dB"
-SILENCE_DETECT_DURATION_SECONDS = 0.3
+SILENCE_DETECT_NOISE = "-62dB"
+SILENCE_DETECT_DURATION_SECONDS = 0.02
+SILENCE_TRIM_NOISE = SILENCE_DETECT_NOISE
+SILENCE_TRIM_DURATION_SECONDS = SILENCE_DETECT_DURATION_SECONDS
 SILENCE_DETECT_TIMEOUT_SECONDS = 60
-SILENCE_SKIP_RATIO = 0.98
-SILENCE_SKIP_MAX_SPEECH_SECONDS = 0.75
+SILENCE_SKIP_RATIO = 0.999
+SILENCE_SKIP_MAX_SPEECH_SECONDS = 0.6
 
 _FFMPEG_DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
 _SILENCE_START_RE = re.compile(r"silence_start:\s*([0-9]+(?:\.[0-9]+)?)")
@@ -297,6 +299,13 @@ def detect_silent_recording(audio_path: Path) -> SilenceDetectionResult:
     except (OSError, subprocess.TimeoutExpired) as exc:
         return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, f"ffmpeg silence detection failed: {exc}")
     if proc.returncode != 0:
+        stderr = proc.stderr or ""
+        if isinstance(stderr, bytes):
+            detail = stderr.decode("utf-8", errors="ignore").strip()
+        else:
+            detail = str(stderr).strip()
+        if detail and not _contains_escaped_null(detail):
+            return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, f"ffmpeg silence detection failed: {detail}")
         return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, "ffmpeg silence detection failed")
     duration_seconds = _parse_ffmpeg_duration(proc.stderr)
     if duration_seconds <= 0:
@@ -355,6 +364,154 @@ def trim_recording_leading_silence(audio_path: Path, leading_silence_seconds: fl
             pass
         raise RecorderError(f"failed to write trimmed recording audio file {temp_path}: {exc}") from exc
     return temp_path
+
+
+def trim_recording_silence(
+    audio_path: Path,
+    *,
+    noise: str = SILENCE_TRIM_NOISE,
+    duration_seconds: float = SILENCE_TRIM_DURATION_SECONDS,
+) -> Path:
+    if not isinstance(audio_path, Path):
+        raise RecorderError("recording audio path must be a path")
+    if not isinstance(noise, str) or isinstance(noise, bool):
+        raise RecorderError("silence trim noise threshold must be text")
+    if not noise.strip():
+        raise RecorderError("silence trim noise threshold must not be empty")
+    if not isinstance(duration_seconds, (int, float)) or isinstance(duration_seconds, bool):
+        raise RecorderError("silence trim duration must be numeric")
+    if duration_seconds <= 0:
+        raise RecorderError("silence trim duration must be greater than 0")
+    if _contains_escaped_null(noise):
+        raise RecorderError("silence trim noise threshold contains invalid null byte")
+    audio_path = validate_recording_path(audio_path, suffix=(".wav", ".flac"), require_recordings_dir=False)
+    fd, temp_name = tempfile.mkstemp(prefix=f"{audio_path.stem}.trimmed-", suffix=".flac", dir=str(audio_path.parent))
+    os.close(fd)
+    trimmed_path = Path(temp_name)
+    try:
+        ffmpeg = _command_path("ffmpeg")
+    except Exception:
+        try:
+            trimmed_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    command = [
+        ffmpeg,
+        "-hide_banner",
+        "-nostdin",
+        "-nostats",
+        "-i",
+        str(audio_path),
+        "-af",
+        (
+        f"silenceremove=start_periods=1:start_duration={duration_seconds}:"
+            f"start_threshold={noise}:stop_periods=1:stop_duration={duration_seconds}:"
+            f"stop_threshold={noise}"
+        ),
+        "-c:a",
+        "flac",
+        "-y",
+        str(trimmed_path),
+    ]
+    try:
+        proc = subprocess.run(  # nosec B603
+            command,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=SILENCE_DETECT_TIMEOUT_SECONDS,
+            env=_filtered_environment(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        try:
+            trimmed_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise RecorderError(f"failed to trim silence from recording {audio_path}: {exc}") from exc
+    if proc.returncode != 0:
+        detail = ""
+        if proc.stderr:
+            detail = proc.stderr.decode("utf-8", errors="ignore").strip()
+            if _contains_escaped_null(detail):
+                detail = ""
+        try:
+            trimmed_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise RecorderError(detail or f"ffmpeg silence trimming failed for {audio_path}")
+    if not trimmed_path.exists() or trimmed_path.stat().st_size == 0:
+        try:
+            trimmed_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise RecorderError(f"ffmpeg silence trimming produced empty output for {audio_path}")
+    return trimmed_path
+
+
+def reencode_recording_to_flac(audio_path: Path) -> Path:
+    if not isinstance(audio_path, Path):
+        raise RecorderError("recording audio path must be a path")
+    audio_path = validate_recording_path(audio_path, suffix=(".wav", ".flac"), require_recordings_dir=False)
+    if audio_path.suffix.lower() == ".flac":
+        return audio_path
+
+    fd, temp_name = tempfile.mkstemp(prefix=f"{audio_path.stem}.encoded-", suffix=".flac", dir=str(audio_path.parent))
+    os.close(fd)
+    encoded_path = Path(temp_name)
+    try:
+        ffmpeg = _command_path("ffmpeg")
+    except Exception:
+        try:
+            encoded_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    command = [
+        ffmpeg,
+        "-hide_banner",
+        "-nostdin",
+        "-nostats",
+        "-i",
+        str(audio_path),
+        "-c:a",
+        "flac",
+        "-y",
+        str(encoded_path),
+    ]
+    try:
+        proc = subprocess.run(  # nosec B603
+            command,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=SILENCE_DETECT_TIMEOUT_SECONDS,
+            env=_filtered_environment(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        try:
+            encoded_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise RecorderError(f"failed to convert recording {audio_path} to FLAC: {exc}") from exc
+    if proc.returncode != 0:
+        detail = ""
+        if proc.stderr:
+            detail = proc.stderr.decode("utf-8", errors="ignore").strip()
+            if _contains_escaped_null(detail):
+                detail = ""
+        try:
+            encoded_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise RecorderError(detail or f"ffmpeg FLAC conversion failed for {audio_path}")
+    if not encoded_path.exists() or encoded_path.stat().st_size == 0:
+        try:
+            encoded_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise RecorderError(f"ffmpeg FLAC conversion produced empty output for {audio_path}")
+    return encoded_path
 
 
 def _assert_positive_pid(pid: int) -> None:
@@ -441,11 +598,36 @@ def read_recording_level(audio_path: Path) -> RecordingLevel:
     )
 
 
-def validate_recording_path(path: Path, *, suffix: str, require_recordings_dir: bool = False) -> Path:
+def _normalize_suffixes(suffix: str | tuple[str, ...]) -> tuple[str, ...]:
+    if isinstance(suffix, str):
+        suffixes = (suffix,)
+    elif isinstance(suffix, tuple):
+        if not suffix:
+            raise RecorderError("recording artifact suffix must be a non-empty string or tuple")
+        suffixes = suffix
+    else:
+        raise RecorderError("recording artifact suffix must be text")
+    normalized: list[str] = []
+    for item in suffixes:
+        if not isinstance(item, str) or isinstance(item, bool):
+            raise RecorderError("recording artifact suffix must be text")
+        if not item:
+            raise RecorderError("recording artifact suffix must be text")
+        normalized.append(item.lower())
+    if not normalized:
+        raise RecorderError("recording artifact suffix must be text")
+    return tuple(dict.fromkeys(normalized))
+
+
+def validate_recording_path(
+    path: Path,
+    *,
+    suffix: str | tuple[str, ...],
+    require_recordings_dir: bool = False,
+) -> Path:
     if not isinstance(path, Path):
         raise RecorderError("recording artifact path must be a path")
-    if not isinstance(suffix, str) or isinstance(suffix, bool):
-        raise RecorderError("recording artifact suffix must be text")
+    normalized_suffixes = _normalize_suffixes(suffix)
     if _contains_escaped_null(str(path)):
         raise RecorderError("recording artifact path contains invalid null byte")
     normalized = path.expanduser()
@@ -463,8 +645,11 @@ def validate_recording_path(path: Path, *, suffix: str, require_recordings_dir: 
         raise RecorderError("recording artifact stem is too long")
     if len(normalized.stem.encode("utf-8")) > MAX_RECORDING_STEM_CHARS:
         raise RecorderError(f"recording artifact stem is too long (max {MAX_RECORDING_STEM_CHARS} bytes)")
-    if normalized.suffix.lower() != suffix.lower():
-        raise RecorderError(f"recording artifact must use {suffix} extension")
+    if normalized.suffix.lower() not in normalized_suffixes:
+        if len(normalized_suffixes) == 1:
+            raise RecorderError(f"recording artifact must use {normalized_suffixes[0]} extension")
+        suffix_summary = ", ".join(normalized_suffixes)
+        raise RecorderError(f"recording artifact must use one of the following extensions: {suffix_summary}")
     if require_recordings_dir:
         root = recordings_dir().resolve(strict=False)
         assert_no_symlink_ancestors(root, field_name="recordings directory")

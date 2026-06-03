@@ -63,6 +63,7 @@ YAML in a dedicated lint step, then repeats the normal checks and publishes a Gi
 checksum, Fedora noarch RPM, generic noarch RPM, and their source RPMs. Tag-triggered releases skip Snap generation by
 default because the GitHub-hosted release runner does not consistently provide a usable Snap build environment. The same
 workflow has manual inputs.
+Publishing requires repository secret `RELEASE_GITHUB_TOKEN` with `contents: write` scope for release creation and upload.
 Optional flags to skip package types when triggering manually:
 
 To trigger the workflow manually:

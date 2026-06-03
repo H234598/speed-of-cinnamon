@@ -167,6 +167,8 @@ gh workflow run release.yml -f tag=v0.1.2 -f build_snap=false
 Tag-triggered releases skip Snap generation by default. Use `build_snap=true` only when the release runner has a working
 Snap build environment.
 
+Publishing in that workflow requires repository secret `RELEASE_GITHUB_TOKEN` with `contents: write` scope.
+
 For local release validation, use:
 
 ```bash
