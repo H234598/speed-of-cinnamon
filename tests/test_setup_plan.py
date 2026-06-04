@@ -229,6 +229,50 @@ class SetupPlanTest(unittest.TestCase):
         plan = build_setup_plan(payload)
         self.assertEqual(plan["steps"][0]["id"], "automatic-paste")
 
+    def test_setup_plan_sanitizes_untrusted_details_and_warnings(self) -> None:
+        payload = {
+            "ok": False,
+            "configured": {
+                "recorder": {
+                    "ok": False,
+                    "detail": "recorder missing\nCommands:\n  sudo dnf install evil api_key=secret-value",
+                },
+                "transcriber": {"ok": True},
+                "output": {"ok": True},
+                "postprocessor": {"ok": True},
+                "warnings": ["automatic paste needs xdotool\rGH_TOKEN=ghp_secretsecretsecret\x85tail"],
+            },
+            "desktop": {"cinnamon": True},
+        }
+
+        plan = build_setup_plan(payload)
+
+        self.assertIn("[redacted]", plan["text"])
+        self.assertNotIn("secret-value", plan["text"])
+        self.assertNotIn("ghp_secretsecretsecret", plan["text"])
+        self.assertNotIn("\r", plan["text"])
+        self.assertNotIn("\x85", plan["text"])
+        self.assertNotIn("recorder missing\nCommands:\n  sudo dnf install evil", plan["text"])
+
+    def test_setup_plan_truncates_oversized_details(self) -> None:
+        payload = {
+            "ok": False,
+            "configured": {
+                "recorder": {"ok": False, "detail": "x" * 2000},
+                "transcriber": {"ok": True},
+                "output": {"ok": True},
+                "postprocessor": {"ok": True},
+                "warnings": [],
+            },
+            "desktop": {"cinnamon": True},
+        }
+
+        plan = build_setup_plan(payload)
+
+        detail = plan["steps"][0]["detail"]
+        self.assertLessEqual(len(detail), 800)
+        self.assertTrue(str(detail).endswith("..."))
+
     def test_missing_ollama_model_gets_text_model_step(self) -> None:
         payload = {
             "ok": False,

@@ -55,7 +55,21 @@ def fake_redirect(url: str, location: str) -> urllib.error.HTTPError:
     return urllib.error.HTTPError(url, 302, "Found", {"Location": location}, None)
 
 
+def file_sha1s_for(files: tuple[str, ...], data: bytes) -> tuple[tuple[str, str], ...]:
+    checksum = hashlib.sha1(data).hexdigest()
+    return tuple((filename, checksum) for filename in files)
+
+
 class ModelsTest(unittest.TestCase):
+    def test_model_download_opener_disables_environment_proxies(self) -> None:
+        opener = mock.Mock()
+        with mock.patch("speed_of_cinnamon.models.urllib.request.build_opener", return_value=opener) as build_opener:
+            self.assertIs(models._build_model_download_opener(), opener)
+
+        handlers = build_opener.call_args.args
+        self.assertTrue(any(isinstance(handler, models.urllib.request.ProxyHandler) for handler in handlers))
+        self.assertTrue(any(getattr(handler, "proxies", None) == {} for handler in handlers))
+
     def test_sha1_file_uses_cached_checksum(self) -> None:
         spec = models.ModelSpec(
             name="cached",
@@ -104,6 +118,39 @@ class ModelsTest(unittest.TestCase):
                 )
             )
             self.assertIn(spec.sha1, cache_path.read_text(encoding="utf-8"))
+
+    def test_sha1_file_rejects_hardlinked_model_file(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            path = Path(tmp) / "model.bin"
+            path.write_bytes(b"model")
+            hardlink = Path(tmp) / "model-hardlink.bin"
+            try:
+                os.link(path, hardlink)
+            except OSError as exc:
+                self.skipTest(f"hardlinks unavailable: {exc}")
+
+            with self.assertRaisesRegex(models.ModelError, "must not be hardlinked"):
+                models.sha1_file(hardlink)
+
+    def test_sha1_file_rejects_fifo_without_blocking(self) -> None:
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("mkfifo unavailable")
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            fifo = Path(tmp) / "model.bin"
+            os.mkfifo(fifo)
+
+            with self.assertRaisesRegex(models.ModelError, "must be a regular file"):
+                models.sha1_file(fifo)
 
     def test_model_status_verify_recomputes_checksum_without_cache(self) -> None:
         data = b"verification content"
@@ -373,6 +420,22 @@ class ModelsTest(unittest.TestCase):
             models._load_model_checksum_cache()
             self.assertEqual(models._model_checksum_cache, {})
 
+    def test_model_checksum_cache_rejects_control_character_paths(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(
+                json.dumps({"a\u0085b.bin": {"checksum": "a" * 40, "size": 1, "mtime_ns": 1}}),
+                encoding="utf-8",
+            )
+            models._load_model_checksum_cache()
+            self.assertEqual(models._model_checksum_cache, {})
+
     def test_write_model_checksum_cache_rejects_oversized_payload(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -492,6 +555,16 @@ class ModelsTest(unittest.TestCase):
             with self.assertRaisesRegex(models.ModelError, "invalid model checksum cache state"):
                 models._set_model_checksum_cache(path, "a" * 40, stat)
 
+    def test_set_model_checksum_cache_rejects_control_character_path(self) -> None:
+        stat = os.stat_result((0, 0, 0, 0, 0, 0, 12, 0, 0, 0))
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+        ):
+            path = models._model_checksum_cache_path().parent / "a\x85b.bin"
+            with self.assertRaisesRegex(models.ModelError, "invalid model checksum cache state"):
+                models._set_model_checksum_cache(path, "a" * 40, stat)
+
     def test_set_model_checksum_cache_rejects_oversized_byte_path(self) -> None:
         stat = os.stat_result((0, 0, 0, 0, 0, 0, 12, 0, 0, 0))
         with (
@@ -515,6 +588,31 @@ class ModelsTest(unittest.TestCase):
             cache_path.write_text("x" * (models.MAX_MODEL_CHECKSUM_JSON_BYTES + 1), encoding="utf-8")
             models._load_model_checksum_cache()
             self.assertFalse(cache_path.exists())
+
+    def test_model_checksum_cache_rejects_file_that_grows_after_size_check(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text("{}", encoding="utf-8")
+
+            with mock.patch.object(
+                models,
+                "read_text_without_following_symlinks",
+                side_effect=OSError("model checksum cache path is too large"),
+            ) as mocked_read:
+                models._load_model_checksum_cache()
+
+            self.assertFalse(cache_path.exists())
+            mocked_read.assert_called_once_with(
+                cache_path,
+                field_name="model checksum cache path",
+                max_bytes=models.MAX_MODEL_CHECKSUM_JSON_BYTES,
+            )
 
     def test_model_checksum_cache_rejects_invalid_utf8(self) -> None:
         with (
@@ -589,7 +687,7 @@ class ModelsTest(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"cache delete fails")
             models._set_model_checksum_cache(path, spec.sha1, path.stat())
-            with mock.patch("speed_of_cinnamon.models.Path.unlink", side_effect=OSError("delete failed")):
+            with mock.patch("speed_of_cinnamon.models.os.unlink", side_effect=OSError("delete failed")):
                 with self.assertRaises(OSError):
                     models.remove_model("cache-delete-fails")
             self.assertIn(str(path), models._model_checksum_cache)
@@ -603,6 +701,7 @@ class ModelsTest(unittest.TestCase):
             description="cache tmp delete fails",
         )
         real_unlink = Path.unlink
+        real_os_unlink = os.unlink
         with (
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
@@ -617,12 +716,16 @@ class ModelsTest(unittest.TestCase):
             tmp_path.write_bytes(b"tmp")
             models._set_model_checksum_cache(path, spec.sha1, path.stat())
 
-            def unlink_or_fail(target: Path) -> None:
-                if target == tmp_path:
+            def unlink_or_fail(target: str, *args: object, **kwargs: object) -> None:
+                if target == tmp_path.name:
                     raise OSError("tmp delete failed")
-                real_unlink(target)
+                dir_fd = kwargs.get("dir_fd")
+                if isinstance(dir_fd, int):
+                    real_os_unlink(target, dir_fd=dir_fd)
+                    return
+                real_unlink(Path(target))
 
-            with mock.patch("speed_of_cinnamon.models.Path.unlink", autospec=True, side_effect=unlink_or_fail):
+            with mock.patch("speed_of_cinnamon.models.os.unlink", side_effect=unlink_or_fail):
                 with self.assertRaisesRegex(models.ModelError, "failed to remove temporary model file"):
                     models.remove_model("cache-tmp-delete-fails")
 
@@ -638,6 +741,7 @@ class ModelsTest(unittest.TestCase):
             description="cache tmp delete and clear fail",
         )
         real_unlink = Path.unlink
+        real_os_unlink = os.unlink
         with (
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
@@ -652,13 +756,17 @@ class ModelsTest(unittest.TestCase):
             tmp_path.write_bytes(b"tmp")
             models._set_model_checksum_cache(path, spec.sha1, path.stat())
 
-            def unlink_or_fail(target: Path) -> None:
-                if target == tmp_path:
+            def unlink_or_fail(target: str, *args: object, **kwargs: object) -> None:
+                if target == tmp_path.name:
                     raise OSError("tmp delete failed")
-                real_unlink(target)
+                dir_fd = kwargs.get("dir_fd")
+                if isinstance(dir_fd, int):
+                    real_os_unlink(target, dir_fd=dir_fd)
+                    return
+                real_unlink(Path(target))
 
             with (
-                mock.patch("speed_of_cinnamon.models.Path.unlink", autospec=True, side_effect=unlink_or_fail),
+                mock.patch("speed_of_cinnamon.models.os.unlink", side_effect=unlink_or_fail),
                 mock.patch(
                     "speed_of_cinnamon.models._clear_model_checksum_cache",
                     side_effect=models.ModelError("cache clear failed"),
@@ -758,6 +866,7 @@ class ModelsTest(unittest.TestCase):
             model_format="ctranslate2",
             repo_id="example/ct2-target-race",
             files=("config.json",),
+            file_sha1s=file_sha1s_for(("config.json",), data),
         )
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -795,6 +904,7 @@ class ModelsTest(unittest.TestCase):
             model_format="ctranslate2",
             repo_id="example/ct2-parent-order",
             files=("config.json",),
+            file_sha1s=file_sha1s_for(("config.json",), data),
         )
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -847,6 +957,7 @@ class ModelsTest(unittest.TestCase):
             model_format="ctranslate2",
             repo_id="example/ct2-test",
             files=("config.json", "model.bin", "tokenizer.json"),
+            file_sha1s=file_sha1s_for(("config.json", "model.bin", "tokenizer.json"), data),
         )
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -870,6 +981,144 @@ class ModelsTest(unittest.TestCase):
         self.assertEqual(payload["downloaded"], True)
         self.assertTrue(payload["verified"])
         self.assertIn("already downloaded", second_payload["message"])
+
+    def test_ctranslate2_directory_model_without_file_hashes_is_not_trusted_for_default(self) -> None:
+        spec = models.ModelSpec(
+            name="ct2-unhashed",
+            filename="ct2-unhashed",
+            size="2 KiB",
+            sha1="",
+            description="ct2 unhashed",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-unhashed",
+            files=("config.json", "model.bin"),
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+        ):
+            path = models.model_path(spec)
+            path.mkdir(parents=True)
+            (path / "config.json").write_bytes(b"config")
+            (path / "model.bin").write_bytes(b"model")
+
+            self.assertEqual(models.default_ctranslate2_model_path(), "")
+            self.assertFalse(models.model_status(spec, verify=True)["verified"])
+            with self.assertRaisesRegex(models.ModelError, "missing per-file checksums"):
+                models.download_model("ct2-unhashed")
+
+    def test_download_model_rejects_multifile_checksum_mismatch(self) -> None:
+        spec = models.ModelSpec(
+            name="ct2-mismatch",
+            filename="ct2-mismatch",
+            size="2 KiB",
+            sha1="",
+            description="ct2 checksum mismatch",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-mismatch",
+            files=("config.json",),
+            file_sha1s=(("config.json", hashlib.sha1(b"expected").hexdigest()),),
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(b"tampered")),
+        ):
+            path = models.model_path(spec)
+            with self.assertRaisesRegex(models.ModelError, "checksum mismatch"):
+                models.download_model("ct2-mismatch")
+
+            self.assertFalse(path.exists())
+            self.assertEqual(list(path.parent.glob(f".{spec.filename}.*")), [])
+
+    def test_ctranslate2_directory_model_requires_matching_file_hashes(self) -> None:
+        config = b"config"
+        model_data = b"model"
+        spec = models.ModelSpec(
+            name="ct2-hashed",
+            filename="ct2-hashed",
+            size="2 KiB",
+            sha1="",
+            description="ct2 hashed",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-hashed",
+            files=("config.json", "model.bin"),
+            file_sha1s=(
+                ("config.json", hashlib.sha1(config).hexdigest()),
+                ("model.bin", hashlib.sha1(model_data).hexdigest()),
+            ),
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+        ):
+            path = models.model_path(spec)
+            path.mkdir(parents=True)
+            (path / "config.json").write_bytes(config)
+            (path / "model.bin").write_bytes(model_data)
+            self.assertEqual(models.default_ctranslate2_model_path(), str(path))
+            (path / "model.bin").write_bytes(b"tampered")
+            self.assertEqual(models.default_ctranslate2_model_path(), "")
+
+    def test_download_model_limits_multifile_downloads_by_remaining_total_size(self) -> None:
+        spec = models.ModelSpec(
+            name="ct2-aggregate-limit",
+            filename="ct2-aggregate-limit",
+            size="1 MiB",
+            sha1="",
+            description="ct2 aggregate limit",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-aggregate-limit",
+            files=("config.json", "model.bin"),
+            file_sha1s=(
+                ("config.json", hashlib.sha1(b"a" * 1500).hexdigest()),
+                ("model.bin", hashlib.sha1(b"b" * 1000).hexdigest()),
+            ),
+        )
+        limits: list[int] = []
+        original_download = models._download_url_to_file_with_fd
+
+        def record_download_limit(
+            url: str,
+            tmp_dir: Path,
+            tmp_dir_fd: int | None,
+            size_limit: int,
+            model_name: str,
+            *,
+            prefix: str,
+        ) -> tuple[Path, int]:
+            limits.append(size_limit)
+            return original_download(url, tmp_dir, tmp_dir_fd, size_limit, model_name, prefix=prefix)
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch.object(models, "MAX_MODEL_DOWNLOAD_BYTES", 2_000),
+            mock.patch.object(models, "_download_url_to_file_with_fd", side_effect=record_download_limit),
+            mock.patch(
+                "speed_of_cinnamon.models._open_model_download_url",
+                side_effect=[
+                    FakeResponseWithLength(b"a" * 1500, 1500),
+                    FakeResponseWithLength(b"b" * 1000, 1000),
+                ],
+            ),
+        ):
+            path = models.model_path(spec)
+
+            with self.assertRaisesRegex(models.ModelError, "downloaded model too large"):
+                models.download_model("ct2-aggregate-limit")
+
+            self.assertEqual(limits, [2_000, 500])
+            self.assertFalse(path.exists())
+            self.assertEqual(list(path.parent.glob(f".{spec.filename}.*")), [])
 
     def test_download_model_uses_nofollow_parent_creation(self) -> None:
         data = b"tiny model"
@@ -996,6 +1245,7 @@ class ModelsTest(unittest.TestCase):
             model_format="ctranslate2",
             repo_id="example/ct2-directory-tdir",
             files=("config.json",),
+            file_sha1s=file_sha1s_for(("config.json",), data),
         )
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -1021,13 +1271,44 @@ class ModelsTest(unittest.TestCase):
             with (
                 mock.patch.object(models, "_open_model_parent_directory", side_effect=record_open_parent),
                 mock.patch.object(models, "_create_temporary_directory_in_parent_directory", side_effect=record_temp_directory),
-                mock.patch.object(models.tempfile, "mkdtemp", side_effect=AssertionError("mkdtemp should not be used for model temp directory")),
             ):
                 models.download_model("ct2-directory-tdir")
 
         self.assertEqual(len(temporary_directory_calls), 1, "directory download should use secure temporary-directory helper once")
         self.assertGreaterEqual(len(open_parent_calls), 1, "directory download should open at least one model parent")
         self.assertIn(temporary_directory_calls[0][0], open_parent_calls)
+
+    def test_download_directory_model_failure_removes_temporary_directory_safely(self) -> None:
+        spec = models.ModelSpec(
+            name="ct2-directory-cleanup-safe",
+            filename="ct2-directory-cleanup-safe",
+            size="2 KiB",
+            sha1="",
+            description="test directory cleanup safety",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            files=("config.json",),
+        )
+        cleanup_calls: list[tuple[Path, Path, str]] = []
+        original_remove_directory = models._remove_model_directory_leaf
+
+        def record_remove_directory(path: Path, root: Path, *, field_name: str = "model directory") -> bool:
+            cleanup_calls.append((path, root, field_name))
+            return original_remove_directory(path, root, field_name=field_name)
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch.object(models, "_remove_model_directory_leaf", side_effect=record_remove_directory),
+        ):
+            with self.assertRaisesRegex(models.ModelError, "missing repo_id"):
+                models.download_model("ct2-directory-cleanup-safe")
+
+        self.assertEqual(len(cleanup_calls), 1)
+        cleanup_path, cleanup_root, field_name = cleanup_calls[0]
+        self.assertEqual(cleanup_root, cleanup_path.parent)
+        self.assertEqual(field_name, "model temporary directory")
 
     def test_multifile_model_symlink_path_is_not_downloaded(self) -> None:
         data = b"small model file"
@@ -1076,6 +1357,33 @@ class ModelsTest(unittest.TestCase):
             with self.assertRaisesRegex(models.ModelError, "missing repo_id"):
                 models.download_model("ct2-bad")
 
+    def test_model_download_urls_rejects_malformed_multifile_repo_id(self) -> None:
+        spec = models.ModelSpec(
+            name="ct2-bad-repo",
+            filename="ct2-bad-repo",
+            size="2 KiB",
+            sha1="",
+            description="ct2 bad repo",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/bad?repo",
+            files=("config.json", "model.bin"),
+        )
+        with self.assertRaisesRegex(models.ModelError, "model repo_id contains invalid character"):
+            models.model_download_urls(spec)
+
+    def test_model_url_rejects_malformed_single_file_repo_id(self) -> None:
+        spec = models.ModelSpec(
+            name="bad-repo",
+            filename="ggml-bad.bin",
+            size="2 KiB",
+            sha1="",
+            description="bad repo",
+            repo_id="example/bad#repo",
+        )
+        with self.assertRaisesRegex(models.ModelError, "model repo_id contains invalid character"):
+            _ = spec.url
+
     def test_download_url_rejects_non_huggingface_hosts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(models.ModelError, "host is not allowed"):
@@ -1086,6 +1394,23 @@ class ModelsTest(unittest.TestCase):
                     "test",
                     prefix=".model.",
                 )
+
+    def test_download_url_rejects_disallowed_host_without_leaking_userinfo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(models.ModelError) as raised:
+                models._download_url_to_file(
+                    "https://user:secret@example.com/model.bin",
+                    Path(tmp),
+                    1024,
+                    "test",
+                    prefix=".model.",
+                )
+
+        error = str(raised.exception)
+        self.assertIn("host is not allowed", error)
+        self.assertNotIn("user", error)
+        self.assertNotIn("secret", error)
+        self.assertNotIn("example.com", error)
 
     def test_download_url_rejects_redirects_to_unapproved_hosts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1107,14 +1432,17 @@ class ModelsTest(unittest.TestCase):
 
     def test_tiny_de_download_requires_exact_catalog_url(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaisesRegex(models.ModelError, "not allowed"):
-                models._download_url_to_file(
-                    "https://huggingface.co/other/model/resolve/main/ggml-tiny-de.bin",
-                    Path(tmp),
-                    1024,
-                    "tiny-de",
-                    prefix=".model.",
-                )
+            with mock.patch("speed_of_cinnamon.models._open_model_download_url") as mocked_open:
+                with self.assertRaisesRegex(models.ModelError, "not allowed"):
+                    models._download_url_to_file(
+                        "https://huggingface.co/other/model/resolve/main/ggml-tiny-de.bin",
+                        Path(tmp),
+                        1024,
+                        "tiny-de",
+                        prefix=".model.",
+                    )
+
+            mocked_open.assert_not_called()
 
     def test_download_url_allows_redirect_to_exact_allowed_url_with_query(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1138,6 +1466,86 @@ class ModelsTest(unittest.TestCase):
             self.assertEqual(downloaded, 5)
             self.assertTrue(tmp_path.exists())
             self.assertEqual(tmp_path.read_bytes(), b"model")
+
+    def test_download_url_allows_huggingface_resolve_cache_redirect_for_same_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch(
+                "speed_of_cinnamon.models._open_model_download_url",
+                side_effect=[
+                    fake_redirect(
+                        "https://huggingface.co/Systran/faster-whisper-base/resolve/main/config.json",
+                        "/api/resolve-cache/models/Systran/faster-whisper-base/ebe41f70/config.json?%2FSystran%2Ffaster-whisper-base%2Fresolve%2Fmain%2Fconfig.json=",
+                    ),
+                    FakeResponseWithLength(b"{}", 2),
+                ],
+            ):
+                tmp_path, downloaded = models._download_url_to_file(
+                    "https://huggingface.co/Systran/faster-whisper-base/resolve/main/config.json",
+                    Path(tmp),
+                    1024,
+                    "ct2-base",
+                    prefix=".model.",
+                )
+            self.assertEqual(downloaded, 2)
+            self.assertEqual(tmp_path.read_bytes(), b"{}")
+
+    def test_download_url_allows_huggingface_storage_redirect(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch(
+                "speed_of_cinnamon.models._open_model_download_url",
+                side_effect=[
+                    fake_redirect(
+                        "https://huggingface.co/Systran/faster-whisper-base/resolve/main/model.bin",
+                        "https://cas-bridge.xethub.hf.co/xet-bridge-us/abc/model.bin?response-content-disposition=inline%3B+filename%3D%22model.bin%22",
+                    ),
+                    FakeResponseWithLength(b"model", 5),
+                ],
+            ):
+                tmp_path, downloaded = models._download_url_to_file(
+                    "https://huggingface.co/Systran/faster-whisper-base/resolve/main/model.bin",
+                    Path(tmp),
+                    1024,
+                    "ct2-base",
+                    prefix=".model.",
+                )
+            self.assertEqual(downloaded, 5)
+            self.assertEqual(tmp_path.read_bytes(), b"model")
+
+    def test_download_url_rejects_huggingface_storage_redirect_for_other_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(models.ModelError, "redirect URL is not allowed"):
+                with mock.patch(
+                    "speed_of_cinnamon.models._open_model_download_url",
+                    side_effect=fake_redirect(
+                        "https://huggingface.co/Systran/faster-whisper-base/resolve/main/model.bin",
+                        "https://cas-bridge.xethub.hf.co/xet-bridge-us/abc/other.bin?response-content-disposition=inline%3B+filename%3D%22other.bin%22",
+                    ),
+                ):
+                    models._download_url_to_file(
+                        "https://huggingface.co/Systran/faster-whisper-base/resolve/main/model.bin",
+                        Path(tmp),
+                        1024,
+                        "ct2-base",
+                        prefix=".model.",
+                    )
+
+    def test_download_url_rejects_same_host_redirects_to_other_huggingface_repo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(models.ModelError, "redirect URL is not allowed"):
+                with mock.patch(
+                    "speed_of_cinnamon.models._open_model_download_url",
+                    side_effect=fake_redirect(
+                        "https://huggingface.co/Systran/faster-whisper-base/resolve/main/config.json",
+                        "https://huggingface.co/other/repo/resolve/main/config.json?download=1",
+                    ),
+                ):
+                    models._download_url_to_file(
+                        "https://huggingface.co/Systran/faster-whisper-base/resolve/main/config.json",
+                        Path(tmp),
+                        1024,
+                        "ct2-base",
+                        prefix=".model.",
+                    )
 
     def test_download_url_rejects_redirects_to_other_huggingface_repo(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1169,6 +1577,7 @@ class ModelsTest(unittest.TestCase):
             model_format="ctranslate2",
             repo_id="example/ct2-replace-fails",
             files=("config.json",),
+            file_sha1s=file_sha1s_for(("config.json",), data),
         )
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -1192,6 +1601,7 @@ class ModelsTest(unittest.TestCase):
             model_format="ctranslate2",
             repo_id="example/ct2-final-replace-fails",
             files=("config.json",),
+            file_sha1s=file_sha1s_for(("config.json",), data),
         )
         real_replace = os.replace
 
@@ -1234,6 +1644,7 @@ class ModelsTest(unittest.TestCase):
             model_format="ctranslate2",
             repo_id="example/ct2-backup-cleanup-fails",
             files=("config.json",),
+            file_sha1s=file_sha1s_for(("config.json",), data),
         )
         real_rmtree = models.shutil.rmtree
 
@@ -1269,6 +1680,7 @@ class ModelsTest(unittest.TestCase):
             model_format="ctranslate2",
             repo_id="example/ct2-backup-cleanup-recovered",
             files=("config.json",),
+            file_sha1s=file_sha1s_for(("config.json",), data),
         )
         real_rmtree = models.shutil.rmtree
 
@@ -1305,6 +1717,7 @@ class ModelsTest(unittest.TestCase):
             model_format="ctranslate2",
             repo_id="example/ct2-replaces-file",
             files=("config.json",),
+            file_sha1s=file_sha1s_for(("config.json",), data),
         )
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -1397,6 +1810,92 @@ class ModelsTest(unittest.TestCase):
         self.assertFalse(tmp_exists)
         self.assertFalse(missing_payload["removed"])
 
+    def test_remove_model_directory_uses_secure_parent_fd_rmtree(self) -> None:
+        spec = models.ModelSpec(
+            name="test-directory-remove",
+            filename="ct2-test-directory-remove",
+            size="1 KiB",
+            sha1="not-used",
+            description="test directory model",
+            model_format="ctranslate2",
+        )
+        real_rmtree = models.shutil.rmtree
+        calls: list[tuple[object, dict[str, object]]] = []
+
+        def record_rmtree(target: object, *args: object, **kwargs: object) -> None:
+            calls.append((target, dict(kwargs)))
+            real_rmtree(target, *args, **kwargs)
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+        ):
+            path = models.model_path(spec)
+            path.mkdir(parents=True)
+            (path / "config.json").write_text("{}", encoding="utf-8")
+            with mock.patch("speed_of_cinnamon.models.shutil.rmtree", side_effect=record_rmtree) as mocked_rmtree:
+                mocked_rmtree.avoids_symlink_attacks = True
+                payload = models.remove_model("test-directory-remove")
+
+            path_exists = path.exists()
+
+        self.assertTrue(payload["removed"])
+        self.assertFalse(path_exists)
+        self.assertEqual(len(calls), 1)
+        target, kwargs = calls[0]
+        self.assertEqual(target, path.name)
+        self.assertIsInstance(kwargs.get("dir_fd"), int)
+
+    def test_remove_model_directory_rejects_unsafe_rmtree_platform(self) -> None:
+        spec = models.ModelSpec(
+            name="test-directory-unsafe-rmtree",
+            filename="ct2-test-directory-unsafe-rmtree",
+            size="1 KiB",
+            sha1="not-used",
+            description="test unsafe rmtree",
+            model_format="ctranslate2",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch.object(models.shutil.rmtree, "avoids_symlink_attacks", False),
+        ):
+            path = models.model_path(spec)
+            path.mkdir(parents=True)
+            (path / "config.json").write_text("{}", encoding="utf-8")
+
+            with self.assertRaisesRegex(models.ModelError, "secure recursive model directory removal"):
+                models.remove_model("test-directory-unsafe-rmtree")
+
+            self.assertTrue(path.exists())
+
+    def test_remove_model_rejects_symlink_tmp_leaf_path(self) -> None:
+        spec = models.ModelSpec(
+            name="test-tmp-symlink-remove",
+            filename="ggml-test-tmp-symlink-remove.bin",
+            size="1 KiB",
+            sha1="not-used",
+            description="test model tmp symlink",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+        ):
+            path = models.model_path(spec)
+            tmp_path = path.with_suffix(path.suffix + ".tmp")
+            path.parent.mkdir(parents=True)
+            marker = Path(tmp) / "tmp-remove-marker"
+            tmp_path.symlink_to(marker)
+
+            with self.assertRaisesRegex(models.ModelError, "temporary model file must not be a symlink"):
+                models.remove_model("test-tmp-symlink-remove")
+
+            self.assertTrue(tmp_path.is_symlink())
+            self.assertFalse(marker.exists())
+
     def test_remove_model_rejects_symlink_leaf_path(self) -> None:
         spec = models.ModelSpec(
             name="test-symlink-remove",
@@ -1440,6 +1939,36 @@ class ModelsTest(unittest.TestCase):
             path.write_bytes(good_data)
             self.assertEqual(models.default_whisper_cpp_model_path(), str(path))
 
+    def test_default_model_path_does_not_trust_stale_checksum_cache(self) -> None:
+        good_data = b"good model"
+        bad_data = b"evil model"
+        spec = models.ModelSpec(
+            name="stale-cache",
+            filename="ggml-stale-cache.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(good_data).hexdigest(),
+            description="stale cache model",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", True),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            path.write_bytes(good_data)
+            original_stat = path.stat()
+            models._set_model_checksum_cache(path, spec.sha1, original_stat)
+            path.write_bytes(bad_data)
+            os.utime(path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+
+            self.assertEqual(path.stat().st_size, original_stat.st_size)
+            self.assertEqual(path.stat().st_mtime_ns, original_stat.st_mtime_ns)
+            self.assertEqual(models.sha1_file(path), spec.sha1)
+            self.assertEqual(models.default_whisper_cpp_model_path(), "")
+
     def test_default_model_path_skips_english_only_model_for_non_english_language(self) -> None:
         english_data = b"english model"
         multilingual_data = b"multilingual model"
@@ -1479,6 +2008,14 @@ class ModelsTest(unittest.TestCase):
 
     def test_model_supports_language_rejects_escaped_null_path(self) -> None:
         self.assertFalse(models.model_supports_language("a\\x00.bin", "de"))
+
+    def test_model_supports_language_rejects_control_character_path(self) -> None:
+        self.assertFalse(models.model_supports_language("a\x85.bin", "en"))
+        self.assertFalse(models.model_supports_language("a\\x85.bin", "de"))
+
+    def test_model_supports_language_rejects_control_character_language(self) -> None:
+        self.assertFalse(models.model_supports_language("ggml-tiny.en.bin", "\x85en"))
+        self.assertFalse(models.model_supports_language("ggml-tiny.en.bin", "\\x85en"))
 
     def test_catalog_path_lookup_uses_filename_index_without_model_path_scan(self) -> None:
         spec = models.ModelSpec(
@@ -1590,6 +2127,28 @@ class ModelsTest(unittest.TestCase):
             description="absolute path",
         )
         with self.assertRaisesRegex(models.ModelError, "model filename must be a relative path without parent traversal"):
+            models.model_path(spec)
+
+    def test_model_path_rejects_catalog_filename_control_character(self) -> None:
+        spec = models.ModelSpec(
+            name="control",
+            filename="\x85ggml-control.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(b"control").hexdigest(),
+            description="control path",
+        )
+        with self.assertRaisesRegex(models.ModelError, "model filename contains invalid control character"):
+            models.model_path(spec)
+
+    def test_model_path_rejects_escaped_catalog_filename_control_character(self) -> None:
+        spec = models.ModelSpec(
+            name="escaped-control",
+            filename="ggml\\x85control.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(b"escaped control").hexdigest(),
+            description="escaped control path",
+        )
+        with self.assertRaisesRegex(models.ModelError, "model filename contains invalid control character"):
             models.model_path(spec)
 
     def test_download_model_rejects_multifile_catalog_path_traversal(self) -> None:
@@ -1791,9 +2350,60 @@ class ModelsTest(unittest.TestCase):
             path = models.model_path(spec)
             path.parent.mkdir(parents=True)
             path.write_bytes(old_data)
-            with mock.patch("speed_of_cinnamon.models.Path.unlink", side_effect=OSError("cleanup failed")):
+            real_os_unlink = os.unlink
+
+            def unlink_or_fail(target: str, *args: object, **kwargs: object) -> None:
+                if ".backup" in target:
+                    raise OSError("cleanup failed")
+                dir_fd = kwargs.get("dir_fd")
+                if isinstance(dir_fd, int):
+                    real_os_unlink(target, dir_fd=dir_fd)
+                    return
+                real_os_unlink(target)
+
+            with mock.patch("speed_of_cinnamon.models.os.unlink", side_effect=unlink_or_fail):
                 with self.assertRaisesRegex(models.ModelError, "failed to remove model backup"):
                     models.download_model("backup-cleanup-fails", force=True)
+
+    def test_download_model_removes_backup_when_restore_fails_after_replace(self) -> None:
+        old_data = b"old model"
+        new_data = b"new model"
+        spec = models.ModelSpec(
+            name="backup-restore-fails",
+            filename="ggml-backup-restore-fails.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(new_data).hexdigest(),
+            description="backup restore failure",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", True),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(new_data)),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            path.write_bytes(old_data)
+
+            def fail_target_cache_update(target: Path, checksum: str, stat: os.stat_result) -> None:
+                if target == path:
+                    raise models.ModelError("cache fail")
+                models._model_checksum_cache[str(target)] = {
+                    "checksum": checksum,
+                    "size": stat.st_size,
+                    "mtime_ns": stat.st_mtime_ns,
+                }
+
+            with (
+                mock.patch("speed_of_cinnamon.models._set_model_checksum_cache", side_effect=fail_target_cache_update),
+                mock.patch("speed_of_cinnamon.models._restore_model_file_backup", side_effect=models.ModelError("restore failed")),
+            ):
+                with self.assertRaisesRegex(models.ModelError, "failed to restore existing model file"):
+                    models.download_model("backup-restore-fails", force=True)
+
+            self.assertEqual(list(path.parent.glob(f".{path.name}.*.backup")), [])
 
     def test_download_model_force_replaces_directory_with_file_model(self) -> None:
         new_data = b"new model"
@@ -1861,11 +2471,15 @@ class ModelsTest(unittest.TestCase):
 
     def test_assert_download_url_rejects_control_character(self) -> None:
         with self.assertRaisesRegex(models.ModelError, "contains invalid control character"):
-            models._assert_download_url("https://huggingface.co/example/model\n.bin")
+            models._assert_download_url("https://huggingface.co/example/model\x85.bin")
+
+    def test_assert_download_url_rejects_leading_control_character(self) -> None:
+        with self.assertRaisesRegex(models.ModelError, "contains invalid control character"):
+            models._assert_download_url("\x85https://huggingface.co/example/model.bin")
 
     def test_assert_download_url_rejects_escaped_control_character(self) -> None:
         with self.assertRaisesRegex(models.ModelError, "contains invalid control character"):
-            models._assert_download_url("https://huggingface.co/example/model\\n.bin")
+            models._assert_download_url("https://huggingface.co/example/model\\x85.bin")
 
     def test_assert_download_url_rejects_unapproved_host_when_allowlisted(self) -> None:
         with self.assertRaisesRegex(models.ModelError, "host is not allowed"):

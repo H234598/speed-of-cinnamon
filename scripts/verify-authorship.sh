@@ -20,6 +20,11 @@ repo_dir = Path(sys.argv[1])
 expected_name = "H234598"
 expected_email = "54270221+H234598@users.noreply.github.com"
 expected_repo = "github.com/H234598/speed-of-cinnamon"
+allowed_remote_urls = {
+    f"https://{expected_repo}",
+    f"git@github.com:H234598/speed-of-cinnamon",
+    f"ssh://git@{expected_repo}",
+}
 allowed_committers = {
     (expected_name, expected_email),
     ("GitHub", "noreply@github.com"),
@@ -47,6 +52,15 @@ def in_git_worktree() -> bool:
         return False
     top_level = run_git("rev-parse", "--show-toplevel").stdout.strip()
     return Path(top_level).resolve() == repo_dir.resolve()
+
+
+def normalize_remote_url(remote: str) -> str:
+    if any(ord(char) < 32 or ord(char) == 127 or 0x80 <= ord(char) <= 0x9F for char in remote):
+        fail("origin must not contain control characters")
+    normalized = remote.strip()
+    if not normalized:
+        fail("origin must not be empty")
+    return normalized.removesuffix(".git")
 
 
 def check_project_metadata() -> None:
@@ -98,9 +112,12 @@ def check_git_identity() -> None:
     if not in_git_worktree():
         return
 
-    remote = run_git("config", "--get", "remote.origin.url", check=False).stdout.strip()
-    normalized_remote = remote.removesuffix(".git")
-    if expected_repo not in normalized_remote:
+    remote_stdout = run_git("config", "--get", "remote.origin.url", check=False).stdout
+    remote = remote_stdout.removesuffix("\n")
+    if remote != remote.strip():
+        fail("origin must not contain leading or trailing whitespace")
+    normalized_remote = normalize_remote_url(remote)
+    if normalized_remote not in allowed_remote_urls:
         fail(f"origin must point at {expected_repo}, got {remote!r}")
 
     log = run_git("--no-pager", "log", "--all", "--format=%H%x1f%an%x1f%ae%x1f%cn%x1f%ce%x1e").stdout

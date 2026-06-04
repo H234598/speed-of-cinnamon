@@ -12,6 +12,9 @@ import sys
 from pathlib import Path
 
 
+COPY_CHUNK_SIZE = 1 << 20
+
+
 def _source_file_signature(stat_result: os.stat_result) -> tuple[int, int, int, int, int, int]:
     return (
         stat_result.st_dev,
@@ -129,6 +132,12 @@ def stat_is_symlink_no_follow(mode: int) -> bool:
     return (mode & 0o170000) == 0o120000
 
 
+def _rmtree_safe(path: str, *, dir_fd: int, action: str) -> None:
+    if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
+        fail(f"refusing unsafe recursive removal during {action}: shutil.rmtree is not fd-safe")
+    shutil.rmtree(path, dir_fd=dir_fd)
+
+
 def cmd_mkdirs(args: argparse.Namespace) -> None:
     path = _validate_absolute(args.path, "directory path")
     fd = _open_dir_chain(path, action=args.action, create=True)
@@ -150,6 +159,11 @@ def cmd_replace(args: argparse.Namespace) -> None:
     try:
         _check_leaf(src_fd, src_name, src, action=args.action, kind=args.src_kind, must_exist=True)
         src_stat = _lstat_at(src_fd, src_name)
+        if src_stat is None:
+            fail(f"source file missing during {args.action}: {src}")
+        src_signature = _source_file_signature(src_stat) if args.src_kind == "file" else None
+        if args.src_kind == "file" and src_stat.st_nlink != 1:
+            fail(f"source file must not be hardlinked during {args.action}: {src}")
         existing = _lstat_at(dst_fd, dst_name)
         if existing is not None:
             if args.dst_must_not_exist:
@@ -157,11 +171,18 @@ def cmd_replace(args: argparse.Namespace) -> None:
             if stat_is_symlink_no_follow(existing.st_mode):
                 fail(f"refusing to follow symlink during {args.action}: {dst}")
         _check_leaf(src_fd, src_name, src, action=args.action, kind=args.src_kind, must_exist=True)
-        if not _same_identity(src_stat, _lstat_at(src_fd, src_name)):
+        source_before_replace = _lstat_at(src_fd, src_name)
+        if src_signature is not None and (
+            source_before_replace is None or _source_file_signature(source_before_replace) != src_signature
+        ):
+            fail(f"source changed during {args.action}: {src}")
+        if src_signature is None and not _same_identity(src_stat, source_before_replace):
             fail(f"source changed during {args.action}: {src}")
         os.replace(src_name, dst_name, src_dir_fd=src_fd, dst_dir_fd=dst_fd)
         final_stat = _lstat_at(dst_fd, dst_name)
-        if not _same_identity(src_stat, final_stat):
+        if src_signature is not None and (final_stat is None or _source_file_signature(final_stat) != src_signature):
+            fail(f"destination changed during {args.action}: {dst}")
+        if src_signature is None and not _same_identity(src_stat, final_stat):
             fail(f"destination changed during {args.action}: {dst}")
         _check_leaf(dst_fd, dst_name, dst, action=args.action, kind=args.src_kind, must_exist=True)
     finally:
@@ -204,13 +225,84 @@ def _write_bytes_atomic(dst: Path, data: bytes, mode: int, *, action: str) -> No
 def cmd_write_wrapper(args: argparse.Namespace) -> None:
     dst = _validate_absolute(args.dst, "wrapper path")
     python_path = _validate_absolute(args.python_path, "python package path")
+    python_executable = _validate_absolute(args.python_executable, "python executable path")
     content = (
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         f"export PYTHONPATH={shlex.quote(str(python_path))}\n"
-        'exec "$(command -v -- python3)" -m speed_of_cinnamon.cli "$@"\n'
+        f"exec {shlex.quote(str(python_executable))} -m speed_of_cinnamon.cli \"$@\"\n"
     )
     _write_bytes_atomic(dst, content.encode("utf-8"), 0o755, action=args.action)
+
+
+def _hash_open_file(handle: object) -> str:
+    hasher = hashlib.sha256()
+    while True:
+        chunk = handle.read(COPY_CHUNK_SIZE)
+        if not chunk:
+            break
+        hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def _copy_file_atomically_from_checked_source(
+    src: Path,
+    dst: Path,
+    *,
+    source_parent_fd: int,
+    source_name: str,
+    source_handle: object,
+    source_before: os.stat_result,
+    source_digest: str,
+    mode: int,
+    action: str,
+) -> None:
+    parent_fd, leaf = _open_parent(dst, action=action)
+    if parent_fd is None:
+        fail(f"failed to open parent directory during {action}: {dst}")
+    tmp_name = f".{leaf}.{secrets.token_hex(8)}.tmp"
+    fd: int | None = None
+    tmp_stat: os.stat_result | None = None
+    try:
+        existing = _lstat_at(parent_fd, leaf)
+        if existing is not None and stat_is_symlink_no_follow(existing.st_mode):
+            fail(f"refusing to follow symlink during {action}: {dst}")
+        fd = os.open(tmp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=parent_fd)
+        copied_hasher = hashlib.sha256()
+        with os.fdopen(fd, "wb", closefd=True) as output:
+            fd = None
+            while True:
+                chunk = source_handle.read(COPY_CHUNK_SIZE)
+                if not chunk:
+                    break
+                copied_hasher.update(chunk)
+                output.write(chunk)
+            output.flush()
+            os.fchmod(output.fileno(), mode)
+        copied_digest = copied_hasher.hexdigest()
+        tmp_stat = _lstat_at(parent_fd, tmp_name)
+        source_after_fd = os.fstat(source_handle.fileno())
+        source_after = _lstat_at(source_parent_fd, source_name)
+        if source_after is None:
+            fail(f"source file missing during {action}: {src}")
+        if _source_file_signature(source_before) != _source_file_signature(source_after_fd):
+            fail(f"source changed during {action}: {src}")
+        if _source_file_signature(source_before) != _source_file_signature(source_after):
+            fail(f"source changed during {action}: {src}")
+        if copied_digest != source_digest:
+            fail(f"source changed during {action}: {src}")
+        os.replace(tmp_name, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        if not _same_identity(tmp_stat, _lstat_at(parent_fd, leaf)):
+            fail(f"destination changed during {action}: {dst}")
+        _check_leaf(parent_fd, leaf, dst, action=action, kind="file", must_exist=True)
+    except Exception:
+        with context_suppress():
+            if fd is not None:
+                os.close(fd)
+            os.unlink(tmp_name, dir_fd=parent_fd)
+        raise
+    finally:
+        os.close(parent_fd)
 
 
 def cmd_copy_file(args: argparse.Namespace) -> None:
@@ -224,32 +316,34 @@ def cmd_copy_file(args: argparse.Namespace) -> None:
         source_checked = _lstat_at(src_fd, src_name)
         if source_checked is None:
             fail(f"source file missing during {args.action}: {src}")
-        source_digest = _hash_file(src)
         with os.fdopen(os.open(src_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=src_fd), "rb") as handle:
             source_before = os.fstat(handle.fileno())
             if _source_file_signature(source_checked) != _source_file_signature(source_before):
                 fail(f"source changed during {args.action}: {src}")
-            data = handle.read()
-            source_after_fd = os.fstat(handle.fileno())
-        source_after = _lstat_at(src_fd, src_name)
-        if source_after is None:
-            fail(f"source file missing during {args.action}: {src}")
-        if _source_file_signature(source_before) != _source_file_signature(source_after_fd):
-            fail(f"source changed during {args.action}: {src}")
-        if _source_file_signature(source_before) != _source_file_signature(source_after):
-            fail(f"source changed during {args.action}: {src}")
-        if hashlib.sha256(data).hexdigest() != source_digest:
-            fail(f"source changed during {args.action}: {src}")
+            if source_before.st_nlink != 1:
+                fail(f"source file must not be hardlinked during {args.action}: {src}")
+            source_digest = _hash_open_file(handle)
+            handle.seek(0)
+            _copy_file_atomically_from_checked_source(
+                src,
+                dst,
+                source_parent_fd=src_fd,
+                source_name=src_name,
+                source_handle=handle,
+                source_before=source_before,
+                source_digest=source_digest,
+                mode=int(args.mode, 8),
+                action=args.action,
+            )
     finally:
         os.close(src_fd)
-    _write_bytes_atomic(dst, data, int(args.mode, 8), action=args.action)
 
 
 def _hash_file(path: Path) -> str:
     hasher = hashlib.sha256()
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd, "rb", closefd=True) as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
+        for chunk in iter(lambda: handle.read(COPY_CHUNK_SIZE), b""):
             hasher.update(chunk)
     return hasher.hexdigest()
 
@@ -283,6 +377,8 @@ def _reject_unsafe_tree(tree: Path, label: str) -> None:
                 fail(f"failed to inspect {label}: {path}: {exc}")
             if stat_is_symlink_no_follow(stat_result.st_mode):
                 fail(f"refusing to install unsafe {label}: {path}")
+            if not stat_is_dir_no_follow(stat_result.st_mode) and not stat_is_file_no_follow(stat_result.st_mode):
+                fail(f"refusing to install unsupported file type in {label}: {path}")
             if stat_is_file_no_follow(stat_result.st_mode) and stat_result.st_nlink != 1:
                 fail(f"refusing to install hardlinked {label}: {path}")
 
@@ -316,6 +412,8 @@ def _tree_signature(tree: Path, *, include_identity: bool = True) -> dict[str, t
                     digest = _hash_file(path)
                 except OSError as exc:
                     fail(f"failed to hash source tree during signature: {path}: {exc}")
+            elif not stat_is_dir_no_follow(stat_result.st_mode):
+                fail(f"refusing unsupported file type in source tree during signature: {path}")
             if include_identity:
                 signature[rel_path] = (
                     stat_result.st_dev,
@@ -375,14 +473,14 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
         activated = True
         _check_leaf(parent_fd, leaf, target, action=args.action, kind="dir", must_exist=True)
         if backup_created:
-            shutil.rmtree(backup_name, dir_fd=parent_fd)
+            _rmtree_safe(backup_name, dir_fd=parent_fd, action=args.action)
             backup_created = False
     except Exception:
         if backup_created and activated and _lstat_at(parent_fd, backup_name) is not None:
             with context_suppress():
                 current = _lstat_at(parent_fd, leaf)
                 if current is not None and stat_is_dir_no_follow(current.st_mode):
-                    shutil.rmtree(leaf, dir_fd=parent_fd)
+                    _rmtree_safe(leaf, dir_fd=parent_fd, action=args.action)
                 os.replace(backup_name, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
                 backup_created = False
         elif backup_created and _lstat_at(parent_fd, backup_name) is not None and _lstat_at(parent_fd, leaf) is None:
@@ -392,10 +490,10 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
         raise
     finally:
         with context_suppress():
-            shutil.rmtree(stage_name, dir_fd=parent_fd)
+            _rmtree_safe(stage_name, dir_fd=parent_fd, action=args.action)
         if backup_created:
             with context_suppress():
-                shutil.rmtree(backup_name, dir_fd=parent_fd)
+                _rmtree_safe(backup_name, dir_fd=parent_fd, action=args.action)
         os.close(parent_fd)
 
 
@@ -413,7 +511,7 @@ def cmd_remove(args: argparse.Namespace) -> None:
         if args.kind == "dir":
             if not stat_is_dir_no_follow(stat_result.st_mode):
                 fail(f"path must be a directory during {args.action}: {path}")
-            shutil.rmtree(leaf, dir_fd=parent_fd)
+            _rmtree_safe(leaf, dir_fd=parent_fd, action=args.action)
         elif args.kind == "file":
             if not stat_is_file_no_follow(stat_result.st_mode):
                 fail(f"path must be a regular file during {args.action}: {path}")
@@ -435,7 +533,7 @@ def cmd_remove_leaf(args: argparse.Namespace) -> None:
             return
         mode = stat_result.st_mode
         if stat_is_dir_no_follow(mode):
-            shutil.rmtree(leaf, dir_fd=parent_fd)
+            _rmtree_safe(leaf, dir_fd=parent_fd, action=args.action)
         else:
             os.unlink(leaf, dir_fd=parent_fd)
     finally:
@@ -486,6 +584,7 @@ def build_parser() -> argparse.ArgumentParser:
     write_wrapper.add_argument("action")
     write_wrapper.add_argument("dst")
     write_wrapper.add_argument("python_path")
+    write_wrapper.add_argument("python_executable")
     write_wrapper.set_defaults(func=cmd_write_wrapper)
 
     copy_file = subparsers.add_parser("copy-file")

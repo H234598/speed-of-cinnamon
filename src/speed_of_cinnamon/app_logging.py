@@ -5,8 +5,9 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
-import tempfile
+import stat as stat_module
 import string
 import time
 from itertools import islice
@@ -14,6 +15,11 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, TextIO
 
+from .path_safety import (
+    assert_fd_is_regular_private_file,
+    ensure_directory_without_following_symlinks,
+    open_file_without_following_symlinks,
+)
 from .paths import logs_dir
 
 LOG_LEVELS = ("off", "error", "warning", "info", "debug")
@@ -52,6 +58,7 @@ _SANITIZE_HINT_RE = re.compile(
     r"(?i)(?:\b(?:bearer|token|api[_-]?key|secret|password)\b\s*[:=]\s*[^,\s;]+|\b(?:token|api[_ -]?key|apikey|password|passwd|passphrase)\b\s+(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required)\b)[^,\s;]+|\bbearer\s+[^,\s;]+|\b(?:sk|sess)-[A-Za-z0-9_\-]{12,}\b|[a-z][a-z0-9+.-]*://[^/@\s:]+:[^/@\s]+@)"
 )
 _SANITIZE_ESCAPE_TABLE = {
+    **{codepoint: f"\\x{codepoint:02x}" for codepoint in tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))},
     ord("\r"): "\\r",
     ord("\n"): "\\n",
     ord("\x00"): "\\x00",
@@ -59,6 +66,10 @@ _SANITIZE_ESCAPE_TABLE = {
 _SANITIZE_KEY_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
 _SENSITIVE_KEY_RE = re.compile(r"(?:api_key|apikey|authorization|bearer|command|context|key|password|prompt|secret|text|token|transcript|vocabulary)")
 _SANITIZE_KEY_SAFE_CHARS = frozenset(string.ascii_lowercase + string.digits + "_.-")
+_FORBIDDEN_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+_ESCAPED_FORBIDDEN_CONTROL_RE = re.compile(
+    r"(?i)(?:\\[abfnrtv]|\\x(?:0[0-9a-f]|1[0-9a-f]|7f|8[0-9a-f]|9[0-9a-f])|\\u00(?:0[0-9a-f]|1[0-9a-f]|7f|8[0-9a-f]|9[0-9a-f]))"
+)
 
 
 class JsonLogFormatter(logging.Formatter):
@@ -83,6 +94,7 @@ class SizeCappedJsonFileHandler(logging.Handler):
         self.path = path
         self.base_dir = base_dir
         self.stream: TextIO | None = None
+        self._disabled = False
         self._next_maintenance_at = time.monotonic() + LOG_MAINTENANCE_INTERVAL_SECONDS
 
     def close(self) -> None:
@@ -92,6 +104,8 @@ class SizeCappedJsonFileHandler(logging.Handler):
         super().close()
 
     def emit(self, record: logging.LogRecord) -> None:
+        if self._disabled:
+            return
         try:
             line = self.format(record) + "\n"
             encoded = line.encode("utf-8")
@@ -115,12 +129,36 @@ class SizeCappedJsonFileHandler(logging.Handler):
             self.stream.flush()
             self._maintain_after_emit(force=rotated)
         except Exception:
-            self.handleError(record)
+            self._disabled = True
+            self.close()
 
     def _open(self) -> None:
         if self.stream is None:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.stream = open(self.path, "a", encoding="utf-8")
+            parent_fd = ensure_directory_without_following_symlinks(self.path.parent, field_name="log directory")
+            try:
+                os.close(parent_fd)
+            except OSError:
+                pass
+            fd = open_file_without_following_symlinks(
+                self.path,
+                os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+                0o600,
+                field_name="log file",
+            )
+            try:
+                file_stat = os.fstat(fd)
+                if not stat_module.S_ISREG(file_stat.st_mode):
+                    raise RuntimeError(f"log file must be a regular file: {self.path}")
+                if getattr(file_stat, "st_nlink", 1) != 1:
+                    raise RuntimeError(f"log file must not be hardlinked: {self.path}")
+                try:
+                    os.fchmod(fd, 0o600)
+                except OSError:
+                    pass
+                self.stream = os.fdopen(fd, "a", encoding="utf-8")
+            except Exception:
+                os.close(fd)
+                raise
 
     def _maintain_after_emit(self, *, force: bool = False) -> None:
         now = time.monotonic()
@@ -130,9 +168,15 @@ class SizeCappedJsonFileHandler(logging.Handler):
         self._next_maintenance_at = now + LOG_MAINTENANCE_INTERVAL_SECONDS
 
 
+def _contains_forbidden_control(value: str) -> bool:
+    return _FORBIDDEN_CONTROL_RE.search(value) is not None or _ESCAPED_FORBIDDEN_CONTROL_RE.search(value) is not None
+
+
 def validate_log_level(level: str) -> str:
     if isinstance(level, bool) or not isinstance(level, str):
         raise RuntimeError("log level must be text")
+    if _contains_forbidden_control(level):
+        raise RuntimeError("log level contains invalid control character")
     normalized = level.strip().lower()
     if normalized not in LOG_LEVELS:
         raise RuntimeError(f"log level must be one of: {', '.join(LOG_LEVELS)}")
@@ -161,7 +205,6 @@ def configure_logging(level: str = DEFAULT_LOG_LEVEL, *, base_dir: Path | None =
     logger.setLevel(level_value)
     directory = base_dir or logs_dir()
     maintain_logs(directory)
-    directory.mkdir(parents=True, exist_ok=True)
     log_path = _active_log_path(directory)
     _rotate_active_if_needed(log_path)
 
@@ -183,7 +226,7 @@ def log_event(level: str, event: str, **fields: object) -> None:
 
 def maintain_logs(base_dir: Path | None = None, *, today: date | None = None) -> None:
     directory = base_dir or logs_dir()
-    directory.mkdir(parents=True, exist_ok=True)
+    _ensure_log_directory(directory)
     current_day = today or date.today()
     _merge_old_months(directory, current_day)
     _compress_old_daily_logs(directory, current_day)
@@ -193,6 +236,8 @@ def maintain_logs(base_dir: Path | None = None, *, today: date | None = None) ->
 
 def sanitize_key(key: object) -> str:
     if isinstance(key, bool) or not isinstance(key, str):
+        return ""
+    if _contains_forbidden_control(key):
         return ""
     safe = key.strip().lower()
     if safe.isascii() and all(ch in _SANITIZE_KEY_SAFE_CHARS for ch in safe):
@@ -228,9 +273,7 @@ def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         return "[invalid]"
     if (
-        "\r" not in value
-        and "\n" not in value
-        and "\x00" not in value
+        not _contains_control_chars(value)
         and ":" not in value
         and "@" not in value
         and _SANITIZE_HINT_RE.search(value) is None
@@ -250,6 +293,10 @@ def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
     if len(text) > max_chars:
         return text[:max_chars] + "...[truncated]"
     return text
+
+
+def _contains_control_chars(value: str) -> bool:
+    return any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in value)
 
 
 def sanitize_error_message(error: object, *, max_chars: int = MAX_LOG_MESSAGE_CHARS) -> str:
@@ -286,6 +333,17 @@ def _active_log_path(directory: Path, today: date | None = None) -> Path:
     return directory / f"speed-of-cinnamon-{current_day.isoformat()}.log"
 
 
+def _ensure_log_directory(directory: Path) -> None:
+    try:
+        directory_fd = ensure_directory_without_following_symlinks(directory, field_name="log directory")
+    except OSError as exc:
+        raise RuntimeError(f"failed to prepare log directory: {directory}") from exc
+    try:
+        os.close(directory_fd)
+    except OSError:
+        pass
+
+
 def _oversized_record_line(record: logging.LogRecord) -> str:
     payload = {
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -295,17 +353,78 @@ def _oversized_record_line(record: logging.LogRecord) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
 
 
-def _assert_regular_unlinked_file(path: Path, *, field_name: str) -> None:
+def _assert_regular_unlinked_file(path: Path, *, field_name: str) -> os.stat_result:
     if not isinstance(path, Path):
         raise RuntimeError(f"{field_name} must be a path")
-    if path.is_symlink():
-        raise RuntimeError(f"{field_name} must not be a symlink: {path}")
-    if not path.exists():
+    try:
+        file_stat = path.lstat()
+    except OSError as exc:
         raise RuntimeError(f"{field_name} must be an existing file: {path}")
-    if not path.is_file():
+    if stat_module.S_ISLNK(file_stat.st_mode):
+        raise RuntimeError(f"{field_name} must not be a symlink: {path}")
+    if not stat_module.S_ISREG(file_stat.st_mode):
         raise RuntimeError(f"{field_name} must be a regular file: {path}")
-    if path.stat().st_nlink != 1:
+    if getattr(file_stat, "st_nlink", 1) != 1:
         raise RuntimeError(f"{field_name} must not be hardlinked: {path}")
+    return file_stat
+
+
+def _open_log_source_file(path: Path, *, field_name: str) -> int:
+    _assert_regular_unlinked_file(path, field_name=field_name)
+    nonblock_flag = getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name=field_name)
+    except OSError as exc:
+        raise RuntimeError(f"{field_name} is not readable: {path}") from exc
+    try:
+        assert_fd_is_regular_private_file(fd, field_name=field_name)
+    except Exception:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _create_log_temp_file(directory: Path, *, prefix: str, suffix: str) -> tuple[int, int, str]:
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise RuntimeError("secure log temporary file creation is not supported on this platform")
+    try:
+        parent_fd = ensure_directory_without_following_symlinks(directory, field_name="log directory")
+    except OSError as exc:
+        raise RuntimeError(f"failed to prepare log directory: {directory}") from exc
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag
+    try:
+        for _ in range(100):
+            temp_name = f".{prefix}.{secrets.token_hex(8)}{suffix}"
+            try:
+                fd = os.open(temp_name, flags, 0o600, dir_fd=parent_fd)
+                return fd, parent_fd, temp_name
+            except FileExistsError:
+                continue
+        raise RuntimeError("failed to create log temporary file")
+    except Exception:
+        os.close(parent_fd)
+        raise
+
+
+def _log_temp_name_matches_fd(parent_fd: int, temp_name: str, fd: int) -> bool:
+    try:
+        path_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
+        fd_stat = os.fstat(fd)
+    except OSError:
+        return False
+    return (
+        stat_module.S_ISREG(path_stat.st_mode)
+        and path_stat.st_dev == fd_stat.st_dev
+        and path_stat.st_ino == fd_stat.st_ino
+    )
+
+
+def _unlink_log_temp(parent_fd: int, temp_name: str) -> None:
+    try:
+        os.unlink(temp_name, dir_fd=parent_fd)
+    except OSError:
+        pass
 
 
 def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
@@ -313,15 +432,20 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
         raise RuntimeError(f"active log file must not be a symlink: {path}")
     if not path.exists():
         return
-    _assert_regular_unlinked_file(path, field_name="active log file")
-    size = path.stat().st_size
+    file_stat = _assert_regular_unlinked_file(path, field_name="active log file")
+    size = file_stat.st_size
     if not force and size < MAX_DAILY_LOG_BYTES:
         return
     suffix = 1
     while True:
         candidate = path.with_name(f"{path.stem}.{suffix}{path.suffix}")
-        if not candidate.exists():
-            path.replace(candidate)
+        if not candidate.exists() and not candidate.is_symlink():
+            parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name="log directory")
+            try:
+                _assert_regular_unlinked_file(path, field_name="active log file")
+                os.replace(path.name, candidate.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            finally:
+                os.close(parent_fd)
             return
         suffix += 1
 
@@ -350,66 +474,105 @@ def _merge_old_months(directory: Path, today: date) -> None:
         existing = [archive] if archive.exists() else []
         if archive.exists():
             _assert_regular_unlinked_file(archive, field_name="monthly log archive")
-        with tempfile.NamedTemporaryFile("wb", delete=False, dir=directory) as tmp_handle:
-            tmp_archive = Path(tmp_handle.name)
+        temp_fd, parent_fd, temp_name = _create_log_temp_file(directory, prefix=archive.stem, suffix=".tmp")
         try:
-            with gzip.open(tmp_archive, "wb") as output:
-                for path in sorted(existing + paths, key=lambda item: item.name):
-                    if not path.exists():
-                        continue
-                    _assert_regular_unlinked_file(path, field_name="monthly log source")
-                    _copy_log_content(path, output)
-            tmp_archive.replace(archive)
-        except Exception:
             try:
-                tmp_archive.unlink()
-            except OSError:
-                pass
+                raw_output = os.fdopen(temp_fd, "wb")
+            except Exception:
+                os.close(temp_fd)
+                raise
+            with raw_output:
+                with gzip.GzipFile(fileobj=raw_output, mode="wb") as output:
+                    for path in sorted(existing + paths, key=lambda item: item.name):
+                        if not path.exists():
+                            continue
+                        _assert_regular_unlinked_file(path, field_name="monthly log source")
+                        _copy_log_content(path, output)
+                raw_output.flush()
+                if not _log_temp_name_matches_fd(parent_fd, temp_name, raw_output.fileno()):
+                    raise RuntimeError("monthly log temporary archive was replaced")
+            os.replace(temp_name, archive.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        except Exception:
+            _unlink_log_temp(parent_fd, temp_name)
             raise
+        finally:
+            os.close(parent_fd)
         for path in paths:
             if path.exists():
                 path.unlink()
 
 
 def _copy_log_content(path: Path, output: gzip.GzipFile) -> None:
-    _assert_regular_unlinked_file(path, field_name="log source file")
-    opener = gzip.open if path.suffix == ".gz" else open
-    with opener(path, "rb") as source:
-        shutil.copyfileobj(source, output)
+    fd = _open_log_source_file(path, field_name="log source file")
+    with os.fdopen(fd, "rb") as source_file:
+        if path.suffix == ".gz":
+            with gzip.GzipFile(fileobj=source_file, mode="rb") as source:
+                shutil.copyfileobj(source, output)
+        else:
+            shutil.copyfileobj(source_file, output)
         output.write(b"\n")
 
 
 def _gzip_file(source: Path, target: Path) -> None:
-    _assert_regular_unlinked_file(source, field_name="log source file")
-    with tempfile.NamedTemporaryFile("wb", delete=False, dir=target.parent) as tmp_handle:
-        tmp_target = Path(tmp_handle.name)
+    if target.exists():
+        _assert_regular_unlinked_file(target, field_name="log target file")
+    temp_fd, parent_fd, temp_name = _create_log_temp_file(target.parent, prefix=target.stem, suffix=".tmp")
     try:
-        with open(source, "rb") as input_file, gzip.open(tmp_target, "wb") as output_file:
-            shutil.copyfileobj(input_file, output_file)
-        tmp_target.replace(target)
+        try:
+            source_fd = _open_log_source_file(source, field_name="log source file")
+        except Exception:
+            os.close(temp_fd)
+            raise
+        try:
+            input_file = os.fdopen(source_fd, "rb")
+        except Exception:
+            os.close(source_fd)
+            os.close(temp_fd)
+            raise
+        try:
+            raw_output = os.fdopen(temp_fd, "wb")
+        except Exception:
+            input_file.close()
+            os.close(temp_fd)
+            raise
+        with input_file, raw_output:
+            with gzip.GzipFile(fileobj=raw_output, mode="wb") as output_file:
+                shutil.copyfileobj(input_file, output_file)
+            raw_output.flush()
+            if not _log_temp_name_matches_fd(parent_fd, temp_name, raw_output.fileno()):
+                raise RuntimeError("log temporary archive was replaced")
+        os.replace(temp_name, target.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         source.unlink()
     except Exception:
-        try:
-            tmp_target.unlink()
-        except OSError:
-            pass
+        _unlink_log_temp(parent_fd, temp_name)
         raise
+    finally:
+        os.close(parent_fd)
 
 
 def _enforce_file_size_limit(directory: Path) -> None:
     for path in directory.glob("speed-of-cinnamon-*.log"):
-        if path.stat().st_size <= MAX_DAILY_LOG_BYTES:
+        file_stat = _assert_regular_unlinked_file(path, field_name="log file")
+        if file_stat.st_size <= MAX_DAILY_LOG_BYTES:
             continue
         _rotate_active_if_needed(path)
 
 
 def _enforce_total_size_limit(directory: Path) -> None:
-    files = [path for path in directory.glob("speed-of-cinnamon-*.log*") if path.is_file()]
-    for path in files:
-        _assert_regular_unlinked_file(path, field_name="log file")
     file_info = []
-    for path in files:
-        st = path.stat()
+    for path in directory.glob("speed-of-cinnamon-*.log*"):
+        if path.name.endswith(".tmp"):
+            continue
+        try:
+            st = path.lstat()
+        except OSError:
+            continue
+        if stat_module.S_ISLNK(st.st_mode):
+            raise RuntimeError(f"log file must not be a symlink: {path}")
+        if not stat_module.S_ISREG(st.st_mode):
+            continue
+        if getattr(st, "st_nlink", 1) != 1:
+            raise RuntimeError(f"log file must not be hardlinked: {path}")
         file_info.append((st.st_mtime, path.name, st.st_size, path))
     total = sum(size for _, _, size, _ in file_info)
     if total <= MAX_TOTAL_LOG_BYTES:

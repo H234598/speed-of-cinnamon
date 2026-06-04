@@ -9,6 +9,7 @@ import wave
 from pathlib import Path
 from unittest import mock
 
+from speed_of_cinnamon import recorder as recorder_module
 from speed_of_cinnamon.recorder import (
     RecorderCommand,
     RecorderError,
@@ -98,14 +99,17 @@ class RecorderTest(unittest.TestCase):
                 "[silencedetect @ 0x1] silence_start: 0\n"
             )
             completed = subprocess.CompletedProcess(["ffmpeg"], 0, stdout="", stderr=stderr)
-        with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
-            with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=completed) as mocked_run:
-                result = detect_silent_recording(audio)
+            with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
+                with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=completed) as mocked_run:
+                    result = detect_silent_recording(audio)
 
-        self.assertEqual(result, SilenceDetectionResult(True, True, 2.0, 2.0, 0.0, 2.0, "silent recording"))
-        argv = mocked_run.call_args.args[0]
+            self.assertEqual(result, SilenceDetectionResult(True, True, 2.0, 2.0, 0.0, 2.0, "silent recording"))
+            argv = mocked_run.call_args.args[0]
         self.assertIn("-nostdin", argv)
         self.assertIn(f"silencedetect=noise={SILENCE_DETECT_NOISE}:d={SILENCE_DETECT_DURATION_SECONDS}", argv)
+        input_path = argv[argv.index("-i") + 1]
+        self.assertTrue(str(input_path).startswith("/proc/self/fd/"))
+        self.assertEqual(mocked_run.call_args.kwargs["pass_fds"], (int(str(input_path).rsplit("/", 1)[-1]),))
         self.assertNotIsInstance(argv, str)
 
     def test_detect_silent_recording_reports_leading_silence_seconds(self) -> None:
@@ -225,6 +229,31 @@ class RecorderTest(unittest.TestCase):
             expected,
             "".join(argv),
         )
+        self.assertIn("-f", argv)
+        self.assertIn("flac", argv)
+        input_path = argv[argv.index("-i") + 1]
+        self.assertTrue(str(input_path).startswith("/proc/self/fd/"))
+        self.assertTrue(str(argv[-1]).startswith("/proc/self/fd/"))
+        self.assertEqual(
+            mocked_run.call_args.kwargs["pass_fds"],
+            (
+                int(str(input_path).rsplit("/", 1)[-1]),
+                int(str(argv[-1]).rsplit("/", 1)[-1]),
+            ),
+        )
+
+    def test_trim_recording_silence_rejects_hardlinked_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            hardlink = Path(tmp) / "sample-hardlink.wav"
+            try:
+                os.link(audio, hardlink)
+            except OSError as exc:
+                self.skipTest(f"hardlinks unavailable: {exc}")
+
+            with self.assertRaisesRegex(RecorderError, "recording audio file must not be hardlinked"):
+                trim_recording_silence(hardlink)
 
     def test_reencode_recording_to_flac_uses_ffmpeg_flac_encoder(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -244,6 +273,54 @@ class RecorderTest(unittest.TestCase):
         argv = mocked_run.call_args.args[0]
         self.assertIn("-c:a", argv)
         self.assertIn("flac", argv)
+        self.assertIn("-f", argv)
+        input_path = argv[argv.index("-i") + 1]
+        self.assertTrue(str(input_path).startswith("/proc/self/fd/"))
+        self.assertTrue(str(argv[-1]).startswith("/proc/self/fd/"))
+        self.assertEqual(
+            mocked_run.call_args.kwargs["pass_fds"],
+            (
+                int(str(input_path).rsplit("/", 1)[-1]),
+                int(str(argv[-1]).rsplit("/", 1)[-1]),
+            ),
+        )
+
+    def test_reencode_recording_to_flac_rejects_hardlinked_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            hardlink = Path(tmp) / "sample-hardlink.wav"
+            try:
+                os.link(audio, hardlink)
+            except OSError as exc:
+                self.skipTest(f"hardlinks unavailable: {exc}")
+
+            with self.assertRaisesRegex(RecorderError, "recording audio file must not be hardlinked"):
+                reencode_recording_to_flac(hardlink)
+
+    def test_recording_temp_artifacts_do_not_use_closed_mkstemp_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            self._write_wav(audio, [0, 12000, 12000])
+            with mock.patch("speed_of_cinnamon.recorder.tempfile.mkstemp", side_effect=AssertionError("mkstemp used")):
+                trimmed = trim_recording_leading_silence(audio, 1 / 16000)
+            try:
+                self.assertTrue(trimmed.exists())
+            finally:
+                trimmed.unlink(missing_ok=True)
+
+    def test_trim_recording_silence_rejects_replaced_temp_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
+                with mock.patch(
+                    "speed_of_cinnamon.recorder.subprocess.run",
+                    side_effect=lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0]),
+                ):
+                    with mock.patch.object(recorder_module, "_recording_temp_path_matches_fd", return_value=False):
+                        with self.assertRaisesRegex(RecorderError, "temporary file was replaced"):
+                            trim_recording_silence(audio)
 
     def test_trim_recording_silence_reports_ffmpeg_error_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -300,6 +377,45 @@ class RecorderTest(unittest.TestCase):
         self.assertFalse(result.silent)
         self.assertIn("ffmpeg missing", result.detail)
 
+    def test_detect_silent_recording_redacts_subprocess_exception_detail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "secret-token-recording.wav"
+            audio.write_bytes(b"RIFF" + b"\x00" * 44)
+            error = OSError(f"failed {audio} token secret")
+            with (
+                mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=error),
+            ):
+                result = detect_silent_recording(audio)
+
+        self.assertFalse(result.analyzed)
+        self.assertIn("[redacted ffmpeg error]", result.detail)
+        self.assertNotIn(str(audio), result.detail)
+        self.assertNotIn("secret", result.detail)
+
+    def test_detect_silent_recording_rejects_symlink_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target.wav"
+            link = Path(tmp) / "link.wav"
+            target.write_bytes(b"RIFF" + b"\x00" * 44)
+            link.symlink_to(target)
+
+            with self.assertRaisesRegex(RecorderError, "must not pass through a symlink"):
+                detect_silent_recording(link)
+
+    def test_detect_silent_recording_rejects_hardlinked_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"RIFF" + b"\x00" * 44)
+            hardlink = Path(tmp) / "sample-hardlink.wav"
+            try:
+                os.link(audio, hardlink)
+            except OSError as exc:
+                self.skipTest(f"hardlinks unavailable: {exc}")
+
+            with self.assertRaisesRegex(RecorderError, "recording audio file must not be hardlinked"):
+                detect_silent_recording(hardlink)
+
     @mock.patch("speed_of_cinnamon.recorder.os.open", wraps=os.open)
     def test_read_recording_level_uses_secure_open_flags(self, mocked_open: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -314,6 +430,29 @@ class RecorderTest(unittest.TestCase):
                 for args, _ in mocked_open.call_args_list
             )
         )
+
+    def test_read_recording_level_rejects_hardlinked_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            self._write_wav(audio, [0, 1, 2, 3])
+            hardlink = Path(tmp) / "sample-hardlink.wav"
+            try:
+                os.link(audio, hardlink)
+            except OSError as exc:
+                self.skipTest(f"hardlinks unavailable: {exc}")
+
+            with self.assertRaisesRegex(RecorderError, "not readable"):
+                read_recording_level(hardlink)
+
+    def test_read_recording_level_rejects_fifo_without_blocking(self) -> None:
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("mkfifo unavailable")
+        with tempfile.TemporaryDirectory() as tmp:
+            fifo = Path(tmp) / "sample.wav"
+            os.mkfifo(fifo)
+
+            with self.assertRaisesRegex(RecorderError, "not readable"):
+                read_recording_level(fifo)
 
     def test_default_input_device_is_normalized_to_empty(self) -> None:
         self.assertEqual(normalize_input_device(""), "")
@@ -352,6 +491,16 @@ class RecorderTest(unittest.TestCase):
             with self.assertRaisesRegex(RecorderError, "preference must be text"):
                 choose_recorder(123, Path(tmp) / "sample.wav", 10)  # type: ignore[arg-type]
 
+    def test_choose_recorder_rejects_control_character_preference(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(RecorderError, "preference contains invalid control character"):
+                choose_recorder("\x85pw-record", Path(tmp) / "sample.wav", 10)
+
+    def test_choose_recorder_rejects_escaped_control_character_preference(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(RecorderError, "preference contains invalid control character"):
+                choose_recorder("\\x85pw-record", Path(tmp) / "sample.wav", 10)
+
     def test_choose_recorder_rejects_invalid_input_device_type(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio_path = Path(tmp) / "sample.wav"
@@ -376,6 +525,10 @@ class RecorderTest(unittest.TestCase):
         with self.assertRaisesRegex(RecorderError, "invalid null byte"):
             normalize_input_device("alsa\\x00input")
 
+    def test_normalize_input_device_rejects_c1_control_character(self) -> None:
+        with self.assertRaisesRegex(RecorderError, "invalid control character"):
+            normalize_input_device("alsa\x85input")
+
     def test_validate_recording_path_rejects_wrong_extension(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
@@ -389,6 +542,22 @@ class RecorderTest(unittest.TestCase):
     def test_validate_recording_path_rejects_escaped_null(self) -> None:
         with self.assertRaisesRegex(RecorderError, "invalid null byte"):
             validate_recording_path(Path("sample\\x00.wav"), suffix=".wav")
+
+    def test_validate_recording_path_rejects_control_character(self) -> None:
+        with self.assertRaisesRegex(RecorderError, "invalid control character"):
+            validate_recording_path(Path("sample\nspoof.wav"), suffix=".wav")
+
+    def test_validate_recording_path_rejects_escaped_control_character(self) -> None:
+        with self.assertRaisesRegex(RecorderError, "invalid control character"):
+            validate_recording_path(Path("sample\\nspoof.wav"), suffix=".wav")
+
+    def test_validate_recording_path_rejects_c1_control_character(self) -> None:
+        with self.assertRaisesRegex(RecorderError, "invalid control character"):
+            validate_recording_path(Path("sample\x85spoof.wav"), suffix=".wav")
+
+    def test_validate_recording_path_rejects_escaped_c1_control_character(self) -> None:
+        with self.assertRaisesRegex(RecorderError, "invalid control character"):
+            validate_recording_path(Path("sample\\x85spoof.wav"), suffix=".wav")
 
     def test_validate_recording_path_rejects_oversized_path_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -540,15 +709,24 @@ class RecorderTest(unittest.TestCase):
                 captured["dir_fd"] = kwargs.get("dir_fd")
             return next_fd
 
+        real_os_stat = os.stat
+
+        def fake_os_stat(path: Path | str, *args: object, **kwargs: object) -> os.stat_result:
+            if path == log_path.name and kwargs.get("dir_fd") is not None and kwargs.get("follow_symlinks") is False:
+                raise FileNotFoundError(path)
+            return real_os_stat(path, *args, **kwargs)
+
         with tempfile.TemporaryDirectory() as tmp:
             log_path = Path(tmp) / "session.log"
             with (
                 mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
                 mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
                 mock.patch("speed_of_cinnamon.recorder.os.open", side_effect=fake_os_open),
+                mock.patch("speed_of_cinnamon.recorder.os.stat", side_effect=fake_os_stat),
                 mock.patch("speed_of_cinnamon.recorder.os.close"),
                 mock.patch("speed_of_cinnamon.recorder.os.fdopen", return_value=fake_log_file),
                 mock.patch("speed_of_cinnamon.recorder.os.fchmod"),
+                mock.patch("speed_of_cinnamon.recorder.assert_fd_is_regular_private_file"),
                 mock.patch("speed_of_cinnamon.recorder.subprocess.Popen") as mocked_popen,
             ):
                 mocked_popen.return_value = mock.Mock()
@@ -559,6 +737,7 @@ class RecorderTest(unittest.TestCase):
         self.assertIsInstance(captured["dir_fd"], int)
         self.assertTrue(captured["flags"] & os.O_APPEND)
         self.assertTrue(captured["flags"] & os.O_CREAT)
+        self.assertTrue(captured["flags"] & os.O_EXCL)
         self.assertTrue(captured["flags"] & os.O_NOFOLLOW)
 
     def test_start_recorder_rejects_symlink_log_leaf_after_validation(self) -> None:
@@ -659,6 +838,24 @@ class RecorderTest(unittest.TestCase):
             self.assertFalse(log_path.exists())
         mocked_popen.assert_called_once()
 
+    def test_start_recorder_rejects_hardlinked_existing_log_file(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        with tempfile.TemporaryDirectory() as tmp:
+            original = Path(tmp) / "base.log"
+            original.write_text("existing", encoding="utf-8")
+            log_path = Path(tmp) / "session.log"
+            try:
+                os.link(original, log_path)
+            except OSError as exc:
+                self.skipTest(f"hardlinks unavailable: {exc}")
+
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
+                with self.assertRaisesRegex(RecorderError, "failed to open recorder log file"):
+                    start_recorder(command, log_path)
+
+            self.assertTrue(log_path.exists())
+            self.assertEqual(log_path.read_text(encoding="utf-8"), "existing")
+
     @mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=OSError("boom"))
     def test_start_recorder_keeps_existing_log_file_when_start_fails(self, mocked_popen: mock.Mock) -> None:
         command = RecorderCommand(name="noop", argv=["true"])
@@ -682,6 +879,37 @@ class RecorderTest(unittest.TestCase):
                     start_recorder(command, log_path)
             self.assertTrue(log_path.exists())
             self.assertEqual(log_path.read_text(encoding="utf-8"), "")
+        mocked_popen.assert_called_once()
+
+    @mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=OSError("boom"))
+    def test_start_recorder_does_not_unlink_replaced_log_file_on_start_failure(self, mocked_popen: mock.Mock) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "session.log"
+            replacement = Path(tmp) / "replacement.log"
+            replacement.write_bytes(b"replaced")
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+            ):
+                original_fstat = os.fstat
+                seen = 0
+
+                def fake_fstat(fd: int) -> os.stat_result:
+                    stat_result = original_fstat(fd)
+                    nonlocal seen
+                    seen += 1
+                    if seen == 2:
+                        os.replace(replacement, log_path)
+                    return stat_result
+
+                with mock.patch("speed_of_cinnamon.recorder.os.fstat", side_effect=fake_fstat):
+                    with self.assertRaisesRegex(RecorderError, "failed to start noop"):
+                        start_recorder(command, log_path)
+
+            self.assertTrue(log_path.exists())
+            self.assertEqual(log_path.read_bytes(), b"replaced")
         mocked_popen.assert_called_once()
 
     def test_run_pactl_command_rejects_empty_command(self) -> None:

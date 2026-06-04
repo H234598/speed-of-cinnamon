@@ -2,16 +2,27 @@
 set -euo pipefail
 umask 077
 IFS=$'\n\t'
+readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH="${TRUSTED_COMMAND_PATH}"
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-wiki_url="${WIKI_URL:-https://github.com/H234598/speed-of-cinnamon.wiki.git}"
+expected_wiki_url="https://github.com/H234598/speed-of-cinnamon.wiki.git"
+wiki_url="${WIKI_URL:-${expected_wiki_url}}"
+safe_fs="${repo_dir}/scripts/safe-local-fs.py"
 
-if ! command -v -- git >/dev/null 2>&1; then
-  printf 'git not found.\n' >&2
+for tool in git python3 stat command realpath; do
+  if ! command -v -- "${tool}" >/dev/null 2>&1; then
+    printf '%s not found.\n' "${tool}" >&2
+    exit 1
+  fi
+done
+if [[ ! -f "${safe_fs}" || -L "${safe_fs}" ]]; then
+  printf 'missing required helper: %s\n' "${safe_fs}" >&2
   exit 1
 fi
-if [[ ! "${wiki_url}" =~ ^https://github\\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\\.wiki\\.git$ ]]; then
-  printf 'Invalid wiki URL: %s\n' "${wiki_url}" >&2
+safe_fs_cmd=(python3 "${safe_fs}")
+if [[ "${wiki_url}" != "${expected_wiki_url}" ]]; then
+  printf 'Invalid wiki URL: expected %s, got %s\n' "${expected_wiki_url}" "${wiki_url}" >&2
   exit 1
 fi
 
@@ -33,21 +44,45 @@ require_source_file() {
 
 work_root="${TMPDIR:-/tmp}"
 if [[ ! "${work_root}" == /* ]]; then
-  work_root="/tmp"
+  printf 'temporary root must be an absolute path: %s\n' "${work_root}" >&2
+  exit 1
 fi
 if [[ -L "${work_root}" ]]; then
-  work_root="${repo_dir}/.tmp"
+  printf 'temporary root must not be a symlink: %s\n' "${work_root}" >&2
+  exit 1
 fi
 if [[ ! -d "${work_root}" || ! -w "${work_root}" ]]; then
-  work_root="${repo_dir}/.tmp"
+  printf 'temporary root is not a writable directory: %s\n' "${work_root}" >&2
+  exit 1
 fi
-if [[ -L "${work_root}" ]]; then
-  work_root="/tmp"
+if ! work_root="$(realpath "${work_root}")"; then
+  printf 'failed to resolve temporary root: %s\n' "${work_root}" >&2
+  exit 1
 fi
-mkdir -p "${work_root}"
+if ! "${safe_fs_cmd[@]}" mkdirs publish-wiki "${work_root}"; then
+  printf 'failed to prepare wiki publish temporary root: %s\n' "${work_root}" >&2
+  exit 1
+fi
 work_dir="$(mktemp -d "${work_root}/speed-of-cinnamon-publish-wiki-XXXXXX")"
+if [[ -L "${work_dir}" ]]; then
+  printf 'temporary wiki publish workspace must not be a symlink: %s\n' "${work_dir}" >&2
+  exit 1
+fi
+if ! work_dir_abs="$(realpath "${work_dir}")"; then
+  printf 'failed to resolve temporary wiki publish workspace: %s\n' "${work_dir}" >&2
+  exit 1
+fi
+if [[ "${work_dir_abs}" != "${work_root}/speed-of-cinnamon-publish-wiki-"* ]]; then
+  printf 'temporary wiki publish workspace escaped temporary root: %s\n' "${work_dir}" >&2
+  exit 1
+fi
+work_dir="${work_dir_abs}"
 cleanup() {
-  rm -rf -- "${work_dir}"
+  if [[ -n "${work_dir}" && -e "${work_dir}" ]]; then
+    if ! "${safe_fs_cmd[@]}" remove publish-wiki "${work_dir}" --kind dir; then
+      printf 'failed to clean wiki publish workspace: %s\n' "${work_dir}" >&2
+    fi
+  fi
 }
 trap cleanup EXIT
 
@@ -63,12 +98,12 @@ require_source_file "${repo_dir}/docs/architecture.md" "wiki source"
 require_source_file "${repo_dir}/docs/development.md" "wiki source"
 require_source_file "${repo_dir}/docs/fedora-cinnamon-runbook.md" "wiki source"
 
-cp "${repo_dir}/docs/wiki/Home.md" "${work_dir}/wiki/Home.md"
-cp "${repo_dir}/docs/user-guide.md" "${work_dir}/wiki/User-Guide.md"
-cp "${repo_dir}/docs/cli-reference.md" "${work_dir}/wiki/CLI-Reference.md"
-cp "${repo_dir}/docs/architecture.md" "${work_dir}/wiki/Architecture.md"
-cp "${repo_dir}/docs/development.md" "${work_dir}/wiki/Development.md"
-cp "${repo_dir}/docs/fedora-cinnamon-runbook.md" "${work_dir}/wiki/Fedora-Cinnamon-Runbook.md"
+"${safe_fs_cmd[@]}" copy-file publish-wiki "${repo_dir}/docs/wiki/Home.md" "${work_dir}/wiki/Home.md" 0644
+"${safe_fs_cmd[@]}" copy-file publish-wiki "${repo_dir}/docs/user-guide.md" "${work_dir}/wiki/User-Guide.md" 0644
+"${safe_fs_cmd[@]}" copy-file publish-wiki "${repo_dir}/docs/cli-reference.md" "${work_dir}/wiki/CLI-Reference.md" 0644
+"${safe_fs_cmd[@]}" copy-file publish-wiki "${repo_dir}/docs/architecture.md" "${work_dir}/wiki/Architecture.md" 0644
+"${safe_fs_cmd[@]}" copy-file publish-wiki "${repo_dir}/docs/development.md" "${work_dir}/wiki/Development.md" 0644
+"${safe_fs_cmd[@]}" copy-file publish-wiki "${repo_dir}/docs/fedora-cinnamon-runbook.md" "${work_dir}/wiki/Fedora-Cinnamon-Runbook.md" 0644
 
 cd "${work_dir}/wiki"
 if [[ -z "$(git status --porcelain -- .)" ]]; then

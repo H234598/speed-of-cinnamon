@@ -50,6 +50,38 @@ class PathsTest(unittest.TestCase):
                 with self.assertRaises(OSError):
                     paths.ensure_runtime_dirs()
 
+    def test_ensure_runtime_dirs_makes_existing_leaf_directories_private(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            data_root = base / "data"
+            state_root = base / "state"
+            cache_root = base / "cache"
+            for directory in (
+                data_root / paths.APP_ID,
+                state_root / paths.APP_ID,
+                cache_root / paths.APP_ID / "recordings",
+            ):
+                directory.mkdir(parents=True)
+                directory.chmod(0o777)
+
+            with mock.patch.dict(
+                paths.os.environ,
+                {
+                    "XDG_DATA_HOME": str(data_root),
+                    "XDG_STATE_HOME": str(state_root),
+                    "XDG_CACHE_HOME": str(cache_root),
+                },
+            ):
+                paths.ensure_runtime_dirs()
+
+            for directory in (
+                data_root / paths.APP_ID,
+                state_root / paths.APP_ID,
+                cache_root / paths.APP_ID,
+                cache_root / paths.APP_ID / "recordings",
+            ):
+                self.assertEqual(directory.stat().st_mode & 0o077, 0)
+
     def test_safe_home_path_falls_back_when_home_is_symlinked(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -136,12 +168,31 @@ class PathsTest(unittest.TestCase):
                 ):
                     self.assertEqual(paths.xdg_data_home(), custom)
 
+    def test_xdg_paths_do_not_resolve_after_symlink_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            custom = Path(tmp) / "custom-data"
+            with (
+                mock.patch.dict(paths.os.environ, {"XDG_DATA_HOME": str(custom)}),
+                mock.patch.object(Path, "resolve", side_effect=AssertionError("must not canonicalize after check")),
+            ):
+                self.assertEqual(paths.xdg_data_home(), custom)
+
     def test_xdg_paths_reject_relative_roots(self) -> None:
         with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):
             with mock.patch.dict(
                 paths.os.environ,
                 {
                     "XDG_DATA_HOME": "relative-data",
+                },
+            ):
+                self.assertEqual(paths.xdg_data_home(), Path("/home/example") / ".local" / "share")
+
+    def test_xdg_paths_reject_parent_traversal_roots(self) -> None:
+        with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):
+            with mock.patch.dict(
+                paths.os.environ,
+                {
+                    "XDG_DATA_HOME": "/tmp/safe/../data",
                 },
             ):
                 self.assertEqual(paths.xdg_data_home(), Path("/home/example") / ".local" / "share")
@@ -167,6 +218,20 @@ class PathsTest(unittest.TestCase):
             ):
                 self.assertEqual(paths.xdg_data_home(), Path("/home/example") / ".local" / "share")
 
+    def test_xdg_paths_reject_c1_control_roots(self) -> None:
+        with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):
+            with mock.patch.dict(
+                paths.os.environ,
+                {
+                    "XDG_DATA_HOME": "/tmp/root\x85",
+                    "XDG_STATE_HOME": "/tmp/root\\x85",
+                    "XDG_CACHE_HOME": "/tmp/root\\u0085",
+                },
+            ):
+                self.assertEqual(paths.xdg_data_home(), Path("/home/example") / ".local" / "share")
+                self.assertEqual(paths.xdg_state_home(), Path("/home/example") / ".local" / "state")
+                self.assertEqual(paths.xdg_cache_home(), Path("/home/example") / ".cache")
+
     def test_xdg_paths_accept_home_subdirectories(self) -> None:
         with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):
             data_root = Path("/home/example") / ".local"
@@ -189,6 +254,19 @@ class PathsTest(unittest.TestCase):
     def test_path_safety_rejects_non_path_inputs_before_path_methods(self) -> None:
         with self.assertRaises(RuntimeError):
             path_safety.assert_no_symlink_ancestors("not-a-path", field_name="input")
+
+    def test_path_safety_symlink_error_does_not_echo_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            target = base / "target"
+            target.mkdir()
+            secret_link = base / "secret-token-link"
+            secret_link.symlink_to(target, target_is_directory=True)
+
+            with self.assertRaisesRegex(RuntimeError, "^input path must not pass through a symlink$") as raised:
+                path_safety.assert_no_symlink_ancestors(secret_link / "child", field_name="input path")
+
+            self.assertNotIn("secret-token-link", str(raised.exception))
 
 
 if __name__ == "__main__":

@@ -77,6 +77,8 @@ def normalize_context(value: str = "") -> str:
     raw = value or ""
     if _contains_escaped_null(raw):
         raise ValueError("personal context contains invalid null byte")
+    if _contains_forbidden_control_chars(raw):
+        raise ValueError("personal context contains unsupported control characters")
     normalized = "\n".join(line.rstrip() for line in raw.strip().splitlines()).strip()
     if len(normalized) > MAX_PERSONAL_CONTEXT_CHARS:
         raise ValueError(f"personal context is too large (max {MAX_PERSONAL_CONTEXT_CHARS} characters)")
@@ -91,6 +93,8 @@ def vocabulary_terms(value: str = "") -> list[str]:
     raw = value or ""
     if _contains_escaped_null(raw):
         raise ValueError("vocabulary contains invalid null byte")
+    if _contains_forbidden_control_chars(raw):
+        raise ValueError("vocabulary contains unsupported control characters")
     if len(raw) > MAX_VOCABULARY_CHARS:
         raise ValueError(f"vocabulary is too large (max {MAX_VOCABULARY_CHARS} characters)")
     if len(raw.encode("utf-8")) > MAX_VOCABULARY_CHARS:
@@ -152,3 +156,9 @@ def _contains_escaped_null(value: str) -> bool:
         raise ValueError("value must be text")
     lowered = (value or "").lower()
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
+
+
+def _contains_forbidden_control_chars(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise ValueError("value must be text")
+    return any((ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F) and char != "\n" for char in value)

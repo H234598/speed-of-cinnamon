@@ -5,9 +5,11 @@ import io
 import math
 import os
 import re
+import secrets
 import shutil
 import subprocess  # nosec B404
 import sys
+import stat
 import tempfile
 import time
 import wave
@@ -15,7 +17,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .paths import recordings_dir
-from .path_safety import assert_no_symlink_ancestors, ensure_directory_without_following_symlinks
+from .path_safety import (
+    assert_fd_is_regular_private_file,
+    assert_no_symlink_ancestors,
+    ensure_directory_without_following_symlinks,
+)
 
 
 class RecorderError(RuntimeError):
@@ -190,10 +196,14 @@ def _contains_http_header_control_chars(value: str) -> bool:
     if not isinstance(value, str) or isinstance(value, bool):
         raise RecorderError("value must be text")
     lowered = (value or "").lower()
-    if "\r" in lowered or "\n" in lowered or "\\r" in lowered or "\\n" in lowered or "\\u000d" in lowered or "\\u000a" in lowered:
+    control_codepoints = tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
+    if any(sequence in lowered for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")):
+        return True
+    if any(f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered for codepoint in control_codepoints):
         return True
     for char in lowered:
-        if ord(char) < 0x20 or ord(char) == 0x7F:
+        codepoint = ord(char)
+        if codepoint < 0x20 or codepoint == 0x7F or 0x80 <= codepoint <= 0x9F:
             return True
     return False
 
@@ -246,6 +256,112 @@ def _command_path(command: str) -> str:
     return str(command_path)
 
 
+def _create_recording_temp_file(audio_path: Path, *, marker: str, suffix: str) -> tuple[int, Path]:
+    if not isinstance(audio_path, Path):
+        raise RecorderError("recording audio path must be a path")
+    if not isinstance(marker, str) or not marker or any(char in marker for char in ("/", "\\", "\x00")):
+        raise RecorderError("recording temp marker is invalid")
+    if not isinstance(suffix, str) or not suffix.startswith(".") or any(char in suffix for char in ("/", "\\", "\x00")):
+        raise RecorderError("recording temp suffix is invalid")
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise RecorderError("secure recording temp file creation is not supported on this platform")
+    try:
+        parent_fd = ensure_directory_without_following_symlinks(
+            audio_path.parent,
+            field_name="recording artifact directory",
+        )
+    except OSError as exc:
+        raise RecorderError(f"failed to prepare recording artifact directory: {audio_path.parent}") from exc
+    temp_name = ""
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag
+        for _ in range(100):
+            temp_name = f"{audio_path.stem}.{marker}-{secrets.token_hex(8)}{suffix}"
+            try:
+                fd = os.open(temp_name, flags, 0o600, dir_fd=parent_fd)
+                return fd, audio_path.parent / temp_name
+            except FileExistsError:
+                temp_name = ""
+                continue
+        raise RecorderError("failed to create recording temporary file")
+    except OSError as exc:
+        raise RecorderError("failed to create recording temporary file") from exc
+    finally:
+        os.close(parent_fd)
+
+
+def _recording_temp_path_matches_fd(path: Path, fd: int) -> bool:
+    try:
+        path_stat = os.stat(path, follow_symlinks=False)
+        fd_stat = os.fstat(fd)
+    except OSError:
+        return False
+    return (
+        stat.S_ISREG(path_stat.st_mode)
+        and path_stat.st_dev == fd_stat.st_dev
+        and path_stat.st_ino == fd_stat.st_ino
+    )
+
+
+def _unlink_recording_path_if_same(path: Path, expected_stat: os.stat_result) -> None:
+    try:
+        parent_fd = ensure_directory_without_following_symlinks(
+            path.parent,
+            field_name="recording artifact directory",
+        )
+    except OSError:
+        return
+    try:
+        try:
+            current = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        if (
+            stat.S_ISREG(current.st_mode)
+            and current.st_dev == expected_stat.st_dev
+            and current.st_ino == expected_stat.st_ino
+            and current.st_mode == expected_stat.st_mode
+        ):
+            os.unlink(path.name, dir_fd=parent_fd)
+    except OSError:
+        return
+    finally:
+        os.close(parent_fd)
+
+
+def _cleanup_recording_temp_file(path: Path, fd: int) -> None:
+    try:
+        expected_stat = os.fstat(fd)
+    except OSError:
+        expected_stat = None
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    if expected_stat is not None:
+        _unlink_recording_path_if_same(path, expected_stat)
+
+
+def _ffmpeg_output_path_for_fd(fd: int) -> str:
+    proc_fd_path = Path("/proc/self/fd") / str(fd)
+    if not proc_fd_path.exists():
+        raise RecorderError("secure ffmpeg output file descriptor path is not available")
+    return str(proc_fd_path)
+
+
+def _inspect_and_close_recording_temp_file(path: Path, fd: int, *, field_name: str) -> tuple[int, bool, os.stat_result]:
+    try:
+        output_stat = os.fstat(fd)
+        output_size = output_stat.st_size
+        output_matches_path = _recording_temp_path_matches_fd(path, fd)
+    except OSError as exc:
+        raise RecorderError(f"failed to inspect {field_name}") from exc
+    finally:
+        os.close(fd)
+    return output_size, output_matches_path, output_stat
+
+
 def _parse_ffmpeg_duration(text: str) -> float:
     match = _FFMPEG_DURATION_RE.search(text)
     if not match:
@@ -290,11 +406,21 @@ def _parse_silence_seconds(text: str, duration_seconds: float) -> tuple[float, f
 def detect_silent_recording(audio_path: Path) -> SilenceDetectionResult:
     if not isinstance(audio_path, Path):
         raise RecorderError("recording audio path must be a path")
+    audio_fd: int | None = None
+    try:
+        audio_path, audio_fd = _open_private_recording_audio_file(audio_path, suffix=(".wav", ".flac"))
+    except RuntimeError as exc:
+        raise RecorderError(str(exc)) from exc
+    except OSError as exc:
+        raise RecorderError(f"recording audio file is not readable: {exc}") from exc
     try:
         ffmpeg = _command_path("ffmpeg")
     except RecorderError as exc:
+        if audio_fd is not None:
+            os.close(audio_fd)
         return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, str(exc))
     try:
+        input_path = _ffmpeg_output_path_for_fd(audio_fd)
         # argv-only ffmpeg invocation with trusted binary resolution.
         proc = subprocess.run(  # nosec B603
             [
@@ -303,7 +429,7 @@ def detect_silent_recording(audio_path: Path) -> SilenceDetectionResult:
                 "-nostdin",
                 "-nostats",
                 "-i",
-                str(audio_path),
+                input_path,
                 "-af",
                 f"silencedetect=noise={SILENCE_DETECT_NOISE}:d={SILENCE_DETECT_DURATION_SECONDS}",
                 "-f",
@@ -316,9 +442,16 @@ def detect_silent_recording(audio_path: Path) -> SilenceDetectionResult:
             text=True,
             timeout=SILENCE_DETECT_TIMEOUT_SECONDS,
             env=_filtered_environment(),
+            pass_fds=(audio_fd,),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, f"ffmpeg silence detection failed: {exc}")
+        detail = _sanitize_ffmpeg_error_detail(exc)
+        if detail and not _contains_escaped_null(detail):
+            return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, f"ffmpeg silence detection failed: {detail}")
+        return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, "ffmpeg silence detection failed")
+    finally:
+        if audio_fd is not None:
+            os.close(audio_fd)
     if proc.returncode != 0:
         stderr = proc.stderr or ""
         if isinstance(stderr, bytes):
@@ -354,45 +487,47 @@ def trim_recording_leading_silence(audio_path: Path, leading_silence_seconds: fl
         raise RecorderError("leading silence seconds must be numeric")
     if leading_silence_seconds <= 0:
         return audio_path
+    audio_fd: int | None = None
     try:
-        audio_path = validate_recording_path(audio_path, suffix=".wav")
+        audio_path, audio_fd = _open_private_recording_audio_file(audio_path, suffix=".wav")
     except RuntimeError as exc:
         raise RecorderError(str(exc)) from exc
     try:
-        with wave.open(str(audio_path), "rb") as source:
-            frame_rate = source.getframerate()
-            total_frames = source.getnframes()
-            raw_start_frame = leading_silence_seconds * frame_rate
-            rounded_start_frame = round(raw_start_frame)
-            if abs(raw_start_frame - rounded_start_frame) < 1e-6:
-                start_frame = max(0, rounded_start_frame)
-            else:
-                start_frame = max(0, int(raw_start_frame))
-            if start_frame <= 0:
-                return audio_path
-            if start_frame >= total_frames:
-                raise RecorderError("recording contains no speech after leading silence")
-            params = source.getparams()
-            source.setpos(start_frame)
-            frames = source.readframes(total_frames - start_frame)
+        with os.fdopen(audio_fd, "rb") as audio_file:
+            audio_fd = None
+            with wave.open(audio_file, "rb") as source:
+                frame_rate = source.getframerate()
+                total_frames = source.getnframes()
+                raw_start_frame = leading_silence_seconds * frame_rate
+                rounded_start_frame = round(raw_start_frame)
+                if abs(raw_start_frame - rounded_start_frame) < 1e-6:
+                    start_frame = max(0, rounded_start_frame)
+                else:
+                    start_frame = max(0, int(raw_start_frame))
+                if start_frame <= 0:
+                    return audio_path
+                if start_frame >= total_frames:
+                    raise RecorderError("recording contains no speech after leading silence")
+                params = source.getparams()
+                source.setpos(start_frame)
+                frames = source.readframes(total_frames - start_frame)
     except (OSError, wave.Error) as exc:
         raise RecorderError(f"failed to trim recording audio file {audio_path}: {exc}") from exc
-    fd, temp_name = tempfile.mkstemp(
-        prefix=f"{audio_path.stem}.trimmed-",
-        suffix=audio_path.suffix,
-        dir=str(audio_path.parent),
-    )
-    os.close(fd)
-    temp_path = Path(temp_name)
+    finally:
+        if audio_fd is not None:
+            os.close(audio_fd)
+    fd, temp_path = _create_recording_temp_file(audio_path, marker="trimmed", suffix=audio_path.suffix)
+    temp_stat = os.fstat(fd)
     try:
-        with wave.open(str(temp_path), "wb") as dest:
-            dest.setparams(params)
-            dest.writeframes(frames)
+        with os.fdopen(fd, "wb") as output_file:
+            with wave.open(output_file, "wb") as dest:
+                dest.setparams(params)
+                dest.writeframes(frames)
+            output_file.flush()
+            if not _recording_temp_path_matches_fd(temp_path, output_file.fileno()):
+                raise RecorderError("trimmed recording temporary file was replaced")
     except Exception as exc:
-        try:
-            temp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        _unlink_recording_path_if_same(temp_path, temp_stat)
         raise RecorderError(f"failed to write trimmed recording audio file {temp_path}: {exc}") from exc
     return temp_path
 
@@ -415,17 +550,30 @@ def trim_recording_silence(
         raise RecorderError("silence trim duration must be greater than 0")
     if _contains_escaped_null(noise):
         raise RecorderError("silence trim noise threshold contains invalid null byte")
-    audio_path = validate_recording_path(audio_path, suffix=(".wav", ".flac"), require_recordings_dir=False)
-    fd, temp_name = tempfile.mkstemp(prefix=f"{audio_path.stem}.trimmed-", suffix=".flac", dir=str(audio_path.parent))
-    os.close(fd)
-    trimmed_path = Path(temp_name)
+    audio_fd: int | None = None
     try:
+        audio_path, audio_fd = _open_private_recording_audio_file(
+            audio_path,
+            suffix=(".wav", ".flac"),
+            require_recordings_dir=False,
+        )
+    except RuntimeError as exc:
+        raise RecorderError(str(exc)) from exc
+    try:
+        fd, trimmed_path = _create_recording_temp_file(audio_path, marker="trimmed", suffix=".flac")
+    except Exception:
+        if audio_fd is not None:
+            os.close(audio_fd)
+        raise
+    output_path = ""
+    try:
+        output_path = _ffmpeg_output_path_for_fd(fd)
+        input_path = _ffmpeg_output_path_for_fd(audio_fd)
         ffmpeg = _command_path("ffmpeg")
     except Exception:
-        try:
-            trimmed_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        _cleanup_recording_temp_file(trimmed_path, fd)
+        if audio_fd is not None:
+            os.close(audio_fd)
         raise
     command = [
         ffmpeg,
@@ -433,17 +581,19 @@ def trim_recording_silence(
         "-nostdin",
         "-nostats",
         "-i",
-        str(audio_path),
+        input_path,
         "-af",
         (
-        f"silenceremove=start_periods=1:start_duration={duration_seconds}:"
+            f"silenceremove=start_periods=1:start_duration={duration_seconds}:"
             f"start_threshold={noise}:stop_periods=1:stop_duration={duration_seconds}:"
             f"stop_threshold={noise}"
         ),
         "-c:a",
         "flac",
+        "-f",
+        "flac",
         "-y",
-        str(trimmed_path),
+        output_path,
     ]
     try:
         proc = subprocess.run(  # nosec B603
@@ -453,14 +603,19 @@ def trim_recording_silence(
             stderr=subprocess.PIPE,
             timeout=SILENCE_DETECT_TIMEOUT_SECONDS,
             env=_filtered_environment(),
+            pass_fds=(audio_fd, fd),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        try:
-            trimmed_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if audio_fd is not None:
+            os.close(audio_fd)
+            audio_fd = None
+        _cleanup_recording_temp_file(trimmed_path, fd)
         detail = _sanitize_ffmpeg_error_detail(exc)
         raise RecorderError(f"failed to trim silence from recording: {detail or 'ffmpeg failed'}") from exc
+    finally:
+        if audio_fd is not None:
+            os.close(audio_fd)
+            audio_fd = None
     if proc.returncode != 0:
         detail = ""
         if proc.stderr:
@@ -468,37 +623,57 @@ def trim_recording_silence(
             if _contains_escaped_null(detail):
                 detail = ""
         detail = _sanitize_ffmpeg_error_detail(detail)
-        try:
-            trimmed_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        _cleanup_recording_temp_file(trimmed_path, fd)
         raise RecorderError(detail or "ffmpeg silence trimming failed")
-    if not trimmed_path.exists() or trimmed_path.stat().st_size == 0:
-        try:
-            trimmed_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+    try:
+        output_size, output_matches_path, output_stat = _inspect_and_close_recording_temp_file(
+            trimmed_path,
+            fd,
+            field_name="ffmpeg silence trimming temporary file",
+        )
+    except RecorderError:
+        raise
+    if output_size == 0:
+        _unlink_recording_path_if_same(trimmed_path, output_stat)
         raise RecorderError(f"ffmpeg silence trimming produced empty output for {audio_path}")
+    if not output_matches_path:
+        _unlink_recording_path_if_same(trimmed_path, output_stat)
+        raise RecorderError("ffmpeg silence trimming temporary file was replaced")
     return trimmed_path
 
 
 def reencode_recording_to_flac(audio_path: Path) -> Path:
     if not isinstance(audio_path, Path):
         raise RecorderError("recording audio path must be a path")
-    audio_path = validate_recording_path(audio_path, suffix=(".wav", ".flac"), require_recordings_dir=False)
+    audio_fd: int | None = None
+    try:
+        audio_path, audio_fd = _open_private_recording_audio_file(
+            audio_path,
+            suffix=(".wav", ".flac"),
+            require_recordings_dir=False,
+        )
+    except RuntimeError as exc:
+        raise RecorderError(str(exc)) from exc
     if audio_path.suffix.lower() == ".flac":
+        if audio_fd is not None:
+            os.close(audio_fd)
         return audio_path
 
-    fd, temp_name = tempfile.mkstemp(prefix=f"{audio_path.stem}.encoded-", suffix=".flac", dir=str(audio_path.parent))
-    os.close(fd)
-    encoded_path = Path(temp_name)
     try:
+        fd, encoded_path = _create_recording_temp_file(audio_path, marker="encoded", suffix=".flac")
+    except Exception:
+        if audio_fd is not None:
+            os.close(audio_fd)
+        raise
+    output_path = ""
+    try:
+        output_path = _ffmpeg_output_path_for_fd(fd)
+        input_path = _ffmpeg_output_path_for_fd(audio_fd)
         ffmpeg = _command_path("ffmpeg")
     except Exception:
-        try:
-            encoded_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        _cleanup_recording_temp_file(encoded_path, fd)
+        if audio_fd is not None:
+            os.close(audio_fd)
         raise
     command = [
         ffmpeg,
@@ -506,11 +681,13 @@ def reencode_recording_to_flac(audio_path: Path) -> Path:
         "-nostdin",
         "-nostats",
         "-i",
-        str(audio_path),
+        input_path,
         "-c:a",
         "flac",
+        "-f",
+        "flac",
         "-y",
-        str(encoded_path),
+        output_path,
     ]
     try:
         proc = subprocess.run(  # nosec B603
@@ -520,14 +697,19 @@ def reencode_recording_to_flac(audio_path: Path) -> Path:
             stderr=subprocess.PIPE,
             timeout=SILENCE_DETECT_TIMEOUT_SECONDS,
             env=_filtered_environment(),
+            pass_fds=(audio_fd, fd),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        try:
-            encoded_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        if audio_fd is not None:
+            os.close(audio_fd)
+            audio_fd = None
+        _cleanup_recording_temp_file(encoded_path, fd)
         detail = _sanitize_ffmpeg_error_detail(exc)
         raise RecorderError(f"failed to convert recording to FLAC: {detail or 'ffmpeg failed'}") from exc
+    finally:
+        if audio_fd is not None:
+            os.close(audio_fd)
+            audio_fd = None
     if proc.returncode != 0:
         detail = ""
         if proc.stderr:
@@ -535,17 +717,22 @@ def reencode_recording_to_flac(audio_path: Path) -> Path:
             if _contains_escaped_null(detail):
                 detail = ""
         detail = _sanitize_ffmpeg_error_detail(detail)
-        try:
-            encoded_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        _cleanup_recording_temp_file(encoded_path, fd)
         raise RecorderError(detail or "ffmpeg FLAC conversion failed")
-    if not encoded_path.exists() or encoded_path.stat().st_size == 0:
-        try:
-            encoded_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+    try:
+        output_size, output_matches_path, output_stat = _inspect_and_close_recording_temp_file(
+            encoded_path,
+            fd,
+            field_name="ffmpeg FLAC conversion temporary file",
+        )
+    except RecorderError:
+        raise
+    if output_size == 0:
+        _unlink_recording_path_if_same(encoded_path, output_stat)
         raise RecorderError(f"ffmpeg FLAC conversion produced empty output for {audio_path}")
+    if not output_matches_path:
+        _unlink_recording_path_if_same(encoded_path, output_stat)
+        raise RecorderError("ffmpeg FLAC conversion temporary file was replaced")
     return encoded_path
 
 
@@ -559,6 +746,8 @@ def _assert_valid_input_device(value: str) -> None:
         raise RecorderError("recording input device must be text")
     if _contains_escaped_null(value):
         raise RecorderError("recording input device contains invalid null byte")
+    if _contains_http_header_control_chars(value):
+        raise RecorderError("recording input device contains invalid control character")
     if len(value) > MAX_RECORDING_INPUT_DEVICE_CHARS:
         raise RecorderError("recording input device name is too long")
     if len(value.encode("utf-8")) > MAX_RECORDING_INPUT_DEVICE_CHARS:
@@ -587,12 +776,28 @@ def read_recording_level(audio_path: Path) -> RecordingLevel:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
         raise RecorderError("secure recording audio file open is not supported on this platform")
+    nonblock_flag = getattr(os, "O_NONBLOCK", 0)
+    fd: int | None = None
     try:
-        fd = os.open(audio_path, os.O_RDONLY | nofollow_flag)
+        fd = os.open(audio_path, os.O_RDONLY | nofollow_flag | nonblock_flag)
+        assert_fd_is_regular_private_file(fd, field_name="recording audio file")
     except OSError as exc:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        raise RecorderError(f"recording audio file is not readable: {audio_path}") from exc
+    except RuntimeError as exc:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         raise RecorderError(f"recording audio file is not readable: {audio_path}") from exc
     try:
         with os.fdopen(fd, "rb") as handle:
+            fd = None
             size = os.fstat(handle.fileno()).st_size
             if size <= DEFAULT_WAV_DATA_OFFSET:
                 return RecordingLevel(False, 0, 0.0, 0.0, 0, "waiting for audio")
@@ -659,12 +864,16 @@ def validate_recording_path(
     *,
     suffix: str | tuple[str, ...],
     require_recordings_dir: bool = False,
+    recordings_root: Path | None = None,
 ) -> Path:
     if not isinstance(path, Path):
         raise RecorderError("recording artifact path must be a path")
     normalized_suffixes = _normalize_suffixes(suffix)
-    if _contains_escaped_null(str(path)):
+    path_text = str(path)
+    if _contains_escaped_null(path_text):
         raise RecorderError("recording artifact path contains invalid null byte")
+    if _contains_http_header_control_chars(path_text):
+        raise RecorderError("recording artifact path contains invalid control character")
     normalized = path.expanduser()
     assert_no_symlink_ancestors(normalized, field_name="recording artifact path")
     normalized = normalized.resolve(strict=False)
@@ -686,13 +895,59 @@ def validate_recording_path(
         suffix_summary = ", ".join(normalized_suffixes)
         raise RecorderError(f"recording artifact must use one of the following extensions: {suffix_summary}")
     if require_recordings_dir:
-        root = recordings_dir().resolve(strict=False)
+        root = recordings_root if recordings_root is not None else recordings_dir()
+        if not isinstance(root, Path):
+            raise RecorderError("recordings directory must be a path")
+        root = root.expanduser()
         assert_no_symlink_ancestors(root, field_name="recordings directory")
+        root = root.resolve(strict=False)
         try:
             normalized.relative_to(root)
         except ValueError as exc:
             raise RecorderError("recording artifact is outside the recordings directory") from exc
     return normalized
+
+
+def _validate_private_recording_audio_file(
+    path: Path,
+    *,
+    suffix: str | tuple[str, ...],
+    require_recordings_dir: bool = False,
+    recordings_root: Path | None = None,
+) -> Path:
+    normalized, fd = _open_private_recording_audio_file(
+        path,
+        suffix=suffix,
+        require_recordings_dir=require_recordings_dir,
+        recordings_root=recordings_root,
+    )
+    os.close(fd)
+    return normalized
+
+
+def _open_private_recording_audio_file(
+    path: Path,
+    *,
+    suffix: str | tuple[str, ...],
+    require_recordings_dir: bool = False,
+    recordings_root: Path | None = None,
+) -> tuple[Path, int]:
+    normalized = validate_recording_path(
+        path,
+        suffix=suffix,
+        require_recordings_dir=require_recordings_dir,
+        recordings_root=recordings_root,
+    )
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise RecorderError("secure recording audio file open is not supported on this platform")
+    fd = os.open(normalized, os.O_RDONLY | nofollow_flag | getattr(os, "O_NONBLOCK", 0))
+    try:
+        assert_fd_is_regular_private_file(fd, field_name="recording audio file")
+    except Exception:
+        os.close(fd)
+        raise
+    return normalized, fd
 
 
 def normalize_input_device(value: str) -> str:
@@ -712,6 +967,10 @@ def choose_recorder(preference: str, audio_path: Path, max_seconds: int, input_d
         raise RecorderError("recording input device must be text")
     audio_path = validate_recording_path(audio_path, suffix=".wav")
     max_seconds = _assert_valid_recording_seconds(max_seconds)
+    if _contains_escaped_null(preference):
+        raise RecorderError("recording preference contains invalid null byte")
+    if _contains_http_header_control_chars(preference):
+        raise RecorderError("recording preference contains invalid control character")
     preference = (preference or "auto").strip().lower()
     target = normalize_input_device(input_device)
     candidates = [preference] if preference != "auto" else ["pw-record", "parecord", "arecord"]
@@ -869,7 +1128,11 @@ def _run_kill(command: list[str] | tuple[str, ...], *, check_exit: bool) -> None
         raise RecorderError(f"failed to run kill command {runtime_command}: {exc}") from exc
 
 
-def _open_recorder_log_file(log_path: Path) -> io.BufferedWriter:
+def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
+    return (left.st_dev, left.st_ino, left.st_mode) == (right.st_dev, right.st_ino, right.st_mode)
+
+
+def _open_recorder_log_file(log_path: Path) -> tuple[io.BufferedWriter, bool]:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
         raise RecorderError("secure log file open is not supported on this platform")
@@ -880,22 +1143,61 @@ def _open_recorder_log_file(log_path: Path) -> io.BufferedWriter:
         )
     except OSError as exc:
         raise RecorderError(f"failed to open recorder log file {log_path}: {exc}") from exc
+    created = False
     try:
-        fd = os.open(
-            log_path.name,
-            os.O_WRONLY | os.O_APPEND | os.O_CREAT | nofollow_flag,
-            0o600,
-            dir_fd=parent_fd,
-        )
+        try:
+            existing = os.stat(log_path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            existing = None
+        if existing is not None:
+            if stat.S_ISLNK(existing.st_mode):
+                raise RecorderError(f"failed to open recorder log file {log_path}: recorder log file must not be a symlink")
+            if not stat.S_ISREG(existing.st_mode):
+                raise RecorderError(f"failed to open recorder log file {log_path}: recorder log file must be a regular file")
+            if getattr(existing, "st_nlink", 1) != 1:
+                raise RecorderError(f"failed to open recorder log file {log_path}: recorder log file must not be hardlinked")
+            flags = os.O_WRONLY | os.O_APPEND | nofollow_flag
+        else:
+            flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_EXCL | nofollow_flag
+            created = True
+        try:
+            fd = os.open(log_path.name, flags, 0o600, dir_fd=parent_fd)
+        except FileExistsError:
+            fd = os.open(log_path.name, os.O_WRONLY | os.O_APPEND | nofollow_flag, 0o600, dir_fd=parent_fd)
+            created = False
+    except RecorderError:
+        raise
     except OSError as exc:
         raise RecorderError(f"failed to open recorder log file {log_path}: {exc}") from exc
     finally:
         os.close(parent_fd)
     try:
-        return os.fdopen(fd, "ab")
-    except OSError as exc:
+        assert_fd_is_regular_private_file(fd, field_name="recorder log file")
+        return os.fdopen(fd, "ab"), created
+    except (OSError, RuntimeError) as exc:
         os.close(fd)
         raise RecorderError(f"failed to open recorder log file {log_path}: {exc}") from exc
+
+
+def _unlink_recorder_log_if_same(log_path: Path, expected_stat: os.stat_result) -> None:
+    try:
+        parent_fd = ensure_directory_without_following_symlinks(
+            log_path.parent,
+            field_name="recorder log directory",
+        )
+    except OSError:
+        return
+    try:
+        try:
+            current = os.stat(log_path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        if _same_file_identity(current, expected_stat):
+            os.unlink(log_path.name, dir_fd=parent_fd)
+    except OSError:
+        return
+    finally:
+        os.close(parent_fd)
 
 
 def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen[bytes]:
@@ -918,9 +1220,7 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
     ):
         raise RecorderError("recorder command contains invalid control character")
     log_path = validate_recording_path(log_path, suffix=".log")
-    existed_before = log_path.exists()
-    preserved_size = log_path.stat().st_size if existed_before else 0
-    log_file = _open_recorder_log_file(log_path)
+    log_file, created_log = _open_recorder_log_file(log_path)
     try:
         try:
             os.fchmod(log_file.fileno(), 0o600)
@@ -937,8 +1237,9 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
         )
     except OSError as exc:
         try:
-            if not existed_before:
-                os.unlink(log_path)
+            opened_stat = os.fstat(log_file.fileno())
+            if created_log:
+                _unlink_recorder_log_if_same(log_path, opened_stat)
         except OSError:
             pass
         raise RecorderError(f"failed to start {command.name}: {exc}") from exc

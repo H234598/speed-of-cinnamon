@@ -42,9 +42,17 @@ class StateStoreTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "unsafe path component"):
             StateStore(Path("state/../state.json"))
 
-    def test_state_store_allows_current_directory_relative_path(self) -> None:
-        store = StateStore(Path("./state.json"))
-        self.assertEqual(store.path, Path("state.json"))
+    def test_state_store_rejects_relative_path(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "state file path must be absolute"):
+            StateStore(Path("./state.json"))
+
+    def test_state_store_rejects_control_character_path(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "invalid control character"):
+            StateStore(Path("state\x85spoof.json"))
+
+    def test_state_store_rejects_escaped_control_character_path(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "invalid control character"):
+            StateStore(Path("state\\x85spoof.json"))
 
     def test_state_store_rejects_oversized_path(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "state file path is invalid"):
@@ -95,6 +103,23 @@ class StateStoreTest(unittest.TestCase):
         self.assertEqual(state.status, "recording")
         self.assertEqual(state.language, "de")
 
+    def test_state_lock_rejects_hardlinked_existing_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            lock_path = path.with_name(f".{path.name}.lock")
+            backing = Path(tmp) / "foreign-lock"
+            backing.write_text("lock\n", encoding="utf-8")
+            try:
+                os.link(backing, lock_path)
+            except OSError as exc:
+                self.skipTest(f"hardlinks unavailable: {exc}")
+
+            with self.assertRaisesRegex(RuntimeError, "must not be hardlinked"):
+                StateStore(path).write(RecordingState(status="recording"))
+
+            self.assertTrue(lock_path.exists())
+            self.assertTrue(backing.exists())
+
     def test_update_returns_persisted_timestamp(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")
@@ -111,6 +136,12 @@ class StateStoreTest(unittest.TestCase):
         self.assertEqual(state.status, "recording")
         mocked_read.assert_called_once()
 
+    def test_invalid_boolean_error_does_not_echo_value(self) -> None:
+        with self.assertRaisesRegex(ValueError, "^state inserted contains invalid boolean value$") as raised:
+            StateStore._coerce_boolean("secret-token")
+
+        self.assertNotIn("secret-token", str(raised.exception))
+
     def test_state_roundtrip_preserves_text_whitespace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")
@@ -124,7 +155,7 @@ class StateStoreTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
             store = StateStore(path)
-            with self.assertRaisesRegex(RuntimeError, "failed to persist state:"):
+            with self.assertRaisesRegex(RuntimeError, "^failed to persist state$"):
                 store.write(store.read())
         mocked_replace.assert_called_once()
 
@@ -173,6 +204,42 @@ class StateStoreTest(unittest.TestCase):
             path.write_text("x" * (MAX_STATE_FILE_BYTES + 1), encoding="utf-8")
             state = StateStore(path).read()
         self.assertEqual(state.error, "state file is too large")
+
+    def test_read_rejects_state_file_replaced_by_broken_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            store = StateStore(path)
+            path.symlink_to(Path(tmp) / "missing.json")
+
+            state = store.read()
+
+        self.assertEqual(state.error, "state file could not be read")
+
+    def test_read_rejects_state_file_replaced_by_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            store = StateStore(path)
+            outside = Path(tmp) / "outside.json"
+            outside.write_text('{"status":"recording"}', encoding="utf-8")
+            path.symlink_to(outside)
+
+            state = store.read()
+
+        self.assertEqual(state.error, "state file could not be read")
+
+    def test_read_rejects_file_that_grows_after_size_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text("{}", encoding="utf-8")
+
+            with mock.patch(
+                "speed_of_cinnamon.state.read_text_without_following_symlinks",
+                side_effect=OSError("state file path is too large"),
+            ) as mocked_read:
+                state = StateStore(path).read()
+
+        self.assertEqual(state.error, "state file is too large")
+        mocked_read.assert_called_once_with(path, field_name="state file path", max_bytes=MAX_STATE_FILE_BYTES)
 
     @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
     def test_read_uses_secure_open_flags(self, mocked_open: mock.Mock) -> None:

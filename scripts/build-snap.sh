@@ -2,6 +2,8 @@
 set -euo pipefail
 umask 077
 IFS=$'\n\t'
+readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH="${TRUSTED_COMMAND_PATH}"
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "${repo_dir}"
@@ -35,7 +37,7 @@ require_regular_source_file() {
   fi
 }
 
-for tool in python3 snapcraft mktemp rm mkdir find realpath stat chmod; do
+for tool in python3 snapcraft mktemp mkdir find realpath stat chmod grep sort basename; do
   require_cmd "${tool}"
 done
 snap_dir="${repo_dir}/snap"
@@ -98,17 +100,31 @@ if [[ "${repo_tmp_abs}" == "${repo_dir}" || "${repo_tmp_abs}" == "${repo_dir}/"*
   printf 'snap temporary root must be outside repository: %s\n' "${repo_tmp_root}" >&2
   exit 1
 fi
+repo_tmp_root="${repo_tmp_abs}"
 
 snap_workspace="$(mktemp -d "${repo_tmp_root}/speed-of-cinnamon-snap-tree-XXXXXX")"
+if [[ -L "${snap_workspace}" ]]; then
+  printf 'temporary snap workspace must not be a symlink: %s\n' "${snap_workspace}" >&2
+  exit 1
+fi
+if ! snap_workspace_abs="$(realpath "${snap_workspace}")"; then
+  printf 'failed to resolve temporary snap workspace: %s\n' "${snap_workspace}" >&2
+  exit 1
+fi
+if [[ "${snap_workspace_abs}" != "${repo_tmp_root}/speed-of-cinnamon-snap-tree-"* ]]; then
+  printf 'temporary snap workspace escaped temporary root: %s\n' "${snap_workspace}" >&2
+  exit 1
+fi
+snap_workspace="${snap_workspace_abs}"
 snapcraft_file_rendered="${snap_workspace}/snap/snapcraft.yaml"
 snap_workspace_dist="${snap_workspace}/dist/snap"
 tmp_output=""
 cleanup_tmpdir() {
-  if [[ -n "${tmp_output}" && -f "${tmp_output}" ]]; then
-    rm -f -- "${tmp_output}"
+  if [[ -n "${tmp_output}" ]]; then
+    "${safe_fs_cmd[@]}" remove-leaf build-snap "${tmp_output}" >/dev/null 2>&1 || true
   fi
   if [[ -n "${snap_workspace}" ]]; then
-    rm -rf -- "${snap_workspace}"
+    "${safe_fs_cmd[@]}" remove build-snap "${snap_workspace}" --kind dir >/dev/null 2>&1 || true
   fi
 }
 trap cleanup_tmpdir EXIT
@@ -129,7 +145,7 @@ if ! "${safe_fs_cmd[@]}" copy-file build-snap "${repo_dir}/README.md" "${snap_wo
   printf 'failed to prepare temporary snap workspace: %s\n' "${snap_workspace}" >&2
   exit 1
 fi
-if ! rm -rf -- "${snap_workspace_dist}"; then
+if ! "${safe_fs_cmd[@]}" remove build-snap "${snap_workspace_dist}" --kind dir; then
   printf 'failed to prepare temporary snap workspace: %s\n' "${snap_workspace}" >&2
   exit 1
 fi

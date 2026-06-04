@@ -8,6 +8,7 @@ from unittest import mock
 
 from speed_of_cinnamon.command_chain import (
     CommandChainError,
+    MAX_COMMAND_LENGTH_CHARS,
     MAX_COMMAND_SEGMENT_TOKENS,
     MAX_COMMAND_SEGMENTS,
     MAX_COMMAND_INPUT_CHARS,
@@ -70,12 +71,16 @@ class CommandChainTest(unittest.TestCase):
             split_command_chain("printf hello\nworld")
 
     def test_split_command_chain_rejects_escaped_control_characters(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "contains control characters"):
-            split_command_chain("printf hello\\r\\nworld")
+        for command in ("printf hello\\r\\nworld", "printf hello\\x1bworld", "printf hello\\u001bworld", "printf hello\\x85world"):
+            with self.subTest(command=command):
+                with self.assertRaisesRegex(CommandChainError, "contains control characters"):
+                    split_command_chain(command)
 
     def test_split_command_chain_rejects_other_control_characters(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "contains control characters"):
-            split_command_chain("printf hello\x1bworld")
+        for command in ("printf hello\x1bworld", "printf hello\x85world"):
+            with self.subTest(command=repr(command)):
+                with self.assertRaisesRegex(CommandChainError, "contains control characters"):
+                    split_command_chain(command)
 
     def test_split_command_chain_rejects_too_long_command(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "command too long"):
@@ -499,13 +504,25 @@ class CommandChainTest(unittest.TestCase):
         with self.assertRaisesRegex(CommandChainError, "command contains invalid control character"):
             run_command_chain([("cmd", "arg\rvalue")], "", label="post-process")
 
+    def test_run_command_chain_rejects_direct_segment_that_is_too_long(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "command too long"):
+            run_command_chain([("cmd", "x" * MAX_COMMAND_LENGTH_CHARS)], "", label="post-process")
+
+    def test_run_command_chain_rejects_direct_segment_invalid_utf8_argument(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "not valid UTF-8"):
+            run_command_chain([("cmd", "\udcff")], "", label="post-process")
+
     def test_run_command_chain_rejects_escaped_control_chars_in_command_argument(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "command contains invalid control character"):
-            run_command_chain([("cmd", "arg\\nvalue")], "", label="post-process")
+        for argument in ("arg\\nvalue", "arg\\x1bvalue", "arg\\u001bvalue", "arg\\x85value"):
+            with self.subTest(argument=argument):
+                with self.assertRaisesRegex(CommandChainError, "command contains invalid control character"):
+                    run_command_chain([("cmd", argument)], "", label="post-process")
 
     def test_run_command_chain_rejects_other_control_characters_in_command_argument(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "command contains invalid control character"):
-            run_command_chain([("cmd", "arg\x1fvalue")], "", label="post-process")
+        for argument in ("arg\x1fvalue", "arg\x85value"):
+            with self.subTest(argument=repr(argument)):
+                with self.assertRaisesRegex(CommandChainError, "command contains invalid control character"):
+                    run_command_chain([("cmd", argument)], "", label="post-process")
 
     def test_run_command_chain_rejects_command_with_path_separator(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "path separators"):

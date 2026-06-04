@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 import os
+import re
 import shlex
 import subprocess  # nosec B404
 import tempfile
@@ -52,6 +53,10 @@ _DANGEROUS_ENV_KEYS = {
     "PYTHONHOME",
     "BASH_ENV",
 }
+_ESCAPED_CONTROL_RE = re.compile(
+    r"(?i)\\(?:[abfnrtv]|x(?:0[0-9a-f]|1[0-9a-f]|7f|8[0-9a-f]|9[0-9a-f])|"
+    r"u00(?:0[0-9a-f]|1[0-9a-f]|7f|8[0-9a-f]|9[0-9a-f]))"
+)
 
 
 def _which(command_name: str) -> str | None:
@@ -167,10 +172,11 @@ def _contains_http_header_control_chars(value: str) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise CommandChainError("value must be text")
     lowered = (value or "").lower()
-    if "\r" in lowered or "\n" in lowered or "\\r" in lowered or "\\n" in lowered or "\\u000d" in lowered or "\\u000a" in lowered:
+    if _ESCAPED_CONTROL_RE.search(lowered):
         return True
     for char in lowered:
-        if ord(char) < 0x20 or ord(char) == 0x7F:
+        codepoint = ord(char)
+        if codepoint < 0x20 or codepoint == 0x7F or 0x80 <= codepoint <= 0x9F:
             return True
     return False
 
@@ -296,6 +302,13 @@ def run_command_chain(
             raise CommandChainError(f"{label} command segment contains non-text item")
         if not cmd:
             raise CommandChainError(f"invalid {label} command segment")
+        try:
+            command_chars_len = sum(len(item) + 1 for item in cmd)
+            command_bytes_len = sum(len(item.encode("utf-8")) + 1 for item in cmd)
+        except UnicodeEncodeError as exc:
+            raise CommandChainError(f"invalid {label} command: not valid UTF-8") from exc
+        if command_chars_len > MAX_COMMAND_LENGTH_CHARS or command_bytes_len > MAX_COMMAND_LENGTH_CHARS:
+            raise CommandChainError(f"invalid {label} command: command too long")
         executable = str(cmd[0]).strip()
         if not executable:
             raise CommandChainError(f"invalid {label} command segment")

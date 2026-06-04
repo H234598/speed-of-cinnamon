@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import urllib.parse
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -62,6 +63,7 @@ def run_checks() -> list[Check]:
 
 
 MAX_SETTINGS_JSON_CHARS = 250_000
+MAX_REMOTE_URL_CHARS = 2_048
 
 
 def _ok(checks: Mapping[str, Check], name: str) -> bool:
@@ -92,13 +94,15 @@ def _env_desktop() -> dict[str, object]:
     current_desktop = _coerce_desktop_env("XDG_CURRENT_DESKTOP")
     session_type = _coerce_desktop_env("XDG_SESSION_TYPE")
     desktop_session = _coerce_desktop_env("DESKTOP_SESSION")
+    display = _coerce_desktop_env("DISPLAY")
     desktop_names = ":".join([current_desktop, desktop_session]).lower()
+    session_is_x11 = session_type.lower() == "x11" or (not session_type and bool(display))
     return {
         "current_desktop": current_desktop,
         "session_type": session_type,
         "desktop_session": desktop_session,
         "cinnamon": "cinnamon" in desktop_names,
-        "x11": session_type.lower() == "x11",
+        "x11": session_is_x11,
     }
 
 
@@ -123,21 +127,61 @@ def _setting(settings: Mapping[str, object], key: str, default: str = "") -> str
         return default
     if isinstance(value, bool) or not isinstance(value, str):
         raise ValueError(f"setting {key} must be text")
-    normalized = value.strip()
-    if _contains_http_header_control_chars(normalized):
+    if _contains_http_header_control_chars(value):
         raise ValueError(f"setting {key} contains invalid control character")
+    normalized = value.strip()
     return normalized
 
 
 def _valid_http_url(value: str) -> bool:
     if not isinstance(value, str) or isinstance(value, bool):
         return False
-    normalized = value.strip()
+    try:
+        _validate_remote_http_url(value, field_name="remote endpoint URL")
+    except ValueError:
+        return False
+    return True
+
+
+def _validate_remote_http_url(value: str, *, field_name: str) -> str:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise ValueError(f"{field_name} must be text")
+    raw = value or ""
+    if _contains_escaped_null(raw):
+        raise ValueError(f"{field_name} contains invalid null byte")
+    if _contains_http_header_control_chars(raw):
+        raise ValueError(f"{field_name} contains invalid control character")
+    normalized = raw.strip()
     if not normalized:
-        return False
-    if _contains_escaped_null(normalized) or _contains_http_header_control_chars(normalized):
-        return False
-    return normalized.startswith(("http://", "https://"))
+        raise ValueError(f"{field_name} is required")
+    if len(normalized) > MAX_REMOTE_URL_CHARS:
+        raise ValueError(f"{field_name} is too large (max {MAX_REMOTE_URL_CHARS} characters)")
+    if len(normalized.encode("utf-8")) > MAX_REMOTE_URL_CHARS:
+        raise ValueError(f"{field_name} is too large (max {MAX_REMOTE_URL_CHARS} bytes)")
+    parsed = urllib.parse.urlparse(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"{field_name} must use http:// or https://")
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise ValueError(f"{field_name} has invalid port") from exc
+    if parsed.username or parsed.password:
+        raise ValueError(f"{field_name} must not contain userinfo")
+    if parsed.query or parsed.fragment:
+        raise ValueError(f"{field_name} must not contain query or fragment")
+    return normalized
+
+
+def _safe_remote_url_display(value: str, *, field_name: str) -> str:
+    normalized = _validate_remote_http_url(value, field_name=field_name)
+    parsed = urllib.parse.urlparse(normalized)
+    hostname = parsed.hostname or ""
+    if ":" in hostname and not hostname.startswith("["):
+        hostname = f"[{hostname}]"
+    netloc = hostname
+    if parsed.port is not None:
+        netloc = f"{netloc}:{parsed.port}"
+    return urllib.parse.urlunparse((parsed.scheme, netloc, "", "", "", ""))
 
 
 def _recorder_status(settings: Mapping[str, object], checks: Mapping[str, Check]) -> dict[str, object]:
@@ -177,7 +221,9 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
     transcriber = normalize_backend(transcriber)
 
     model_backend = ""
-    local_model_is_invalid = bool(local_model and _contains_escaped_null(local_model))
+    local_model_is_invalid = bool(
+        local_model and (_contains_escaped_null(local_model) or _contains_http_header_control_chars(local_model))
+    )
     if local_model and not local_model_is_invalid:
         try:
             local_model_path = Path(local_model).expanduser()
@@ -190,7 +236,7 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
             return {
                 "ok": False,
                 "value": transcriber or "auto",
-                "detail": f"voice model path is invalid: {local_model}",
+                "detail": "voice model path is invalid",
             }
     else:
         local_model_path = None
@@ -200,7 +246,7 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
 
     def _model_problem(value: str, *, explicit_backend: str = "") -> dict[str, object] | None:
         if local_model_is_invalid:
-            return {"ok": False, "value": value, "detail": f"voice model path is invalid: {local_model}"}
+            return {"ok": False, "value": value, "detail": "voice model path is invalid"}
         if local_model and not local_model_language_ok:
             if explicit_backend == "whisper-cpp":
                 return {
@@ -214,7 +260,7 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
                 "detail": f"voice model does not support language {language}; use a compatible model",
             }
         if local_model and not model_ok:
-            return {"ok": False, "value": value, "detail": f"voice model not found: {local_model}"}
+            return {"ok": False, "value": value, "detail": "voice model not found"}
         return None
 
     def _model_backend_status(value: str, expected_backend: str = "") -> dict[str, object]:
@@ -275,16 +321,18 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
                 "value": "openai-compatible",
                 "detail": "OpenAI-compatible speech model is required",
             }
-        if not _valid_http_url(openai_compatible_url):
+        try:
+            endpoint_display = _safe_remote_url_display(openai_compatible_url, field_name="OpenAI-compatible speech endpoint URL")
+        except ValueError as exc:
             return {
                 "ok": False,
                 "value": "openai-compatible",
-                "detail": "OpenAI-compatible speech endpoint URL must use http:// or https://",
+                "detail": str(exc),
             }
         return {
             "ok": True,
             "value": "openai-compatible",
-            "detail": f"OpenAI-compatible speech endpoint configured at {openai_compatible_url}",
+            "detail": f"OpenAI-compatible speech endpoint configured at {endpoint_display}",
         }
     if transcriber in {"whisper-cpp", "whisper.cpp"}:
         return _model_backend_status("whisper-cpp", "whisper-cpp")
@@ -366,10 +414,14 @@ def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
     if backend == "ollama":
         if not ollama_model:
             return {"ok": False, "value": "ollama", "detail": "Ollama model is required"}
+        try:
+            endpoint_display = _safe_remote_url_display(ollama_url, field_name="Ollama URL")
+        except ValueError as exc:
+            return {"ok": False, "value": "ollama", "detail": str(exc)}
         return {
             "ok": True,
             "value": "ollama",
-            "detail": f"Ollama configured at {ollama_url}; ensure the local server is running",
+            "detail": f"Ollama configured at {endpoint_display}; ensure the local server is running",
         }
     if backend in {"openai-compatible", "openai", "local-openai"}:
         if not openai_compatible_model:
@@ -378,11 +430,15 @@ def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
                 "value": "openai-compatible",
                 "detail": "OpenAI-compatible text model is required",
             }
+        try:
+            endpoint_display = _safe_remote_url_display(openai_compatible_url, field_name="OpenAI-compatible API URL")
+        except ValueError as exc:
+            return {"ok": False, "value": "openai-compatible", "detail": str(exc)}
         return {
             "ok": True,
             "value": "openai-compatible",
             "detail": (
-                f"OpenAI-compatible API configured at {openai_compatible_url}; "
+                f"OpenAI-compatible API configured at {endpoint_display}; "
                 "ensure the configured endpoint is reachable"
             ),
         }
@@ -480,10 +536,14 @@ def _contains_http_header_control_chars(value: str) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise ValueError("value must be text")
     lowered = (value or "").lower()
-    if "\r" in lowered or "\n" in lowered or "\\r" in lowered or "\\n" in lowered or "\\u000d" in lowered or "\\u000a" in lowered:
+    control_codepoints = tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
+    if any(sequence in lowered for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")):
+        return True
+    if any(f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered for codepoint in control_codepoints):
         return True
     for char in lowered:
-        if ord(char) < 0x20 or ord(char) == 0x7F:
+        codepoint = ord(char)
+        if codepoint < 0x20 or codepoint == 0x7F or 0x80 <= codepoint <= 0x9F:
             return True
     return False
 

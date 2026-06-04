@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 IFS=$'\n\t'
+shopt -s nullglob
 
-if ! compgen -G '.github/workflows/*.yml' > /dev/null && ! compgen -G '.github/workflows/*.yaml' > /dev/null; then
+workflows=(.github/workflows/*.yml .github/workflows/*.yaml)
+if [[ "${#workflows[@]}" -eq 0 ]]; then
   printf 'No workflow files found under .github/workflows.\n' >&2
   exit 1
 fi
-
-workflows=(.github/workflows/*.yml .github/workflows/*.yaml)
 actionlint_strict="${ACTIONLINT_STRICT:-false}"
 
 run_actionlint() {

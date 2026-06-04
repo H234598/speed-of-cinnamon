@@ -35,6 +35,14 @@ class SettingsExportTest(unittest.TestCase):
         with self.assertRaisesRegex(SettingsExportError, "invalid null byte"):
             read_export(Path("settings\x00.json"))
 
+    def test_write_export_rejects_control_character_path(self) -> None:
+        with self.assertRaisesRegex(SettingsExportError, "invalid control character"):
+            write_export(Path("settings\x85spoof.json"), {"language": "en"})
+
+    def test_read_export_rejects_escaped_control_character_path(self) -> None:
+        with self.assertRaisesRegex(SettingsExportError, "invalid control character"):
+            read_export(Path("settings\\x85spoof.json"))
+
     @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
     def test_read_export_uses_secure_open_flags(self, mocked_open: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -68,6 +76,19 @@ class SettingsExportTest(unittest.TestCase):
                 self.skipTest(f"hardlinks unavailable: {exc}")
             with self.assertRaisesRegex(SettingsExportError, "must not be hardlinked"):
                 read_export(hardlink)
+
+    def test_read_export_rejects_fifo_without_blocking(self) -> None:
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("fifo creation unavailable")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            try:
+                os.mkfifo(path)
+            except OSError as exc:
+                self.skipTest(f"fifo creation unavailable: {exc}")
+
+            with self.assertRaisesRegex(SettingsExportError, "regular file"):
+                read_export(path)
 
     def test_read_export_rejects_escaped_null_path(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "invalid null byte"):
@@ -163,16 +184,45 @@ class SettingsExportTest(unittest.TestCase):
             with self.assertRaisesRegex(SettingsExportError, "invalid control character"):
                 read_export(path)
 
+    def test_read_export_rejects_control_char_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text(
+                '{"app":"speed-of-cinnamon","version":2,"created_at":"2026-06-01\\nspoof",'
+                '"speed_of_cinnamon_version":"1.0","settings":{"language":"en","max-seconds":30},'
+                '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(SettingsExportError, "invalid control character"):
+                read_export(path)
+
+    def test_read_export_rejects_oversized_metadata(self) -> None:
+        long_value = "v" * (MAX_SETTINGS_TEXT_CHARS + 10)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text(
+                '{"app":"speed-of-cinnamon","version":2,"created_at":"2026-06-01",'
+                f'"speed_of_cinnamon_version":"{long_value}",'
+                '"settings":{"language":"en","max-seconds":30},'
+                '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(SettingsExportError, "is too long"):
+                read_export(path)
+
     def test_build_export_keeps_only_supported_settings(self) -> None:
         payload = build_export({
             "primary-language-keybinding": "<Super><Alt>z::",
             "secondary-language-keybinding": "<Super><Shift>z::",
             "language": "de",
+            "show-panel-label": True,
             "append-space": False,
             "auto-transcribe-timeout": False,
+            "auto-relisten": True,
             "keep-recording-artifacts": True,
             "sanitize-special-chars": True,
             "typing-delay-ms": "12",
+            "auto-paste-window-title": "Teams",
             "post-process-backend": "ollama",
             "ollama-model": "llama3.2:3b",
             "openai-compatible-url": "http://127.0.0.1:8000/v1",
@@ -187,11 +237,14 @@ class SettingsExportTest(unittest.TestCase):
         self.assertEqual(settings["primary-language-keybinding"], "<Super><Alt>z::")
         self.assertEqual(settings["secondary-language-keybinding"], "<Super><Shift>z::")
         self.assertEqual(settings["language"], "de")
+        self.assertTrue(settings["show-panel-label"])
         self.assertFalse(settings["append-space"])
         self.assertFalse(settings["auto-transcribe-timeout"])
+        self.assertTrue(settings["auto-relisten"])
         self.assertTrue(settings["keep-recording-artifacts"])
         self.assertTrue(settings["sanitize-special-chars"])
         self.assertEqual(settings["typing-delay-ms"], 12)
+        self.assertEqual(settings["auto-paste-window-title"], "Teams")
         self.assertEqual(settings["post-process-backend"], "ollama")
         self.assertEqual(settings["ollama-model"], "llama3.2:3b")
         self.assertEqual(settings["openai-compatible-url"], "http://127.0.0.1:8000/v1")
@@ -201,6 +254,19 @@ class SettingsExportTest(unittest.TestCase):
         self.assertNotIn("cli-path", settings)
         self.assertNotIn("unknown", settings)
 
+    def test_build_export_does_not_leak_command_settings(self) -> None:
+        payload = build_export({
+            "transcriber-command": "custom-asr --token sk-secret-token",
+            "post-process-command": "polish --api-key ghp_secret",
+            "language": "de",
+        })
+        rendered = json.dumps(payload, sort_keys=True)
+
+        self.assertNotIn("transcriber-command", payload["settings"])
+        self.assertNotIn("post-process-command", payload["settings"])
+        self.assertNotIn("sk-secret-token", rendered)
+        self.assertNotIn("ghp_secret", rendered)
+
     def test_write_and_read_export_round_trips_normalized_settings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
@@ -208,6 +274,8 @@ class SettingsExportTest(unittest.TestCase):
                 path,
                 {
                     "auto-transcribe-timeout": False,
+                    "auto-relisten": True,
+                    "auto-paste-window-title": "Teams",
                     "notify-complete": False,
                     "personal-context": "Project words",
                 },
@@ -229,11 +297,25 @@ class SettingsExportTest(unittest.TestCase):
             )
             payload = read_export(path)
         self.assertFalse(payload["settings"]["auto-transcribe-timeout"])
+        self.assertTrue(payload["settings"]["auto-relisten"])
+        self.assertEqual(payload["settings"]["auto-paste-window-title"], "Teams")
         self.assertFalse(payload["settings"]["notify-complete"])
         self.assertEqual(payload["settings"]["personal-context"], "Project words")
         self.assertEqual(payload["alarms"]["last_checked_at"], "2026-06-01T09:10")
         self.assertEqual(payload["alarms"]["alarms"][0]["name"], "Standup")
         self.assertEqual(payload["alarms"]["alarms"][0]["days"], ["mon", "wed", "fri"])
+
+    def test_read_export_uses_schema_aligned_show_panel_label_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text(
+                '{"app":"speed-of-cinnamon","version":2,"settings":{"language":"de"},'
+                '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}',
+                encoding="utf-8",
+            )
+            payload = read_export(path)
+
+        self.assertFalse(payload["settings"]["show-panel-label"])
 
     def test_write_export_rejects_out_of_range_numeric_settings(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "must be at least"):

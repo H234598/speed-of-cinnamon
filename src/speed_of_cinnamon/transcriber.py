@@ -26,7 +26,9 @@ from .postprocessor import (
     MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
 )
 from .path_safety import (
+    assert_fd_is_regular_private_file,
     assert_no_symlink_ancestors,
+    ensure_directory_without_following_symlinks,
     open_file_without_following_symlinks,
     read_text_without_following_symlinks,
     write_bytes_atomically_without_following_symlinks,
@@ -160,13 +162,18 @@ def _contains_escaped_null(value: str) -> bool:
 def _contains_multipart_control_chars(value: str) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise TranscriptionError("value must be text")
-    lowered = (value or "")
+    lowered = (value or "").lower()
     if _contains_escaped_null(value):
         return True
-    if any(ord(ch) < 0x20 for ch in lowered):
+    control_codepoints = tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
+    if any(sequence in lowered for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")):
         return True
-    if "\\r" in lowered.lower() or "\\n" in lowered.lower():
+    if any(f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered for codepoint in control_codepoints):
         return True
+    for char in lowered:
+        codepoint = ord(char)
+        if codepoint < 0x20 or codepoint == 0x7F or 0x80 <= codepoint <= 0x9F:
+            return True
     return False
 
 
@@ -174,19 +181,14 @@ def _contains_http_header_control_chars(value: str) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise TranscriptionError("value must be text")
     lowered = (value or "").lower()
-    if (
-        "\r" in lowered
-        or "\n" in lowered
-        or "\\r" in lowered
-        or "\\n" in lowered
-        or "\\u000d" in lowered
-        or "\\u000a" in lowered
-        or "\\x0a" in lowered
-        or "\\x0d" in lowered
-    ):
+    control_codepoints = tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
+    if any(sequence in lowered for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")):
+        return True
+    if any(f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered for codepoint in control_codepoints):
         return True
     for char in lowered:
-        if ord(char) < 0x20 or ord(char) == 0x7F:
+        codepoint = ord(char)
+        if codepoint < 0x20 or codepoint == 0x7F or 0x80 <= codepoint <= 0x9F:
             return True
     return False
 
@@ -195,6 +197,8 @@ def _model_path_exists(path: str) -> bool:
     if isinstance(path, bool) or not isinstance(path, str):
         return False
     if _contains_escaped_null(path):
+        return False
+    if _contains_http_header_control_chars(path):
         return False
     try:
         return Path(path).expanduser().exists()
@@ -230,14 +234,22 @@ def _read_file_head(file: io.BufferedRandom, max_chars: int) -> str:
     return text
 
 
-def _read_text_file(path: Path) -> str:
+def _read_text_file(path: Path, *, size_field_name: str | None = None) -> str:
     if not isinstance(path, Path):
         raise TranscriptionError("path must be a Path")
     try:
-        text = read_text_without_following_symlinks(path, field_name="generated transcript path")
+        text = read_text_without_following_symlinks(
+            path,
+            field_name="generated transcript path",
+            max_bytes=MAX_TRANSCRIPT_TEXT_CHARS,
+        )
     except UnicodeDecodeError as exc:
         raise TranscriptionError(f"failed to read generated transcript: {path}") from exc
     except OSError as exc:
+        if "too large" in str(exc) and size_field_name:
+            raise TranscriptionError(
+                f"{size_field_name} is too large (max {MAX_TRANSCRIPT_TEXT_CHARS} bytes)"
+            ) from exc
         raise TranscriptionError(f"failed to read generated transcript: {path}") from exc
     if _contains_escaped_null(text):
         raise TranscriptionError(f"failed to read generated transcript: {path}")
@@ -251,14 +263,30 @@ def _snapshot_existing_file(path: Path) -> bytes | None:
         raise TranscriptionError(str(exc)) from exc
     if not path.exists():
         return None
+    nonblock_flag = getattr(os, "O_NONBLOCK", 0)
+    fd: int | None = None
     try:
-        fd = open_file_without_following_symlinks(path, os.O_RDONLY, field_name="existing transcript path")
+        fd = open_file_without_following_symlinks(
+            path,
+            os.O_RDONLY | nonblock_flag,
+            field_name="existing transcript path",
+        )
+        assert_fd_is_regular_private_file(fd, field_name="existing transcript path")
     except OSError as exc:
+        raise TranscriptionError(f"failed to snapshot existing transcript file: {path}") from exc
+    except RuntimeError as exc:
+        if fd is not None:
+            with suppress(OSError):
+                os.close(fd)
         raise TranscriptionError(f"failed to snapshot existing transcript file: {path}") from exc
     try:
         with os.fdopen(fd, "rb") as handle:
+            fd = None
             data = handle.read(MAX_TRANSCRIPT_TEXT_CHARS + 1)
     except OSError as exc:
+        if fd is not None:
+            with suppress(OSError):
+                os.close(fd)
         raise TranscriptionError(f"failed to snapshot existing transcript file: {path}") from exc
     if len(data) > MAX_TRANSCRIPT_TEXT_CHARS:
         raise TranscriptionError(f"existing transcript file is too large: {path}")
@@ -459,28 +487,47 @@ def validate_audio_file(path: Path) -> Path:
     return normalized
 
 
-def _read_private_file_bytes(path: Path, *, field_name: str) -> bytes:
+def _read_private_file_bytes(path: Path, *, field_name: str, max_bytes: int | None = None) -> bytes:
+    if max_bytes is not None and (isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0):
+        raise TranscriptionError("max_bytes must be a non-negative integer")
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
         raise TranscriptionError(f"secure {field_name} open is not supported on this platform")
+    nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     try:
         assert_no_symlink_ancestors(path, field_name=field_name)
     except RuntimeError as exc:
         raise TranscriptionError(f"failed to read {field_name}: {path}") from exc
+    fd: int | None = None
     try:
-        fd = os.open(path, os.O_RDONLY | nofollow_flag)
+        fd = os.open(path, os.O_RDONLY | nofollow_flag | nonblock_flag)
+        assert_fd_is_regular_private_file(fd, field_name=field_name)
     except OSError as exc:
+        raise TranscriptionError(f"failed to read {field_name}: {path}") from exc
+    except RuntimeError as exc:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         raise TranscriptionError(f"failed to read {field_name}: {path}") from exc
     try:
         handle = os.fdopen(fd, "rb")
+        fd = None
     except OSError as exc:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         raise TranscriptionError(f"failed to read {field_name}: {path}") from exc
     try:
-        return handle.read()
+        if max_bytes is None:
+            return handle.read()
+        data = handle.read(max_bytes + 1)
+        if len(data) > max_bytes:
+            raise TranscriptionError(f"{field_name} is too large")
+        return data
     except OSError as exc:
         raise TranscriptionError(f"failed to read {field_name}: {path}") from exc
     finally:
@@ -591,7 +638,7 @@ def transcribe_with_template(
 
     try:
         if should_read_text_file and text_path.exists():
-            output = _read_text_file(text_path)
+            output = _read_text_file(text_path, size_field_name="transcript file text")
             return _assert_text_length(output.strip(), field_name="transcript file text")
         return _assert_text_length(output, field_name="transcript")
     except Exception:
@@ -605,6 +652,7 @@ def transcribe_with_openai_whisper(
     text_path: Path,
     write_transcript: bool = True,
 ) -> str:
+    audio_path = validate_audio_file(audio_path)
     try:
         _command_path("whisper")
     except TranscriptionError as exc:
@@ -627,7 +675,7 @@ def transcribe_with_openai_whisper(
     if generated.exists():
         if generated == text_path:
             try:
-                text = _read_text_file(generated).strip()
+                text = _read_text_file(generated, size_field_name="transcript").strip()
                 _assert_text_length(text, field_name="transcript")
             except Exception:
                 if existing_snapshot is not None:
@@ -649,7 +697,7 @@ def transcribe_with_openai_whisper(
             return text
         primary_error: BaseException | None = None
         try:
-            text = _read_text_file(generated).strip()
+            text = _read_text_file(generated, size_field_name="transcript").strip()
             _assert_text_length(text, field_name="transcript")
             if write_transcript:
                 _write_text_atomic(text_path, text + "\n")
@@ -727,6 +775,7 @@ def transcribe_with_whisper_cpp(
     model_path: str,
     write_transcript: bool = True,
 ) -> str:
+    audio_path = validate_audio_file(audio_path)
     if not model_path.strip():
         raise TranscriptionError("whisper.cpp model path is required")
     if not model_supports_language(model_path, language):
@@ -743,7 +792,7 @@ def transcribe_with_whisper_cpp(
     if generated_path.exists():
         if generated_path == text_path:
             try:
-                text = _read_text_file(generated_path).strip()
+                text = _read_text_file(generated_path, size_field_name="transcript").strip()
                 _assert_text_length(text, field_name="transcript")
             except Exception:
                 if existing_snapshot is not None:
@@ -765,7 +814,7 @@ def transcribe_with_whisper_cpp(
             return text
         primary_error: BaseException | None = None
         try:
-            text = _read_text_file(generated_path).strip()
+            text = _read_text_file(generated_path, size_field_name="transcript").strip()
             _assert_text_length(text, field_name="transcript")
             if write_transcript:
                 _write_text_atomic(text_path, text + "\n")
@@ -797,6 +846,7 @@ def transcribe_with_faster_whisper(
     model_path: str,
     write_transcript: bool = True,
 ) -> str:
+    audio_path = validate_audio_file(audio_path)
     if not model_path.strip():
         raise TranscriptionError("CTranslate2 model path is required")
     if not model_supports_language(model_path, language):
@@ -818,7 +868,7 @@ def transcribe_with_faster_whisper(
         )
         text = " ".join(segment.text.strip() for segment in segments).strip()
     except Exception as exc:
-        raise TranscriptionError(f"faster-whisper failed: {exc}") from exc
+        raise TranscriptionError("faster-whisper failed: error detail redacted") from exc
     _assert_text_length(text, field_name="transcript")
     if write_transcript:
         _write_text_atomic(text_path, text + "\n")
@@ -884,7 +934,7 @@ def _safe_url_display(url: str, *, field_name: str) -> str:
     port = _effective_url_port(parsed)
     if parsed.port is not None and port is not None:
         netloc = f"{netloc}:{port}"
-    return urllib.parse.urlunparse((parsed.scheme, netloc, parsed.path.rstrip("/"), "", "", ""))
+    return urllib.parse.urlunparse((parsed.scheme, netloc, "", "", "", ""))
 
 
 def _openai_compatible_error_detail(raw: str) -> str:
@@ -971,7 +1021,11 @@ def _multipart_form_data(
         raise TranscriptionError("audio file name contains invalid newline")
     file_name = file_name.replace("\\", "\\\\").replace('"', '\\"')
     try:
-        file_bytes = _read_private_file_bytes(file_path, field_name="audio file for API upload")
+        file_bytes = _read_private_file_bytes(
+            file_path,
+            field_name="audio file for API upload",
+            max_bytes=MAX_AUDIO_FILE_BYTES,
+        )
     except TranscriptionError as exc:
         raise TranscriptionError(str(exc)) from exc
     for key, value in fields.items():
@@ -1123,6 +1177,10 @@ def transcribe_with_openai_compatible_api(
 def normalize_backend(value: str) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         raise TranscriptionError("backend must be text")
+    if _contains_escaped_null(value):
+        raise TranscriptionError("backend contains invalid null byte")
+    if _contains_http_header_control_chars(value):
+        raise TranscriptionError("backend contains invalid control character")
     normalized = (value or "auto").strip().lower().replace("_", "-")
     aliases = {
         "openai": "whisper",
@@ -1145,7 +1203,12 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
     if not isinstance(config, TranscriberConfig):
         raise TranscriptionError("config must be TranscriberConfig")
     backend = normalize_backend(config.backend)
-    configured_model = config.whisper_model.strip()
+    raw_whisper_model = config.whisper_model or ""
+    if _contains_escaped_null(raw_whisper_model):
+        raise TranscriptionError("whisper model contains invalid null byte")
+    if _contains_http_header_control_chars(raw_whisper_model):
+        raise TranscriptionError("whisper model contains invalid control character")
+    configured_model = raw_whisper_model.strip()
     has_configured_model = bool(configured_model)
     configured_model_backend = model_backend_for_path(configured_model) if configured_model else ""
     configured_model_is_dir = False
@@ -1156,8 +1219,6 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
         except (OSError, ValueError):
             configured_model_is_dir = False
     local_model = configured_model or default_ctranslate2_model_path(config.language) or default_whisper_cpp_model_path(config.language)
-    if _contains_escaped_null(config.whisper_model or ""):
-        raise TranscriptionError("whisper model contains invalid null byte")
     if backend == "auto":
         if config.command_template.strip():
             return "command"
@@ -1181,9 +1242,10 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
             return "whisper-cpp"
         if _is_command_available("whisper"):
             return "whisper"
-        if local_model and model_backend_for_path(local_model) == "faster-whisper" and faster_whisper_available():
+        local_model_backend = model_backend_for_path(local_model) if local_model else ""
+        if local_model and local_model_backend == "faster-whisper" and faster_whisper_available():
             return "faster-whisper"
-        if local_model and resolve_whisper_cpp_command():
+        if local_model and local_model_backend == "whisper-cpp" and resolve_whisper_cpp_command():
             return "whisper-cpp"
         raise TranscriptionError(
             "no transcriber available; install 'whisper', install faster-whisper, configure whisper.cpp with a model, "
@@ -1219,7 +1281,14 @@ def transcribe(
         assert_no_symlink_ancestors(text_path, field_name="transcript path")
     except RuntimeError as exc:
         raise TranscriptionError(str(exc)) from exc
-    text_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        parent_fd = ensure_directory_without_following_symlinks(text_path.parent, field_name="transcript directory")
+    except OSError as exc:
+        raise TranscriptionError(f"failed to prepare transcript directory: {text_path.parent}") from exc
+    try:
+        os.close(parent_fd)
+    except OSError:
+        pass
     if not isinstance(command_template, str) or isinstance(command_template, bool):
         raise TranscriptionError("command template must be text")
     if not isinstance(backend, str) or isinstance(backend, bool):
@@ -1236,6 +1305,8 @@ def transcribe(
         raise TranscriptionError("OpenAI-compatible API URL must be text")
     if not isinstance(openai_compatible_api_key, str) or isinstance(openai_compatible_api_key, bool):
         raise TranscriptionError("OpenAI-compatible API key must be text")
+    if not openai_compatible_api_key.strip():
+        openai_compatible_api_key = _coerce_environment_value("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY") or ""
     if not isinstance(openai_compatible_flex_processing, bool):
         raise TranscriptionError("OpenAI-compatible flex processing must be a boolean")
     if _contains_escaped_null(openai_compatible_model):

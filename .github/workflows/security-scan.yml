@@ -17,7 +17,43 @@ on:
         type: string
 
 jobs:
+  validate-scan-ref:
+    timeout-minutes: 2
+    runs-on: ubuntu-24.04
+    outputs:
+      ref: ${{ steps.validate.outputs.ref }}
+    steps:
+      - name: Validate scan ref
+        id: validate
+        env:
+          DEFAULT_REF: ${{ github.ref }}
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          scan_ref="${INPUT_REF:-${DEFAULT_REF}}"
+          if [[ -z "${scan_ref}" ]]; then
+            printf 'scan ref must not be empty.\n' >&2
+            exit 1
+          fi
+          if [[ "${scan_ref}" == *$'\n'* || "${scan_ref}" == *$'\r'* || "${scan_ref}" == *$'\t'* ]]; then
+            printf 'scan ref contains control characters: %s\n' "${scan_ref}" >&2
+            exit 1
+          fi
+          if [[ "${scan_ref}" == -* || "${scan_ref}" == *..* || "${scan_ref}" == *//* || "${scan_ref}" == *@{* || "${scan_ref}" == *\\* || "${scan_ref}" == *.lock || "${scan_ref}" == */ || "${scan_ref}" == *. ]]; then
+            printf 'scan ref is not safe: %s\n' "${scan_ref}" >&2
+            exit 1
+          fi
+          if [[ ! ( "${scan_ref}" =~ ^refs/heads/[A-Za-z0-9._/-]+$ || "${scan_ref}" =~ ^refs/tags/[A-Za-z0-9._/-]+$ || "${scan_ref}" =~ ^refs/pull/[0-9]+/(head|merge)$ || "${scan_ref}" =~ ^[0-9a-fA-F]{40}$ ) ]]; then
+            printf 'scan ref is not an allowed ref form: %s\n' "${scan_ref}" >&2
+            exit 1
+          fi
+          {
+            printf 'ref<<REF\n'
+            printf '%s\n' "${scan_ref}"
+            printf 'REF\n'
+          } >> "${GITHUB_OUTPUT}"
+
   python-security:
+    needs: validate-scan-ref
     timeout-minutes: 15
     runs-on: ubuntu-24.04
     steps:
@@ -25,7 +61,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ needs.validate-scan-ref.outputs.ref }}
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: "3.12"
@@ -35,6 +71,7 @@ jobs:
         run: make python-security-scan
 
   shell-security:
+    needs: validate-scan-ref
     timeout-minutes: 10
     runs-on: ubuntu-24.04
     steps:
@@ -42,7 +79,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ needs.validate-scan-ref.outputs.ref }}
       - name: Install shellcheck
         run: |
           sudo apt-get update

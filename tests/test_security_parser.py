@@ -9,6 +9,8 @@ from unittest import mock
 
 from speed_of_cinnamon.security_parser import (
     _MAX_BLACKLIST_ENTRIES,
+    _MAX_BLACKLIST_FILE_BYTES,
+    _MAX_SECURITY_TEXT_CHARS,
     apply_blacklist_mode,
     apply_security_mode,
     parse_security_directives,
@@ -71,6 +73,22 @@ class SecurityParserTest(unittest.TestCase):
         self.assertFalse(directives.show_blacklist)
         self.assertEqual(directives.text, text)
 
+    def test_parse_security_directives_rejects_oversized_transcript(self) -> None:
+        with self.assertRaisesRegex(ValueError, "transcript is too large"):
+            parse_security_directives("x" * (_MAX_SECURITY_TEXT_CHARS + 1))
+
+    def test_parse_security_directives_rejects_control_characters(self) -> None:
+        bad_inputs = [
+            "blacklisteintrag:\rgeheim",
+            "blacklisteintrag:\tgeheim",
+            "Blacklist anzeigen\x1b",
+            "blacklisteintrag:\\rgeheim",
+        ]
+        for text in bad_inputs:
+            with self.subTest(text=repr(text)):
+                with self.assertRaisesRegex(ValueError, "invalid control character"):
+                    parse_security_directives(text)
+
     def test_parse_security_directives_detects_show_phrase_with_open(self) -> None:
         text = "Bitte Blacklist öffnen"
         directives = parse_security_directives(text)
@@ -83,6 +101,25 @@ class SecurityParserTest(unittest.TestCase):
         self.assertIn("[redacted token]", sanitized)
         self.assertIn("[redacted iban]", sanitized)
         self.assertGreater(count, 0)
+
+    def test_apply_security_mode_rejects_oversized_transcript(self) -> None:
+        with self.assertRaisesRegex(ValueError, "transcript is too large"):
+            apply_security_mode("x" * (_MAX_SECURITY_TEXT_CHARS + 1), [])
+
+    def test_apply_security_mode_rejects_control_characters(self) -> None:
+        bad_inputs = [
+            "token:\rabc123",
+            "token:\tabc123",
+            "token:\x1babc123",
+            "token:\\x1babc123",
+            "token:\\x85abc123",
+            "token:\\u001babc123",
+            "token:\\u0085abc123",
+        ]
+        for text in bad_inputs:
+            with self.subTest(text=repr(text)):
+                with self.assertRaisesRegex(ValueError, "invalid control character"):
+                    apply_security_mode(text, [])
 
     def test_apply_security_mode_masks_spaced_iban_and_hyphenated_single_name(self) -> None:
         text = "mein name ist Jean-Luc und IBAN DE44 5001 0517 5407 3249 31"
@@ -120,6 +157,25 @@ class SecurityParserTest(unittest.TestCase):
         self.assertNotIn("ab cd", sanitized)
         self.assertNotIn("abc123", sanitized)
         self.assertGreaterEqual(count, 2)
+
+    def test_apply_security_mode_masks_newline_split_sensitive_values(self) -> None:
+        text = (
+            "token:\nabc123\n\n"
+            "passwort:\nab\ncd\n\n"
+            "Name:\nMax Mustermann\n"
+            "Adresse: Hauptstraße 5"
+        )
+        sanitized, count = apply_security_mode(text, [])
+
+        self.assertIn("[redacted token]", sanitized)
+        self.assertIn("[redacted password]", sanitized)
+        self.assertIn("[redacted name]", sanitized)
+        self.assertIn("[redacted address]", sanitized)
+        self.assertNotIn("abc123", sanitized)
+        self.assertNotIn("ab\ncd", sanitized)
+        self.assertNotIn("Max Mustermann", sanitized)
+        self.assertNotIn("Hauptstraße 5", sanitized)
+        self.assertGreaterEqual(count, 4)
 
     def test_apply_security_mode_stops_spoken_name_at_plain_conjunction(self) -> None:
         sanitized, count = apply_security_mode("mein name ist Anna und gehe jetzt weiter", [])
@@ -271,6 +327,16 @@ class SecurityParserTest(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual(sanitized, "visible [redacted blacklist item]")
 
+    def test_apply_blacklist_mode_rejects_oversized_transcript(self) -> None:
+        with self.assertRaisesRegex(ValueError, "transcript is too large"):
+            apply_blacklist_mode("x" * (_MAX_SECURITY_TEXT_CHARS + 1), ["x"])
+
+    def test_apply_blacklist_mode_rejects_control_characters(self) -> None:
+        for text in ("geheim\tsichtbar", "geheim\rsichtbar", "geheim\x85sichtbar"):
+            with self.subTest(text=repr(text)):
+                with self.assertRaisesRegex(ValueError, "invalid control character"):
+                    apply_blacklist_mode(text, ["geheim"])
+
     def test_update_blacklist_file_deduplicates_and_persists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "blacklist.txt"
@@ -282,7 +348,7 @@ class SecurityParserTest(unittest.TestCase):
     def test_update_blacklist_file_normalizes_added_entries_before_persisting(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "blacklist.txt"
-            entries = update_blacklist_file(path, [" geheim! ", "GEHEIM", True, "\x00bad", "zweite"])  # type: ignore[list-item]
+            entries = update_blacklist_file(path, [" geheim! ", "GEHEIM", True, "\x00bad", "\tbad", "zweite"])  # type: ignore[list-item]
             content = path.read_text(encoding="utf-8")
 
         self.assertEqual(entries, ["geheim", "zweite"])
@@ -329,6 +395,25 @@ class SecurityParserTest(unittest.TestCase):
             [fcntl.LOCK_EX, fcntl.LOCK_UN],
         )
 
+    def test_update_blacklist_file_rejects_hardlinked_existing_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            lock_path = path.with_name(f".{path.name}.lock")
+            backing = Path(tmp) / "foreign-lock"
+            backing.write_text("lock\n", encoding="utf-8")
+            backing.chmod(0o644)
+            try:
+                os.link(backing, lock_path)
+            except OSError as exc:
+                self.skipTest(f"hardlinks unavailable: {exc}")
+
+            with self.assertRaisesRegex(ValueError, "failed to lock blacklist file"):
+                update_blacklist_file(path, ["geheim"])
+
+            self.assertTrue(lock_path.exists())
+            self.assertTrue(backing.exists())
+            self.assertEqual(backing.stat().st_mode & 0o777, 0o644)
+
     def test_load_blacklist_file_rejects_symlink_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "real.txt"
@@ -337,6 +422,17 @@ class SecurityParserTest(unittest.TestCase):
             os.symlink(target, path)
             entries = load_blacklist_file(path)
         self.assertEqual(entries, [])
+
+    def test_load_blacklist_file_strict_rejects_non_regular_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            path.mkdir()
+
+            tolerant_entries = load_blacklist_file(path)
+            with self.assertRaisesRegex(ValueError, "blacklist file is not a regular file"):
+                load_blacklist_file(path, strict=True)
+
+        self.assertEqual(tolerant_entries, [])
 
     def test_load_blacklist_file_strict_rejects_unreadable_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -348,6 +444,23 @@ class SecurityParserTest(unittest.TestCase):
                 load_blacklist_file(path, strict=True)
 
         self.assertEqual(tolerant_entries, [])
+
+    def test_load_blacklist_file_rejects_file_that_grows_after_size_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            path.write_text("geheim\n", encoding="utf-8")
+
+            with mock.patch(
+                "speed_of_cinnamon.security_parser.read_text_without_following_symlinks",
+                side_effect=OSError("blacklist file is too large"),
+            ) as mocked_read:
+                tolerant_entries = load_blacklist_file(path)
+                with self.assertRaisesRegex(ValueError, "blacklist file is too large"):
+                    load_blacklist_file(path, strict=True)
+
+        self.assertEqual(tolerant_entries, [])
+        self.assertEqual(mocked_read.call_count, 2)
+        mocked_read.assert_called_with(path, field_name="blacklist file", max_bytes=_MAX_BLACKLIST_FILE_BYTES)
 
     def test_update_blacklist_file_does_not_follow_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

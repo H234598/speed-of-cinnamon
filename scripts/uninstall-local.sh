@@ -32,16 +32,39 @@ man_dir="${HOME}/.local/share/man/man1"
 app_data="${HOME}/.local/share/speed-of-cinnamon"
 python_dir="${app_data}/python"
 
-if ! command -v -- python3 >/dev/null 2>&1; then
-  printf 'python3 not found.\n' >&2
-  exit 1
-fi
 if [[ ! -f "${repo_dir}/scripts/safe-local-fs.py" || -L "${repo_dir}/scripts/safe-local-fs.py" ]]; then
   printf 'missing required helper: %s\n' "${repo_dir}/scripts/safe-local-fs.py" >&2
   exit 1
 fi
+if ! command -v -- realpath >/dev/null 2>&1; then
+  printf 'realpath not found.\n' >&2
+  exit 1
+fi
+resolve_python3() {
+  local candidate
+  local resolved
+  for candidate in /usr/bin/python3 /bin/python3; do
+    if [[ -x "${candidate}" && ! -d "${candidate}" ]]; then
+      resolved="$(realpath "${candidate}")"
+      printf '%s\n' "${resolved}"
+      return 0
+    fi
+  done
+  candidate="$(command -v -- python3 || true)"
+  if [[ -z "${candidate}" ]]; then
+    printf 'python3 not found.\n' >&2
+    return 1
+  fi
+  resolved="$(realpath "${candidate}")"
+  if [[ "${resolved}" != /* || ! -x "${resolved}" || -d "${resolved}" ]]; then
+    printf 'python3 path is invalid: %s\n' "${candidate}" >&2
+    return 1
+  fi
+  printf '%s\n' "${resolved}"
+}
+python3_path="$(resolve_python3)"
 safe_fs() {
-  python3 "${repo_dir}/scripts/safe-local-fs.py" "$@"
+  "${python3_path}" "${repo_dir}/scripts/safe-local-fs.py" "$@"
 }
 
 if [[ "${HOME}" == "/" ]]; then

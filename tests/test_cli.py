@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import io
 import json
 import os
@@ -98,6 +99,20 @@ class CliTest(unittest.TestCase):
 
             self.assertEqual(path.read_bytes(), b"old")
 
+    def test_prepare_private_file_rejects_symlinked_parent_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            real = root / "real-recordings"
+            real.mkdir()
+            link = root / "recordings"
+            link.symlink_to(real, target_is_directory=True)
+
+            with self.assertRaisesRegex(RuntimeError, "failed to prepare recording audio file"):
+                cli._prepare_private_file(link / "recording.wav", field_name="recording audio file")
+
+            self.assertEqual(list(real.iterdir()), [])
+            self.assertTrue(link.is_symlink())
+
     def test_ensure_private_text_file_keeps_existing_blacklist_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "blacklist.txt"
@@ -106,6 +121,20 @@ class CliTest(unittest.TestCase):
             cli._ensure_private_text_file(path)
 
             self.assertEqual(path.read_text(encoding="utf-8"), "geheim\n")
+
+    def test_ensure_private_text_file_rejects_symlinked_parent_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            real = root / "real-config"
+            real.mkdir()
+            link = root / "config"
+            link.symlink_to(real, target_is_directory=True)
+
+            with self.assertRaisesRegex(RuntimeError, "blacklist file"):
+                cli._ensure_private_text_file(link / "blacklist.txt")
+
+            self.assertEqual(list(real.iterdir()), [])
+            self.assertTrue(link.is_symlink())
 
     def test_allocate_recording_artifacts_retries_existing_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -125,6 +154,24 @@ class CliTest(unittest.TestCase):
             self.assertTrue(audio_path.exists())
             self.assertFalse(log_path.exists())
 
+    def test_allocate_recording_artifacts_caps_collision_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            root.mkdir(parents=True)
+            base = "20260101-000000-000000"
+            for index in range(cli.MAX_RECORDING_ARTIFACT_CANDIDATES):
+                stem = base if index == 0 else f"{base}-{index:02d}"
+                (root / f"{stem}.wav").write_bytes(b"old")
+
+            with (
+                mock.patch("speed_of_cinnamon.cli.recordings_dir", return_value=root),
+                mock.patch("speed_of_cinnamon.cli.timestamp", side_effect=[base]) as mocked_timestamp,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "failed to allocate collision-free recording artifacts"):
+                    cli._allocate_recording_artifacts()
+
+            mocked_timestamp.assert_called_once_with()
+
     def test_allocate_recording_artifacts_removes_partial_audio_after_prepare_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "speed-of-cinnamon" / "recordings"
@@ -136,7 +183,7 @@ class CliTest(unittest.TestCase):
                 attempts += 1
                 path.write_bytes(b"partial")
                 if attempts == 1:
-                    raise RuntimeError("prepare failed")
+                    raise cli._PrivateFilePrepareError("prepare failed", created=True)
 
             with (
                 mock.patch("speed_of_cinnamon.cli.recordings_dir", return_value=root),
@@ -152,6 +199,33 @@ class CliTest(unittest.TestCase):
             self.assertEqual(audio_path.name, "20260101-000000-000001.wav")
             self.assertEqual(log_path.name, "20260101-000000-000001.log")
 
+    def test_allocate_recording_artifacts_keeps_race_created_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            root.mkdir(parents=True)
+            attempts = 0
+            race_path = root / "20260101-000000-000000.wav"
+            real_prepare = cli._prepare_private_file
+
+            def fake_prepare(path: Path, *, field_name: str, exclusive: bool = True) -> None:
+                nonlocal attempts
+                attempts += 1
+                if attempts == 1:
+                    path.write_bytes(b"foreign")
+                    raise cli._PrivateFilePrepareError("prepare failed", created=False, errno_value=errno.EEXIST)
+                real_prepare(path, field_name=field_name, exclusive=exclusive)
+
+            with (
+                mock.patch("speed_of_cinnamon.cli.recordings_dir", return_value=root),
+                mock.patch("speed_of_cinnamon.cli.timestamp", return_value="20260101-000000-000000"),
+                mock.patch("speed_of_cinnamon.cli._prepare_private_file", side_effect=fake_prepare),
+            ):
+                audio_path, log_path = cli._allocate_recording_artifacts()
+
+            self.assertEqual(race_path.read_bytes(), b"foreign")
+            self.assertEqual(audio_path.name, "20260101-000000-000000-01.wav")
+            self.assertEqual(log_path.name, "20260101-000000-000000-01.log")
+
     def test_allocate_recording_artifacts_fails_if_partial_audio_cleanup_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "speed-of-cinnamon" / "recordings"
@@ -159,7 +233,7 @@ class CliTest(unittest.TestCase):
 
             def fake_prepare(path: Path, *, field_name: str, exclusive: bool = True) -> None:
                 path.write_bytes(b"partial")
-                raise RuntimeError("prepare failed")
+                raise cli._PrivateFilePrepareError("prepare failed", created=True)
 
             with (
                 mock.patch("speed_of_cinnamon.cli.recordings_dir", return_value=root),
@@ -697,7 +771,7 @@ class CliTest(unittest.TestCase):
             blacklist.write_text("geheim\n", encoding="utf-8")
             stdout = io.StringIO()
             with (
-                mock.patch.dict(os.environ, {"XDG_DATA_HOME": str(tmp)}),
+                mock.patch.dict(os.environ, {"XDG_DATA_HOME": str(tmp), "XDG_STATE_HOME": str(tmp)}),
                 mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
                 redirect_stdout(stdout),
             ):
@@ -919,6 +993,12 @@ class CliTest(unittest.TestCase):
         self.assertTrue(cli._is_remote_post_process_backend("openai-compatible"))
         self.assertTrue(cli._is_remote_post_process_backend("openai"))
         self.assertFalse(cli._is_remote_post_process_backend("command"))
+        self.assertFalse(cli._is_remote_post_process_backend("\x85openai"))
+        self.assertFalse(cli._is_remote_post_process_backend("\\x85openai"))
+
+    def test_effective_post_process_backend_rejects_control_character(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "post-process backend contains invalid control character"):
+            cli._effective_post_process_backend("\x85openai", "")
 
     @mock.patch("speed_of_cinnamon.cli.apply_security_mode")
     @mock.patch("speed_of_cinnamon.cli.apply_blacklist_mode", return_value=("Hallo geheim", 1))
@@ -1073,6 +1153,37 @@ class CliTest(unittest.TestCase):
         mocked_transcribe.assert_called_once()
         self.assertEqual(mocked_transcribe.call_args.kwargs["backend"], "whisper-cpp")
         self.assertEqual(mocked_transcribe.call_args.kwargs["whisper_model"], str(model_path))
+
+    @mock.patch("speed_of_cinnamon.cli.transcribe", side_effect=RuntimeError("token abc123 leaked"))
+    def test_benchmark_models_redacts_transcribe_error(self, mocked_transcribe: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            model_path = Path(tmp) / "ggml-tiny.bin"
+            self._write_wav(audio, [0, 100, -100])
+            model_path.write_bytes(b"model")
+            stdout = io.StringIO()
+            with (
+                mock.patch("speed_of_cinnamon.cli.model_path", return_value=model_path),
+                mock.patch("speed_of_cinnamon.cli.model_status", return_value={"downloaded": True}),
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "benchmark-models",
+                    str(audio),
+                    "--language",
+                    "de",
+                    "--models",
+                    "tiny",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertFalse(payload["results"][0]["ok"])
+        self.assertNotIn("abc123", payload["results"][0]["error"])
+        self.assertIn("redacted", payload["results"][0]["error"].lower())
+        mocked_transcribe.assert_called_once()
 
     def test_benchmark_models_reports_missing_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1314,6 +1425,32 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("ollama pull stderr contains invalid null byte", payload["error"])
 
+    def test_install_text_model_redacts_failed_pull_output(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            stdout = kwargs["stdout"]
+            stderr = kwargs["stderr"]
+            stdout.write(b"")
+            stderr.write(b"failed with Bearer sk-secret-token and https://user:pass@example.test/model")
+            return subprocess.CompletedProcess(args, 1, stdout=b"", stderr=b"")
+
+        stdout = io.StringIO()
+        with (
+            mock.patch("speed_of_cinnamon.cli.shutil.which", return_value="/usr/bin/ollama"),
+            mock.patch("speed_of_cinnamon.cli.subprocess.run", side_effect=fake_run),
+            redirect_stdout(stdout),
+        ):
+            code = cli.run([
+                "install-text-model",
+                "--model",
+                "llama3.2:3b",
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("ollama pull failed", payload["error"])
+        self.assertNotIn("sk-secret-token", payload["error"])
+        self.assertNotIn("user:pass", payload["error"])
+
     def test_install_text_model_rejects_missing_ollama_command(self) -> None:
         stdout = io.StringIO()
         with (
@@ -1416,6 +1553,29 @@ class CliTest(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 1)
         self.assertIn("contains invalid null byte", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models")
+    def test_text_models_rejects_control_character_openai_url(self, mocked_list: mock.Mock) -> None:
+        for url in (
+            "http://127.0.0.1:8000/v1\x85",
+            "http://127.0.0.1:8000/v1\\x85",
+            "http://127.0.0.1:8000/v1\\u0085",
+        ):
+            with self.subTest(url=repr(url)):
+                stdout = io.StringIO()
+                with redirect_stdout(stdout):
+                    code = cli.run([
+                        "text-models",
+                        "--backend",
+                        "openai-compatible",
+                        "--openai-compatible-url",
+                        url,
+                        "--json",
+                    ])
+                payload = json.loads(stdout.getvalue())
+                self.assertEqual(code, 1)
+                self.assertIn("contains invalid control character", payload["error"])
+        mocked_list.assert_not_called()
 
     def test_text_models_rejects_non_http_openai_url(self) -> None:
         stdout = io.StringIO()
@@ -1534,6 +1694,19 @@ class CliTest(unittest.TestCase):
 
     @mock.patch("speed_of_cinnamon.cli.list_ollama_models", return_value={
         "available": True,
+        "models": [{"name": "llama3.2\x85:3b"}],
+        "message": "",
+    })
+    def test_text_models_rejects_ollama_control_model_name(self, mocked_list: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["text-models", "--ollama-url", "http://localhost:11434", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("model name contains invalid control character", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_ollama_models", return_value={
+        "available": True,
         "models": [{"name": "llama3.2:3b"}],
     })
     def test_text_models_rejects_ollama_missing_message(self, mocked_list: mock.Mock) -> None:
@@ -1643,6 +1816,26 @@ class CliTest(unittest.TestCase):
     @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models", return_value={
         "available": True,
         "models": [{"name": "local-llama"}],
+        "message": "contains\\x85",
+    })
+    def test_text_models_rejects_openai_escaped_control_message(self, mocked_list: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run([
+                "text-models",
+                "--backend",
+                "openai-compatible",
+                "--openai-compatible-url",
+                "http://127.0.0.1:8000/v1",
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("text models payload message contains invalid control character", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models", return_value={
+        "available": True,
+        "models": [{"name": "local-llama"}],
         "message": True,
     })
     def test_text_models_rejects_openai_invalid_message(self, mocked_list: mock.Mock) -> None:
@@ -1685,6 +1878,21 @@ class CliTest(unittest.TestCase):
                 backend="openai",
                 ollama_url="http://localhost:11434",
                 openai_compatible_url="http://127.0.0.1:8000/v1",
+            ))
+
+    def test_text_models_rejects_control_character_backend(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "text models backend contains invalid control character"):
+            cli.command_text_models(argparse.Namespace(
+                backend="\x85ollama",
+                ollama_url="http://localhost:11434",
+                openai_compatible_url="http://127.0.0.1:8000/v1",
+            ))
+
+    def test_install_text_model_rejects_control_character_backend(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "text model backend contains invalid control character"):
+            cli.command_install_text_model(argparse.Namespace(
+                backend="\\x85ollama",
+                model="llama3.2:3b",
             ))
 
     @mock.patch("speed_of_cinnamon.cli.doctor_report")
@@ -1968,6 +2176,54 @@ class CliTest(unittest.TestCase):
         self.assertEqual(len(payload["transcripts"]), 1)
         self.assertEqual(payload["transcripts"][0]["name"], "real.txt")
 
+    def test_history_ignores_symlinked_transcript_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "secret.txt").write_text("secret dictated words\n", encoding="utf-8")
+            link = root / "transcripts"
+            link.symlink_to(outside, target_is_directory=True)
+
+            with mock.patch("speed_of_cinnamon.cli.transcript_dir", return_value=link):
+                entries = cli.read_transcript_history(5)
+
+        self.assertEqual(entries, [])
+
+    def test_history_candidates_skip_unsafe_transcript_entries_before_reading(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            valid = transcript_dir / "valid.txt"
+            valid.write_text("valid\n", encoding="utf-8")
+            symlink = transcript_dir / "link.txt"
+            symlink.symlink_to(valid)
+            directory = transcript_dir / "directory.txt"
+            directory.mkdir()
+            hardlinked = False
+            hardlink_source = transcript_dir / "hardlink-source.txt"
+            hardlink_source.write_text("source\n", encoding="utf-8")
+            hardlink = transcript_dir / "hardlink.txt"
+            try:
+                os.link(hardlink_source, hardlink)
+                hardlinked = True
+            except OSError:
+                hardlink_source.unlink()
+            if hasattr(os, "mkfifo"):
+                fifo = transcript_dir / "fifo.txt"
+                try:
+                    os.mkfifo(fifo)
+                except OSError:
+                    pass
+
+            candidates = list(cli._transcript_history_candidates(transcript_dir))
+
+        candidate_names = {path.name for _mtime, path in candidates}
+        self.assertEqual(candidate_names, {"valid.txt"})
+        if hardlinked:
+            self.assertNotIn("hardlink-source.txt", candidate_names)
+            self.assertNotIn("hardlink.txt", candidate_names)
+
     def test_history_rejects_negative_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             stdout = io.StringIO()
@@ -2215,6 +2471,23 @@ class CliTest(unittest.TestCase):
                 files = cli.recording_artifact_files()
         self.assertEqual({group["stem"] for group in groups}, {"upper"})
         self.assertEqual({path.name for path in files}, {"upper.WAV", "upper.FLAC", "upper.LOG"})
+
+    def test_recording_artifact_scanners_ignore_symlinked_recordings_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "secret.wav").write_bytes(b"audio")
+            (outside / "secret.log").write_text("log", encoding="utf-8")
+            link = root / "recordings"
+            link.symlink_to(outside, target_is_directory=True)
+
+            with mock.patch("speed_of_cinnamon.cli.recordings_dir", return_value=link):
+                groups = cli.recording_groups()
+                files = cli.recording_artifact_files()
+
+        self.assertEqual(groups, [])
+        self.assertEqual(files, [])
 
     def test_recording_artifact_scanners_include_temporary_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2637,6 +2910,29 @@ class CliTest(unittest.TestCase):
             self.assertEqual(final_audio.read_bytes(), b"trimmed-audio")
             self.assertFalse(temp_trimmed.exists())
 
+    @mock.patch("speed_of_cinnamon.cli.os.replace", wraps=os.replace)
+    def test_stabilize_recording_artifact_uses_secure_directory_fd_replace(self, mocked_replace: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings_root = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            temp_trimmed = recordings_root / "recording.trimmed-keep.flac"
+            temp_trimmed.write_bytes(b"trimmed-audio")
+
+            stable = cli._stabilize_recording_artifact_path(temp_trimmed)
+
+            self.assertEqual(stable, recordings_root / "recording.flac")
+            self.assertEqual(stable.read_bytes(), b"trimmed-audio")
+            self.assertFalse(temp_trimmed.exists())
+            calls = [
+                (args, kwargs)
+                for args, kwargs in mocked_replace.call_args_list
+                if args[:2] == ("recording.trimmed-keep.flac", "recording.flac")
+            ]
+            self.assertEqual(len(calls), 1)
+            _args, kwargs = calls[0]
+            self.assertIsInstance(kwargs.get("src_dir_fd"), int)
+            self.assertEqual(kwargs.get("src_dir_fd"), kwargs.get("dst_dir_fd"))
+
     def test_cleanup_rejects_boolean_recording_counts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             stdout = io.StringIO()
@@ -2959,6 +3255,29 @@ class CliTest(unittest.TestCase):
 
         encoded = json.dumps(payload)
         self.assertEqual(code, 0)
+        self.assertNotIn("token abc123", encoded)
+        self.assertNotIn("abc123", encoded)
+
+    @mock.patch("speed_of_cinnamon.cli.list_input_sources", side_effect=RuntimeError("token abc123"))
+    def test_command_diagnostics_redacts_source_errors_before_global_payload_redaction(self, mocked_sources: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_DATA_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.ensure_runtime_dirs"),
+                mock.patch("speed_of_cinnamon.cli.list_alarm_payload", return_value={"alarms": [], "last_checked_at": ""}),
+                mock.patch("speed_of_cinnamon.cli.list_models", return_value=[]),
+            ):
+                payload = cli.command_diagnostics(argparse.Namespace(
+                    settings_json="{}",
+                    applet=False,
+                    output="",
+                    save=False,
+                    state_file=str(state_file),
+                ))
+
+        encoded = json.dumps(payload)
+        self.assertIn("inputs", payload)
         self.assertNotIn("token abc123", encoded)
         self.assertNotIn("abc123", encoded)
 
@@ -3776,6 +4095,79 @@ class CliTest(unittest.TestCase):
             acquired = cli._acquire_finalization_lock(state_file)
 
         self.assertIsNone(acquired)
+
+    @mock.patch("speed_of_cinnamon.cli.os.open", wraps=os.open)
+    def test_finalization_lock_uses_secure_directory_fd_open(self, mocked_open: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+
+            acquired = cli._acquire_finalization_lock(state_file)
+            try:
+                self.assertEqual(acquired, lock_path)
+                final_opens = [
+                    (args, kwargs)
+                    for args, kwargs in mocked_open.call_args_list
+                    if args and args[0] == lock_path.name
+                ]
+                self.assertEqual(len(final_opens), 1)
+                args, kwargs = final_opens[0]
+                self.assertTrue(args[1] & os.O_WRONLY)
+                self.assertTrue(args[1] & os.O_CREAT)
+                self.assertTrue(args[1] & os.O_EXCL)
+                self.assertTrue(args[1] & os.O_NOFOLLOW)
+                self.assertIsInstance(kwargs.get("dir_fd"), int)
+            finally:
+                cli._release_finalization_lock(acquired)
+
+    def test_finalization_lock_rejects_hardlinked_existing_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            backing = Path(tmp) / "foreign-lock"
+            backing.write_text("999999999\n", encoding="ascii")
+            os.link(backing, lock_path)
+            old = time.time() - cli.MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS - 1
+            os.utime(lock_path, (old, old))
+
+            acquired = cli._acquire_finalization_lock(state_file)
+            self.assertIsNone(acquired)
+            self.assertTrue(lock_path.exists())
+            self.assertTrue(backing.exists())
+
+    def test_finalization_lock_pid_reader_rejects_hardlinked_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            backing = Path(tmp) / "foreign-lock"
+            backing.write_text(f"{os.getpid()}\n", encoding="ascii")
+            try:
+                os.link(backing, lock_path)
+            except OSError as exc:
+                self.skipTest(f"hardlinks unavailable: {exc}")
+
+            self.assertIsNone(cli._read_finalization_lock_pid(lock_path))
+
+    def test_finalization_lock_pid_reader_rejects_fifo_without_blocking(self) -> None:
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("mkfifo unavailable")
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            os.mkfifo(lock_path)
+
+            self.assertIsNone(cli._read_finalization_lock_pid(lock_path))
+
+    def test_finalization_lock_identity_reader_rejects_oversized_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            lock_path.write_text("12345\nowner-identity\n", encoding="ascii")
+
+            with mock.patch.object(cli, "MAX_FINALIZATION_LOCK_BYTES", 4):
+                identity = cli._read_finalization_lock_identity(lock_path)
+
+        self.assertIsNone(identity)
 
     def test_finalization_lock_does_not_reclaim_live_foreign_owner_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4905,7 +5297,7 @@ class CliTest(unittest.TestCase):
         self.assertTrue(payload["audio_deleted"])
         self.assertFalse(payload["log_deleted"])
         self.assertTrue(payload["transcript_deleted"])
-        self.assertIsNone(final_state.audio_path)
+        self.assertFalse(final_state.audio_path)
         self.assertEqual(final_state.log_path, str(log))
         self.assertEqual(final_state.transcript_path, "")
 
@@ -5100,6 +5492,33 @@ class CliTest(unittest.TestCase):
         self.assertEqual([call.args[0] for call in mocked_choose.call_args_list], ["pw-record"])
         self.assertEqual(recording_artifacts, [])
 
+    def test_start_explicit_recorder_redacts_immediate_exit_log_tail(self) -> None:
+        failed_proc = mock.Mock()
+        failed_proc.pid = 23456
+        failed_proc.poll.return_value = 1
+        failed_proc.returncode = 1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch(
+                    "speed_of_cinnamon.cli.choose_recorder",
+                    return_value=RecorderCommand("pw-record", ["pw-record"]),
+                ),
+                mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=failed_proc),
+                mock.patch("speed_of_cinnamon.cli.read_file_tail", return_value="token=sk-secret-token\nBearer ghp_secret"),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["start", "--recorder", "pw-record", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 1)
+        self.assertIn("pw-record exited immediately", payload["error"])
+        self.assertNotIn("sk-secret-token", payload["error"])
+        self.assertNotIn("ghp_secret", payload["error"])
+
     def test_start_auto_removes_artifacts_when_all_recorders_fail(self) -> None:
         failed_processes = []
         for returncode in (1, 2, 3):
@@ -5205,6 +5624,39 @@ class CliTest(unittest.TestCase):
         self.assertFalse(log.exists())
         self.assertEqual(final_state.status, "idle")
         self.assertEqual(final_state.audio_path, "")
+
+    def test_cancel_does_not_touch_artifacts_while_finalization_lock_is_held(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recorded.wav"
+            log = recordings_root / "recorded.log"
+            audio.write_bytes(b"audio")
+            log.write_text("log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="recorded", audio_path=str(audio), log_path=str(log)))
+            lock_path = cli._acquire_finalization_lock(state_file)
+            self.assertIsNotNone(lock_path)
+            try:
+                stdout = io.StringIO()
+                with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                    code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+                payload = json.loads(stdout.getvalue())
+                final_state = store.read()
+                audio_exists = audio.exists()
+                log_exists = log.exists()
+            finally:
+                cli._release_finalization_lock(lock_path)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "finalizing")
+        self.assertTrue(audio_exists)
+        self.assertTrue(log_exists)
+        self.assertEqual(final_state.status, "recorded")
+        self.assertEqual(final_state.audio_path, str(audio))
+        self.assertEqual(final_state.log_path, str(log))
 
     @mock.patch("speed_of_cinnamon.cli.stop_process")
     @mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=True)
@@ -5317,6 +5769,134 @@ class CliTest(unittest.TestCase):
         self.assertEqual(final_state.audio_path, "")
         self.assertEqual(final_state.log_path, "")
 
+    def test_finalize_keeps_audio_artifacts_when_error_state_update_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            audio = recordings / "recording.wav"
+            log = recordings / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args()
+            real_update = store.update
+
+            def fake_update(**kwargs: object) -> RecordingState:
+                if kwargs.get("status") == "error":
+                    raise RuntimeError("state write failed")
+                return real_update(**kwargs)
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch.object(store, "update", side_effect=fake_update),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch(
+                    "speed_of_cinnamon.cli.detect_silent_recording",
+                    return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent"),
+                ),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("trim failed")),
+                mock.patch("speed_of_cinnamon.cli.transcribe", side_effect=RuntimeError("transcribe failed")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "transcribe failed; failed to persist error state: state write failed"):
+                    cli.finalize_recording(args, store, store.read())
+
+            audio_exists = audio.exists()
+            log_exists = log.exists()
+
+        self.assertTrue(audio_exists)
+        self.assertTrue(log_exists)
+
+    def test_finalize_transcript_cleanup_runs_even_when_error_state_update_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            transcripts = tmp_path / "speed-of-cinnamon" / "transcripts"
+            recordings.mkdir(parents=True)
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            audio = recordings / "recording.wav"
+            log = recordings / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args()
+            real_update = store.update
+
+            def fake_update(**kwargs: object) -> RecordingState:
+                if kwargs.get("status") == "error":
+                    raise RuntimeError("state write failed")
+                return real_update(**kwargs)
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch.object(store, "update", side_effect=fake_update),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch(
+                    "speed_of_cinnamon.cli.detect_silent_recording",
+                    return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent"),
+                ),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("trim failed")),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.insert_text", side_effect=RuntimeError("insert failed")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "insert failed; failed to persist error state: state write failed"):
+                    cli.finalize_recording(args, store, store.read())
+
+            transcript_files = list(transcripts.glob("*.txt")) if transcripts.exists() else []
+
+        self.assertEqual(transcript_files, [])
+
+    def test_finalize_error_cleanup_does_not_delete_when_cleanup_state_update_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            audio = recordings / "recording.wav"
+            log = recordings / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=False)
+            real_update = store.update
+
+            def fake_update(**kwargs: object) -> RecordingState:
+                if kwargs.get("audio_path") == "" and kwargs.get("log_path") == "":
+                    raise RuntimeError("cleanup state write failed")
+                return real_update(**kwargs)
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch.object(store, "update", side_effect=fake_update),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch(
+                    "speed_of_cinnamon.cli.detect_silent_recording",
+                    return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent"),
+                ),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("trim failed")),
+                mock.patch("speed_of_cinnamon.cli.transcribe", side_effect=RuntimeError("transcribe failed")),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "transcribe failed; failed to persist error cleanup state: cleanup state write failed",
+                ):
+                    cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+            audio_exists = audio.exists()
+            log_exists = log.exists()
+
+        self.assertEqual(final_state.status, "error")
+        self.assertEqual(final_state.audio_path, str(audio))
+        self.assertEqual(final_state.log_path, str(log))
+        self.assertTrue(audio_exists)
+        self.assertTrue(log_exists)
+
     def test_finalize_removes_unstabilized_trimmed_artifact_on_error_when_keeping_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -5413,26 +5993,56 @@ class CliTest(unittest.TestCase):
         with (
             mock.patch("speed_of_cinnamon.cli.os.open", side_effect=fake_os_open),
             mock.patch("speed_of_cinnamon.cli.os.fdopen", return_value=handle),
+            mock.patch("speed_of_cinnamon.cli.assert_fd_is_regular_private_file"),
         ):
             text = cli.read_file_tail(Path("/tmp/sample.txt"), 10)
 
         self.assertEqual(text, "hello")
         self.assertEqual(captured["path"], Path("/tmp/sample.txt"))
-        self.assertEqual(captured["flags"], os.O_RDONLY | os.O_NOFOLLOW)
+        self.assertEqual(captured["flags"], os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0))
         handle.close.assert_called_once()
 
+    def test_read_file_tail_rejects_hardlinked_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "log.txt"
+            path.write_text("log\n", encoding="utf-8")
+            hardlink = Path(tmp) / "log-hardlink.txt"
+            try:
+                os.link(path, hardlink)
+            except OSError as exc:
+                self.skipTest(f"hardlinks unavailable: {exc}")
+
+            with self.assertRaisesRegex(OSError, "must not be hardlinked"):
+                cli.read_file_tail(hardlink, 10)
+
+    def test_read_file_tail_rejects_fifo_without_blocking(self) -> None:
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("mkfifo unavailable")
+        with tempfile.TemporaryDirectory() as tmp:
+            fifo = Path(tmp) / "log.fifo"
+            os.mkfifo(fifo)
+
+            with self.assertRaisesRegex(OSError, "must be a regular file"):
+                cli.read_file_tail(fifo, 10)
+
     @mock.patch("speed_of_cinnamon.cli.os.open", wraps=os.open)
-    def test_prepare_private_file_uses_secure_open_flags(self, mocked_open: mock.Mock) -> None:
+    def test_prepare_private_file_uses_secure_directory_fd_open(self, mocked_open: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "recording.wav"
             cli._prepare_private_file(path, field_name="recording audio file")
 
-        self.assertTrue(
-            any(
-                Path(args[0]) == path and isinstance(args[1], int) and args[1] & os.O_NOFOLLOW
-                for args, _ in mocked_open.call_args_list
-            )
-        )
+        final_opens = [
+            (args, kwargs)
+            for args, kwargs in mocked_open.call_args_list
+            if args and args[0] == "recording.wav"
+        ]
+        self.assertEqual(len(final_opens), 1)
+        args, kwargs = final_opens[0]
+        self.assertTrue(args[1] & os.O_WRONLY)
+        self.assertTrue(args[1] & os.O_CREAT)
+        self.assertTrue(args[1] & os.O_EXCL)
+        self.assertTrue(args[1] & os.O_NOFOLLOW)
+        self.assertIsInstance(kwargs.get("dir_fd"), int)
 
     def test_read_file_tail_rejects_escaped_null(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5440,6 +6050,64 @@ class CliTest(unittest.TestCase):
             path.write_text("line\\x00end", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "contains invalid null byte"):
                 cli.read_file_tail(path, 10)
+
+    def test_read_file_tail_rejects_control_character_path(self) -> None:
+        with self.assertRaisesRegex(ValueError, "invalid control character"):
+            cli.read_file_tail(Path("log\x85spoof.txt"), 10)
+
+    def test_read_file_tail_rejects_escaped_control_character_path(self) -> None:
+        with self.assertRaisesRegex(ValueError, "invalid control character"):
+            cli.read_file_tail(Path("log\\x85spoof.txt"), 10)
+
+    def test_normalize_input_sources_rejects_control_characters(self) -> None:
+        base = {
+            "id": "alsa_input",
+            "name": "Microphone",
+            "description": "Built-in microphone",
+            "driver": "PipeWire",
+            "state": "RUNNING",
+            "default": False,
+            "monitor": False,
+        }
+        error_fields = {
+            "id": "input source id contains invalid control character",
+            "name": "input source name contains invalid control character",
+            "description": "input source description contains invalid control character",
+            "driver": "input source driver contains invalid control character",
+            "state": "input source state contains invalid control character",
+        }
+        for field_name, error in error_fields.items():
+            values = dict(base)
+            values[field_name] = "bad\x85value"
+            source = type("Source", (), values)()
+            with self.subTest(field_name=field_name):
+                with self.assertRaisesRegex(RuntimeError, error):
+                    cli._normalize_input_sources([source])
+
+    def test_normalize_input_sources_rejects_escaped_control_characters(self) -> None:
+        source = type(
+            "Source",
+            (),
+            {
+                "id": "alsa_input",
+                "name": "Microphone",
+                "description": "Built-in microphone",
+                "driver": "Pipe\\x85Wire",
+                "state": "RUNNING",
+                "default": False,
+                "monitor": False,
+            },
+        )()
+        with self.assertRaisesRegex(RuntimeError, "input source driver contains invalid control character"):
+            cli._normalize_input_sources([source])
+
+    def test_normalize_model_payloads_rejects_control_characters(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "model name contains invalid control character"):
+            cli._normalize_model_payloads([{"name": "bad\x85model"}])
+
+    def test_normalize_text_models_payload_rejects_escaped_control_message(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "text models payload message contains invalid control character"):
+            cli._normalize_text_models_payload({"available": True, "models": [], "message": "bad\\x85message"})
 
     def test_read_file_tail_rejects_request_exceeding_history_cap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5484,6 +6152,10 @@ class CliTest(unittest.TestCase):
             cli._assert_clean_text("line1\\x0d", field_name="value", max_chars=20)
         with self.assertRaisesRegex(RuntimeError, "contains invalid control character"):
             cli._assert_clean_text("line1\\u000a", field_name="value", max_chars=20)
+        with self.assertRaisesRegex(RuntimeError, "contains invalid control character"):
+            cli._assert_clean_text("line1\x85", field_name="value", max_chars=20)
+        with self.assertRaisesRegex(RuntimeError, "contains invalid control character"):
+            cli._assert_clean_text("line1\\x85", field_name="value", max_chars=20)
 
     def test_assert_text_limit_rejects_oversized_bytes(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "is too large"):

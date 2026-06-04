@@ -73,7 +73,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.openaiCompatibleApiKey = "";', source)
         self.assertIn('"openai-compatible-api-key": "openai-compatible API key"', source)
         self.assertIn('"openai-compatible-api-key", "openaiCompatibleApiKey"', source)
-        self.assertIn('args.push("--openai-compatible-api-key", safeOpenAiCompatibleApiKey)', source)
+        self.assertNotIn('args.push("--openai-compatible-api-key"', source)
+        self.assertIn('"SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY"', source)
+        self.assertIn("_shouldExposeOpenAiCompatibleApiKeyToBackend: function(args)", source)
+        self.assertIn('command === "text-models"', source)
+        self.assertIn('this._argValue(args, "--backend") === "openai-compatible"', source)
+        self.assertIn("_runWithBackendEnvironment(this._shouldExposeOpenAiCompatibleApiKeyToBackend(normalizedArgs), (backendEnv) => {", source)
+        self.assertIn("_spawnJsonWithBackendEnvironment: function(args, env, callback)", source)
+        self.assertIn("Gio.SubprocessLauncher", source)
+        self.assertIn("Gio.SubprocessFlags.SEARCH_PATH", source)
+        self.assertNotIn("SEARCH_PATH_FROM_ENVP", source)
+        self.assertIn("launcher.setenv(key, String(env[key] || \"\"), true);", source)
+        self.assertNotIn("GLib.setenv", source)
+        self.assertNotIn("GLib.unsetenv", source)
         self.assertNotIn('snapshot["openai-compatible-api-key"]', source)
         self.assertIn('let externalMenu = new PopupMenu.PopupSubMenuMenuItem(_("External API"));', source)
         self.assertIn("this._populateExternalApiVoiceMenu(externalMenu.menu);", source)
@@ -102,7 +114,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("OPENAI_COMPATIBLE_TEXT_MODEL=", source)
         self.assertIn("OPENAI_COMPATIBLE_API_KEY=", source)
         self.assertIn("_writeExternalApiEnvFile: function()", source)
-        self.assertIn("GLib.file_set_contents(path, this._externalApiEnvContent());", source)
+        self.assertIn("_writeExternalApiEnvFileContents: function(path, content)", source)
+        self.assertIn("this._writeExternalApiEnvFileContents(path, this._externalApiEnvContent());", source)
         self.assertIn('this._setStatus("error", _("External API config file could not be written"), this.lastTranscript);', source)
         self.assertIn("_migrateExternalApiEnvFile: function(path)", source)
         self.assertIn('"OPENAI_COMPATIBLE_URL=" + LEGACY_OPENAI_COMPATIBLE_URL', source)
@@ -123,6 +136,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_watchExternalApiEnvFile: function(path)", source)
         self.assertIn("Gio.FileMonitorEvent.CHANGES_DONE_HINT", source)
         self.assertIn("_applyExternalApiEnvFile: function(showStatus)", source)
+        self.assertIn("const MAX_EXTERNAL_API_ENV_BYTES = 65536;", source)
+        self.assertIn("_externalApiEnvFileInfo: function(path, allowMissing)", source)
+        self.assertIn('query_info("standard::type,standard::size,unix::mode", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null)', source)
+        self.assertIn("info.get_file_type() !== Gio.FileType.REGULAR", source)
+        self.assertIn("External API config file is too large", source)
+        self.assertIn("this._externalApiEnvFileInfo(path, true);", source)
+        self.assertIn('Gio.File.new_for_path(path).set_attribute_uint32("unix::mode", 0o600, Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);', source)
+        self.assertIn("Gio.File.new_for_path(path).replace_contents(", source)
+        self.assertIn("ByteArray.fromString(text)", source)
+        self.assertIn("Gio.FileCreateFlags.PRIVATE | Gio.FileCreateFlags.REPLACE_DESTINATION", source)
+        self.assertNotIn("GLib.umask", source)
+        self.assertIn("this._externalApiEnvFileInfo(path, false);", source)
+        self.assertIn("this._readExternalApiEnvFile(path)", source)
         self.assertIn("ByteArray.toString(contents)", source)
 
     def test_error_status_displays_backend_error_message(self) -> None:
@@ -130,6 +156,22 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertIn('statusText = "error";', source)
         self.assertIn('statusText += " - " + this._shortMenuText(this.lastMessage, 140);', source)
+
+    def test_applet_redacts_sensitive_local_error_messages_before_display(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("const SENSITIVE_ERROR_RE =", source)
+        self.assertIn("_sanitizeErrorMessage: function(value)", source)
+        self.assertIn('return "[redacted error details]";', source)
+        self.assertIn('this.lastMessage = status === "error" ? this._sanitizeErrorMessage(message) : message || "";', source)
+        self.assertNotIn('this._notify(_("Could not open terminal"), String(err), true);', source)
+        self.assertNotIn('this._notify(_("Could not start install terminal"), String(err), true);', source)
+        self.assertNotIn('this._notify(_("Could not start uninstall terminal"), String(err), true);', source)
+        self.assertNotIn('this._notify(_("Could not start setup terminal"), String(err), true);', source)
+        self.assertIn('this._notify(_("Could not open terminal"), safeError, true);', source)
+        self.assertIn('this._notify(_("Could not start install terminal"), safeError, true);', source)
+        self.assertIn('this._notify(_("Could not start uninstall terminal"), safeError, true);', source)
+        self.assertIn('this._notify(_("Could not start setup terminal"), safeError, true);', source)
 
     def test_applet_registers_optional_language_specific_hotkeys(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -378,6 +420,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.autoRelistenPending = Boolean(relistenToken);', source)
         self.assertIn('this.autoRelistenPendingToken = relistenToken;', source)
         self.assertIn('if (relistenToken && this.autoRelistenPendingToken !== relistenToken) {', source)
+        self.assertIn('if (nextPayload && nextPayload.error) {\n        this.autoTranscribeRecordingKey = "";\n      }', source)
         self.assertIn('let hasTranscript = typeof payload.transcript === "string" && payload.transcript.length > 0;', source)
         self.assertIn('if (payload.status === "done" && payload.silence_detected)', source)
         self.assertIn('if (payload.status === "done" && hasTranscript)', source)
@@ -386,7 +429,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let relistenStarted = false;', source)
         self.assertIn('if (shouldRelisten) {', source)
         self.assertIn('relistenStarted = this._restartRelistenRecording();', source)
-        self.assertIn('this._insertTranscriptText(transcript)', source)
+        self.assertIn('this._insertTranscriptText(transcript,', source)
         self.assertIn('this._reserveAutoInsertFingerprint(insertFingerprint)', source)
         self.assertIn('if (relistenStarted) {', source)
         self.assertIn('return true;', source)
@@ -436,6 +479,23 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let applet = this;", source)
         self.assertIn("let spawnGeneration = this.spawnGeneration;", source)
         self.assertIn("if (applet.appletRemoved || applet.spawnGeneration !== spawnGeneration) {", source)
+
+    def test_lifecycle_timers_ignore_removed_applet(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        for marker in (
+            "_scheduleSetupCheck: function()",
+            "_scheduleAlarmCheck: function(delaySeconds)",
+            "_scheduleStatusPoll: function()",
+            "_scheduleDisplayTick: function()",
+            "_spawnKeyboardAfterFocus: function(args, followUpArgs)",
+            "_watchExternalApiEnvFile: function(path)",
+        ):
+            with self.subTest(marker=marker):
+                start = source.index(marker)
+                end = source.find("\n  _", start + len(marker))
+                block = source[start:] if end == -1 else source[start:end]
+                self.assertIn("if (this.appletRemoved)", block)
 
     def test_applet_exposes_notification_options_submenu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -812,14 +872,23 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertIn("const PASTE_FOCUS_DELAY_MS = 120;", source)
         self.assertIn("const PASTE_SUBMIT_DELAY_MS = 120;", source)
+        self.assertIn("const CLIPBOARD_TARGET_TIMEOUT_SECONDS = 1;", source)
         self.assertIn("this.targetWindow = null;", source)
         self.assertIn("this._rememberFocusedWindow();", source)
         self.assertIn("global.display ? global.display.focus_window : null", source)
         self.assertIn("window.is_skip_taskbar && window.is_skip_taskbar()", source)
+        self.assertIn("this._windowLooksLikeSpeedOfCinnamon(window)", source)
+        self.assertIn("_windowLooksLikeSpeedOfCinnamon: function(window)", source)
+        self.assertIn('"speed of cinnamon"', source)
+        self.assertIn('"speed-of-cinnamon"', source)
+        self.assertIn("UUID.toLowerCase()", source)
         self.assertIn("Main.activateWindow(this.targetWindow, global.get_current_time())", source)
         self.assertIn("this._restoreTargetWindowForPaste()", source)
         self.assertIn('this._pasteClipboardAfterFocus(submitWithReturn)', source)
-        self.assertIn('this._setStatus("done", _("Copied to clipboard; target window unavailable for automatic paste"), transcript);', source)
+        self.assertIn(
+            'this._setStatus("done", _("Copied to clipboard; target window could not be restored for automatic paste"), transcript);',
+            source,
+        )
         self.assertIn('this._setStatus("error", _("Target window unavailable for direct typing"), transcript);', source)
         self.assertIn('this._setStatus("done", _("No transcript text to insert"), transcript);', source)
         self.assertIn("Mainloop.timeout_add(PASTE_SUBMIT_DELAY_MS", source)
@@ -839,11 +908,16 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!this._reserveAutoInsertFingerprint(insertFingerprint))", source)
         self.assertIn("this._rememberAutoInsertFingerprint(fingerprint);", source)
         self.assertIn("this._forgetAutoInsertFingerprint(insertFingerprint);", source)
+        self.assertIn("_transcriptDigest: function(transcript)", source)
+        self.assertIn("GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, text, -1)", source)
+        self.assertIn('":sha256:" + digest', source)
+        self.assertNotIn("rawTranscript.slice(0, 64)", source)
         self.assertIn("_finishPendingRelisten: function()", source)
         self.assertIn("this._finishPendingRelisten();", source)
         reserve_index = source.index("if (!this._reserveAutoInsertFingerprint(insertFingerprint))", finish_index)
-        insert_index = source.index("this._insertTranscriptText(transcript)", finish_index)
+        insert_index = source.index("this._insertTranscriptText(transcript,", finish_index)
         self.assertLess(reserve_index, insert_index)
+        self.assertIn("if (result === null) {\n        return;\n      }", source[finish_index:source.index("_finishPendingRelisten: function()", finish_index)])
         duplicate_index = reserve_index
         duplicate_finish_index = source.index("this._finishPendingRelisten();", duplicate_index)
         duplicate_return_index = source.index("return;", duplicate_index)
@@ -957,14 +1031,14 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.insertLastItem.connect(\"activate\", () => this._insertLastTranscript())", source)
         self.assertIn("this.insertLastItem.setSensitive(Boolean(this.lastTranscript))", source)
         self.assertIn("_insertLastTranscript: function()", source)
-        self.assertIn("_insertTranscriptText: function(transcript)", source)
+        self.assertIn("_insertTranscriptText: function(transcript, completionCallback)", source)
         self.assertIn("_finishAppletTextInsert: function(payload)", source)
         self.assertIn("_finishPendingRelisten: function()", source)
         self.assertIn("let shouldRelisten = this.autoRelistenPending;", source)
         self.assertIn("let relistenStarted = false;", source)
         self.assertIn("if (shouldRelisten) {", source)
         self.assertIn("relistenStarted = this._restartRelistenRecording();", source)
-        self.assertIn("this._insertTranscriptText(transcript)", source)
+        self.assertIn("this._insertTranscriptText(transcript,", source)
         self.assertIn("this._reserveAutoInsertFingerprint(insertFingerprint)", source)
         self.assertIn("if (payload.inserted === true) {", source)
         self.assertIn("if (relistenStarted) {", source)
@@ -1003,29 +1077,34 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         self.assertIn("_clipboardTargetList: function(program, args)", source)
+        self.assertIn('let timeout = GLib.find_program_in_path("timeout");', source)
+        self.assertIn("let helper = GLib.find_program_in_path(program);", source)
+        self.assertIn('let command = [timeout, "--kill-after=1", String(CLIPBOARD_TARGET_TIMEOUT_SECONDS), helper];', source)
+        self.assertIn("result[1].length > MAX_CLIPBOARD_TARGET_OUTPUT_BYTES", source)
         self.assertIn("_clipboardTargetsContainNonTextPayload: function(targets)", source)
+        self.assertIn("_clipboardNonTextPayloadTargets: function(targets)", source)
         self.assertIn("_clipboardHasNonTextPayload: function()", source)
-        self.assertIn("return null;", source)
-        self.assertIn("if (targets === null || targets === undefined) {", source)
-        self.assertIn('if (String(targets || "").trim() === "") {', source)
-        self.assertIn("let knownTextTargets = {", source)
-        self.assertIn("let sawTextTarget = false;", source)
+        self.assertIn("_clipboardPayloadSnapshot: function()", source)
+        self.assertIn("return [\"clipboard\"];", source)
+        self.assertIn("let nonTextTargets = [];", source)
         self.assertIn('target.indexOf("text/") === 0', source)
-        self.assertIn("sawTextTarget = true;", source)
-        self.assertNotIn("let nonTextTargets = {", source)
-        self.assertIn('target.indexOf("text/") === 0', source)
-        self.assertIn(
-            '    }\n    return !sawTextTarget;\n  },\n\n  _clipboardHasNonTextPayload',
-            source,
-        )
-        self.assertIn(
-            '      if (knownTextTargets[target] || target.indexOf("text/") === 0) {\n        sawTextTarget = true;\n        continue;\n      }\n      return true;',
-            source,
-        )
+        self.assertIn("_clipboardPayloadDescriptionFromTargets: function(targets)", source)
+        self.assertIn("nonTextTargets.slice(0, 6).join(\", \")", source)
+        self.assertIn("this._shortMenuText(description, 160)", source)
+        self.assertIn("_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn)", source)
+        self.assertIn('  _describeNonTextClipboardPayload: function() {', source)
+        self.assertIn('_confirmClipboardOverwriteForPaste: function(clipboardSnapshot, transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback)', source)
         self.assertIn('if (method === "clipboard-paste" && !canPasteWithKeyboard) {', source)
         self.assertIn('this._setStatus("error", _("Clipboard-paste requires a keyboard helper (xdotool or wtype)"), transcript);', source)
-        self.assertIn('if (method === "clipboard-paste" && this._clipboardHasNonTextPayload()) {', source)
-        self.assertIn('this._setStatus("error", _("Clipboard contains non-text data; skipping automatic paste"), transcript);', source)
+        self.assertIn('let clipboardSnapshot = this._clipboardPayloadSnapshot();', source)
+        self.assertIn('if (method === "clipboard-paste" && clipboardSnapshot.hasNonTextPayload) {', source)
+        self.assertIn('this._confirmClipboardOverwriteForPaste(', source)
+        self.assertIn('_("Clipboard contains non-text payload (%s).").replace("%s", String(nonTextDescription || _("unknown")))', source)
+        self.assertIn('_("Clipboard overwrite cancelled"), transcript);', source)
+        self.assertIn('_("Replace clipboard content and continue paste?"),', source)
+        self.assertIn('_("Overwrite clipboard")', source)
+        self.assertNotIn("skippig", source)
+        self.assertNotIn("speef", source.lower())
         self.assertIn('this._clipboardTargetList("xclip", ["-selection", "clipboard", "-t", "TARGETS", "-out"])', source)
         self.assertIn('this._clipboardTargetList("xsel", ["--clipboard", "--output", "--target", "TARGETS"])', source)
         self.assertIn('this._clipboardTargetList("wl-paste", ["--list-types"])', source)
@@ -1033,16 +1112,43 @@ class AppletStaticTest(unittest.TestCase):
             'this._clipboardTargetList("wl-paste", ["--list-types"]);\n      return this._clipboardTargetsContainNonTextPayload(targets);\n    }\n    return true;',
             source,
         )
-        self.assertIn('Copied to clipboard; automatic paste could not be started', source)
+        self.assertIn('Copied to clipboard; automatic paste command could not be started', source)
 
     def test_applet_blocks_auto_paste_when_clipboard_targets_unknown_or_empty(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         self.assertIn(
-            'if (targets === null || targets === undefined) {\n      return true;\n    }\n    if (String(targets || "").trim() === "") {\n      return true;',
+            'if (targets === null || targets === undefined) {\n      return ["clipboard"];',
             source,
         )
-        self.assertIn("return true;", source)
+        self.assertIn('return ["clipboard"];', source)
+
+    def test_applet_prompts_before_overwriting_non_text_clipboard_payload(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn('_describeNonTextClipboardPayload: function() {', source)
+        self.assertIn('this._setStatus("ready", _("Clipboard overwrite cancelled"), transcript);', source)
+        self.assertIn('this._setStatus("ready", _("Clipboard changed; overwrite cancelled"), transcript);', source)
+        self.assertIn('_("Clipboard contains non-text payload (%s).").replace("%s", String(nonTextDescription || _("unknown")))', source)
+        self.assertIn('_("Replace clipboard content and continue paste?"),', source)
+        self.assertIn("dialog.contentLayout.add_child(new St.Label", source)
+        self.assertIn('dialog.setButtons([', source)
+        self.assertIn('key: Clutter.KEY_Escape,', source)
+        self.assertIn('let completed = false;', source)
+        self.assertIn('let originalClipboardSignature = clipboardSnapshot && clipboardSnapshot.signature ? clipboardSnapshot.signature : "unknown";', source)
+        self.assertIn('if (originalClipboardSignature === "unknown") {', source)
+        self.assertIn('this._setStatus("ready", _("Clipboard state unavailable; overwrite cancelled"), transcript);', source)
+        self.assertIn('let currentClipboardSnapshot = this._clipboardPayloadSnapshot();', source)
+        self.assertIn('if (currentClipboardSnapshot.signature === "unknown" || currentClipboardSnapshot.signature !== originalClipboardSignature) {', source)
+        self.assertIn('if (completed) {\n        return;\n      }', source)
+        self.assertIn('completed = true;', source)
+        self.assertIn('complete(false);', source)
+        self.assertNotIn('this.clipboard.set_text(St.ClipboardType.CLIPBOARD, "");', source)
+        self.assertIn("this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);", source)
+        self.assertIn("complete(this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn));", source)
+        self.assertIn('if (!dialog.open()) {', source)
+        self.assertIn('this._setStatus("error", _("Clipboard overwrite prompt could not be opened"), transcript);', source)
+        self.assertIn("if (result === null) {\n        return;\n      }", source)
 
     def test_history_entries_can_be_copied_or_inserted(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

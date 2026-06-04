@@ -2,6 +2,8 @@
 set -euo pipefail
 umask 077
 IFS=$'\n\t'
+readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH="${TRUSTED_COMMAND_PATH}"
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_dir}"
@@ -92,11 +94,26 @@ fi
 mkdir -p "${repo_tmp_root}"
 
 rpmbuild_tmpdir="$(mktemp -d "${repo_tmp_root}/speed-of-cinnamon-rpm-tmp-XXXXXX")"
+if [[ -L "${rpmbuild_tmpdir}" ]]; then
+  printf 'temporary RPM workspace must not be a symlink: %s\n' "${rpmbuild_tmpdir}" >&2
+  exit 1
+fi
+if ! rpmbuild_tmpdir_abs="$(realpath "${rpmbuild_tmpdir}")"; then
+  printf 'failed to resolve temporary RPM workspace: %s\n' "${rpmbuild_tmpdir}" >&2
+  exit 1
+fi
+if [[ "${rpmbuild_tmpdir_abs}" != "${repo_tmp_root}/speed-of-cinnamon-rpm-tmp-"* ]]; then
+  printf 'temporary RPM workspace escaped temporary root: %s\n' "${rpmbuild_tmpdir}" >&2
+  exit 1
+fi
+rpmbuild_tmpdir="${rpmbuild_tmpdir_abs}"
 stage_topdir=""
 cleanup_tmpdir() {
-  rm -rf -- "${rpmbuild_tmpdir}"
   if [[ -n "${stage_topdir}" ]]; then
-    rm -rf -- "${stage_topdir}"
+    "${safe_fs_cmd[@]}" remove build-rpm "${stage_topdir}" --kind dir >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${rpmbuild_tmpdir}" ]]; then
+    "${safe_fs_cmd[@]}" remove build-rpm "${rpmbuild_tmpdir}" --kind dir >/dev/null 2>&1 || true
   fi
 }
 trap cleanup_tmpdir EXIT
@@ -155,6 +172,19 @@ fi
 mkdir -p "${dist_dir}"
 dist_finalize_lock="${dist_dir}/.build-rpm.finalize.lock"
 stage_topdir="$(mktemp -d "${rpmbuild_tmpdir}/.$(basename "${final_topdir}").stage.XXXXXX")"
+if [[ -L "${stage_topdir}" ]]; then
+  printf 'temporary RPM stage directory must not be a symlink: %s\n' "${stage_topdir}" >&2
+  exit 1
+fi
+if ! stage_topdir_abs="$(realpath "${stage_topdir}")"; then
+  printf 'failed to resolve temporary RPM stage directory: %s\n' "${stage_topdir}" >&2
+  exit 1
+fi
+if [[ "${stage_topdir_abs}" != "${rpmbuild_tmpdir}/."*".stage."* ]]; then
+  printf 'temporary RPM stage directory escaped temporary workspace: %s\n' "${stage_topdir}" >&2
+  exit 1
+fi
+stage_topdir="${stage_topdir_abs}"
 spec_file="${stage_topdir}/SPECS/speed-of-cinnamon.spec"
 
 if [[ ! -f "${spec_source}" ]]; then
@@ -219,7 +249,7 @@ if ! activate_with_finalize_lock "${dist_finalize_lock}" "${stage_topdir}" "${fi
   printf 'failed to activate RPM build directory: %s\n' "${final_topdir}" >&2
   exit 1
 fi
-rm -rf -- "${stage_topdir}"
+"${safe_fs_cmd[@]}" remove build-rpm "${stage_topdir}" --kind dir
 stage_topdir=""
 
 find "${final_topdir}/RPMS" "${final_topdir}/SRPMS" -type f \( -name '*.rpm' -o -name '*.src.rpm' \) -print | sort

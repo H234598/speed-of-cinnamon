@@ -13,6 +13,7 @@ from .alarms import normalize_alarm
 from .paths import APP_ID
 from .recorder import MAX_RECORDING_SECONDS
 from .path_safety import (
+    assert_fd_is_regular_private_file,
     assert_no_symlink_ancestors,
     ensure_directory_without_following_symlinks,
     open_file_without_following_symlinks,
@@ -35,11 +36,12 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "toggle-keybinding": (str, "<Super>z::"),
     "primary-language-keybinding": (str, ""),
     "secondary-language-keybinding": (str, ""),
-    "show-panel-label": (bool, True),
+    "show-panel-label": (bool, False),
     "language": (str, "en"),
     "secondary-language": (str, "de"),
     "max-seconds": (int, DEFAULT_MAX_SECONDS),
     "auto-transcribe-timeout": (bool, True),
+    "auto-relisten": (bool, False),
     "keep-recording-artifacts": (bool, False),
     "recorder": (str, "auto"),
     "input-device": (str, ""),
@@ -52,11 +54,10 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "append-space": (bool, True),
     "sanitize-special-chars": (bool, False),
     "typing-delay-ms": (int, DEFAULT_TYPING_DELAY_MS),
+    "auto-paste-window-title": (str, "codex"),
     "transcriber": (str, "auto"),
     "whisper-model": (str, ""),
     "post-process-backend": (str, "none"),
-    "transcriber-command": (str, ""),
-    "post-process-command": (str, ""),
     "ollama-url": (str, "http://127.0.0.1:11434"),
     "ollama-model": (str, ""),
     "openai-compatible-url": (str, "https://api.openai.com/v1"),
@@ -81,6 +82,8 @@ def _assert_clean_path(path: Path, *, field_name: str) -> None:
         raise SettingsExportError(f"{field_name} path is invalid")
     if _contains_escaped_null(text):
         raise SettingsExportError(f"{field_name} contains invalid null byte")
+    if _contains_http_header_control_chars(text):
+        raise SettingsExportError(f"{field_name} contains invalid control character")
     assert_no_symlink_ancestors(path, field_name=field_name)
 
 
@@ -95,10 +98,14 @@ def _contains_http_header_control_chars(text: str) -> bool:
     if isinstance(text, bool) or not isinstance(text, str):
         raise SettingsExportError("value must be text")
     lowered = (text or "").lower()
-    if "\r" in lowered or "\n" in lowered or "\\r" in lowered or "\\n" in lowered or "\\u000d" in lowered or "\\u000a" in lowered:
+    control_codepoints = tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
+    if any(sequence in lowered for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")):
+        return True
+    if any(f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered for codepoint in control_codepoints):
         return True
     for char in lowered:
-        if ord(char) < 0x20 or ord(char) == 0x7F:
+        codepoint = ord(char)
+        if codepoint < 0x20 or codepoint == 0x7F or 0x80 <= codepoint <= 0x9F:
             return True
     return False
 
@@ -166,11 +173,14 @@ def _create_private_temp_file(parent_fd: int, final_name: str) -> tuple[int, str
 
 
 def _read_text_capped_without_following_symlinks(path: Path) -> str:
-    fd = open_file_without_following_symlinks(path, os.O_RDONLY, field_name="settings export path")
+    nonblock_flag = getattr(os, "O_NONBLOCK", 0)
+    fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name="settings export path")
     try:
+        try:
+            assert_fd_is_regular_private_file(fd, field_name="settings export")
+        except RuntimeError as exc:
+            raise SettingsExportError(str(exc)) from exc
         file_stat = os.fstat(fd)
-        if file_stat.st_nlink > 1:
-            raise SettingsExportError("settings export must not be hardlinked")
         if file_stat.st_size > MAX_SETTINGS_EXPORT_BYTES:
             raise SettingsExportError(f"settings export is too large: {path}")
         with os.fdopen(fd, "r", encoding="utf-8") as handle:
@@ -340,8 +350,11 @@ def read_export(path: Path) -> dict[str, Any]:
     return {
         "app": APP_ID,
         "version": version,
-        "created_at": payload.get("created_at", ""),
-        "speed_of_cinnamon_version": payload.get("speed_of_cinnamon_version", ""),
+        "created_at": _sanitize_text_field(payload.get("created_at", ""), field_name="settings export created_at"),
+        "speed_of_cinnamon_version": _sanitize_text_field(
+            payload.get("speed_of_cinnamon_version", ""),
+            field_name="settings export speed_of_cinnamon_version",
+        ),
         "settings": normalize_settings(raw_settings),
         "alarms": normalize_alarm_store(raw_alarms),
     }

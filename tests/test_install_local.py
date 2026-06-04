@@ -101,6 +101,38 @@ class InstallLocalTest(unittest.TestCase):
         shutil.copy2(REPO_ROOT / "scripts" / "safe-local-fs.py", repo_root / "scripts" / "safe-local-fs.py")
         return repo_root
 
+    def test_install_local_fails_cleanly_when_home_is_unset(self) -> None:
+        env = os.environ.copy()
+        env.pop("HOME", None)
+        result = subprocess.run(
+            ["bash", str(REPO_ROOT / "scripts" / "install-local.sh")],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("HOME must be set.", result.stderr)
+        self.assertNotIn("unbound variable", result.stderr)
+
+    def test_uninstall_local_fails_cleanly_when_home_is_unset(self) -> None:
+        env = os.environ.copy()
+        env.pop("HOME", None)
+        result = subprocess.run(
+            ["bash", str(REPO_ROOT / "scripts" / "uninstall-local.sh")],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("HOME must be set.", result.stderr)
+        self.assertNotIn("unbound variable", result.stderr)
+
     def test_install_local_refuses_symlinked_python_package(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -186,77 +218,6 @@ class InstallLocalTest(unittest.TestCase):
             self.assertFalse((home / ".local" / "bin" / "speed-of-cinnamon").exists())
             self.assertTrue(bad_target.is_symlink())
 
-    def test_install_local_removes_new_targets_when_late_activation_fails_and_active_target_is_swapped_to_symlink(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            repo_root = self._copy_installable_minimal_repo(tmp_path)
-            home = tmp_path / "home"
-            home.mkdir()
-            bad_target = home / ".local" / "share" / "man" / "man1" / "speed-of-cinnamon.1"
-            bad_target.parent.mkdir(parents=True)
-            bad_target.symlink_to(tmp_path / "payload")
-
-            swap_state = tmp_path / "swap-state"
-            swap_payload = tmp_path / "swap-payload"
-            swap_payload.write_text("swap", encoding="utf-8")
-            real_python = shutil.which("python3")
-            assert real_python is not None
-            fake_bin = tmp_path / "fake-bin"
-            fake_bin.mkdir()
-            fake_python = fake_bin / "python3"
-            fake_python.write_text(
-                f"#!{real_python}\n"
-                "import os\n"
-                "import subprocess\n"
-                "import sys\n"
-                "from pathlib import Path\n"
-                "\n"
-                "real_python = os.environ[\"SPEED_OF_CINNAMON_REAL_PYTHON3\"]\n"
-                "wrapper_target = os.environ[\"SPEED_OF_CINNAMON_SWAP_WRAPPER\"]\n"
-                "swap_payload = os.environ[\"SPEED_OF_CINNAMON_SWAP_TARGET\"]\n"
-                "state_file = Path(os.environ[\"SPEED_OF_CINNAMON_SWAP_STATE\"])\n"
-                "\n"
-                "result = subprocess.run([real_python, *sys.argv[1:]])\n"
-                "if (\n"
-                "    result.returncode == 0\n"
-                "    and len(sys.argv) > 5\n"
-                "    and sys.argv[1].endswith(\"safe-local-fs.py\")\n"
-                "    and sys.argv[2] == \"replace\"\n"
-                "    and sys.argv[5] == wrapper_target\n"
-                "    and not state_file.exists()\n"
-                "):\n"
-                "    state_file.write_text(\"swapped\", encoding=\"utf-8\")\n"
-                "    Path(wrapper_target).unlink(missing_ok=True)\n"
-                "    os.symlink(swap_payload, wrapper_target)\n"
-                "sys.exit(result.returncode)\n",
-                encoding="utf-8",
-            )
-            fake_python.chmod(0o700)
-
-            result = self._run_install_local(
-                repo_root,
-                home,
-                {
-                    "PATH": f"{fake_bin}:{os.environ['PATH']}",
-                    "SPEED_OF_CINNAMON_REAL_PYTHON3": real_python,
-                    "SPEED_OF_CINNAMON_SWAP_WRAPPER": str(home / ".local" / "bin" / "speed-of-cinnamon"),
-                    "SPEED_OF_CINNAMON_SWAP_TARGET": str(swap_payload),
-                    "SPEED_OF_CINNAMON_SWAP_STATE": str(swap_state),
-                },
-            )
-
-            self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
-            self.assertIn("refusing to follow symlink during install", result.stderr)
-            self.assertTrue(swap_state.exists())
-            self.assertEqual(swap_state.read_text(encoding="utf-8"), "swapped")
-            self.assertFalse(
-                (home / ".local" / "share" / "cinnamon" / "applets" / "speed-of-cinnamon@H234598").exists()
-            )
-            self.assertFalse(
-                (home / ".local" / "share" / "speed-of-cinnamon" / "python" / "speed_of_cinnamon").exists()
-            )
-            self.assertFalse((home / ".local" / "bin" / "speed-of-cinnamon").exists())
-
     def test_install_local_refuses_hardlinked_man_page_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -332,6 +293,21 @@ class InstallLocalTest(unittest.TestCase):
 
             self.assertFalse(target.exists())
 
+    def test_safe_fs_remove_dir_requires_symlink_safe_rmtree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = self._load_safe_fs_module()
+            root = Path(tmp)
+            target = root / "target"
+            target.mkdir()
+            (target / "payload.txt").write_text("safe\n", encoding="utf-8")
+
+            args = module.argparse.Namespace(action="install", path=str(target), kind="dir")
+            with mock.patch.object(module.shutil.rmtree, "avoids_symlink_attacks", False):
+                with self.assertRaisesRegex(SystemExit, "1"):
+                    module.cmd_remove(args)
+
+            self.assertTrue(target.exists())
+
     def test_safe_fs_copy_file_rejects_in_place_source_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = self._load_safe_fs_module()
@@ -362,6 +338,77 @@ class InstallLocalTest(unittest.TestCase):
                     module.cmd_copy_file(args)
 
             self.assertFalse(target.exists())
+
+    def test_safe_fs_copy_file_rejects_hardlinked_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = self._load_safe_fs_module()
+            root = Path(tmp)
+            source = root / "source.txt"
+            sibling = root / "sibling.txt"
+            target = root / "target.txt"
+            source.write_text("safe\n", encoding="utf-8")
+            os.link(source, sibling)
+
+            args = module.argparse.Namespace(action="install", src=str(source), dst=str(target), mode="0600")
+            with self.assertRaisesRegex(SystemExit, "1"):
+                module.cmd_copy_file(args)
+
+            self.assertFalse(target.exists())
+
+    def test_safe_fs_replace_file_rejects_hardlinked_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = self._load_safe_fs_module()
+            root = Path(tmp)
+            source = root / "source.txt"
+            sibling = root / "sibling.txt"
+            target = root / "target.txt"
+            source.write_text("safe\n", encoding="utf-8")
+            os.link(source, sibling)
+
+            args = module.argparse.Namespace(
+                action="build-dist",
+                src=str(source),
+                dst=str(target),
+                src_kind="file",
+                dst_must_not_exist=False,
+            )
+            with self.assertRaisesRegex(SystemExit, "1"):
+                module.cmd_replace(args)
+
+            self.assertTrue(source.exists())
+            self.assertFalse(target.exists())
+
+    def test_safe_fs_replace_file_rejects_source_mutation_before_move(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = self._load_safe_fs_module()
+            root = Path(tmp)
+            source = root / "source.txt"
+            target = root / "target.txt"
+            source.write_text("safe\n", encoding="utf-8")
+            target.write_text("old\n", encoding="utf-8")
+            real_check_leaf = module._check_leaf
+            source_checks = 0
+
+            def check_leaf(parent_fd: int, name: str, path: Path, *, action: str, kind: str, must_exist: bool) -> None:
+                nonlocal source_checks
+                real_check_leaf(parent_fd, name, path, action=action, kind=kind, must_exist=must_exist)
+                if path == source and kind == "file":
+                    source_checks += 1
+                    if source_checks == 2:
+                        source.write_text("mutated payload\n", encoding="utf-8")
+
+            args = module.argparse.Namespace(
+                action="build-dist",
+                src=str(source),
+                dst=str(target),
+                src_kind="file",
+                dst_must_not_exist=False,
+            )
+            with mock.patch.object(module, "_check_leaf", side_effect=check_leaf):
+                with self.assertRaisesRegex(SystemExit, "1"):
+                    module.cmd_replace(args)
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "old\n")
 
     def test_safe_fs_copy_file_rejects_source_exchange_during_copy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -491,6 +538,7 @@ class InstallLocalTest(unittest.TestCase):
             env = os.environ.copy()
             env["HOME"] = str(runtime_home)
             wrapper = install_home / ".local" / "bin" / "speed-of-cinnamon"
+            wrapper_source = wrapper.read_text(encoding="utf-8")
             version_result = subprocess.run(
                 [str(wrapper), "--version"],
                 env=env,
@@ -501,6 +549,11 @@ class InstallLocalTest(unittest.TestCase):
 
         self.assertEqual(version_result.returncode, 0, msg=version_result.stdout + version_result.stderr)
         self.assertIn(f"speed-of-cinnamon {project_version}", version_result.stdout)
+        self.assertNotIn("command -v -- python3", wrapper_source)
+        exec_lines = [line for line in wrapper_source.splitlines() if line.startswith("exec ")]
+        self.assertEqual(len(exec_lines), 1)
+        self.assertTrue(exec_lines[0].startswith("exec /"))
+        self.assertIn(' -m speed_of_cinnamon.cli "$@"', exec_lines[0])
 
     def test_install_local_does_not_use_path_mv_for_activation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -508,6 +561,15 @@ class InstallLocalTest(unittest.TestCase):
             fake_bin = tmp_path / "fake-bin"
             fake_bin.mkdir()
             marker = tmp_path / "mv-marker"
+            python_marker = tmp_path / "python-marker"
+            fake_python = fake_bin / "python3"
+            fake_python.write_text(
+                "#!/usr/bin/env bash\n"
+                f"printf used > {str(python_marker)!r}\n"
+                "exit 77\n",
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o755)
             fake_mv = fake_bin / "mv"
             fake_mv.write_text(
                 "#!/usr/bin/env bash\n"
@@ -523,6 +585,7 @@ class InstallLocalTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
             self.assertFalse(marker.exists())
+            self.assertFalse(python_marker.exists())
             self.assertTrue((home / ".local" / "bin" / "speed-of-cinnamon").exists())
 
     def test_uninstall_local_removes_installed_code_but_preserves_user_data(self) -> None:

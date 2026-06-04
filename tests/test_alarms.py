@@ -46,6 +46,14 @@ class AlarmTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "invalid null byte"):
             load_alarm_store(Path("alarms\\\\x00.json"))
 
+    def test_load_alarm_store_rejects_control_character_path(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "invalid control character"):
+            load_alarm_store(Path("alarms\x85spoof.json"))
+
+    def test_save_alarm_store_rejects_escaped_control_character_path(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "invalid control character"):
+            save_alarm_store({}, Path("alarms\\x85spoof.json"))
+
     def test_load_alarm_store_rejects_parent_traversal_path(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "unsafe path component"):
             load_alarm_store(Path("../outside/alarms.json"))
@@ -100,6 +108,39 @@ class AlarmTest(unittest.TestCase):
             path.write_text("x" * (MAX_ALARM_STORE_BYTES + 1), encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "alarm store is too large"):
                 load_alarm_store(path)
+
+    def test_load_alarm_store_rejects_store_replaced_by_broken_symlink_after_path_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            path.write_text('{"version":1,"alarms":[],"last_checked_at":""}', encoding="utf-8")
+            original_assert = alarm_module._assert_clean_path
+            replaced = False
+
+            def replace_after_assert(target: Path, *, field_name: str) -> None:
+                nonlocal replaced
+                original_assert(target, field_name=field_name)
+                if target == path and not replaced:
+                    replaced = True
+                    path.unlink()
+                    path.symlink_to(Path(tmp) / "missing-alarms.json")
+
+            with mock.patch("speed_of_cinnamon.alarms._assert_clean_path", side_effect=replace_after_assert):
+                with self.assertRaisesRegex(RuntimeError, "alarm store could not be read"):
+                    load_alarm_store(path)
+
+    def test_load_alarm_store_rejects_file_that_grows_after_size_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            path.write_text('{"version":1,"alarms":[],"last_checked_at":""}', encoding="utf-8")
+
+            with mock.patch(
+                "speed_of_cinnamon.alarms.read_text_without_following_symlinks",
+                side_effect=OSError("alarm store path is too large"),
+            ) as mocked_read:
+                with self.assertRaisesRegex(RuntimeError, "alarm store is too large"):
+                    load_alarm_store(path)
+
+        mocked_read.assert_called_once_with(path, field_name="alarm store path", max_bytes=MAX_ALARM_STORE_BYTES)
 
     @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
     def test_load_alarm_store_uses_secure_open_flags(self, mocked_open: mock.Mock) -> None:
@@ -266,6 +307,23 @@ class AlarmTest(unittest.TestCase):
 
         self.assertEqual([alarm["name"] for alarm in payload["alarms"]], ["Concurrent", "Morning"])
 
+    def test_alarm_store_lock_rejects_hardlinked_existing_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            lock_path = path.with_name(f".{path.name}.lock")
+            backing = Path(tmp) / "foreign-lock"
+            backing.write_text("lock\n", encoding="utf-8")
+            try:
+                os.link(backing, lock_path)
+            except OSError as exc:
+                self.skipTest(f"hardlinks unavailable: {exc}")
+
+            with self.assertRaisesRegex(RuntimeError, "must not be hardlinked"):
+                add_alarm("09:00", name="Morning", days="mon", path=path)
+
+            self.assertTrue(lock_path.exists())
+            self.assertTrue(backing.exists())
+
     def test_due_check_with_zero_catch_up_skips_past_alarm(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
@@ -320,6 +378,10 @@ class AlarmTest(unittest.TestCase):
     def test_normalize_alarm_rejects_null_byte_name(self) -> None:
         with self.assertRaisesRegex(ValueError, "alarm name contains invalid null byte"):
             normalize_alarm({"name": "Morning\x00", "hour": 9, "minute": 0})
+
+    def test_normalize_alarm_rejects_control_char_name(self) -> None:
+        with self.assertRaisesRegex(ValueError, "alarm name contains invalid control character"):
+            normalize_alarm({"name": "Morning\nInjected", "hour": 9, "minute": 0})
 
     def test_normalize_alarm_rejects_null_byte_id(self) -> None:
         with self.assertRaisesRegex(ValueError, "alarm id contains invalid null byte"):
@@ -527,6 +589,14 @@ class AlarmTest(unittest.TestCase):
             add_alarm("09:00", urgency=123)  # type: ignore[arg-type]
         with self.assertRaisesRegex(ValueError, "enabled must be a boolean"):
             add_alarm("09:00", enabled="yes")  # type: ignore[arg-type]
+
+    def test_add_alarm_rejects_control_character_urgency(self) -> None:
+        with self.assertRaisesRegex(ValueError, "urgency contains invalid control character"):
+            add_alarm("09:00", urgency="\x85normal")
+
+    def test_add_alarm_rejects_escaped_control_character_urgency(self) -> None:
+        with self.assertRaisesRegex(ValueError, "urgency contains invalid control character"):
+            add_alarm("09:00", urgency="\\x85normal")
 
     def test_parse_repeat_days_rejects_non_string_input(self) -> None:
         with self.assertRaisesRegex(ValueError, "alarm days must be text"):

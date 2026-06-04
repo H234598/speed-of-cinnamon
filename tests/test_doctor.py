@@ -79,6 +79,45 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(payload["configured"]["output"]["ok"])
         self.assertIn("xdotool", payload["configured"]["output"]["detail"])
 
+    def test_cli_clipboard_paste_accepts_display_when_session_type_missing(self) -> None:
+        tools = {"python3", "pw-record", "pactl", "xdotool", "xsel"}
+        env = {
+            "DISPLAY": ":0",
+            "XDG_CURRENT_DESKTOP": "X-Cinnamon",
+            "XDG_SESSION_TYPE": "",
+            "DESKTOP_SESSION": "cinnamon",
+        }
+        settings = {
+            "recorder": "auto",
+            "transcriber": "command",
+            "transcriber-command": "printf ok",
+            "insert-method": "clipboard-paste",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)), mock.patch.dict(os.environ, env):
+            payload = doctor.report(settings)
+        self.assertTrue(payload["desktop"]["x11"])
+        self.assertTrue(payload["configured"]["output"]["ok"])
+        self.assertTrue(payload["configured"]["output"]["paste_ok"])
+
+    def test_display_does_not_override_explicit_wayland_session(self) -> None:
+        tools = {"python3", "pw-record", "pactl", "xdotool", "xsel"}
+        env = {
+            "DISPLAY": ":0",
+            "XDG_CURRENT_DESKTOP": "X-Cinnamon",
+            "XDG_SESSION_TYPE": "wayland",
+            "DESKTOP_SESSION": "cinnamon",
+        }
+        settings = {
+            "recorder": "auto",
+            "transcriber": "command",
+            "transcriber-command": "printf ok",
+            "insert-method": "clipboard-paste",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)), mock.patch.dict(os.environ, env):
+            payload = doctor.report(settings)
+        self.assertFalse(payload["desktop"]["x11"])
+        self.assertFalse(payload["configured"]["output"]["paste_ok"])
+
     def test_direct_typing_requires_xdotool_on_x11(self) -> None:
         tools = {"python3", "pw-record", "pactl"}
         env = {"XDG_CURRENT_DESKTOP": "X-Cinnamon", "XDG_SESSION_TYPE": "x11", "DESKTOP_SESSION": "cinnamon"}
@@ -383,7 +422,8 @@ class DoctorTest(unittest.TestCase):
 
         self.assertTrue(payload["configured"]["transcriber"]["ok"])
         self.assertEqual(payload["configured"]["transcriber"]["value"], "openai-compatible")
-        self.assertIn("https://api.example.test/v1", payload["configured"]["transcriber"]["detail"])
+        self.assertIn("https://api.example.test", payload["configured"]["transcriber"]["detail"])
+        self.assertNotIn("/v1", payload["configured"]["transcriber"]["detail"])
 
     def test_external_api_transcriber_rejects_invalid_url(self) -> None:
         payload = doctor.report({
@@ -396,6 +436,21 @@ class DoctorTest(unittest.TestCase):
 
         self.assertFalse(payload["configured"]["transcriber"]["ok"])
         self.assertIn("must use http:// or https://", payload["configured"]["transcriber"]["detail"])
+
+    def test_external_api_transcriber_rejects_url_userinfo_without_echoing_secret(self) -> None:
+        payload = doctor.report({
+            "recorder": "auto",
+            "transcriber": "openai-compatible",
+            "openai-compatible-model": "whisper-large-v3",
+            "openai-compatible-url": "https://user:secret-token@api.example.test/v1",
+            "insert-method": "none",
+        })
+
+        serialized = json.dumps(payload)
+        self.assertFalse(payload["configured"]["transcriber"]["ok"])
+        self.assertIn("must not contain userinfo", payload["configured"]["transcriber"]["detail"])
+        self.assertNotIn("secret-token", serialized)
+        self.assertNotIn("user:secret-token", serialized)
 
     def test_ollama_postprocessor_requires_model(self) -> None:
         tools = {"python3", "pw-record"}
@@ -458,6 +513,67 @@ class DoctorTest(unittest.TestCase):
             payload = doctor.report(settings)
         self.assertTrue(payload["ok"])
 
+    def test_openai_compatible_postprocessor_does_not_echo_url_path_secret(self) -> None:
+        tools = {"python3", "pw-record"}
+        settings = {
+            "recorder": "auto",
+            "transcriber": "command",
+            "transcriber-command": "printf ok",
+            "insert-method": "none",
+            "post-process-backend": "openai-compatible",
+            "openai-compatible-model": "local-llama",
+            "openai-compatible-url": "http://127.0.0.1:8000/v1/secret-token",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
+            payload = doctor.report(settings)
+
+        serialized = json.dumps(payload)
+        self.assertTrue(payload["ok"])
+        self.assertIn("http://127.0.0.1:8000", payload["configured"]["postprocessor"]["detail"])
+        self.assertNotIn("secret-token", serialized)
+        self.assertNotIn("/v1/secret-token", serialized)
+
+    def test_ollama_postprocessor_rejects_url_userinfo_without_echoing_secret(self) -> None:
+        tools = {"python3", "pw-record"}
+        settings = {
+            "recorder": "auto",
+            "transcriber": "command",
+            "transcriber-command": "printf ok",
+            "insert-method": "none",
+            "post-process-backend": "ollama",
+            "ollama-model": "llama3.2:3b",
+            "ollama-url": "http://user:secret-token@127.0.0.1:11434",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
+            payload = doctor.report(settings)
+
+        serialized = json.dumps(payload)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["configured"]["postprocessor"]["ok"])
+        self.assertIn("must not contain userinfo", payload["configured"]["postprocessor"]["detail"])
+        self.assertNotIn("secret-token", serialized)
+        self.assertNotIn("user:secret-token", serialized)
+
+    def test_openai_compatible_postprocessor_rejects_url_query_without_echoing_secret(self) -> None:
+        tools = {"python3", "pw-record"}
+        settings = {
+            "recorder": "auto",
+            "transcriber": "command",
+            "transcriber-command": "printf ok",
+            "insert-method": "none",
+            "post-process-backend": "openai-compatible",
+            "openai-compatible-text-model": "local-polisher",
+            "openai-compatible-url": "http://127.0.0.1:8000/v1?api_key=secret-token",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
+            payload = doctor.report(settings)
+
+        serialized = json.dumps(payload)
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["configured"]["postprocessor"]["ok"])
+        self.assertIn("must not contain query or fragment", payload["configured"]["postprocessor"]["detail"])
+        self.assertNotIn("secret-token", serialized)
+
     def test_openai_compatible_postprocessor_uses_separate_text_model_when_configured(self) -> None:
         tools = {"python3", "pw-record"}
         settings = {
@@ -503,6 +619,19 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(payload["configured"]["transcriber"]["ok"])
         self.assertIn("invalid", payload["configured"]["transcriber"]["detail"])
 
+    def test_report_rejects_control_character_in_whisper_model_path(self) -> None:
+        tools = {"python3", "pw-record", "whisper-cli"}
+        settings = {
+            "recorder": "auto",
+            "transcriber": "whisper-cpp",
+            "whisper-model": "\x85model.bin",
+            "insert-method": "none",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
+            payload = doctor.report(settings)
+        self.assertFalse(payload["configured"]["transcriber"]["ok"])
+        self.assertIn("invalid", payload["configured"]["transcriber"]["detail"])
+
     def test_report_rejects_symlinked_whisper_model_path(self) -> None:
         tools = {"python3", "pw-record", "whisper-cli"}
         with tempfile.TemporaryDirectory() as tmp:
@@ -521,6 +650,22 @@ class DoctorTest(unittest.TestCase):
                 payload = doctor.report(settings)
         self.assertFalse(payload["configured"]["transcriber"]["ok"])
         self.assertIn("voice model path is invalid", payload["configured"]["transcriber"]["detail"])
+        self.assertNotIn(str(model_link), json.dumps(payload))
+
+    def test_report_does_not_echo_missing_whisper_model_path(self) -> None:
+        tools = {"python3", "pw-record", "whisper-cli"}
+        secret_path = "/tmp/secret-token-model-does-not-exist.bin"
+        settings = {
+            "recorder": "auto",
+            "transcriber": "whisper-cpp",
+            "whisper-model": secret_path,
+            "insert-method": "none",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
+            payload = doctor.report(settings)
+        self.assertFalse(payload["configured"]["transcriber"]["ok"])
+        self.assertEqual(payload["configured"]["transcriber"]["detail"], "voice model not found")
+        self.assertNotIn(secret_path, json.dumps(payload))
 
     def test_parse_settings_json_rejects_null_byte(self) -> None:
         with self.assertRaisesRegex(ValueError, "contains invalid null byte"):
@@ -533,6 +678,14 @@ class DoctorTest(unittest.TestCase):
     def test_parse_settings_json_rejects_escaped_x00_null_byte(self) -> None:
         with self.assertRaisesRegex(ValueError, "contains invalid null byte"):
             doctor.parse_settings_json('{"language":"en\\\\x00"}')
+
+    def test_parse_settings_json_rejects_c1_control_character(self) -> None:
+        with self.assertRaisesRegex(ValueError, "contains invalid control character"):
+            doctor.parse_settings_json('{"language":"en\x85"}')
+
+    def test_validate_remote_http_url_rejects_leading_control_character(self) -> None:
+        with self.assertRaisesRegex(ValueError, "contains invalid control character"):
+            doctor._validate_remote_http_url("\x85https://api.example.test/v1", field_name="remote endpoint URL")
 
     def test_parse_settings_json_rejects_large_payload(self) -> None:
         with self.assertRaisesRegex(ValueError, "settings JSON is too large"):

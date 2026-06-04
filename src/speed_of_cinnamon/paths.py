@@ -5,7 +5,12 @@ import stat as stat_module
 import tempfile
 from pathlib import Path
 
-from .path_safety import assert_no_symlink_ancestors, ensure_directory_without_following_symlinks
+from .path_safety import (
+    assert_fd_is_private_directory,
+    assert_no_symlink_ancestors,
+    assert_safe_path_components,
+    ensure_directory_without_following_symlinks,
+)
 
 APP_ID = "speed-of-cinnamon"
 APP_NAME = "Speed of Cinnamon"
@@ -20,6 +25,18 @@ def _contains_escaped_null(value: str) -> bool:
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
 
 
+def _contains_control_chars(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise RuntimeError("value must be text")
+    lowered = (value or "").lower()
+    control_codepoints = tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
+    if any(sequence in lowered for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")):
+        return True
+    if any(f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered for codepoint in control_codepoints):
+        return True
+    return any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in value)
+
+
 def _xdg_path(environment_variable: str, default: Path) -> Path:
     if isinstance(environment_variable, bool) or not isinstance(environment_variable, str):
         raise RuntimeError("environment variable name must be text")
@@ -29,21 +46,22 @@ def _xdg_path(environment_variable: str, default: Path) -> Path:
         return default
     if value is None or isinstance(value, bool) or not isinstance(value, str):
         return default
+    if _contains_escaped_null(value) or _contains_control_chars(value):
+        return default
     normalized = (value or "").strip()
     if not normalized:
         return default
     if len(normalized) > MAX_XDG_PATH_CHARS or len(normalized.encode("utf-8")) > MAX_XDG_PATH_CHARS:
         return default
-    if _contains_escaped_null(normalized):
-        return default
     candidate = Path(normalized).expanduser()
     if not candidate.is_absolute():
         return default
     try:
+        assert_safe_path_components(candidate, field_name=environment_variable)
         assert_no_symlink_ancestors(candidate, field_name=environment_variable)
     except RuntimeError:
         return default
-    return candidate.resolve(strict=False)
+    return candidate
 
 
 def _private_runtime_temp_root() -> Path:
@@ -58,7 +76,7 @@ def _private_runtime_temp_root() -> Path:
     uid = os.getuid() if hasattr(os, "getuid") else os.getpid()
     private_root = temp_root / f"{APP_ID}-{uid}"
     if private_root.is_symlink():
-        raise RuntimeError(f"temporary directory must not be a symlink: {private_root}")
+        raise RuntimeError("temporary directory must not be a symlink")
     private_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
@@ -67,20 +85,20 @@ def _private_runtime_temp_root() -> Path:
     try:
         fd = os.open(private_root, open_flags)
     except OSError as exc:
-        raise RuntimeError(f"temporary directory is not safe: {private_root}") from exc
+        raise RuntimeError("temporary directory is not safe") from exc
     try:
         file_stat = os.fstat(fd)
         if not stat_module.S_ISDIR(file_stat.st_mode):
-            raise RuntimeError(f"temporary directory is not a directory: {private_root}")
+            raise RuntimeError("temporary directory is not a directory")
         if hasattr(os, "getuid") and file_stat.st_uid != os.getuid():
-            raise RuntimeError(f"temporary directory is not owned by the current user: {private_root}")
+            raise RuntimeError("temporary directory is not owned by the current user")
         os.fchmod(fd, 0o700)
         file_stat = os.fstat(fd)
     finally:
         os.close(fd)
     assert_no_symlink_ancestors(private_root, field_name="temporary directory")
     if file_stat.st_mode & 0o077:
-        raise RuntimeError(f"temporary directory is not private: {private_root}")
+        raise RuntimeError("temporary directory is not private")
     return private_root
 
 
@@ -161,6 +179,7 @@ def ensure_runtime_dirs() -> None:
     for directory in (
         data_dir(),
         state_dir(),
+        cache_dir(),
         recordings_dir(),
         transcript_dir(),
         diagnostics_dir(),
@@ -169,4 +188,11 @@ def ensure_runtime_dirs() -> None:
         ctranslate2_models_dir(),
     ):
         fd = ensure_directory_without_following_symlinks(directory, field_name="runtime directory")
-        os.close(fd)
+        try:
+            try:
+                os.fchmod(fd, 0o700)
+            except OSError as exc:
+                raise RuntimeError("runtime directory could not be made private") from exc
+            assert_fd_is_private_directory(fd, field_name="runtime directory")
+        finally:
+            os.close(fd)

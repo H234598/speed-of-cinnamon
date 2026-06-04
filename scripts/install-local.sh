@@ -2,17 +2,19 @@
 set -euo pipefail
 umask 077
 IFS=$'\n\t'
+readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH="${TRUSTED_COMMAND_PATH}"
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 uuid="speed-of-cinnamon@H234598"
-app_data="${HOME}/.local/share/speed-of-cinnamon"
-bin_dir="${HOME}/.local/bin"
-applet_target="${HOME}/.local/share/cinnamon/applets/${uuid}"
-man_dir="${HOME}/.local/share/man/man1"
 if [[ -z "${HOME:-}" ]]; then
   printf 'HOME must be set.\n' >&2
   exit 1
 fi
+app_data="${HOME}/.local/share/speed-of-cinnamon"
+bin_dir="${HOME}/.local/bin"
+applet_target="${HOME}/.local/share/cinnamon/applets/${uuid}"
+man_dir="${HOME}/.local/share/man/man1"
 account_home="$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f6 || true)"
 if [[ "${SPEED_OF_CINNAMON_TEST_HOME:-0}" != "1" && ( -z "${account_home}" || "${HOME}" != "${account_home}" ) ]]; then
   printf 'Refusing to run with mismatched HOME: %s (expected %s).\n' "${HOME}" "${account_home}" >&2
@@ -30,12 +32,35 @@ if [[ ! -d "${HOME}" ]]; then
   printf 'HOME must be an existing directory: %s\n' "${HOME}" >&2
   exit 1
 fi
-for tool in find grep python3 command realpath; do
+for tool in find grep command realpath; do
   if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found.\n' "${tool}" >&2
     exit 1
   fi
 done
+resolve_python3() {
+  local candidate
+  local resolved
+  for candidate in /usr/bin/python3 /bin/python3; do
+    if [[ -x "${candidate}" && ! -d "${candidate}" ]]; then
+      resolved="$(realpath "${candidate}")"
+      printf '%s\n' "${resolved}"
+      return 0
+    fi
+  done
+  candidate="$(command -v -- python3 || true)"
+  if [[ -z "${candidate}" ]]; then
+    printf 'python3 not found.\n' >&2
+    return 1
+  fi
+  resolved="$(realpath "${candidate}")"
+  if [[ "${resolved}" != /* || ! -x "${resolved}" || -d "${resolved}" ]]; then
+    printf 'python3 path is invalid: %s\n' "${candidate}" >&2
+    return 1
+  fi
+  printf '%s\n' "${resolved}"
+}
+python3_path="$(resolve_python3)"
 for path in \
   "${repo_dir}/files/${uuid}" \
   "${repo_dir}/src/speed_of_cinnamon" \
@@ -50,9 +75,9 @@ do
 done
 
 safe_fs() {
-  python3 "${repo_dir}/scripts/safe-local-fs.py" "$@"
+  "${python3_path}" "${repo_dir}/scripts/safe-local-fs.py" "$@"
 }
-safe_fs_cmd=(python3 "${repo_dir}/scripts/safe-local-fs.py")
+safe_fs_cmd=("${python3_path}" "${repo_dir}/scripts/safe-local-fs.py")
 
 reject_unsafe_tree() {
   local tree="$1"
@@ -137,7 +162,7 @@ write_staging_dir() {
     exit 1
   fi
 
-  if ! safe_fs write-wrapper install "${stage_root}/speed-of-cinnamon/bin/speed-of-cinnamon" "${app_data}/python"; then
+  if ! safe_fs write-wrapper install "${stage_root}/speed-of-cinnamon/bin/speed-of-cinnamon" "${app_data}/python" "${python3_path}"; then
     printf 'failed to stage backend wrapper\n' >&2
     exit 1
   fi

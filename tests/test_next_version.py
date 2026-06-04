@@ -5,6 +5,7 @@ import sys
 import importlib.util
 import unittest
 import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 from unittest import mock
 
@@ -13,17 +14,15 @@ def _run_version(*args: str, expect_ok: bool, cwd: Path | None = None, path: str
     root = Path(__file__).resolve().parents[1]
     cmd = [sys.executable, str(root / "scripts" / "next_version.py")]
     cmd.extend(args)
-    env = None
-    if path is not None:
-        env = {"PATH": path}
-    result = subprocess.run(
-        cmd,
-        check=expect_ok,
-        text=True,
-        capture_output=True,
-        cwd=str(cwd) if cwd is not None else None,
-        env=env,
-    )
+    env_patch = mock.patch.dict("os.environ", {"PATH": path}) if path is not None else nullcontext()
+    with env_patch:
+        result = subprocess.run(
+            cmd,
+            check=expect_ok,
+            text=True,
+            capture_output=True,
+            cwd=str(cwd) if cwd is not None else None,
+        )
     return result
 
 
@@ -162,6 +161,14 @@ class NextVersionTest(unittest.TestCase):
             "1.2",
             "1.2.3.4",
             "bad",
+            "+1.2.3",
+            "1.+2.3",
+            "1.2.+3",
+            "01.2.3",
+            "1.02.3",
+            "1.2.03",
+            "1. 2.3",
+            "1.2. 3",
             "-1.2.3",
             "1.-2.3",
             "1.2.x",
@@ -397,6 +404,12 @@ class NextVersionTest(unittest.TestCase):
             next_version.normalize_tag("vv0.1.20")
         with self.assertRaises(next_version.UserInputError):
             next_version.normalize_tag("VV0.1.20")
+
+    def test_normalize_tag_rejects_non_canonical_versions(self) -> None:
+        for tag in ("v01.2.3", "v1.+2.3", "v1.2.03", "v1.2.3-rc1"):
+            with self.subTest(tag=tag):
+                with self.assertRaises(next_version.UserInputError):
+                    next_version.normalize_tag(tag)
 
     def test_to_version_rejects_invalid_inputs(self) -> None:
         with self.assertRaises(next_version.UserInputError):

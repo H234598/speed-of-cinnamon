@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import urllib.parse
 import urllib.error
@@ -58,6 +59,10 @@ OPENAI_COMPATIBLE_TEXT_MODEL_EXCLUDED_TERMS = (
     "transcribe",
     "tts",
 )
+_ESCAPED_CONTROL_RE = re.compile(
+    r"(?i)\\(?:[abfnrtv]|x(?:0[0-9a-f]|1[0-9a-f]|7f|8[0-9a-f]|9[0-9a-f])|"
+    r"u00(?:0[0-9a-f]|1[0-9a-f]|7f|8[0-9a-f]|9[0-9a-f]))"
+)
 
 
 def _quote(value: str) -> str:
@@ -83,13 +88,14 @@ def _assert_text_length(value: str, *, field_name: str, max_chars: int | None = 
 def _assert_clean_url(url: str, *, field_name: str) -> str:
     if not isinstance(url, str) or isinstance(url, bool):
         raise PostProcessError(f"{field_name} must be text")
-    normalized = (url or "").strip()
+    raw = url or ""
+    if _contains_escaped_null(raw):
+        raise PostProcessError(f"{field_name} contains invalid null byte")
+    if _contains_http_header_control_chars(raw):
+        raise PostProcessError(f"{field_name} contains invalid control character")
+    normalized = raw.strip()
     if not normalized:
         raise PostProcessError(f"{field_name} is required")
-    if _contains_escaped_null(normalized):
-        raise PostProcessError(f"{field_name} contains invalid null byte")
-    if _contains_http_header_control_chars(normalized):
-        raise PostProcessError(f"{field_name} contains invalid control character")
     return _assert_text_length(normalized, field_name=field_name, max_chars=MAX_POSTPROCESS_URL_CHARS)
 
 
@@ -123,7 +129,7 @@ def _safe_url_display(url: str, *, field_name: str) -> str:
     port = _effective_url_port(parsed)
     if parsed.port is not None and port is not None:
         netloc = f"{netloc}:{port}"
-    return urllib.parse.urlunparse((parsed.scheme, netloc, parsed.path.rstrip("/"), "", "", ""))
+    return urllib.parse.urlunparse((parsed.scheme, netloc, "", "", "", ""))
 
 
 def _validate_http_request(request: urllib.request.Request, *, field_name: str) -> None:
@@ -185,19 +191,11 @@ def _contains_http_header_control_chars(value: str) -> bool:
     if not isinstance(value, str) or isinstance(value, bool):
         raise PostProcessError("value must be text")
     lowered = (value or "").lower()
-    if (
-        "\r" in lowered
-        or "\n" in lowered
-        or "\\r" in lowered
-        or "\\n" in lowered
-        or "\\u000d" in lowered
-        or "\\u000a" in lowered
-        or "\\x0a" in lowered
-        or "\\x0d" in lowered
-    ):
+    if _ESCAPED_CONTROL_RE.search(lowered):
         return True
     for char in lowered:
-        if ord(char) < 0x20 or ord(char) == 0x7F:
+        codepoint = ord(char)
+        if codepoint < 0x20 or codepoint == 0x7F or 0x80 <= codepoint <= 0x9F:
             return True
     return False
 
@@ -291,6 +289,10 @@ def build_ollama_prompt(
 def _safe_prompt_language(language: str) -> str:
     if not isinstance(language, str) or isinstance(language, bool):
         raise PostProcessError("language must be text")
+    if _contains_escaped_null(language):
+        raise PostProcessError("language contains invalid null byte")
+    if _contains_http_header_control_chars(language):
+        raise PostProcessError("language contains invalid control character")
     value = language.strip()
     if not value:
         return "auto"
@@ -493,7 +495,10 @@ def _normalize_openai_compatible_model(model: object) -> dict[str, object] | Non
 
 
 def _openai_compatible_model_supports_text_polishing(name: str) -> bool:
-    normalized = str(name or "").strip().lower()
+    raw = str(name or "")
+    if _contains_escaped_null(raw) or _contains_http_header_control_chars(raw):
+        return False
+    normalized = raw.strip().lower()
     if not normalized:
         return False
     if normalized.startswith(OPENAI_COMPATIBLE_TEXT_MODEL_EXCLUDED_PREFIXES):
@@ -824,7 +829,12 @@ def post_process_text(
         raise PostProcessError("openai-compatible API key must be text")
     if not isinstance(openai_compatible_flex_processing, bool):
         raise PostProcessError("OpenAI-compatible flex processing must be a boolean")
-    normalized_backend = (backend or "command").strip().lower().replace("_", "-")
+    raw_backend = backend or "command"
+    if _contains_escaped_null(raw_backend):
+        raise PostProcessError("backend contains invalid null byte")
+    if _contains_http_header_control_chars(raw_backend):
+        raise PostProcessError("backend contains invalid control character")
+    normalized_backend = raw_backend.strip().lower().replace("_", "-")
     if normalized_backend in {"none", "off", "disabled"}:
         return text
     if normalized_backend == "ollama":

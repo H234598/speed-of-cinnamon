@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import subprocess  # nosec B404
 from pathlib import Path
@@ -26,6 +27,7 @@ class GitEnvironmentError(NextVersionError):
 COMMITS_PER_PATCH = 100
 PATCHES_PER_MINOR = 100
 MINORS_PER_MAJOR = 100
+VERSION_PATTERN = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 
 
 def _assert_non_negative_int(name: str, value: int) -> int:
@@ -57,13 +59,10 @@ def parse_version(value: str) -> tuple[int, int, int]:
         if len(value) > 1 and value[1] in ("v", "V"):
             raise UserInputError(f"invalid version format: {value}")
         value = value[1:]
-    parts = value.split(".")
-    if len(parts) != 3:
+    match = VERSION_PATTERN.fullmatch(value)
+    if match is None:
         raise UserInputError(f"invalid version format: {value}")
-    try:
-        major, minor, patch = (int(x) for x in parts)
-    except ValueError as exc:
-        raise UserInputError(f"invalid version format: {value}") from exc
+    major, minor, patch = (int(x) for x in match.groups())
     return _assert_version_tuple((major, minor, patch))
 
 
@@ -73,12 +72,7 @@ def normalize_tag(tag: str) -> str:
     tag = tag.strip()
     if tag == "":
         raise UserInputError("tag must be a non-empty string")
-    tag = tag.lower()
-    if tag.startswith("v"):
-        if tag.startswith("vv"):
-            raise UserInputError("tag may have at most one leading v")
-        return tag
-    return f"v{tag}"
+    return tag_for_version(parse_version(tag))
 
 def to_version(major: int, minor: int, patch: int) -> str:
     major = _assert_non_negative_int("major", major)
@@ -244,6 +238,8 @@ def main() -> int:
         normalized_from_tag = normalize_tag(from_tag_raw)
         if tag_exists(normalized_from_tag):
             commits = commits_since_tag(normalized_from_tag)
+        elif not str(from_tag_raw).lower().startswith("v") and base == read_current_version():
+            commits = 0
         else:
             raise UserInputError(f"release tag {normalized_from_tag} does not exist")
     elif a.base is not None:

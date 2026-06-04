@@ -2,6 +2,8 @@
 set -euo pipefail
 umask 077
 IFS=$'\n\t'
+readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH="${TRUSTED_COMMAND_PATH}"
 
 usage() {
   printf 'usage: %s [--skip-snap] [--skip-generic-rpm] [--dry-run] [v]VERSION\n' "$0" >&2
@@ -89,6 +91,21 @@ for tool in "${required_tools[@]}"; do
   fi
 done
 
+contains_control_chars() {
+  local value=$1
+  python3 - "${value}" <<'PY'
+import sys
+
+value = sys.argv[1]
+raise SystemExit(
+    not (
+        any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in value)
+        or any(0xDC80 <= ord(char) <= 0xDCFF for char in value)
+    )
+)
+PY
+}
+
 version="$(
   python3 - <<'PY'
 import tomllib
@@ -168,22 +185,28 @@ verify_asset_path() {
     printf 'asset name may not start with option-like prefix: %s\n' "${asset}" >&2
     exit 1
   fi
-  if [[ "${asset}" == *$'\n'* || "${asset}" == *$'\r'* || "${asset}" == *$'\t'* ]]; then
-    printf 'asset name must not contain control characters: %s\n' "${asset}" >&2
-    exit 1
-  fi
-
-  absolute="$(realpath "${asset}")"
-  if [[ "${absolute}" != "${repo_dir}"/* ]]; then
-    printf 'asset is outside repository: %s\n' "${asset}" >&2
-    exit 1
-  fi
-  if [[ ! -f "${asset}" ]]; then
-    printf 'asset is not a regular file: %s\n' "${asset}" >&2
+  if contains_control_chars "${asset}"; then
+    printf 'asset name must not contain control characters\n' >&2
     exit 1
   fi
   if [[ -L "${asset}" ]]; then
-    printf 'asset must not be a symlink: %s\n' "${asset}" >&2
+    printf 'asset must not be a symlink\n' >&2
+    exit 1
+  fi
+  if [[ ! -f "${asset}" ]]; then
+    printf 'asset is not a regular file\n' >&2
+    exit 1
+  fi
+  if ! absolute="$(realpath "${asset}" 2>/dev/null)"; then
+    printf 'failed to resolve asset path\n' >&2
+    exit 1
+  fi
+  if contains_control_chars "${absolute}"; then
+    printf 'asset path must not contain control characters\n' >&2
+    exit 1
+  fi
+  if [[ "${absolute}" != "${repo_dir}"/* ]]; then
+    printf 'asset is outside repository\n' >&2
     exit 1
   fi
   link_count="$(stat -c '%h' "${asset}")"
@@ -293,6 +316,7 @@ require_regular_source_file "${safe_fs}" "safe local filesystem helper"
 
 staging_dir=""
 upload_refs=()
+declare -A staged_names_seen=()
 source_archive_ref=""
 checksum_ref=""
 rpm_ref=""
@@ -303,6 +327,19 @@ if [[ -z "${staging_dir}" ]]; then
   printf 'failed to create staging directory for upload assets.\n' >&2
   exit 1
 fi
+if [[ -L "${staging_dir}" ]]; then
+  printf 'release staging directory must not be a symlink: %s\n' "${staging_dir}" >&2
+  exit 1
+fi
+if ! staging_dir_abs="$(realpath "${staging_dir}")"; then
+  printf 'failed to resolve release staging directory: %s\n' "${staging_dir}" >&2
+  exit 1
+fi
+if [[ "${staging_dir_abs}" != "${repo_dir}/dist/release-upload-"* ]]; then
+  printf 'release staging directory escaped dist directory: %s\n' "${staging_dir}" >&2
+  exit 1
+fi
+staging_dir="${staging_dir_abs}"
 
 for asset in "${assets[@]}"; do
   if ! asset_abs="$(realpath "${asset}")"; then
@@ -316,6 +353,11 @@ for asset in "${assets[@]}"; do
       break
     fi
   done
+  if [[ -n "${staged_names_seen[${staged_name}]:-}" ]]; then
+    printf 'duplicate release asset staging name: %s\n' "${staged_name}" >&2
+    exit 1
+  fi
+  staged_names_seen["${staged_name}"]=1
   staged_path="${staging_dir}/${staged_name}"
   if ! "${safe_fs_cmd[@]}" copy-file publish "${asset_abs}" "${staged_path}" 0644; then
     printf 'failed to stage release asset for upload: %s\n' "${asset}" >&2
@@ -432,14 +474,27 @@ if ! notes_tmp_root="$(realpath "${notes_tmp_root}")"; then
 fi
 mkdir -p "${notes_tmp_root}"
 notes_file="$(mktemp "${notes_tmp_root}/speed-of-cinnamon-release-notes-XXXXXX")"
+if [[ -L "${notes_file}" ]]; then
+  printf 'release notes file must not be a symlink: %s\n' "${notes_file}" >&2
+  exit 1
+fi
+if ! notes_file_abs="$(realpath "${notes_file}")"; then
+  printf 'failed to resolve release notes file: %s\n' "${notes_file}" >&2
+  exit 1
+fi
+if [[ "${notes_file_abs}" != "${notes_tmp_root}/speed-of-cinnamon-release-notes-"* ]]; then
+  printf 'release notes file escaped temporary root: %s\n' "${notes_file}" >&2
+  exit 1
+fi
+notes_file="${notes_file_abs}"
 cleanup_notes() {
   cleanup_release_state
-  rm -f -- "${notes_file}"
+  "${safe_fs_cmd[@]}" remove-leaf publish "${notes_file}" >/dev/null 2>&1 || true
   if [[ -n "${existing_notes_file}" ]]; then
-    rm -f -- "${existing_notes_file}"
+    "${safe_fs_cmd[@]}" remove-leaf publish "${existing_notes_file}" >/dev/null 2>&1 || true
   fi
   if [[ -n "${staging_dir}" ]]; then
-    rm -rf -- "${staging_dir}"
+    "${safe_fs_cmd[@]}" remove publish "${staging_dir}" --kind dir >/dev/null 2>&1 || true
   fi
 }
 trap cleanup_notes EXIT
@@ -481,6 +536,19 @@ if gh release view "${tag}" --repo "${repo}" >/dev/null 2>&1; then
   existing_release_title="$(gh release view "${tag}" --repo "${repo}" --json name --jq '.name // empty')"
   existing_release_title_captured="true"
   existing_notes_file="$(mktemp "${notes_tmp_root}/speed-of-cinnamon-existing-release-notes-XXXXXX")"
+  if [[ -L "${existing_notes_file}" ]]; then
+    printf 'existing release notes file must not be a symlink: %s\n' "${existing_notes_file}" >&2
+    exit 1
+  fi
+  if ! existing_notes_file_abs="$(realpath "${existing_notes_file}")"; then
+    printf 'failed to resolve existing release notes file: %s\n' "${existing_notes_file}" >&2
+    exit 1
+  fi
+  if [[ "${existing_notes_file_abs}" != "${notes_tmp_root}/speed-of-cinnamon-existing-release-notes-"* ]]; then
+    printf 'existing release notes file escaped temporary root: %s\n' "${existing_notes_file}" >&2
+    exit 1
+  fi
+  existing_notes_file="${existing_notes_file_abs}"
   if ! gh release view "${tag}" --repo "${repo}" --json body --jq '.body // ""' > "${existing_notes_file}"; then
     printf 'failed to snapshot existing release notes for rollback: %s\n' "${tag}" >&2
     exit 1
@@ -502,8 +570,6 @@ if gh release view "${tag}" --repo "${repo}" >/dev/null 2>&1; then
     exit 1
   fi
 else
-  created_release="true"
-  mark_release_mutation
   if ! gh release create "${tag}" \
       --repo "${repo}" \
       --title "Speed of Cinnamon ${tag}" \
@@ -513,6 +579,8 @@ else
     printf 'failed to create draft release: %s\n' "${tag}" >&2
     exit 1
   fi
+  created_release="true"
+  mark_release_mutation
 fi
 
 if ! gh release upload "${tag}" "${upload_refs[@]}" --repo "${repo}"; then

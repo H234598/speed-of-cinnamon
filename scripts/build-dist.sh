@@ -2,12 +2,15 @@
 set -euo pipefail
 umask 077
 IFS=$'\n\t'
+readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH="${TRUSTED_COMMAND_PATH}"
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_dir}"
 safe_fs="${repo_dir}/scripts/safe-local-fs.py"
+safe_fs_cmd=(python3 "${safe_fs}")
 
-for tool in python3 tar sha256sum mktemp cp find rm git stat realpath; do
+for tool in python3 tar sha256sum mktemp find git stat realpath; do
   if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found.\n' "${tool}" >&2
     exit 1
@@ -64,17 +67,32 @@ if ! work_root="$(realpath "${work_root}")"; then
 fi
 mkdir -p "${work_root}"
 work_dir="$(mktemp -d "${work_root}/speed-of-cinnamon-build-dist-XXXXXX")"
+if [[ -L "${work_dir}" ]]; then
+  printf 'temporary build-dist workspace must not be a symlink: %s\n' "${work_dir}" >&2
+  exit 1
+fi
+if ! work_dir_abs="$(realpath "${work_dir}")"; then
+  printf 'failed to resolve temporary build-dist workspace: %s\n' "${work_dir}" >&2
+  exit 1
+fi
+if [[ "${work_dir_abs}" != "${work_root}/speed-of-cinnamon-build-dist-"* ]]; then
+  printf 'temporary build-dist workspace escaped temporary root: %s\n' "${work_dir}" >&2
+  exit 1
+fi
+work_dir="${work_dir_abs}"
 staging_tarball=""
 staging_checksum=""
 dist_finalize_lock="${dist_dir}/.build-dist.finalize.lock"
 cleanup() {
   if [[ -n "${staging_tarball}" ]]; then
-    rm -f -- "${staging_tarball}"
+    "${safe_fs_cmd[@]}" remove-leaf build-dist "${staging_tarball}" >/dev/null 2>&1 || true
   fi
   if [[ -n "${staging_checksum}" ]]; then
-    rm -f -- "${staging_checksum}"
+    "${safe_fs_cmd[@]}" remove-leaf build-dist "${staging_checksum}" >/dev/null 2>&1 || true
   fi
-  rm -rf -- "${work_dir}"
+  if [[ -n "${work_dir}" ]]; then
+    "${safe_fs_cmd[@]}" remove build-dist "${work_dir}" --kind dir >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT
 
@@ -124,29 +142,6 @@ PY
 
 mkdir -p "${dist_dir}" "${work_dir}/${package}"
 
-require_unsafe_source() {
-  local path=$1
-  local label=$2
-  local link_count
-
-  if [[ -d "${path}" ]]; then
-    if find "${path}" \( -type l -o -type f -links +1 \) -print -quit | grep -q .; then
-      printf '%s must not contain symlinks or hardlinks: %s\n' "${label}" "${path}" >&2
-      exit 1
-    fi
-    return
-  fi
-  if [[ ! -f "${path}" || -L "${path}" ]]; then
-    printf '%s must be a regular file: %s\n' "${label}" "${path}" >&2
-    exit 1
-  fi
-  link_count="$(stat -c '%h' "${path}")"
-  if [[ "${link_count}" -ne 1 ]]; then
-    printf '%s must not be hardlinked: %s\n' "${label}" "${path}" >&2
-    exit 1
-  fi
-}
-
 for path in \
   .github \
   docs \
@@ -160,15 +155,31 @@ for path in \
   pyproject.toml \
   README.md
 do
-  require_unsafe_source "${repo_dir}/${path}" "distribution source"
-  cp -a "${repo_dir}/${path}" "${work_dir}/${package}/"
+  source_path="${repo_dir}/${path}"
+  target_path="${work_dir}/${package}/${path}"
+  if [[ -d "${source_path}" ]]; then
+    if ! python3 "${safe_fs}" install-tree build-dist "${source_path}" "${target_path}" "distribution source tree"; then
+      printf 'failed to copy distribution source tree: %s\n' "${source_path}" >&2
+      exit 1
+    fi
+  else
+    if ! python3 "${safe_fs}" copy-file build-dist "${source_path}" "${target_path}" 0644; then
+      printf 'failed to copy distribution source file: %s\n' "${source_path}" >&2
+      exit 1
+    fi
+  fi
 done
-require_unsafe_source "${safe_fs}" "safe local filesystem helper"
 
-find "${work_dir}/${package}" \
-  -type d \( -name __pycache__ -o -name .pytest_cache -o -name .mypy_cache \) \
-  -prune -exec rm -rf {} +
-find "${work_dir}/${package}" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+while IFS= read -r -d '' cache_dir; do
+  "${safe_fs_cmd[@]}" remove build-dist "${cache_dir}" --kind dir
+done < <(
+  find "${work_dir}/${package}" \
+    -type d \( -name __pycache__ -o -name .pytest_cache -o -name .mypy_cache \) \
+    -prune -print0
+)
+while IFS= read -r -d '' bytecode_file; do
+  "${safe_fs_cmd[@]}" remove build-dist "${bytecode_file}" --kind file
+done < <(find "${work_dir}/${package}" -type f \( -name '*.pyc' -o -name '*.pyo' \) -print0)
 
 if find "${work_dir}/${package}" -type l -print -quit | grep -q .; then
   printf 'build-dist detected unsupported symlink in package contents.\n' >&2

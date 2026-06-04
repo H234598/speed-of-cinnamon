@@ -22,6 +22,12 @@ class PersonalizationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "personal context contains invalid null byte"):
             normalize_context("hello\\x00world")
 
+    def test_context_rejects_unsupported_control_characters(self) -> None:
+        for value in ("hello\x1b[31mworld", "hello\rworld", "hello\tworld", "hello\x85world"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "unsupported control characters"):
+                    normalize_context(value)
+
     def test_context_rejects_non_text(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be text"):
             normalize_context(123)  # type: ignore[arg-type]
@@ -42,6 +48,12 @@ class PersonalizationTest(unittest.TestCase):
     def test_vocabulary_rejects_invalid_null_byte(self) -> None:
         with self.assertRaisesRegex(ValueError, "vocabulary contains invalid null byte"):
             vocabulary_terms("PipeWire\\x00")
+
+    def test_vocabulary_rejects_unsupported_control_characters(self) -> None:
+        for value in ("PipeWire\x1b", "PipeWire\rCinnamon", "PipeWire\tCinnamon"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "unsupported control characters"):
+                    vocabulary_terms(value)
 
     def test_vocabulary_rejects_non_text(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be text"):

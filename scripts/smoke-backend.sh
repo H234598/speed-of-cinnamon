@@ -3,8 +3,20 @@ set -euo pipefail
 umask 077
 IFS=$'\n\t'
 
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+safe_fs="${repo_dir}/scripts/safe-local-fs.py"
+safe_fs_cmd=(python3 "${safe_fs}")
+
 if [[ -z "${HOME:-}" ]]; then
   printf 'HOME must be set.\n' >&2
+  exit 1
+fi
+if ! command -v -- python3 >/dev/null 2>&1; then
+  printf 'python3 not found.\n' >&2
+  exit 1
+fi
+if [[ -L "${safe_fs}" || ! -f "${safe_fs}" ]]; then
+  printf 'safe local filesystem helper is invalid: %s\n' "${safe_fs}" >&2
   exit 1
 fi
 if [[ "${SPEED_OF_CINNAMON_TEST_HOME:-}" != "1" ]]; then
@@ -27,10 +39,49 @@ if [[ ! -d "${HOME}" ]]; then
   exit 1
 fi
 
+resolve_smoke_tmp_root() {
+  local tmp_root="${TMPDIR:-/tmp}"
+  if [[ ! "${tmp_root}" == /* ]]; then
+    printf 'temporary root must be an absolute path: %s\n' "${tmp_root}" >&2
+    exit 1
+  fi
+  if [[ -L "${tmp_root}" ]]; then
+    printf 'temporary root must not be a symlink: %s\n' "${tmp_root}" >&2
+    exit 1
+  fi
+  if [[ ! -d "${tmp_root}" || ! -w "${tmp_root}" ]]; then
+    printf 'temporary root is not a writable directory: %s\n' "${tmp_root}" >&2
+    exit 1
+  fi
+  if ! tmp_root="$(realpath "${tmp_root}")"; then
+    printf 'failed to resolve temporary root: %s\n' "${tmp_root}" >&2
+    exit 1
+  fi
+  if [[ -L "${tmp_root}" ]]; then
+    printf 'temporary root must not be a symlink: %s\n' "${tmp_root}" >&2
+    exit 1
+  fi
+  printf '%s\n' "${tmp_root}"
+}
+
 smoke_root=""
 if [[ "${SPEED_OF_CINNAMON_SMOKE_REAL_STATE:-0}" != "1" ]]; then
-  smoke_root="$(mktemp -d "${TMPDIR:-/tmp}/speed-of-cinnamon-smoke-XXXXXX")"
-  trap 'rm -rf -- "${smoke_root}"' EXIT
+  smoke_tmp_root="$(resolve_smoke_tmp_root)"
+  smoke_root="$(mktemp -d "${smoke_tmp_root}/speed-of-cinnamon-smoke-XXXXXX")"
+  if [[ -L "${smoke_root}" ]]; then
+    printf 'temporary smoke directory must not be a symlink: %s\n' "${smoke_root}" >&2
+    exit 1
+  fi
+  if ! smoke_root_abs="$(realpath "${smoke_root}")"; then
+    printf 'failed to resolve temporary smoke directory: %s\n' "${smoke_root}" >&2
+    exit 1
+  fi
+  if [[ "${smoke_root_abs}" != "${smoke_tmp_root}/speed-of-cinnamon-smoke-"* ]]; then
+    printf 'temporary smoke directory escaped temporary root: %s\n' "${smoke_root}" >&2
+    exit 1
+  fi
+  smoke_root="${smoke_root_abs}"
+  trap '"${safe_fs_cmd[@]}" remove smoke-backend "${smoke_root}" --kind dir >/dev/null 2>&1 || true' EXIT
   export XDG_STATE_HOME="${smoke_root}/state"
   export XDG_DATA_HOME="${smoke_root}/data"
   export XDG_CACHE_HOME="${smoke_root}/cache"

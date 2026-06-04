@@ -17,7 +17,10 @@ class TextUtilsTest(unittest.TestCase):
         self.assertEqual(sanitize_special_chars("¡Hola! ¿Listo?"), "Hola! Listo?")
 
     def test_sanitize_special_chars_removes_null_and_control_characters(self) -> None:
-        self.assertEqual(sanitize_special_chars("ok\x00bad\rgood"), "okbadgood")
+        self.assertEqual(sanitize_special_chars("ok\x00bad\rgood\x7f"), "okbadgood")
+
+    def test_sanitize_special_chars_removes_unicode_format_controls(self) -> None:
+        self.assertEqual(sanitize_special_chars("safe\u202egnp.exe"), "safegnp.exe")
 
     def test_sanitize_special_chars_rejects_non_text(self) -> None:
         with self.assertRaises(ValueError):

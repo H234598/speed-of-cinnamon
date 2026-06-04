@@ -12,7 +12,12 @@ import time
 from pathlib import Path
 
 from .app_logging import log_event
-from .path_safety import assert_no_symlink_ancestors, read_text_without_following_symlinks
+from .path_safety import (
+    assert_no_symlink_ancestors,
+    ensure_directory_without_following_symlinks,
+    read_text_without_following_symlinks,
+    write_text_atomically_without_following_symlinks,
+)
 from .paths import state_dir
 
 
@@ -63,6 +68,8 @@ MAX_EXEC_TIMEOUT_SECONDS = 10
 MAX_TYPE_DELAY_MS = 10_000
 MAX_DUPLICATE_TEXT_SECONDS = 2.5
 MAX_DUPLICATE_LOCK_SECONDS = 30.0
+MAX_CLIPBOARD_DEDUP_STATE_BYTES = 1_000_000
+MAX_CLIPBOARD_DEDUP_LOCK_BYTES = 1_024
 CLIPBOARD_DEDUP_STATE_FILE = "clipboard-last.json"
 CLIPBOARD_DEDUP_LOCK_FILE = ".clipboard-last.lock"
 _CLIPBOARD_DEDUP_PENDING_FIELD = "pending"
@@ -163,10 +170,14 @@ def _contains_http_header_control_chars(value: str) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise OutputError("value must be text")
     lowered = (value or "").lower()
-    if "\r" in lowered or "\n" in lowered or "\\r" in lowered or "\\n" in lowered or "\\u000d" in lowered or "\\u000a" in lowered:
+    control_codepoints = tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
+    if any(sequence in lowered for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")):
+        return True
+    if any(f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered for codepoint in control_codepoints):
         return True
     for char in lowered:
-        if ord(char) < 0x20 or ord(char) == 0x7F:
+        codepoint = ord(char)
+        if codepoint < 0x20 or codepoint == 0x7F or 0x80 <= codepoint <= 0x9F:
             return True
     return False
 
@@ -232,7 +243,11 @@ def _read_clipboard_dedup_state_entry() -> tuple[bool, tuple[str, float], bool]:
     if not path.exists() and not path.is_symlink():
         return True, ("", 0.0), False
     try:
-        raw = read_text_without_following_symlinks(path, field_name="clipboard dedupe state")
+        raw = read_text_without_following_symlinks(
+            path,
+            field_name="clipboard dedupe state",
+            max_bytes=MAX_CLIPBOARD_DEDUP_STATE_BYTES,
+        )
     except FileNotFoundError:
         return True, ("", 0.0), False
     except OSError:
@@ -280,32 +295,16 @@ def _write_clipboard_dedup_fingerprint_state(fingerprint: str, at: float, *, pen
         path = _clipboard_dedup_state_path()
     except RuntimeError:
         return False
+    payload = {"sha256": fingerprint, "at": at}
+    if pending:
+        payload[_CLIPBOARD_DEDUP_PENDING_FIELD] = True
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return False
-    temp_path: Path | None = None
-    try:
-        fd, temp_name = tempfile.mkstemp(prefix="clipboard-dedupe-", suffix=".tmp", dir=str(path.parent))
-        temp_path = Path(temp_name)
-        payload = {"sha256": fingerprint, "at": at}
-        if pending:
-            payload[_CLIPBOARD_DEDUP_PENDING_FIELD] = True
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            try:
-                os.fchmod(handle.fileno(), 0o600)
-            except OSError:
-                pass
-            json.dump(payload, handle)
-            handle.write("\n")
-        assert_no_symlink_ancestors(path, field_name="clipboard dedupe state")
-        os.replace(temp_path, path)
+        write_text_atomically_without_following_symlinks(
+            path,
+            json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+            field_name="clipboard dedupe state",
+        )
     except (OSError, RuntimeError):
-        if temp_path is not None:
-            try:
-                temp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
         return False
     return True
 
@@ -359,7 +358,11 @@ def _clipboard_lock_identity_for_pid(pid: int) -> str | None:
 
 def _read_clipboard_dedup_lock_pid(path: Path) -> int | None:
     try:
-        raw = read_text_without_following_symlinks(path, field_name="clipboard dedupe lock")
+        raw = read_text_without_following_symlinks(
+            path,
+            field_name="clipboard dedupe lock",
+            max_bytes=MAX_CLIPBOARD_DEDUP_LOCK_BYTES,
+        )
     except (OSError, RuntimeError, UnicodeDecodeError):
         return None
     first_line = raw.splitlines()[0].strip() if raw.splitlines() else ""
@@ -372,7 +375,11 @@ def _read_clipboard_dedup_lock_pid(path: Path) -> int | None:
 
 def _read_clipboard_dedup_lock_identity(path: Path) -> str | None:
     try:
-        raw = read_text_without_following_symlinks(path, field_name="clipboard dedupe lock")
+        raw = read_text_without_following_symlinks(
+            path,
+            field_name="clipboard dedupe lock",
+            max_bytes=MAX_CLIPBOARD_DEDUP_LOCK_BYTES,
+        )
     except (OSError, RuntimeError, UnicodeDecodeError):
         return None
     lines = raw.splitlines()
@@ -386,12 +393,14 @@ def _same_clipboard_lock_snapshot(first: os.stat_result, second: os.stat_result)
     return (
         first.st_dev,
         first.st_ino,
+        first.st_nlink,
         first.st_size,
         first.st_mtime_ns,
         first.st_ctime_ns,
     ) == (
         second.st_dev,
         second.st_ino,
+        second.st_nlink,
         second.st_size,
         second.st_mtime_ns,
         second.st_ctime_ns,
@@ -403,69 +412,91 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
         path = _clipboard_dedup_lock_path()
     except RuntimeError:
         return None
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        return None
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        parent_fd = ensure_directory_without_following_symlinks(
+            path.parent,
+            field_name="clipboard dedupe lock directory",
+        )
     except OSError:
         return None
-    for _attempt in range(2):
-        now = time.time()
-        try:
-            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError:
+    try:
+        for _attempt in range(2):
+            now = time.time()
             try:
-                existing = path.lstat()
-            except OSError:
-                return None
-            if not stat.S_ISREG(existing.st_mode):
-                return None
-            owner_pid = _read_clipboard_dedup_lock_pid(path)
-            owner_identity = _read_clipboard_dedup_lock_identity(path)
-            if owner_pid is not None and _clipboard_lock_pid_is_running(owner_pid):
-                if owner_identity is not None:
-                    owner_current_identity = _clipboard_lock_identity_for_pid(owner_pid)
-                    if owner_current_identity is not None and owner_identity == owner_current_identity:
-                        return None
-                    if owner_current_identity is None and now - existing.st_mtime <= MAX_DUPLICATE_LOCK_SECONDS:
-                        return None
-                elif now - existing.st_mtime <= MAX_DUPLICATE_LOCK_SECONDS:
+                fd = os.open(
+                    path.name,
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY | nofollow_flag,
+                    0o600,
+                    dir_fd=parent_fd,
+                )
+            except FileExistsError:
+                try:
+                    existing = path.lstat()
+                except OSError:
                     return None
-            if owner_pid is None and now - existing.st_mtime <= MAX_DUPLICATE_LOCK_SECONDS:
-                return None
-            try:
-                current = path.lstat()
+                if not stat.S_ISREG(existing.st_mode):
+                    return None
+                if getattr(existing, "st_nlink", 1) != 1:
+                    return None
+                owner_pid = _read_clipboard_dedup_lock_pid(path)
+                owner_identity = _read_clipboard_dedup_lock_identity(path)
+                if owner_pid is not None and _clipboard_lock_pid_is_running(owner_pid):
+                    if owner_identity is not None:
+                        owner_current_identity = _clipboard_lock_identity_for_pid(owner_pid)
+                        if owner_current_identity is not None and owner_identity == owner_current_identity:
+                            return None
+                        if owner_current_identity is None and now - existing.st_mtime <= MAX_DUPLICATE_LOCK_SECONDS:
+                            return None
+                    elif now - existing.st_mtime <= MAX_DUPLICATE_LOCK_SECONDS:
+                        return None
+                if owner_pid is None and now - existing.st_mtime <= MAX_DUPLICATE_LOCK_SECONDS:
+                    return None
+                try:
+                    current = path.lstat()
+                except OSError:
+                    return None
+                if getattr(current, "st_nlink", 1) != 1:
+                    return None
+                if not _same_clipboard_lock_snapshot(existing, current):
+                    return None
+                try:
+                    path.unlink()
+                except OSError:
+                    return None
+                continue
             except OSError:
                 return None
-            if not _same_clipboard_lock_snapshot(existing, current):
-                return None
+
             try:
-                path.unlink()
+                identity = _clipboard_lock_identity_for_pid(os.getpid())
+                if identity is None:
+                    os.write(fd, f"{os.getpid()}\n".encode("ascii"))
+                else:
+                    os.write(fd, f"{os.getpid()}\n{identity}\n".encode("ascii"))
             except OSError:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
                 return None
-            continue
-        except OSError:
-            return None
-        try:
-            identity = _clipboard_lock_identity_for_pid(os.getpid())
-            if identity is None:
-                os.write(fd, f"{os.getpid()}\n".encode("ascii"))
-            else:
-                os.write(fd, f"{os.getpid()}\n{identity}\n".encode("ascii"))
-        except OSError:
             try:
                 os.close(fd)
             except OSError:
                 pass
-            try:
-                path.unlink()
-            except OSError:
-                pass
-            return None
+            return path
+        return None
+    finally:
         try:
-            os.close(fd)
+            os.close(parent_fd)
         except OSError:
             pass
-        return path
-    return None
 
 
 def _release_clipboard_dedup_lock(path: Path | None) -> None:
@@ -924,6 +955,10 @@ def paste_from_clipboard() -> None:
     raise OutputError("no keyboard helper found; install xdotool or wtype")
 
 
+def _clipboard_paste_helper_available() -> bool:
+    return bool(_which("xdotool") or _which("wtype"))
+
+
 def type_text(text: str, delay_ms: int) -> None:
     if not _which("xdotool"):
         raise OutputError("xdotool is required for direct typing on Cinnamon X11")
@@ -1022,6 +1057,10 @@ def _begin_clipboard_insertion(text: str, method: str) -> tuple[Path, tuple[str,
 def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
     if not isinstance(method, str) or isinstance(method, bool):
         raise OutputError("method must be text")
+    if _contains_escaped_null(method):
+        raise OutputError("method contains invalid null byte")
+    if _contains_http_header_control_chars(method):
+        raise OutputError("method contains invalid control character")
     method = (method or "clipboard-paste").strip().lower()
     if method == "none":
         return False
@@ -1063,6 +1102,8 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
         clipboard_snapshot_available = False
         clipboard_snapshot = ""
         try:
+            if not _clipboard_paste_helper_available():
+                raise OutputError("no keyboard helper found; install xdotool or wtype")
             if _clipboard_has_non_text_payload():
                 raise OutputError("refusing to overwrite non-text clipboard for automatic paste")
             clipboard_snapshot_available, clipboard_snapshot = _read_text_clipboard_snapshot()
@@ -1082,19 +1123,11 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
             committed = True
             return True
         finally:
-            rollback_error: OutputError | None = None
             if not committed:
-                if clipboard_snapshot_available:
-                    try:
-                        if _clipboard_still_contains_inserted_text(text):
-                            set_clipboard(clipboard_snapshot)
-                    except OutputError as exc:
-                        rollback_error = exc
-                _restore_clipboard_insertion_snapshot(snapshot)
-                _restore_clipboard_dedup_state(persistent_snapshot, pending=persistent_snapshot_pending)
+                if not operation_performed:
+                    _restore_clipboard_insertion_snapshot(snapshot)
+                    _restore_clipboard_dedup_state(persistent_snapshot, pending=persistent_snapshot_pending)
             _release_clipboard_dedup_lock(lock_path)
-            if rollback_error is not None:
-                raise OutputError("failed to restore previous clipboard after paste failure") from rollback_error
     if method == "type":
         type_text(text, delay_ms)
         return True

@@ -1,8 +1,33 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping
 
 from .transcriber import normalize_backend
+
+MAX_SETUP_DETAIL_CHARS = 800
+
+_SECRET_PATTERNS = (
+    re.compile(r"\bsk-[A-Za-z0-9_-]{12,}\b"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{12,}\b"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{12,}\b", re.IGNORECASE),
+    re.compile(
+        r"(?i)\b(api[_-]?key|access[_-]?token|auth[_-]?token|password|secret)\s*[:=]\s*[^\s,;]+"
+    ),
+)
+
+
+def _sanitize_setup_text(value: object, fallback: str = "") -> str:
+    text = str(value if value is not None else fallback)
+    for pattern in _SECRET_PATTERNS:
+        text = pattern.sub("[redacted]", text)
+    text = "".join(" " if ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F else char for char in text)
+    text = " ".join(text.split())
+    if not text:
+        return fallback
+    if len(text) > MAX_SETUP_DETAIL_CHARS:
+        return text[: MAX_SETUP_DETAIL_CHARS - 3].rstrip() + "..."
+    return text
 
 
 def _configured(payload: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -30,7 +55,7 @@ def _warnings(payload: Mapping[str, Any]) -> list[str]:
         raise RuntimeError("warnings must be a list")
     filtered: list[str] = []
     for item in warnings:
-        warning = str(item).strip()
+        warning = _sanitize_setup_text(item)
         if warning:
             filtered.append(warning)
     return filtered
@@ -89,14 +114,16 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
             steps,
             "recorder-tools",
             "Install recorder tools",
-            str(recorder.get("detail") or "Install PipeWire, PulseAudio, or ALSA recording tools."),
+            _sanitize_setup_text(
+                recorder.get("detail"), "Install PipeWire, PulseAudio, or ALSA recording tools."
+            ),
             ["sudo dnf install -y pipewire-utils pulseaudio-utils alsa-utils"],
         )
 
     transcriber = _section(configured, "transcriber")
     if not _coerce_plan_bool(transcriber, "ok"):
         value = normalize_backend(str(transcriber.get("value") or "auto"))
-        detail = str(transcriber.get("detail") or "Configure a local ASR backend.")
+        detail = _sanitize_setup_text(transcriber.get("detail"), "Configure a local ASR backend.")
         if value == "command":
             _add_step(
                 steps,
@@ -144,7 +171,10 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
             steps,
             "output-tools",
             "Install text output helpers",
-            str(output.get("detail") or "Install clipboard and keyboard helpers for the selected output mode."),
+            _sanitize_setup_text(
+                output.get("detail"),
+                "Install clipboard and keyboard helpers for the selected output mode.",
+            ),
             ["sudo dnf install -y xdotool xclip xsel wl-clipboard"],
         )
 
@@ -163,7 +193,7 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
     postprocessor = _section(configured, "postprocessor")
     if not _coerce_plan_bool(postprocessor, "ok"):
         value = str(postprocessor.get("value") or "")
-        detail = str(postprocessor.get("detail") or "Configure text polishing.")
+        detail = _sanitize_setup_text(postprocessor.get("detail"), "Configure text polishing.")
         if value == "ollama":
             _add_step(
                 steps,

@@ -1,5 +1,5 @@
 Name:           speed-of-cinnamon
-Version:        0.1.32
+Version:        0.1.33
 Release:        2%{?dist}
 Summary:        Cinnamon-native voice typing helper for Fedora Cinnamon
 
@@ -54,11 +54,19 @@ if find src/speed_of_cinnamon \( -type l -o -type f -links +1 \) -print -quit | 
   echo "refusing unsafe python package source tree" >&2
   exit 1
 fi
+if find src/speed_of_cinnamon -name '*[[:cntrl:]]*' -print -quit | grep -q .; then
+  echo "refusing python package source tree with control characters in file names" >&2
+  exit 1
+fi
 cp -a src/speed_of_cinnamon "${pydir}/"
 
 install -d %{buildroot}%{_datadir}/cinnamon/applets/speed-of-cinnamon@H234598
 if find files/speed-of-cinnamon@H234598 \( -type l -o -type f -links +1 \) -print -quit | grep -q .; then
   echo "refusing unsafe applet source tree" >&2
+  exit 1
+fi
+if find files/speed-of-cinnamon@H234598 -name '*[[:cntrl:]]*' -print -quit | grep -q .; then
+  echo "refusing applet source tree with control characters in file names" >&2
   exit 1
 fi
 cp -a files/speed-of-cinnamon@H234598/. %{buildroot}%{_datadir}/cinnamon/applets/speed-of-cinnamon@H234598/

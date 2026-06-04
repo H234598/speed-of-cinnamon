@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import glob
 import heapq
 import io
 import json
 import os
 import platform
+import re
 import shutil
 import stat as stat_module
 import subprocess  # nosec B404
@@ -57,7 +59,11 @@ from .paths import (
     transcript_dir,
 )
 from .path_safety import (
+    assert_fd_is_regular_private_file,
     assert_no_symlink_ancestors,
+    assert_safe_path_components,
+    ensure_directory_without_following_symlinks,
+    open_directory_without_following_symlinks,
     read_text_without_following_symlinks,
     write_text_atomically_without_following_symlinks,
 )
@@ -87,6 +93,7 @@ from .recorder import (
     list_input_sources,
     read_recording_level,
     reencode_recording_to_flac,
+    normalize_input_device,
     start_recorder,
     stop_process,
     trim_recording_silence,
@@ -118,9 +125,11 @@ MAX_TRANSCRIBER_TEXT_CHARS = 65_535
 MAX_SETTINGS_JSON_CHARS = 250_000
 MAX_SETTINGS_FILE_BYTES = 1_000_000
 MAX_DIAGNOSTICS_JSON_BYTES = 1_000_000
+MAX_FINALIZATION_LOCK_BYTES = 1_024
 MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS = 5
 MAX_URL_CHARS = 2_048
 MAX_ALARM_CATCH_UP_MINUTES = 14_400
+MAX_RECORDING_ARTIFACT_CANDIDATES = 100
 DEFAULT_BENCHMARK_LANGUAGE = "de"
 OLLAMA_PULL_TIMEOUT_SECONDS = 1800
 TRANSCRIBER_CHOICES = [
@@ -184,14 +193,21 @@ def _read_finalization_lock_pid(lock_path: Path) -> int | None:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
         return None
+    nonblock_flag = getattr(os, "O_NONBLOCK", 0)
+    fd: int | None = None
     try:
-        fd = os.open(str(lock_path), os.O_RDONLY | nofollow_flag)
-    except OSError:
-        return None
-    try:
+        assert_no_symlink_ancestors(lock_path, field_name="finalization lock")
+        fd = os.open(str(lock_path), os.O_RDONLY | nofollow_flag | nonblock_flag)
+        assert_fd_is_regular_private_file(fd, field_name="finalization lock")
         with os.fdopen(fd, "rb") as handle:
+            fd = None
             raw = handle.read(512)
-    except OSError:
+    except (OSError, RuntimeError):
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         return None
     try:
         text = raw.decode("ascii")
@@ -233,7 +249,11 @@ def _finalization_lock_identity_for_pid(pid: int) -> str | None:
 
 def _read_finalization_lock_identity(lock_path: Path) -> str | None:
     try:
-        raw = read_text_without_following_symlinks(lock_path, field_name="finalization lock")
+        raw = read_text_without_following_symlinks(
+            lock_path,
+            field_name="finalization lock",
+            max_bytes=MAX_FINALIZATION_LOCK_BYTES,
+        )
     except (OSError, RuntimeError, UnicodeDecodeError):
         return None
     lines = raw.splitlines()
@@ -250,12 +270,14 @@ def _same_finalization_lock_snapshot(
     return (
         first.st_dev,
         first.st_ino,
+        first.st_nlink,
         first.st_size,
         first.st_mtime_ns,
         first.st_ctime_ns,
     ) == (
         second.st_dev,
         second.st_ino,
+        second.st_nlink,
         second.st_size,
         second.st_mtime_ns,
         second.st_ctime_ns,
@@ -268,74 +290,95 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
         assert_no_symlink_ancestors(lock_path, field_name="finalization lock path")
     except RuntimeError:
         return None
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        return None
     try:
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        parent_fd = ensure_directory_without_following_symlinks(
+            lock_path.parent,
+            field_name="finalization lock directory",
+        )
     except OSError:
         return None
-    for _attempt in range(2):
-        now = time.time()
-        try:
-            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError:
+    try:
+        for _attempt in range(2):
+            now = time.time()
             try:
-                existing = lock_path.lstat()
-            except OSError:
-                return None
-            if not stat_module.S_ISREG(existing.st_mode):
-                return None
-            owner_pid = _read_finalization_lock_pid(lock_path)
-            owner_identity = _read_finalization_lock_identity(lock_path)
-            if owner_pid is not None and process_is_alive(owner_pid):
-                if owner_identity is not None:
-                    owner_current_identity = _finalization_lock_identity_for_pid(owner_pid)
-                    if owner_current_identity is not None and owner_identity == owner_current_identity:
-                        return None
-                    if owner_current_identity is None and now - existing.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS:
-                        return None
-                elif now - existing.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS:
+                fd = os.open(
+                    lock_path.name,
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY | nofollow_flag,
+                    0o600,
+                    dir_fd=parent_fd,
+                )
+            except FileExistsError:
+                try:
+                    existing = lock_path.lstat()
+                except OSError:
                     return None
-            if owner_pid is None and now - existing.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS:
-                return None
-            try:
-                current = lock_path.lstat()
+                if not stat_module.S_ISREG(existing.st_mode):
+                    return None
+                if getattr(existing, "st_nlink", 1) != 1:
+                    return None
+                owner_pid = _read_finalization_lock_pid(lock_path)
+                owner_identity = _read_finalization_lock_identity(lock_path)
+                if owner_pid is not None and process_is_alive(owner_pid):
+                    if owner_identity is not None:
+                        owner_current_identity = _finalization_lock_identity_for_pid(owner_pid)
+                        if owner_current_identity is not None and owner_identity == owner_current_identity:
+                            return None
+                        if owner_current_identity is None and now - existing.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS:
+                            return None
+                    elif now - existing.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS:
+                        return None
+                if owner_pid is None and now - existing.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS:
+                    return None
+                try:
+                    current = lock_path.lstat()
+                except OSError:
+                    return None
+                if getattr(current, "st_nlink", 1) != 1:
+                    return None
+                if not _same_finalization_lock_snapshot(existing, current):
+                    return None
+                try:
+                    lock_path.unlink()
+                except OSError:
+                    return None
+                continue
             except OSError:
                 return None
-            if not _same_finalization_lock_snapshot(existing, current):
-                return None
-            try:
-                lock_path.unlink()
-            except OSError:
-                return None
-            continue
-        except OSError:
-            return None
 
-        try:
-            identity = _finalization_lock_identity_for_pid(os.getpid())
-            if identity is None:
-                os.write(fd, f"{os.getpid()}\n".encode("ascii"))
-            else:
-                os.write(fd, f"{os.getpid()}\n{identity}\n".encode("ascii"))
-        except OSError:
+            try:
+                identity = _finalization_lock_identity_for_pid(os.getpid())
+                if identity is None:
+                    os.write(fd, f"{os.getpid()}\n".encode("ascii"))
+                else:
+                    os.write(fd, f"{os.getpid()}\n{identity}\n".encode("ascii"))
+            except OSError:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                try:
+                    lock_path.unlink()
+                except OSError:
+                    pass
+                return None
             try:
                 os.close(fd)
             except OSError:
-                pass
-            try:
-                lock_path.unlink()
-            except OSError:
-                pass
-            return None
+                try:
+                    lock_path.unlink()
+                except OSError:
+                    pass
+                return None
+            return lock_path
+        return None
+    finally:
         try:
-            os.close(fd)
+            os.close(parent_fd)
         except OSError:
-            try:
-                lock_path.unlink()
-            except OSError:
-                pass
-            return None
-        return lock_path
-    return None
+            pass
 
 
 def _release_finalization_lock(lock_path: Path | None) -> None:
@@ -396,23 +439,21 @@ def _contains_escaped_null(value: str) -> bool:
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
 
 
+_ESCAPED_CONTROL_RE = re.compile(
+    r"(?i)\\(?:[abfnrtv]|x(?:0[0-9a-f]|1[0-9a-f]|7f|8[0-9a-f]|9[0-9a-f])|"
+    r"u00(?:0[0-9a-f]|1[0-9a-f]|7f|8[0-9a-f]|9[0-9a-f]))"
+)
+
+
 def _contains_http_header_control_chars(value: str) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise RuntimeError("value must be text")
     lowered = (value or "").lower()
-    if (
-        "\r" in lowered
-        or "\n" in lowered
-        or "\\r" in lowered
-        or "\\n" in lowered
-        or "\\x0d" in lowered
-        or "\\x0a" in lowered
-        or "\\u000d" in lowered
-        or "\\u000a" in lowered
-    ):
+    if _ESCAPED_CONTROL_RE.search(lowered):
         return True
     for char in lowered:
-        if ord(char) < 0x20 or ord(char) == 0x7F:
+        codepoint = ord(char)
+        if codepoint < 0x20 or codepoint == 0x7F or 0x80 <= codepoint <= 0x9F:
             return True
     return False
 
@@ -497,7 +538,12 @@ def _validate_openai_compatible_http_url(url: str, field_name: str) -> str:
 
 
 def _is_local_ollama_url(url: str) -> bool:
-    normalized = (url or DEFAULT_OLLAMA_URL).strip().lower()
+    raw = url or DEFAULT_OLLAMA_URL
+    if isinstance(raw, bool) or not isinstance(raw, str):
+        return False
+    if _contains_escaped_null(raw) or _contains_http_header_control_chars(raw):
+        return False
+    normalized = raw.strip().lower()
     return (
         normalized.startswith("http://127.0.0.1:")
         or normalized.startswith("http://localhost:")
@@ -506,14 +552,26 @@ def _is_local_ollama_url(url: str) -> bool:
 
 
 def _effective_post_process_backend(backend: str, command_template: str) -> str:
-    normalized = (backend or "none").strip().lower().replace("_", "-")
+    raw = backend or "none"
+    if isinstance(raw, bool) or not isinstance(raw, str):
+        raise RuntimeError("post-process backend must be text")
+    if _contains_escaped_null(raw):
+        raise RuntimeError("post-process backend contains invalid null byte")
+    if _contains_http_header_control_chars(raw):
+        raise RuntimeError("post-process backend contains invalid control character")
+    normalized = raw.strip().lower().replace("_", "-")
     if normalized in {"none", "off", "disabled"} and (command_template or "").strip():
         return "command"
     return normalized
 
 
 def _is_remote_post_process_backend(backend: str) -> bool:
-    normalized = (backend or "none").strip().lower().replace("_", "-")
+    raw = backend or "none"
+    if isinstance(raw, bool) or not isinstance(raw, str):
+        return False
+    if _contains_escaped_null(raw) or _contains_http_header_control_chars(raw):
+        return False
+    normalized = raw.strip().lower().replace("_", "-")
     return normalized in {"ollama", "openai-compatible", "openai"}
 
 
@@ -573,6 +631,17 @@ def read_file_tail(path: Path, max_chars: int) -> str:
         raise ValueError("max_chars must be positive")
     if max_chars > MAX_TRANSCRIPT_HISTORY_TEXT_CHARS:
         raise ValueError(f"max_chars must be at most {MAX_TRANSCRIPT_HISTORY_TEXT_CHARS}")
+    path_text = str(path)
+    if _contains_escaped_null(path_text):
+        raise ValueError(f"file path contains invalid null byte: {path}")
+    lowered_path = path_text.lower()
+    control_codepoints = tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
+    if (
+        any(sequence in lowered_path for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v"))
+        or any(f"\\x{codepoint:02x}" in lowered_path or f"\\u00{codepoint:02x}" in lowered_path for codepoint in control_codepoints)
+        or any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in path_text)
+    ):
+        raise ValueError(f"file path contains invalid control character: {path}")
     max_bytes = max_chars * 4
     try:
         assert_no_symlink_ancestors(path, field_name="file path")
@@ -581,17 +650,34 @@ def read_file_tail(path: Path, max_chars: int) -> str:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
         raise OSError("secure file open is not supported on this platform")
+    nonblock_flag = getattr(os, "O_NONBLOCK", 0)
+    fd: int | None = None
     try:
-        fd = os.open(path, os.O_RDONLY | nofollow_flag)
+        fd = os.open(path, os.O_RDONLY | nofollow_flag | nonblock_flag)
+        assert_fd_is_regular_private_file(fd, field_name="file path")
     except OSError as exc:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        raise OSError(str(exc)) from exc
+    except RuntimeError as exc:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         raise OSError(str(exc)) from exc
     try:
         handle = os.fdopen(fd, "rb")
+        fd = None
     except OSError:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         raise
     try:
         handle.seek(0, os.SEEK_END)
@@ -695,7 +781,6 @@ def prepare_output_text(text: str, append_space: bool, sanitize: bool) -> str:
 
 def _ensure_private_text_file(path: Path) -> None:
     assert_no_symlink_ancestors(path, field_name="blacklist file")
-    path.parent.mkdir(parents=True, exist_ok=True)
     _prepare_private_file(path, field_name="blacklist file", exclusive=False)
 
 
@@ -844,7 +929,7 @@ def read_log_excerpt(path: Path | None, max_chars: int = 2000) -> str:
         text = read_file_tail(path, max_chars)
     except (OSError, ValueError):
         return ""
-    return text.strip()
+    return _redact_error_for_user(text.strip())
 
 
 def transcript_preview(text: str, max_chars: int = 80) -> str:
@@ -857,19 +942,20 @@ def transcript_preview(text: str, max_chars: int = 80) -> str:
 
 
 def _transcript_history_candidates(directory: Path):
-    for path in directory.glob("*.txt"):
-        try:
-            yield path.stat().st_mtime, path
-        except OSError:
+    for path, file_stat in _safe_directory_entries(directory, field_name="transcript directory"):
+        if path.suffix.lower() != ".txt":
             continue
+        if not stat_module.S_ISREG(file_stat.st_mode):
+            continue
+        if getattr(file_stat, "st_nlink", 1) != 1:
+            continue
+        yield file_stat.st_mtime, path
 
 
 def read_transcript_history(limit: int = 10) -> list[dict[str, object]]:
     if limit <= 0:
         return []
     directory = transcript_dir()
-    if not directory.exists():
-        return []
 
     candidates = heapq.nlargest(max(limit * 4, limit + 16), _transcript_history_candidates(directory))
 
@@ -924,23 +1010,35 @@ def _write_text_atomic(path: Path, text: str) -> None:
         raise RuntimeError(f"failed to write transcript file: {path}") from exc
 
 
+class _PrivateFilePrepareError(RuntimeError):
+    def __init__(self, message: str, *, created: bool, errno_value: int | None = None) -> None:
+        super().__init__(message)
+        self.created = created
+        self.errno = errno_value
+
+
 def _prepare_private_file(path: Path, *, field_name: str, exclusive: bool = True) -> None:
     if not isinstance(path, Path):
         raise RuntimeError(f"{field_name} must be a path")
-    assert_no_symlink_ancestors(path, field_name=field_name)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    assert_safe_path_components(path, field_name=field_name)
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
         raise RuntimeError(f"secure {field_name} open is not supported on this platform")
+    try:
+        parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name=f"{field_name} directory")
+    except OSError as exc:
+        raise _PrivateFilePrepareError(f"failed to prepare {field_name}: {path}", created=False, errno_value=exc.errno) from exc
     try:
         flags = os.O_WRONLY | os.O_CREAT | nofollow_flag
         if exclusive:
             flags |= os.O_EXCL
         else:
             flags |= os.O_APPEND
-        fd = os.open(path, flags, 0o600)
+        fd = os.open(path.name, flags, 0o600, dir_fd=parent_fd)
     except OSError as exc:
-        raise RuntimeError(f"failed to prepare {field_name}: {path}") from exc
+        raise _PrivateFilePrepareError(f"failed to prepare {field_name}: {path}", created=False, errno_value=exc.errno) from exc
+    finally:
+        os.close(parent_fd)
     try:
         with os.fdopen(fd, "ab") as handle:
             try:
@@ -952,32 +1050,45 @@ def _prepare_private_file(path: Path, *, field_name: str, exclusive: bool = True
             os.close(fd)
         except OSError:
             pass
-        raise RuntimeError(f"failed to prepare {field_name}: {path}") from exc
+        raise _PrivateFilePrepareError(f"failed to prepare {field_name}: {path}", created=True, errno_value=exc.errno) from exc
 
 
 def _allocate_recording_artifacts() -> tuple[Path, Path]:
     root = recordings_dir()
-    for attempt in range(100):
-        stem = timestamp()
-        if attempt:
-            stem = f"{stem}-{attempt:02d}"
-        audio_path = validate_recording_path(root / f"{stem}.wav", suffix=".wav", require_recordings_dir=True)
-        log_path = validate_recording_path(root / f"{stem}.log", suffix=".log", require_recordings_dir=True)
-        if _recording_artifact_stat(audio_path) is not None or _recording_artifact_stat(log_path) is not None:
-            continue
-        try:
-            _prepare_private_file(audio_path, field_name="recording audio file")
-        except RuntimeError:
-            if _recording_artifact_stat(audio_path) is not None:
-                if not remove_file(str(audio_path), suffix=".wav"):
-                    raise RuntimeError(f"failed to clean partial recording audio file: {audio_path}") from None
-            if _recording_artifact_stat(log_path) is not None:
-                if not remove_file(str(log_path), suffix=".log"):
-                    raise RuntimeError(f"failed to clean partial recording log file: {log_path}") from None
+    candidates_checked = 0
+    while candidates_checked < MAX_RECORDING_ARTIFACT_CANDIDATES:
+        base_stem = timestamp()
+        for collision_index in range(MAX_RECORDING_ARTIFACT_CANDIDATES - candidates_checked):
+            stem = base_stem if collision_index == 0 else f"{base_stem}-{collision_index:02d}"
+            audio_path = validate_recording_path(
+                root / f"{stem}.wav",
+                suffix=".wav",
+                require_recordings_dir=True,
+                recordings_root=root,
+            )
+            log_path = validate_recording_path(
+                root / f"{stem}.log",
+                suffix=".log",
+                require_recordings_dir=True,
+                recordings_root=root,
+            )
+            candidates_checked += 1
             if _recording_artifact_stat(audio_path) is not None or _recording_artifact_stat(log_path) is not None:
                 continue
-            raise
-        return audio_path, log_path
+            try:
+                _prepare_private_file(audio_path, field_name="recording audio file")
+            except _PrivateFilePrepareError as exc:
+                if exc.created:
+                    if not remove_file(str(audio_path), suffix=".wav", recordings_root=root):
+                        raise RuntimeError(f"failed to clean partial recording audio file: {audio_path}") from None
+                    if _recording_artifact_stat(audio_path) is not None:
+                        continue
+                    break
+                if exc.errno == errno.EEXIST and _recording_artifact_stat(audio_path) is not None:
+                    continue
+                raise
+            else:
+                return audio_path, log_path
     raise RuntimeError("failed to allocate collision-free recording artifacts")
 
 
@@ -1079,30 +1190,40 @@ def _normalize_input_sources(sources: object) -> list[dict[str, object]]:
             raise RuntimeError("input source id must be text")
         if _contains_escaped_null(source_id):
             raise RuntimeError("input source id contains invalid null byte")
+        if _contains_http_header_control_chars(source_id):
+            raise RuntimeError("input source id contains invalid control character")
 
         name = source.name if hasattr(source, "name") else None
         if not isinstance(name, str) or isinstance(name, bool):
             raise RuntimeError("input source name must be text")
         if _contains_escaped_null(name):
             raise RuntimeError("input source name contains invalid null byte")
+        if _contains_http_header_control_chars(name):
+            raise RuntimeError("input source name contains invalid control character")
 
         description = source.description if hasattr(source, "description") else None
         if not isinstance(description, str) or isinstance(description, bool):
             raise RuntimeError("input source description must be text")
         if _contains_escaped_null(description):
             raise RuntimeError("input source description contains invalid null byte")
+        if _contains_http_header_control_chars(description):
+            raise RuntimeError("input source description contains invalid control character")
 
         driver = source.driver if hasattr(source, "driver") else None
         if not isinstance(driver, str) or isinstance(driver, bool):
             raise RuntimeError("input source driver must be text")
         if _contains_escaped_null(driver):
             raise RuntimeError("input source driver contains invalid null byte")
+        if _contains_http_header_control_chars(driver):
+            raise RuntimeError("input source driver contains invalid control character")
 
         state = source.state if hasattr(source, "state") else None
         if not isinstance(state, str) or isinstance(state, bool):
             raise RuntimeError("input source state must be text")
         if _contains_escaped_null(state):
             raise RuntimeError("input source state contains invalid null byte")
+        if _contains_http_header_control_chars(state):
+            raise RuntimeError("input source state contains invalid control character")
 
         default = source.default if hasattr(source, "default") else None
         if not isinstance(default, bool):
@@ -1139,6 +1260,8 @@ def _normalize_model_payloads(models: object) -> list[dict[str, object]]:
             raise RuntimeError("model name must be text")
         if _contains_escaped_null(name):
             raise RuntimeError("model name contains invalid null byte")
+        if _contains_http_header_control_chars(name):
+            raise RuntimeError("model name contains invalid control character")
         normalized.append(model)
     return normalized
 
@@ -1154,6 +1277,8 @@ def _normalize_text_models_payload(payload: object) -> dict[str, object]:
         raise RuntimeError("text models payload message must be text")
     if _contains_escaped_null(message):
         raise RuntimeError("text models payload message contains invalid null byte")
+    if _contains_http_header_control_chars(message):
+        raise RuntimeError("text models payload message contains invalid control character")
     models = _normalize_model_payloads(payload.get("models"))
     return {
         "available": available,
@@ -1269,6 +1394,7 @@ def _stabilize_recording_artifact_path(artifact_path: Path) -> Path:
         raise RuntimeError("recording artifact path is invalid")
     if artifact_path.suffix.lower() not in {".wav", ".flac"}:
         raise RuntimeError("recording artifact path has invalid suffix")
+    assert_no_symlink_ancestors(artifact_path, field_name="recording artifact path")
     if _recording_artifact_stat(artifact_path) is None:
         raise RuntimeError("recording artifact path is not a safe regular file")
     stem = artifact_path.stem
@@ -1284,12 +1410,22 @@ def _stabilize_recording_artifact_path(artifact_path: Path) -> Path:
     stable_path = artifact_path.with_name(f"{marker_stem}{artifact_path.suffix}")
     if stable_path == artifact_path:
         return artifact_path
+    parent_fd: int | None = None
     try:
         assert_no_symlink_ancestors(stable_path, field_name="recording artifact path")
+        parent_fd = ensure_directory_without_following_symlinks(
+            stable_path.parent,
+            field_name="recording artifact directory",
+        )
         if stable_path.exists() and _recording_artifact_stat(stable_path) is None:
             raise RuntimeError(f"stable recording artifact is not a safe regular file: {stable_path}")
         try:
-            os.replace(artifact_path, stable_path)
+            os.replace(
+                artifact_path.name,
+                stable_path.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
         except OSError as exc:
             if stable_path.exists() and stable_path.is_symlink():
                 raise RuntimeError(f"stable recording artifact is not a safe regular file: {stable_path}") from exc
@@ -1299,6 +1435,12 @@ def _stabilize_recording_artifact_path(artifact_path: Path) -> Path:
         return stable_path
     except (OSError, RuntimeError) as exc:
         raise RuntimeError(f"failed to stabilize recording artifact path: {exc}") from exc
+    finally:
+        if parent_fd is not None:
+            try:
+                os.close(parent_fd)
+            except OSError:
+                pass
 
 
 def _recording_artifact_stat(path: Path) -> os.stat_result | None:
@@ -1311,6 +1453,43 @@ def _recording_artifact_stat(path: Path) -> os.stat_result | None:
     if getattr(file_stat, "st_nlink", 1) != 1:
         return None
     return file_stat
+
+
+def _safe_directory_entries(directory: Path, *, field_name: str) -> list[tuple[Path, os.stat_result]]:
+    try:
+        directory_fd = open_directory_without_following_symlinks(directory, field_name=field_name)
+    except (OSError, RuntimeError):
+        return []
+    try:
+        try:
+            names = os.listdir(directory_fd)
+        except OSError:
+            return []
+        entries: list[tuple[Path, os.stat_result]] = []
+        for name in names:
+            if not isinstance(name, str) or name in {"", ".", ".."} or "/" in name:
+                continue
+            try:
+                file_stat = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            except OSError:
+                continue
+            entries.append((directory / name, file_stat))
+        return entries
+    finally:
+        os.close(directory_fd)
+
+
+def _safe_regular_child_files(directory: Path, suffixes: tuple[str, ...], *, field_name: str) -> list[Path]:
+    files: list[Path] = []
+    for path, file_stat in _safe_directory_entries(directory, field_name=field_name):
+        if suffixes and path.suffix.lower() not in suffixes:
+            continue
+        if not stat_module.S_ISREG(file_stat.st_mode):
+            continue
+        if getattr(file_stat, "st_nlink", 1) != 1:
+            continue
+        files.append(path)
+    return files
 
 
 def _is_finalization_lock_active(state_path: Path) -> bool:
@@ -1421,13 +1600,12 @@ def prune_files_by_mtime(paths: list[Path], keep: int, active_paths: set[Path], 
 def recording_groups() -> list[dict[str, object]]:
     groups: dict[str, dict[str, object]] = {}
     directory = recordings_dir()
-    if not directory.exists():
-        return []
-    for path in directory.iterdir():
+    for path, file_stat in _safe_directory_entries(directory, field_name="recordings directory"):
         if path.suffix.lower() not in RECORDING_ARTIFACT_EXTENSIONS:
             continue
-        file_stat = _recording_artifact_stat(path)
-        if file_stat is None:
+        if not stat_module.S_ISREG(file_stat.st_mode):
+            continue
+        if getattr(file_stat, "st_nlink", 1) != 1:
             continue
         group = groups.setdefault(path.stem, {"stem": path.stem, "mtime": 0.0, "files": []})
         group["mtime"] = max(float(group["mtime"]), file_stat.st_mtime)
@@ -1438,16 +1616,11 @@ def recording_groups() -> list[dict[str, object]]:
 
 
 def recording_artifact_files() -> list[Path]:
-    directory = recordings_dir()
-    if not directory.exists():
-        return []
-    files: list[Path] = []
-    for path in directory.iterdir():
-        if path.suffix.lower() not in RECORDING_ARTIFACT_EXTENSIONS:
-            continue
-        if _recording_artifact_stat(path) is not None:
-            files.append(path)
-    return files
+    return _safe_regular_child_files(
+        recordings_dir(),
+        RECORDING_ARTIFACT_EXTENSIONS,
+        field_name="recordings directory",
+    )
 
 
 def _add_recording_artifact_counts(paths: list[str], recording_result: dict[str, object], prefix: str) -> None:
@@ -1597,8 +1770,9 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
             "message": "recording exited before audio was saved",
         }
 
-    audio_path, log_path = _allocate_recording_artifacts()
     max_seconds = _coerce_int(args.max_seconds, field_name="max-seconds", max_value=MAX_RECORDING_SECONDS)
+    normalized_input_device = normalize_input_device(args.input_device)
+    audio_path, log_path = _allocate_recording_artifacts()
 
     def reset_recording_artifacts() -> None:
         nonlocal audio_path, log_path
@@ -1612,7 +1786,7 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
     proc: subprocess.Popen[bytes] | None = None
     for recorder_preference in recorder_preferences:
         try:
-            candidate = choose_recorder(recorder_preference, audio_path, max_seconds, args.input_device)
+            candidate = choose_recorder(recorder_preference, audio_path, max_seconds, normalized_input_device)
             candidate_proc = start_recorder(candidate, log_path)
         except Exception as exc:
             startup_errors.append(f"{recorder_preference}: {exc}")
@@ -1649,7 +1823,7 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
         language=language,
         recorder=command.name,
         max_seconds=max_seconds,
-        input_device=args.input_device,
+        input_device=normalized_input_device,
     )
     store.write(state)
     _enforce_recording_artifact_cap(state)
@@ -1659,7 +1833,7 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
         "pid": proc.pid,
         "audio_path": str(audio_path),
         "recorder": command.name,
-        "input_device": args.input_device,
+        "input_device": normalized_input_device,
         "language": language,
     }
 
@@ -1875,7 +2049,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             if trimmed_audio_path is not None:
                 remove_file(str(trimmed_audio_path), suffix=".flac")
             stabilized_audio_deleted = False
-            if stabilized_audio_path is not None:
+            if stabilized_audio_path is not None and str(state.audio_path or "") != str(stabilized_audio_path):
                 stabilized_audio_deleted = remove_file(str(stabilized_audio_path), suffix=stabilized_audio_path.suffix)
             error_update: dict[str, object] = {
                 "status": "error",
@@ -1888,13 +2062,6 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
                 and (stabilized_audio_deleted or _recording_artifact_stat(stabilized_audio_path) is None)
             ):
                 error_update["audio_path"] = ""
-            error_delete_audio_path: Path | None = None
-            error_delete_log_path: str | None = None
-            if not keep_recording_artifacts:
-                if audio_suffix and _recording_artifact_stat(audio_path) is not None:
-                    error_delete_audio_path = audio_path
-                if state.log_path:
-                    error_delete_log_path = state.log_path
             if written_text_path is not None:
                 try:
                     _remove_transcript_file(written_text_path)
@@ -1903,19 +2070,45 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
                 else:
                     error_update["transcript"] = ""
                     error_update["transcript_path"] = ""
-            store.update(**error_update)
-            if error_delete_audio_path is not None:
-                if remove_file(str(error_delete_audio_path), suffix=audio_suffix):
-                    store.update(audio_path="")
-            if error_delete_log_path is not None:
-                if remove_file(error_delete_log_path, suffix=".log"):
-                    store.update(log_path="")
+            final_error_text = str(error_update.get("error", error_text))
+            cleanup_targets: list[tuple[str, str, str]] = []
+            cleanup_clear_update: dict[str, object] = {}
+            if not keep_recording_artifacts:
+                if audio_suffix and _recording_artifact_stat(audio_path) is not None:
+                    cleanup_clear_update["audio_path"] = ""
+                    cleanup_targets.append(("audio_path", str(audio_path), audio_suffix))
+                if state.log_path:
+                    cleanup_clear_update["log_path"] = ""
+                    cleanup_targets.append(("log_path", state.log_path, ".log"))
+            try:
+                store.update(**error_update)
+            except Exception as update_exc:
+                update_error = _redact_error_for_user(str(update_exc))
+                raise RuntimeError(f"{final_error_text}; failed to persist error state: {update_error}") from update_exc
+            if cleanup_clear_update:
+                try:
+                    store.update(**cleanup_clear_update)
+                except Exception as update_exc:
+                    update_error = _redact_error_for_user(str(update_exc))
+                    raise RuntimeError(f"{final_error_text}; failed to persist error cleanup state: {update_error}") from update_exc
+                cleanup_restore_update: dict[str, object] = {}
+                for cleanup_field, cleanup_path, cleanup_suffix in cleanup_targets:
+                    if not remove_file(cleanup_path, suffix=cleanup_suffix):
+                        cleanup_restore_update[cleanup_field] = cleanup_path
+                if cleanup_restore_update:
+                    try:
+                        store.update(**cleanup_restore_update)
+                    except Exception as update_exc:
+                        update_error = _redact_error_for_user(str(update_exc))
+                        raise RuntimeError(
+                            f"{final_error_text}; failed to persist error cleanup state: {update_error}"
+                        ) from update_exc
         raise RuntimeError(str(error_update.get("error", error_text)) if state_marked_finalizing else error_text)
     finally:
         _release_finalization_lock(lock_path)
 
 
-def remove_file(path_value: str | None, *, suffix: str | None = None) -> bool:
+def remove_file(path_value: str | None, *, suffix: str | None = None, recordings_root: Path | None = None) -> bool:
     if not path_value:
         return False
     try:
@@ -1924,7 +2117,12 @@ def remove_file(path_value: str | None, *, suffix: str | None = None) -> bool:
         return False
     if suffix:
         try:
-            path = validate_recording_path(Path(path_value), suffix=suffix, require_recordings_dir=True)
+            path = validate_recording_path(
+                Path(path_value),
+                suffix=suffix,
+                require_recordings_dir=True,
+                recordings_root=recordings_root,
+            )
         except (RecorderError, RuntimeError, ValueError, OSError):
             return False
     else:
@@ -1968,38 +2166,36 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
 def command_cancel(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     store = build_store(args)
-    state = store.read()
-    _raise_if_state_unreadable(state)
-    if state.status == "finalizing":
+    lock_path = _acquire_finalization_lock(store.path)
+    if lock_path is None:
         return {
             "status": "finalizing",
             "message": "finalization in progress; use cancel after completion",
         }
-    if state.status == "recording" and _is_recording_process_alive(state.pid):
-        stop_process(_coerce_int(state.pid, field_name="state pid"))
+    try:
+        state = store.read()
+        _raise_if_state_unreadable(state)
+        if state.status == "finalizing":
+            return {
+                "status": "finalizing",
+                "message": "finalization in progress; use cancel after completion",
+            }
+        if state.status == "recording" and _is_recording_process_alive(state.pid):
+            stop_process(_coerce_int(state.pid, field_name="state pid"))
 
-    discarded_audio_path = state.audio_path
-    audio_deleted = _remove_recording_artifact(discarded_audio_path)
-    log_deleted = remove_file(state.log_path, suffix=".log")
-    transcript_path = normalized_path(state.transcript_path)
-    transcript_deleted = True
-    if transcript_path is not None:
-        try:
-            transcript_deleted = _remove_transcript_file(transcript_path)
-        except RuntimeError:
-            transcript_deleted = False
-    if (
-        (discarded_audio_path and not audio_deleted)
-        or (state.log_path and not log_deleted)
-        or (state.transcript_path and not transcript_deleted)
-    ):
-        error_message = "failed to discard recording artifacts"
+        discarded_audio_path = state.audio_path
+        has_artifacts = bool(discarded_audio_path or state.log_path or state.transcript_path)
+        has_recording_state = state.status in {"recording", "recorded", "processing", "finalizing"}
+        if not has_artifacts and not has_recording_state:
+            return {"status": "idle", "message": "nothing to cancel"}
+
+        error_message = "discarding recording artifacts"
         store.write(
             RecordingState(
                 status="error",
-                audio_path=state.audio_path if not audio_deleted else None,
-                log_path=state.log_path if not log_deleted else None,
-                transcript_path=state.transcript_path if not transcript_deleted else "",
+                audio_path=state.audio_path,
+                log_path=state.log_path,
+                transcript_path=state.transcript_path,
                 stopped_at=now_iso(),
                 language=state.language,
                 recorder=state.recorder,
@@ -2008,25 +2204,54 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 error=error_message,
             )
         )
-        return {
-            "status": "error",
-            "message": error_message,
-            "discarded_audio_path": discarded_audio_path,
-            "audio_deleted": audio_deleted,
-            "log_deleted": log_deleted,
-            "transcript_deleted": transcript_deleted,
-        }
-    store.write(
-        RecordingState(
-            status="idle",
-            stopped_at=now_iso(),
-            language=state.language,
-            recorder=state.recorder,
-            input_device=state.input_device,
-            max_seconds=state.max_seconds,
+
+        audio_deleted = _remove_recording_artifact(discarded_audio_path)
+        log_deleted = remove_file(state.log_path, suffix=".log")
+        transcript_path = normalized_path(state.transcript_path)
+        transcript_deleted = True
+        if transcript_path is not None:
+            try:
+                transcript_deleted = _remove_transcript_file(transcript_path)
+            except RuntimeError:
+                transcript_deleted = False
+        if (
+            (discarded_audio_path and not audio_deleted)
+            or (state.log_path and not log_deleted)
+            or (state.transcript_path and not transcript_deleted)
+        ):
+            error_message = "failed to discard recording artifacts"
+            store.write(
+                RecordingState(
+                    status="error",
+                    audio_path=state.audio_path if not audio_deleted else None,
+                    log_path=state.log_path if not log_deleted else None,
+                    transcript_path=state.transcript_path if not transcript_deleted else "",
+                    stopped_at=now_iso(),
+                    language=state.language,
+                    recorder=state.recorder,
+                    input_device=state.input_device,
+                    max_seconds=state.max_seconds,
+                    error=error_message,
+                )
+            )
+            return {
+                "status": "error",
+                "message": error_message,
+                "discarded_audio_path": discarded_audio_path,
+                "audio_deleted": audio_deleted,
+                "log_deleted": log_deleted,
+                "transcript_deleted": transcript_deleted,
+            }
+        store.write(
+            RecordingState(
+                status="idle",
+                stopped_at=now_iso(),
+                language=state.language,
+                recorder=state.recorder,
+                input_device=state.input_device,
+                max_seconds=state.max_seconds,
+            )
         )
-    )
-    if state.status in {"recording", "recorded", "processing", "finalizing"} or discarded_audio_path:
         return {
             "status": "idle",
             "message": "recording discarded",
@@ -2035,7 +2260,8 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             "log_deleted": log_deleted,
             "transcript_deleted": transcript_deleted,
         }
-    return {"status": "idle", "message": "nothing to cancel"}
+    finally:
+        _release_finalization_lock(lock_path)
 
 
 def command_toggle(args: argparse.Namespace) -> dict[str, object]:
@@ -2114,7 +2340,14 @@ def command_models(args: argparse.Namespace) -> dict[str, object]:
 
 
 def command_text_models(args: argparse.Namespace) -> dict[str, object]:
-    backend = (args.backend or "ollama").strip().lower().replace("_", "-")
+    raw_backend = args.backend or "ollama"
+    if isinstance(raw_backend, bool) or not isinstance(raw_backend, str):
+        raise RuntimeError("text models backend must be text")
+    if _contains_escaped_null(raw_backend):
+        raise RuntimeError("text models backend contains invalid null byte")
+    if _contains_http_header_control_chars(raw_backend):
+        raise RuntimeError("text models backend contains invalid control character")
+    backend = raw_backend.strip().lower().replace("_", "-")
     if backend not in {"ollama", "openai-compatible"}:
         raise RuntimeError("text models backend must be ollama or openai-compatible")
     if backend == "openai-compatible":
@@ -2159,7 +2392,14 @@ def command_text_models(args: argparse.Namespace) -> dict[str, object]:
 
 
 def command_install_text_model(args: argparse.Namespace) -> dict[str, object]:
-    backend = (args.backend or "ollama").strip().lower().replace("_", "-")
+    raw_backend = args.backend or "ollama"
+    if isinstance(raw_backend, bool) or not isinstance(raw_backend, str):
+        raise RuntimeError("text model backend must be text")
+    if _contains_escaped_null(raw_backend):
+        raise RuntimeError("text model backend contains invalid null byte")
+    if _contains_http_header_control_chars(raw_backend):
+        raise RuntimeError("text model backend contains invalid control character")
+    backend = raw_backend.strip().lower().replace("_", "-")
     if backend != "ollama":
         raise RuntimeError("text model installation currently supports only ollama")
     model = _assert_clean_text(args.model, field_name="ollama model", max_chars=MAX_PATH_CHARS).strip()
@@ -2196,7 +2436,8 @@ def command_install_text_model(args: argparse.Namespace) -> dict[str, object]:
         raise RuntimeError(f"failed to run ollama pull: {exc}") from exc
     if proc.returncode != 0:
         detail = (stderr or stdout or f"exit code {proc.returncode}").strip()
-        raise RuntimeError(f"ollama pull failed: {detail[:MAX_LOG_EXCERPT_CHARS]}")
+        detail = _redact_error_for_user(detail[:MAX_LOG_EXCERPT_CHARS])
+        raise RuntimeError(f"ollama pull failed: {detail}")
     return {
         "status": "done",
         "backend": "ollama",
@@ -2270,7 +2511,7 @@ def _benchmark_model(audio_path: Path, language: str, model: ModelSpec) -> dict[
         )
     except Exception as exc:
         result["seconds"] = round(time.perf_counter() - started, 3)
-        result["error"] = str(exc)
+        result["error"] = _redact_error_for_user(str(exc))
         return result
 
     result["ok"] = True
@@ -2330,7 +2571,7 @@ def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
     state = store.read()
     active_paths = active_artifact_paths(state, state_path=store.path)
     transcript_result = prune_files_by_mtime(
-        list(transcript_dir().glob("*.txt")),
+        _safe_regular_child_files(transcript_dir(), (".txt",), field_name="transcript directory"),
         keep_transcripts,
         active_paths,
         dry_run,
@@ -2379,7 +2620,6 @@ def command_diagnostics(args: argparse.Namespace) -> dict[str, object]:
             else diagnostics_dir() / f"diagnostics-{timestamp()}.json"
         )
         _assert_json_payload_size(payload, max_bytes=MAX_DIAGNOSTICS_JSON_BYTES)
-        path.parent.mkdir(parents=True, exist_ok=True)
         payload["saved_path"] = str(path)
         _write_json_atomic(path, payload, max_bytes=MAX_DIAGNOSTICS_JSON_BYTES)
         payload["message"] = f"diagnostics saved to {path}"
@@ -2454,7 +2694,7 @@ def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
             "sources": source_items,
         }
     except Exception as exc:
-        source_payload = {"ok": False, "error": str(exc)}
+        source_payload = {"ok": False, "error": _redact_error_for_user(str(exc))}
 
     transcript_entries = [
         {key: entry[key] for key in ("name", "path", "modified_at") if key in entry}

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import fcntl
+import stat
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterator
 from .path_safety import (
     assert_no_symlink_ancestors,
+    assert_fd_is_regular_private_file,
     assert_safe_path_components,
     ensure_directory_without_following_symlinks,
     read_text_without_following_symlinks,
@@ -38,10 +40,14 @@ def _contains_http_header_control_chars(value: str) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise ValueError("value must be text")
     lowered = (value or "").lower()
-    if "\r" in lowered or "\n" in lowered or "\\r" in lowered or "\\n" in lowered or "\\u000d" in lowered or "\\u000a" in lowered:
+    control_codepoints = tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
+    if any(sequence in lowered for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")):
+        return True
+    if any(f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered for codepoint in control_codepoints):
         return True
     for char in lowered:
-        if ord(char) < 0x20 or ord(char) == 0x7F:
+        codepoint = ord(char)
+        if codepoint < 0x20 or codepoint == 0x7F or 0x80 <= codepoint <= 0x9F:
             return True
     return False
 
@@ -76,7 +82,11 @@ class StateStore:
             raise RuntimeError("state file path is invalid")
         if _contains_escaped_null(text):
             raise RuntimeError("state file path contains invalid null byte")
+        if _contains_http_header_control_chars(text):
+            raise RuntimeError("state file path contains invalid control character")
         assert_safe_path_components(path, field_name="state file path")
+        if not path.is_absolute():
+            raise RuntimeError("state file path must be absolute")
         assert_no_symlink_ancestors(path, field_name="state file path")
         self.path = path
 
@@ -95,8 +105,12 @@ class StateStore:
             os.close(parent_fd)
             raise RuntimeError("failed to open state lock file") from exc
         try:
+            assert_fd_is_regular_private_file(fd, field_name="state lock file")
             fcntl.flock(fd, fcntl.LOCK_EX)
+            assert_fd_is_regular_private_file(fd, field_name="state lock file")
             yield
+        except RuntimeError:
+            raise
         finally:
             try:
                 fcntl.flock(fd, fcntl.LOCK_UN)
@@ -124,7 +138,7 @@ class StateStore:
     @staticmethod
     def _coerce_boolean(value: Any) -> bool:
         if not isinstance(value, bool):
-            raise ValueError(f"state inserted contains invalid boolean value: {value!r}")
+            raise ValueError("state inserted contains invalid boolean value")
         return value
 
     @staticmethod
@@ -186,22 +200,34 @@ class StateStore:
         return normalized
 
     def read(self) -> RecordingState:
-        if not self.path.exists():
+        try:
+            assert_no_symlink_ancestors(self.path, field_name="state file path")
+            file_stat = self.path.lstat()
+        except FileNotFoundError:
             return RecordingState()
-        try:
-            if self.path.stat().st_size > MAX_STATE_FILE_BYTES:
-                return RecordingState(error="state file is too large")
-        except OSError:
+        except (OSError, RuntimeError):
             return RecordingState(error="state file could not be read")
+        if not stat.S_ISREG(file_stat.st_mode):
+            return RecordingState(error="state file could not be read")
+        if file_stat.st_size > MAX_STATE_FILE_BYTES:
+            return RecordingState(error="state file is too large")
         try:
-            data_text = read_text_without_following_symlinks(self.path, field_name="state file path")
+            data_text = read_text_without_following_symlinks(
+                self.path,
+                field_name="state file path",
+                max_bytes=MAX_STATE_FILE_BYTES,
+            )
             if _contains_escaped_null(data_text):
                 return RecordingState(error="state file could not be read")
             data = json.loads(data_text)
             if not isinstance(data, dict):
                 return RecordingState(error="state file is malformed")
             normalized = StateStore._normalize_state_data(data)
-        except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        except OSError as exc:
+            if "too large" in str(exc):
+                return RecordingState(error="state file is too large")
+            return RecordingState(error="state file could not be read")
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
             return RecordingState(error="state file could not be read")
         return RecordingState(**normalized)
 
@@ -223,7 +249,7 @@ class StateStore:
                 field_name="state file path",
             )
         except OSError as exc:
-            raise RuntimeError(f"failed to persist state: {self.path}") from exc
+            raise RuntimeError("failed to persist state") from exc
         return RecordingState(**normalized_payload)
 
     def update(self, **values: Any) -> RecordingState:

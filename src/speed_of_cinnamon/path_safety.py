@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +33,7 @@ def assert_no_symlink_ancestors(path: Path, *, field_name: str = "path") -> None
     current = path
     while True:
         if current.is_symlink():
-            raise RuntimeError(f"{field_name} must not pass through a symlink: {current}")
+            raise RuntimeError(f"{field_name} must not pass through a symlink")
         if current.parent == current:
             break
         current = current.parent
@@ -82,6 +83,30 @@ def open_directory_without_following_symlinks(path: Path, *, field_name: str = "
     return open_file_without_following_symlinks(path, os.O_RDONLY | directory_flag, field_name=field_name)
 
 
+def assert_fd_is_regular_private_file(fd: int, *, field_name: str = "path") -> None:
+    try:
+        file_stat = os.fstat(fd)
+    except OSError as exc:
+        raise RuntimeError(f"{field_name} could not be inspected") from exc
+    if not stat.S_ISREG(file_stat.st_mode):
+        raise RuntimeError(f"{field_name} must be a regular file")
+    if getattr(file_stat, "st_nlink", 1) != 1:
+        raise RuntimeError(f"{field_name} must not be hardlinked")
+
+
+def assert_fd_is_private_directory(fd: int, *, field_name: str = "path") -> None:
+    try:
+        file_stat = os.fstat(fd)
+    except OSError as exc:
+        raise RuntimeError(f"{field_name} could not be inspected") from exc
+    if not stat.S_ISDIR(file_stat.st_mode):
+        raise RuntimeError(f"{field_name} must be a directory")
+    if hasattr(os, "getuid") and file_stat.st_uid != os.getuid():
+        raise RuntimeError(f"{field_name} must be owned by the current user")
+    if file_stat.st_mode & 0o077:
+        raise RuntimeError(f"{field_name} must be private")
+
+
 def ensure_directory_without_following_symlinks(path: Path, *, field_name: str = "path") -> int:
     if not isinstance(path, Path):
         raise RuntimeError(f"{field_name} must be a path")
@@ -123,20 +148,41 @@ def ensure_directory_without_following_symlinks(path: Path, *, field_name: str =
         raise
 
 
-def read_text_without_following_symlinks(path: Path, *, field_name: str = "path", encoding: str = "utf-8") -> str:
+def read_text_without_following_symlinks(
+    path: Path,
+    *,
+    field_name: str = "path",
+    encoding: str = "utf-8",
+    max_bytes: int | None = None,
+) -> str:
     if not isinstance(path, Path):
         raise RuntimeError(f"{field_name} must be a path")
+    if max_bytes is not None and (isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0):
+        raise RuntimeError("max_bytes must be a non-negative integer")
+    nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     try:
-        fd = open_file_without_following_symlinks(path, os.O_RDONLY, field_name=field_name)
+        fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name=field_name)
     except OSError as exc:
         raise OSError(str(exc)) from exc
     try:
-        handle = os.fdopen(fd, "r", encoding=encoding)
+        try:
+            assert_fd_is_regular_private_file(fd, field_name=field_name)
+        except RuntimeError as exc:
+            raise OSError(str(exc)) from exc
+        if max_bytes is None:
+            handle = os.fdopen(fd, "r", encoding=encoding)
+        else:
+            handle = os.fdopen(fd, "rb")
     except OSError:
         os.close(fd)
         raise
     with handle:
-        return handle.read()
+        if max_bytes is None:
+            return handle.read()
+        payload = handle.read(max_bytes + 1)
+    if len(payload) > max_bytes:
+        raise OSError(f"{field_name} is too large")
+    return payload.decode(encoding)
 
 
 def _write_atomically_without_following_symlinks(
@@ -155,6 +201,12 @@ def _write_atomically_without_following_symlinks(
     try:
         nofollow_flag = getattr(os, "O_NOFOLLOW", 0)
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag
+        try:
+            target_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            target_stat = None
+        if target_stat is not None and stat.S_ISLNK(target_stat.st_mode):
+            raise OSError(f"{field_name} must not be a symlink")
         for _ in range(100):
             temp_name = f".{path.name}.{secrets.token_hex(8)}.tmp"
             try:

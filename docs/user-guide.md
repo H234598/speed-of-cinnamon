@@ -96,6 +96,10 @@ When invoked from the applet, the backend returns text without inserting it. The
 mode. Clipboard copy uses Cinnamon's `St.Clipboard`. Automatic paste and direct typing use `xdotool` on X11 when it is
 available. Without `xdotool`, dictation can still complete as a Cinnamon clipboard copy.
 
+For `Clipboard and paste`, the applet checks the current clipboard targets before overwriting them. If the clipboard
+contains non-text data such as images, files, or app-specific MIME data, a short confirmation dialog describes the
+detected target types and asks whether to replace the clipboard content before continuing the paste.
+
 Use `Text options` to toggle:
 
 - `Append trailing space`

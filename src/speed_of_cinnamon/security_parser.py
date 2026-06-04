@@ -4,9 +4,11 @@ import functools
 import fcntl
 import os
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from .path_safety import (
+    assert_fd_is_regular_private_file,
     assert_no_symlink_ancestors,
     ensure_directory_without_following_symlinks,
     read_text_without_following_symlinks,
@@ -18,6 +20,7 @@ _MAX_BLACKLIST_ENTRY_CHARS = 120
 _MAX_BLACKLIST_ENTRIES = 1_000
 _MAX_BLACKLIST_FILE_BYTES = 1_000_000
 _MAX_BLACKLIST_PATTERN_BYTES = _MAX_BLACKLIST_ENTRY_CHARS * _MAX_BLACKLIST_ENTRIES
+_MAX_SECURITY_TEXT_CHARS = 65_535
 
 
 _BLACKLIST_ADD_RE = re.compile(
@@ -41,7 +44,9 @@ _SPOKEN_SENSITIVE_LABEL_PATTERN = (
 )
 _SECRET_VALUE_PATTERN = (
     r"(?:\"[^\n\"]{1,20000}\"|'[^\n']{1,20000}'|"
-    rf"(?:(?!\s+(?:(?:und|and)\s+)?(?:meine|my\s+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)[^\n]){{1,20000}})"
+    rf"(?:(?!\s+\[redacted\b)(?!\s+(?:und|and)\s+\[redacted\b)"
+    rf"(?!\b(?:und|and)\s+(?:meine|my\s+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)"
+    rf"(?!\s+(?:(?:und|and)\s+)?(?:meine|my\s+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)[^\n]){{1,20000}})"
 )
 _TOKEN_RE = re.compile(
     r"(?i)\b(?:token|api[_-]?key|api\s+key|secret|apikey|bearer)\b\s*(?::|=)\s*"
@@ -126,13 +131,13 @@ _ADDRESS_RE = re.compile(
 )
 
 _SENSITIVE_PATTERNS = [
-    (_PASSWORD_RE, "[redacted password]"),
-    (_VERBAL_PASSWORD_RE, "[redacted password]"),
-    (_BARE_PASSWORD_WORD_RE, "[redacted password]"),
     (_TOKEN_RE, "[redacted token]"),
     (_VERBAL_TOKEN_RE, "[redacted token]"),
     (_BARE_TOKEN_RE, "[redacted token]"),
     (_BARE_TOKEN_WORD_RE, "[redacted token]"),
+    (_PASSWORD_RE, "[redacted password]"),
+    (_VERBAL_PASSWORD_RE, "[redacted password]"),
+    (_BARE_PASSWORD_WORD_RE, "[redacted password]"),
     (_ACCESS_TOKEN_RE, "[redacted token]"),
     (_URL_CRED_RE, "[redacted credentials]"),
     (_LABELED_NAME_RE, "[redacted name]"),
@@ -144,6 +149,15 @@ _SENSITIVE_PATTERNS = [
     (_CUSTOMER_ID_RE, "[redacted customer id]"),
     (_PHONE_RE, "[redacted phone]"),
 ]
+
+_MULTILINE_SENSITIVE_RE = re.compile(
+    rf"(?i)\b(?P<label>{_SPOKEN_SENSITIVE_LABEL_PATTERN})\b"
+    r"(?:\s*(?::|=)|\s+(?:ist|is|lautet|heißt|heisst|heist|heisse|heise)\s*[:=]?)"
+    r"[^\S\n]*\n+[^\S\n]*"
+    r"(?P<value>(?:(?!\n[^\S\n]*\n)"
+    rf"(?!\n[^\S\n]*(?:(?:und|and)[^\S\n]+)?(?:meine|my[^\S\n]+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)"
+    r"(?!\n[^\S\n]*(?:und|and)\b)[\s\S]){1,20000})"
+)
 
 
 @functools.lru_cache(maxsize=16)
@@ -180,10 +194,31 @@ def _compile_blacklist_pattern(entries: list[str]) -> re.Pattern[str] | None:
 
 
 _DUPLICATE_SPACE_RE = re.compile(r"\s+")
+_FORBIDDEN_CONTROL_CHAR_RE = re.compile(r"[\x00-\x09\x0b-\x1f\x7f-\x9f]")
+_ESCAPED_FORBIDDEN_CONTROL_RE = re.compile(
+    r"(?i)\\(?:[abfnrtv]|x(?:0[0-9a-f]|1[0-9a-f]|7f|8[0-9a-f]|9[0-9a-f])|"
+    r"u00(?:0[0-9a-f]|1[0-9a-f]|7f|8[0-9a-f]|9[0-9a-f]))"
+)
 
 
 def _contains_escaped_null(value: str) -> bool:
     return "\x00" in value or "\\x00" in value or "\\u0000" in value
+
+
+def _contains_forbidden_control(value: str) -> bool:
+    return bool(_FORBIDDEN_CONTROL_CHAR_RE.search(value) or _ESCAPED_FORBIDDEN_CONTROL_RE.search(value))
+
+
+def _assert_security_text(value: str) -> str:
+    if not isinstance(value, str) or isinstance(value, bool):
+        raise ValueError("transcript must be text")
+    if _contains_escaped_null(value):
+        raise ValueError("transcript contains invalid null byte")
+    if _contains_forbidden_control(value):
+        raise ValueError("transcript contains invalid control character")
+    if len(value) > _MAX_SECURITY_TEXT_CHARS or len(value.encode("utf-8")) > _MAX_SECURITY_TEXT_CHARS:
+        raise ValueError(f"transcript is too large (max {_MAX_SECURITY_TEXT_CHARS} bytes)")
+    return value
 
 
 @dataclass(frozen=True)
@@ -194,7 +229,7 @@ class SecurityParserResult:
 
 
 def _normalize_blacklist_entry(value: str) -> str:
-    if _contains_escaped_null(value):
+    if _contains_escaped_null(value) or _contains_forbidden_control(value):
         return ""
     entry = value.strip().strip("\"'")
     if not entry:
@@ -221,15 +256,33 @@ def _read_blacklist(path: Path, *, strict: bool = False) -> list[str]:
         if strict:
             raise ValueError("blacklist file path is not safe") from exc
         return []
-    if not path.is_file():
+    try:
+        file_stat = path.lstat()
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        if strict:
+            raise ValueError("failed to inspect blacklist file") from exc
+        return []
+    if not stat.S_ISREG(file_stat.st_mode):
+        if strict:
+            raise ValueError("blacklist file is not a regular file")
         return []
     try:
-        if path.stat().st_size > _MAX_BLACKLIST_FILE_BYTES:
+        if file_stat.st_size > _MAX_BLACKLIST_FILE_BYTES:
             if strict:
                 raise ValueError("blacklist file is too large")
             return []
-        text = read_text_without_following_symlinks(path, field_name="blacklist file")
+        text = read_text_without_following_symlinks(
+            path,
+            field_name="blacklist file",
+            max_bytes=_MAX_BLACKLIST_FILE_BYTES,
+        )
     except (OSError, UnicodeDecodeError) as exc:
+        if "too large" in str(exc):
+            if strict:
+                raise ValueError("blacklist file is too large") from exc
+            return []
         if strict:
             raise ValueError("failed to read blacklist file") from exc
         return []
@@ -283,12 +336,14 @@ def _acquire_blacklist_lock(path: Path) -> int:
         os.close(parent_fd)
         raise ValueError("failed to open blacklist lock file") from exc
     try:
+        assert_fd_is_regular_private_file(fd, field_name="blacklist lock file")
         try:
             os.fchmod(fd, 0o600)
         except OSError:
             pass
         fcntl.flock(fd, fcntl.LOCK_EX)
-    except OSError as exc:
+        assert_fd_is_regular_private_file(fd, field_name="blacklist lock file")
+    except (OSError, RuntimeError) as exc:
         os.close(fd)
         raise ValueError("failed to lock blacklist file") from exc
     finally:
@@ -334,9 +389,36 @@ def _mask_cards(text: str) -> tuple[str, int]:
     return clean, redactions
 
 
+def _placeholder_for_sensitive_label(label: str) -> str:
+    normalized = re.sub(r"[\s_-]+", " ", label.casefold()).strip()
+    if normalized in {"password", "passwort", "kennwort", "passcode"}:
+        return "[redacted password]"
+    if normalized == "iban":
+        return "[redacted iban]"
+    if normalized in {"name", "adresse", "anschrift", "address"}:
+        if normalized == "name":
+            return "[redacted name]"
+        return "[redacted address]"
+    if normalized in {"kundennummer", "kundennr", "kunden nr"}:
+        return "[redacted customer id]"
+    if normalized in {"ssn", "tax id"}:
+        return "[redacted id]"
+    return "[redacted token]"
+
+
+def _apply_multiline_sensitive_redaction(text: str) -> tuple[str, int]:
+    redactions = 0
+
+    def _mask(match: re.Match[str]) -> str:
+        nonlocal redactions
+        redactions += 1
+        return _placeholder_for_sensitive_label(match.group("label"))
+
+    return _MULTILINE_SENSITIVE_RE.sub(_mask, text), redactions
+
+
 def parse_security_directives(text: str) -> SecurityParserResult:
-    if not isinstance(text, str) or isinstance(text, bool):
-        raise ValueError("transcript must be text")
+    text = _assert_security_text(text)
     lines = text.splitlines()
     kept: list[str] = []
     added: list[str] = []
@@ -369,11 +451,16 @@ def _apply_name_redaction(text: str) -> tuple[str, int]:
 
 
 def apply_security_mode(text: str, blacklist: list[str]) -> tuple[str, int]:
-    if _contains_escaped_null(text):
-        raise ValueError("transcript contains invalid null byte")
+    text = _assert_security_text(text)
 
     clean = text
     redactions = 0
+    blacklist_pattern = _compile_blacklist_pattern(blacklist)
+    if blacklist_pattern is not None:
+        clean, count = blacklist_pattern.subn("[redacted blacklist item]", clean)
+        redactions += count
+    clean, count = _apply_multiline_sensitive_redaction(clean)
+    redactions += count
     clean, count = _mask_cards(clean)
     redactions += count
     for pattern, placeholder in _SENSITIVE_PATTERNS:
@@ -383,17 +470,11 @@ def apply_security_mode(text: str, blacklist: list[str]) -> tuple[str, int]:
     clean, count = _apply_name_redaction(clean)
     redactions += count
 
-    blacklist_pattern = _compile_blacklist_pattern(blacklist)
-    if blacklist_pattern is not None:
-        clean, count = blacklist_pattern.subn("[redacted blacklist item]", clean)
-        redactions += count
-
     return clean.strip(), redactions
 
 
 def apply_blacklist_mode(text: str, blacklist: list[str]) -> tuple[str, int]:
-    if _contains_escaped_null(text):
-        raise ValueError("transcript contains invalid null byte")
+    text = _assert_security_text(text)
     clean = text
     pattern = _compile_blacklist_pattern(blacklist)
     if pattern is None:

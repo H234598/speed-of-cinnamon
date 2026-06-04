@@ -4,6 +4,7 @@ import json
 import os
 import re
 import fcntl
+import stat
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -12,6 +13,7 @@ from typing import Any, Iterator
 from .paths import alarms_file
 from .path_safety import (
     assert_no_symlink_ancestors,
+    assert_fd_is_regular_private_file,
     assert_safe_path_components,
     ensure_directory_without_following_symlinks,
     read_text_without_following_symlinks,
@@ -39,6 +41,7 @@ MAX_ALARM_NAME_CHARS = 200
 MAX_ALARM_TRIGGER_CHARS = 40
 MAX_ALARM_DAYS_CHARS = 128
 MAX_ALARM_TIME_CHARS = 16
+MAX_ALARM_URGENCY_CHARS = 16
 
 
 def _assert_clean_path(path: Path, *, field_name: str) -> None:
@@ -51,6 +54,8 @@ def _assert_clean_path(path: Path, *, field_name: str) -> None:
         raise RuntimeError(f"{field_name} path is invalid")
     if _contains_escaped_null(text):
         raise RuntimeError(f"{field_name} contains invalid null byte")
+    if _contains_forbidden_control(text):
+        raise RuntimeError(f"{field_name} contains invalid control character")
     assert_safe_path_components(path, field_name=field_name)
     assert_no_symlink_ancestors(path, field_name=field_name)
 
@@ -77,7 +82,9 @@ def _locked_alarm_store(path: Path | None = None) -> Iterator[Path]:
         os.close(parent_fd)
         raise RuntimeError("failed to open alarm store lock file") from exc
     try:
+        assert_fd_is_regular_private_file(fd, field_name="alarm store lock file")
         fcntl.flock(fd, fcntl.LOCK_EX)
+        assert_fd_is_regular_private_file(fd, field_name="alarm store lock file")
         yield store_path
     finally:
         try:
@@ -94,15 +101,32 @@ def _contains_escaped_null(value: str) -> bool:
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
 
 
+def _contains_forbidden_control(value: str) -> bool:
+    if not isinstance(value, str) or isinstance(value, bool):
+        raise RuntimeError("value must be text")
+    lowered = (value or "").lower()
+    control_codepoints = tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
+    return (
+        any(sequence in lowered for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v"))
+        or any(f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered for codepoint in control_codepoints)
+        or any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in value)
+    )
+
+
 def _sanitize_text_field(value: object, *, field_name: str, max_chars: int) -> str:
     if value is None:
-        text = ""
+        raw = ""
     elif isinstance(value, str) and not isinstance(value, bool):
-        text = value.strip()
+        raw = value
     else:
         raise ValueError(f"{field_name} must be text")
-    if _contains_escaped_null(text):
+    text = raw.strip()
+    if not text and all(char in " \t\r\n\v\f" for char in raw):
+        return ""
+    if _contains_escaped_null(raw):
         raise ValueError(f"{field_name} contains invalid null byte")
+    if _contains_forbidden_control(raw):
+        raise ValueError(f"{field_name} contains invalid control character")
     if len(text) > max_chars:
         raise ValueError(f"{field_name} is too large (max {max_chars} characters)")
     if len(text.encode("utf-8")) > max_chars:
@@ -260,16 +284,26 @@ def empty_store() -> dict[str, Any]:
 def load_alarm_store(path: Path | None = None) -> dict[str, Any]:
     store_path = path or alarms_file()
     _assert_clean_path(store_path, field_name="alarm store path")
-    if not store_path.exists():
+    try:
+        assert_no_symlink_ancestors(store_path, field_name="alarm store path")
+        file_stat = store_path.lstat()
+    except FileNotFoundError:
         return empty_store()
-    try:
-        if store_path.stat().st_size > MAX_ALARM_STORE_BYTES:
-            raise RuntimeError(f"alarm store is too large: {store_path}")
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
         raise RuntimeError(f"alarm store could not be read: {store_path}") from exc
+    if not stat.S_ISREG(file_stat.st_mode):
+        raise RuntimeError(f"alarm store could not be read: {store_path}")
+    if file_stat.st_size > MAX_ALARM_STORE_BYTES:
+        raise RuntimeError(f"alarm store is too large: {store_path}")
     try:
-        text = read_text_without_following_symlinks(store_path, field_name="alarm store path")
+        text = read_text_without_following_symlinks(
+            store_path,
+            field_name="alarm store path",
+            max_bytes=MAX_ALARM_STORE_BYTES,
+        )
     except OSError as exc:
+        if "too large" in str(exc):
+            raise RuntimeError(f"alarm store is too large: {store_path}") from exc
         raise RuntimeError(f"alarm store could not be read: {store_path}") from exc
     except UnicodeDecodeError as exc:
         raise RuntimeError(f"alarm store could not be parsed: {exc}") from exc
@@ -301,7 +335,6 @@ def load_alarm_store(path: Path | None = None) -> dict[str, Any]:
 def save_alarm_store(store: dict[str, Any], path: Path | None = None) -> None:
     store_path = path or alarms_file()
     _assert_clean_path(store_path, field_name="alarm store path")
-    store_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "version": STORE_VERSION,
         "alarms": _normalize_alarm_list(store.get("alarms", [])),
@@ -410,7 +443,7 @@ def add_alarm(
     if not isinstance(enabled, bool):
         raise ValueError("enabled must be a boolean")
     hour, minute = parse_alarm_time(alarm_time)
-    normalized_urgency = urgency.strip().lower()
+    normalized_urgency = _sanitize_text_field(urgency, field_name="urgency", max_chars=MAX_ALARM_URGENCY_CHARS).strip().lower()
     if normalized_urgency not in URGENCIES:
         raise ValueError(f"urgency must be one of: {', '.join(sorted(URGENCIES))}")
     with _locked_alarm_store(path) as store_path:
