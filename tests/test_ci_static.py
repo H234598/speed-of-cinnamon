@@ -628,6 +628,7 @@ class CiStaticTest(unittest.TestCase):
         publish_script = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
         self.assertIn("resolve_github_remote_repo()", publish_script)
         self.assertIn("git remote get-url origin", publish_script)
+        self.assertIn('remote_url="${remote_url%.git}"', publish_script)
         self.assertIn("GITHUB_REPOSITORY is not set and origin is not a GitHub repository.", publish_script)
         self.assertIn("repository value does not match checked out origin", publish_script)
         self.assertNotIn('repo="${GITHUB_REPOSITORY:-H234598/speed-of-cinnamon}"', publish_script)

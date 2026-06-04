@@ -219,6 +219,7 @@ verify_asset_path() {
 resolve_github_remote_repo() {
   local remote_url
   remote_url="$(git remote get-url origin 2>/dev/null || true)"
+  remote_url="${remote_url%.git}"
   if [[ "${remote_url}" =~ ^https://github\.com/([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)(\.git)?$ ]]; then
     printf '%s\n' "${BASH_REMATCH[1]}"
     return 0
