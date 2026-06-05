@@ -171,6 +171,15 @@ jobs:
                 exit 1
               fi
             fi
+            if ! command -v -- snapcraft >/dev/null 2>&1 && snap run snapcraft --version >/dev/null 2>&1; then
+              printf '%s\n' '#!/usr/bin/env sh' 'exec snap run snapcraft "$@"' \
+                | sudo tee /usr/local/bin/snapcraft >/dev/null
+              sudo chmod 0755 /usr/local/bin/snapcraft
+            fi
+            if ! command -v -- snapcraft >/dev/null 2>&1; then
+              printf 'snapcraft is installed but no executable launcher was found.\n' >&2
+              exit 1
+            fi
             snapcraft_base=""
             for candidate in core24 core22; do
               if snap list "${candidate}" >/dev/null 2>&1; then
