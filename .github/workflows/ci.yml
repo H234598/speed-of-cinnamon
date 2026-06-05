@@ -147,9 +147,17 @@ jobs:
           tar -xzf "/tmp/${archive}" -C /tmp actionlint
           sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
           if [[ "${BUILD_SNAP}" == "1" ]]; then
+            if [[ -d /snap/bin ]]; then
+              printf '/snap/bin\n' >> "${GITHUB_PATH}"
+              export PATH="/snap/bin:${PATH}"
+            fi
             if ! command -v -- snapcraft >/dev/null 2>&1; then
               if command -v -- snap >/dev/null 2>&1; then
                 sudo snap install snapcraft --classic
+                if [[ -d /snap/bin ]]; then
+                  printf '/snap/bin\n' >> "${GITHUB_PATH}"
+                  export PATH="/snap/bin:${PATH}"
+                fi
               else
                 printf 'snap is missing; cannot install snapcraft. Install snapd or set build_snap to false.\n' >&2
                 exit 1
