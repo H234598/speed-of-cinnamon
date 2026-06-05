@@ -137,7 +137,7 @@ jobs:
       - name: Install shell tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y cpio rpm shellcheck squashfs-tools
+          sudo apt-get install -y cpio rpm shellcheck squashfs-tools xclip xdotool xsel
           version="1.7.12"
           archive="actionlint_${version}_linux_amd64.tar.gz"
           archive_sha256="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
