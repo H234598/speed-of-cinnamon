@@ -223,12 +223,15 @@ jobs:
       - name: Build Snap package
         run: |
           if [[ "${BUILD_SNAP}" == "1" ]]; then
+            export PATH="/snap/bin:${PATH}"
             make snap
           fi
         if: env.BUILD_SNAP == '1'
       - name: Verify Snap package
         if: env.BUILD_SNAP == '1'
-        run: make snap-check
+        run: |
+          export PATH="/snap/bin:${PATH}"
+          make snap-check
       - name: Upload source release archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
