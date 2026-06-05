@@ -168,6 +168,7 @@ unsquashfs -lln -no-progress "${snap_snapshot}" > "${snap_listing}"
 python3 - <<'PY' "${snap_listing}"
 from pathlib import PurePosixPath
 from pathlib import Path
+import posixpath
 import sys
 
 REQUIRED_ENTRIES = {
@@ -175,6 +176,37 @@ REQUIRED_ENTRIES = {
     "squashfs-root/bin/speed-of-cinnamon",
     "squashfs-root/src/speed_of_cinnamon/cli.py",
 }
+
+
+def contains_unsafe_text(value: str) -> bool:
+    return (
+        "\x00" in value
+        or any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in value)
+        or any(0xDC80 <= ord(char) <= 0xDCFF for char in value)
+    )
+
+
+def validate_snap_path(path_text: str) -> PurePosixPath:
+    if contains_unsafe_text(path_text):
+        raise SystemExit(f"snap package contains unsafe path entry: {path_text!r}")
+    if path_text != "squashfs-root" and not path_text.startswith("squashfs-root/"):
+        raise SystemExit(f"snap package contains unexpected root entry: {path_text}")
+    path = PurePosixPath(path_text)
+    if path.is_absolute() or any(part == ".." for part in path.parts):
+        raise SystemExit(f"snap package contains unsafe path entry: {path_text}")
+    return path
+
+
+def validate_symlink_target(path: PurePosixPath, target_text: str) -> None:
+    if not target_text or contains_unsafe_text(target_text):
+        raise SystemExit(f"snap package contains unsafe link target: {path} -> {target_text!r}")
+    target = PurePosixPath(target_text)
+    if target.is_absolute():
+        raise SystemExit(f"snap package contains unsafe link target: {path} -> {target_text}")
+    resolved = posixpath.normpath(posixpath.join(str(path.parent), target_text))
+    if resolved != "squashfs-root" and not resolved.startswith("squashfs-root/"):
+        raise SystemExit(f"snap package contains unsafe link target: {path} -> {target_text}")
+
 
 seen: set[str] = set()
 for raw in Path(sys.argv[1]).read_text(encoding="utf-8").split("\n"):
@@ -184,21 +216,18 @@ for raw in Path(sys.argv[1]).read_text(encoding="utf-8").split("\n"):
     if len(parts) != 6:
         raise SystemExit(f"snap package contains malformed listing entry: {raw!r}")
     mode, _owner_group, size_text, _date, _time, path_text = parts
+    link_target = None
     if " -> " in path_text:
-        raise SystemExit(f"snap package contains unsupported link entry: {path_text}")
-    if not mode or mode[0] not in {"-", "d"}:
+        path_text, link_target = path_text.split(" -> ", 1)
+        if not mode or mode[0] != "l":
+            raise SystemExit(f"snap package contains unsupported link entry: {path_text} -> {link_target}")
+    elif mode and mode[0] == "l":
+        raise SystemExit(f"snap package contains malformed link entry: {path_text}")
+    if link_target is None and (not mode or mode[0] not in {"-", "d"}):
         raise SystemExit(f"snap package contains unsupported entry type: {path_text}")
-    if (
-        "\x00" in path_text
-        or any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in path_text)
-        or any(0xDC80 <= ord(char) <= 0xDCFF for char in path_text)
-    ):
-        raise SystemExit(f"snap package contains unsafe path entry: {path_text!r}")
-    if path_text != "squashfs-root" and not path_text.startswith("squashfs-root/"):
-        raise SystemExit(f"snap package contains unexpected root entry: {path_text}")
-    path = PurePosixPath(path_text)
-    if path.is_absolute() or any(part == ".." for part in path.parts):
-        raise SystemExit(f"snap package contains unsafe path entry: {path_text}")
+    path = validate_snap_path(path_text)
+    if link_target is not None:
+        validate_symlink_target(path, link_target)
     if path_text in seen:
         raise SystemExit(f"snap package contains duplicate entry: {path_text}")
     seen.add(path_text)
