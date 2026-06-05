@@ -207,7 +207,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('new PopupMenu.PopupIconMenuItem(_("Start secondary: ") + secondary', source)
         self.assertIn('new PopupMenu.PopupIconMenuItem(_("Switch primary/secondary")', source)
         self.assertIn("selectPrimary.connect(\"activate\", () => this._setActiveLanguage(primary", source)
-        self.assertIn("startSecondary.connect(\"activate\", () => this._startWithLanguage(secondary))", source)
+        self.assertIn("startSecondary.connect(\"activate\", () => this._startWithLanguage(secondary, true))", source)
         self.assertIn("if (!this.activeLanguageExplicit || (current !== primary && current !== secondary))", source)
         self.assertIn("this.activeLanguageExplicit = false;", source)
         self.assertIn("this.activeLanguageExplicit = true;", source)
@@ -293,8 +293,8 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertIn("auto-paste-window-title", schema["layout"]["output-section"]["keys"])
         self.assertEqual(schema["auto-paste-window-title"]["default"], "codex")
-        self.assertIn("Built-in marker names require the title marker", schema["auto-paste-window-title"]["tooltip"])
-        self.assertIn("other custom strings are title-only", schema["auto-paste-window-title"]["tooltip"])
+        self.assertIn("Built-in marker names match known window classes/app IDs", schema["auto-paste-window-title"]["tooltip"])
+        self.assertIn("full window title case-insensitively", schema["auto-paste-window-title"]["tooltip"])
         self.assertIn('const DEFAULT_AUTO_PASTE_TITLE = "codex";', source)
         self.assertIn('const AUTO_PASTE_TITLE_PRESETS = [\n  "codex",\n  "Terminal",\n  "PDF",\n  "Excel",\n  "Teams"\n];', source)
         self.assertIn("const AUTO_PASTE_IDENTITY_MARKERS = {", source)
@@ -329,18 +329,22 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._setAutoPasteTitles([])', source)
         self.assertIn('_windowTitleMatchesAutoPaste: function()', source)
         self.assertIn('_markerAllowsAutoPasteIdentity: function(marker)', source)
-        self.assertIn('if (!AUTO_PASTE_IDENTITY_MARKERS[key]) {', source)
-        self.assertIn('return true;', source)
-        self.assertIn('return this._windowIdentityMatchesAutoPaste(marker);', source)
+        self.assertIn('let hasTitleMatch = title.indexOf(key) >= 0;', source)
+        self.assertIn('if (AUTO_PASTE_IDENTITY_MARKERS[key]) {', source)
+        self.assertIn('if (key === "codex") {', source)
+        self.assertIn('if (this._windowIdentityMatchesAutoPaste(marker)) {', source)
         self.assertIn('_windowIdentityMatchesAutoPaste: function(marker)', source)
         self.assertIn('this._windowProbeValue(this.targetWindow, "get_title")', source)
         self.assertIn('AUTO_PASTE_IDENTITY_MARKERS[key] || null', source)
-        self.assertIn('title.indexOf(marker.toLowerCase()) >= 0 && this._markerAllowsAutoPasteIdentity(marker)', source)
         self.assertIn('for (let marker of markers)', source)
-        self.assertIn('marker.toLowerCase()', source)
+        self.assertIn('String(marker || "").trim().toLowerCase()', source)
         self.assertIn('submitWithReturn', source)
-        self.assertIn('String(this._windowProbeValue(this.targetWindow, "get_title") || "").toLowerCase()', source)
-        self.assertIn('this._pasteClipboardAfterFocus(submitWithReturn)', source)
+        self.assertIn('String(this._windowProbeValue(this.targetWindow, "get_title") || this.targetWindowXTitle || "").toLowerCase()', source)
+        self.assertIn('this._pasteClipboardAfterFocus(submitWithReturn, text)', source)
+        self.assertIn("CLIPBOARD_READY_RETRY_MS", source)
+        self.assertIn("CLIPBOARD_READY_TIMEOUT_MS", source)
+        self.assertIn("_spawnKeyboardWhenClipboardReady: function(args, followUpArgs, expectedClipboardText, deadlineMs)", source)
+        self.assertIn('this._setStatus("error", _("Clipboard did not confirm new text before automatic paste"), this.lastTranscript);', source)
         self.assertIn('this._preparedTranscriptText(transcript, submitWithReturn)', source)
 
     def test_typing_delay_has_backend_limits(self) -> None:
@@ -488,7 +492,7 @@ class AppletStaticTest(unittest.TestCase):
             "_scheduleAlarmCheck: function(delaySeconds)",
             "_scheduleStatusPoll: function()",
             "_scheduleDisplayTick: function()",
-            "_spawnKeyboardAfterFocus: function(args, followUpArgs)",
+            "_spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText)",
             "_watchExternalApiEnvFile: function(path)",
         ):
             with self.subTest(marker=marker):
@@ -854,7 +858,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("value = value.replace(/\\u0000/g, \"\");", source)
         self.assertIn('if (value.length > MAX_TYPE_COMMAND_CHARS) {', source)
         self.assertIn("Text too long for keyboard typing", source)
-        self.assertIn("_spawnKeyboardAfterFocus: function(args, followUpArgs) {", source)
+        self.assertIn("_closeMenuForKeyboardInsert: function() {", source)
+        self.assertIn("Could not close applet menu before keyboard insert", source)
+        self.assertIn("_spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText) {", source)
         self.assertIn("Util.spawn(this._coerceSpawnArgs(args));", source)
 
     def test_doctor_check_deduplicates_overlapping_cli_calls(self) -> None:
@@ -872,19 +878,54 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertIn("const PASTE_FOCUS_DELAY_MS = 120;", source)
         self.assertIn("const PASTE_SUBMIT_DELAY_MS = 120;", source)
+        self.assertIn("const SELF_PROTECTION_NOTICE_COOLDOWN_MS = 3000;", source)
         self.assertIn("const CLIPBOARD_TARGET_TIMEOUT_SECONDS = 1;", source)
+        self.assertIn("const MAX_XDOTOOL_TARGET_OUTPUT_BYTES = 4096;", source)
         self.assertIn("this.targetWindow = null;", source)
-        self.assertIn("this._rememberFocusedWindow();", source)
+        self.assertIn('this.targetWindowXid = "";', source)
+        self.assertIn('this.targetWindowXTitle = "";', source)
+        self.assertIn('this.targetWindowXClass = "";', source)
+        self.assertIn('this.selfProtectionNoticeKey = "";', source)
+        self.assertIn("this.selfProtectionNoticeAtMs = 0;", source)
+        self.assertIn('this._registerHotkey(HOTKEY_ID, this.toggleKeybinding, () => {\n      this._rememberFocusedWindow();\n      this._toggleRecording();\n    });', source)
+        self.assertIn('this.toggleItem.connect("activate", () => {\n      this._rememberFocusedWindow(true);\n      this._toggleRecording();\n    });', source)
+        self.assertIn('startPrimary.connect("activate", () => this._startWithLanguage(primary, true));', source)
+        self.assertIn('startSecondary.connect("activate", () => this._startWithLanguage(secondary, true));', source)
+        self.assertIn("_startWithLanguage: function(language, preserveTargetOnFailure)", source)
+        self.assertIn('if (preserveOnFailure && this._hasRememberedTargetWindow()) {', source)
+        self.assertIn("_hasRememberedTargetWindow: function()", source)
+        self.assertIn('on_applet_clicked: function() {\n    if (!this.menu.isOpen) {\n      this._rememberFocusedWindow();\n    }\n    this.menu.toggle();\n  }', source)
+        self.assertNotIn('if (this.status !== "recording") {\n      this._rememberFocusedWindow();\n    }\n    this.notificationSessionActive = true;', source)
         self.assertIn("global.display ? global.display.focus_window : null", source)
+        self.assertIn("this._rememberActiveXWindow();\n      return true;", source)
+        self.assertIn("this._clearTargetWindowXid();\n    return false;", source)
+        self.assertIn("_xdotoolOutput: function(args, maxBytes)", source)
+        self.assertIn('this._xdotoolOutput(["getactivewindow"], MAX_XDOTOOL_TARGET_OUTPUT_BYTES)', source)
+        self.assertIn('this._xdotoolOutput(["getwindowname", xid], MAX_XDOTOOL_TARGET_OUTPUT_BYTES)', source)
+        self.assertIn('this._xdotoolOutput(["getwindowclassname", xid], MAX_XDOTOOL_TARGET_OUTPUT_BYTES)', source)
+        self.assertIn('this._xdotoolOutput(["windowactivate", "--sync", xid], MAX_XDOTOOL_TARGET_OUTPUT_BYTES)', source)
+        self.assertIn('return output !== null;', source)
+        self.assertIn("_closeMenuForKeyboardInsert: function() {", source)
+        self.assertIn("this.menu.close();", source)
+        self.assertIn('this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);', source)
         self.assertIn("window.is_skip_taskbar && window.is_skip_taskbar()", source)
         self.assertIn("this._windowLooksLikeSpeedOfCinnamon(window)", source)
         self.assertIn("_windowLooksLikeSpeedOfCinnamon: function(window)", source)
+        self.assertIn("_xWindowLooksLikeSpeedOfCinnamon: function(title, windowClass)", source)
+        self.assertIn("_notifySelfProtectionBlocked: function(title, windowClass)", source)
+        self.assertIn('this._notify(_("Speed of Cinnamon"), message, true);', source)
+        self.assertIn('this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);', source)
+        self.assertIn("let classValue = String(windowClass || \"\").toLowerCase();", source)
+        self.assertIn("let identityValues = [", source)
+        self.assertIn("TERMINAL_WINDOW_MARKERS.length", source)
+        self.assertIn('if (!this._isUsableTargetWindow(this.targetWindow) && !this.targetWindowXTitle && !this.targetWindowXClass) {', source)
+        self.assertIn('let title = String(this._windowProbeValue(this.targetWindow, "get_title") || this.targetWindowXTitle || "").toLowerCase();', source)
         self.assertIn('"speed of cinnamon"', source)
         self.assertIn('"speed-of-cinnamon"', source)
         self.assertIn("UUID.toLowerCase()", source)
         self.assertIn("Main.activateWindow(this.targetWindow, global.get_current_time())", source)
         self.assertIn("this._restoreTargetWindowForPaste()", source)
-        self.assertIn('this._pasteClipboardAfterFocus(submitWithReturn)', source)
+        self.assertIn('this._pasteClipboardAfterFocus(submitWithReturn, text)', source)
         self.assertIn(
             'this._setStatus("done", _("Copied to clipboard; target window could not be restored for automatic paste"), transcript);',
             source,
@@ -1053,6 +1094,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (method === "none")', source)
         self.assertIn('if (method === "type")', source)
         self.assertIn("if (this._typeTextAfterFocus(text)) {", source)
+        self.assertIn('if (!this._closeMenuForKeyboardInsert()) {\n          this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);\n          return false;\n        }\n        let restored = this._restoreTargetWindowForPaste();', source)
         self.assertIn("Util.spawn(this._coerceSpawnArgs(args));", source)
         self.assertIn('["xdotool", "type", "--clearmodifiers", "--delay", String(delay), "--", typedText]', source)
         self.assertIn("_isTerminalTargetWindow: function()", source)
@@ -1061,6 +1103,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let terminalPaste = this._isTerminalTargetWindow();', source)
         self.assertIn('let hasXdotool = GLib.find_program_in_path("xdotool");', source)
         self.assertIn('let hasWtype = GLib.find_program_in_path("wtype");', source)
+        self.assertIn('if (!this._isUsableTargetWindow(this.targetWindow) && !this.targetWindowXClass && !this.targetWindowXTitle) {', source)
+        self.assertIn('String(this.targetWindowXClass || "").toLowerCase()', source)
+        self.assertIn('String(this.targetWindowXTitle || "").toLowerCase()', source)
         self.assertIn('if (hasXdotool) {', source)
         self.assertIn('let pasteKey = terminalPaste ? "ctrl+shift+v" : "ctrl+v";', source)
         self.assertIn('["xdotool", "key", "--clearmodifiers", pasteKey]', source)
@@ -1069,7 +1114,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('["wtype", "-M", "ctrl", "v", "-m", "ctrl"]', source)
         self.assertIn('if (sendEnter) {', source)
         self.assertIn('followUpArgs = ["wtype", "-k", "Return"];', source)
-        self.assertIn("return this._spawnKeyboardAfterFocus(args, followUpArgs);", source)
+        self.assertIn("return this._spawnKeyboardAfterFocus(args, followUpArgs, expectedClipboardText);", source)
         self.assertIn("return false;", source)
         self.assertIn("return true;", source)
 
@@ -1085,6 +1130,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_clipboardNonTextPayloadTargets: function(targets)", source)
         self.assertIn("_clipboardHasNonTextPayload: function()", source)
         self.assertIn("_clipboardPayloadSnapshot: function()", source)
+        self.assertIn('let targetSignature = Array.isArray(targets) ? targets.join("\\n") : String(targets || "");', source)
+        self.assertIn("signature: targetSignature,", source)
+        self.assertNotIn('signature: targets.join("\\n"),', source)
         self.assertIn("return [\"clipboard\"];", source)
         self.assertIn("let nonTextTargets = [];", source)
         self.assertIn('target.indexOf("text/") === 0', source)
@@ -1092,6 +1140,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("nonTextTargets.slice(0, 6).join(\", \")", source)
         self.assertIn("this._shortMenuText(description, 160)", source)
         self.assertIn("_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn)", source)
+        self.assertIn('if (!this._closeMenuForKeyboardInsert()) {\n        this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);\n        return false;\n      }\n      let restored = this._restoreTargetWindowForPaste();', source)
         self.assertIn('  _describeNonTextClipboardPayload: function() {', source)
         self.assertIn('_confirmClipboardOverwriteForPaste: function(clipboardSnapshot, transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback)', source)
         self.assertIn('if (method === "clipboard-paste" && !canPasteWithKeyboard) {', source)
@@ -1106,19 +1155,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn("skippig", source)
         self.assertNotIn("speef", source.lower())
         self.assertIn('this._clipboardTargetList("xclip", ["-selection", "clipboard", "-t", "TARGETS", "-out"])', source)
-        self.assertIn('this._clipboardTargetList("xsel", ["--clipboard", "--output", "--target", "TARGETS"])', source)
+        self.assertNotIn('this._clipboardTargetList("xsel", ["--clipboard", "--output", "--target", "TARGETS"])', source)
         self.assertIn('this._clipboardTargetList("wl-paste", ["--list-types"])', source)
         self.assertIn(
-            'this._clipboardTargetList("wl-paste", ["--list-types"]);\n      return this._clipboardTargetsContainNonTextPayload(targets);\n    }\n    return true;',
+            'this._clipboardTargetList("wl-paste", ["--list-types"]);\n      return this._clipboardTargetsContainNonTextPayload(targets);\n    }\n    return false;',
             source,
         )
         self.assertIn('Copied to clipboard; automatic paste command could not be started', source)
 
-    def test_applet_blocks_auto_paste_when_clipboard_targets_unknown_or_empty(self) -> None:
+    def test_applet_allows_auto_paste_when_clipboard_targets_unknown_but_blocks_empty_targets(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         self.assertIn(
-            'if (targets === null || targets === undefined) {\n      return ["clipboard"];',
+            'if (targets === null || targets === undefined) {\n      return {\n        signature: "unknown",\n        hasNonTextPayload: false,',
             source,
         )
         self.assertIn('return ["clipboard"];', source)
