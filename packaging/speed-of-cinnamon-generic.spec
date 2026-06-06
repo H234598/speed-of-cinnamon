@@ -1,5 +1,5 @@
 Name:           speed-of-cinnamon
-Version:        0.1.33
+Version:        0.2.0
 Release:        2%{?dist}
 Summary:        Cross-distribution Cinnamon-native voice typing helper
 
@@ -11,10 +11,12 @@ Source0:        %{name}-%{version}.tar.gz
 
 BuildArch:      noarch
 Requires:       python3
+Requires:       python3-cryptography
 Requires:       cinnamon
 Requires:       libnotify
 Requires:       pipewire-utils
 Requires:       pulseaudio-utils
+Recommends:     libsecret
 
 %description
 Speed of Cinnamon is a Cinnamon-native voice typing applet plus a small

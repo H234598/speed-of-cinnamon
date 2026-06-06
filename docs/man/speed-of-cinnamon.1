@@ -1,4 +1,4 @@
-.TH SPEED-OF-CINNAMON 1 "June 2026" "speed-of-cinnamon 0.1.36" "User Commands"
+.TH SPEED-OF-CINNAMON 1 "June 2026" "speed-of-cinnamon 0.2.0" "User Commands"
 .SH NAME
 speed-of-cinnamon \- Cinnamon-native voice typing backend
 .SH SYNOPSIS
@@ -112,6 +112,21 @@ Use
 .BR type ,
 or
 .BR none .
+.TP
+.BI --artifact-encryption " MODE"
+Use
+.BR off ,
+.BR passphrase ,
+or
+.BR keyring
+for stored transcript files and retained recording files. Keyring mode uses the
+desktop Secret Service through
+.BR secret-tool (1)
+and falls back to passphrase mode when
+.B SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE
+or
+.B SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE
+is configured.
 .TP
 .BI --transcriber " BACKEND"
 Use

@@ -97,6 +97,12 @@ const MIN_TYPING_DELAY_MS = 0;
 const MAX_TYPING_DELAY_MS = 10000;
 const DEFAULT_TYPING_DELAY_MS = 8;
 const DEFAULT_MAX_TRANSCRIPT_FILES = 500;
+const DEFAULT_ARTIFACT_ENCRYPTION = "keyring";
+const ARTIFACT_ENCRYPTION_MODES = [
+  "keyring",
+  "passphrase",
+  "off"
+];
 const MIN_TRANSCRIPT_FILES = 1;
 const MAX_TRANSCRIPT_FILES = 1000;
 const TRANSCRIPT_STORAGE_LIMITS = [20, 50, 100, 200, 500, 1000];
@@ -343,6 +349,7 @@ const EXPORTABLE_SETTINGS = [
   ["sanitize-special-chars", "sanitizeSpecialChars"],
   ["soften-profanity", "softenProfanity"],
   ["max-transcript-files", "maxTranscriptFiles"],
+  ["artifact-encryption", "artifactEncryption"],
   ["auto-paste-window-title", "autoPasteWindowTitle"],
   ["transcriber", "transcriber"],
   ["whisper-model", "whisperModel"],
@@ -400,6 +407,7 @@ MyApplet.prototype = {
     this.sanitizeSpecialChars = false;
     this.softenProfanity = false;
     this.maxTranscriptFiles = DEFAULT_MAX_TRANSCRIPT_FILES;
+    this.artifactEncryption = DEFAULT_ARTIFACT_ENCRYPTION;
     this.autoPasteWindowTitle = DEFAULT_AUTO_PASTE_TITLE;
     this.cliPath = "";
     this.transcriber = "auto";
@@ -498,6 +506,7 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "sanitize-special-chars", "sanitizeSpecialChars", this._onTextOutputSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "soften-profanity", "softenProfanity", this._onTextOutputSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "max-transcript-files", "maxTranscriptFiles", this._onTranscriptRetentionSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "artifact-encryption", "artifactEncryption", this._onTextOutputSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "auto-paste-window-title", "autoPasteWindowTitle", this._onTextOutputSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "cli-path", "cliPath", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "transcriber", "transcriber", this._onVoiceBackendSettingsChanged, null);
@@ -1051,6 +1060,7 @@ MyApplet.prototype = {
       "--typing-delay-ms", String(this._normalizeTypingDelayMs(this.typingDelayMs))
     ];
     args.push("--keep-transcripts", String(this._normalizeTranscriptLimit(this.maxTranscriptFiles)));
+    args.push("--artifact-encryption", this._normalizeArtifactEncryption(this.artifactEncryption));
     if (this.appendSpace) {
       args.push("--append-space");
     }
@@ -1255,6 +1265,11 @@ MyApplet.prototype = {
   _normalizeOutputMethod: function(method) {
     let value = String(method || "").trim();
     return OUTPUT_METHODS.indexOf(value) >= 0 ? value : "clipboard-paste";
+  },
+
+  _normalizeArtifactEncryption: function(method) {
+    let value = String(method || "").trim();
+    return ARTIFACT_ENCRYPTION_MODES.indexOf(value) >= 0 ? value : DEFAULT_ARTIFACT_ENCRYPTION;
   },
 
   _recorderLabel: function(method) {
@@ -3893,6 +3908,7 @@ MyApplet.prototype = {
     this.maxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
     this.typingDelayMs = this._normalizeTypingDelayMs(this.typingDelayMs);
     this.maxTranscriptFiles = this._normalizeTranscriptLimit(this.maxTranscriptFiles);
+    this.artifactEncryption = this._normalizeArtifactEncryption(this.artifactEncryption);
     this._populateRecordingLimitMenu();
     this._populateTranscriptStorageMenu();
     this._populateRecordingOptionsMenu();
@@ -4008,6 +4024,9 @@ MyApplet.prototype = {
     }
     if (key === "insert-method") {
       return this._coerceImportedEnumSetting(value, OUTPUT_METHODS, fallback);
+    }
+    if (key === "artifact-encryption") {
+      return this._coerceImportedEnumSetting(value, ARTIFACT_ENCRYPTION_MODES, fallback);
     }
     if (key === "transcriber") {
       return this._coerceImportedEnumSetting(value, TRANSCRIBER_METHODS, fallback);

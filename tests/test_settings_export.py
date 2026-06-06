@@ -225,6 +225,7 @@ class SettingsExportTest(unittest.TestCase):
             "soften-profanity": True,
             "typing-delay-ms": "12",
             "max-transcript-files": "500",
+            "artifact-encryption": "passphrase",
             "auto-paste-window-title": "Teams",
             "post-process-backend": "ollama",
             "ollama-model": "llama3.2:3b",
@@ -254,6 +255,7 @@ class SettingsExportTest(unittest.TestCase):
         self.assertTrue(settings["soften-profanity"])
         self.assertEqual(settings["typing-delay-ms"], 12)
         self.assertEqual(settings["max-transcript-files"], 500)
+        self.assertEqual(settings["artifact-encryption"], "passphrase")
         self.assertEqual(settings["auto-paste-window-title"], "Teams")
         self.assertEqual(settings["post-process-backend"], "ollama")
         self.assertEqual(settings["ollama-model"], "llama3.2:3b")
@@ -291,6 +293,7 @@ class SettingsExportTest(unittest.TestCase):
                     "auto-relisten": True,
                     "auto-paste-window-title": "Teams",
                     "max-transcript-files": 500,
+                    "artifact-encryption": "keyring",
                     "notify-complete": False,
                     "personal-context": "Project words",
                 },
@@ -315,6 +318,7 @@ class SettingsExportTest(unittest.TestCase):
         self.assertTrue(payload["settings"]["auto-relisten"])
         self.assertEqual(payload["settings"]["auto-paste-window-title"], "Teams")
         self.assertEqual(payload["settings"]["max-transcript-files"], 500)
+        self.assertEqual(payload["settings"]["artifact-encryption"], "keyring")
         self.assertFalse(payload["settings"]["notify-complete"])
         self.assertEqual(payload["settings"]["personal-context"], "Project words")
         self.assertEqual(payload["alarms"]["last_checked_at"], "2026-06-01T09:10")

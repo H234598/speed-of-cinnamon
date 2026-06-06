@@ -206,7 +206,36 @@ if [[ -L "${dist_dir}" ]]; then
   printf 'dist snap directory must not be a symlink: %s\n' "${dist_dir}" >&2
   exit 1
 fi
-if find "${dist_dir}" "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -print -quit | grep -q .; then
+
+cleanup_existing_dist_snaps() {
+  local cleanup_list
+  local existing_snap
+  local existing_real
+  local -a existing_dist_snaps=()
+
+  if find "${dist_dir}" -maxdepth 1 -name "speed-of-cinnamon_*.snap" ! -type f -print -quit | grep -q .; then
+    printf 'refusing to clean non-regular snap artifact from output directory: %s\n' "${dist_dir}" >&2
+    exit 1
+  fi
+
+  cleanup_list="$(mktemp "${repo_tmp_root}/speed-of-cinnamon-snap-cleanup-XXXXXX")"
+  find "${dist_dir}" -maxdepth 1 -type f -name "speed-of-cinnamon_*.snap" -print0 | sort -z > "${cleanup_list}"
+  mapfile -d '' -t existing_dist_snaps < "${cleanup_list}"
+  "${safe_fs_cmd[@]}" remove build-snap "${cleanup_list}" --kind file
+
+  for existing_snap in "${existing_dist_snaps[@]}"; do
+    existing_real="$(realpath "${existing_snap}")"
+    if [[ "${existing_real}" != "${dist_dir}/speed-of-cinnamon_"*".snap" ]]; then
+      printf 'refusing to clean snap artifact outside output directory: %s\n' "${existing_snap}" >&2
+      exit 1
+    fi
+    "${safe_fs_cmd[@]}" remove build-snap "${existing_snap}" --kind file
+  done
+}
+
+cleanup_existing_dist_snaps
+
+if find "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -print -quit | grep -q .; then
   printf 'refusing to overwrite existing snap artifact for version %s\n' "${version}" >&2
   exit 1
 fi

@@ -21,6 +21,8 @@ parts:
     source: .
     stage-packages:
       - python3-minimal
+      - python3-cryptography
+      - libsecret-tools
     organize:
       snap/local/bin/speed-of-cinnamon: bin/speed-of-cinnamon
 

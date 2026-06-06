@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "speed-of-cinnamon"
-version = "0.1.36"
+version = "0.2.0"
 description = "Cinnamon-native voice typing helper for Fedora Cinnamon"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "H234598" }]
-dependencies = []
+dependencies = ["cryptography>=42"]
 
 [project.scripts]
 speed-of-cinnamon = "speed_of_cinnamon.cli:main"

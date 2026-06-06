@@ -1219,6 +1219,26 @@ class AppletStaticTest(unittest.TestCase):
         self.assertEqual(schema["show-profanity-filter-list"]["description"], "Edit profanity replacement list")
         self.assertEqual(schema["show-profanity-filter-list"]["callback"], "_openProfanityFilterList")
 
+    def test_applet_exposes_artifact_encryption_dropdown(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
+
+        self.assertIn("artifact-encryption", schema["layout"]["output-section"]["keys"])
+        self.assertEqual(schema["artifact-encryption"]["default"], "keyring")
+        self.assertEqual(
+            set(schema["artifact-encryption"]["options"].values()),
+            {"keyring", "passphrase", "off"},
+        )
+        self.assertIn("passphrase fallback", schema["artifact-encryption"]["tooltip"])
+        self.assertIn('const DEFAULT_ARTIFACT_ENCRYPTION = "keyring";', source)
+        self.assertIn('const ARTIFACT_ENCRYPTION_MODES = [', source)
+        self.assertIn('this.artifactEncryption = DEFAULT_ARTIFACT_ENCRYPTION;', source)
+        self.assertIn('["artifact-encryption", "artifactEncryption"]', source)
+        self.assertIn('this.settings.bindProperty(Settings.BindingDirection.IN, "artifact-encryption", "artifactEncryption", this._onTextOutputSettingsChanged, null)', source)
+        self.assertIn('args.push("--artifact-encryption", this._normalizeArtifactEncryption(this.artifactEncryption));', source)
+        self.assertIn("_normalizeArtifactEncryption: function(method)", source)
+        self.assertIn('if (key === "artifact-encryption")', source)
+
     def test_dynamic_model_menus_guard_fast_expand_clicks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

@@ -1,5 +1,5 @@
 Name:           speed-of-cinnamon
-Version:        0.1.33
+Version:        0.2.0
 Release:        2%{?dist}
 Summary:        Cinnamon-native voice typing helper for Fedora Cinnamon
 
@@ -11,11 +11,13 @@ Source0:        %{name}-%{version}.tar.gz
 
 BuildArch:      noarch
 Requires:       python3
+Requires:       python3-cryptography
 Requires:       cinnamon
 Requires:       pipewire-utils
 Requires:       pulseaudio-utils
 Requires:       libnotify
 Requires:       python3-pywhispercpp
+Recommends:     libsecret
 Recommends:     xdotool
 Recommends:     xclip
 Recommends:     xsel

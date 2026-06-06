@@ -1,66 +1,146 @@
 {
   "layout": {
     "type": "layout",
-    "pages": ["main-page", "about-page"],
+    "pages": [
+      "main-page",
+      "about-page"
+    ],
     "main-page": {
       "type": "page",
       "title": "Speed of Cinnamon",
-      "sections": ["main-menu-map-section", "activation-section", "recording-section", "personalization-section", "notification-section", "output-section", "text-polishing-section", "backend-section"]
+      "sections": [
+        "main-menu-map-section",
+        "activation-section",
+        "recording-section",
+        "personalization-section",
+        "notification-section",
+        "output-section",
+        "text-polishing-section",
+        "backend-section"
+      ]
     },
     "about-page": {
       "type": "page",
       "title": "About",
-      "sections": ["about-section"]
+      "sections": [
+        "about-section"
+      ]
     },
     "main-menu-map-section": {
       "type": "section",
       "title": "Main menu settings",
-      "keys": ["main-menu-settings-map"]
+      "keys": [
+        "main-menu-settings-map"
+      ]
     },
     "activation-section": {
       "type": "section",
       "title": "Activation and shortcuts",
-      "keys": ["toggle-keybinding", "primary-language-keybinding", "secondary-language-keybinding", "cancel-keybinding", "show-panel-label"]
+      "keys": [
+        "toggle-keybinding",
+        "primary-language-keybinding",
+        "secondary-language-keybinding",
+        "cancel-keybinding",
+        "show-panel-label"
+      ]
     },
     "recording-section": {
       "type": "section",
       "title": "Recording (menu: Recording)",
-      "keys": ["language", "secondary-language", "max-seconds", "auto-transcribe-timeout", "auto-relisten", "keep-recording-artifacts", "recorder", "input-device"]
+      "keys": [
+        "language",
+        "secondary-language",
+        "max-seconds",
+        "auto-transcribe-timeout",
+        "auto-relisten",
+        "keep-recording-artifacts",
+        "recorder",
+        "input-device"
+      ]
     },
     "personalization-section": {
       "type": "section",
       "title": "Personalization (menu: Text and output)",
-      "keys": ["personalization-help", "blacklist-help", "personal-context", "vocabulary"]
+      "keys": [
+        "personalization-help",
+        "blacklist-help",
+        "personal-context",
+        "vocabulary"
+      ]
     },
     "notification-section": {
       "type": "section",
       "title": "Notifications",
-      "keys": ["notify-recording", "notify-complete", "notify-error"]
+      "keys": [
+        "notify-recording",
+        "notify-complete",
+        "notify-error"
+      ]
     },
     "output-section": {
       "type": "section",
       "title": "Text output (menu: Text and output)",
-      "keys": ["insert-method", "append-space", "sanitize-special-chars", "soften-profanity", "show-profanity-filter-list", "typing-delay-ms", "max-transcript-files", "auto-paste-window-title"]
+      "keys": [
+        "insert-method",
+        "append-space",
+        "sanitize-special-chars",
+        "soften-profanity",
+        "show-profanity-filter-list",
+        "typing-delay-ms",
+        "max-transcript-files",
+        "artifact-encryption",
+        "auto-paste-window-title"
+      ]
     },
     "text-polishing-section": {
       "type": "section",
       "title": "Text polishing (menu: Text model)",
-      "keys": ["text-polishing-help", "post-process-backend", "post-process-preset", "post-process-preset-help-minimal", "post-process-preset-help-clean", "post-process-preset-help-code", "post-process-preset-help-chat", "post-process-preset-help-email", "post-process-preset-help-safety", "post-process-preset-help-custom", "post-process-prompt", "post-process-preserve-code", "post-process-never-add-content", "post-process-mask-sensitive-data", "post-process-command", "ollama-url", "ollama-model", "openai-compatible-text-model"]
+      "keys": [
+        "text-polishing-help",
+        "post-process-backend",
+        "post-process-preset",
+        "post-process-preset-help-minimal",
+        "post-process-preset-help-clean",
+        "post-process-preset-help-code",
+        "post-process-preset-help-chat",
+        "post-process-preset-help-email",
+        "post-process-preset-help-safety",
+        "post-process-preset-help-custom",
+        "post-process-prompt",
+        "post-process-preserve-code",
+        "post-process-never-add-content",
+        "post-process-mask-sensitive-data",
+        "post-process-command",
+        "ollama-url",
+        "ollama-model",
+        "openai-compatible-text-model"
+      ]
     },
     "backend-section": {
       "type": "section",
       "title": "Voice model and external API (menu: Voice model / Text model)",
-      "keys": ["cli-path", "transcriber", "whisper-model", "transcriber-command", "openai-compatible-url", "openai-compatible-model", "openai-compatible-flex-processing", "openai-compatible-api-key"]
+      "keys": [
+        "cli-path",
+        "transcriber",
+        "whisper-model",
+        "transcriber-command",
+        "openai-compatible-url",
+        "openai-compatible-model",
+        "openai-compatible-flex-processing",
+        "openai-compatible-api-key"
+      ]
     },
     "about-section": {
       "type": "section",
       "title": "Speed of Cinnamon",
-      "keys": ["about-version"]
+      "keys": [
+        "about-version"
+      ]
     }
   },
   "about-version": {
     "type": "label",
-    "description": "Version: 0.1.36\nAuthor: H234598\nCinnamon-native voice typing for Fedora Cinnamon."
+    "description": "Version: 0.2.0\nAuthor: H234598\nCinnamon-native voice typing for Fedora Cinnamon."
   },
   "main-menu-settings-map": {
     "type": "label",
@@ -469,5 +549,16 @@
     "tooltip": "Optional custom instruction appended to the selected preset and checkboxes. Max 4096 chars. The transcript, language, context, and vocabulary are added automatically.",
     "height": 100,
     "default": ""
+  },
+  "artifact-encryption": {
+    "type": "combobox",
+    "description": "Stored transcript and recording encryption",
+    "tooltip": "Controls encryption for transcript files and retained recording files. Secret Service keyring is the desktop default. If keyring access fails in CLI mode, Speed of Cinnamon tries the passphrase fallback from SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE or SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE. Without a usable key source, encrypted writes fail closed and no plaintext archive file is written.",
+    "options": {
+      "Secret Service keyring (variant 2)": "keyring",
+      "Passphrase (variant 1)": "passphrase",
+      "Off": "off"
+    },
+    "default": "keyring"
   }
 }

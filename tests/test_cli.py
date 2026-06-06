@@ -16,7 +16,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from speed_of_cinnamon import cli
+from speed_of_cinnamon import artifact_crypto, cli
 from speed_of_cinnamon.alarms import (
     MAX_ALARM_NAME_CHARS,
     MAX_ALARM_ID_CHARS,
@@ -634,6 +634,98 @@ class CliTest(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 1)
         self.assertIn("failed to write transcript file", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="encrypted ok")
+    @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
+    def test_transcribe_file_can_encrypt_stored_transcript_with_passphrase(
+        self,
+        mocked_validate: mock.Mock,
+        mocked_transcribe: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            mocked_validate.return_value = audio
+            env = {
+                "XDG_STATE_HOME": tmp,
+                artifact_crypto.PASSPHRASE_ENV: "transcript passphrase",
+            }
+            with mock.patch.dict(os.environ, env, clear=False), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf encrypted",
+                    "--artifact-encryption",
+                    "passphrase",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+            encrypted_path = Path(payload["transcript_path"])
+            plaintext_path = encrypted_path.with_name(encrypted_path.name.removesuffix(".socenc"))
+            with mock.patch.dict(os.environ, env, clear=False):
+                decrypted = artifact_crypto.read_decrypted_bytes_from_file(
+                    encrypted_path,
+                    kind="transcript",
+                    field_name="transcript file",
+                ).decode("utf-8")
+
+                history = cli.read_transcript_history(5)
+            encrypted_exists = encrypted_path.exists()
+            plaintext_exists = plaintext_path.exists()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["transcript"], "encrypted ok")
+        self.assertTrue(payload["transcript_encrypted"])
+        self.assertEqual(payload["transcript_encryption"], "passphrase")
+        self.assertTrue(encrypted_path.name.endswith(".txt.socenc"))
+        self.assertTrue(encrypted_exists)
+        self.assertFalse(plaintext_exists)
+        self.assertEqual(decrypted, "encrypted ok\n")
+        self.assertEqual(history[0]["preview"], "encrypted ok")
+        mocked_transcribe.assert_called_once()
+        self.assertNotEqual(mocked_transcribe.call_args.kwargs["text_path"], plaintext_path)
+
+    @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="must not be stored as plaintext")
+    @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
+    def test_transcribe_file_keyring_failure_without_passphrase_fails_closed(
+        self,
+        mocked_validate: mock.Mock,
+        mocked_transcribe: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            mocked_validate.return_value = audio
+            transcript_root = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: ""}, clear=False),
+                mock.patch("speed_of_cinnamon.artifact_crypto._load_keyring_key", side_effect=artifact_crypto.ArtifactCryptoError("no dbus")),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf encrypted",
+                    "--artifact-encryption",
+                    "keyring",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+            plaintext_exists = (transcript_root / "input.txt").exists()
+            encrypted_exists = (transcript_root / "input.txt.socenc").exists()
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["error"], "[redacted error details]")
+        self.assertFalse(plaintext_exists)
+        self.assertFalse(encrypted_exists)
+        mocked_transcribe.assert_called_once()
 
     @mock.patch("speed_of_cinnamon.cli.insert_text")
     @mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="redacted")
@@ -4983,10 +5075,72 @@ class CliTest(unittest.TestCase):
                 with redirect_stdout(stdout):
                     code = cli.run(["cleanup", "--keep-transcripts", "0", "--keep-recordings", "0", "--json"])
                 payload = json.loads(stdout.getvalue())
-            self.assertEqual(code, 0)
-            self.assertEqual(payload["deleted_recordings"], 1)
-            self.assertIn(str(finalized), payload["deleted_paths"])
-            self.assertFalse(finalized.exists())
+                self.assertEqual(code, 0)
+                self.assertEqual(payload["deleted_recordings"], 1)
+                self.assertIn(str(finalized), payload["deleted_paths"])
+                self.assertFalse(finalized.exists())
+
+    def test_finalize_encrypts_kept_recording_and_transcript_with_passphrase(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            original = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            temp_trimmed = recordings_root / "recording.trimmed-keep.flac"
+            original.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            temp_trimmed.write_bytes(b"trimmed-audio")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(original), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=True)
+            args.artifact_encryption = "passphrase"
+            env = {
+                "XDG_CACHE_HOME": tmp,
+                "XDG_STATE_HOME": tmp,
+                artifact_crypto.PASSPHRASE_ENV: "recording passphrase",
+            }
+            with (
+                mock.patch.dict(os.environ, env, clear=False),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=original),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent")),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", return_value=temp_trimmed),
+                mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
+            ):
+                payload = cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+            encrypted_audio = Path(final_state.audio_path)
+            encrypted_transcript = Path(final_state.transcript_path)
+            with mock.patch.dict(os.environ, env, clear=False):
+                decrypted_audio = artifact_crypto.read_decrypted_bytes_from_file(
+                    encrypted_audio,
+                    kind="recording",
+                    field_name="recording audio file",
+                )
+                decrypted_transcript = artifact_crypto.read_decrypted_bytes_from_file(
+                    encrypted_transcript,
+                    kind="transcript",
+                    field_name="transcript file",
+                ).decode("utf-8")
+            original_exists = original.exists()
+            temp_trimmed_exists = temp_trimmed.exists()
+
+        self.assertEqual(payload["status"], "done")
+        self.assertEqual(payload["transcript"], "transcript")
+        self.assertTrue(payload["transcript_encrypted"])
+        self.assertTrue(payload["recording_encrypted"])
+        self.assertTrue(encrypted_audio.name.endswith(".flac.socenc"))
+        self.assertTrue(encrypted_transcript.name.endswith(".txt.socenc"))
+        self.assertFalse(original_exists)
+        self.assertFalse(temp_trimmed_exists)
+        self.assertEqual(decrypted_audio, b"trimmed-audio")
+        self.assertEqual(decrypted_transcript, "transcript\n")
+        self.assertEqual(final_state.transcript, "")
 
     def test_finalize_rejects_non_boolean_keep_recording_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

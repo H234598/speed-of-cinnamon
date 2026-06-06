@@ -9,6 +9,7 @@ import json
 import os
 import platform
 import re
+import secrets
 import shutil
 import stat as stat_module
 import subprocess  # nosec B404
@@ -32,6 +33,16 @@ from .alarms import (
     set_alarm_enabled,
 )
 from .app_logging import DEFAULT_LOG_LEVEL, LOG_LEVELS, configure_logging, log_event, sanitize_error_message
+from .artifact_crypto import (
+    ARTIFACT_ENCRYPTION_CHOICES,
+    ARTIFACT_ENCRYPTION_OFF,
+    ArtifactCryptoError,
+    encrypted_path_for,
+    is_encrypted_path,
+    normalize_artifact_encryption,
+    read_decrypted_bytes_from_file,
+    write_encrypted_bytes_atomically,
+)
 from .doctor import parse_settings_json, report as doctor_report
 from .models import (
     CATALOG,
@@ -119,8 +130,12 @@ DEFAULT_KEEP_TRANSCRIPTS = 500
 DEFAULT_KEEP_RECORDINGS = 20
 DEFAULT_RECORDING_MAX_AGE_DAYS = 7
 MAX_TEMP_RECORDING_FILES = 20
-RECORDING_ARTIFACT_EXTENSIONS = (".wav", ".flac", ".log")
+RECORDING_ARTIFACT_EXTENSIONS = (".wav", ".flac", ".log", ".socenc")
+ENCRYPTED_RECORDING_ARTIFACT_SUFFIXES = (".wav.socenc", ".flac.socenc")
+TRANSCRIPT_ARTIFACT_SUFFIXES = (".txt", ".socenc")
+ENCRYPTED_TRANSCRIPT_SUFFIX = ".txt.socenc"
 MAX_LOG_EXCERPT_CHARS = 2000
+MAX_STORED_TRANSCRIPT_BYTES = 1_000_000
 MAX_TRANSCRIPT_HISTORY_TEXT_CHARS = 4_000
 EMPTY_TRANSCRIPT_MARKERS = frozenset(
     {
@@ -1018,13 +1033,118 @@ def transcript_preview(text: str, max_chars: int = 80) -> str:
 
 def _transcript_history_candidates(directory: Path):
     for path, file_stat in _safe_directory_entries(directory, field_name="transcript directory"):
-        if path.suffix.lower() != ".txt":
+        if not _is_transcript_artifact(path):
             continue
         if not stat_module.S_ISREG(file_stat.st_mode):
             continue
         if getattr(file_stat, "st_nlink", 1) != 1:
             continue
         yield file_stat.st_mtime, path
+
+
+def _is_transcript_artifact(path: Path) -> bool:
+    if not isinstance(path, Path):
+        return False
+    name = path.name.lower()
+    return name.endswith(".txt") or name.endswith(ENCRYPTED_TRANSCRIPT_SUFFIX)
+
+
+def _safe_transcript_artifact_files() -> list[Path]:
+    return [
+        path
+        for path in _safe_regular_child_files(transcript_dir(), TRANSCRIPT_ARTIFACT_SUFFIXES, field_name="transcript directory")
+        if _is_transcript_artifact(path)
+    ]
+
+
+def _read_stored_transcript_text(path: Path) -> str:
+    if is_encrypted_path(path):
+        payload = read_decrypted_bytes_from_file(
+            path,
+            kind="transcript",
+            field_name="transcript file",
+            max_bytes=MAX_STORED_TRANSCRIPT_BYTES * 2,
+        )
+        try:
+            return payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise RuntimeError(f"transcript file is not valid UTF-8: {path}") from exc
+    return read_text_without_following_symlinks(
+        path,
+        field_name="transcript file",
+        max_bytes=MAX_STORED_TRANSCRIPT_BYTES,
+    )
+
+
+def _artifact_encryption_mode(args: argparse.Namespace) -> str:
+    return normalize_artifact_encryption(getattr(args, "artifact_encryption", ARTIFACT_ENCRYPTION_OFF))
+
+
+def _transcript_work_path(storage_path: Path, encryption_mode: str) -> Path:
+    if encryption_mode == ARTIFACT_ENCRYPTION_OFF:
+        return storage_path
+    return storage_path.with_name(f".{storage_path.stem}.{secrets.token_hex(8)}.tmp.txt")
+
+
+def _remove_transient_transcript_path(path: Path, storage_path: Path) -> None:
+    if path == storage_path:
+        return
+    try:
+        path.relative_to(transcript_dir())
+    except ValueError:
+        return
+    if not path.name.startswith(".") or not path.name.endswith(".tmp.txt"):
+        return
+    try:
+        assert_no_symlink_ancestors(path, field_name="transient transcript file")
+        path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError:
+        return
+
+
+def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) -> tuple[Path, str]:
+    mode = _artifact_encryption_mode(args)
+    payload = text.encode("utf-8")
+    if mode == ARTIFACT_ENCRYPTION_OFF:
+        _write_text_atomic(path, text)
+        return path, ARTIFACT_ENCRYPTION_OFF
+    try:
+        return write_encrypted_bytes_atomically(path, payload, mode, kind="transcript", field_name="transcript file")
+    except ArtifactCryptoError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
+def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tuple[Path, str]:
+    mode = _artifact_encryption_mode(args)
+    if mode == ARTIFACT_ENCRYPTION_OFF:
+        return path, ARTIFACT_ENCRYPTION_OFF
+    try:
+        payload = read_decrypted_bytes_from_file(
+            path,
+            kind="recording",
+            field_name="recording audio file",
+        ) if is_encrypted_path(path) else read_decrypted_bytes_from_file(
+            path,
+            kind="recording",
+            field_name="recording audio file",
+            max_bytes=None,
+        )
+        encrypted_path, effective_mode = write_encrypted_bytes_atomically(
+            path,
+            payload,
+            mode,
+            kind="recording",
+            field_name="recording audio file",
+        )
+    except ArtifactCryptoError as exc:
+        raise RuntimeError(str(exc)) from exc
+    if encrypted_path != path:
+        suffix = path.suffix.lower()
+        if not remove_file(str(path), suffix=suffix):
+            raise RuntimeError(f"failed to remove plaintext recording artifact after encryption: {path}")
+    return encrypted_path, effective_mode
 
 
 def read_transcript_history(limit: int = 10) -> list[dict[str, object]]:
@@ -1037,8 +1157,8 @@ def read_transcript_history(limit: int = 10) -> list[dict[str, object]]:
     entries: list[dict[str, object]] = []
     for mtime, path in candidates:
         try:
-            text = read_file_tail(path, MAX_TRANSCRIPT_HISTORY_TEXT_CHARS).strip()
-        except (OSError, ValueError):
+            text = _read_stored_transcript_text(path).strip()
+        except (OSError, RuntimeError, ValueError, UnicodeDecodeError, ArtifactCryptoError):
             continue
         if not text:
             continue
@@ -1070,8 +1190,8 @@ def write_transcripts_document(limit: int = MAX_HISTORY_LIMIT) -> tuple[Path, in
     count = 0
     for mtime, path in candidates:
         try:
-            text = read_text_without_following_symlinks(path, field_name="transcript file").strip()
-        except (OSError, RuntimeError, ValueError, UnicodeDecodeError):
+            text = _read_stored_transcript_text(path).strip()
+        except (OSError, RuntimeError, ValueError, UnicodeDecodeError, ArtifactCryptoError):
             continue
         if not text:
             continue
@@ -1206,8 +1326,8 @@ def _allocate_recording_artifacts() -> tuple[Path, Path]:
 
 
 def _remove_transcript_file(path: Path) -> bool:
-    if not isinstance(path, Path) or path.suffix.lower() != ".txt":
-        raise RuntimeError("transcript path must be a .txt path")
+    if not isinstance(path, Path) or not _is_transcript_artifact(path):
+        raise RuntimeError("transcript path must be a .txt or .txt.socenc path")
     try:
         path.relative_to(transcript_dir())
     except ValueError:
@@ -1408,7 +1528,7 @@ def active_artifact_paths(
     paths: set[Path] = set()
     audio_path = _safe_recording_artifact_path(
         state.audio_path,
-        suffix=(".wav", ".flac"),
+        suffix=(".wav", ".flac", ".socenc"),
         require_recordings_dir=True,
     )
     if audio_path is not None and _recording_artifact_stat(audio_path) is None:
@@ -1452,7 +1572,13 @@ def _safe_recording_artifact_path(
     if not value:
         return None
     try:
-        return validate_recording_path(Path(value), suffix=suffix, require_recordings_dir=require_recordings_dir)
+        path = Path(value)
+        if path.name.lower().endswith(ENCRYPTED_RECORDING_ARTIFACT_SUFFIXES):
+            suffixes = (suffix,) if isinstance(suffix, str) else suffix
+            if ".socenc" not in suffixes:
+                return None
+            return validate_recording_path(path, suffix=".socenc", require_recordings_dir=require_recordings_dir)
+        return validate_recording_path(path, suffix=suffix, require_recordings_dir=require_recordings_dir)
     except (RecorderError, ValueError, OSError, TypeError):
         return None
 
@@ -1469,7 +1595,7 @@ def _raise_if_state_unreadable(state: RecordingState) -> None:
 
 
 def _recording_level_payload(state: RecordingState) -> dict[str, object] | None:
-    audio_path = _safe_recording_artifact_path(state.audio_path, suffix=(".wav", ".flac"))
+    audio_path = _safe_recording_artifact_path(state.audio_path, suffix=(".wav", ".flac", ".socenc"))
     if not audio_path:
         if state.audio_path:
             return {
@@ -1640,7 +1766,7 @@ def _finalizing_inflight_artifact_paths(state_path: Path, state: RecordingState)
         return set()
 
     in_flight_paths: set[Path] = set()
-    audio_path = _safe_recording_artifact_path(state.audio_path, suffix=(".wav", ".flac"), require_recordings_dir=True)
+    audio_path = _safe_recording_artifact_path(state.audio_path, suffix=(".wav", ".flac", ".socenc"), require_recordings_dir=True)
     if audio_path is None:
         return set()
     if audio_path.suffix.lower() in {".wav", ".flac"}:
@@ -1649,10 +1775,36 @@ def _finalizing_inflight_artifact_paths(state_path: Path, state: RecordingState)
     return in_flight_paths
 
 
+def _is_encrypted_recording_artifact(path: Path) -> bool:
+    return isinstance(path, Path) and path.name.lower().endswith(ENCRYPTED_RECORDING_ARTIFACT_SUFFIXES)
+
+
+def _is_recording_audio_artifact(path: Path) -> bool:
+    if not isinstance(path, Path):
+        return False
+    suffix = path.suffix.lower()
+    return suffix in {".wav", ".flac"} or _is_encrypted_recording_artifact(path)
+
+
+def _is_recording_artifact(path: Path) -> bool:
+    if not isinstance(path, Path):
+        return False
+    return path.suffix.lower() == ".log" or _is_recording_audio_artifact(path)
+
+
+def _recording_group_stem(path: Path) -> str:
+    name = path.name
+    lowered = name.lower()
+    for suffix in ENCRYPTED_RECORDING_ARTIFACT_SUFFIXES:
+        if lowered.endswith(suffix):
+            return name[: -len(suffix)]
+    return path.stem
+
+
 def _is_inflight_recording_artifact(path: Path) -> bool:
     if not isinstance(path, Path):
         return False
-    if path.suffix.lower() not in RECORDING_ARTIFACT_EXTENSIONS:
+    if not _is_recording_artifact(path):
         return False
     stem = path.stem.lower()
     return ".trimmed-" in stem or ".encoded-" in stem
@@ -1714,13 +1866,14 @@ def recording_groups() -> list[dict[str, object]]:
     groups: dict[str, dict[str, object]] = {}
     directory = recordings_dir()
     for path, file_stat in _safe_directory_entries(directory, field_name="recordings directory"):
-        if path.suffix.lower() not in RECORDING_ARTIFACT_EXTENSIONS:
+        if not _is_recording_artifact(path):
             continue
         if not stat_module.S_ISREG(file_stat.st_mode):
             continue
         if getattr(file_stat, "st_nlink", 1) != 1:
             continue
-        group = groups.setdefault(path.stem, {"stem": path.stem, "mtime": 0.0, "files": []})
+        group_stem = _recording_group_stem(path)
+        group = groups.setdefault(group_stem, {"stem": group_stem, "mtime": 0.0, "files": []})
         group["mtime"] = max(float(group["mtime"]), file_stat.st_mtime)
         group_files = group["files"]
         if isinstance(group_files, list):
@@ -1729,11 +1882,15 @@ def recording_groups() -> list[dict[str, object]]:
 
 
 def recording_artifact_files() -> list[Path]:
-    return _safe_regular_child_files(
-        recordings_dir(),
-        RECORDING_ARTIFACT_EXTENSIONS,
-        field_name="recordings directory",
-    )
+    return [
+        path
+        for path in _safe_regular_child_files(
+            recordings_dir(),
+            RECORDING_ARTIFACT_EXTENSIONS,
+            field_name="recordings directory",
+        )
+        if _is_recording_artifact(path)
+    ]
 
 
 def _add_recording_artifact_counts(paths: list[str], recording_result: dict[str, object], prefix: str) -> None:
@@ -1742,8 +1899,9 @@ def _add_recording_artifact_counts(paths: list[str], recording_result: dict[str,
     recording_count = _coerce_int(recording_result[recording_key], field_name=recording_key)
     log_count = _coerce_int(recording_result[log_key], field_name=log_key)
     for path_text in paths:
-        suffix = Path(path_text).suffix.lower()
-        if suffix in {".wav", ".flac"}:
+        path = Path(path_text)
+        suffix = path.suffix.lower()
+        if _is_recording_audio_artifact(path):
             recording_count += 1
         elif suffix == ".log":
             log_count += 1
@@ -1786,7 +1944,7 @@ def prune_recording_groups(
             if dry_run:
                 planned_paths.append(str(path))
                 suffix = path.suffix.lower()
-                if suffix in {".wav", ".flac"}:
+                if _is_recording_audio_artifact(path):
                     planned_recordings += 1
                 elif suffix == ".log":
                     planned_logs += 1
@@ -1794,7 +1952,7 @@ def prune_recording_groups(
             if delete_artifact(path):
                 deleted_paths.append(str(path))
                 suffix = path.suffix.lower()
-                if suffix in {".wav", ".flac"}:
+                if _is_recording_audio_artifact(path):
                     deleted_recordings += 1
                 elif suffix == ".log":
                     deleted_logs += 1
@@ -1850,7 +2008,7 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
         }
     if current.status == "recording":
         current_audio_path = _safe_recording_artifact_path(
-            current.audio_path, suffix=(".wav", ".flac"), require_recordings_dir=False
+            current.audio_path, suffix=(".wav", ".flac", ".socenc"), require_recordings_dir=False
         )
         if _is_recording_process_alive(current.pid):
             return {
@@ -1967,7 +2125,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         if not state.audio_path:
             store.update(status="error", stopped_at=state.stopped_at or now_iso(), error="no recording is available")
             raise RuntimeError("no recording is available")
-        audio_path = _safe_recording_artifact_path(state.audio_path, suffix=(".wav", ".flac"), require_recordings_dir=True)
+        audio_path = _safe_recording_artifact_path(state.audio_path, suffix=(".wav", ".flac", ".socenc"), require_recordings_dir=True)
         if not audio_path:
             store.update(status="error", stopped_at=state.stopped_at or now_iso(), error="recording audio path is invalid")
             raise RuntimeError("recording audio path is invalid")
@@ -2052,6 +2210,8 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             }
 
         text_path = transcript_dir() / f"{audio_path.stem}.txt"
+        artifact_encryption = _artifact_encryption_mode(args)
+        transcriber_text_path = _transcript_work_path(text_path, artifact_encryption)
         transcript_audio_path = audio_path
         try:
             trimmed_audio_path = trim_recording_silence(audio_path)
@@ -2062,7 +2222,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             text = transcribe(
                 audio_path=transcript_audio_path,
                 language=language,
-                text_path=text_path,
+                text_path=transcriber_text_path,
                 command_template=args.transcriber_command,
                 backend=normalized_transcriber,
                 whisper_model=args.whisper_model,
@@ -2071,6 +2231,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
                 **_openai_compatible_transcribe_kwargs(args, normalized_transcriber),
             )
         finally:
+            _remove_transient_transcript_path(transcriber_text_path, text_path)
             if trimmed_audio_path is not None and not keep_recording_artifacts:
                 remove_file(str(trimmed_audio_path), suffix=".flac")
 
@@ -2082,8 +2243,8 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         soften_profanity = _coerce_bool(getattr(args, "soften_profanity", False), field_name="soften_profanity")
         if text.strip() and soften_profanity:
             text = soften_profanity_text(text)
-        _write_text_atomic(text_path, text.strip() + "\n")
-        written_text_path = text_path
+        stored_text_path, transcript_encryption = _write_stored_transcript(text_path, text.strip() + "\n", args)
+        written_text_path = stored_text_path
         append_space = _coerce_bool(args.append_space, field_name="append_space")
         sanitize_special_chars = _coerce_bool(
             args.sanitize_special_chars,
@@ -2121,13 +2282,23 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             else:
                 done_audio_path = str(audio_path)
 
+        recording_encryption = ARTIFACT_ENCRYPTION_OFF
+        if keep_recording_artifacts and done_audio_path:
+            plaintext_done_audio_path = Path(done_audio_path)
+            encrypted_audio_path, recording_encryption = _encrypt_kept_recording_artifact(plaintext_done_audio_path, args)
+            if encrypted_audio_path != plaintext_done_audio_path:
+                done_audio_path = str(encrypted_audio_path)
+                stabilized_audio_path = encrypted_audio_path
+                if plaintext_done_audio_path == audio_path:
+                    remove_original_after_state_update = False
+
         done = store.update(
             status="done",
             stopped_at=state.stopped_at or now_iso(),
             audio_path=done_audio_path,
             log_path=done_log_path,
-            transcript=text,
-            transcript_path=str(text_path),
+            transcript=text if transcript_encryption == ARTIFACT_ENCRYPTION_OFF else "",
+            transcript_path=str(stored_text_path),
             inserted=inserted,
             error="",
         )
@@ -2152,7 +2323,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             max_value=MAX_KEEP_TRANSCRIPTS,
         )
         transcript_cleanup = prune_files_by_mtime(
-            _safe_regular_child_files(transcript_dir(), (".txt",), field_name="transcript directory"),
+            _safe_transcript_artifact_files(),
             keep_transcripts,
             active_artifact_paths(done, state_path=store.path),
             False,
@@ -2161,7 +2332,12 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             "status": done.status,
             "message": "recording finished without transcript" if not text.strip() else "transcription completed",
             "transcript": text,
-            "transcript_path": str(text_path),
+            "transcript_path": str(stored_text_path),
+            "artifact_encryption": artifact_encryption,
+            "transcript_encryption": transcript_encryption,
+            "transcript_encrypted": transcript_encryption != ARTIFACT_ENCRYPTION_OFF,
+            "recording_encryption": recording_encryption,
+            "recording_encrypted": recording_encryption != ARTIFACT_ENCRYPTION_OFF,
             "inserted": inserted,
             "security": security_post_processing,
             "recording_artifact_cap": artifact_cleanup,
@@ -2710,7 +2886,7 @@ def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
     state = store.read()
     active_paths = active_artifact_paths(state, state_path=store.path)
     transcript_result = prune_files_by_mtime(
-        _safe_regular_child_files(transcript_dir(), (".txt",), field_name="transcript directory"),
+        _safe_transcript_artifact_files(),
         keep_transcripts,
         active_paths,
         dry_run,
@@ -2948,17 +3124,22 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
     normalized_transcriber = normalize_backend(args.transcriber)
     audio_path = validate_audio_file(audio_path)
     text_path = transcript_dir() / f"{audio_path.stem}.txt"
-    text = transcribe(
-        audio_path=audio_path,
-        language=language,
-        text_path=text_path,
-        command_template=args.transcriber_command,
-        backend=normalized_transcriber,
-        whisper_model=args.whisper_model,
-        personal_context=args.personal_context,
-        vocabulary=args.vocabulary,
-        **_openai_compatible_transcribe_kwargs(args, normalized_transcriber),
-    )
+    artifact_encryption = _artifact_encryption_mode(args)
+    transcriber_text_path = _transcript_work_path(text_path, artifact_encryption)
+    try:
+        text = transcribe(
+            audio_path=audio_path,
+            language=language,
+            text_path=transcriber_text_path,
+            command_template=args.transcriber_command,
+            backend=normalized_transcriber,
+            whisper_model=args.whisper_model,
+            personal_context=args.personal_context,
+            vocabulary=args.vocabulary,
+            **_openai_compatible_transcribe_kwargs(args, normalized_transcriber),
+        )
+    finally:
+        _remove_transient_transcript_path(transcriber_text_path, text_path)
     if _is_empty_transcript_text(text):
         text = ""
         security_post_processing = _empty_security_post_processing()
@@ -2966,24 +3147,27 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         text, security_post_processing = _process_transcript(text, args, args.language)
     if text.strip() and _coerce_bool(getattr(args, "soften_profanity", False), field_name="soften_profanity"):
         text = soften_profanity_text(text)
-    _write_text_atomic(text_path, text.strip() + "\n")
+    stored_text_path, transcript_encryption = _write_stored_transcript(text_path, text.strip() + "\n", args)
     keep_transcripts = _coerce_int(
         getattr(args, "keep_transcripts", DEFAULT_KEEP_TRANSCRIPTS),
         field_name="keep-transcripts",
         max_value=MAX_KEEP_TRANSCRIPTS,
     )
     transcript_cleanup = prune_files_by_mtime(
-        _safe_regular_child_files(transcript_dir(), (".txt",), field_name="transcript directory"),
+        _safe_transcript_artifact_files(),
         keep_transcripts,
-        {text_path},
+        {stored_text_path},
         False,
     )
     return {
         "status": "done",
         "transcript": text,
-        "transcript_path": str(text_path),
+        "transcript_path": str(stored_text_path),
         "security": security_post_processing,
         "transcript_file_cap": transcript_cleanup,
+        "artifact_encryption": artifact_encryption,
+        "transcript_encryption": transcript_encryption,
+        "transcript_encrypted": transcript_encryption != ARTIFACT_ENCRYPTION_OFF,
     }
 
 
@@ -3030,6 +3214,15 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--typing-delay-ms", type=int, default=DEFAULT_TYPING_DELAY_MS)
     parser.add_argument("--keep-transcripts", type=int, default=DEFAULT_KEEP_TRANSCRIPTS)
+    parser.add_argument(
+        "--artifact-encryption",
+        default=ARTIFACT_ENCRYPTION_OFF,
+        choices=ARTIFACT_ENCRYPTION_CHOICES,
+        help=(
+            "encrypt stored transcripts and retained recordings: off, passphrase, or keyring; "
+            "keyring falls back to passphrase when the Secret Service CLI path is unavailable"
+        ),
+    )
     parser.add_argument("--sanitize-special-chars", action="store_true")
     parser.add_argument("--soften-profanity", action="store_true")
     parser.add_argument("--append-space", action="store_true")
@@ -3250,6 +3443,12 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_file.add_argument("--post-process-prompt", default="")
     transcribe_file.add_argument("--personal-context", default="")
     transcribe_file.add_argument("--vocabulary", default="")
+    transcribe_file.add_argument(
+        "--artifact-encryption",
+        default=ARTIFACT_ENCRYPTION_OFF,
+        choices=ARTIFACT_ENCRYPTION_CHOICES,
+        help="encrypt the stored transcript: off, passphrase, or keyring",
+    )
     transcribe_file.add_argument("--soften-profanity", action="store_true")
     transcribe_file.set_defaults(handler=command_transcribe_file)
     return parser

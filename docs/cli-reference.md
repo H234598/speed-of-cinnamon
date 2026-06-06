@@ -275,6 +275,19 @@ copying outside the applet menu.
 
 Cleanup skips the currently referenced state paths. Use the dry run before deleting.
 
+## Artifact Encryption
+
+```bash
+speed-of-cinnamon transcribe-file ~/sample.flac --artifact-encryption passphrase --json
+speed-of-cinnamon toggle --artifact-encryption keyring --keep-recording-artifacts
+```
+
+`--artifact-encryption` accepts `off`, `passphrase`, or `keyring`. Passphrase mode derives per-file keys from
+`SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE` or `SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE`; prefer the file variable
+to avoid shell history exposure. Keyring mode stores one random master key in the desktop Secret Service through
+`secret-tool`. If keyring access fails in CLI mode, the backend tries the passphrase fallback. If no usable key source is
+available, encrypted writes fail closed instead of writing a plaintext archive file.
+
 ## Settings Backup
 
 ```bash

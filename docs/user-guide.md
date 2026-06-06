@@ -253,6 +253,12 @@ Use `Store transcripts` in `Files and settings` to choose how many transcript fi
 After each successful transcription, older transcript files are deleted automatically so at most that many transcript
 files remain.
 
+Use `Stored transcript and recording encryption` in the applet settings to choose how persistent transcript files and
+retained recording files are protected. The default is `Secret Service keyring`, which keeps a random master key in the
+desktop keyring. `Passphrase` mode uses `SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE` or
+`SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE`; prefer the file variable. If keyring mode cannot use the desktop keyring from
+CLI context, it tries the passphrase fallback. Without a usable key source, encrypted writes fail closed.
+
 Use `Preview cleanup` before `Clean all old files`. Manual cleanup removes all old transcript files and cached
 recordings while skipping the currently referenced state paths. Recordings and their companion logs are handled as one
 cache group.

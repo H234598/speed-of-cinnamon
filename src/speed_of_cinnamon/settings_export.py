@@ -58,6 +58,7 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "soften-profanity": (bool, False),
     "typing-delay-ms": (int, DEFAULT_TYPING_DELAY_MS),
     "max-transcript-files": (int, DEFAULT_MAX_TRANSCRIPT_FILES),
+    "artifact-encryption": (str, "keyring"),
     "auto-paste-window-title": (str, "codex"),
     "transcriber": (str, "auto"),
     "whisper-model": (str, ""),
