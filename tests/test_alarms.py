@@ -51,8 +51,11 @@ class AlarmTest(unittest.TestCase):
             load_alarm_store(Path("alarms\x85spoof.json"))
 
     def test_save_alarm_store_rejects_escaped_control_character_path(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "invalid control character"):
-            save_alarm_store({}, Path("alarms\\x85spoof.json"))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms\\x85spoof.json"
+            with self.assertRaisesRegex(RuntimeError, "invalid control character"):
+                save_alarm_store({}, path)
+            self.assertFalse(path.exists())
 
     def test_load_alarm_store_rejects_parent_traversal_path(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "unsafe path component"):
