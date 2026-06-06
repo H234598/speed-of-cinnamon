@@ -785,20 +785,6 @@ MyApplet.prototype = {
     listTranscripts.connect("activate", () => this._listAllTranscripts());
     this.maintenanceMenuItem.menu.addMenuItem(listTranscripts);
 
-    this.transcriptStorageItem = new PopupMenu.PopupSubMenuMenuItem(_("Store transcripts: 500"));
-    this.transcriptStorageItem.menu.connect("open-state-changed", (menu, open) => {
-      if (open) {
-        this._populateTranscriptStorageMenu();
-      }
-    });
-    this.maintenanceMenuItem.menu.addMenuItem(this.transcriptStorageItem);
-    this._populateTranscriptStorageMenu();
-
-    this.openAiFlexProcessingItem = new PopupMenu.PopupMenuItem("");
-    this.openAiFlexProcessingItem.connect("activate", () => this._toggleOpenAiFlexProcessing());
-    this.maintenanceMenuItem.menu.addMenuItem(this.openAiFlexProcessingItem);
-    this._updateOpenAiFlexProcessingItem();
-
     let cleanupPreview = new PopupMenu.PopupIconMenuItem(_("Preview cleanup"), "edit-find-symbolic", St.IconType.SYMBOLIC);
     cleanupPreview.connect("activate", () => this._previewCleanup());
     this.maintenanceMenuItem.menu.addMenuItem(cleanupPreview);

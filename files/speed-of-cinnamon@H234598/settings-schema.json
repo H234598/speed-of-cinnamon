@@ -556,15 +556,15 @@
     "description": "Stored transcript and recording encryption",
     "tooltip": "Controls encryption for stored transcript files and retained recording files. Secret Service keyring is the recommended desktop mode. Passphrase mode uses SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE or SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE and is also the passphrase fallback for CLI/keyring failures. Off stores files as plaintext.",
     "options": {
-      "Secret Service keyring (variant 2)": "keyring",
-      "Passphrase (variant 1)": "passphrase",
+      "Secret Service keyring": "keyring",
+      "Passphrase": "passphrase",
       "Off": "off"
     },
     "default": "keyring"
   },
   "artifact-encryption-help": {
     "type": "label",
-    "description": "Encryption legend: Keyring stores the encryption key in the desktop Secret Service and is the default. Passphrase derives the key from SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE, or SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE if no file is configured. If keyring access fails, Speed of Cinnamon falls back to passphrase mode only when a passphrase is configured. If encryption is selected but no usable key source exists, stored transcript and recording writes fail closed instead of silently keeping plaintext. If the backend ever reports that a stored artifact was written without encryption while encryption is expected, the applet shows a critical warning popup for that transcription.",
+    "description": "Keyring: Uses the desktop Secret Service and is recommended for normal desktop use.\nPassphrase: CLI-friendly mode. The key is derived from SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE, or SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE if no file is configured.\nFallback and fail closed: If Keyring fails, Speed of Cinnamon falls back to Passphrase only when a passphrase is configured. If encryption is selected but no usable key source exists, stored transcript and recording writes fail closed instead of silently keeping plaintext.\nWarning popup: If the backend ever reports that a stored artifact was written without encryption while encryption is expected, the applet shows a critical warning popup for that transcription.",
     "tooltip": "Use Keyring for normal desktop use. Use Passphrase for CLI-friendly or portable setups. Use Off only when plaintext transcript and recording files are acceptable."
   }
 }
