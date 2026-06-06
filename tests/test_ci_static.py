@@ -529,6 +529,10 @@ class CiStaticTest(unittest.TestCase):
             'readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"\n'
             'export PATH="${TRUSTED_COMMAND_PATH}"'
         )
+        snap_trusted_path_preamble = (
+            'readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin:/var/lib/snapd/snap/bin"\n'
+            'export PATH="${TRUSTED_COMMAND_PATH}"'
+        )
         build_dist = (REPO_ROOT / "scripts" / "build-dist.sh").read_text(encoding="utf-8")
         build_rpm = (REPO_ROOT / "scripts" / "build-rpm.sh").read_text(encoding="utf-8")
         build_snap = (REPO_ROOT / "scripts" / "build-snap.sh").read_text(encoding="utf-8")
@@ -537,8 +541,9 @@ class CiStaticTest(unittest.TestCase):
         verify_snap = (REPO_ROOT / "scripts" / "verify-snap.sh").read_text(encoding="utf-8")
         uninstall_local = (REPO_ROOT / "scripts" / "uninstall-local.sh").read_text(encoding="utf-8")
 
-        for script_text in (build_dist, build_rpm, build_snap, verify_dist, verify_rpm, verify_snap):
+        for script_text in (build_dist, build_rpm, verify_dist, verify_rpm, verify_snap):
             self.assertIn(trusted_path_preamble, script_text)
+        self.assertIn(snap_trusted_path_preamble, build_snap)
         self.assertIn('safe_fs_cmd=(python3 "${safe_fs}")', build_rpm)
         self.assertIn("activate_with_finalize_lock() {", build_rpm)
         self.assertIn('[sys.executable, safe_fs, "install-tree", "build-rpm", staging_path, final_path, "RPM build directory"]', build_rpm)
@@ -561,7 +566,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn('install-tree build-snap "${repo_dir}" "${snap_workspace}" "snap temporary source tree"', build_snap)
         self.assertIn('python3 - "${snapcraft_file_rendered}" "${snapcraft_file_rendered}" "${version}" "${snapcraft_base}"', build_snap)
         self.assertIn('( cd "${snap_workspace}" && umask 022 && snapcraft pack --destructive-mode )', build_snap)
-        self.assertIn('python3 "${safe_fs}" replace build-snap "${snap_files[0]}" "${output_path}" --src-kind file --dst-must-not-exist', build_snap)
+        self.assertIn('"${safe_fs_cmd[@]}" copy-file build-snap "${snap_files[0]}" "${output_path}" 0644 --dst-must-not-exist', build_snap)
         self.assertNotIn('rm -rf -- "${snap_workspace}"', build_snap)
         self.assertNotIn("mv -T", build_snap)
         self.assertIn("contains_control_chars() {", verify_dist)
@@ -902,7 +907,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn('install-tree build-snap "${repo_dir}" "${snap_workspace}" "snap temporary source tree"', build_snap)
         self.assertIn('mkdir -p "${snap_workspace_dist}"', build_snap)
         self.assertIn('python3 - "${snapcraft_file_rendered}" "${snapcraft_file_rendered}" "${version}" "${snapcraft_base}"', build_snap)
-        self.assertIn('python3 "${safe_fs}" replace build-snap "${snap_files[0]}" "${output_path}" --src-kind file --dst-must-not-exist', build_snap)
+        self.assertIn('"${safe_fs_cmd[@]}" copy-file build-snap "${snap_files[0]}" "${output_path}" 0644 --dst-must-not-exist', build_snap)
         self.assertNotIn('rm -rf -- "${snap_workspace}"', build_snap)
         self.assertNotIn('snapcraft_backup', build_snap)
         self.assertNotIn('mv -f -- "${snapcraft_backup}" "${snapcraft_file}"', build_snap)
@@ -1135,7 +1140,10 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("run: make rpm-generic-check", workflow)
         self.assertTrue("if: env.BUILD_GENERIC_RPM == 'true'" in workflow or "if: env.BUILD_GENERIC_RPM == '1'" in workflow)
         self.assertIn("name: Build Snap package", workflow)
-        self.assertIn("github.event_name != 'workflow_dispatch' && '0'", workflow)
+        self.assertIn('BUILD_SNAP: "1"', workflow)
+        self.assertNotIn("build_snap:", workflow)
+        self.assertNotIn("if: env.BUILD_SNAP", workflow)
+        self.assertNotIn("--skip-snap", workflow)
         self.assertIn("build_generic_rpm:", workflow)
         self.assertIn("run: shellcheck scripts/*.sh", workflow)
         self.assertIn("GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}", workflow)
@@ -1288,12 +1296,15 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("if [ \"$(BUILD_GENERIC_RPM)\" = \"0\" ]; then", makefile)
         self.assertIn("Skipping generic RPM generation (BUILD_GENERIC_RPM=0).\\n", makefile)
         self.assertIn("--skip-generic-rpm", makefile)
-        self.assertIn("release-dry-run: release-validate-flags dist-check rpm rpm-check", makefile)
-        self.assertIn("release: release-validate-flags dist-check rpm rpm-check", makefile)
+        self.assertIn("release-dry-run: release-validate-flags release-require-snap dist-check rpm rpm-check", makefile)
+        self.assertIn("release: release-validate-flags release-require-snap dist-check rpm rpm-check", makefile)
         self.assertIn("release-validate-flags", makefile)
         self.assertIn("release-validate-flags:", makefile)
         self.assertIn('SNAP_BUILD must be 0 or 1.\\n', makefile)
         self.assertIn('BUILD_GENERIC_RPM must be 0 or 1.\\n', makefile)
+        self.assertIn("release-require-snap:", makefile)
+        self.assertIn("SNAP_BUILD=0 is not allowed for release or release-dry-run.", makefile)
+        self.assertIn("release-dry-run-no-snap:", makefile)
 
     def test_build_rpm_stages_topdir_before_replacing_previous_build(self) -> None:
         build_rpm = (REPO_ROOT / "scripts" / "build-rpm.sh").read_text(encoding="utf-8")

@@ -5,7 +5,7 @@
     "main-page": {
       "type": "page",
       "title": "Speed of Cinnamon",
-      "sections": ["main-menu-map-section", "activation-section", "recording-section", "personalization-section", "notification-section", "output-section", "backend-section"]
+      "sections": ["main-menu-map-section", "activation-section", "recording-section", "personalization-section", "notification-section", "output-section", "text-polishing-section", "backend-section"]
     },
     "about-page": {
       "type": "page",
@@ -20,7 +20,7 @@
     "activation-section": {
       "type": "section",
       "title": "Activation and shortcuts",
-      "keys": ["toggle-keybinding", "primary-language-keybinding", "secondary-language-keybinding", "show-panel-label"]
+      "keys": ["toggle-keybinding", "primary-language-keybinding", "secondary-language-keybinding", "cancel-keybinding", "show-panel-label"]
     },
     "recording-section": {
       "type": "section",
@@ -30,7 +30,7 @@
     "personalization-section": {
       "type": "section",
       "title": "Personalization (menu: Text and output)",
-      "keys": ["personal-context", "vocabulary"]
+      "keys": ["personalization-help", "blacklist-help", "personal-context", "vocabulary"]
     },
     "notification-section": {
       "type": "section",
@@ -40,12 +40,17 @@
     "output-section": {
       "type": "section",
       "title": "Text output (menu: Text and output)",
-      "keys": ["insert-method", "append-space", "sanitize-special-chars", "typing-delay-ms", "max-transcript-files", "auto-paste-window-title"]
+      "keys": ["insert-method", "append-space", "sanitize-special-chars", "soften-profanity", "show-profanity-filter-list", "typing-delay-ms", "max-transcript-files", "auto-paste-window-title"]
+    },
+    "text-polishing-section": {
+      "type": "section",
+      "title": "Text polishing (menu: Text model)",
+      "keys": ["text-polishing-help", "post-process-backend", "post-process-preset", "post-process-preset-help-minimal", "post-process-preset-help-clean", "post-process-preset-help-code", "post-process-preset-help-chat", "post-process-preset-help-email", "post-process-preset-help-safety", "post-process-preset-help-custom", "post-process-prompt", "post-process-preserve-code", "post-process-never-add-content", "post-process-mask-sensitive-data", "post-process-command", "ollama-url", "ollama-model", "openai-compatible-text-model"]
     },
     "backend-section": {
       "type": "section",
-      "title": "Voice and text models (menu: Voice model / Text model)",
-      "keys": ["cli-path", "transcriber", "whisper-model", "transcriber-command", "post-process-backend", "post-process-command", "ollama-url", "ollama-model", "openai-compatible-url", "openai-compatible-model", "openai-compatible-text-model", "openai-compatible-flex-processing", "openai-compatible-api-key", "post-process-prompt"]
+      "title": "Voice model and external API (menu: Voice model / Text model)",
+      "keys": ["cli-path", "transcriber", "whisper-model", "transcriber-command", "openai-compatible-url", "openai-compatible-model", "openai-compatible-flex-processing", "openai-compatible-api-key"]
     },
     "about-section": {
       "type": "section",
@@ -59,7 +64,7 @@
   },
   "main-menu-settings-map": {
     "type": "label",
-    "description": "All persistent settings from the applet menu are available here. Recording options are in Recording, output and Auto-Submitt are in Text output, personal context and vocabulary are in Personalization, and voice/text model backend values are in Voice and text models. Dynamic actions such as downloading models, opening transcript folders, diagnostics, cleanup, and alarm commands remain in the applet panel menu."
+    "description": "All persistent settings from the applet menu are available here. Recording options are in Recording, output and Auto-Submitt are in Text output, personal context and vocabulary are in Personalization, text polishing prompts are in Text polishing, and voice/backend values are in Voice model and external API. Dynamic actions such as downloading models, opening transcript folders, diagnostics, cleanup, and alarm commands remain in the applet panel menu."
   },
   "toggle-keybinding": {
     "type": "keybinding",
@@ -76,6 +81,12 @@
     "type": "keybinding",
     "description": "Start dictation with the secondary language",
     "tooltip": "Optional Cinnamon global shortcut. When already recording, it stops the current recording without changing its language.",
+    "default": ""
+  },
+  "cancel-keybinding": {
+    "type": "keybinding",
+    "description": "Cancel recording",
+    "tooltip": "Optional Cinnamon global shortcut. Cancels the current recording, deletes local recording artifacts, and prevents auto-relisten restart.",
     "default": ""
   },
   "show-panel-label": {
@@ -185,10 +196,18 @@
     "tooltip": "Optional PipeWire/Pulse source name. Max 4096 chars. Leave empty for the current default. Run 'speed-of-cinnamon list-inputs --json' to inspect available sources.",
     "default": ""
   },
+  "personalization-help": {
+    "type": "label",
+    "description": "Personal context is background for recognition and polishing, for example preferred language, domain, product names, or style constraints. Custom vocabulary is a word list for spellings that should be recognized or preserved, for example project names, commands, abbreviations, file names, or proper nouns. Do not store secrets, passwords, API keys, account data, or other highly sensitive values here; these values may be sent to the configured transcription or polishing backend."
+  },
+  "blacklist-help": {
+    "type": "label",
+    "description": "Voice-activated blacklist: dictate 'blacklisteintrag: <word>' to add a word to the local blacklist without copying or auto-submitting that directive. Dictate 'Blacklist anzeigen' or a similar request to open the blacklist file for review and editing. If a blacklist hit is detected after transcription, the text is passed through the safety parser before clipboard or paste output so sensitive words can be masked."
+  },
   "personal-context": {
     "type": "textview",
     "description": "Personal context",
-    "tooltip": "Optional private context for recognition and text polishing. Use this for names, project terms, or other background that should influence the transcript. Max 4096 chars. Available as {context}, {prompt}, and SPEED_OF_CINNAMON_CONTEXT.",
+    "tooltip": "Optional private context for recognition and text polishing. Use this for domain, style, product terms, or other background that should influence the transcript. Max 4096 chars. Available as {context}, {prompt}, and SPEED_OF_CINNAMON_CONTEXT.",
     "height": 120,
     "default": ""
   },
@@ -235,6 +254,18 @@
     "description": "Replace accents before output",
     "tooltip": "Optional compatibility fallback for direct typing on X11. Clipboard output normally works better with this disabled.",
     "default": false
+  },
+  "soften-profanity": {
+    "type": "switch",
+    "description": "Replace profanity with harmless words",
+    "tooltip": "When enabled, common German and English profanity is replaced locally with harmless equivalents before transcripts are saved, copied, pasted, or auto-submitted. Disabled by default to avoid changing dictated code, commands, or exact quotes.",
+    "default": false
+  },
+  "show-profanity-filter-list": {
+    "type": "button",
+    "description": "Edit profanity replacement list",
+    "tooltip": "Create if needed and open the editable local profanity replacement file. Format: pattern -> replacement.",
+    "callback": "_openProfanityFilterList"
   },
   "typing-delay-ms": {
     "type": "spinbutton",
@@ -304,6 +335,86 @@
     },
     "default": "none"
   },
+  "text-polishing-help": {
+    "type": "label",
+    "description": "Text polishing runs after speech recognition and before clipboard/paste output. Presets provide safe reusable instructions: minimal corrections, natural text, command/code preservation, chat message, email, or sensitive-data masking. The custom instruction narrows the preset, for example tone, formatting, or app-specific requirements. Prefer precise instructions such as 'do not add content' or 'preserve commands exactly'.",
+    "tooltip": "This section controls what happens after speech recognition but before the text reaches the clipboard, paste target, or Auto-Submitt. Choose a preset for the general behavior, then use the custom instruction and safety switches to narrow it. Keep instructions short and explicit. Avoid secrets in prompts because external polishing backends may receive the transcript, context, vocabulary, and effective polishing instruction."
+  },
+  "post-process-preset": {
+    "type": "combobox",
+    "description": "Text polishing preset",
+    "tooltip": "Reusable instruction sent to Ollama, OpenAI-compatible text polishing, or the {prompt} placeholder of a custom command.",
+    "options": {
+      "Safe default: minimal corrections - punctuation, capitalization, obvious ASR errors": "minimal",
+      "Clean natural text - readable prose while preserving technical terms": "clean",
+      "Preserve commands and code - keep commands, paths, flags, identifiers exact": "code",
+      "Short chat message - concise chat text without added greeting or subject": "chat",
+      "Polite email - email tone while preserving dictated intent": "email",
+      "Sensitive-data masking - mask tokens, passwords, account data, addresses, names": "safety",
+      "Custom instruction only - use the custom instruction without a preset": "custom"
+    },
+    "default": "minimal"
+  },
+  "post-process-preset-help-minimal": {
+    "type": "label",
+    "description": "Safe default fixes punctuation, capitalization, and obvious transcription errors without changing meaning.",
+    "tooltip": "Use this for normal dictation when you want the text cleaned up but not rewritten. The backend should correct punctuation, capitalization, spacing, and clear ASR mistakes only. It should preserve wording, intent, tone, technical terms, and factual content.",
+    "dependency": "post-process-preset=minimal"
+  },
+  "post-process-preset-help-clean": {
+    "type": "label",
+    "description": "Clean natural text makes dictated text read naturally while preserving technical terms.",
+    "tooltip": "Use this when raw dictation should become smoother prose. It may remove obvious filler words, repair sentence boundaries, and improve readability, but it should not invent facts, change meaning, or normalize commands and technical names incorrectly.",
+    "dependency": "post-process-preset=clean"
+  },
+  "post-process-preset-help-code": {
+    "type": "label",
+    "description": "Preserve commands and code keeps commands, paths, flags, identifiers, and quoted text exact.",
+    "tooltip": "Use this for terminals, developer chats, notes with shell commands, file paths, code snippets, variables, branch names, issue IDs, and quoted strings. It tells the backend to avoid typographic quotes and to keep syntax-sensitive text unchanged.",
+    "dependency": "post-process-preset=code"
+  },
+  "post-process-preset-help-chat": {
+    "type": "label",
+    "description": "Short chat message formats a concise chat message without adding a greeting, subject, or sign-off.",
+    "tooltip": "Use this for messengers and team chat. It should make the message compact and readable, but should not add salutations, signatures, headings, explanations, or context that was not dictated.",
+    "dependency": "post-process-preset=chat"
+  },
+  "post-process-preset-help-email": {
+    "type": "label",
+    "description": "Polite email formats an email while preserving dictated intent and content.",
+    "tooltip": "Use this for longer messages that should read like an email. It may improve structure and politeness, but should only add an opening or closing if the dictation clearly asks for one or already implies one.",
+    "dependency": "post-process-preset=email"
+  },
+  "post-process-preset-help-safety": {
+    "type": "label",
+    "description": "Sensitive-data masking asks the backend to mask tokens, passwords, account data, phone numbers, addresses, and private names.",
+    "tooltip": "Use this when dictated text might contain secrets or personal information. The backend should mask likely tokens, passwords, API keys, account data, contact details, addresses, and private names before output while preserving the rest of the text.",
+    "dependency": "post-process-preset=safety"
+  },
+  "post-process-preset-help-custom": {
+    "type": "label",
+    "description": "Custom instruction only uses your custom instruction without adding a preset.",
+    "tooltip": "Use this when the preset instructions are too broad and you want the custom instruction field to define the whole polishing behavior. The global safety checkboxes still add their instructions when enabled.",
+    "dependency": "post-process-preset=custom"
+  },
+  "post-process-preserve-code": {
+    "type": "switch",
+    "description": "Preserve commands and code",
+    "tooltip": "Keep commands, paths, filenames, flags, variable names, identifiers, code, and quoted text exact unless explicitly requested otherwise.",
+    "default": true
+  },
+  "post-process-never-add-content": {
+    "type": "switch",
+    "description": "Never add content",
+    "tooltip": "Forbid extra facts, explanations, greetings, sign-offs, headings, or other content that was not dictated or explicitly requested.",
+    "default": true
+  },
+  "post-process-mask-sensitive-data": {
+    "type": "switch",
+    "description": "Mask sensitive data",
+    "tooltip": "Ask the polishing backend to mask tokens, passwords, account data, phone numbers, addresses, and private names before output.",
+    "default": false
+  },
   "post-process-command": {
     "type": "entry",
     "description": "Post-process command",
@@ -354,8 +465,8 @@
   },
   "post-process-prompt": {
     "type": "textview",
-    "description": "Text polishing instruction",
-    "tooltip": "Optional instruction for Ollama or OpenAI-compatible polishing. Max 4096 chars. The transcript, language, context, and vocabulary are added automatically.",
+    "description": "Custom polishing instruction",
+    "tooltip": "Optional custom instruction appended to the selected preset and checkboxes. Max 4096 chars. The transcript, language, context, and vocabulary are added automatically.",
     "height": 100,
     "default": ""
   }

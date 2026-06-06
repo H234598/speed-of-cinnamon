@@ -1,4 +1,4 @@
-.PHONY: check test coverage lint lint-workflows lint-workflows-check python-security-scan shell-security-scan security-scan verify-authorship smoke-doctor smoke-backend release-dry-run release dist dist-check rpm rpm-check rpm-generic rpm-generic-check snap snap-check release-validate-flags install-local uninstall-local clean version-next
+.PHONY: check test coverage lint lint-workflows lint-workflows-check python-security-scan shell-security-scan security-scan verify-authorship smoke-doctor smoke-backend release-dry-run release-dry-run-no-snap release release-require-snap dist dist-check rpm rpm-check rpm-generic rpm-generic-check snap snap-check release-validate-flags install-local uninstall-local clean version-next
 SHELL := /usr/bin/env bash
 
 PYTHON := $(shell command -v python3 2>/dev/null | awk 'NR==1 {print}')
@@ -66,37 +66,40 @@ smoke-backend:
 version-next:
 	@./scripts/next_version.py $(OPTS)
 
-release-dry-run: release-validate-flags dist-check rpm rpm-check
+release-dry-run: release-validate-flags release-require-snap dist-check rpm rpm-check
 	@if [ "$(BUILD_GENERIC_RPM)" = "0" ]; then \
 		  printf 'Skipping generic RPM generation (BUILD_GENERIC_RPM=0).\n'; \
 	else \
 		  $(MAKE) rpm-generic rpm-generic-check; \
 	fi
 	@$(MAKE) snap
-	@if [ "$(SNAP_BUILD)" = "0" ]; then \
-		  printf 'Skipping snap verification (SNAP_BUILD=0).\n'; \
-	else \
-		  $(MAKE) snap-check; \
-	fi
+	@$(MAKE) snap-check
 	./scripts/publish-github-release.sh --dry-run \
-		$(if $(filter 0,$(SNAP_BUILD)),--skip-snap) \
 		$(if $(filter 0,$(BUILD_GENERIC_RPM)),--skip-generic-rpm) \
 		"v$(PROJECT_VERSION)"
 
-release: release-validate-flags dist-check rpm rpm-check
+release-dry-run-no-snap: SNAP_BUILD=0
+release-dry-run-no-snap: release-validate-flags dist-check rpm rpm-check
+	@if [ "$(BUILD_GENERIC_RPM)" = "0" ]; then \
+	  printf 'Skipping generic RPM generation (BUILD_GENERIC_RPM=0).\n'; \
+	else \
+	  $(MAKE) rpm-generic rpm-generic-check; \
+	fi
+	@printf 'Skipping snap build for local no-snap release dry-run. This target is not publishable.\n'
+	./scripts/publish-github-release.sh --dry-run \
+		--skip-snap \
+		$(if $(filter 0,$(BUILD_GENERIC_RPM)),--skip-generic-rpm) \
+		"v$(PROJECT_VERSION)"
+
+release: release-validate-flags release-require-snap dist-check rpm rpm-check
 	@if [ "$(BUILD_GENERIC_RPM)" = "0" ]; then \
 	  printf 'Skipping generic RPM generation (BUILD_GENERIC_RPM=0).\n'; \
 	else \
 	  $(MAKE) rpm-generic rpm-generic-check; \
 	fi
 	@$(MAKE) snap
-	@if [ "$(SNAP_BUILD)" = "0" ]; then \
-	  printf 'Skipping snap verification (SNAP_BUILD=0).\n'; \
-	else \
-	  $(MAKE) snap-check; \
-	fi
+	@$(MAKE) snap-check
 	./scripts/publish-github-release.sh \
-	  $(if $(filter 0,$(SNAP_BUILD)),--skip-snap) \
 	  $(if $(filter 0,$(BUILD_GENERIC_RPM)),--skip-generic-rpm) \
 	  "v$(PROJECT_VERSION)"
 
@@ -147,6 +150,12 @@ release-validate-flags:
 	fi
 	@if [ "$(BUILD_GENERIC_RPM)" != "0" ] && [ "$(BUILD_GENERIC_RPM)" != "1" ]; then \
 		printf 'BUILD_GENERIC_RPM must be 0 or 1.\n' >&2; \
+		exit 1; \
+	fi
+
+release-require-snap: release-validate-flags
+	@if [ "$(SNAP_BUILD)" != "1" ]; then \
+		printf 'SNAP_BUILD=0 is not allowed for release or release-dry-run. Use release-dry-run-no-snap only for local validation without Snap.\n' >&2; \
 		exit 1; \
 	fi
 

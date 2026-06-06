@@ -17,6 +17,7 @@ const UUID = "speed-of-cinnamon@H234598";
 const HOTKEY_ID = "speed-of-cinnamon-toggle";
 const PRIMARY_HOTKEY_ID = "speed-of-cinnamon-primary-language";
 const SECONDARY_HOTKEY_ID = "speed-of-cinnamon-secondary-language";
+const CANCEL_HOTKEY_ID = "speed-of-cinnamon-cancel";
 const DEFAULT_CLI = GLib.build_filenamev([GLib.get_home_dir(), ".local", "bin", "speed-of-cinnamon"]);
 const SYSTEM_CLI = "/usr/bin/speed-of-cinnamon";
 const RUNBOOK_URL = "https://gist.github.com/H234598/b95129e13ac0b09c9777edd41aeedfa0";
@@ -69,10 +70,21 @@ const CLI_TEXT_SETTINGS = {
   "openai-compatible-model": "openai-compatible model",
   "openai-compatible-text-model": "openai-compatible text model",
   "openai-compatible-api-key": "openai-compatible API key",
+  "post-process-preset": "post-process preset",
   "post-process-prompt": "post-process prompt",
   "whisper-model": "whisper model",
   "personal-context": "personal context",
   "vocabulary": "vocabulary"
+};
+const TEXT_POLISHING_SAFE_PRESET = "minimal";
+const TEXT_POLISHING_PRESET_INSTRUCTIONS = {
+  "minimal": "Correct only punctuation, capitalization, and obvious transcription errors. Preserve the meaning. Do not add new information.",
+  "clean": "Format the transcript as natural, correct text in the transcript language. Remove filler words only when they are clearly unintended. Preserve technical terms.",
+  "code": "Preserve commands, paths, filenames, flags, variable names, code, and quoted text exactly. Do not use typographic quotes. Do not add explanations.",
+  "chat": "Format the transcript as a concise, clear chat message. Do not add a subject, greeting, or sign-off unless it was dictated.",
+  "email": "Format the transcript as a polite email while preserving intent and content. Add salutation or sign-off only when clearly dictated or requested.",
+  "safety": "Check for sensitive data such as tokens, passwords, account data, phone numbers, addresses, and private names. Mask such values without rewriting unrelated text.",
+  "custom": ""
 };
 const MAX_TYPE_COMMAND_CHARS = 4000;
 const MAX_SPAWN_JSON_BYTES = 262144;
@@ -267,12 +279,17 @@ const BOOLEAN_IMPORT_SETTINGS = {
   "notify-error": true,
   "append-space": true,
   "sanitize-special-chars": true,
+  "soften-profanity": false,
+  "post-process-preserve-code": true,
+  "post-process-never-add-content": true,
+  "post-process-mask-sensitive-data": false,
   "openai-compatible-flex-processing": true
 };
 const IMPORT_TEXT_SETTINGS = {
   "toggle-keybinding": "toggle keybinding",
   "primary-language-keybinding": "primary language keybinding",
   "secondary-language-keybinding": "secondary language keybinding",
+  "cancel-keybinding": "cancel recording keybinding",
   "input-device": "input device",
   "personal-context": "personal context",
   "vocabulary": "vocabulary",
@@ -286,6 +303,7 @@ const IMPORT_TEXT_SETTINGS = {
   "openai-compatible-model": "openai-compatible model",
   "openai-compatible-text-model": "openai-compatible text model",
   "openai-compatible-api-key": "openai-compatible API key",
+  "post-process-preset": "post-process preset",
   "post-process-prompt": "post-process prompt"
 };
 const RECORDING_LIMIT_SECONDS = [
@@ -304,6 +322,7 @@ const EXPORTABLE_SETTINGS = [
   ["toggle-keybinding", "toggleKeybinding"],
   ["primary-language-keybinding", "primaryLanguageKeybinding"],
   ["secondary-language-keybinding", "secondaryLanguageKeybinding"],
+  ["cancel-keybinding", "cancelKeybinding"],
   ["show-panel-label", "showPanelLabel"],
   ["language", "language"],
   ["secondary-language", "secondaryLanguage"],
@@ -322,6 +341,7 @@ const EXPORTABLE_SETTINGS = [
   ["append-space", "appendSpace"],
   ["typing-delay-ms", "typingDelayMs"],
   ["sanitize-special-chars", "sanitizeSpecialChars"],
+  ["soften-profanity", "softenProfanity"],
   ["max-transcript-files", "maxTranscriptFiles"],
   ["auto-paste-window-title", "autoPasteWindowTitle"],
   ["transcriber", "transcriber"],
@@ -335,6 +355,10 @@ const EXPORTABLE_SETTINGS = [
   ["openai-compatible-model", "openaiCompatibleModel"],
   ["openai-compatible-text-model", "openaiCompatibleTextModel"],
   ["openai-compatible-flex-processing", "openaiCompatibleFlexProcessing"],
+  ["post-process-preset", "postProcessPreset"],
+  ["post-process-preserve-code", "postProcessPreserveCode"],
+  ["post-process-never-add-content", "postProcessNeverAddContent"],
+  ["post-process-mask-sensitive-data", "postProcessMaskSensitiveData"],
   ["post-process-prompt", "postProcessPrompt"]
 ];
 
@@ -358,6 +382,7 @@ MyApplet.prototype = {
     this.toggleKeybinding = "<Super>z::";
     this.primaryLanguageKeybinding = "";
     this.secondaryLanguageKeybinding = "";
+    this.cancelKeybinding = "";
     this.showPanelLabel = true;
     this.language = "en";
     this.secondaryLanguage = "de";
@@ -373,6 +398,7 @@ MyApplet.prototype = {
     this.appendSpace = true;
     this.typingDelayMs = DEFAULT_TYPING_DELAY_MS;
     this.sanitizeSpecialChars = false;
+    this.softenProfanity = false;
     this.maxTranscriptFiles = DEFAULT_MAX_TRANSCRIPT_FILES;
     this.autoPasteWindowTitle = DEFAULT_AUTO_PASTE_TITLE;
     this.cliPath = "";
@@ -388,6 +414,10 @@ MyApplet.prototype = {
     this.openaiCompatibleTextModel = DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL;
     this.openaiCompatibleFlexProcessing = true;
     this.openaiCompatibleApiKey = "";
+    this.postProcessPreset = TEXT_POLISHING_SAFE_PRESET;
+    this.postProcessPreserveCode = true;
+    this.postProcessNeverAddContent = true;
+    this.postProcessMaskSensitiveData = false;
     this.postProcessPrompt = "";
     this.personalContext = "";
     this.vocabulary = "";
@@ -452,6 +482,7 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "toggle-keybinding", "toggleKeybinding", this._onHotkeyChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "primary-language-keybinding", "primaryLanguageKeybinding", this._onHotkeyChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "secondary-language-keybinding", "secondaryLanguageKeybinding", this._onHotkeyChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "cancel-keybinding", "cancelKeybinding", this._onHotkeyChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "show-panel-label", "showPanelLabel", this._updatePanel, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "language", "language", this._onLanguageSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "secondary-language", "secondaryLanguage", this._onLanguageSettingsChanged, null);
@@ -465,6 +496,7 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "append-space", "appendSpace", this._onTextOutputSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "typing-delay-ms", "typingDelayMs", this._onTextOutputSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "sanitize-special-chars", "sanitizeSpecialChars", this._onTextOutputSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "soften-profanity", "softenProfanity", this._onTextOutputSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "max-transcript-files", "maxTranscriptFiles", this._onTranscriptRetentionSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "auto-paste-window-title", "autoPasteWindowTitle", this._onTextOutputSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "cli-path", "cliPath", null, null);
@@ -480,6 +512,10 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-text-model", "openaiCompatibleTextModel", this._onTextModelSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-flex-processing", "openaiCompatibleFlexProcessing", this._onOpenAiFlexProcessingSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-api-key", "openaiCompatibleApiKey", this._onVoiceBackendSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-preset", "postProcessPreset", this._onTextModelSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-preserve-code", "postProcessPreserveCode", this._onTextModelSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-never-add-content", "postProcessNeverAddContent", this._onTextModelSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-mask-sensitive-data", "postProcessMaskSensitiveData", this._onTextModelSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-prompt", "postProcessPrompt", this._onTextModelSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "personal-context", "personalContext", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "vocabulary", "vocabulary", null, null);
@@ -884,6 +920,9 @@ MyApplet.prototype = {
       this._rememberFocusedWindow();
       this._startWithLanguage(this._secondaryLanguage());
     });
+    this._registerHotkey(CANCEL_HOTKEY_ID, this.cancelKeybinding, () => {
+      this._cancelRecording();
+    });
   },
 
   _onHotkeyChanged: function() {
@@ -979,6 +1018,7 @@ MyApplet.prototype = {
     Main.keybindingManager.removeHotKey(this._hotkeyName(HOTKEY_ID));
     Main.keybindingManager.removeHotKey(this._hotkeyName(PRIMARY_HOTKEY_ID));
     Main.keybindingManager.removeHotKey(this._hotkeyName(SECONDARY_HOTKEY_ID));
+    Main.keybindingManager.removeHotKey(this._hotkeyName(CANCEL_HOTKEY_ID));
     if (this.settings) {
       this.settings.finalize();
     }
@@ -993,10 +1033,10 @@ MyApplet.prototype = {
     let safeOpenAiCompatibleUrl = this._coerceCliTextArg(this.openaiCompatibleUrl, "openai-compatible URL");
     let safeOpenAiCompatibleModel = this._coerceCliTextArg(this.openaiCompatibleModel, "openai-compatible model");
     let safeOpenAiCompatibleTextModel = this._coerceCliTextArg(this.openaiCompatibleTextModel, "openai-compatible text model");
-    let safePostProcessPrompt = this._coerceCliTextArg(this.postProcessPrompt, "post-process prompt");
+    let safePostProcessPrompt = this._coerceCliTextArg(this._effectivePostProcessPrompt(), "post-process prompt");
     let safeWhisperModel = this._coerceCliTextArg(this.whisperModel, "whisper model");
-    let safePersonalContext = this._coerceCliTextArg(this.personalContext, "personal context");
-    let safeVocabulary = this._coerceCliTextArg(this.vocabulary, "vocabulary");
+    let safePersonalContext = this._coerceCliTextArg(this._singleLineCliTextValue(this.personalContext), "personal context");
+    let safeVocabulary = this._coerceCliTextArg(this._singleLineCliTextValue(this.vocabulary), "vocabulary");
 
     let args = [
       this._cliCommand(),
@@ -1016,6 +1056,9 @@ MyApplet.prototype = {
     }
     if (this.sanitizeSpecialChars) {
       args.push("--sanitize-special-chars");
+    }
+    if (this.softenProfanity) {
+      args.push("--soften-profanity");
     }
     if (this.keepRecordingArtifacts) {
       args.push("--keep-recording-artifacts");
@@ -1083,6 +1126,10 @@ MyApplet.prototype = {
 
   _diagnosticsSaveArgs: function() {
     return [this._cliCommand(), "diagnostics", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshotForCli()), "--save", "--json"];
+  },
+
+  _profanityFilterDocumentArgs: function() {
+    return [this._cliCommand(), "profanity-filter-document", "--json"];
   },
 
   _benchmarkArgs: function(audioPath) {
@@ -1597,6 +1644,10 @@ MyApplet.prototype = {
     let sanitize = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.sanitizeSpecialChars), _("Replace accents before output")));
     sanitize.connect("activate", () => this._toggleSanitizeSpecialChars());
     this.textOptionsItem.menu.addMenuItem(sanitize);
+
+    let soften = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.softenProfanity), _("Replace profanity with harmless words")));
+    soften.connect("activate", () => this._toggleSoftenProfanity());
+    this.textOptionsItem.menu.addMenuItem(soften);
   },
 
   _setTextOptionStatus: function(message) {
@@ -1621,6 +1672,15 @@ MyApplet.prototype = {
     this._populateTextOptionsMenu();
     this._setTextOptionStatus(
       this.sanitizeSpecialChars ? _("Accent replacement enabled") : _("Accent replacement disabled")
+    );
+  },
+
+  _toggleSoftenProfanity: function() {
+    this.softenProfanity = !Boolean(this.softenProfanity);
+    this.settings.setValue("soften-profanity", this.softenProfanity);
+    this._populateTextOptionsMenu();
+    this._setTextOptionStatus(
+      this.softenProfanity ? _("Profanity replacement enabled") : _("Profanity replacement disabled")
     );
   },
 
@@ -1917,7 +1977,7 @@ MyApplet.prototype = {
       [_("Start or stop dictation"), this._formatKeybinding(this.toggleKeybinding)],
       [_("Start primary language"), this._formatKeybinding(this.primaryLanguageKeybinding)],
       [_("Start secondary language"), this._formatKeybinding(this.secondaryLanguageKeybinding)],
-      [_("Cancel recording"), _("Applet menu only")],
+      [_("Cancel recording"), this._formatKeybinding(this.cancelKeybinding)],
       [_("Switch language"), _("Applet menu only")]
     ];
   },
@@ -1933,6 +1993,9 @@ MyApplet.prototype = {
       this.shortcutItem.menu.addMenuItem(item);
     }
     this.shortcutItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    let configure = new PopupMenu.PopupIconMenuItem(_("Configure shortcuts"), "preferences-desktop-keyboard-symbolic", St.IconType.SYMBOLIC);
+    configure.connect("activate", () => this._openShortcutSettings());
+    this.shortcutItem.menu.addMenuItem(configure);
     let copy = new PopupMenu.PopupIconMenuItem(_("Copy shortcut reference"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
     copy.connect("activate", () => this._copyShortcutReference());
     this.shortcutItem.menu.addMenuItem(copy);
@@ -1949,6 +2012,10 @@ MyApplet.prototype = {
   _copyShortcutReference: function() {
     this.clipboard.set_text(St.ClipboardType.CLIPBOARD, this._shortcutReferenceText());
     this._setStatus("done", _("Copied shortcut reference"), this.lastTranscript);
+  },
+
+  _openShortcutSettings: function() {
+    this._openAppletSettings(_("Opened Cinnamon shortcut settings"));
   },
 
   _toggleRecording: function() {
@@ -2139,12 +2206,18 @@ MyApplet.prototype = {
   },
 
   _openAppletSettings: function() {
-    if (!GLib.find_program_in_path("cinnamon-settings")) {
-      this._setStatus("error", _("cinnamon-settings command not found"), this.lastTranscript);
+    let openedMessage = arguments.length > 0 ? String(arguments[0] || "") : _("Opened Cinnamon applet settings");
+    if (!GLib.find_program_in_path("xlet-settings")) {
+      this._setStatus("error", _("xlet-settings command not found"), this.lastTranscript);
       return;
     }
-    Util.spawn(["cinnamon-settings", "applets"]);
-    this._setStatus("ready", _("Opened Cinnamon applet settings"), this.lastTranscript);
+    let args = ["xlet-settings", "applet", UUID];
+    let instanceId = String(this.instanceId || "").trim();
+    if (instanceId !== "") {
+      args.push("--id", instanceId);
+    }
+    Util.spawn(args);
+    this._setStatus("ready", openedMessage, this.lastTranscript);
   },
 
   _openSetupGuide: function() {
@@ -2184,6 +2257,22 @@ MyApplet.prototype = {
       global.logError(err);
       this._setStatus("error", _("Could not open file: ") + err.message, this.lastTranscript);
     }
+  },
+
+  _openProfanityFilterList: function() {
+    this._setStatus("processing", _("Preparing profanity replacement list..."), this.lastTranscript);
+    this._spawnJson(this._profanityFilterDocumentArgs(), (payload) => {
+      if (payload.error) {
+        this._setStatus("error", payload.error, this.lastTranscript);
+        return;
+      }
+      let path = String(payload.path || "");
+      if (path === "") {
+        this._setStatus("error", _("Profanity replacement list was not generated"), this.lastTranscript);
+        return;
+      }
+      this._openFile(path, _("Opened profanity replacement list: ") + String(payload.entries || 0));
+    });
   },
 
   _copySetupPlan: function() {
@@ -3341,6 +3430,12 @@ MyApplet.prototype = {
 
     this.textModelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
+    let reset = this._selectionMenuItem(_("Reset polishing defaults"));
+    reset.connect("activate", () => this._resetTextPolishingDefaults());
+    this.textModelItem.menu.addMenuItem(reset);
+
+    this.textModelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
     if (message) {
       this.textModelItem.menu.addMenuItem(this._selectionInfoItem(message));
       return;
@@ -3649,6 +3744,61 @@ MyApplet.prototype = {
     }
   },
 
+  _normalizeTextPolishingPreset: function(value) {
+    let key = String(value || "").trim();
+    if (Object.prototype.hasOwnProperty.call(TEXT_POLISHING_PRESET_INSTRUCTIONS, key)) {
+      return key;
+    }
+    return TEXT_POLISHING_SAFE_PRESET;
+  },
+
+  _singleLineCliTextValue: function(value) {
+    return String(value || "")
+      .replace(NUL_RE, "")
+      .replace(/\\u000d|\\u000a|\\r|\\n/gi, " ")
+      .replace(/[\u0001-\u001f\u007f]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  },
+
+  _effectivePostProcessPrompt: function() {
+    let parts = [];
+    let preset = this._normalizeTextPolishingPreset(this.postProcessPreset);
+    let presetInstruction = TEXT_POLISHING_PRESET_INSTRUCTIONS[preset] || "";
+    if (presetInstruction !== "") {
+      parts.push("Preset instruction: " + presetInstruction);
+    }
+    let customInstruction = String(this.postProcessPrompt || "").trim();
+    if (customInstruction !== "") {
+      parts.push("Custom instruction: " + customInstruction);
+    }
+    if (Boolean(this.postProcessPreserveCode)) {
+      parts.push("Preserve commands, code, paths, filenames, flags, variable names, identifiers, and quoted text exactly unless the user explicitly asks for rewriting.");
+    }
+    if (Boolean(this.postProcessNeverAddContent)) {
+      parts.push("Do not add facts, explanations, greetings, sign-offs, headings, or extra content that was not dictated or explicitly requested.");
+    }
+    if (Boolean(this.postProcessMaskSensitiveData)) {
+      parts.push("Mask sensitive data such as tokens, passwords, account data, phone numbers, addresses, and private names before returning the final text.");
+    }
+    return this._singleLineCliTextValue(parts.join(" "));
+  },
+
+  _resetTextPolishingDefaults: function() {
+    this.postProcessPreset = TEXT_POLISHING_SAFE_PRESET;
+    this.postProcessPrompt = "";
+    this.postProcessPreserveCode = true;
+    this.postProcessNeverAddContent = true;
+    this.postProcessMaskSensitiveData = false;
+    this.settings.setValue("post-process-preset", this.postProcessPreset);
+    this.settings.setValue("post-process-prompt", this.postProcessPrompt);
+    this.settings.setValue("post-process-preserve-code", this.postProcessPreserveCode);
+    this.settings.setValue("post-process-never-add-content", this.postProcessNeverAddContent);
+    this.settings.setValue("post-process-mask-sensitive-data", this.postProcessMaskSensitiveData);
+    this._refreshTextModelMenu();
+    this._setStatus("ready", _("Text polishing defaults restored"), this.lastTranscript);
+  },
+
   _previewCleanup: function() {
     if (this.isCommandRunning) {
       return;
@@ -3750,6 +3900,7 @@ MyApplet.prototype = {
     this._updateOpenAiFlexProcessingItem();
     this.insertMethod = this._normalizeOutputMethod(this.insertMethod);
     this._populateOutputMethodMenu();
+    this._populateTextOptionsMenu();
     this._updateAutoPasteItem();
     this._registerHotkeys();
     this._updatePanel();

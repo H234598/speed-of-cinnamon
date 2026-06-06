@@ -205,38 +205,37 @@ git push origin vX.Y.Z
 The release workflow has a dedicated workflow validation job and then runs the normal checks, verifies the source archive and
 all package payloads, and finally publishes a GitHub Release
 with the source archive, checksum, Fedora noarch RPM, generic noarch RPM, and their source RPMs. Tag-triggered releases
-skip Snap generation by default because the GitHub-hosted release runner does not consistently provide a usable Snap
-build environment. Manual release runs can opt into Snap generation with `build_snap=true`.
+build Snap packages by default and require a usable Snap build environment.
 It also has manual inputs:
 
-- `build_snap=false` to skip snap package generation in CI.
+- Snap packages are mandatory for release CI.
 - `build_generic_rpm=false` to skip generic RPM generation.
 - `run_workflow_lint=false` to skip workflow validation step.
 
 Publishing uses repository secret `RELEASE_GITHUB_TOKEN` (PAT or token with `contents: write`) for `gh release create` and
 `gh release upload`. For local dry-runs this secret is not required because `make release-dry-run` does not publish.
 
-For environments without `snapcraft`, run `make release-dry-run SNAP_BUILD=0` locally.
+For environments without `snapcraft`, run `make release-dry-run-no-snap` only as a local non-publishable validation.
 To skip local generic RPM generation, use `make release-dry-run BUILD_GENERIC_RPM=0`.
 This keeps the release build and validation steps and skips only the publish/upload step for local dry-runs.
 To combine both optional skips:
 
 ```bash
-make release-dry-run SNAP_BUILD=0 BUILD_GENERIC_RPM=0
+make release-dry-run BUILD_GENERIC_RPM=0
 ```
 
 Flag values are validated locally before any artifacts are built:
 
-- `SNAP_BUILD`: `0` or `1`
+- `SNAP_BUILD`: must be `1` for `release` and `release-dry-run`
 - `BUILD_GENERIC_RPM`: `0` or `1`
 
 To run the manual release workflow from CLI:
 
 ```bash
-gh workflow run release.yml -f tag=v0.1.2 -f build_snap=false
+gh workflow run release.yml -f tag=v0.1.2
 ```
 
-Use `build_snap=true` only when the release runner has a working Snap build environment. Use
+The release runner must have a working Snap build environment. Use
 `build_generic_rpm=false` to skip the generic RPM profile.
 
 Local release helpers:
@@ -246,10 +245,10 @@ make release-dry-run
 make release
 ```
 
-For local real release attempts with fewer artifacts, you can also skip snap or generic RPM:
+For local real release attempts with fewer artifacts, you can skip generic RPM, but Snap remains mandatory:
 
 ```bash
-make release SNAP_BUILD=0 BUILD_GENERIC_RPM=0
+make release BUILD_GENERIC_RPM=0
 ```
 
 To calculate the next version from commit policy:

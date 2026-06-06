@@ -214,6 +214,7 @@ class SettingsExportTest(unittest.TestCase):
         payload = build_export({
             "primary-language-keybinding": "<Super><Alt>z::",
             "secondary-language-keybinding": "<Super><Shift>z::",
+            "cancel-keybinding": "<Super>Escape::",
             "language": "de",
             "show-panel-label": True,
             "append-space": False,
@@ -221,6 +222,7 @@ class SettingsExportTest(unittest.TestCase):
             "auto-relisten": True,
             "keep-recording-artifacts": True,
             "sanitize-special-chars": True,
+            "soften-profanity": True,
             "typing-delay-ms": "12",
             "max-transcript-files": "500",
             "auto-paste-window-title": "Teams",
@@ -230,6 +232,10 @@ class SettingsExportTest(unittest.TestCase):
             "openai-compatible-model": "local-llama",
             "openai-compatible-text-model": "local-polisher",
             "openai-compatible-flex-processing": False,
+            "post-process-preset": "code",
+            "post-process-preserve-code": True,
+            "post-process-never-add-content": True,
+            "post-process-mask-sensitive-data": True,
             "cli-path": "/tmp/not-portable",
             "unknown": "ignored",
         })
@@ -237,6 +243,7 @@ class SettingsExportTest(unittest.TestCase):
         self.assertEqual(payload["app"], "speed-of-cinnamon")
         self.assertEqual(settings["primary-language-keybinding"], "<Super><Alt>z::")
         self.assertEqual(settings["secondary-language-keybinding"], "<Super><Shift>z::")
+        self.assertEqual(settings["cancel-keybinding"], "<Super>Escape::")
         self.assertEqual(settings["language"], "de")
         self.assertTrue(settings["show-panel-label"])
         self.assertFalse(settings["append-space"])
@@ -244,6 +251,7 @@ class SettingsExportTest(unittest.TestCase):
         self.assertTrue(settings["auto-relisten"])
         self.assertTrue(settings["keep-recording-artifacts"])
         self.assertTrue(settings["sanitize-special-chars"])
+        self.assertTrue(settings["soften-profanity"])
         self.assertEqual(settings["typing-delay-ms"], 12)
         self.assertEqual(settings["max-transcript-files"], 500)
         self.assertEqual(settings["auto-paste-window-title"], "Teams")
@@ -253,6 +261,10 @@ class SettingsExportTest(unittest.TestCase):
         self.assertEqual(settings["openai-compatible-model"], "local-llama")
         self.assertEqual(settings["openai-compatible-text-model"], "local-polisher")
         self.assertFalse(settings["openai-compatible-flex-processing"])
+        self.assertEqual(settings["post-process-preset"], "code")
+        self.assertTrue(settings["post-process-preserve-code"])
+        self.assertTrue(settings["post-process-never-add-content"])
+        self.assertTrue(settings["post-process-mask-sensitive-data"])
         self.assertNotIn("cli-path", settings)
         self.assertNotIn("unknown", settings)
 

@@ -16,8 +16,8 @@ status and a short state label:
 - `ERR`: the last operation failed.
 
 The default global shortcut is `Super+Z`. Optional shortcuts can start dictation directly with the configured primary
-or secondary language. The applet menu's `Keyboard shortcuts` entry shows the live Cinnamon bindings and can copy them
-for setup notes.
+or secondary language, or cancel the current recording. The applet menu's `Keyboard shortcuts` entry shows the live
+Cinnamon bindings, can copy them for setup notes, and opens the Cinnamon applet settings to edit the shortcuts.
 
 ## Setup Menu
 
@@ -105,9 +105,20 @@ Use `Text options` to toggle:
 - `Append trailing space`
 - `Replace accents before output`
 
+Use `Personal context` for background that should influence recognition or polishing, such as preferred language,
+domain, product names, tone, or formatting constraints. Use `Custom vocabulary` as a word list for spellings that should
+be recognized or preserved, such as commands, abbreviations, file names, project names, or proper nouns. Do not store
+passwords, API keys, account data, or other highly sensitive values there; the configured transcription or polishing
+backend may receive these values.
+
 Use `Auto-Submitt` to choose one or more target-window markers such as `codex`, `Terminal`, `PDF`, `Excel`, `Telegram`, or `Teams`. Built-in marker names such as `Terminal`, `PDF`, `Excel`, `Telegram`, and `Teams` match known window classes/app IDs before inserted text gets a trailing Enter. `codex` and other custom comma-separated or line-separated markers match the full window title case-insensitively; an empty custom value disables Auto-Submitt. The default marker is `codex`.
 
 Accent replacement is a compatibility fallback for direct typing. Saved transcripts stay unchanged.
+
+Enable `Replace profanity with harmless words` when dictated profanity should be softened locally before transcripts are
+saved, copied, pasted, or auto-submitted. It is disabled by default because exact quotes, commands, and code should not
+be rewritten unexpectedly. Use `Show profanity replacement list` in the applet settings to open and edit the current
+local pattern/replacement file. The format is `pattern -> replacement`; lines without that separator are ignored.
 
 ### Security and blacklist
 
@@ -184,6 +195,21 @@ The `Text model` menu controls optional text polishing. It can:
 - use the custom command backend,
 - select a model returned by a local Ollama `/api/tags` endpoint,
 - select a model returned by an OpenAI-compatible `/v1/models` endpoint.
+
+The Cinnamon settings include text polishing presets and safety switches:
+
+- `Safe default: minimal corrections` fixes punctuation, capitalization, and obvious transcription errors without
+  changing meaning.
+- `Clean natural text` makes dictated text read naturally while preserving technical terms.
+- `Preserve commands and code` keeps commands, paths, flags, identifiers, and quoted text exact.
+- `Short chat message` formats the transcript as a concise chat message without adding greetings or subjects.
+- `Polite email` formats the transcript as an email while preserving dictated intent.
+- `Sensitive-data masking` asks the polishing backend to mask tokens, passwords, account data, phone numbers, addresses,
+  and private names.
+- `Custom polishing instruction` appends your own rule to the selected preset and checkboxes.
+
+The default polishing policy preserves commands/code and forbids adding content. `Mask sensitive data` is opt-in because
+it can intentionally remove dictated details.
 
 If the selected endpoint is not reachable, the menu stays usable and shows the connection status instead of blocking
 dictation.

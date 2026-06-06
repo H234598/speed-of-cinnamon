@@ -249,6 +249,7 @@ Downloads verify SHA-1 checksums before a model is activated.
 ```bash
 speed-of-cinnamon insert-text "Hallo Terminal" --insert-method clipboard-paste --json
 speed-of-cinnamon toggle --sanitize-special-chars --insert-method type
+speed-of-cinnamon profanity-filter-document --json
 ```
 
 `insert-text` exercises only the output path. It is useful for testing clipboard, terminal paste, direct typing, and
@@ -256,6 +257,9 @@ character sanitizing without recording or transcribing audio.
 
 `--sanitize-special-chars` maps common accented and special characters to ASCII before output. Saved transcripts stay
 unchanged.
+
+`profanity-filter-document` creates the editable profanity replacement file if needed and returns its path. The applet
+settings button opens the same file for editing.
 
 ## History And Cleanup
 

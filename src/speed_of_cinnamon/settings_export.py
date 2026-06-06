@@ -37,6 +37,7 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "toggle-keybinding": (str, "<Super>z::"),
     "primary-language-keybinding": (str, ""),
     "secondary-language-keybinding": (str, ""),
+    "cancel-keybinding": (str, ""),
     "show-panel-label": (bool, False),
     "language": (str, "en"),
     "secondary-language": (str, "de"),
@@ -54,6 +55,7 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "insert-method": (str, "clipboard-paste"),
     "append-space": (bool, True),
     "sanitize-special-chars": (bool, False),
+    "soften-profanity": (bool, False),
     "typing-delay-ms": (int, DEFAULT_TYPING_DELAY_MS),
     "max-transcript-files": (int, DEFAULT_MAX_TRANSCRIPT_FILES),
     "auto-paste-window-title": (str, "codex"),
@@ -66,6 +68,10 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "openai-compatible-model": (str, "gpt-4o-transcribe"),
     "openai-compatible-text-model": (str, "gpt-4o-mini"),
     "openai-compatible-flex-processing": (bool, True),
+    "post-process-preset": (str, "minimal"),
+    "post-process-preserve-code": (bool, True),
+    "post-process-never-add-content": (bool, True),
+    "post-process-mask-sensitive-data": (bool, False),
     "post-process-prompt": (str, ""),
 }
 

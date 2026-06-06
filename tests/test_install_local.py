@@ -332,7 +332,13 @@ class InstallLocalTest(unittest.TestCase):
                     mutated = True
                 return fd
 
-            args = module.argparse.Namespace(action="install", src=str(source), dst=str(target), mode="0600")
+            args = module.argparse.Namespace(
+                action="install",
+                src=str(source),
+                dst=str(target),
+                mode="0600",
+                dst_must_not_exist=False,
+            )
             with mock.patch.object(module.os, "open", side_effect=open_and_mutate):
                 with self.assertRaisesRegex(SystemExit, "1"):
                     module.cmd_copy_file(args)
@@ -349,7 +355,13 @@ class InstallLocalTest(unittest.TestCase):
             source.write_text("safe\n", encoding="utf-8")
             os.link(source, sibling)
 
-            args = module.argparse.Namespace(action="install", src=str(source), dst=str(target), mode="0600")
+            args = module.argparse.Namespace(
+                action="install",
+                src=str(source),
+                dst=str(target),
+                mode="0600",
+                dst_must_not_exist=False,
+            )
             with self.assertRaisesRegex(SystemExit, "1"):
                 module.cmd_copy_file(args)
 
@@ -436,12 +448,39 @@ class InstallLocalTest(unittest.TestCase):
                     mutated = True
                 return fd
 
-            args = module.argparse.Namespace(action="install", src=str(source), dst=str(target), mode="0600")
+            args = module.argparse.Namespace(
+                action="install",
+                src=str(source),
+                dst=str(target),
+                mode="0600",
+                dst_must_not_exist=False,
+            )
             with mock.patch.object(module.os, "open", side_effect=open_and_replace):
                 with self.assertRaisesRegex(SystemExit, "1"):
                     module.cmd_copy_file(args)
 
             self.assertFalse(target.exists())
+
+    def test_safe_fs_copy_file_can_reject_existing_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = self._load_safe_fs_module()
+            root = Path(tmp)
+            source = root / "source.txt"
+            target = root / "target.txt"
+            source.write_text("safe\n", encoding="utf-8")
+            target.write_text("old\n", encoding="utf-8")
+
+            args = module.argparse.Namespace(
+                action="build-snap",
+                src=str(source),
+                dst=str(target),
+                mode="0644",
+                dst_must_not_exist=True,
+            )
+            with self.assertRaisesRegex(SystemExit, "1"):
+                module.cmd_copy_file(args)
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "old\n")
 
     def test_safe_fs_install_tree_copies_with_symlink_preservation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

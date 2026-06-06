@@ -6281,5 +6281,39 @@ class CliTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "sanitize must be a boolean"):
             cli.prepare_output_text("hello", True, "yes")  # type: ignore[arg-type]
 
+    def test_prepare_output_text_can_soften_profanity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}):
+                self.assertEqual(cli.prepare_output_text("Scheiße, fuck.", False, False, True), "Glitzerkram, Frickelfrosch.")
+                self.assertEqual(cli.prepare_output_text("assignment", False, False, True), "assignment")
+
+    def test_prepare_output_text_uses_editable_profanity_filter_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}):
+                path = cli._ensure_editable_profanity_filter_file()
+                path.write_text("schei(?:ss|ß)e? -> Regenbogenmuffin\n", encoding="utf-8")
+                self.assertEqual(cli.prepare_output_text("Scheiße!", False, False, True), "Regenbogenmuffin!")
+
+    def test_soften_profanity_text_rejects_non_text(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "text must be text"):
+            cli.soften_profanity_text(False)  # type: ignore[arg-type]
+
+    def test_profanity_filter_document_command_writes_list(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp, "XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["profanity-filter-document", "--json"])
+            payload = json.loads(stdout.getvalue())
+            document = Path(payload["path"])
+            text = document.read_text(encoding="utf-8")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["entries"], len(cli.PROFANITY_REPLACEMENT_PAIRS))
+        self.assertTrue(payload["editable"])
+        self.assertEqual(document.name, "profanity-filter.txt")
+        self.assertIn("Speed of Cinnamon profanity replacement list", text)
+        self.assertIn("Glitzerkram", text)
+        self.assertIn("Frickelfrosch", text)
+
 if __name__ == "__main__":
     unittest.main()

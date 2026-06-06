@@ -72,6 +72,9 @@ List recent transcript files.
 .B transcripts-document
 Write complete transcript history to a plain text document.
 .TP
+.B profanity-filter-document
+Create if needed and return the editable profanity replacement file.
+.TP
 .B cleanup
 Preview or remove old transcript files and cached recordings.
 .TP
@@ -203,6 +206,12 @@ Test only the output path:
 .PP
 .EX
 speed-of-cinnamon insert-text "Hallo Terminal" --insert-method clipboard-paste --json
+.EE
+.PP
+Open the editable profanity replacement file:
+.PP
+.EX
+speed-of-cinnamon profanity-filter-document --json
 .EE
 .PP
 Write complete transcript history to a plain text document:

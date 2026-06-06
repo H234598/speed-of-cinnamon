@@ -2,7 +2,7 @@
 set -euo pipefail
 umask 077
 IFS=$'\n\t'
-readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin:/var/lib/snapd/snap/bin"
 export PATH="${TRUSTED_COMMAND_PATH}"
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -252,7 +252,7 @@ done
 
 output_path="${dist_dir}/$(basename "${snap_files[0]}")"
 if [[ "$(realpath "${snap_files[0]}")" != "${output_path}" ]]; then
-  python3 "${safe_fs}" replace build-snap "${snap_files[0]}" "${output_path}" --src-kind file --dst-must-not-exist
+  "${safe_fs_cmd[@]}" copy-file build-snap "${snap_files[0]}" "${output_path}" 0644 --dst-must-not-exist
 fi
 printf 'Built %s\n' "${output_path}" >&2
 printf '%s\n' "${output_path}"

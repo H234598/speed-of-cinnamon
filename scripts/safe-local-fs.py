@@ -256,6 +256,7 @@ def _copy_file_atomically_from_checked_source(
     source_digest: str,
     mode: int,
     action: str,
+    dst_must_not_exist: bool,
 ) -> None:
     parent_fd, leaf = _open_parent(dst, action=action)
     if parent_fd is None:
@@ -265,6 +266,8 @@ def _copy_file_atomically_from_checked_source(
     tmp_stat: os.stat_result | None = None
     try:
         existing = _lstat_at(parent_fd, leaf)
+        if existing is not None and dst_must_not_exist:
+            fail(f"destination already exists during {action}: {dst}")
         if existing is not None and stat_is_symlink_no_follow(existing.st_mode):
             fail(f"refusing to follow symlink during {action}: {dst}")
         fd = os.open(tmp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=parent_fd)
@@ -334,6 +337,7 @@ def cmd_copy_file(args: argparse.Namespace) -> None:
                 source_digest=source_digest,
                 mode=int(args.mode, 8),
                 action=args.action,
+                dst_must_not_exist=args.dst_must_not_exist,
             )
     finally:
         os.close(src_fd)
@@ -592,6 +596,7 @@ def build_parser() -> argparse.ArgumentParser:
     copy_file.add_argument("src")
     copy_file.add_argument("dst")
     copy_file.add_argument("mode")
+    copy_file.add_argument("--dst-must-not-exist", action="store_true")
     copy_file.set_defaults(func=cmd_copy_file)
 
     assert_file = subparsers.add_parser("assert-file")

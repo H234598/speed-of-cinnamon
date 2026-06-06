@@ -15,11 +15,6 @@ on:
         required: false
         default: false
         type: boolean
-      build_snap:
-        description: "Build snap package"
-        required: false
-        default: true
-        type: boolean
       build_generic_rpm:
         description: "Build generic RPM package"
         required: false
@@ -130,7 +125,7 @@ jobs:
       contents: write
     runs-on: ubuntu-24.04
     env:
-      BUILD_SNAP: ${{ github.event_name != 'workflow_dispatch' && '0' || (inputs.build_snap && '1' || '0') }}
+      BUILD_SNAP: "1"
       BUILD_GENERIC_RPM: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_generic_rpm && '1' || '0') }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -154,59 +149,55 @@ jobs:
           printf '%s  %s\n' "${actionlint_sha256}" "/tmp/${actionlint_archive}" | sha256sum -c -
           tar -xzf "/tmp/${actionlint_archive}" -C /tmp actionlint
           sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
-          if [[ "${BUILD_SNAP}" == "1" ]]; then
-            if [[ -d /snap/bin ]]; then
-              printf '/snap/bin\n' >> "${GITHUB_PATH}"
-              export PATH="/snap/bin:${PATH}"
-            fi
-            if ! command -v -- snapcraft >/dev/null 2>&1; then
-              if command -v -- snap >/dev/null 2>&1; then
-                sudo snap install snapcraft --classic
-                if [[ -d /snap/bin ]]; then
-                  printf '/snap/bin\n' >> "${GITHUB_PATH}"
-                  export PATH="/snap/bin:${PATH}"
-                fi
-              else
-                printf 'snap is missing; cannot install snapcraft. Install snapd or set build_snap to false.\n' >&2
-                exit 1
+          if [[ -d /snap/bin ]]; then
+            printf '/snap/bin\n' >> "${GITHUB_PATH}"
+            export PATH="/snap/bin:${PATH}"
+          fi
+          if ! command -v -- snapcraft >/dev/null 2>&1; then
+            if command -v -- snap >/dev/null 2>&1; then
+              sudo snap install snapcraft --classic
+              if [[ -d /snap/bin ]]; then
+                printf '/snap/bin\n' >> "${GITHUB_PATH}"
+                export PATH="/snap/bin:${PATH}"
               fi
-            fi
-            if snap list snapcraft >/dev/null 2>&1; then
-              printf '%s\n' '#!/usr/bin/env sh' 'exec snap run snapcraft "$@"' \
-                | sudo tee /usr/local/bin/snapcraft >/dev/null
-              sudo chmod 0755 /usr/local/bin/snapcraft
-            fi
-            if ! command -v -- snapcraft >/dev/null 2>&1; then
-              printf 'snapcraft is installed but no executable launcher was found.\n' >&2
+            else
+              printf 'snap is missing; cannot install snapcraft for mandatory Snap release builds.\n' >&2
               exit 1
             fi
-            snapcraft_base=""
+          fi
+          if snap list snapcraft >/dev/null 2>&1; then
+            printf '%s\n' '#!/usr/bin/env sh' 'exec snap run snapcraft "$@"' \
+              | sudo tee /usr/local/bin/snapcraft >/dev/null
+            sudo chmod 0755 /usr/local/bin/snapcraft
+          fi
+          if ! command -v -- snapcraft >/dev/null 2>&1; then
+            printf 'snapcraft is installed but no executable launcher was found.\n' >&2
+            exit 1
+          fi
+          snapcraft_base=""
+          for candidate in core24 core22; do
+            if snap list "${candidate}" >/dev/null 2>&1; then
+              snapcraft_base="${candidate}"
+              break
+            fi
+          done
+          if [[ -z "${snapcraft_base}" ]]; then
             for candidate in core24 core22; do
-              if snap list "${candidate}" >/dev/null 2>&1; then
+              if sudo snap install "${candidate}" --channel=latest/stable; then
                 snapcraft_base="${candidate}"
                 break
               fi
             done
-            if [[ -z "${snapcraft_base}" ]]; then
-              for candidate in core24 core22; do
-                if sudo snap install "${candidate}" --channel=latest/stable; then
-                  snapcraft_base="${candidate}"
-                  break
-                fi
-              done
-            fi
-            if [[ -z "${snapcraft_base}" ]]; then
-              printf 'Could not install a compatible snap base (tried core24, core22).\n' >&2
-              exit 1
-            fi
-            {
-              printf 'SNAPCRAFT_BASE<<SNAPCRAFT_BASE\n'
-              printf '%s\n' "${snapcraft_base}"
-              printf 'SNAPCRAFT_BASE\n'
-            } >> "${GITHUB_ENV}"
-          else
-            printf 'Skipping snap toolchain bootstrap (build_snap=false).\n'
           fi
+          if [[ -z "${snapcraft_base}" ]]; then
+            printf 'Could not install a compatible snap base (tried core24, core22).\n' >&2
+            exit 1
+          fi
+          {
+            printf 'SNAPCRAFT_BASE<<SNAPCRAFT_BASE\n'
+            printf '%s\n' "${snapcraft_base}"
+            printf 'SNAPCRAFT_BASE\n'
+          } >> "${GITHUB_ENV}"
       - name: Verify GitHub CLI
         run: gh --version
       - name: Resolve release tag
@@ -265,14 +256,9 @@ jobs:
         run: make rpm-generic-check
       - name: Build Snap package
         run: |
-          if [[ "${BUILD_SNAP}" == "1" ]]; then
-            export PATH="/snap/bin:${PATH}"
-            make snap
-          else
-            make SNAP_BUILD=0 snap
-          fi
+          export PATH="/snap/bin:${PATH}"
+          make snap
       - name: Verify Snap package
-        if: env.BUILD_SNAP == '1'
         run: |
           export PATH="/snap/bin:${PATH}"
           make snap-check
@@ -307,7 +293,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Upload Snap package
-        if: env.BUILD_SNAP == '1'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: speed-of-cinnamon-snap-${{ github.sha }}
@@ -322,9 +307,6 @@ jobs:
           DRY_RUN: ${{ github.event_name != 'workflow_dispatch' && 'false' || (inputs.dry_run && 'true' || 'false') }}
         run: |
           args=()
-          if [[ "${BUILD_SNAP}" != "1" ]]; then
-            args+=(--skip-snap)
-          fi
           if [[ "${BUILD_GENERIC_RPM}" != "1" ]]; then
             args+=(--skip-generic-rpm)
           fi

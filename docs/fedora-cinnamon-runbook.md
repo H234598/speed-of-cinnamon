@@ -60,8 +60,8 @@ archive and checksum, plus `speed-of-cinnamon-rpm-<commit>` with the Fedora noar
 
 Pushing a version tag that matches `pyproject.toml`, for example `vX.Y.Z`, runs the release workflow. It validates workflow
 YAML in a dedicated lint step, then repeats the normal checks and publishes a GitHub Release with the source archive,
-checksum, Fedora noarch RPM, generic noarch RPM, and their source RPMs. Tag-triggered releases skip Snap generation by
-default because the GitHub-hosted release runner does not consistently provide a usable Snap build environment. The same
+checksum, Fedora noarch RPM, generic noarch RPM, Snap package, and their source RPMs. Tag-triggered releases build Snap
+packages by default and require a usable Snap build environment. The same
 workflow has manual inputs.
 Publishing requires repository secret `RELEASE_GITHUB_TOKEN` with `contents: write` scope for release creation and upload.
 Optional flags to skip package types when triggering manually:
@@ -69,46 +69,46 @@ Optional flags to skip package types when triggering manually:
 To trigger the workflow manually:
 
 ```bash
-gh workflow run release.yml -f tag=v0.1.2 -f build_snap=false
+gh workflow run release.yml -f tag=v0.1.2
 ```
 
-Set `build_snap=true` only when the release runner has a working Snap build environment.
+Release builds always include a Snap package; the release runner needs a working Snap build environment.
 Set `build_generic_rpm=false` to skip the generic RPM profile in the same way.
 Set `run_workflow_lint=false` to skip the workflow-lint step.
 
 To skip the workflow-lint preflight on a manual release run:
 
 ```bash
-gh workflow run release.yml -f tag=v0.1.2 -f build_snap=false -f run_workflow_lint=false
+gh workflow run release.yml -f tag=v0.1.2 -f run_workflow_lint=false
 ```
 
-For an explicit release run without Snap creation, run:
+For an explicit release run, run:
 
 ```bash
-gh workflow run release.yml -f tag=v0.1.2 -f build_snap=false
+gh workflow run release.yml -f tag=v0.1.2
 ```
 
 For a validation-only run that skips both optional package types:
 
 ```bash
-gh workflow run release.yml -f tag=v0.1.2 -f build_snap=false -f build_generic_rpm=false
+gh workflow run release.yml -f tag=v0.1.2 -f build_generic_rpm=false
 ```
 
 For local release validation checks without optional package types, keep everything local and skip optional builds as needed:
 
 ```bash
-make release-dry-run SNAP_BUILD=0 BUILD_GENERIC_RPM=0
+make release-dry-run BUILD_GENERIC_RPM=0
 ```
 
 For a local publish run with the same reduced package set:
 
 ```bash
-make release SNAP_BUILD=0 BUILD_GENERIC_RPM=0
+make release BUILD_GENERIC_RPM=0
 ```
 
 Local flag values are validated before release steps run:
 
-- `SNAP_BUILD=0` or `SNAP_BUILD=1`
+- `SNAP_BUILD=1` for `release` and `release-dry-run`; use `release-dry-run-no-snap` only for local validation without Snap
 - `BUILD_GENERIC_RPM=0` or `BUILD_GENERIC_RPM=1`
 
 `make check` also runs `scripts/verify-authorship.sh`. That guard verifies the expected GitHub repository URL, commit
@@ -123,7 +123,8 @@ applet. The startup check does not use portals and does not open a separate wind
 through Cinnamon's GJS/Gio default-app API, not an `xdg-open` shell command.
 
 Use `Keyboard shortcuts` in the applet menu as the live shortcut reference. It shows the configured Cinnamon global
-toggle, optional primary/secondary language shortcuts, and applet-only actions such as cancel or language switching.
+toggle, optional primary/secondary language shortcuts, optional cancel shortcut, and applet-only actions such as language
+switching. It can also open the Cinnamon applet settings for editing.
 `Copy shortcut reference` copies the current bindings through Cinnamon's clipboard, which is useful for setup notes or
 support reports.
 

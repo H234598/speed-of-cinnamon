@@ -171,6 +171,10 @@ def blacklist_file() -> Path:
     return data_dir() / "blacklist.txt"
 
 
+def profanity_filter_file() -> Path:
+    return data_dir() / "profanity-filter.txt"
+
+
 def alarms_file() -> Path:
     return data_dir() / "alarms.json"
 

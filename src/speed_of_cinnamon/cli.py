@@ -53,6 +53,7 @@ from .paths import (
     default_state_file,
     diagnostics_dir,
     blacklist_file,
+    profanity_filter_file,
     ensure_runtime_dirs,
     recordings_dir,
     state_dir,
@@ -104,6 +105,14 @@ from .setup_plan import build_setup_plan
 from .state import RecordingState, StateStore, now_iso, process_is_alive
 from .text_utils import sanitize_special_chars
 from .transcriber import MAX_AUDIO_PATH_CHARS, normalize_backend, validate_audio_file, transcribe
+from .profanity_filter import (
+    MAX_PROFANITY_FILTER_BYTES,
+    PROFANITY_REPLACEMENTS,
+    PROFANITY_REPLACEMENT_PAIRS,
+    compile_profanity_replacements,
+    parse_profanity_replacement_list,
+    render_profanity_replacement_list,
+)
 
 RECORDER_START_GRACE_SECONDS = 0.2
 DEFAULT_KEEP_TRANSCRIPTS = 500
@@ -627,6 +636,7 @@ def _validate_pipeline_text_args(
         getattr(args, "openai_compatible_flex_processing", True),
         field_name="openai-compatible flex processing",
     )
+    _coerce_bool(getattr(args, "soften_profanity", False), field_name="soften_profanity")
     _validate_text_model_url(args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url")
     _validate_openai_compatible_http_url(args.openai_compatible_url or DEFAULT_OPENAI_COMPATIBLE_URL, field_name="openai-compatible url")
     return language
@@ -780,20 +790,64 @@ def append_space_if_needed(text: str, append_space: bool) -> str:
     return text
 
 
-def prepare_output_text(text: str, append_space: bool, sanitize: bool) -> str:
+def _match_replacement_case(original: str, replacement: str) -> str:
+    if original.isupper():
+        return replacement.upper()
+    if original[:1].isupper():
+        return replacement[:1].upper() + replacement[1:]
+    return replacement
+
+
+def soften_profanity_text(text: str) -> str:
+    if isinstance(text, bool) or not isinstance(text, str):
+        raise RuntimeError("text must be text")
+    output = text
+    for pattern, replacement in _profanity_replacements():
+        output = pattern.sub(lambda match, value=replacement: _match_replacement_case(match.group(0), value), output)
+    return output
+
+
+def prepare_output_text(text: str, append_space: bool, sanitize: bool, soften_profanity: bool = False) -> str:
     if isinstance(text, bool) or not isinstance(text, str):
         raise RuntimeError("text must be text")
     if not isinstance(append_space, bool):
         raise RuntimeError("append_space must be a boolean")
     if not isinstance(sanitize, bool):
         raise RuntimeError("sanitize must be a boolean")
-    output = sanitize_special_chars(text) if sanitize else text
+    if not isinstance(soften_profanity, bool):
+        raise RuntimeError("soften_profanity must be a boolean")
+    output = soften_profanity_text(text) if soften_profanity else text
+    output = sanitize_special_chars(output) if sanitize else output
     return append_space_if_needed(output, append_space)
 
 
-def _ensure_private_text_file(path: Path) -> None:
-    assert_no_symlink_ancestors(path, field_name="blacklist file")
-    _prepare_private_file(path, field_name="blacklist file", exclusive=False)
+def _ensure_private_text_file(path: Path, *, field_name: str = "blacklist file") -> None:
+    assert_no_symlink_ancestors(path, field_name=field_name)
+    _prepare_private_file(path, field_name=field_name, exclusive=False)
+
+
+def _ensure_editable_profanity_filter_file() -> Path:
+    ensure_runtime_dirs()
+    path = profanity_filter_file()
+    assert_no_symlink_ancestors(path, field_name="profanity filter file")
+    if not path.exists():
+        _write_text_atomic(path, render_profanity_replacement_list())
+    _ensure_private_text_file(path, field_name="profanity filter file")
+    return path
+
+
+def _profanity_replacement_pairs_from_file() -> tuple[tuple[str, str], ...]:
+    path = _ensure_editable_profanity_filter_file()
+    text = read_text_without_following_symlinks(
+        path,
+        field_name="profanity filter file",
+        max_bytes=MAX_PROFANITY_FILTER_BYTES,
+    )
+    return parse_profanity_replacement_list(text)
+
+
+def _profanity_replacements() -> tuple[tuple[re.Pattern[str], str], ...]:
+    return compile_profanity_replacements(_profanity_replacement_pairs_from_file())
 
 
 def _open_blacklist_document() -> bool:
@@ -2025,6 +2079,9 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             security_post_processing = _empty_security_post_processing()
         else:
             text, security_post_processing = _process_transcript(text, args, language)
+        soften_profanity = _coerce_bool(getattr(args, "soften_profanity", False), field_name="soften_profanity")
+        if text.strip() and soften_profanity:
+            text = soften_profanity_text(text)
         _write_text_atomic(text_path, text.strip() + "\n")
         written_text_path = text_path
         append_space = _coerce_bool(args.append_space, field_name="append_space")
@@ -2857,14 +2914,28 @@ def command_settings_import(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def write_profanity_filter_document() -> tuple[Path, int]:
+    path = _ensure_editable_profanity_filter_file()
+    pairs = _profanity_replacement_pairs_from_file()
+    return path, len(pairs)
+
+
+def command_profanity_filter_document(args: argparse.Namespace) -> dict[str, object]:
+    path, entries = write_profanity_filter_document()
+    return {
+        "status": "done",
+        "path": str(path),
+        "entries": entries,
+        "editable": True,
+    }
+
+
 def command_insert_text(args: argparse.Namespace) -> dict[str, object]:
     text = _assert_clean_text(args.text, field_name="text", max_chars=MAX_TRANSCRIBER_TEXT_CHARS)
     sanitize_special_chars_flag = _coerce_bool(args.sanitize_special_chars, field_name="sanitize_special_chars")
-    if sanitize_special_chars_flag:
-        text = sanitize_special_chars(text)
     append_space = _coerce_bool(getattr(args, "append_space", False), field_name="append_space")
-    if append_space and text and text[-1] not in " \t\n\r\f\v":
-        text += " "
+    soften_profanity = _coerce_bool(getattr(args, "soften_profanity", False), field_name="soften_profanity")
+    text = prepare_output_text(text, append_space, sanitize_special_chars_flag, soften_profanity)
     typing_delay_ms = _coerce_int(args.typing_delay_ms, field_name="typing-delay-ms", max_value=MAX_TYPING_DELAY_MS)
     inserted = insert_text(text, args.insert_method, typing_delay_ms)
     return {"status": "done", "inserted": inserted}
@@ -2893,6 +2964,8 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         security_post_processing = _empty_security_post_processing()
     else:
         text, security_post_processing = _process_transcript(text, args, args.language)
+    if text.strip() and _coerce_bool(getattr(args, "soften_profanity", False), field_name="soften_profanity"):
+        text = soften_profanity_text(text)
     _write_text_atomic(text_path, text.strip() + "\n")
     keep_transcripts = _coerce_int(
         getattr(args, "keep_transcripts", DEFAULT_KEEP_TRANSCRIPTS),
@@ -2958,6 +3031,7 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--typing-delay-ms", type=int, default=DEFAULT_TYPING_DELAY_MS)
     parser.add_argument("--keep-transcripts", type=int, default=DEFAULT_KEEP_TRANSCRIPTS)
     parser.add_argument("--sanitize-special-chars", action="store_true")
+    parser.add_argument("--soften-profanity", action="store_true")
     parser.add_argument("--append-space", action="store_true")
     parser.add_argument(
         "--keep-recording-artifacts",
@@ -3139,12 +3213,17 @@ def build_parser() -> argparse.ArgumentParser:
     settings_import.add_argument("--input", default="")
     settings_import.set_defaults(handler=command_settings_import)
 
+    profanity_filter_document = subparsers.add_parser("profanity-filter-document")
+    add_common_options(profanity_filter_document)
+    profanity_filter_document.set_defaults(handler=command_profanity_filter_document)
+
     insert = subparsers.add_parser("insert-text")
     add_common_options(insert)
     insert.add_argument("text")
     insert.add_argument("--insert-method", default="clipboard-paste", choices=["clipboard-paste", "clipboard", "type", "none"])
     insert.add_argument("--typing-delay-ms", type=int, default=DEFAULT_TYPING_DELAY_MS)
     insert.add_argument("--sanitize-special-chars", action="store_true")
+    insert.add_argument("--soften-profanity", action="store_true")
     insert.set_defaults(handler=command_insert_text)
 
     transcribe_file = subparsers.add_parser("transcribe-file")
@@ -3171,6 +3250,7 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_file.add_argument("--post-process-prompt", default="")
     transcribe_file.add_argument("--personal-context", default="")
     transcribe_file.add_argument("--vocabulary", default="")
+    transcribe_file.add_argument("--soften-profanity", action="store_true")
     transcribe_file.set_defaults(handler=command_transcribe_file)
     return parser
 
