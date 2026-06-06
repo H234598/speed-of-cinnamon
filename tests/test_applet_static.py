@@ -1224,19 +1224,30 @@ class AppletStaticTest(unittest.TestCase):
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
 
         self.assertIn("artifact-encryption", schema["layout"]["output-section"]["keys"])
+        self.assertIn("artifact-encryption-help", schema["layout"]["output-section"]["keys"])
         self.assertEqual(schema["artifact-encryption"]["default"], "keyring")
         self.assertEqual(
             set(schema["artifact-encryption"]["options"].values()),
             {"keyring", "passphrase", "off"},
         )
         self.assertIn("passphrase fallback", schema["artifact-encryption"]["tooltip"])
+        self.assertEqual(schema["artifact-encryption-help"]["type"], "label")
+        self.assertIn("fail closed", schema["artifact-encryption-help"]["description"])
+        self.assertIn("critical warning popup", schema["artifact-encryption-help"]["description"])
         self.assertIn('const DEFAULT_ARTIFACT_ENCRYPTION = "keyring";', source)
         self.assertIn('const ARTIFACT_ENCRYPTION_MODES = [', source)
         self.assertIn('this.artifactEncryption = DEFAULT_ARTIFACT_ENCRYPTION;', source)
+        self.assertIn('this.lastArtifactEncryptionWarningKey = "";', source)
         self.assertIn('["artifact-encryption", "artifactEncryption"]', source)
         self.assertIn('this.settings.bindProperty(Settings.BindingDirection.IN, "artifact-encryption", "artifactEncryption", this._onTextOutputSettingsChanged, null)', source)
         self.assertIn('args.push("--artifact-encryption", this._normalizeArtifactEncryption(this.artifactEncryption));', source)
         self.assertIn("_normalizeArtifactEncryption: function(method)", source)
+        self.assertIn("_maybeWarnUnencryptedArtifactStorage: function(payload)", source)
+        self.assertIn('let mode = this._normalizeArtifactEncryption(payload.artifact_encryption || this.artifactEncryption);', source)
+        self.assertIn('let transcriptStoredPlaintext = transcriptPath !== "" && payload.transcript_encrypted === false;', source)
+        self.assertIn('let recordingStoredPlaintext = payload.recording_artifacts_kept === true && payload.recording_encrypted === false;', source)
+        self.assertIn('this._notify(_("Speed of Cinnamon encryption warning"), message, true);', source)
+        self.assertIn("this._maybeWarnUnencryptedArtifactStorage(payload);", source)
         self.assertIn('if (key === "artifact-encryption")', source)
 
     def test_dynamic_model_menus_guard_fast_expand_clicks(self) -> None:

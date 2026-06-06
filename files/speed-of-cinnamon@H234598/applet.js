@@ -442,6 +442,7 @@ MyApplet.prototype = {
     this.doctorSummaryText = "";
     this.notificationSessionActive = false;
     this.lastNotificationKey = "";
+    this.lastArtifactEncryptionWarningKey = "";
     this.selfProtectionNoticeKey = "";
     this.selfProtectionNoticeAtMs = 0;
     this.autoTranscribeRecordingKey = "";
@@ -4269,6 +4270,9 @@ MyApplet.prototype = {
       return;
     }
     let hasTranscript = typeof payload.transcript === "string" && !this._isEmptyTranscriptText(payload.transcript);
+    if (payload.status === "done") {
+      this._maybeWarnUnencryptedArtifactStorage(payload);
+    }
     if (payload.status === "done" && payload.silence_detected) {
       this._finishSilentRelistenSkip(payload);
       return;
@@ -4299,6 +4303,49 @@ MyApplet.prototype = {
       return;
     }
     this._maybeAutoTranscribeRecorded(payload);
+  },
+
+  _artifactEncryptionWarningKey: function(payload) {
+    if (!payload) {
+      return "";
+    }
+    let marker = String(payload.transcript_path || payload.audio_path || payload.audio || payload.stopped_at || payload.started_at || "");
+    if (marker === "") {
+      marker = String(payload.status || "done");
+    }
+    return marker;
+  },
+
+  _maybeWarnUnencryptedArtifactStorage: function(payload) {
+    if (!payload || String(payload.status || "") !== "done") {
+      return;
+    }
+    let mode = this._normalizeArtifactEncryption(payload.artifact_encryption || this.artifactEncryption);
+    if (mode === "off") {
+      return;
+    }
+    let transcriptPath = String(payload.transcript_path || "").trim();
+    let transcriptStoredPlaintext = transcriptPath !== "" && payload.transcript_encrypted === false;
+    let recordingStoredPlaintext = payload.recording_artifacts_kept === true && payload.recording_encrypted === false;
+    if (!transcriptStoredPlaintext && !recordingStoredPlaintext) {
+      return;
+    }
+    let warningKey = this._artifactEncryptionWarningKey(payload);
+    if (warningKey !== "" && warningKey === this.lastArtifactEncryptionWarningKey) {
+      return;
+    }
+    this.lastArtifactEncryptionWarningKey = warningKey;
+    let details = [];
+    if (transcriptStoredPlaintext) {
+      details.push(_("transcript"));
+    }
+    if (recordingStoredPlaintext) {
+      details.push(_("recording"));
+    }
+    let subject = details.length > 0 ? details.join(", ") : _("stored artifact");
+    let message = _("Encryption is selected, but the backend reported unencrypted stored data: ") + subject + ". " + _("Check Secret Service/keyring or passphrase configuration.");
+    this.lastMessage = message;
+    this._notify(_("Speed of Cinnamon encryption warning"), message, true);
   },
 
   _emptyTranscriptMarker: function(transcript) {
