@@ -106,13 +106,25 @@ from .text_utils import sanitize_special_chars
 from .transcriber import MAX_AUDIO_PATH_CHARS, normalize_backend, validate_audio_file, transcribe
 
 RECORDER_START_GRACE_SECONDS = 0.2
-DEFAULT_KEEP_TRANSCRIPTS = 100
+DEFAULT_KEEP_TRANSCRIPTS = 500
 DEFAULT_KEEP_RECORDINGS = 20
 DEFAULT_RECORDING_MAX_AGE_DAYS = 7
 MAX_TEMP_RECORDING_FILES = 20
 RECORDING_ARTIFACT_EXTENSIONS = (".wav", ".flac", ".log")
 MAX_LOG_EXCERPT_CHARS = 2000
 MAX_TRANSCRIPT_HISTORY_TEXT_CHARS = 4_000
+EMPTY_TRANSCRIPT_MARKERS = frozenset(
+    {
+        "leere aufnahme",
+        "leerer text",
+        "keine transkription",
+        "keine sprache erkannt",
+        "empty recording",
+        "empty transcript",
+        "no transcript",
+        "no speech detected",
+    }
+)
 MAX_HISTORY_LIMIT = 1_000
 DEFAULT_MAX_SECONDS = 30
 MAX_KEEP_TRANSCRIPTS = 1_000
@@ -843,6 +855,15 @@ def _empty_security_post_processing() -> dict[str, object]:
     return {"blacklist_added": [], "blacklist_opened": False, "redacted_words": [], "blacklist_hits": 0}
 
 
+def _empty_transcript_marker(text: str) -> str:
+    return re.sub(r"[\W_]+", " ", str(text or "").casefold()).strip()
+
+
+def _is_empty_transcript_text(text: str) -> bool:
+    marker = _empty_transcript_marker(text)
+    return marker == "" or marker in EMPTY_TRANSCRIPT_MARKERS
+
+
 def _merge_security_post_processing(left: dict[str, object], right: dict[str, object]) -> dict[str, object]:
     left_added = left.get("blacklist_added", [])
     right_added = right.get("blacklist_added", [])
@@ -979,6 +1000,44 @@ def read_transcript_history(limit: int = 10) -> list[dict[str, object]]:
         if len(entries) >= limit:
             break
     return entries
+
+
+def write_transcripts_document(limit: int = MAX_HISTORY_LIMIT) -> tuple[Path, int]:
+    if limit <= 0:
+        limit = MAX_HISTORY_LIMIT
+    limit = min(limit, MAX_HISTORY_LIMIT)
+    directory = transcript_dir()
+    candidates = heapq.nlargest(max(limit * 4, limit + 16), _transcript_history_candidates(directory))
+    lines = [
+        "Speed of Cinnamon transcripts",
+        f"Generated: {now_iso()}",
+        "",
+    ]
+    count = 0
+    for mtime, path in candidates:
+        try:
+            text = read_text_without_following_symlinks(path, field_name="transcript file").strip()
+        except (OSError, RuntimeError, ValueError, UnicodeDecodeError):
+            continue
+        if not text:
+            continue
+        modified_at = datetime.fromtimestamp(mtime, timezone.utc).isoformat()
+        lines.extend(
+            [
+                f"===== {path.name} =====",
+                f"Modified: {modified_at}",
+                f"Path: {path}",
+                "",
+                text,
+                "",
+            ]
+        )
+        count += 1
+        if count >= limit:
+            break
+    output_path = state_dir() / "all-transcripts.txt"
+    _write_text_atomic(output_path, "\n".join(lines).rstrip() + "\n")
+    return output_path, count
 
 
 def normalized_path(path_value: str | None) -> Path | None:
@@ -1961,7 +2020,11 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             if trimmed_audio_path is not None and not keep_recording_artifacts:
                 remove_file(str(trimmed_audio_path), suffix=".flac")
 
-        text, security_post_processing = _process_transcript(text, args, language)
+        if _is_empty_transcript_text(text):
+            text = ""
+            security_post_processing = _empty_security_post_processing()
+        else:
+            text, security_post_processing = _process_transcript(text, args, language)
         _write_text_atomic(text_path, text.strip() + "\n")
         written_text_path = text_path
         append_space = _coerce_bool(args.append_space, field_name="append_space")
@@ -2026,14 +2089,26 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         if audio_path is not None:
             artifact_cleanup_active_paths.add(audio_path)
         artifact_cleanup = _enforce_recording_artifact_cap(state, artifact_cleanup_active_paths)
+        keep_transcripts = _coerce_int(
+            getattr(args, "keep_transcripts", DEFAULT_KEEP_TRANSCRIPTS),
+            field_name="keep-transcripts",
+            max_value=MAX_KEEP_TRANSCRIPTS,
+        )
+        transcript_cleanup = prune_files_by_mtime(
+            _safe_regular_child_files(transcript_dir(), (".txt",), field_name="transcript directory"),
+            keep_transcripts,
+            active_artifact_paths(done, state_path=store.path),
+            False,
+        )
         return {
             "status": done.status,
-            "message": "transcription completed",
+            "message": "recording finished without transcript" if not text.strip() else "transcription completed",
             "transcript": text,
             "transcript_path": str(text_path),
             "inserted": inserted,
             "security": security_post_processing,
             "recording_artifact_cap": artifact_cleanup,
+            "transcript_file_cap": transcript_cleanup,
             "language": language,
             "recording_artifacts_kept": keep_recording_artifacts,
             "audio_deleted": audio_deleted,
@@ -2557,6 +2632,13 @@ def command_history(args: argparse.Namespace) -> dict[str, object]:
     return {"status": "done", "transcripts": read_transcript_history(limit)}
 
 
+def command_transcripts_document(args: argparse.Namespace) -> dict[str, object]:
+    ensure_runtime_dirs()
+    limit = _coerce_int(args.limit, field_name="history limit", max_value=MAX_HISTORY_LIMIT)
+    output_path, count = write_transcripts_document(limit)
+    return {"status": "done", "path": str(output_path), "transcripts": count}
+
+
 def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     keep_transcripts = _coerce_int(args.keep_transcripts, field_name="keep-transcripts", max_value=MAX_KEEP_TRANSCRIPTS)
@@ -2806,13 +2888,29 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         vocabulary=args.vocabulary,
         **_openai_compatible_transcribe_kwargs(args, normalized_transcriber),
     )
-    text, security_post_processing = _process_transcript(text, args, args.language)
+    if _is_empty_transcript_text(text):
+        text = ""
+        security_post_processing = _empty_security_post_processing()
+    else:
+        text, security_post_processing = _process_transcript(text, args, args.language)
     _write_text_atomic(text_path, text.strip() + "\n")
+    keep_transcripts = _coerce_int(
+        getattr(args, "keep_transcripts", DEFAULT_KEEP_TRANSCRIPTS),
+        field_name="keep-transcripts",
+        max_value=MAX_KEEP_TRANSCRIPTS,
+    )
+    transcript_cleanup = prune_files_by_mtime(
+        _safe_regular_child_files(transcript_dir(), (".txt",), field_name="transcript directory"),
+        keep_transcripts,
+        {text_path},
+        False,
+    )
     return {
         "status": "done",
         "transcript": text,
         "transcript_path": str(text_path),
         "security": security_post_processing,
+        "transcript_file_cap": transcript_cleanup,
     }
 
 
@@ -2858,6 +2956,7 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
         choices=["clipboard-paste", "clipboard", "type", "none"],
     )
     parser.add_argument("--typing-delay-ms", type=int, default=DEFAULT_TYPING_DELAY_MS)
+    parser.add_argument("--keep-transcripts", type=int, default=DEFAULT_KEEP_TRANSCRIPTS)
     parser.add_argument("--sanitize-special-chars", action="store_true")
     parser.add_argument("--append-space", action="store_true")
     parser.add_argument(
@@ -2966,6 +3065,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(history)
     history.add_argument("--limit", type=int, default=10)
     history.set_defaults(handler=command_history)
+
+    transcripts_document = subparsers.add_parser("transcripts-document")
+    add_common_options(transcripts_document)
+    transcripts_document.add_argument("--limit", type=int, default=MAX_HISTORY_LIMIT)
+    transcripts_document.set_defaults(handler=command_transcripts_document)
 
     cleanup = subparsers.add_parser("cleanup")
     add_common_options(cleanup)

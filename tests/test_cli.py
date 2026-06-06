@@ -711,7 +711,7 @@ class CliTest(unittest.TestCase):
             state_file = tmp_path / "state.json"
             store = StateStore(state_file)
             store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
-            args = self._build_finalize_args(insert_method="clipboard-paste")
+            args = self._build_finalize_args(keep_recording_artifacts=False, insert_method="clipboard-paste")
             silence = cli.SilenceDetectionResult(True, False, 4.0, 0.0, 3.0, 0.0, "speech detected")
             with (
                 mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
@@ -728,6 +728,44 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["security"]["blacklist_added"], ["geheim"])
         mocked_insert.assert_not_called()
         mocked_prepare.assert_not_called()
+
+    def test_finalize_empty_raw_transcript_skips_parser_and_insert(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            text_dir = tmp_path / "speed-of-cinnamon" / "transcripts"
+            recordings_root.mkdir(parents=True)
+            text_dir.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(insert_method="clipboard-paste")
+            silence = cli.SilenceDetectionResult(False, False, 4.0, 0.0, 3.0, 0.0, "speech detected")
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=silence),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value=" leere Aufnahme. "),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.transcript_dir", return_value=text_dir),
+                mock.patch("speed_of_cinnamon.cli._process_transcript") as mocked_process,
+                mock.patch("speed_of_cinnamon.cli.prepare_output_text") as mocked_prepare,
+                mock.patch("speed_of_cinnamon.cli.insert_text") as mocked_insert,
+            ):
+                payload = cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+
+        self.assertEqual(payload["message"], "recording finished without transcript")
+        self.assertEqual(payload["transcript"], "")
+        self.assertEqual(final_state.transcript, "")
+        mocked_process.assert_not_called()
+        mocked_prepare.assert_not_called()
+        mocked_insert.assert_not_called()
 
     @mock.patch("speed_of_cinnamon.cli.load_blacklist_file", return_value=[])
     @mock.patch("speed_of_cinnamon.cli.trim_recording_silence", return_value=mock.ANY)
@@ -2090,6 +2128,33 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["transcripts"][0]["name"], "newer.txt")
         self.assertEqual(payload["transcripts"][0]["preview"], "newer text with more words")
         self.assertNotIn("text", payload["transcripts"][0])
+
+    def test_transcripts_document_contains_full_transcript_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            older = transcript_dir / "older.txt"
+            newer = transcript_dir / "newer.txt"
+            older_text = "older line one\nolder line two\n"
+            newer_text = "newer line one\nnewer line two\nnewer line three\n"
+            older.write_text(older_text, encoding="utf-8")
+            newer.write_text(newer_text, encoding="utf-8")
+            os.utime(older, (100, 100))
+            os.utime(newer, (200, 200))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["transcripts-document", "--limit", "1000", "--json"])
+            payload = json.loads(stdout.getvalue())
+            document_path = Path(payload["path"])
+            document = document_path.read_text(encoding="utf-8")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["transcripts"], 2)
+        self.assertEqual(document_path.name, "all-transcripts.txt")
+        self.assertIn("===== newer.txt =====", document)
+        self.assertIn("===== older.txt =====", document)
+        self.assertIn(newer_text.strip(), document)
+        self.assertIn(older_text.strip(), document)
+        self.assertLess(document.index("===== newer.txt ====="), document.index("===== older.txt ====="))
 
     def test_history_skips_empty_transcripts_when_filling_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

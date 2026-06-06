@@ -43,6 +43,16 @@ const NON_ASCII_RE = /[^\u0000-\u007E]/g;
 const COMBINING_MARKS_RE = /[\u0300-\u036f]/g;
 const ASCII_ONLY_RE = /^[\u0000-\u007E]*$/;
 const SENSITIVE_ERROR_RE = /(?:\b(?:bearer|token|api[_ -]?key|apikey|password|passwd|passphrase|secret)\b\s*[:=]\s*[^,\s;]+|\b(?:bearer|token|api[_ -]?key|apikey|password|passwd|passphrase|secret)\b\s+(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required|not|empty)\b)[^,\s;]+|\b(?:sk|sess)-[A-Za-z0-9_\-]{6,}\b|[a-z][a-z0-9+.-]*:\/\/[^/@\s:]+:[^/@\s]+@)/i;
+const EMPTY_TRANSCRIPT_MARKERS = [
+  "leere aufnahme",
+  "leerer text",
+  "keine transkription",
+  "keine sprache erkannt",
+  "empty recording",
+  "empty transcript",
+  "no transcript",
+  "no speech detected"
+];
 const SANITIZE_SPECIAL_CHAR_MAP = {
   "ß": "ss", "ẞ": "SS", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE",
   "ø": "o", "Ø": "O", "đ": "d", "Đ": "D", "ł": "l", "Ł": "L",
@@ -74,12 +84,17 @@ const DEFAULT_RECORDING_SECONDS = 30;
 const MIN_TYPING_DELAY_MS = 0;
 const MAX_TYPING_DELAY_MS = 10000;
 const DEFAULT_TYPING_DELAY_MS = 8;
+const DEFAULT_MAX_TRANSCRIPT_FILES = 500;
+const MIN_TRANSCRIPT_FILES = 1;
+const MAX_TRANSCRIPT_FILES = 1000;
+const TRANSCRIPT_STORAGE_LIMITS = [20, 50, 100, 200, 500, 1000];
 const DEFAULT_AUTO_PASTE_TITLE = "codex";
 const AUTO_PASTE_TITLE_PRESETS = [
   "codex",
   "Terminal",
   "PDF",
   "Excel",
+  "Telegram",
   "Teams"
 ];
 const CLI_COMMAND_TIMEOUT_MS = 300000;
@@ -134,28 +149,73 @@ const AUTO_PASTE_IDENTITY_MARKERS = {
   "pdf": [
     "acroread",
     "adobe",
+    "adobe acrobat",
+    "apvlv",
+    "atril",
+    "com.github.johnfactotum.foliate",
+    "com.github.xournalpp.xournalpp",
+    "document viewer",
     "evince",
+    "foxit reader",
+    "foxitreader",
+    "llpp",
+    "master pdf editor",
+    "masterpdfeditor",
+    "mendeley",
+    "mendeleydesktop",
+    "mupdf",
+    "org.gnome.papers",
     "okular",
+    "org.kde.okular",
     "org.gnome.evince",
     "org.pwmt.zathura",
+    "papers",
+    "qpdfview",
+    "sioyek",
+    "xournalpp",
+    "xpdf",
     "xreader",
     "zathura"
   ],
   "excel": [
     "calc",
+    "chrome-excel.office.com",
+    "et",
     "excel",
+    "freeoffice",
     "libreoffice",
+    "libreoffice-calc",
+    "microsoft excel",
     "onlyoffice",
+    "onlyoffice desktop editors",
+    "onlyoffice-desktopeditors",
+    "org.libreoffice.libreoffice",
+    "planmaker",
     "soffice",
     "spreadsheet",
     "wps"
   ],
   "teams": [
+    "chrome-msteams",
+    "com.github.ismaelmartinez.teams_for_linux",
     "com.microsoft.teams",
+    "dev.wrapbox.teamsforlinux",
+    "microsoft edge",
     "microsoft teams",
+    "microsoft-edge",
     "microsoft-teams",
+    "ms-teams",
     "msteams",
+    "teams",
+    "teams for linux",
     "teams-for-linux"
+  ],
+  "telegram": [
+    "org.telegram.desktop",
+    "telegram desktop",
+    "telegram-desktop",
+    "telegramdesktop",
+    "telegram"
   ]
 };
 const PANEL_STATUS_CLASSES = [
@@ -262,6 +322,7 @@ const EXPORTABLE_SETTINGS = [
   ["append-space", "appendSpace"],
   ["typing-delay-ms", "typingDelayMs"],
   ["sanitize-special-chars", "sanitizeSpecialChars"],
+  ["max-transcript-files", "maxTranscriptFiles"],
   ["auto-paste-window-title", "autoPasteWindowTitle"],
   ["transcriber", "transcriber"],
   ["whisper-model", "whisperModel"],
@@ -312,6 +373,7 @@ MyApplet.prototype = {
     this.appendSpace = true;
     this.typingDelayMs = DEFAULT_TYPING_DELAY_MS;
     this.sanitizeSpecialChars = false;
+    this.maxTranscriptFiles = DEFAULT_MAX_TRANSCRIPT_FILES;
     this.autoPasteWindowTitle = DEFAULT_AUTO_PASTE_TITLE;
     this.cliPath = "";
     this.transcriber = "auto";
@@ -347,6 +409,7 @@ MyApplet.prototype = {
     this.autoTranscribeRecordingKey = "";
     this.autoRelistenPending = false;
     this.autoRelistenPendingToken = "";
+    this.autoRelistenManualStopRequested = false;
     this.autoRelistenSequence = 0;
     this.autoInsertFingerprint = "";
     this.autoInsertFingerprints = [];
@@ -402,6 +465,7 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "append-space", "appendSpace", this._onTextOutputSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "typing-delay-ms", "typingDelayMs", this._onTextOutputSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "sanitize-special-chars", "sanitizeSpecialChars", this._onTextOutputSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "max-transcript-files", "maxTranscriptFiles", this._onTranscriptRetentionSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "auto-paste-window-title", "autoPasteWindowTitle", this._onTextOutputSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "cli-path", "cliPath", null, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "transcriber", "transcriber", this._onVoiceBackendSettingsChanged, null);
@@ -540,7 +604,7 @@ MyApplet.prototype = {
     this.textOutputMenuItem.menu.addMenuItem(this.textOptionsItem);
     this._populateTextOptionsMenu();
 
-    this.autoPasteItem = new PopupMenu.PopupSubMenuMenuItem(_("Auto-Paste: codex"));
+    this.autoPasteItem = new PopupMenu.PopupSubMenuMenuItem(_("Auto-Submitt: codex"));
     this.autoPasteItem.menu.connect("open-state-changed", (menu, open) => {
       if (open) {
         this._populateAutoPasteMenu();
@@ -583,11 +647,6 @@ MyApplet.prototype = {
     let doctor = new PopupMenu.PopupIconMenuItem(_("Run doctor"), "dialog-information-symbolic", St.IconType.SYMBOLIC);
     doctor.connect("activate", () => this._runDoctor());
     this.toolsMenuItem.menu.addMenuItem(doctor);
-
-    this.openAiFlexProcessingItem = new PopupMenu.PopupMenuItem("");
-    this.openAiFlexProcessingItem.connect("activate", () => this._toggleOpenAiFlexProcessing());
-    this.toolsMenuItem.menu.addMenuItem(this.openAiFlexProcessingItem);
-    this._updateOpenAiFlexProcessingItem();
 
     let openSettings = new PopupMenu.PopupIconMenuItem(_("Open applet settings"), "preferences-system-symbolic", St.IconType.SYMBOLIC);
     openSettings.connect("activate", () => this._openAppletSettings());
@@ -667,20 +726,38 @@ MyApplet.prototype = {
     this.textOutputMenuItem.menu.addMenuItem(this.textModelItem);
     this._populateTextModelMenu([], _("Open menu to load local text models"));
 
+    this.maintenanceMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Files and settings"));
+    this.toolsMenuItem.menu.addMenuItem(this.maintenanceMenuItem);
+
     let transcripts = new PopupMenu.PopupIconMenuItem(_("Open transcripts"), "folder-documents-symbolic", St.IconType.SYMBOLIC);
     transcripts.connect("activate", () => {
       this._openFolder(GLib.build_filenamev([GLib.get_user_state_dir(), "speed-of-cinnamon", "transcripts"]), _("Opened transcripts"));
     });
-    this.transcriptsMenuItem.menu.addMenuItem(transcripts);
+    this.maintenanceMenuItem.menu.addMenuItem(transcripts);
 
-    this.maintenanceMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Files and settings"));
-    this.toolsMenuItem.menu.addMenuItem(this.maintenanceMenuItem);
+    let listTranscripts = new PopupMenu.PopupIconMenuItem(_("List all Transcripts"), "view-list-symbolic", St.IconType.SYMBOLIC);
+    listTranscripts.connect("activate", () => this._listAllTranscripts());
+    this.maintenanceMenuItem.menu.addMenuItem(listTranscripts);
+
+    this.transcriptStorageItem = new PopupMenu.PopupSubMenuMenuItem(_("Store transcripts: 500"));
+    this.transcriptStorageItem.menu.connect("open-state-changed", (menu, open) => {
+      if (open) {
+        this._populateTranscriptStorageMenu();
+      }
+    });
+    this.maintenanceMenuItem.menu.addMenuItem(this.transcriptStorageItem);
+    this._populateTranscriptStorageMenu();
+
+    this.openAiFlexProcessingItem = new PopupMenu.PopupMenuItem("");
+    this.openAiFlexProcessingItem.connect("activate", () => this._toggleOpenAiFlexProcessing());
+    this.maintenanceMenuItem.menu.addMenuItem(this.openAiFlexProcessingItem);
+    this._updateOpenAiFlexProcessingItem();
 
     let cleanupPreview = new PopupMenu.PopupIconMenuItem(_("Preview cleanup"), "edit-find-symbolic", St.IconType.SYMBOLIC);
     cleanupPreview.connect("activate", () => this._previewCleanup());
     this.maintenanceMenuItem.menu.addMenuItem(cleanupPreview);
 
-    let cleanup = new PopupMenu.PopupIconMenuItem(_("Clean old files"), "edit-clear-symbolic", St.IconType.SYMBOLIC);
+    let cleanup = new PopupMenu.PopupIconMenuItem(_("Clean all old files"), "edit-clear-symbolic", St.IconType.SYMBOLIC);
     cleanup.connect("activate", () => this._cleanupOldFiles());
     this.maintenanceMenuItem.menu.addMenuItem(cleanup);
 
@@ -827,6 +904,12 @@ MyApplet.prototype = {
     this._updatePanel();
   },
 
+  _onTranscriptRetentionSettingsChanged: function() {
+    this.maxTranscriptFiles = this._normalizeTranscriptLimit(this.maxTranscriptFiles);
+    this._populateTranscriptStorageMenu();
+    this._updatePanel();
+  },
+
   _onRecorderSettingsChanged: function() {
     this.recorder = this._normalizeRecorder(this.recorder);
     this._populateRecorderMenu();
@@ -883,6 +966,7 @@ MyApplet.prototype = {
     this.spawnGeneration += 1;
     this.autoRelistenPending = false;
     this.autoRelistenPendingToken = "";
+    this.autoRelistenManualStopRequested = false;
     this.modelMenuRefreshToken = null;
     this.textModelMenuRefreshToken = null;
     this._clearStatusTimer();
@@ -926,6 +1010,7 @@ MyApplet.prototype = {
       "--insert-method", "none",
       "--typing-delay-ms", String(this._normalizeTypingDelayMs(this.typingDelayMs))
     ];
+    args.push("--keep-transcripts", String(this._normalizeTranscriptLimit(this.maxTranscriptFiles)));
     if (this.appendSpace) {
       args.push("--append-space");
     }
@@ -1038,12 +1123,16 @@ MyApplet.prototype = {
     return [this._cliCommand(), "history", "--limit", "5", "--json"];
   },
 
+  _allHistoryArgs: function() {
+    return [this._cliCommand(), "transcripts-document", "--limit", "1000", "--json"];
+  },
+
   _cleanupArgs: function() {
-    return [this._cliCommand(), "cleanup", "--keep-transcripts", "100", "--keep-recordings", "20", "--json"];
+    return [this._cliCommand(), "cleanup", "--keep-transcripts", "0", "--keep-recordings", "0", "--json"];
   },
 
   _cleanupPreviewArgs: function() {
-    return [this._cliCommand(), "cleanup", "--keep-transcripts", "100", "--keep-recordings", "20", "--dry-run", "--json"];
+    return [this._cliCommand(), "cleanup", "--keep-transcripts", "0", "--keep-recordings", "0", "--dry-run", "--json"];
   },
 
   _listInputsArgs: function() {
@@ -1176,6 +1265,14 @@ MyApplet.prototype = {
     return Math.max(MIN_TYPING_DELAY_MS, Math.min(MAX_TYPING_DELAY_MS, value));
   },
 
+  _normalizeTranscriptLimit: function(limit) {
+    let value = Math.floor(Number(limit));
+    if (!isFinite(value)) {
+      value = DEFAULT_MAX_TRANSCRIPT_FILES;
+    }
+    return Math.max(MIN_TRANSCRIPT_FILES, Math.min(MAX_TRANSCRIPT_FILES, value));
+  },
+
   _populateRecordingLimitMenu: function() {
     if (!this.recordingLimitItem) {
       return;
@@ -1257,6 +1354,94 @@ MyApplet.prototype = {
       return null;
     }
     return seconds;
+  },
+
+  _transcriptStorageLabel: function() {
+    return _("Store transcripts: ") + String(this._normalizeTranscriptLimit(this.maxTranscriptFiles));
+  },
+
+  _updateTranscriptStorageItem: function() {
+    if (this.transcriptStorageItem) {
+      this.transcriptStorageItem.label.text = this._transcriptStorageLabel();
+    }
+  },
+
+  _populateTranscriptStorageMenu: function() {
+    if (!this.transcriptStorageItem) {
+      return;
+    }
+    this.transcriptStorageItem.menu.removeAll();
+    let current = this._normalizeTranscriptLimit(this.maxTranscriptFiles);
+    let hasPreset = TRANSCRIPT_STORAGE_LIMITS.indexOf(current) >= 0;
+    if (!hasPreset) {
+      let currentItem = new PopupMenu.PopupMenuItem("[x] " + _("Keep a maximum of ") + String(current) + _(" transcript files"));
+      currentItem.setSensitive(false);
+      this.transcriptStorageItem.menu.addMenuItem(currentItem);
+      this.transcriptStorageItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    }
+    for (let limit of TRANSCRIPT_STORAGE_LIMITS) {
+      let label = (current === limit ? "[x] " : "[ ] ") + _("Keep a maximum of ") + String(limit) + _(" transcript files");
+      let item = new PopupMenu.PopupMenuItem(label);
+      item.connect("activate", () => this._selectTranscriptStorageLimit(limit));
+      this.transcriptStorageItem.menu.addMenuItem(item);
+    }
+    this.transcriptStorageItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    let custom = new PopupMenu.PopupIconMenuItem((hasPreset ? "[ ] " : "[x] ") + _("Custom transcript limit..."), "document-edit-symbolic", St.IconType.SYMBOLIC);
+    custom.connect("activate", () => this._promptCustomTranscriptLimit());
+    this.transcriptStorageItem.menu.addMenuItem(custom);
+    this._updateTranscriptStorageItem();
+  },
+
+  _selectTranscriptStorageLimit: function(limit) {
+    this.maxTranscriptFiles = this._normalizeTranscriptLimit(limit);
+    this.settings.setValue("max-transcript-files", this.maxTranscriptFiles);
+    this._populateTranscriptStorageMenu();
+    this._setStatus("ready", _("Keep a maximum of ") + String(this.maxTranscriptFiles) + _(" transcript files"), this.lastTranscript);
+  },
+
+  _customTranscriptLimitPromptArgs: function() {
+    let current = String(this._normalizeTranscriptLimit(this.maxTranscriptFiles));
+    return [
+      "zenity",
+      "--entry",
+      "--title=Store transcripts",
+      "--text=Keep a maximum of this many transcript files (1-1000).",
+      "--entry-text=" + current
+    ];
+  },
+
+  _promptCustomTranscriptLimit: function() {
+    if (!GLib.find_program_in_path("zenity")) {
+      this.lastMessage = _("Install zenity to enter a custom transcript limit.");
+      this._setStatus("ready", this.lastMessage, this.lastTranscript);
+      return;
+    }
+    this._spawnText(this._customTranscriptLimitPromptArgs(), (output) => {
+      let limit = this._parseCustomTranscriptLimit(output);
+      if (limit === null) {
+        return;
+      }
+      this._selectTranscriptStorageLimit(limit);
+    });
+  },
+
+  _parseCustomTranscriptLimit: function(value) {
+    let text = String(value === undefined || value === null ? "" : value).trim();
+    if (text === "") {
+      return null;
+    }
+    if (!/^[0-9]+$/.test(text)) {
+      this.lastMessage = _("Transcript limit must be a whole number.");
+      this._setStatus("ready", this.lastMessage, this.lastTranscript);
+      return null;
+    }
+    let limit = Math.floor(Number(text));
+    if (!isFinite(limit) || limit < MIN_TRANSCRIPT_FILES || limit > MAX_TRANSCRIPT_FILES) {
+      this.lastMessage = _("Transcript limit must be between 1 and 1000.");
+      this._setStatus("ready", this.lastMessage, this.lastTranscript);
+      return null;
+    }
+    return limit;
   },
 
   _populateRecordingOptionsMenu: function() {
@@ -1464,8 +1649,8 @@ MyApplet.prototype = {
     return [
       "zenity",
       "--entry",
-      "--title=Auto-Paste",
-      "--text=Window title text to match. Empty disables Auto-Paste.",
+      "--title=Auto-Submitt",
+      "--text=Window title/class marker for trailing Enter. Empty disables Auto-Submitt.",
       "--entry-text=" + current
     ];
   },
@@ -1477,17 +1662,17 @@ MyApplet.prototype = {
   _autoPasteLabel: function() {
     let titles = this._autoPasteTitleValues(this.autoPasteWindowTitle);
     if (titles.length === 0) {
-      return _("AutoPaste: off");
+      return _("Auto-Submitt: off");
     }
-    return _("Auto-Paste: ") + this._shortMenuText(titles.join(", "), 48);
+    return _("Auto-Submitt: ") + this._shortMenuText(titles.join(", "), 48);
   },
 
   _configureAutoPaste: function() {
     if (!GLib.find_program_in_path("zenity")) {
-      this._setTextOptionStatus(_("Install zenity to enter a custom Auto-Paste string"));
+      this._setTextOptionStatus(_("Install zenity to enter a custom Auto-Submitt string"));
       return;
     }
-    this._setTextOptionStatus(_("Enter custom Auto-Paste window title text..."));
+    this._setTextOptionStatus(_("Enter custom Auto-Submitt window title text..."));
     this._spawnText(this._autoPastePromptArgs(), (output) => {
       this._setAutoPasteTitles(this._autoPasteTitleValues(output));
     }, { timeoutMs: 0 });
@@ -1498,8 +1683,8 @@ MyApplet.prototype = {
     this.settings.setValue("auto-paste-window-title", this.autoPasteWindowTitle);
     this._populateAutoPasteMenu();
     let message = this._autoPasteEnabled()
-      ? _("Auto-Paste window titles: ") + this.autoPasteWindowTitle
-      : _("Auto-Paste disabled");
+      ? _("Auto-Submitt targets: ") + this.autoPasteWindowTitle
+      : _("Auto-Submitt disabled");
     this._setTextOptionStatus(message);
   },
 
@@ -1768,16 +1953,28 @@ MyApplet.prototype = {
 
   _toggleRecording: function() {
     if (this.isCommandRunning) {
+      if (this.autoRelisten && this.notificationSessionActive) {
+        this.autoRelistenManualStopRequested = true;
+        this.autoRelistenPending = false;
+        this.autoRelistenPendingToken = "";
+        this._setStatus("processing", _("Stopping Auto Relisten..."), this.lastTranscript);
+      }
       return;
     }
     if (!this._ensureVoiceModelCompatibleWithCurrentLanguage(true)) {
       return;
     }
+    let manualRelistenStopRequested = Boolean(
+      this.autoRelisten &&
+      this.notificationSessionActive &&
+      (this.status === "recording" || this.status === "recorded" || this.autoRelistenPending)
+    );
     this.notificationSessionActive = true;
     this.lastNotificationKey = "";
     this.autoTranscribeRecordingKey = "";
     this.autoRelistenPending = false;
     this.autoRelistenPendingToken = "";
+    this.autoRelistenManualStopRequested = manualRelistenStopRequested;
     this.autoInsertFingerprint = "";
     this.autoInsertFingerprints = [];
     this.recordingStartedAtMs = 0;
@@ -1822,6 +2019,7 @@ MyApplet.prototype = {
     this.autoTranscribeRecordingKey = "";
     this.autoRelistenPending = false;
     this.autoRelistenPendingToken = "";
+    this.autoRelistenManualStopRequested = true;
     this._setStatus("processing", _("Cancelling..."), this.lastTranscript);
     this._spawnJson(this._cancelArgs(), (payload) => {
       this.isCommandRunning = false;
@@ -3374,11 +3572,81 @@ MyApplet.prototype = {
     });
   },
 
+  _listAllTranscripts: function() {
+    if (this.isCommandRunning) {
+      return;
+    }
+    this.isCommandRunning = true;
+    this._setStatus("processing", _("Preparing transcript document..."), this.lastTranscript);
+    this._spawnJson(this._allHistoryArgs(), (payload) => {
+      this.isCommandRunning = false;
+      if (payload.error) {
+        this._setStatus("error", payload.error, this.lastTranscript);
+        return;
+      }
+      let path = String(payload.path || "");
+      if (path === "") {
+        this._setStatus("error", _("Transcript document path is empty"), this.lastTranscript);
+        return;
+      }
+      this._openFile(path, _("Opened transcript document: ") + String(payload.transcripts || 0));
+    });
+  },
+
   _cleanupCount: function(payload, dryRun) {
     if (dryRun) {
       return Number(payload.would_delete_transcripts || 0) + Number(payload.would_delete_recordings || 0) + Number(payload.would_delete_logs || 0);
     }
     return Number(payload.deleted_transcripts || 0) + Number(payload.deleted_recordings || 0) + Number(payload.deleted_logs || 0);
+  },
+
+  _cleanupPreviewText: function(payload) {
+    let plannedPaths = Array.isArray(payload.would_delete_paths) ? payload.would_delete_paths : [];
+    let failedPaths = Array.isArray(payload.failed_paths) ? payload.failed_paths : [];
+    let skippedPaths = Array.isArray(payload.skipped_active_paths) ? payload.skipped_active_paths : [];
+    let lines = [
+      _("Clean all old files preview"),
+      "",
+      _("Files that would be deleted: ") + String(this._cleanupCount(payload, true)),
+      _("Transcripts: ") + String(Number(payload.would_delete_transcripts || 0)),
+      _("Recordings: ") + String(Number(payload.would_delete_recordings || 0)),
+      _("Logs: ") + String(Number(payload.would_delete_logs || 0))
+    ];
+    let addPaths = (title, paths) => {
+      if (paths.length === 0) {
+        return;
+      }
+      lines.push("");
+      lines.push(title);
+      let limit = Math.min(paths.length, 12);
+      for (let i = 0; i < limit; i++) {
+        lines.push("- " + this._shortMenuText(String(paths[i] || ""), 140));
+      }
+      if (paths.length > limit) {
+        lines.push("... +" + String(paths.length - limit));
+      }
+    };
+    addPaths(_("Planned files:"), plannedPaths);
+    addPaths(_("Skipped active files:"), skippedPaths);
+    addPaths(_("Failed files:"), failedPaths);
+    return lines.join("\n");
+  },
+
+  _showCleanupPreviewDialog: function(payload) {
+    let dialog = new ModalDialog.ModalDialog();
+    dialog.contentLayout.add_child(new St.Label({ text: this._cleanupPreviewText(payload), x_expand: true }));
+    dialog.setButtons([
+      {
+        label: _("Close"),
+        key: Clutter.KEY_Escape,
+        action: function() {
+          dialog.close();
+        }.bind(this),
+      }
+    ]);
+    if (!dialog.open()) {
+      this._notify(_("Speed of Cinnamon"), _("Cleanup preview: ") + String(this._cleanupCount(payload, true)), false);
+    }
   },
 
   _previewCleanup: function() {
@@ -3394,6 +3662,7 @@ MyApplet.prototype = {
         return;
       }
       this._setStatus("ready", _("Cleanup preview: ") + String(this._cleanupCount(payload, true)), this.lastTranscript);
+      this._showCleanupPreviewDialog(payload);
     });
   },
 
@@ -3473,7 +3742,9 @@ MyApplet.prototype = {
     this._populateRecorderMenu();
     this.maxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
     this.typingDelayMs = this._normalizeTypingDelayMs(this.typingDelayMs);
+    this.maxTranscriptFiles = this._normalizeTranscriptLimit(this.maxTranscriptFiles);
     this._populateRecordingLimitMenu();
+    this._populateTranscriptStorageMenu();
     this._populateRecordingOptionsMenu();
     this._populateNotificationOptionsMenu();
     this._updateOpenAiFlexProcessingItem();
@@ -3574,6 +3845,9 @@ MyApplet.prototype = {
     }
     if (key === "typing-delay-ms") {
       return typeof value === "number" ? this._normalizeTypingDelayMs(value) : this._normalizeTypingDelayMs(fallback);
+    }
+    if (key === "max-transcript-files") {
+      return typeof value === "number" ? this._normalizeTranscriptLimit(value) : this._normalizeTranscriptLimit(fallback);
     }
     if (key === "language" || key === "secondary-language") {
       return this._coerceImportedEnumSetting(value, LANGUAGE_CODES, fallback);
@@ -3820,10 +4094,11 @@ MyApplet.prototype = {
     if (payload.error) {
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
+      this.autoRelistenManualStopRequested = false;
       this._setStatus("error", payload.error, this.lastTranscript);
       return;
     }
-    let hasTranscript = typeof payload.transcript === "string" && payload.transcript.length > 0;
+    let hasTranscript = typeof payload.transcript === "string" && !this._isEmptyTranscriptText(payload.transcript);
     if (payload.status === "done" && payload.silence_detected) {
       this._finishSilentRelistenSkip(payload);
       return;
@@ -3836,14 +4111,33 @@ MyApplet.prototype = {
       this._finishEmptyRelistenDone(payload);
       return;
     }
-    if (!this.isCommandRunning) {
+    if (!this.isCommandRunning && !this.autoRelistenManualStopRequested) {
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
     }
     let message = payload.message || status;
-    let transcript = typeof payload.transcript === "string" ? payload.transcript : this.lastTranscript || "";
+    let transcript = typeof payload.transcript === "string" && !this._isEmptyTranscriptText(payload.transcript)
+      ? payload.transcript
+      : this.lastTranscript || "";
     this._setStatus(status, message, transcript);
+    if (
+      (payload.status === "recording" || payload.status === "recorded") &&
+      this.autoRelistenManualStopRequested &&
+      !this.isCommandRunning
+    ) {
+      this._toggleRecording();
+      return;
+    }
     this._maybeAutoTranscribeRecorded(payload);
+  },
+
+  _emptyTranscriptMarker: function(transcript) {
+    return String(transcript || "").toLowerCase().replace(/[\W_]+/g, " ").trim();
+  },
+
+  _isEmptyTranscriptText: function(transcript) {
+    let marker = this._emptyTranscriptMarker(transcript);
+    return marker === "" || EMPTY_TRANSCRIPT_MARKERS.indexOf(marker) >= 0;
   },
 
   _applyMicrophoneLevel: function(level, status) {
@@ -4283,7 +4577,7 @@ MyApplet.prototype = {
     }
     this.selfProtectionNoticeKey = key;
     this.selfProtectionNoticeAtMs = now;
-    let message = _("Auto-Paste self-protection blocked target: ") + detail;
+    let message = _("Auto-Submitt self-protection blocked target: ") + detail;
     this.lastMessage = message;
     this._updatePanel();
     this._notify(_("Speed of Cinnamon"), message, true);
@@ -4686,7 +4980,12 @@ MyApplet.prototype = {
   },
 
   _finishAppletTextInsert: function(payload) {
+    this._ensureAutoRelistenPendingForDonePayload(payload);
     let transcript = String(payload.transcript || "");
+    if (this._isEmptyTranscriptText(transcript)) {
+      this._finishEmptyRelistenDone(payload);
+      return;
+    }
     let insertFingerprint = this._autoInsertFingerprint(payload, transcript);
     if (!this._reserveAutoInsertFingerprint(insertFingerprint)) {
       this._setStatus("done", payload.message || _("Transcript already inserted"), transcript);
@@ -4717,16 +5016,40 @@ MyApplet.prototype = {
     this._finishPendingRelisten();
   },
 
+  _ensureAutoRelistenPendingForDonePayload: function(payload) {
+    if (this.autoRelistenManualStopRequested) {
+      return;
+    }
+    if (this.autoRelistenPending || !this.autoRelisten || !this.notificationSessionActive) {
+      return;
+    }
+    let marker = "done";
+    if (payload) {
+      marker = String(payload.audio_path || payload.audio || payload.transcript_path || payload.stopped_at || payload.started_at || "done");
+    }
+    if (marker === "") {
+      marker = "done";
+    }
+    this.autoRelistenSequence += 1;
+    this.autoRelistenPending = true;
+    this.autoRelistenPendingToken = String(this.autoRelistenSequence) + ":done:" + marker;
+  },
+
   _finishPendingRelisten: function() {
     let shouldRelisten = this.autoRelistenPending;
+    let previousNotificationSessionActive = this.notificationSessionActive;
     let relistenStarted = false;
     if (shouldRelisten) {
+      this.notificationSessionActive = true;
       relistenStarted = this._restartRelistenRecording();
     }
     this.autoRelistenPending = false;
     this.autoRelistenPendingToken = "";
+    this.autoRelistenManualStopRequested = false;
     if (relistenStarted) {
       this.notificationSessionActive = true;
+    } else if (shouldRelisten) {
+      this.notificationSessionActive = previousNotificationSessionActive;
     }
     return relistenStarted;
   },
@@ -4812,6 +5135,7 @@ MyApplet.prototype = {
   },
 
   _finishSilentRelistenSkip: function(payload) {
+    this._ensureAutoRelistenPendingForDonePayload(payload);
     if (this._finishPendingRelisten()) {
       return;
     }
@@ -4819,6 +5143,7 @@ MyApplet.prototype = {
   },
 
   _finishEmptyRelistenDone: function(payload) {
+    this._ensureAutoRelistenPendingForDonePayload(payload);
     if (this._finishPendingRelisten()) {
       return;
     }
@@ -4827,16 +5152,16 @@ MyApplet.prototype = {
 
   _insertTranscriptText: function(transcript, completionCallback) {
     let method = this._normalizeOutputMethod(this.insertMethod);
-    let autoPasteEnter = this._windowTitleMatchesAutoPaste();
+    let autoPasteTarget = this._windowTitleMatchesAutoPaste();
     let canPasteWithKeyboard = GLib.find_program_in_path("xdotool") || GLib.find_program_in_path("wtype");
-    let submitWithReturn = autoPasteEnter && method === "clipboard-paste" && canPasteWithKeyboard;
+    let submitWithReturn = autoPasteTarget && method === "clipboard-paste" && canPasteWithKeyboard;
     let text = this._preparedTranscriptText(transcript, submitWithReturn);
     if (method === "none") {
       this._setStatus("done", _("Insertion disabled"), transcript);
       return true;
     }
-    if (text === "") {
-      this._setStatus("done", _("No transcript text to insert"), transcript);
+    if (this._isEmptyTranscriptText(transcript) || this._isEmptyTranscriptText(text)) {
+      this._setStatus("done", _("No transcript text to insert"), "");
       return true;
     }
     if (method === "type") {
@@ -5276,6 +5601,7 @@ MyApplet.prototype = {
       this.textOptionsItem.label.text = this._textOptionsLabel();
     }
     this._updateAutoPasteItem();
+    this._updateTranscriptStorageItem();
     if (this.inputSourceItem) {
       this.inputSourceItem.label.text = this._inputSourceLabel();
     }

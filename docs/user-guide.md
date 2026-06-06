@@ -105,7 +105,7 @@ Use `Text options` to toggle:
 - `Append trailing space`
 - `Replace accents before output`
 
-Use `Auto-Paste` to choose one or more target-window markers such as `codex`, `Terminal`, `PDF`, `Excel`, or `Teams`. Built-in marker names such as `Terminal`, `PDF`, `Excel`, and `Teams` match known window classes/app IDs before inserted text gets a trailing Enter. `codex` and other custom comma-separated or line-separated markers match the full window title case-insensitively; an empty custom value disables Auto-Paste. The default marker is `codex`.
+Use `Auto-Submitt` to choose one or more target-window markers such as `codex`, `Terminal`, `PDF`, `Excel`, `Telegram`, or `Teams`. Built-in marker names such as `Terminal`, `PDF`, `Excel`, `Telegram`, and `Teams` match known window classes/app IDs before inserted text gets a trailing Enter. `codex` and other custom comma-separated or line-separated markers match the full window title case-insensitively; an empty custom value disables Auto-Submitt. The default marker is `codex`.
 
 Accent replacement is a compatibility fallback for direct typing. Saved transcripts stay unchanged.
 
@@ -219,13 +219,22 @@ alarms that became due while the applet was not running.
 
 ## Cleanup
 
-Use `Preview cleanup` before `Clean old files`. Cleanup removes old transcript files and cached recordings while
-skipping the currently referenced state paths. Recordings and their companion logs are handled as one cache group.
+Use `Open transcripts` in `Files and settings` to open the transcript directory. Use `List all Transcripts` to generate
+and open a text document containing the full transcript texts, one transcript after another. The document is opened in
+your default text editor, so it is scrollable and selectable/copyable.
+
+Use `Store transcripts` in `Files and settings` to choose how many transcript files should be kept. The default is 500.
+After each successful transcription, older transcript files are deleted automatically so at most that many transcript
+files remain.
+
+Use `Preview cleanup` before `Clean all old files`. Manual cleanup removes all old transcript files and cached
+recordings while skipping the currently referenced state paths. Recordings and their companion logs are handled as one
+cache group.
 
 The matching CLI dry run is:
 
 ```bash
-speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 20 --dry-run --json
+speed-of-cinnamon cleanup --keep-transcripts 0 --keep-recordings 0 --dry-run --json
 ```
 
 ## Settings Backup

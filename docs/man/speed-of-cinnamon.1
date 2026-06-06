@@ -1,4 +1,4 @@
-.TH SPEED-OF-CINNAMON 1 "June 2026" "speed-of-cinnamon 0.1.34" "User Commands"
+.TH SPEED-OF-CINNAMON 1 "June 2026" "speed-of-cinnamon 0.1.35" "User Commands"
 .SH NAME
 speed-of-cinnamon \- Cinnamon-native voice typing backend
 .SH SYNOPSIS
@@ -68,6 +68,9 @@ Install an Ollama text model.
 .TP
 .B history
 List recent transcript files.
+.TP
+.B transcripts-document
+Write complete transcript history to a plain text document.
 .TP
 .B cleanup
 Preview or remove old transcript files and cached recordings.
@@ -202,10 +205,16 @@ Test only the output path:
 speed-of-cinnamon insert-text "Hallo Terminal" --insert-method clipboard-paste --json
 .EE
 .PP
+Write complete transcript history to a plain text document:
+.PP
+.EX
+speed-of-cinnamon transcripts-document --limit 1000 --json
+.EE
+.PP
 Preview cleanup:
 .PP
 .EX
-speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 20 --dry-run --json
+speed-of-cinnamon cleanup --keep-transcripts 0 --keep-recordings 0 --dry-run --json
 .EE
 .SH FILES
 .TP

@@ -40,7 +40,7 @@
     "output-section": {
       "type": "section",
       "title": "Text output (menu: Text and output)",
-      "keys": ["insert-method", "append-space", "sanitize-special-chars", "typing-delay-ms", "auto-paste-window-title"]
+      "keys": ["insert-method", "append-space", "sanitize-special-chars", "typing-delay-ms", "max-transcript-files", "auto-paste-window-title"]
     },
     "backend-section": {
       "type": "section",
@@ -55,11 +55,11 @@
   },
   "about-version": {
     "type": "label",
-    "description": "Version: 0.1.34\nAuthor: H234598\nCinnamon-native voice typing for Fedora Cinnamon."
+    "description": "Version: 0.1.35\nAuthor: H234598\nCinnamon-native voice typing for Fedora Cinnamon."
   },
   "main-menu-settings-map": {
     "type": "label",
-    "description": "All persistent settings from the applet menu are available here. Recording options are in Recording, output and Auto-Paste are in Text output, personal context and vocabulary are in Personalization, and voice/text model backend values are in Voice and text models. Dynamic actions such as downloading models, opening transcript folders, diagnostics, cleanup, and alarm commands remain in the applet panel menu."
+    "description": "All persistent settings from the applet menu are available here. Recording options are in Recording, output and Auto-Submitt are in Text output, personal context and vocabulary are in Personalization, and voice/text model backend values are in Voice and text models. Dynamic actions such as downloading models, opening transcript folders, diagnostics, cleanup, and alarm commands remain in the applet panel menu."
   },
   "toggle-keybinding": {
     "type": "keybinding",
@@ -245,10 +245,19 @@
     "units": "ms",
     "default": 8
   },
+  "max-transcript-files": {
+    "type": "spinbutton",
+    "description": "Keep a maximum of transcript files",
+    "tooltip": "After each successful transcription, delete older transcript files so at most this many transcript files are kept. Preview cleanup and Clean old files use the same limit.",
+    "min": 1,
+    "max": 1000,
+    "step": 1,
+    "default": 500
+  },
   "auto-paste-window-title": {
     "type": "entry",
-    "description": "AutoPaste window title",
-    "tooltip": "Built-in marker names match known window classes/app IDs; codex and custom strings match the full window title case-insensitively. Empty disables Auto-Paste. Max 4096 chars.",
+    "description": "Auto-Submitt target markers",
+    "tooltip": "Built-in marker names match known window classes/app IDs; codex and custom strings match the full window title case-insensitively. Matching targets receive a trailing Enter after Clipboard and paste. Empty disables Auto-Submitt. Max 4096 chars.",
     "default": "codex"
   },
   "cli-path": {

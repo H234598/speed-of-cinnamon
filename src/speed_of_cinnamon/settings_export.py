@@ -29,6 +29,7 @@ MAX_SETTINGS_EXPORT_JSON_NODES = 10_000
 MAX_TYPING_DELAY_MS = 10_000
 DEFAULT_MAX_SECONDS = 30
 DEFAULT_TYPING_DELAY_MS = 8
+DEFAULT_MAX_TRANSCRIPT_FILES = 500
 MIN_RECORDING_SECONDS = 0
 MIN_TYPING_DELAY_MS = 0
 
@@ -54,6 +55,7 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "append-space": (bool, True),
     "sanitize-special-chars": (bool, False),
     "typing-delay-ms": (int, DEFAULT_TYPING_DELAY_MS),
+    "max-transcript-files": (int, DEFAULT_MAX_TRANSCRIPT_FILES),
     "auto-paste-window-title": (str, "codex"),
     "transcriber": (str, "auto"),
     "whisper-model": (str, ""),

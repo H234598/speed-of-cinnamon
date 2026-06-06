@@ -222,11 +222,11 @@ setup, recorded, and error states, so the indicator remains scannable even witho
 Old transcript files and cached recordings can be pruned without touching the currently referenced state files:
 
 ```bash
-speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 20 --dry-run --json
-speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 20 --json
+speed-of-cinnamon cleanup --keep-transcripts 0 --keep-recordings 0 --dry-run --json
+speed-of-cinnamon cleanup --keep-transcripts 0 --keep-recordings 0 --json
 ```
 
-The Cinnamon applet exposes the same conservative cleanup as `Preview cleanup` and `Clean old files`. Use the preview
+The Cinnamon applet exposes the same cleanup as `Preview cleanup` and `Clean all old files`. Use the preview
 first to count what would be removed without deleting anything. Recordings and their companion logs are handled as one
 cache group, and the current `state.json` audio/log/transcript paths are skipped. In normal use, successful recordings
 have already been removed; cleanup is mainly for retained debug artifacts, cancelled runs, and older caches.

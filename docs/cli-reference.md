@@ -261,9 +261,13 @@ unchanged.
 
 ```bash
 speed-of-cinnamon history --limit 5 --json
-speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 20 --dry-run --json
-speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 20 --json
+speed-of-cinnamon transcripts-document --limit 1000 --json
+speed-of-cinnamon cleanup --keep-transcripts 0 --keep-recordings 0 --dry-run --json
+speed-of-cinnamon cleanup --keep-transcripts 0 --keep-recordings 0 --json
 ```
+
+`transcripts-document` writes a plain text document with complete transcript contents for scrolling, selecting, and
+copying outside the applet menu.
 
 Cleanup skips the currently referenced state paths. Use the dry run before deleting.
 

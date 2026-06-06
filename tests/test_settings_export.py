@@ -222,6 +222,7 @@ class SettingsExportTest(unittest.TestCase):
             "keep-recording-artifacts": True,
             "sanitize-special-chars": True,
             "typing-delay-ms": "12",
+            "max-transcript-files": "500",
             "auto-paste-window-title": "Teams",
             "post-process-backend": "ollama",
             "ollama-model": "llama3.2:3b",
@@ -244,6 +245,7 @@ class SettingsExportTest(unittest.TestCase):
         self.assertTrue(settings["keep-recording-artifacts"])
         self.assertTrue(settings["sanitize-special-chars"])
         self.assertEqual(settings["typing-delay-ms"], 12)
+        self.assertEqual(settings["max-transcript-files"], 500)
         self.assertEqual(settings["auto-paste-window-title"], "Teams")
         self.assertEqual(settings["post-process-backend"], "ollama")
         self.assertEqual(settings["ollama-model"], "llama3.2:3b")
@@ -276,6 +278,7 @@ class SettingsExportTest(unittest.TestCase):
                     "auto-transcribe-timeout": False,
                     "auto-relisten": True,
                     "auto-paste-window-title": "Teams",
+                    "max-transcript-files": 500,
                     "notify-complete": False,
                     "personal-context": "Project words",
                 },
@@ -299,6 +302,7 @@ class SettingsExportTest(unittest.TestCase):
         self.assertFalse(payload["settings"]["auto-transcribe-timeout"])
         self.assertTrue(payload["settings"]["auto-relisten"])
         self.assertEqual(payload["settings"]["auto-paste-window-title"], "Teams")
+        self.assertEqual(payload["settings"]["max-transcript-files"], 500)
         self.assertFalse(payload["settings"]["notify-complete"])
         self.assertEqual(payload["settings"]["personal-context"], "Project words")
         self.assertEqual(payload["alarms"]["last_checked_at"], "2026-06-01T09:10")
