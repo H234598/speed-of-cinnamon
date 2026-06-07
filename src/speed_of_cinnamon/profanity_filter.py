@@ -245,6 +245,50 @@ _IGNORABLE_MATCH_RANGES = _unicode_category_char_class_ranges(_MATCH_IGNORE_CATE
 _IGNORABLE_CHAR_CLASS = f"[{_IGNORABLE_MATCH_RANGES}]"
 _IGNORABLE_BOUNDARY_CLASS = f"[\\w{_IGNORABLE_MATCH_RANGES}]"
 _IGNORABLE_GAP_PATTERN = rf"{_IGNORABLE_CHAR_CLASS}*"
+_CONFUSABLE_FOLD = str.maketrans({
+    "а": "a",
+    "А": "a",
+    "е": "e",
+    "Е": "e",
+    "о": "o",
+    "О": "o",
+    "р": "p",
+    "Р": "p",
+    "с": "c",
+    "С": "c",
+    "у": "y",
+    "У": "y",
+    "х": "x",
+    "Х": "x",
+    "і": "i",
+    "І": "i",
+    "ј": "j",
+    "Ј": "j",
+    "к": "k",
+    "К": "k",
+    "ѕ": "s",
+    "Ѕ": "s",
+})
+_CONFUSABLE_REGEX_EQUIVALENTS: dict[str, str] = {
+    "a": "aаА",
+    "c": "cсС",
+    "e": "eеЕ",
+    "i": "iіІ",
+    "j": "jјЈ",
+    "k": "kкК",
+    "o": "oоО",
+    "p": "pрР",
+    "s": "sѕЅ",
+    "x": "xхХ",
+    "y": "yуУ",
+}
+
+
+def _confusable_regex_source(char: str) -> str:
+    equivalents = _CONFUSABLE_REGEX_EQUIVALENTS.get(char)
+    if not equivalents:
+        return re.escape(char)
+    return "[" + "".join(re.escape(item) for item in equivalents) + "]"
 
 
 def _normalize_profanity_pattern(pattern: str) -> str:
@@ -252,7 +296,7 @@ def _normalize_profanity_pattern(pattern: str) -> str:
     for char in unicodedata.normalize("NFKD", pattern).casefold():
         if unicodedata.category(char) in _MATCH_IGNORE_CATEGORIES:
             continue
-        normalized.append(char)
+        normalized.append(char.translate(_CONFUSABLE_FOLD))
     return "".join(normalized)
 
 
@@ -260,7 +304,7 @@ def _build_tolerant_profanity_pattern(pattern: str) -> str:
     normalized = _normalize_profanity_pattern(pattern)
     if not normalized:
         return ""
-    source = _IGNORABLE_GAP_PATTERN.join(re.escape(char) for char in normalized)
+    source = _IGNORABLE_GAP_PATTERN.join(_confusable_regex_source(char) for char in normalized)
     return rf"(?<!{_IGNORABLE_BOUNDARY_CLASS}){_IGNORABLE_GAP_PATTERN}{source}{_IGNORABLE_GAP_PATTERN}(?!{_IGNORABLE_BOUNDARY_CLASS})"
 
 

@@ -34,6 +34,12 @@ class ProfanityFilterTest(unittest.TestCase):
 
         self.assertEqual(compiled[0][0].sub(compiled[0][1], "scho\u0308n"), "blume")
 
+    def test_compile_profanity_replacements_blocks_common_mixed_script_homoglyphs(self) -> None:
+        compiled = compile_profanity_replacements((("fuck", "frog"), ("ass", "donkey")))
+
+        self.assertEqual(compiled[0][0].sub(compiled[0][1], "fu\u0441\u043a"), "frog")
+        self.assertEqual(compiled[1][0].sub(compiled[1][1], "\u0430\u0455s"), "donkey")
+
     def test_default_profanity_replacements_preserve_trusted_regex_patterns(self) -> None:
         from speed_of_cinnamon.profanity_filter import PROFANITY_REPLACEMENTS
 

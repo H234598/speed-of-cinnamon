@@ -7609,6 +7609,57 @@ class CliTest(unittest.TestCase):
         self.assertEqual(final_state.transcript, "already handled")
         mocked_finalize.assert_not_called()
 
+    def test_start_refuses_to_spawn_recorder_while_lifecycle_lock_is_held(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            args = self._build_finalize_args(insert_method="none")
+            args.state_file = str(state_file)
+            args.max_seconds = 30
+            args.input_device = ""
+            args.recorder = "auto"
+            args.language = "en"
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli._acquire_finalization_lock", return_value=None),
+                mock.patch("speed_of_cinnamon.cli.start_recorder") as mocked_start_recorder,
+            ):
+                result = cli.command_start(args)
+
+        self.assertEqual(result["status"], "finalizing")
+        self.assertIn("lifecycle", result["message"])
+        mocked_start_recorder.assert_not_called()
+
+    def test_stop_rereads_recorded_state_after_lifecycle_lock_before_finalizing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recorded.wav"
+            audio.write_bytes(b"audio")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="recorded", audio_path=str(audio)))
+            args = self._build_finalize_args(insert_method="none")
+            args.state_file = str(state_file)
+            original_acquire_finalization_lock = cli._acquire_finalization_lock
+
+            def acquire_and_complete(state_path: Path) -> Path | None:
+                lock_path = original_acquire_finalization_lock(state_path)
+                store.write(RecordingState(status="done", transcript="already handled", inserted=True))
+                return lock_path
+
+            with (
+                mock.patch("speed_of_cinnamon.cli._acquire_finalization_lock", side_effect=acquire_and_complete),
+                mock.patch("speed_of_cinnamon.cli.finalize_recording") as mocked_finalize,
+            ):
+                result = cli.command_stop(args)
+            final_state = store.read()
+
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(final_state.transcript, "already handled")
+        mocked_finalize.assert_not_called()
+
     @mock.patch("speed_of_cinnamon.cli.stop_process")
     @mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=True)
     def test_cancel_running_recording_does_not_signal_reused_pid(self, mocked_alive: mock.Mock, mocked_stop: mock.Mock) -> None:

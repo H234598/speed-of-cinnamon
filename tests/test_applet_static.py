@@ -984,7 +984,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("main-menu-settings-map", schema)
         self.assertIn("All persistent settings from the applet menu are available here", schema["main-menu-settings-map"]["description"])
         self.assertIn("Voice model settings mirror Recording > Voice model", schema["main-menu-settings-map"]["description"])
-        self.assertIn("Text model and polishing settings mirror Text and output > Text model", schema["main-menu-settings-map"]["description"])
+        self.assertIn("Text backend and model selection mirror Text and output > Text model", schema["main-menu-settings-map"]["description"])
+        self.assertIn("polishing presets, custom instructions, and safety switches are configured here only", schema["main-menu-settings-map"]["description"])
         self.assertIn("menu: Recording", schema["layout"]["recording-section"]["title"])
         self.assertIn("input-device-default", schema["layout"]["recording-section"]["keys"])
         self.assertIn("input-device", schema["layout"]["recording-section"]["keys"])
@@ -1008,6 +1009,25 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("Max 4096 chars", schema["openai-compatible-text-model"]["tooltip"])
         self.assertIn("Max 4096 chars", schema["ollama-url"]["tooltip"])
         self.assertIn("Max 4096 chars", schema["openai-compatible-url"]["tooltip"])
+
+    def test_settings_export_excludes_private_command_templates(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        guide = (Path(__file__).resolve().parents[1] / "docs" / "user-guide.md").read_text(encoding="utf-8")
+
+        self.assertNotIn('["transcriber-command", "transcriberCommand"]', source)
+        self.assertNotIn('["post-process-command", "postProcessCommand"]', source)
+        self.assertIn("custom command templates", guide)
+
+    def test_user_guide_matches_recording_and_notification_defaults(self) -> None:
+        guide = (Path(__file__).resolve().parents[1] / "docs" / "user-guide.md").read_text(encoding="utf-8")
+        schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
+
+        self.assertFalse(schema["auto-relisten"]["default"])
+        self.assertFalse(schema["notify-complete"]["default"])
+        self.assertTrue(schema["notify-error"]["default"])
+        self.assertIn("`Auto Relisten` is off by default", guide)
+        self.assertIn("Error notifications are enabled by default", guide)
+        self.assertIn("Completion notifications", guide)
 
     def test_starter_voice_model_matches_current_language(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

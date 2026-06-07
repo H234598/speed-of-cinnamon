@@ -165,7 +165,7 @@
   },
   "main-menu-settings-map": {
     "type": "label",
-    "description": "All persistent settings from the applet menu are available here. Recording options mirror the Recording menu. Voice model settings mirror Recording > Voice model. Text model and polishing settings mirror Text and output > Text model. Output and Auto-Submitt are in Text output, personal context and vocabulary are in Personalization. Dynamic actions such as downloading or removing models, opening transcript folders, listing or exporting transcript documents, diagnostics, cleanup, and alarm commands remain in the applet panel menu."
+    "description": "All persistent settings from the applet menu are available here. Recording options mirror the Recording menu. Voice model settings mirror Recording > Voice model. Text backend and model selection mirror Text and output > Text model; polishing presets, custom instructions, and safety switches are configured here only. Output and Auto-Submitt are in Text output, personal context and vocabulary are in Personalization. Dynamic actions such as downloading or removing models, opening transcript folders, listing or exporting transcript documents, diagnostics, cleanup, and alarm commands remain in the applet panel menu."
   },
   "settings-logo-header": {
     "type": "custom",

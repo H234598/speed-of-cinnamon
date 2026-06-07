@@ -74,11 +74,15 @@ the next recording.
 Use `Recording options` to toggle:
 
 - `Auto-transcribe at time limit`
+- `Auto Relisten`
 - `Keep recording files`
 
 When a recording reaches its maximum length, the backend preserves the audio as `recorded`. By default, the applet starts
 transcription as soon as it sees that state. Disable auto-transcription to keep the recording at `RDY` until the next
 shortcut press.
+
+`Auto Relisten` is off by default. When enabled, a recording that was automatically transcribed at the time limit can
+immediately start a new recording with the same duration. Manual stop and cancel do not restart recording.
 
 Recording files are deleted after successful transcription by default. Keep them only when debugging recorder or ASR
 behavior.
@@ -223,9 +227,9 @@ speed-of-cinnamon install-text-model --model llama3.2:3b --json
 
 ## Notifications
 
-Completion and error notifications are enabled by default. Recording-start and time-limit notifications can be enabled
-separately. Use the `Notifications` submenu to toggle recording, completion, and error notifications without opening
-Cinnamon settings.
+Error notifications are enabled by default. Completion notifications and recording-start/time-limit notifications can be
+enabled separately. Use the `Notifications` submenu to toggle recording, completion, and error notifications without
+opening Cinnamon settings.
 
 Notifications are emitted by the Cinnamon applet through Cinnamon APIs. The backend stays quiet for CLI smoke tests and
 scripted runs.

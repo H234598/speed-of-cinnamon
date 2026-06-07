@@ -53,6 +53,12 @@ class SecurityParserTest(unittest.TestCase):
         self.assertTrue(directives.show_blacklist)
         self.assertEqual(directives.text, "")
 
+    def test_parse_security_directives_treats_unicode_line_separator_as_line_break(self) -> None:
+        text = "blacklisteintrag: geheim\u2028Hallo"
+        directives = parse_security_directives(text)
+        self.assertEqual(directives.added_blacklist, ["geheim"])
+        self.assertEqual(directives.text, "Hallo")
+
     def test_parse_security_directives_add_without_colon(self) -> None:
         text = "blacklisteintrag geheim"
         directives = parse_security_directives(text)

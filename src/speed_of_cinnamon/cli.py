@@ -2734,9 +2734,7 @@ def prune_recording_groups(
     return result
 
 
-def command_start(args: argparse.Namespace) -> dict[str, object]:
-    ensure_runtime_dirs()
-    store = build_store(args)
+def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[str, object]:
     current = store.read()
     _raise_if_state_unreadable(current)
     if current.status == "finalizing":
@@ -2865,6 +2863,39 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
         "recording_artifact_cap": artifact_cleanup,
         **({"cleanup_failed_paths": cleanup_failed_paths} if cleanup_failed_paths else {}),
     }
+
+
+def command_start(args: argparse.Namespace) -> dict[str, object]:
+    ensure_runtime_dirs()
+    store = build_store(args)
+    lock_path = _acquire_finalization_lock(store.path)
+    if lock_path is None:
+        return {
+            "status": "finalizing",
+            "message": "recording lifecycle in progress; wait for completion",
+        }
+    try:
+        return _command_start_locked(args, store)
+    finally:
+        _release_finalization_lock(lock_path)
+
+
+def _finalize_non_recording_state_with_lock(args: argparse.Namespace, store: StateStore) -> dict[str, object]:
+    lock_path = _acquire_finalization_lock(store.path)
+    if lock_path is None:
+        return {"status": "finalizing", "message": "finalization already in progress"}
+    try:
+        state = store.read()
+        _raise_if_state_unreadable(state)
+        if state.status in {"recorded", "processing"}:
+            return finalize_recording(args, store, state, finalization_lock_path=lock_path)
+        if state.status == "finalizing":
+            if state.audio_path:
+                return finalize_recording(args, store, state, finalization_lock_path=lock_path)
+            return {"status": "finalizing", "message": "finalization in progress"}
+        return {"status": state.status, "message": "not recording"}
+    finally:
+        _release_finalization_lock(lock_path)
 
 
 def finalize_recording(
@@ -3293,12 +3324,10 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
     state = store.read()
     _raise_if_state_unreadable(state)
     if state.status != "recording":
-        if state.status == "finalizing":
-            if state.audio_path:
-                return finalize_recording(args, store, state)
-            return {"status": "finalizing", "message": "finalization in progress"}
         if state.status in {"recorded", "processing"}:
-            return finalize_recording(args, store, state)
+            return _finalize_non_recording_state_with_lock(args, store)
+        if state.status == "finalizing":
+            return _finalize_non_recording_state_with_lock(args, store)
         return {"status": state.status, "message": "not recording"}
 
     lock_path = _acquire_finalization_lock(store.path)
@@ -3460,14 +3489,11 @@ def command_toggle(args: argparse.Namespace) -> dict[str, object]:
     state = store.read()
     _raise_if_state_unreadable(state)
     if state.status == "finalizing":
-        if state.audio_path:
-            return finalize_recording(args, store, state)
-        return {"status": "finalizing", "message": "finalization in progress"}
+        return command_stop(args)
     if state.status == "recording":
         if _recording_process_verified_alive(state):
             return command_stop(args)
         if state.audio_path:
-            store.update(status="processing", stopped_at=state.stopped_at or now_iso())
             return command_stop(args)
     if state.status in {"recorded", "processing"}:
         return command_stop(args)
