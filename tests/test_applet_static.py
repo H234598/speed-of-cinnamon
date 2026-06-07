@@ -527,6 +527,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.autoRelistenPending = false;', source)
         self.assertIn('this.autoRelistenPendingToken = "";', source)
         self.assertIn('this.autoRelistenManualStopRequested = false;', source)
+        self.assertIn("this.cancelPendingWhileCommandRunning = false;", source)
         self.assertIn("this.autoRelistenSequence = 0;", source)
         self.assertIn('let shouldRelisten = this.autoRelistenPending;', source)
         self.assertIn('relistenToken = String(this.autoRelistenSequence) + ":" + recordingKey;', source)
@@ -1189,8 +1190,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._forgetAutoInsertFingerprint(insertFingerprint);", source)
         self.assertIn("_transcriptDigest: function(transcript)", source)
         self.assertIn("GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, text, -1)", source)
-        self.assertIn('":sha256:" + digest', source)
-        self.assertNotIn("rawTranscript.slice(0, 64)", source)
+        self.assertIn('"sha256:" + GLib.compute_checksum_for_string', source)
+        self.assertIn('return "digest-unavailable";', source)
+        self.assertNotIn("rawTranscript.slice", source)
+        self.assertNotIn("text.slice(0, 256)", source)
         self.assertIn("_finishPendingRelisten: function()", source)
         self.assertIn("this._finishPendingRelisten();", source)
         reserve_index = source.index("if (!this._reserveAutoInsertFingerprint(insertFingerprint))", finish_index)
@@ -1257,9 +1260,23 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.autoRelistenManualStopRequested = manualRelistenStopRequested;", source[toggle_index:toggle_end])
         self.assertIn('this._setStatus("processing", _("Stopping Auto Relisten..."), this.lastTranscript);', source[toggle_index:toggle_end])
         self.assertIn("if (this.isCommandRunning) {", source[cancel_index:cancel_end])
+        self.assertIn("this.cancelPendingWhileCommandRunning = true;", source[cancel_index:cancel_end])
         self.assertIn("this.autoRelistenManualStopRequested = true;", source[cancel_index:cancel_end])
         self.assertIn('this._setStatus("processing", _("Stopping Auto Relisten..."), this.lastTranscript);', source[cancel_index:cancel_end])
         self.assertIn("if (this.autoRelistenManualStopRequested) {\n      return;\n    }", source[ensure_index:ensure_end])
+
+    def test_cancel_pending_during_command_suppresses_done_transcript_insert(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        apply_index = source.index("_applyPayload: function(payload, statusRefreshToken)")
+        apply_end = source.index("_applyMicrophoneLevel: function", apply_index)
+        block = source[apply_index:apply_end]
+
+        cancel_done_index = block.index('if (this.cancelPendingWhileCommandRunning && payload.status === "done")')
+        finish_insert_index = block.index('if (payload.status === "done" && hasTranscript)')
+        self.assertLess(cancel_done_index, finish_insert_index)
+        self.assertIn('this._setStatus("ready", _("Cancel applied; transcript not inserted"), this.lastTranscript);', block)
+        self.assertIn("this.cancelPendingWhileCommandRunning = false;", block)
+        self.assertIn("this._cancelRecording();", block)
 
     def test_failed_insert_stops_auto_relisten_restart(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

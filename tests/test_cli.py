@@ -2854,6 +2854,29 @@ class CliTest(unittest.TestCase):
         self.assertTrue(middle_exists)
         self.assertTrue(newer_exists)
 
+    def test_cleanup_deletes_stale_transient_transcripts_without_touching_fresh_ones(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            stale = transcript_dir / ".old.abcd.tmp.txt"
+            fresh = transcript_dir / ".fresh.abcd.tmp.txt"
+            stale.write_text("old plaintext\n", encoding="utf-8")
+            fresh.write_text("fresh plaintext\n", encoding="utf-8")
+            old_mtime = time.time() - cli.TRANSIENT_TRANSCRIPT_MAX_AGE_SECONDS - 60
+            os.utime(stale, (old_mtime, old_mtime))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cleanup", "--keep-transcripts", "0", "--keep-recordings", "0", "--json"])
+            payload = json.loads(stdout.getvalue())
+            stale_exists = stale.exists()
+            fresh_exists = fresh.exists()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["deleted_transient_transcripts"], 1)
+        self.assertIn(str(stale), payload["deleted_paths"])
+        self.assertFalse(stale_exists)
+        self.assertTrue(fresh_exists)
+
     def test_cleanup_prunes_recording_groups_and_skips_active_state_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -5161,6 +5184,7 @@ class CliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            transcript_root = tmp_path / "speed-of-cinnamon" / "transcripts"
             recordings_root.mkdir(parents=True)
             audio = recordings_root / "recording.wav"
             log = recordings_root / "recording.log"
@@ -5317,6 +5341,7 @@ class CliTest(unittest.TestCase):
             self.assertEqual(final_state.status, "error")
             self.assertEqual(final_state.audio_path, str(audio))
             self.assertEqual(final_state.log_path, str(log))
+            self.assertFalse(final_state.transcript_path)
 
     def test_finalize_non_silent_keeps_artifacts_if_done_and_error_state_updates_fail(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

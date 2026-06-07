@@ -1386,7 +1386,7 @@ Source #13
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
             mock.patch(
                 "speed_of_cinnamon.recorder._recording_process_identity_for_pid",
-                return_value="owner-identity",
+                side_effect=["owner-identity", None],
             ) as mocked_identity,
             mock.patch("speed_of_cinnamon.recorder.os.kill", side_effect=ProcessLookupError) as mocked_os_kill,
             mock.patch(
@@ -1396,7 +1396,7 @@ Source #13
             result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
 
         self.assertTrue(result)
-        self.assertEqual(mocked_identity.call_count, 2)
+        self.assertEqual(mocked_identity.call_count, 1)
         mocked_os_kill.assert_called_once_with(-1234, 0)
         self.assertEqual(mocked_kill.call_args_list[0].args[0], ["kill", "-INT", "--", "-1234"])
 

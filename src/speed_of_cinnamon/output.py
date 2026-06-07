@@ -917,6 +917,8 @@ def _active_x_window_snapshot(*, xdotool_command: str | None = None) -> tuple[st
         timeout=MAX_PASTE_TIMEOUT_SECONDS,
         resolved_command=runtime_command,
     )
+    if not isinstance(window_class, str) or not window_class:
+        return None
     return window_id, window_title, window_class
 
 
@@ -930,11 +932,15 @@ def _active_x_window_matches_snapshot(
     current = _active_x_window_snapshot(xdotool_command=xdotool_command)
     if current is None:
         return False
-    expected_id, _expected_title, expected_class = snapshot
-    current_id, _current_title, current_class = current
+    expected_id, expected_title, expected_class = snapshot
+    current_id, current_title, current_class = current
     if current_id != expected_id:
         return False
-    if expected_class and current_class != expected_class:
+    if not isinstance(expected_class, str) or not expected_class:
+        return False
+    if not isinstance(current_class, str) or current_class != expected_class:
+        return False
+    if isinstance(expected_title, str) and expected_title and current_title != expected_title:
         return False
     return True
 
@@ -1190,13 +1196,15 @@ def _begin_clipboard_insertion(text: str, method: str) -> tuple[Path, tuple[str,
         return None
     lock_path = _acquire_clipboard_dedup_lock()
     if lock_path is None:
-        return None
+        raise OutputError("clipboard dedupe lock unavailable")
     try:
         (
             persistent_state_trusted,
             persistent_snapshot,
             persistent_state_pending,
         ) = _read_clipboard_dedup_state_entry()
+        if not persistent_state_trusted:
+            raise OutputError("untrusted clipboard dedupe state")
         if _should_skip_clipboard_duplicate(
             text,
             method,
@@ -1234,6 +1242,12 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
         operation_performed = False
         committed = False
         try:
+            if not _write_clipboard_dedup_fingerprint_state(
+                _clipboard_text_fingerprint(_normalize_clipboard_text(text)),
+                time.time(),
+                pending=True,
+            ):
+                raise OutputError("failed to reserve clipboard insertion state")
             set_clipboard(text)
             operation_performed = True
             if not _commit_clipboard_insertion(text, method):

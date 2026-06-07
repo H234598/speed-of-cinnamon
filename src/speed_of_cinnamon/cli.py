@@ -131,6 +131,7 @@ DEFAULT_KEEP_TRANSCRIPTS = 500
 DEFAULT_KEEP_RECORDINGS = 20
 DEFAULT_RECORDING_MAX_AGE_DAYS = 7
 MAX_TEMP_RECORDING_FILES = 20
+TRANSIENT_TRANSCRIPT_MAX_AGE_SECONDS = 3600
 RECORDING_ARTIFACT_EXTENSIONS = (".wav", ".flac", ".log", ".socenc")
 ENCRYPTED_RECORDING_ARTIFACT_SUFFIXES = (".wav.socenc", ".flac.socenc")
 TRANSCRIPT_ARTIFACT_SUFFIXES = (".txt", ".socenc")
@@ -1126,6 +1127,40 @@ def _safe_transcript_artifact_files() -> list[Path]:
         for path in _safe_regular_child_files(transcript_dir(), TRANSCRIPT_ARTIFACT_SUFFIXES, field_name="transcript directory")
         if _is_transcript_artifact(path)
     ]
+
+
+def _is_transient_transcript_artifact(path: Path) -> bool:
+    if not isinstance(path, Path):
+        return False
+    name = path.name.lower()
+    return name.startswith(".") and name.endswith(".tmp.txt")
+
+
+def _safe_stale_transient_transcript_files(max_age_seconds: int = TRANSIENT_TRANSCRIPT_MAX_AGE_SECONDS) -> list[Path]:
+    if not isinstance(max_age_seconds, int) or isinstance(max_age_seconds, bool):
+        raise RuntimeError("transient transcript max age must be an integer")
+    cutoff = time.time() - max(max_age_seconds, 0)
+    files: list[Path] = []
+    for path, file_stat in _safe_directory_entries(transcript_dir(), field_name="transcript directory"):
+        if not _is_transient_transcript_artifact(path):
+            continue
+        if not stat_module.S_ISREG(file_stat.st_mode):
+            continue
+        if getattr(file_stat, "st_nlink", 1) != 1:
+            continue
+        if file_stat.st_mtime > cutoff:
+            continue
+        files.append(path)
+    return files
+
+
+def prune_stale_transient_transcripts(dry_run: bool = False) -> dict[str, object]:
+    return prune_files_by_mtime(
+        _safe_stale_transient_transcript_files(),
+        0,
+        active_paths=set(),
+        dry_run=dry_run,
+    )
 
 
 def _read_stored_transcript_text(path: Path) -> str:
@@ -2495,6 +2530,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
     state_marked_finalizing = False
     written_text_path: Path | None = None
     artifact_encryption = ARTIFACT_ENCRYPTION_OFF
+    preserve_written_text_on_error = False
     try:
         state = store.read()
         _raise_if_state_unreadable(state)
@@ -2699,6 +2735,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             inserted=inserted,
             error="",
         )
+        preserve_written_text_on_error = True
         cleanup_failures: list[tuple[str, str, str]] = []
         if remove_original_after_state_update:
             if not remove_file(str(audio_path), suffix=audio_suffix):
@@ -2732,6 +2769,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             active_artifact_paths(done, state_path=store.path),
             False,
         )
+        transient_transcript_cleanup = prune_stale_transient_transcripts(False)
         return {
             "status": done.status,
             "message": "recording finished without transcript" if not text.strip() else "transcription completed",
@@ -2747,6 +2785,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             "security": security_post_processing,
             "recording_artifact_cap": artifact_cleanup,
             "transcript_file_cap": transcript_cleanup,
+            "transient_transcript_cleanup": transient_transcript_cleanup,
             "language": language,
             "recording_artifacts_kept": keep_recording_artifacts,
             "audio_deleted": audio_deleted,
@@ -2775,7 +2814,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
                 and (stabilized_audio_deleted or _recording_artifact_stat(stabilized_audio_path) is None)
             ):
                 error_update["audio_path"] = ""
-            if written_text_path is not None:
+            if written_text_path is not None and not preserve_written_text_on_error:
                 try:
                     _remove_transcript_file(written_text_path)
                 except RuntimeError as cleanup_exc:
@@ -3376,17 +3415,20 @@ def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
         active_paths,
         dry_run,
     )
+    transient_transcript_result = prune_stale_transient_transcripts(dry_run)
     recording_result = prune_recording_groups(keep_recordings, active_paths, dry_run, recording_max_age_days)
     deleted_transcripts = len(transcript_result["deleted_paths"])
+    deleted_transient_transcripts = len(transient_transcript_result["deleted_paths"])
     deleted_recordings = _coerce_int(recording_result["deleted_recordings"], field_name="deleted-recordings")  # type: ignore[arg-type]
     deleted_logs = _coerce_int(recording_result["deleted_logs"], field_name="deleted-logs")  # type: ignore[arg-type]
     would_delete_transcripts = len(transcript_result["planned_paths"])
+    would_delete_transient_transcripts = len(transient_transcript_result["planned_paths"])
     would_delete_recordings = _coerce_int(recording_result["planned_recordings"], field_name="planned-recordings")  # type: ignore[arg-type]
     would_delete_logs = _coerce_int(recording_result["planned_logs"], field_name="planned-logs")  # type: ignore[arg-type]
     total = (
-        would_delete_transcripts + would_delete_recordings + would_delete_logs
+        would_delete_transcripts + would_delete_transient_transcripts + would_delete_recordings + would_delete_logs
         if dry_run
-        else deleted_transcripts + deleted_recordings + deleted_logs
+        else deleted_transcripts + deleted_transient_transcripts + deleted_recordings + deleted_logs
     )
     verb = "would clean" if dry_run else "cleaned"
     return {
@@ -3397,15 +3439,17 @@ def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
         "keep_recordings": keep_recordings,
         "recording_max_age_days": recording_max_age_days,
         "deleted_transcripts": deleted_transcripts,
+        "deleted_transient_transcripts": deleted_transient_transcripts,
         "deleted_recordings": deleted_recordings,
         "deleted_logs": deleted_logs,
         "would_delete_transcripts": would_delete_transcripts,
+        "would_delete_transient_transcripts": would_delete_transient_transcripts,
         "would_delete_recordings": would_delete_recordings,
         "would_delete_logs": would_delete_logs,
-        "deleted_paths": transcript_result["deleted_paths"] + recording_result["deleted_paths"],
-        "would_delete_paths": transcript_result["planned_paths"] + recording_result["planned_paths"],
-        "failed_paths": transcript_result["failed_paths"] + recording_result["failed_paths"],
-        "skipped_active_paths": transcript_result["skipped_active_paths"] + recording_result["skipped_active_paths"],
+        "deleted_paths": transcript_result["deleted_paths"] + transient_transcript_result["deleted_paths"] + recording_result["deleted_paths"],
+        "would_delete_paths": transcript_result["planned_paths"] + transient_transcript_result["planned_paths"] + recording_result["planned_paths"],
+        "failed_paths": transcript_result["failed_paths"] + transient_transcript_result["failed_paths"] + recording_result["failed_paths"],
+        "skipped_active_paths": transcript_result["skipped_active_paths"] + transient_transcript_result["skipped_active_paths"] + recording_result["skipped_active_paths"],
     }
 
 
@@ -3653,6 +3697,7 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         {stored_text_path},
         False,
     )
+    transient_transcript_cleanup = prune_stale_transient_transcripts(False)
     return {
         "status": "done",
         "transcript": _transcript_payload_text(text, transcript_encryption, args),
@@ -3660,6 +3705,7 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         "transcript_path": str(stored_text_path),
         "security": security_post_processing,
         "transcript_file_cap": transcript_cleanup,
+        "transient_transcript_cleanup": transient_transcript_cleanup,
         "artifact_encryption": artifact_encryption,
         "transcript_encryption": transcript_encryption,
         "transcript_encrypted": transcript_encryption != ARTIFACT_ENCRYPTION_OFF,

@@ -1292,6 +1292,29 @@ class OutputTest(unittest.TestCase):
         with mock.patch("speed_of_cinnamon.output._which", return_value=None):
             self.assertTrue(output_module._clipboard_has_non_text_payload())
 
+    def test_active_window_snapshot_match_requires_same_class(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.output._active_x_window_snapshot",
+            return_value=("123", "Editor", "Terminal"),
+        ):
+            self.assertFalse(output_module._active_x_window_matches_snapshot(("123", "Editor", "")))
+            self.assertFalse(output_module._active_x_window_matches_snapshot(("123", "Editor", "Code")))
+            self.assertTrue(output_module._active_x_window_matches_snapshot(("123", "Editor", "Terminal")))
+
+    def test_active_window_snapshot_match_rejects_title_change_when_known(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.output._active_x_window_snapshot",
+            return_value=("123", "Other", "Terminal"),
+        ):
+            self.assertFalse(output_module._active_x_window_matches_snapshot(("123", "Editor", "Terminal")))
+
+    def test_active_window_snapshot_requires_window_class(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.output._which", return_value="/usr/bin/xdotool"),
+            mock.patch("speed_of_cinnamon.output._run_stdout", side_effect=["123", "Editor", ""]),
+        ):
+            self.assertIsNone(output_module._active_x_window_snapshot())
+
     def test_insert_text_fails_closed_when_dedupe_state_is_malformed(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -1302,7 +1325,8 @@ class OutputTest(unittest.TestCase):
             state_path = Path(tmp) / "speed-of-cinnamon" / output_module.CLIPBOARD_DEDUP_STATE_FILE
             state_path.parent.mkdir(parents=True)
             state_path.write_text("{", encoding="utf-8")
-            self.assertFalse(insert_text("secure text", "clipboard-paste"))
+            with self.assertRaisesRegex(OutputError, "untrusted clipboard dedupe state"):
+                insert_text("secure text", "clipboard-paste")
 
         mocked_clipboard.assert_not_called()
         mocked_paste.assert_not_called()
@@ -1322,7 +1346,8 @@ class OutputTest(unittest.TestCase):
                 encoding="utf-8",
             )
             state_path.symlink_to(target_path)
-            self.assertFalse(insert_text("secure text", "clipboard-paste"))
+            with self.assertRaisesRegex(OutputError, "untrusted clipboard dedupe state"):
+                insert_text("secure text", "clipboard-paste")
 
         mocked_clipboard.assert_not_called()
         mocked_paste.assert_not_called()
@@ -1331,13 +1356,13 @@ class OutputTest(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
-            mock.patch("speed_of_cinnamon.output._write_clipboard_dedup_state", return_value=False),
+            mock.patch("speed_of_cinnamon.output._write_clipboard_dedup_fingerprint_state", return_value=False),
             mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
         ):
-            with self.assertRaisesRegex(OutputError, "failed to commit clipboard insertion state"):
+            with self.assertRaisesRegex(OutputError, "failed to reserve clipboard insertion state"):
                 insert_text("secure text", "clipboard")
 
-        mocked_clipboard.assert_called_once_with("secure text")
+        mocked_clipboard.assert_not_called()
 
     def test_insert_text_clipboard_paste_fails_closed_when_dedupe_state_cannot_persist(self) -> None:
         with (
@@ -1399,7 +1424,8 @@ class OutputTest(unittest.TestCase):
                         mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
                         mock.patch("speed_of_cinnamon.output.paste_from_clipboard") as mocked_paste,
                     ):
-                        self.assertFalse(insert_text("anderer text", "clipboard-paste"))
+                        with self.assertRaisesRegex(OutputError, "clipboard dedupe lock unavailable"):
+                            insert_text("anderer text", "clipboard-paste")
                 finally:
                     _release_clipboard_dedup_lock(lock_path)
 

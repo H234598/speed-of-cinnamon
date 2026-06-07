@@ -1330,27 +1330,31 @@ def stop_process(
 
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        if not _recording_process_identity_matches(pid, expected_process_identity):
-            return False
         if _process_is_gone(process_target):
             return True
+        if not _recording_process_identity_matches(pid, expected_process_identity):
+            return False
         time.sleep(0.1)
 
+    if _process_is_gone(process_target):
+        return True
     if not _recording_process_identity_matches(pid, expected_process_identity):
         return False
     _run_kill(["kill", "-TERM", "--", process_target], check_exit=False)
 
     time.sleep(0.5)
-    if not _recording_process_identity_matches(pid, expected_process_identity):
-        return False
     if _process_is_gone(process_target):
         return True
+    if not _recording_process_identity_matches(pid, expected_process_identity):
+        return False
 
     try:
         _run_kill(["kill", "-KILL", "--", process_target], check_exit=False)
     except RecorderError as exc:
         raise RecorderError(f"failed to stop recorder process {pid}: {exc}") from exc
     time.sleep(0.1)
+    if _process_is_gone(process_target):
+        return True
     if not _recording_process_identity_matches(pid, expected_process_identity):
         return False
     return _process_is_gone(process_target)

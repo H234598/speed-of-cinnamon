@@ -442,6 +442,7 @@ MyApplet.prototype = {
     this.lastTranscript = "";
     this.lastMessage = "";
     this.isCommandRunning = false;
+    this.cancelPendingWhileCommandRunning = false;
     this._statusRefreshToken = 0;
     this._statusCommandRunning = false;
     this._doctorCommandRunning = false;
@@ -454,6 +455,7 @@ MyApplet.prototype = {
     this.selfProtectionNoticeKey = "";
     this.selfProtectionNoticeAtMs = 0;
     this.autoTranscribeRecordingKey = "";
+    this.cancelPendingWhileCommandRunning = false;
     this.autoRelistenPending = false;
     this.autoRelistenPendingToken = "";
     this.autoRelistenManualStopRequested = false;
@@ -2113,6 +2115,7 @@ MyApplet.prototype = {
   _cancelRecording: function() {
     if (this.isCommandRunning) {
       this.autoTranscribeRecordingKey = "";
+      this.cancelPendingWhileCommandRunning = true;
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
       this.autoRelistenManualStopRequested = true;
@@ -2121,6 +2124,7 @@ MyApplet.prototype = {
     }
     this.isCommandRunning = true;
     this.autoTranscribeRecordingKey = "";
+    this.cancelPendingWhileCommandRunning = false;
     this.autoRelistenPending = false;
     this.autoRelistenPendingToken = "";
     this.autoRelistenManualStopRequested = true;
@@ -4448,6 +4452,7 @@ MyApplet.prototype = {
     this._updateRecordingTiming(payload, status);
     this._applyMicrophoneLevel(payload.microphone_level, status);
     if (payload.error) {
+      this.cancelPendingWhileCommandRunning = false;
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
       this._setStatus("error", payload.error, this.lastTranscript);
@@ -4457,6 +4462,26 @@ MyApplet.prototype = {
     let hasTranscript = typeof payload.transcript === "string" && !this._isEmptyTranscriptText(payload.transcript);
     if (payload.status === "done") {
       this._maybeWarnUnencryptedArtifactStorage(payload);
+    }
+    if (this.cancelPendingWhileCommandRunning && payload.status === "done") {
+      this.cancelPendingWhileCommandRunning = false;
+      this.autoRelistenPending = false;
+      this.autoRelistenPendingToken = "";
+      this.autoRelistenManualStopRequested = true;
+      this._setStatus("ready", _("Cancel applied; transcript not inserted"), this.lastTranscript);
+      return;
+    }
+    if (
+      this.cancelPendingWhileCommandRunning &&
+      (payload.status === "recording" || payload.status === "recorded") &&
+      !this.isCommandRunning
+    ) {
+      this.cancelPendingWhileCommandRunning = false;
+      this._cancelRecording();
+      return;
+    }
+    if (this.cancelPendingWhileCommandRunning && !this.isCommandRunning) {
+      this.cancelPendingWhileCommandRunning = false;
     }
     if (payload.status === "done" && payload.silence_detected) {
       this._finishSilentRelistenSkip(payload);
@@ -5745,9 +5770,9 @@ MyApplet.prototype = {
   _transcriptDigest: function(transcript) {
     let text = String(transcript || "");
     try {
-      return GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, text, -1);
+      return "sha256:" + GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, text, -1);
     } catch (err) {
-      return text.slice(0, 256).replace(/\s+/g, " ").trim();
+      return "digest-unavailable";
     }
   },
 
@@ -5759,10 +5784,10 @@ MyApplet.prototype = {
       marker = String(payload.started_at || payload.stopped_at || "");
     }
     if (marker === "") {
-      return "len:" + String(rawTranscript.length) + ":sha256:" + digest;
+      return "len:" + String(rawTranscript.length) + ":" + digest;
     }
     let compactMarker = String(marker).trim();
-    return compactMarker + "|" + String(rawTranscript.length) + "|sha256:" + digest;
+    return compactMarker + "|" + String(rawTranscript.length) + "|" + digest;
   },
 
   _resetAutoInsertFingerprint: function() {
