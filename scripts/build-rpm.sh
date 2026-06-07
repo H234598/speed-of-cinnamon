@@ -42,6 +42,7 @@ activate_with_finalize_lock() {
   "${python_bin}" - "$lock_path" "$safe_fs" "$staging_path" "$final_path" <<'PY'
 import os
 import subprocess
+import stat
 import sys
 
 try:
@@ -52,25 +53,56 @@ except ModuleNotFoundError:
 
 lock_path, safe_fs, staging_path, final_path = sys.argv[1:]
 lock_parent = os.path.dirname(lock_path)
+lock_name = os.path.basename(lock_path)
 
-if os.path.islink(lock_parent):
-    print(f"finalization lock parent must not be a symlink: {lock_parent}", file=sys.stderr)
-    raise SystemExit(1)
-if os.path.islink(lock_path):
-    print(f"finalization lock must not be a symlink: {lock_path}", file=sys.stderr)
+if not lock_name:
+    print(f"finalization lock path is invalid: {lock_path}", file=sys.stderr)
     raise SystemExit(1)
 
-flags = os.O_CREAT | os.O_RDWR
+parent_flags = os.O_RDONLY
+if hasattr(os, "O_DIRECTORY"):
+    parent_flags |= os.O_DIRECTORY
 if hasattr(os, "O_NOFOLLOW"):
-    flags |= os.O_NOFOLLOW
+    parent_flags |= os.O_NOFOLLOW
+try:
+    parent_fd = os.open(lock_parent, parent_flags)
+except OSError as exc:
+    print(f"failed to open finalization lock parent safely: {lock_parent}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
 
-lock_fd = os.open(lock_path, flags, 0o600)
-with os.fdopen(lock_fd, "r+", encoding="utf-8") as lock:
-    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-    subprocess.run(
-        [sys.executable, safe_fs, "install-tree", "build-rpm", staging_path, final_path, "RPM build directory"],
-        check=True,
-    )
+try:
+    parent_stat = os.fstat(parent_fd)
+    if not stat.S_ISDIR(parent_stat.st_mode):
+        print(f"finalization lock parent must be a directory: {lock_parent}", file=sys.stderr)
+        raise SystemExit(1)
+    try:
+        lock_stat = os.stat(lock_name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        lock_stat = None
+    if lock_stat is not None:
+        if stat.S_ISLNK(lock_stat.st_mode):
+            print(f"finalization lock must not be a symlink: {lock_path}", file=sys.stderr)
+            raise SystemExit(1)
+        if not stat.S_ISREG(lock_stat.st_mode):
+            print(f"finalization lock must be a regular file: {lock_path}", file=sys.stderr)
+            raise SystemExit(1)
+        if getattr(lock_stat, "st_nlink", 1) != 1:
+            print(f"finalization lock must not be hardlinked: {lock_path}", file=sys.stderr)
+            raise SystemExit(1)
+
+    flags = os.O_CREAT | os.O_RDWR
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+
+    lock_fd = os.open(lock_name, flags, 0o600, dir_fd=parent_fd)
+    with os.fdopen(lock_fd, "r+", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        subprocess.run(
+            [sys.executable, safe_fs, "install-tree", "build-rpm", staging_path, final_path, "RPM build directory"],
+            check=True,
+        )
+finally:
+    os.close(parent_fd)
 PY
 }
 

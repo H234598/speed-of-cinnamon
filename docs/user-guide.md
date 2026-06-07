@@ -199,8 +199,8 @@ The `Text model` menu controls optional text polishing. It can:
 
 The Cinnamon settings include text polishing presets and safety switches:
 
-- `Safe default: minimal corrections` fixes punctuation, capitalization, and obvious transcription errors without
-  changing meaning.
+- `Safe default: minimal corrections` fixes only punctuation, capitalization, spacing, and clear ASR transcription
+  errors while preserving wording, sentence order, tone, politeness, friendliness, and intent.
 - `Clean natural text` makes dictated text read naturally while preserving technical terms.
 - `Preserve commands and code` keeps commands, paths, flags, identifiers, and quoted text exact.
 - `Short chat message` formats the transcript as a concise chat message without adding greetings or subjects.

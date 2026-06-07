@@ -19,7 +19,7 @@ if [[ $# -gt 1 ]]; then
   exit 2
 fi
 
-for tool in rpm rpm2cpio cpio python3 realpath; do
+for tool in rpm rpm2cpio cpio python3 realpath stat; do
   if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found. Install rpm and cpio tooling.\n' "${tool}" >&2
     exit 1
@@ -29,6 +29,10 @@ done
 safe_fs="${repo_dir}/scripts/safe-local-fs.py"
 if [[ -L "${safe_fs}" || ! -f "${safe_fs}" || "$(stat -c '%F' "${safe_fs}")" != "regular file" ]]; then
   printf 'safe local filesystem helper is invalid: %s\n' "${safe_fs}" >&2
+  exit 1
+fi
+if [[ "$(stat -c '%h' "${safe_fs}")" -ne 1 ]]; then
+  printf 'safe local filesystem helper must not be hardlinked: %s\n' "${safe_fs}" >&2
   exit 1
 fi
 safe_fs_cmd=(python3 "${safe_fs}")
@@ -70,6 +74,7 @@ if [[ $# -eq 1 ]]; then
 else
   rpm_candidates=(
     "${repo_dir}"/dist/rpmbuild/RPMS/noarch/speed-of-cinnamon-*.noarch.rpm
+    "${repo_dir}"/dist/rpmbuild-generic/RPMS/noarch/speed-of-cinnamon-*.noarch.rpm
   )
   shopt -s nullglob
   filtered_rpms=()

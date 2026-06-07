@@ -383,7 +383,9 @@ def cmd_assert_file(args: argparse.Namespace) -> None:
         os.close(parent_fd)
 
 
-def _reject_unsafe_tree(tree: Path, label: str) -> None:
+def _reject_unsafe_tree(tree: Path, label: str, *, reject_symlink_ancestors: bool = False) -> None:
+    if reject_symlink_ancestors:
+        _reject_symlink_ancestors(tree, label)
     if not tree.exists() or tree.is_symlink() or not tree.is_dir():
         fail(f"refusing to install unsafe {label}: {tree}")
     for root, dirs, files in os.walk(tree):
@@ -402,7 +404,21 @@ def _reject_unsafe_tree(tree: Path, label: str) -> None:
                 fail(f"refusing to install hardlinked {label}: {path}")
 
 
-def _tree_signature(tree: Path, *, include_identity: bool = True) -> dict[str, tuple[object, ...]]:
+def _reject_symlink_ancestors(path: Path, label: str) -> None:
+    for ancestor in reversed(path.parents):
+        if ancestor == Path("/"):
+            continue
+        try:
+            stat_result = ancestor.lstat()
+        except OSError as exc:
+            fail(f"failed to inspect {label} ancestor: {ancestor}: {exc}")
+        if stat_is_symlink_no_follow(stat_result.st_mode):
+            fail(f"refusing to install {label} through symlinked ancestor: {ancestor}")
+
+
+def _tree_signature(tree: Path, *, include_identity: bool = True, reject_symlink_ancestors: bool = False) -> dict[str, tuple[object, ...]]:
+    if reject_symlink_ancestors:
+        _reject_symlink_ancestors(tree, "source tree")
     signature: dict[str, tuple[object, ...]] = {}
     root_stat = tree.lstat()
     if include_identity:
@@ -452,8 +468,8 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
     source = _validate_absolute(args.source, "source tree")
     target = _validate_absolute(args.target, "target tree")
     label = str(args.label or "tree")
-    _reject_unsafe_tree(source, f"{label} source tree")
-    source_signature = _tree_signature(source, include_identity=False)
+    _reject_unsafe_tree(source, f"{label} source tree", reject_symlink_ancestors=True)
+    source_signature = _tree_signature(source, include_identity=False, reject_symlink_ancestors=True)
     parent_fd, leaf = _open_parent(target, action=args.action, create=True)
     if parent_fd is None:
         fail(f"failed to open parent directory during {args.action}: {target}")
@@ -467,10 +483,10 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
         os.mkdir(stage_name, 0o700, dir_fd=parent_fd)
         _fsync_directory_fd(parent_fd, action=args.action)
         staged_tree = parent_path / stage_name / leaf
-        if _tree_signature(source, include_identity=False) != source_signature:
+        if _tree_signature(source, include_identity=False, reject_symlink_ancestors=True) != source_signature:
             fail(f"source tree changed during {args.action}: {source}")
         shutil.copytree(source, staged_tree, symlinks=True)
-        if _tree_signature(source, include_identity=False) != source_signature:
+        if _tree_signature(source, include_identity=False, reject_symlink_ancestors=True) != source_signature:
             fail(f"source tree changed during {args.action}: {source}")
         if _tree_signature(staged_tree, include_identity=False) != source_signature:
             fail(f"staged copy changed during {args.action}: {target}")

@@ -79,7 +79,7 @@ const CLI_TEXT_SETTINGS = {
 };
 const TEXT_POLISHING_SAFE_PRESET = "minimal";
 const TEXT_POLISHING_PRESET_INSTRUCTIONS = {
-  "minimal": "Correct only punctuation, capitalization, and obvious transcription errors. Preserve the meaning. Do not add new information.",
+  "minimal": "Correct only punctuation, capitalization, spacing, and clear ASR transcription errors. Preserve the user's wording, sentence order, tone, politeness, formality, emotion, emphasis, and intent. Do not remove friendliness, greetings, thanks, apologies, hedging, or softeners unless they are clear ASR artifacts. Do not rewrite, summarize, rephrase, or add new information.",
   "clean": "Format the transcript as natural, correct text in the transcript language. Remove filler words only when they are clearly unintended. Preserve technical terms.",
   "code": "Preserve commands, paths, filenames, flags, variable names, code, and quoted text exactly. Do not use typographic quotes. Do not add explanations.",
   "chat": "Format the transcript as a concise, clear chat message. Do not add a subject, greeting, or sign-off unless it was dictated.",

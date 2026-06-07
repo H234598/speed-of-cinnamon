@@ -582,6 +582,25 @@ class InstallLocalTest(unittest.TestCase):
             self.assertTrue(seen.get("symlinks"))
             self.assertFalse(target.exists())
 
+    def test_safe_fs_install_tree_rejects_symlinked_source_ancestor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = self._load_safe_fs_module()
+            root = Path(tmp)
+            real_parent = root / "real"
+            source = real_parent / "source"
+            target = root / "target"
+            real_parent.mkdir()
+            source.mkdir()
+            (source / "payload.txt").write_text("safe\n", encoding="utf-8")
+            link_parent = root / "link"
+            link_parent.symlink_to(real_parent, target_is_directory=True)
+
+            args = module.argparse.Namespace(action="install", source=str(link_parent / "source"), target=str(target), label="tree")
+            with self.assertRaisesRegex(SystemExit, "1"):
+                module.cmd_install_tree(args)
+
+            self.assertFalse(target.exists())
+
     def test_install_local_refuses_symlinked_home_ancestor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

@@ -40,6 +40,10 @@ if [[ -L "${safe_fs}" || ! -f "${safe_fs}" || "$(stat -c '%F' "${safe_fs}")" != 
   printf 'safe local filesystem helper is invalid: %s\n' "${safe_fs}" >&2
   exit 1
 fi
+if [[ "$(stat -c '%h' "${safe_fs}")" -ne 1 ]]; then
+  printf 'safe local filesystem helper must not be hardlinked: %s\n' "${safe_fs}" >&2
+  exit 1
+fi
 safe_fs_cmd=(python3 "${safe_fs}")
 
 if [[ $# -lt 1 ]]; then

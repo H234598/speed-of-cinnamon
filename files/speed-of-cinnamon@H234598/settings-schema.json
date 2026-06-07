@@ -483,8 +483,8 @@
   },
   "post-process-preset-help-minimal": {
     "type": "label",
-    "description": "Safe default fixes punctuation, capitalization, and obvious transcription errors without changing meaning.",
-    "tooltip": "Use this for normal dictation when you want the text cleaned up but not rewritten. The backend should correct punctuation, capitalization, spacing, and clear ASR mistakes only. It should preserve wording, intent, tone, technical terms, and factual content.",
+    "description": "Safe default fixes only punctuation, capitalization, spacing, and clear ASR errors while preserving wording, tone, politeness, and intent.",
+    "tooltip": "Use this for normal dictation when you want the text cleaned up but not rewritten. The backend should correct punctuation, capitalization, spacing, and clear ASR mistakes only. It must preserve wording, sentence order, tone, politeness, formality, emotion, emphasis, technical terms, and factual content. It must not remove friendliness, greetings, thanks, apologies, hedging, or softeners unless they are clear ASR artifacts.",
     "dependency": "post-process-preset=minimal"
   },
   "post-process-preset-help-clean": {
