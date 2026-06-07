@@ -221,15 +221,41 @@ if ! "${safe_fs_cmd[@]}" copy-file build-rpm "${spec_source}" "${spec_file}" 064
   exit 1
 fi
 "${python_bin}" - <<'PY' "${spec_file}" "${version}"
+import os
 from pathlib import Path
 import re
+import secrets
 import sys
 
 spec_path = Path(sys.argv[1])
 version = sys.argv[2]
 text = spec_path.read_text(encoding="utf-8")
 text = re.sub(r"^Version:\s*.*$", f"Version:        {version}", text, flags=re.M)
-spec_path.write_text(text, encoding="utf-8")
+payload = text.encode("utf-8")
+parent_fd = os.open(spec_path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+tmp_name = f".{spec_path.name}.{secrets.token_hex(8)}.tmp"
+fd = -1
+try:
+    fd = os.open(tmp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent_fd)
+    with os.fdopen(fd, "wb", closefd=True) as handle:
+        fd = -1
+        handle.write(payload)
+        handle.flush()
+        os.fchmod(handle.fileno(), 0o600)
+        os.fsync(handle.fileno())
+    os.replace(tmp_name, spec_path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+    os.fsync(parent_fd)
+    tmp_name = ""
+finally:
+    if fd >= 0:
+        os.close(fd)
+    if tmp_name:
+        try:
+            os.unlink(tmp_name, dir_fd=parent_fd)
+            os.fsync(parent_fd)
+        except OSError:
+            pass
+    os.close(parent_fd)
 PY
 
 rpmbuild \

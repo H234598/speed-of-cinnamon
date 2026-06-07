@@ -1835,6 +1835,23 @@ class CliTest(unittest.TestCase):
         self.assertIn("openai-compatible url must use http:// or https://", payload["error"])
 
     @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models")
+    def test_text_models_rejects_remote_plain_http_openai_url(self, mocked_list: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run([
+                "text-models",
+                "--backend",
+                "openai-compatible",
+                "--openai-compatible-url",
+                "http://api.example.test/v1",
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("openai-compatible url must use https:// unless host is local loopback", payload["error"])
+        mocked_list.assert_not_called()
+
+    @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models")
     def test_text_models_lists_openai_compatible_models(self, mocked_list: mock.Mock) -> None:
         mocked_list.return_value = {
             "available": True,
@@ -2582,6 +2599,10 @@ class CliTest(unittest.TestCase):
             with (
                 mock.patch.dict(os.environ, env),
                 mock.patch("speed_of_cinnamon.cli._transcript_export_path", return_value=stale_export),
+                mock.patch(
+                    "speed_of_cinnamon.cli._unlink_regular_leaf_with_parent_fsync",
+                    wraps=cli._unlink_regular_leaf_with_parent_fsync,
+                ) as unlink_leaf,
                 redirect_stdout(stdout),
             ):
                 code = cli.run(["transcripts-export", "--limit", "1000", "--artifact-encryption", "passphrase", "--json"])
@@ -2598,6 +2619,7 @@ class CliTest(unittest.TestCase):
         self.assertTrue(export_path.name.startswith("all-transcripts-"))
         self.assertTrue(export_path.name.endswith(".txt.socenc"))
         self.assertFalse(stale_export.exists())
+        unlink_leaf.assert_any_call(stale_export, field_name="transcript export")
         self.assertNotIn(transcript_text.encode("utf-8"), encrypted_payload)
         self.assertIn(transcript_text.strip(), decrypted)
 

@@ -132,6 +132,13 @@ def stat_is_symlink_no_follow(mode: int) -> bool:
     return (mode & 0o170000) == 0o120000
 
 
+def _fsync_directory_fd(directory_fd: int, *, action: str) -> None:
+    try:
+        os.fsync(directory_fd)
+    except OSError as exc:
+        fail(f"failed to synchronize directory during {action}: {exc}")
+
+
 def _rmtree_safe(path: str, *, dir_fd: int, action: str) -> None:
     if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
         fail(f"refusing unsafe recursive removal during {action}: shutil.rmtree is not fd-safe")
@@ -185,6 +192,8 @@ def cmd_replace(args: argparse.Namespace) -> None:
         if src_signature is None and not _same_identity(src_stat, final_stat):
             fail(f"destination changed during {args.action}: {dst}")
         _check_leaf(dst_fd, dst_name, dst, action=args.action, kind=args.src_kind, must_exist=True)
+        _fsync_directory_fd(dst_fd, action=args.action)
+        _fsync_directory_fd(src_fd, action=args.action)
     finally:
         os.close(src_fd)
         os.close(dst_fd)
@@ -207,16 +216,19 @@ def _write_bytes_atomic(dst: Path, data: bytes, mode: int, *, action: str) -> No
             handle.write(data)
             handle.flush()
             os.fchmod(handle.fileno(), mode)
+            os.fsync(handle.fileno())
         tmp_stat = _lstat_at(parent_fd, tmp_name)
         os.replace(tmp_name, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         if not _same_identity(tmp_stat, _lstat_at(parent_fd, leaf)):
             fail(f"destination changed during {action}: {dst}")
         _check_leaf(parent_fd, leaf, dst, action=action, kind="file", must_exist=True)
+        _fsync_directory_fd(parent_fd, action=action)
     except Exception:
         with context_suppress():
             if fd is not None:
                 os.close(fd)
             os.unlink(tmp_name, dir_fd=parent_fd)
+            os.fsync(parent_fd)
         raise
     finally:
         os.close(parent_fd)
@@ -282,6 +294,7 @@ def _copy_file_atomically_from_checked_source(
                 output.write(chunk)
             output.flush()
             os.fchmod(output.fileno(), mode)
+            os.fsync(output.fileno())
         copied_digest = copied_hasher.hexdigest()
         tmp_stat = _lstat_at(parent_fd, tmp_name)
         source_after_fd = os.fstat(source_handle.fileno())
@@ -298,11 +311,13 @@ def _copy_file_atomically_from_checked_source(
         if not _same_identity(tmp_stat, _lstat_at(parent_fd, leaf)):
             fail(f"destination changed during {action}: {dst}")
         _check_leaf(parent_fd, leaf, dst, action=action, kind="file", must_exist=True)
+        _fsync_directory_fd(parent_fd, action=action)
     except Exception:
         with context_suppress():
             if fd is not None:
                 os.close(fd)
             os.unlink(tmp_name, dir_fd=parent_fd)
+            os.fsync(parent_fd)
         raise
     finally:
         os.close(parent_fd)
@@ -450,6 +465,7 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
     parent_path = Path(f"/proc/self/fd/{parent_fd}")
     try:
         os.mkdir(stage_name, 0o700, dir_fd=parent_fd)
+        _fsync_directory_fd(parent_fd, action=args.action)
         staged_tree = parent_path / stage_name / leaf
         if _tree_signature(source, include_identity=False) != source_signature:
             fail(f"source tree changed during {args.action}: {source}")
@@ -472,12 +488,15 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
             if not stat_is_dir_no_follow(existing.st_mode):
                 fail(f"path must be a directory during {args.action}: {target}")
             os.replace(leaf, backup_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            _fsync_directory_fd(parent_fd, action=args.action)
             backup_created = True
         os.replace(f"{stage_name}/{leaf}", leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         activated = True
         _check_leaf(parent_fd, leaf, target, action=args.action, kind="dir", must_exist=True)
+        _fsync_directory_fd(parent_fd, action=args.action)
         if backup_created:
             _rmtree_safe(backup_name, dir_fd=parent_fd, action=args.action)
+            _fsync_directory_fd(parent_fd, action=args.action)
             backup_created = False
     except Exception:
         if backup_created and activated and _lstat_at(parent_fd, backup_name) is not None:
@@ -485,19 +504,24 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
                 current = _lstat_at(parent_fd, leaf)
                 if current is not None and stat_is_dir_no_follow(current.st_mode):
                     _rmtree_safe(leaf, dir_fd=parent_fd, action=args.action)
+                    os.fsync(parent_fd)
                 os.replace(backup_name, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                os.fsync(parent_fd)
                 backup_created = False
         elif backup_created and _lstat_at(parent_fd, backup_name) is not None and _lstat_at(parent_fd, leaf) is None:
             with context_suppress():
                 os.replace(backup_name, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                os.fsync(parent_fd)
                 backup_created = False
         raise
     finally:
         with context_suppress():
             _rmtree_safe(stage_name, dir_fd=parent_fd, action=args.action)
+            os.fsync(parent_fd)
         if backup_created:
             with context_suppress():
                 _rmtree_safe(backup_name, dir_fd=parent_fd, action=args.action)
+                os.fsync(parent_fd)
         os.close(parent_fd)
 
 
@@ -516,10 +540,12 @@ def cmd_remove(args: argparse.Namespace) -> None:
             if not stat_is_dir_no_follow(stat_result.st_mode):
                 fail(f"path must be a directory during {args.action}: {path}")
             _rmtree_safe(leaf, dir_fd=parent_fd, action=args.action)
+            _fsync_directory_fd(parent_fd, action=args.action)
         elif args.kind == "file":
             if not stat_is_file_no_follow(stat_result.st_mode):
                 fail(f"path must be a regular file during {args.action}: {path}")
             os.unlink(leaf, dir_fd=parent_fd)
+            _fsync_directory_fd(parent_fd, action=args.action)
         else:
             fail(f"unsupported remove kind: {args.kind}")
     finally:
@@ -540,6 +566,7 @@ def cmd_remove_leaf(args: argparse.Namespace) -> None:
             _rmtree_safe(leaf, dir_fd=parent_fd, action=args.action)
         else:
             os.unlink(leaf, dir_fd=parent_fd)
+        _fsync_directory_fd(parent_fd, action=args.action)
     finally:
         os.close(parent_fd)
 
@@ -559,6 +586,7 @@ def cmd_rmdir(args: argparse.Namespace) -> None:
             fail(f"path must be a directory during {args.action}: {path}")
         try:
             os.rmdir(leaf, dir_fd=parent_fd)
+            _fsync_directory_fd(parent_fd, action=args.action)
         except OSError as exc:
             if args.ignore_non_empty and exc.errno in {errno.ENOTEMPTY, errno.EEXIST}:
                 return

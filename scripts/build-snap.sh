@@ -152,7 +152,9 @@ fi
 mkdir -p "${snap_workspace_dist}"
 
 python3 - "${snapcraft_file_rendered}" "${snapcraft_file_rendered}" "${version}" "${snapcraft_base}" <<'PYCODE'
+import os
 import pathlib
+import secrets
 import sys
 
 path = pathlib.Path(sys.argv[1])
@@ -176,7 +178,31 @@ if not replaced:
     raise SystemExit("snapcraft version field not found")
 if not base_replaced:
     raise SystemExit("snapcraft base field not found")
-output_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+payload = ("\n".join(out) + "\n").encode("utf-8")
+parent_fd = os.open(output_path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+tmp_name = f".{output_path.name}.{secrets.token_hex(8)}.tmp"
+fd = -1
+try:
+    fd = os.open(tmp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent_fd)
+    with os.fdopen(fd, "wb", closefd=True) as handle:
+        fd = -1
+        handle.write(payload)
+        handle.flush()
+        os.fchmod(handle.fileno(), 0o600)
+        os.fsync(handle.fileno())
+    os.replace(tmp_name, output_path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+    os.fsync(parent_fd)
+    tmp_name = ""
+finally:
+    if fd >= 0:
+        os.close(fd)
+    if tmp_name:
+        try:
+            os.unlink(tmp_name, dir_fd=parent_fd)
+            os.fsync(parent_fd)
+        except OSError:
+            pass
+    os.close(parent_fd)
 PYCODE
 snapcraft_mode="$(stat -c '%a' "${snapcraft_file}")"
 chmod "${snapcraft_mode}" "${snapcraft_file_rendered}"

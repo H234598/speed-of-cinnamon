@@ -19,6 +19,7 @@ from pathlib import Path
 from .models import default_ctranslate2_model_path, default_whisper_cpp_model_path, model_backend_for_path, model_supports_language
 from .command_chain import CommandChainError, MAX_COMMAND_OUTPUT_CHARS, run_command_chain, run_process_bounded_output, split_command_chain
 from .personalization import build_personalization_prompt, normalize_context, normalize_vocabulary
+from .http_safety import is_loopback_hostname
 from .postprocessor import (
     DEFAULT_OPENAI_COMPATIBLE_MODEL,
     DEFAULT_OPENAI_COMPATIBLE_URL,
@@ -989,6 +990,8 @@ def _validate_openai_compatible_api_url(
     parsed = urllib.parse.urlparse(base)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise TranscriptionError(f"{field_name} must use http:// or https://")
+    if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
+        raise TranscriptionError(f"{field_name} must use https:// unless host is local loopback")
     try:
         parsed.port
     except ValueError as exc:

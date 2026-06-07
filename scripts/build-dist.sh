@@ -96,6 +96,34 @@ cleanup() {
 }
 trap cleanup EXIT
 
+fsync_regular_file() {
+  local path=$1
+  local label=$2
+  python3 - "$path" "$label" <<'PY'
+import os
+import stat
+import sys
+
+path, label = sys.argv[1:]
+flags = os.O_RDONLY
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+try:
+    fd = os.open(path, flags)
+except OSError as exc:
+    print(f"failed to open {label} for fsync: {path}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+try:
+    file_stat = os.fstat(fd)
+    if not stat.S_ISREG(file_stat.st_mode):
+        print(f"{label} must be a regular file: {path}", file=sys.stderr)
+        raise SystemExit(1)
+    os.fsync(fd)
+finally:
+    os.close(fd)
+PY
+}
+
 replace_with_finalize_lock() {
   local lock_path=$1
   local staging_path=$2
@@ -201,10 +229,12 @@ final_checksum="${final_tarball}.sha256"
 staging_tarball="$(mktemp "${dist_dir}/.${package}.tar.gz.XXXXXX")"
 
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@0" -C "${work_dir}" -czf "${staging_tarball}" "${package}"
+fsync_regular_file "${staging_tarball}" "staged dist tarball"
 checksum_value="$(sha256sum "${staging_tarball}")"
 checksum_value="${checksum_value%% *}"
 staging_checksum="$(mktemp "${dist_dir}/.${package}.tar.gz.sha256.XXXXXX")"
 printf '%s  %s\n' "${checksum_value}" "${package}.tar.gz" > "${staging_checksum}"
+fsync_regular_file "${staging_checksum}" "staged dist checksum"
 replace_with_finalize_lock \
   "${dist_finalize_lock}" \
   "${staging_tarball}" \

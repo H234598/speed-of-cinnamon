@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from .http_safety import is_loopback_hostname
 from .paths import ctranslate2_models_dir, models_dir
 from .path_safety import (
     assert_fd_is_regular_private_file,
@@ -417,6 +418,8 @@ def _assert_download_url(
         raise ModelError(f"{field_name} must use http:// or https://")
     if not parsed.netloc:
         raise ModelError(f"{field_name} is missing network location")
+    if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
+        raise ModelError(f"{field_name} must use https:// unless host is local loopback")
     hostname = (parsed.hostname or "").lower()
     if allowed_urls is not None and normalized not in allowed_urls:
         raise ModelError(f"{field_name} is not allowed")

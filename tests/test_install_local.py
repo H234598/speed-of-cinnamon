@@ -4,6 +4,7 @@ import json
 import importlib.util
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
 import tomllib
@@ -307,6 +308,77 @@ class InstallLocalTest(unittest.TestCase):
                     module.cmd_remove(args)
 
             self.assertTrue(target.exists())
+
+    def test_safe_fs_write_wrapper_fsyncs_file_and_parent_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = self._load_safe_fs_module()
+            target = Path(tmp) / "soc-wrapper"
+            fsynced_modes: list[int] = []
+            real_fsync = module.os.fsync
+
+            def record_fsync(fd: int) -> None:
+                fsynced_modes.append(module.os.fstat(fd).st_mode)
+                real_fsync(fd)
+
+            args = module.argparse.Namespace(
+                action="install",
+                dst=str(target),
+                python_path="/tmp/soc-package",
+                python_executable="/usr/bin/python3",
+            )
+            with mock.patch.object(module.os, "fsync", side_effect=record_fsync):
+                module.cmd_write_wrapper(args)
+
+            self.assertTrue(target.exists())
+            self.assertTrue(any(stat.S_ISREG(mode) for mode in fsynced_modes))
+            self.assertTrue(any(stat.S_ISDIR(mode) for mode in fsynced_modes))
+
+    def test_safe_fs_copy_file_fsyncs_file_and_parent_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = self._load_safe_fs_module()
+            root = Path(tmp)
+            source = root / "source.txt"
+            target = root / "target.txt"
+            source.write_text("safe\n", encoding="utf-8")
+            fsynced_modes: list[int] = []
+            real_fsync = module.os.fsync
+
+            def record_fsync(fd: int) -> None:
+                fsynced_modes.append(module.os.fstat(fd).st_mode)
+                real_fsync(fd)
+
+            args = module.argparse.Namespace(
+                action="install",
+                src=str(source),
+                dst=str(target),
+                mode="0644",
+                dst_must_not_exist=False,
+            )
+            with mock.patch.object(module.os, "fsync", side_effect=record_fsync):
+                module.cmd_copy_file(args)
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "safe\n")
+            self.assertTrue(any(stat.S_ISREG(mode) for mode in fsynced_modes))
+            self.assertTrue(any(stat.S_ISDIR(mode) for mode in fsynced_modes))
+
+    def test_safe_fs_remove_file_fsyncs_parent_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = self._load_safe_fs_module()
+            target = Path(tmp) / "target.txt"
+            target.write_text("safe\n", encoding="utf-8")
+            fsynced_modes: list[int] = []
+            real_fsync = module.os.fsync
+
+            def record_fsync(fd: int) -> None:
+                fsynced_modes.append(module.os.fstat(fd).st_mode)
+                real_fsync(fd)
+
+            args = module.argparse.Namespace(action="install", path=str(target), kind="file")
+            with mock.patch.object(module.os, "fsync", side_effect=record_fsync):
+                module.cmd_remove(args)
+
+            self.assertFalse(target.exists())
+            self.assertTrue(any(stat.S_ISDIR(mode) for mode in fsynced_modes))
 
     def test_safe_fs_copy_file_rejects_in_place_source_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from .http_safety import is_loopback_hostname
 from .models import default_ctranslate2_model_path, default_whisper_cpp_model_path, model_backend_for_path, model_supports_language
 from .postprocessor import DEFAULT_OPENAI_COMPATIBLE_MODEL, DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL, DEFAULT_OPENAI_COMPATIBLE_URL
 from .path_safety import assert_no_symlink_ancestors
@@ -161,6 +162,8 @@ def _validate_remote_http_url(value: str, *, field_name: str) -> str:
     parsed = urllib.parse.urlparse(normalized)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError(f"{field_name} must use http:// or https://")
+    if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
+        raise ValueError(f"{field_name} must use https:// unless host is local loopback")
     try:
         parsed.port
     except ValueError as exc:

@@ -533,7 +533,7 @@ class OutputTest(unittest.TestCase):
 
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which", side_effect=fake_which),
-            mock.patch("speed_of_cinnamon.output._active_window_paste_key", return_value="ctrl+shift+v"),
+            mock.patch("speed_of_cinnamon.output._active_x_window_snapshot", return_value=("1", "Terminal", "Gnome-terminal")),
             mock.patch("speed_of_cinnamon.output._run_with_input", side_effect=OutputError("xdotool failed")) as mocked_run,
             mock.patch("speed_of_cinnamon.output.log_event") as mocked_log,
         ):

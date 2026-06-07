@@ -342,6 +342,72 @@ if [[ "${staging_dir_abs}" != "${repo_dir}/dist/release-upload-"* ]]; then
 fi
 staging_dir="${staging_dir_abs}"
 
+fsync_regular_file() {
+  local path=$1
+  local label=$2
+  python3 - "$path" "$label" <<'PY'
+import os
+import stat
+import sys
+
+path, label = sys.argv[1:]
+flags = os.O_RDONLY
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+try:
+    fd = os.open(path, flags)
+except OSError as exc:
+    print(f"failed to open {label} for fsync: {path}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+try:
+    file_stat = os.fstat(fd)
+    if not stat.S_ISREG(file_stat.st_mode):
+        print(f"{label} must be a regular file: {path}", file=sys.stderr)
+        raise SystemExit(1)
+    os.fsync(fd)
+finally:
+    os.close(fd)
+PY
+}
+
+chmod_and_fsync_regular_file() {
+  local path=$1
+  local mode=$2
+  local label=$3
+  python3 - "$path" "$mode" "$label" <<'PY'
+import os
+import stat
+import sys
+
+path, raw_mode, label = sys.argv[1:]
+try:
+    mode = int(raw_mode, 8)
+except ValueError:
+    print(f"invalid mode for {label}: {raw_mode}", file=sys.stderr)
+    raise SystemExit(1)
+flags = os.O_RDONLY
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+try:
+    fd = os.open(path, flags)
+except OSError as exc:
+    print(f"failed to open {label} for chmod: {path}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+try:
+    file_stat = os.fstat(fd)
+    if not stat.S_ISREG(file_stat.st_mode):
+        print(f"{label} must be a regular file: {path}", file=sys.stderr)
+        raise SystemExit(1)
+    if getattr(file_stat, "st_nlink", 1) != 1:
+        print(f"{label} must not be hardlinked: {path}", file=sys.stderr)
+        raise SystemExit(1)
+    os.fchmod(fd, mode)
+    os.fsync(fd)
+finally:
+    os.close(fd)
+PY
+}
+
 for asset in "${assets[@]}"; do
   if ! asset_abs="$(realpath "${asset}")"; then
     printf 'failed to resolve release asset for staging: %s\n' "${asset}" >&2
@@ -364,7 +430,7 @@ for asset in "${assets[@]}"; do
     printf 'failed to stage release asset for upload: %s\n' "${asset}" >&2
     exit 1
   fi
-  chmod 0444 -- "${staged_path}"
+  chmod_and_fsync_regular_file "${staged_path}" 0444 "staged release asset"
   upload_refs+=("${staged_path}")
   uploaded_asset_names+=("${staged_name}")
   verify_asset_path "${staged_path}"
@@ -515,6 +581,7 @@ Assets:
 - Source RPM (generic): ${generic_src_label}
 - Snap package: ${snap_label}
 EOF
+fsync_regular_file "${notes_file}" "release notes file"
 
 if [[ "${dry_run}" == "true" ]]; then
   printf 'Dry-run mode enabled. Build and assets validated for tag %s.\n' "${tag}"
@@ -554,6 +621,7 @@ if gh release view "${tag}" --repo "${repo}" >/dev/null 2>&1; then
     printf 'failed to snapshot existing release notes for rollback: %s\n' "${tag}" >&2
     exit 1
   fi
+  fsync_regular_file "${existing_notes_file}" "existing release notes file"
   for asset_ref in "${upload_refs[@]}"; do
     asset_name="$(basename "${asset_ref}")"
     if grep -Fxq -- "${asset_name}" <<<"${existing_assets}"; then

@@ -2681,6 +2681,14 @@ class ModelsTest(unittest.TestCase):
         with self.assertRaisesRegex(models.ModelError, "host is not allowed"):
             models._assert_download_url("https://example.com/model.bin", allowed_hosts={"huggingface.co"})
 
+    def test_assert_download_url_rejects_remote_plain_http(self) -> None:
+        with self.assertRaisesRegex(models.ModelError, "must use https:// unless host is local loopback"):
+            models._assert_download_url("http://example.com/model.bin")
+
+    def test_assert_download_url_allows_loopback_plain_http(self) -> None:
+        url = "http://127.0.0.1:8000/model.bin"
+        self.assertEqual(models._assert_download_url(url), url)
+
     def test_download_model_rejects_catalog_url_outside_huggingface(self) -> None:
         spec = models.ModelSpec(
             name="evil-host",

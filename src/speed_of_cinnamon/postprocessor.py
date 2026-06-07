@@ -10,6 +10,7 @@ import urllib.request
 from contextlib import suppress
 
 from .command_chain import CommandChainError, DEFAULT_COMMAND_TIMEOUT_SECONDS, MAX_COMMAND_OUTPUT_CHARS, run_command_chain, split_command_chain
+from .http_safety import is_loopback_hostname
 from .personalization import build_personalization_prompt, normalize_context, normalize_vocabulary
 
 
@@ -358,7 +359,11 @@ def _is_flex_service_tier_rejected(detail: str) -> bool:
 
 
 def _validate_openai_compatible_http_url(url: str) -> str:
-    return _validate_http_url(url, field_name="openai-compatible url")
+    normalized = _validate_http_url(url, field_name="openai-compatible url")
+    parsed = urllib.parse.urlparse(normalized)
+    if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
+        raise PostProcessError("openai-compatible url must use https:// unless host is local loopback")
+    return normalized
 
 
 def _read_json(request: urllib.request.Request, timeout: int) -> object:

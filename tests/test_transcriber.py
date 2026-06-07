@@ -2140,6 +2140,20 @@ class TranscriberTest(unittest.TestCase):
                     openai_compatible_url="ftp://127.0.0.1:8000/v1",
                 )
 
+    def test_openai_compatible_api_rejects_remote_plain_http_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with self.assertRaisesRegex(TranscriptionError, "must use https:// unless host is local loopback"):
+                transcribe(
+                    audio,
+                    "en",
+                    Path(tmp) / "sample.txt",
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-transcribe",
+                    openai_compatible_url="http://api.example.test/v1",
+                )
+
     def test_openai_compatible_api_rejects_url_userinfo(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"

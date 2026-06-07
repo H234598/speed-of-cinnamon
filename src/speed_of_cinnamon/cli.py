@@ -44,6 +44,7 @@ from .artifact_crypto import (
     write_encrypted_bytes_atomically,
 )
 from .doctor import parse_settings_json, report as doctor_report
+from .http_safety import is_loopback_hostname
 from .models import (
     CATALOG,
     ModelError,
@@ -629,6 +630,8 @@ def _validate_openai_compatible_http_url(url: str, field_name: str) -> str:
     parsed = urllib.parse.urlparse(base)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise RuntimeError(f"{field_name} must use http:// or https://")
+    if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
+        raise RuntimeError(f"{field_name} must use https:// unless host is local loopback")
     return base
 
 
@@ -1260,21 +1263,12 @@ def _remove_plaintext_export_sibling_after_encryption(storage_path: Path, encryp
         raise RuntimeError(f"unexpected encrypted transcript export sibling path: {encrypted_path}")
     if not plaintext_path.exists() and not plaintext_path.is_symlink():
         return
-    assert_safe_path_components(plaintext_path, field_name="transcript export")
-    parent_fd = ensure_directory_without_following_symlinks(
-        plaintext_path.parent,
-        field_name="transcript export directory",
-    )
     try:
         assert_no_symlink_ancestors(plaintext_path, field_name="transcript export")
-        os.unlink(plaintext_path.name, dir_fd=parent_fd)
-        os.fsync(parent_fd)
-    except FileNotFoundError:
-        return
-    except OSError as exc:
+        if not _unlink_regular_leaf_with_parent_fsync(plaintext_path, field_name="transcript export"):
+            return
+    except RuntimeError as exc:
         raise RuntimeError(f"failed to remove plaintext transcript export after encryption: {plaintext_path}") from exc
-    finally:
-        os.close(parent_fd)
 
 
 def _plaintext_recording_sibling_for_encrypted_path(path: Path) -> Path | None:
