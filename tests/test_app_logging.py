@@ -151,6 +151,22 @@ class AppLoggingTest(unittest.TestCase):
         self.assertNotIn("user", sanitized)
         self.assertNotIn("p:a:s", sanitized)
 
+    def test_sanitize_text_redacts_url_userinfo_without_password(self) -> None:
+        sanitized = app_logging.sanitize_text("https://secret-token@example.test/path", max_chars=120)
+        self.assertEqual(sanitized, "https://[redacted]@example.test/path")
+        self.assertNotIn("secret-token", sanitized)
+
+    def test_sanitize_hint_detects_url_userinfo_without_password(self) -> None:
+        self.assertIsNotNone(app_logging._SANITIZE_HINT_RE.search("https://secret-token@example.test/path"))
+
+    def test_log_path_insecure_rejects_non_private_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            os.chmod(log_dir, 0o777)
+            handler = app_logging.SizeCappedJsonFileHandler(log_dir / "speed-of-cinnamon.log", log_dir)
+
+            self.assertTrue(handler._is_log_path_insecure())
+
     def test_log_event_redacts_sensitive_fields_and_tokens(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

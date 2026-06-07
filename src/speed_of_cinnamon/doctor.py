@@ -65,6 +65,7 @@ def run_checks() -> list[Check]:
 
 MAX_SETTINGS_JSON_CHARS = 250_000
 MAX_REMOTE_URL_CHARS = 2_048
+MAX_DOCTOR_FIELD_CHARS = 512
 
 
 def _ok(checks: Mapping[str, Check], name: str) -> bool:
@@ -118,8 +119,7 @@ def _coerce_desktop_env(name: str) -> str:
         return ""
     if _contains_escaped_null(value) or _contains_http_header_control_chars(value):
         return ""
-    normalized = value.strip().lower()
-    return normalized
+    return _doctor_field_text(value, field_name=name).lower()
 
 
 def _setting(settings: Mapping[str, object], key: str, default: str = "") -> str:
@@ -130,7 +130,15 @@ def _setting(settings: Mapping[str, object], key: str, default: str = "") -> str
         raise ValueError(f"setting {key} must be text")
     if _contains_http_header_control_chars(value):
         raise ValueError(f"setting {key} contains invalid control character")
+    return _doctor_field_text(value, field_name=f"setting {key}")
+
+
+def _doctor_field_text(value: str, *, field_name: str) -> str:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise ValueError(f"{field_name} must be text")
     normalized = value.strip()
+    if len(normalized) > MAX_DOCTOR_FIELD_CHARS:
+        return normalized[:MAX_DOCTOR_FIELD_CHARS] + "..."
     return normalized
 
 

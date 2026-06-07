@@ -74,6 +74,13 @@ class StateStoreTest(unittest.TestCase):
         self.assertEqual(state.status, "idle")
         self.assertEqual(state.transcript, "")
 
+    def test_state_store_rejects_non_private_parent_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chmod(tmp, 0o777)
+            store = StateStore(Path(tmp) / "state.json")
+            with self.assertRaisesRegex(RuntimeError, "state lock directory must be private"):
+                store.write(RecordingState(status="idle"))
+
     def test_write_and_update_are_persistent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")

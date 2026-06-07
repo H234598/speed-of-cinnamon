@@ -4,6 +4,7 @@ import shutil
 import shlex
 import subprocess  # nosec B404
 import tempfile
+import time
 import io
 import hashlib
 import json
@@ -1313,9 +1314,23 @@ def transcribe_with_faster_whisper(
                 task="transcribe",
                 beam_size=5,
             )
-            text = " ".join(segment.text.strip() for segment in segments).strip()
+            deadline = time.monotonic() + TRANSCRIBE_COMMAND_TIMEOUT_SECONDS
+            text_parts: list[str] = []
+            for segment in segments:
+                if time.monotonic() > deadline:
+                    raise TranscriptionError("faster-whisper timed out")
+                segment_text = str(segment.text or "").strip()
+                if not segment_text:
+                    continue
+                text_parts.append(segment_text)
+                _assert_text_length(" ".join(text_parts), field_name="transcript")
+            text = " ".join(text_parts).strip()
         except Exception as exc:
+            if isinstance(exc, TranscriptionError):
+                raise
             raise TranscriptionError("faster-whisper failed: error detail redacted") from exc
+    if not text:
+        raise TranscriptionError("transcriber completed without transcript")
     _assert_text_length(text, field_name="transcript")
     if write_transcript:
         _write_text_atomic(text_path, text + "\n")
@@ -1872,6 +1887,8 @@ def transcribe(
     else:
         raise TranscriptionError(f"unknown transcriber backend: {resolved_backend}")
     text = text.strip()
+    if not text:
+        raise TranscriptionError("transcriber completed without transcript")
     _reject_placeholder_transcript(text, language)
     _assert_text_length(text, field_name="transcript")
     return text

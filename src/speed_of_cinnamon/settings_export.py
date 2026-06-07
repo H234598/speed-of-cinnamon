@@ -16,6 +16,7 @@ from .http_safety import is_loopback_hostname
 from .paths import APP_ID
 from .recorder import MAX_RECORDING_SECONDS
 from .path_safety import (
+    assert_fd_is_private_directory,
     assert_fd_is_regular_private_file,
     assert_no_symlink_ancestors,
     ensure_directory_without_following_symlinks,
@@ -435,6 +436,10 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
     parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name="settings export directory")
     temp_name = ""
     try:
+        try:
+            assert_fd_is_private_directory(parent_fd, field_name="settings export directory")
+        except RuntimeError as exc:
+            raise SettingsExportError(str(exc)) from exc
         try:
             existing_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
         except FileNotFoundError:

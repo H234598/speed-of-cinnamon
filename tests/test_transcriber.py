@@ -1713,6 +1713,15 @@ class TranscriberTest(unittest.TestCase):
         self.assertEqual(result, "hello cinnamon")
         self.assertFalse(text.exists())
 
+    def test_command_empty_stdout_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text = Path(tmp) / "sample.txt"
+            with self.assertRaisesRegex(TranscriptionError, "without transcript"):
+                transcribe(audio, "en", text, "printf ''")
+        self.assertFalse(text.exists())
+
     def test_command_does_not_receive_personalization_environment_without_placeholder(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
@@ -2719,6 +2728,33 @@ class TranscriberTest(unittest.TestCase):
         self.assertNotIn("secret-model", message)
         self.assertNotIn("private transcript", message)
         self.assertNotIn("token=secret", message)
+
+    def test_faster_whisper_empty_segments_are_rejected(self) -> None:
+        class Segment:
+            text = "   "
+
+        class WhisperModel:
+            def __init__(self, *_args: object, **_kwargs: object) -> None:
+                pass
+
+            def transcribe(self, *_args: object, **_kwargs: object) -> tuple[list[Segment], object]:
+                return [Segment()], object()
+
+        fake_module = type("FakeFasterWhisper", (), {"WhisperModel": WhisperModel})
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            model_path = Path(tmp) / "model"
+            model_path.mkdir()
+            with (
+                mock.patch.dict("sys.modules", {"faster_whisper": fake_module}),
+                mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "without transcript"):
+                    transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
+
+        self.assertFalse(text_path.exists())
 
     def test_faster_whisper_fails_closed_if_audio_is_swapped_after_validation(self) -> None:
         class FakeFasterWhisper:

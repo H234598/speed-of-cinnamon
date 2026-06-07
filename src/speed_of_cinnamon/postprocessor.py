@@ -898,10 +898,10 @@ def post_process_text(
     if _contains_http_header_control_chars(raw_backend):
         raise PostProcessError("backend contains invalid control character")
     normalized_backend = raw_backend.strip().lower().replace("_", "-")
+    text = _assert_text_length(text, field_name="input text")
     if normalized_backend in {"none", "off", "disabled"}:
         return text
     if normalized_backend == "ollama":
-        _assert_text_length(text, field_name="input text")
         return post_process_with_ollama(
             text,
             language,
@@ -912,7 +912,6 @@ def post_process_text(
             ollama_prompt,
         )
     if normalized_backend in {"openai-compatible", "openai", "local-openai"}:
-        _assert_text_length(text, field_name="input text")
         return post_process_with_openai_compatible(
             text,
             language,
@@ -927,8 +926,6 @@ def post_process_text(
         )
     if normalized_backend not in {"command", "custom"}:
         raise PostProcessError(f"unknown post-process backend: {backend}")
-    text = _assert_text_length(text, field_name="input text")
-
     template = command_template.strip()
     if not template:
         return text

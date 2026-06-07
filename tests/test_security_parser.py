@@ -106,6 +106,13 @@ class SecurityParserTest(unittest.TestCase):
         self.assertIn("[redacted iban]", sanitized)
         self.assertGreater(count, 0)
 
+    def test_apply_security_mode_masks_url_userinfo_without_password(self) -> None:
+        sanitized, count = apply_security_mode("https://secret-token@example.test/path", [])
+
+        self.assertEqual(sanitized, "[redacted credentials]example.test/path")
+        self.assertNotIn("secret-token", sanitized)
+        self.assertGreaterEqual(count, 1)
+
     def test_apply_security_mode_rejects_oversized_transcript(self) -> None:
         with self.assertRaisesRegex(ValueError, "transcript is too large"):
             apply_security_mode("x" * (_MAX_SECURITY_TEXT_CHARS + 1), [])

@@ -31,6 +31,17 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(payload["configured"]["transcriber"]["ok"])
         self.assertIn("install whisper", payload["configured"]["transcriber"]["detail"])
 
+    def test_desktop_environment_values_are_field_limited(self) -> None:
+        with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "X" * (doctor.MAX_DOCTOR_FIELD_CHARS + 100)}, clear=True):
+            value = doctor._coerce_desktop_env("XDG_CURRENT_DESKTOP")
+
+        self.assertEqual(len(value), doctor.MAX_DOCTOR_FIELD_CHARS + 3)
+
+    def test_settings_values_are_field_limited(self) -> None:
+        value = doctor._setting({"insert-method": "x" * (doctor.MAX_DOCTOR_FIELD_CHARS + 100)}, "insert-method")
+
+        self.assertEqual(len(value), doctor.MAX_DOCTOR_FIELD_CHARS + 3)
+
     def test_custom_command_pipeline_allows_copy_only_without_xdotool(self) -> None:
         tools = {"python3", "pw-record", "pactl"}
         env = {"XDG_CURRENT_DESKTOP": "X-Cinnamon", "XDG_SESSION_TYPE": "x11", "DESKTOP_SESSION": "cinnamon"}

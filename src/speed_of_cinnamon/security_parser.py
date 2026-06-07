@@ -105,7 +105,7 @@ _BARE_PASSWORD_WORD_RE = re.compile(
     + _BARE_SENSITIVE_WORD_VALUE_PATTERN
 )
 _ACCESS_TOKEN_RE = re.compile(r"(?i)\b(?:sk|sess|ghp|gho|xox[pb]-|hf|pat)[A-Za-z0-9_\-]{12,}\b")
-_URL_CRED_RE = re.compile(r"[a-z][a-z0-9+.-]*://[^\s/@:]+:[^\s/@]+@")
+_URL_CRED_RE = re.compile(r"[a-z][a-z0-9+.-]*://[^\s/@]+@")
 _CREDIT_CARD_RE = re.compile(r"\b(?:\d[ -]*?){13,19}\b")
 _LABELED_NAME_RE = re.compile(
     r"(?i)\b(?:name|voller\s+name|full\s+name)\b\s*[:=]\s*"

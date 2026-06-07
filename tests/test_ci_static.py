@@ -322,8 +322,11 @@ class CiStaticTest(unittest.TestCase):
         self.assertEqual(offenders, [], f"high-risk shell/workflow patterns found: {offenders}")
 
         applet_text = applet.read_text(encoding="utf-8")
-        self.assertNotIn("sudo rm -rf /usr/share/ollama", applet_text)
-        self.assertIn("Leaving /usr/share/ollama in place; inspect and remove it manually if desired.", applet_text)
+        self.assertNotIn("sudo ", applet_text)
+        self.assertNotIn("apt-get", applet_text)
+        self.assertNotIn("dnf install", applet_text)
+        self.assertIn("does not run privileged package-manager commands from the applet", applet_text)
+        self.assertIn("does not run privileged uninstall commands from the applet", applet_text)
 
         publish_script = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
         verify_script = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(encoding="utf-8")

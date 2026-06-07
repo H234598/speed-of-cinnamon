@@ -48,7 +48,7 @@ const NUL_RE = /\u0000/g;
 const NON_ASCII_RE = /[^\u0000-\u007E]/g;
 const COMBINING_MARKS_RE = /[\u0300-\u036f]/g;
 const ASCII_ONLY_RE = /^[\u0000-\u007E]*$/;
-const SENSITIVE_ERROR_RE = /(?:\b(?:bearer|token|api[_ -]?key|apikey|password|passwd|passphrase|secret)\b\s*[:=]\s*[^,\s;]+|\b(?:bearer|token|api[_ -]?key|apikey|password|passwd|passphrase|secret)\b\s+(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required|not|empty)\b)[^,\s;]+|\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b|[a-z][a-z0-9+.-]*:\/\/[^/@\s:]+:[^@\s]+@)/i;
+const SENSITIVE_ERROR_RE = /(?:\b(?:bearer|token|api[_ -]?key|apikey|password|passwd|passphrase|secret)\b\s*[:=]\s*[^,\s;]+|\b(?:bearer|token|api[_ -]?key|apikey|password|passwd|passphrase|secret)\b\s+(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required|not|empty)\b)[^,\s;]+|\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b|[a-z][a-z0-9+.-]*:\/\/[^/@\s]+@)/i;
 const EMPTY_TRANSCRIPT_MARKERS = [
   "leere aufnahme",
   "leerer text",
@@ -2462,17 +2462,10 @@ MyApplet.prototype = {
       "  echo 'Ollama is already installed.'",
       "  ollama --version || true",
       "else",
-      "  if command -v dnf >/dev/null 2>&1; then",
-      "    sudo dnf install -y ollama",
-      "  elif command -v apt-get >/dev/null 2>&1; then",
-      "    sudo apt-get update",
-      "    sudo apt-get install -y ollama",
-      "  else",
-      "    printf 'No supported package manager found (dnf/apt-get). Install Ollama manually and rerun this step.\\n' >&2",
-      "    exit 1",
-      "  fi",
+      "  printf 'Speed of Cinnamon does not run privileged package-manager commands from the applet.\\n' >&2",
+      "  printf 'Install Ollama manually with your distribution package manager, then rerun this step.\\n' >&2",
+      "  exit 1",
       "fi",
-      "if command -v systemctl >/dev/null 2>&1; then sudo systemctl enable --now ollama || true; fi",
       "if command -v ollama >/dev/null 2>&1; then ollama serve >/tmp/speed-of-cinnamon-ollama.log 2>&1 & sleep 2 || true; fi",
       "if command -v ollama >/dev/null 2>&1; then ollama list >/dev/null 2>&1 && echo 'Ollama is reachable on 127.0.0.1:11434.' || { echo 'Ollama installed, but the local API is not reachable yet.'; exit 1; }; fi"
     ]);
@@ -2481,21 +2474,11 @@ MyApplet.prototype = {
   _uninstallOllamaRuntimeCommand: function() {
     return this._terminalWorkflowScript([
       "echo 'Uninstalling Ollama runtime...'",
-      "if command -v dnf >/dev/null 2>&1 && rpm -q ollama >/dev/null 2>&1; then",
-      "  sudo dnf remove -y ollama",
-      "elif command -v apt-get >/dev/null 2>&1 && dpkg -s ollama >/dev/null 2>&1; then",
-      "  sudo apt-get remove -y ollama",
-      "else",
-      "  sudo systemctl disable --now ollama 2>/dev/null || true",
-      "  sudo rm -f /etc/systemd/system/ollama.service /usr/local/bin/ollama",
-      "  if [ -e /usr/share/ollama ] || [ -L /usr/share/ollama ]; then",
-      "    printf 'Leaving /usr/share/ollama in place; inspect and remove it manually if desired.\\n'",
-      "  fi",
-      "  sudo userdel ollama 2>/dev/null || true",
-      "  sudo groupdel ollama 2>/dev/null || true",
-      "  sudo systemctl daemon-reload 2>/dev/null || true",
+      "if command -v ollama >/dev/null 2>&1; then",
+      "  printf 'Speed of Cinnamon does not run privileged uninstall commands from the applet.\\n' >&2",
+      "  printf 'Remove Ollama manually with your distribution package manager or service manager.\\n' >&2",
+      "  exit 1",
       "fi",
-      "if command -v ollama >/dev/null 2>&1; then echo 'Ollama command is still present.'; exit 1; fi",
       "echo 'Ollama runtime removed.'"
     ]);
   },
@@ -2504,7 +2487,7 @@ MyApplet.prototype = {
     let cli = this._terminalCommandQuote(this._cliCommand(), "CLI command");
     return this._terminalWorkflowScript([
       "echo 'Running Speed of Cinnamon basic setup...'",
-      "if command -v dnf >/dev/null 2>&1; then sudo dnf install -y zenity xdotool xclip xsel wl-clipboard pipewire-utils pulseaudio-utils alsa-utils python3-pip; fi",
+      "echo 'Install OS packages manually if missing: zenity xdotool xclip xsel wl-clipboard pipewire-utils pulseaudio-utils alsa-utils python3-pip.'",
       "if command -v python3 >/dev/null 2>&1; then python3 -m pip install --user --upgrade faster-whisper; fi",
       cli + " download-model ct2-base-int8 --json",
       "echo 'Basic setup finished.'"

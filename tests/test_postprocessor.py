@@ -293,6 +293,10 @@ class PostProcessorTest(unittest.TestCase):
     def test_disabled_backend_returns_original_text(self) -> None:
         self.assertEqual(post_process_text("hello", "en", backend="none"), "hello")
 
+    def test_disabled_backend_validates_input_text(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "input text contains invalid null byte"):
+            post_process_text("hello\x00", "en", backend="none")
+
     def test_ollama_prompt_includes_context_vocabulary_and_text(self) -> None:
         prompt = build_ollama_prompt(
             "hallo cinnamon",

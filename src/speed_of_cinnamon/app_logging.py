@@ -9,12 +9,14 @@ import secrets
 import stat as stat_module
 import string
 import time
+from contextlib import suppress
 from itertools import islice
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, TextIO
 
 from .path_safety import (
+    assert_fd_is_private_directory,
     assert_fd_is_regular_private_file,
     ensure_directory_without_following_symlinks,
     open_file_without_following_symlinks,
@@ -55,7 +57,7 @@ _BARE_CREDENTIAL_RE = re.compile(
 _BEARER_RE = re.compile(r"(?i)\bbearer\s+[^,\s;]+")
 _OPENAI_KEY_RE = re.compile(r"\b(?:sk|sess)-[A-Za-z0-9_\-]{12,}\b")
 _SHORT_API_KEY_RE = re.compile(r"\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b")
-_URL_CREDENTIAL_RE = re.compile(r"([a-z][a-z0-9+.-]*://)([^/@\s:]+):([^@\s]+)@")
+_URL_CREDENTIAL_RE = re.compile(r"([a-z][a-z0-9+.-]*://)([^/@\s]+)@")
 _ERROR_DETAIL_RE = re.compile(
     r"(?i)(?:\b(?:stdout|stderr)\s*:|\b(?:raw\s+)?transcript\s*(?::|\b(?:text|words|payload|for)\b)|\bprompt\s*:|command\s+output\s*:|backend\s+output\s*:)"
 )
@@ -67,7 +69,7 @@ _SANITIZE_HINT_RE = re.compile(
     r"\b(?:token|access[_ -]?token|refresh[_ -]?token|id[_ -]?token|api[_ -]?key|apikey|"
     r"client[_ -]?secret|private[_ -]?key|secret[_ -]?key|password|passwd|passphrase)\b\s+(?:(?:is|are|was|were)\s+)?"
     r"(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required|not|empty)\b)[^,\s;]+|"
-    r"\bbearer\s+[^,\s;]+|\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b|[a-z][a-z0-9+.-]*://[^/@\s:]+:[^@\s]+@)"
+    r"\bbearer\s+[^,\s;]+|\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b|[a-z][a-z0-9+.-]*://[^/@\s]+@)"
 )
 _SANITIZE_ESCAPE_TABLE = {
     **{codepoint: f"\\x{codepoint:02x}" for codepoint in tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))},
@@ -197,6 +199,7 @@ class SizeCappedJsonFileHandler(logging.Handler):
                 if getattr(file_stat, "st_nlink", 1) != 1:
                     return True
             parent_fd = ensure_directory_without_following_symlinks(self.path.parent, field_name="log directory")
+            assert_fd_is_private_directory(parent_fd, field_name="log directory")
             return False
         except RuntimeError:
             return True
@@ -217,9 +220,10 @@ class SizeCappedJsonFileHandler(logging.Handler):
         if self.stream is None:
             parent_fd = ensure_directory_without_following_symlinks(self.path.parent, field_name="log directory")
             try:
-                os.close(parent_fd)
-            except OSError:
-                pass
+                assert_fd_is_private_directory(parent_fd, field_name="log directory")
+            finally:
+                with suppress(OSError):
+                    os.close(parent_fd)
             fd = open_file_without_following_symlinks(
                 self.path,
                 os.O_WRONLY | os.O_CREAT | os.O_APPEND,

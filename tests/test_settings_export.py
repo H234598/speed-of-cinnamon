@@ -646,6 +646,13 @@ class SettingsExportTest(unittest.TestCase):
 
             self.assertTrue(path.exists())
 
+    def test_write_export_rejects_non_private_parent_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chmod(tmp, 0o777)
+            path = Path(tmp) / "settings-export.json"
+            with self.assertRaisesRegex(SettingsExportError, "settings export directory must be private"):
+                write_export(path, {"language": "en"})
+
     def test_write_export_sets_private_permissions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"

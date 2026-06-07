@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 from .path_safety import (
+    assert_fd_is_private_directory,
     assert_no_symlink_ancestors,
     assert_fd_is_regular_private_file,
     assert_safe_path_components,
@@ -112,6 +113,7 @@ class StateStore:
             raise RuntimeError("secure state lock open is not supported on this platform")
         parent_fd = ensure_directory_without_following_symlinks(lock_path.parent, field_name="state lock directory")
         try:
+            assert_fd_is_private_directory(parent_fd, field_name="state lock directory")
             fd = os.open(lock_path.name, os.O_RDWR | os.O_CREAT | nofollow_flag, 0o600, dir_fd=parent_fd)
         except OSError as exc:
             os.close(parent_fd)
