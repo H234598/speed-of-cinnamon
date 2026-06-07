@@ -76,6 +76,10 @@ class AlarmTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "path is invalid"):
                 load_alarm_store(Path("é" * 3))
 
+    def test_load_alarm_store_rejects_unencodable_unicode_path(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "path is invalid"):
+            load_alarm_store(Path("alarms\ud800.json"))
+
     def test_save_alarm_store_rejects_null_byte_path(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "invalid null byte"):
             save_alarm_store({}, Path("alarms\x00.json"))
@@ -104,6 +108,10 @@ class AlarmTest(unittest.TestCase):
         with mock.patch("speed_of_cinnamon.alarms.MAX_ALARM_STORE_PATH_CHARS", 4):
             with self.assertRaisesRegex(RuntimeError, "path is invalid"):
                 save_alarm_store({}, Path("é" * 3))
+
+    def test_save_alarm_store_rejects_unencodable_unicode_path(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "path is invalid"):
+            save_alarm_store({}, Path("alarms\ud800.json"))
 
     def test_load_alarm_store_rejects_oversized_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -613,6 +621,10 @@ class AlarmTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "enabled must be a boolean"):
             add_alarm("09:00", enabled="yes")  # type: ignore[arg-type]
 
+    def test_add_alarm_rejects_unencodable_unicode_name(self) -> None:
+        with self.assertRaisesRegex(ValueError, "alarm name contains invalid unicode"):
+            add_alarm("09:00", name="\ud800")
+
     def test_add_alarm_rejects_control_character_urgency(self) -> None:
         with self.assertRaisesRegex(ValueError, "urgency contains invalid control character"):
             add_alarm("09:00", urgency="\x85normal")
@@ -820,6 +832,14 @@ class AlarmTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "failed to persist alarm store"):
                 save_alarm_store({}, path)
         mocked_replace.assert_called_once()
+
+    @mock.patch("speed_of_cinnamon.alarms.json.dumps")
+    def test_save_alarm_store_rejects_unencodable_rendered_payload(self, mocked_dumps: mock.Mock) -> None:
+        mocked_dumps.return_value = "\ud800"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            with self.assertRaisesRegex(ValueError, "alarm store contains invalid unicode"):
+                save_alarm_store({}, path)
 
     @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
     def test_save_alarm_store_uses_secure_directory_relative_replace(self, mocked_open: mock.Mock) -> None:

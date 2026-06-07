@@ -27,6 +27,14 @@ MAX_STATE_FILE_BYTES = 1_000_000
 MAX_STATE_STRING_CHARS = 1_000_000
 MAX_STATE_PATH_CHARS = 4_096
 MAX_STATE_INT = 2_147_483_647
+VALID_STATE_STATUSES = frozenset({"idle", "recording", "recorded", "processing", "finalizing", "done", "error"})
+
+
+def _utf8_byte_count(value: str, *, field_name: str) -> int:
+    try:
+        return len(value.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{field_name} contains invalid Unicode characters") from exc
 
 
 def _contains_escaped_null(value: str) -> bool:
@@ -79,8 +87,11 @@ class StateStore:
         text = str(path)
         if not text or len(text) > MAX_STATE_PATH_CHARS:
             raise RuntimeError("state file path is invalid")
-        if len(text.encode("utf-8")) > MAX_STATE_PATH_CHARS:
-            raise RuntimeError("state file path is invalid")
+        try:
+            if _utf8_byte_count(text, field_name="state file path") > MAX_STATE_PATH_CHARS:
+                raise RuntimeError("state file path is invalid")
+        except ValueError as exc:
+            raise RuntimeError("state file path is invalid") from exc
         if _contains_escaped_null(text):
             raise RuntimeError("state file path contains invalid null byte")
         if _contains_http_header_control_chars(text):
@@ -120,9 +131,16 @@ class StateStore:
                 os.close(parent_fd)
 
     @staticmethod
-    def _sanitize_text_field(value: Any, *, field_name: str) -> str:
+    def _sanitize_text_field(
+        value: Any,
+        *,
+        field_name: str,
+        allow_null: bool = False,
+    ) -> str:
         if value is None:
-            return ""
+            if allow_null:
+                return ""
+            raise ValueError(f"state {field_name} must be text")
         if isinstance(value, bool) or not isinstance(value, str):
             raise ValueError(f"state {field_name} must be text")
         text = str(value)
@@ -132,7 +150,7 @@ class StateStore:
             raise ValueError(f"state {field_name} contains invalid control character")
         if len(text) > MAX_STATE_STRING_CHARS:
             raise ValueError(f"state {field_name} is too large (max {MAX_STATE_STRING_CHARS} characters)")
-        if len(text.encode("utf-8")) > MAX_STATE_STRING_CHARS:
+        if _utf8_byte_count(text, field_name=f"state {field_name}") > MAX_STATE_STRING_CHARS:
             raise ValueError(f"state {field_name} is too large (max {MAX_STATE_STRING_CHARS} bytes)")
         return text
 
@@ -180,8 +198,26 @@ class StateStore:
             if field_name not in raw:
                 continue
             value = raw[field_name]
-            if field_name in {"status", "process_identity", "audio_path", "log_path", "started_at", "stopped_at", "language", "recorder", "input_device", "transcript", "transcript_path", "error", "updated_at"}:
+            optional_text_fields = {"audio_path", "log_path", "started_at", "stopped_at", "transcript_path"}
+            if field_name == "status":
+                status = StateStore._sanitize_text_field(value, field_name=field_name)
+                if status not in VALID_STATE_STATUSES:
+                    raise ValueError("state status is invalid")
+                normalized[field_name] = status
+            elif field_name in {
+                "process_identity",
+                "language",
+                "recorder",
+                "input_device",
+                "transcript",
+                "error",
+                "updated_at",
+            }:
                 normalized[field_name] = StateStore._sanitize_text_field(value, field_name=field_name)
+            elif field_name in optional_text_fields:
+                normalized[field_name] = StateStore._sanitize_text_field(
+                    value, field_name=field_name, allow_null=True
+                )
             elif field_name == "pid":
                 normalized[field_name] = StateStore._coerce_state_int(
                     value,
@@ -242,7 +278,11 @@ class StateStore:
         payload["updated_at"] = now_iso()
         normalized_payload = StateStore._normalize_state_data(payload)
         rendered = json.dumps(normalized_payload, indent=2, sort_keys=True) + "\n"
-        if len(rendered.encode("utf-8")) > MAX_STATE_FILE_BYTES:
+        try:
+            rendered_size = _utf8_byte_count(rendered, field_name="state payload")
+        except ValueError as exc:
+            raise RuntimeError("state payload is not valid UTF-8") from exc
+        if rendered_size > MAX_STATE_FILE_BYTES:
             raise RuntimeError("state file is too large")
         try:
             write_text_atomically_without_following_symlinks(

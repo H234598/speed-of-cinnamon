@@ -2703,8 +2703,10 @@ class CliTest(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 0)
         self.assertEqual(len(payload["transcripts"]), 1)
-        self.assertEqual(payload["transcripts"][0]["name"], "newer.txt")
+        self.assertEqual(payload["transcripts"][0]["name"], cli.HISTORY_METADATA_REDACTED_TEXT)
+        self.assertEqual(payload["transcripts"][0]["path"], cli.HISTORY_METADATA_REDACTED_TEXT)
         self.assertEqual(payload["transcripts"][0]["preview"], cli.HISTORY_PREVIEW_REDACTED_TEXT)
+        self.assertNotIn("newer.txt", json.dumps(payload, sort_keys=True))
         self.assertNotIn("text", payload["transcripts"][0])
 
     def test_history_plaintext_previews_require_confirmation(self) -> None:
@@ -2724,6 +2726,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(len(payload["transcripts"]), 1)
         self.assertEqual(payload["transcripts"][0]["name"], "newer.txt")
+        self.assertIn("newer.txt", payload["transcripts"][0]["path"])
         self.assertEqual(payload["transcripts"][0]["preview"], "newer text with more words")
 
     def test_transcripts_document_contains_full_transcript_text(self) -> None:
@@ -2758,6 +2761,21 @@ class CliTest(unittest.TestCase):
         self.assertIn(older_text.strip(), document)
         self.assertNotIn("temporary plaintext leak", document)
         self.assertLess(document.index("===== newer.txt ====="), document.index("===== older.txt ====="))
+
+    def test_transcripts_document_escapes_control_characters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            (transcript_dir / "ansi.txt").write_text("\x1b[31mALERT\x1b[0m\nsafe\n", encoding="utf-8")
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["transcripts-document", "--limit", "1000", "--confirm-plaintext", "--json"])
+            payload = json.loads(stdout.getvalue())
+            document = payload["content"]
+        self.assertEqual(code, 0)
+        self.assertNotIn("\x1b", document)
+        self.assertIn("\\u001b[31mALERT\\u001b[0m", document)
+        self.assertIn("safe", document)
 
     def test_transcripts_document_requires_plaintext_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2831,6 +2849,20 @@ class CliTest(unittest.TestCase):
         self.assertIn("failed to read transcript", payload["error"])
         self.assertNotIn("content", payload)
 
+    def test_transcripts_document_fails_closed_on_invalid_utf8_plaintext(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            (transcript_dir / "invalid.txt").write_bytes(b"\xff")
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["transcripts-document", "--limit", "1000", "--confirm-plaintext", "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertNotEqual(code, 0)
+        self.assertIn("failed to read transcript", payload["error"])
+        self.assertIn("not valid UTF-8", payload["error"])
+        self.assertNotIn("content", payload)
+
     def test_transcripts_export_rejects_unsafe_modes_before_building_document(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             stdout = io.StringIO()
@@ -2888,6 +2920,20 @@ class CliTest(unittest.TestCase):
         unlink_leaf.assert_any_call(stale_export, field_name="transcript export")
         self.assertNotIn(transcript_text.encode("utf-8"), encrypted_payload)
         self.assertIn(transcript_text.strip(), decrypted)
+
+    def test_plaintext_transcripts_export_escapes_control_characters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            (transcript_dir / "ansi.txt").write_text("\x1b[31mALERT\x1b[0m\n", encoding="utf-8")
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["transcripts-export", "--plaintext", "--confirm-plaintext", "--json"])
+            payload = json.loads(stdout.getvalue())
+            export_text = Path(payload["path"]).read_text(encoding="utf-8")
+        self.assertEqual(code, 0)
+        self.assertNotIn("\x1b", export_text)
+        self.assertIn("\\u001b[31mALERT\\u001b[0m", export_text)
 
     def test_transcripts_export_rolls_back_encrypted_bundle_when_plaintext_cleanup_fails(self) -> None:
         strong_passphrase = artifact_crypto._b64encode(bytes(range(32)))
@@ -2957,8 +3003,8 @@ class CliTest(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 0)
         self.assertEqual(len(payload["transcripts"]), 2)
-        self.assertEqual(payload["transcripts"][0]["name"], "middle.txt")
-        self.assertEqual(payload["transcripts"][1]["name"], "older.txt")
+        self.assertEqual(payload["transcripts"][0]["name"], cli.HISTORY_METADATA_REDACTED_TEXT)
+        self.assertEqual(payload["transcripts"][1]["name"], cli.HISTORY_METADATA_REDACTED_TEXT)
 
     def test_history_reports_corrupt_transcripts_when_filling_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2976,7 +3022,7 @@ class CliTest(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 0)
         self.assertEqual(len(payload["transcripts"]), 1)
-        self.assertEqual(payload["transcripts"][0]["name"], "valid.txt")
+        self.assertEqual(payload["transcripts"][0]["name"], cli.HISTORY_METADATA_REDACTED_TEXT)
         self.assertEqual(payload["unreadable_count"], 1)
 
     def test_history_limit_zero_returns_no_transcripts(self) -> None:
@@ -3002,7 +3048,7 @@ class CliTest(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 0)
         self.assertEqual(len(payload["transcripts"]), 1)
-        self.assertEqual(payload["transcripts"][0]["name"], "huge.txt")
+        self.assertEqual(payload["transcripts"][0]["name"], cli.HISTORY_METADATA_REDACTED_TEXT)
         self.assertNotIn("text", payload["transcripts"][0])
         self.assertLessEqual(len(payload["transcripts"][0]["preview"]), 80)
 
@@ -3022,7 +3068,7 @@ class CliTest(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 0)
         self.assertEqual(len(payload["transcripts"]), 1)
-        self.assertEqual(payload["transcripts"][0]["name"], "real.txt")
+        self.assertEqual(payload["transcripts"][0]["name"], cli.HISTORY_METADATA_REDACTED_TEXT)
 
     def test_history_ignores_symlinked_transcript_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -144,6 +144,8 @@ MAX_TRANSCRIPTS_DOCUMENT_CHARS = 180_000
 MAX_TRANSCRIPTS_DOCUMENT_JSON_BYTES = 240_000
 MAX_TRANSCRIPTS_EXPORT_CHARS = 64_000_000
 HISTORY_PREVIEW_REDACTED_TEXT = "[transcript preview redacted]"
+HISTORY_METADATA_REDACTED_TEXT = "[transcript metadata redacted]"
+TRANSCRIPT_DISPLAY_CONTROL_RE = re.compile(r"[\x00-\x09\x0b-\x1f\x7f-\x9f]")
 EMPTY_TRANSCRIPT_MARKERS = frozenset(
     {
         "leere aufnahme",
@@ -1143,6 +1145,7 @@ def read_log_excerpt(path: Path | None, max_chars: int = 2000) -> str:
 
 
 def transcript_preview(text: str, max_chars: int = 80) -> str:
+    text = _sanitize_transcript_display_text(text)
     if text and len(text) <= max_chars and all(text.find(ch) < 0 for ch in " \t\n\r\f\v"):
         return text
     clean = " ".join(text.split())
@@ -1151,11 +1154,24 @@ def transcript_preview(text: str, max_chars: int = 80) -> str:
     return clean[: max_chars - 3] + "..."
 
 
+def _sanitize_transcript_display_text(text: str) -> str:
+    if isinstance(text, bool) or not isinstance(text, str):
+        raise RuntimeError("transcript display text must be text")
+    return TRANSCRIPT_DISPLAY_CONTROL_RE.sub(lambda match: f"\\u{ord(match.group(0)):04x}", text)
+
+
 def _redact_history_previews(transcripts: list[dict[str, object]]) -> list[dict[str, object]]:
-    return [
-        {**entry, "preview": HISTORY_PREVIEW_REDACTED_TEXT}
-        for entry in transcripts
-    ]
+    redacted: list[dict[str, object]] = []
+    for entry in transcripts:
+        redacted_entry: dict[str, object] = {
+            "preview": HISTORY_PREVIEW_REDACTED_TEXT,
+            "name": HISTORY_METADATA_REDACTED_TEXT,
+            "path": HISTORY_METADATA_REDACTED_TEXT,
+        }
+        if "modified_at" in entry:
+            redacted_entry["modified_at"] = entry["modified_at"]
+        redacted.append(redacted_entry)
+    return redacted
 
 
 def _transcript_history_candidates(directory: Path):
@@ -1339,11 +1355,14 @@ def _read_stored_transcript_text(path: Path) -> str:
             return payload.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise RuntimeError(f"transcript file is not valid UTF-8: {path}") from exc
-    return read_text_without_following_symlinks(
-        path,
-        field_name="transcript file",
-        max_bytes=MAX_STORED_TRANSCRIPT_BYTES,
-    )
+    try:
+        return read_text_without_following_symlinks(
+            path,
+            field_name="transcript file",
+            max_bytes=MAX_STORED_TRANSCRIPT_BYTES,
+        )
+    except UnicodeDecodeError as exc:
+        raise RuntimeError(f"transcript file is not valid UTF-8: {path}") from exc
 
 
 def _artifact_encryption_mode(args: argparse.Namespace) -> str:
@@ -1704,13 +1723,14 @@ def build_transcripts_document(
             raise _transcript_read_failure(path, exc) from exc
         if not text:
             continue
+        display_text = _sanitize_transcript_display_text(text)
         modified_at = datetime.fromtimestamp(mtime, timezone.utc).isoformat()
         entry = [
             f"===== {path.name} =====",
             f"Modified: {modified_at}",
             f"Path: {path}",
             "",
-            text,
+            display_text,
             "",
         ]
         if max_chars is not None:

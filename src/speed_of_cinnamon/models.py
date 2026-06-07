@@ -54,6 +54,15 @@ def _build_model_download_opener() -> urllib.request.OpenerDirector:
     return urllib.request.build_opener(_NoRedirectHandler, urllib.request.ProxyHandler({}))
 
 
+def _safe_utf8_length(value: str, *, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise ModelError(f"{field_name} must be text")
+    try:
+        return len(value.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise ModelError(f"{field_name} contains malformed UTF-8") from exc
+
+
 _MODEL_DOWNLOAD_OPENER = _build_model_download_opener()
 
 
@@ -171,10 +180,14 @@ def _load_model_checksum_cache() -> None:
         return
 
     for key, raw_entry in payload.items():
+        try:
+            key_byte_length = _safe_utf8_length(key, field_name="model checksum cache path key")
+        except ModelError:
+            continue
         if (
             not isinstance(key, str)
             or len(key) > MAX_MODEL_CHECKSUM_PATH_CHARS
-            or len(key.encode("utf-8")) > MAX_MODEL_CHECKSUM_PATH_CHARS
+            or key_byte_length > MAX_MODEL_CHECKSUM_PATH_CHARS
             or _contains_escaped_null(key)
             or _contains_http_header_control_chars(key)
             or not _is_valid_cache_entry(raw_entry)
@@ -223,7 +236,7 @@ def _write_model_checksum_cache() -> None:
     cache_path = _model_checksum_cache_path()
     try:
         rendered = json.dumps(_model_checksum_cache, indent=2, sort_keys=True) + "\n"
-        if len(rendered.encode("utf-8")) > MAX_MODEL_CHECKSUM_JSON_BYTES:
+        if _safe_utf8_length(rendered, field_name="model checksum cache JSON") > MAX_MODEL_CHECKSUM_JSON_BYTES:
             _model_checksum_cache.clear()
             _remove_model_checksum_cache_file(cache_path)
             return
@@ -250,7 +263,7 @@ def _set_model_checksum_cache(path: Path, checksum: str, stat: os.stat_result) -
         or stat.st_mtime_ns < 0
         or not isinstance(key, str)
         or len(key) > MAX_MODEL_CHECKSUM_PATH_CHARS
-        or len(key.encode("utf-8")) > MAX_MODEL_CHECKSUM_PATH_CHARS
+        or _safe_utf8_length(key, field_name="model checksum cache path") > MAX_MODEL_CHECKSUM_PATH_CHARS
         or _contains_escaped_null(key)
         or _contains_http_header_control_chars(key)
     ):
@@ -405,7 +418,7 @@ def _assert_download_url(
         raise ModelError(f"{field_name} is required")
     if len(normalized) > MAX_MODEL_DOWNLOAD_URL_CHARS:
         raise ModelError(f"{field_name} is too large (max {MAX_MODEL_DOWNLOAD_URL_CHARS} characters)")
-    if len(normalized.encode("utf-8")) > MAX_MODEL_DOWNLOAD_URL_CHARS:
+    if _safe_utf8_length(normalized, field_name=f"{field_name} URL") > MAX_MODEL_DOWNLOAD_URL_CHARS:
         raise ModelError(f"{field_name} is too large (max {MAX_MODEL_DOWNLOAD_URL_CHARS} bytes)")
     try:
         parsed = urllib.parse.urlparse(normalized)

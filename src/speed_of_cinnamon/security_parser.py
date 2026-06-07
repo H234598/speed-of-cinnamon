@@ -179,7 +179,10 @@ def _compile_blacklist_pattern(entries: list[str]) -> re.Pattern[str] | None:
         entry_key = entry.casefold()
         if not entry or entry_key in seen:
             continue
-        entry_bytes = len(entry.encode("utf-8"))
+        try:
+            entry_bytes = _safe_utf8_length(entry, field_name="blacklist entry")
+        except ValueError:
+            continue
         if normalized and total_bytes + entry_bytes > _MAX_BLACKLIST_PATTERN_BYTES:
             break
         normalized.append(entry)
@@ -209,6 +212,13 @@ def _contains_forbidden_control(value: str) -> bool:
     return bool(_FORBIDDEN_CONTROL_CHAR_RE.search(value) or _ESCAPED_FORBIDDEN_CONTROL_RE.search(value))
 
 
+def _safe_utf8_length(value: str, *, field_name: str) -> int:
+    try:
+        return len(value.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{field_name} contains invalid unicode") from exc
+
+
 def _assert_security_text(value: str) -> str:
     if not isinstance(value, str) or isinstance(value, bool):
         raise ValueError("transcript must be text")
@@ -216,7 +226,9 @@ def _assert_security_text(value: str) -> str:
         raise ValueError("transcript contains invalid null byte")
     if _contains_forbidden_control(value):
         raise ValueError("transcript contains invalid control character")
-    if len(value) > _MAX_SECURITY_TEXT_CHARS or len(value.encode("utf-8")) > _MAX_SECURITY_TEXT_CHARS:
+    if len(value) > _MAX_SECURITY_TEXT_CHARS or _safe_utf8_length(
+        value, field_name="transcript"
+    ) > _MAX_SECURITY_TEXT_CHARS:
         raise ValueError(f"transcript is too large (max {_MAX_SECURITY_TEXT_CHARS} bytes)")
     return value
 

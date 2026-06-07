@@ -63,6 +63,10 @@ class StateStoreTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "state file path is invalid"):
                 StateStore(Path("é" * 3))
 
+    def test_state_store_rejects_unencodable_path(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "state file path is invalid"):
+            StateStore(Path("state\ud800.json"))
+
     def test_missing_state_defaults_to_idle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state = StateStore(Path(tmp) / "state.json").read()
@@ -303,6 +307,27 @@ class StateStoreTest(unittest.TestCase):
             state = StateStore(path).read()
         self.assertEqual(state.error, "state file could not be read")
 
+    def test_read_rejects_null_language_text_field(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('{"status":"idle","language":null}', encoding="utf-8")
+            state = StateStore(path).read()
+        self.assertEqual(state.error, "state file could not be read")
+
+    def test_read_rejects_null_status_text_field(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('{"status":null}', encoding="utf-8")
+            state = StateStore(path).read()
+        self.assertEqual(state.error, "state file could not be read")
+
+    def test_read_rejects_invalid_status_value(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('{"status":"weird"}', encoding="utf-8")
+            state = StateStore(path).read()
+        self.assertEqual(state.error, "state file could not be read")
+
     def test_read_rejects_non_object_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
@@ -334,6 +359,15 @@ class StateStoreTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "state status contains invalid control character"):
                 store.write(RecordingState(status="oops\rextra"))
 
+    @mock.patch("speed_of_cinnamon.state.json.dumps", return_value='{"state":"\ud800"}')
+    def test_write_rejects_unencodable_rendered_payload(self, mocked_dumps: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            store = StateStore(path)
+            with self.assertRaisesRegex(RuntimeError, "state payload is not valid UTF-8"):
+                store.write(RecordingState(status="done"))
+        mocked_dumps.assert_called_once()
+
     def test_write_rejects_oversized_state(self) -> None:
         long_value = "Y" * (MAX_STATE_STRING_CHARS + 5)
         with tempfile.TemporaryDirectory() as tmp:
@@ -361,6 +395,10 @@ class StateStoreTest(unittest.TestCase):
     def test_sanitize_text_field_rejects_non_text(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be text"):
             StateStore._sanitize_text_field(12, field_name="status")
+
+    def test_sanitize_text_field_rejects_unencodable_text(self) -> None:
+        with self.assertRaisesRegex(ValueError, "invalid Unicode characters"):
+            StateStore._sanitize_text_field("label\ud800", field_name="status")
 
     def test_process_is_alive_rejects_non_int(self) -> None:
         self.assertFalse(process_is_alive("123"))  # type: ignore[arg-type]

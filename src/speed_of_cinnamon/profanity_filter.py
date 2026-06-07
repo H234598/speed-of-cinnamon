@@ -238,7 +238,11 @@ def _clean_editable_value(value: str, *, max_chars: int) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
-    if len(text) > max_chars or len(text.encode("utf-8")) > max_chars:
+    try:
+        text_bytes = len(text.encode("utf-8"))
+    except UnicodeEncodeError:
+        return ""
+    if len(text) > max_chars or text_bytes > max_chars:
         return ""
     if any(ord(char) < 0x20 or ord(char) == 0x7F for char in text):
         return ""

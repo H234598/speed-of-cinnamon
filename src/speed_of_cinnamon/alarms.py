@@ -50,7 +50,11 @@ def _assert_clean_path(path: Path, *, field_name: str) -> None:
     text = str(path)
     if not text or len(text) > MAX_ALARM_STORE_PATH_CHARS:
         raise RuntimeError(f"{field_name} path is invalid")
-    if len(text.encode("utf-8")) > MAX_ALARM_STORE_PATH_CHARS:
+    try:
+        path_bytes = len(text.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise RuntimeError(f"{field_name} path is invalid") from exc
+    if path_bytes > MAX_ALARM_STORE_PATH_CHARS:
         raise RuntimeError(f"{field_name} path is invalid")
     if _contains_escaped_null(text):
         raise RuntimeError(f"{field_name} contains invalid null byte")
@@ -129,8 +133,11 @@ def _sanitize_text_field(value: object, *, field_name: str, max_chars: int) -> s
         raise ValueError(f"{field_name} contains invalid control character")
     if len(text) > max_chars:
         raise ValueError(f"{field_name} is too large (max {max_chars} characters)")
-    if len(text.encode("utf-8")) > max_chars:
-        raise ValueError(f"{field_name} is too large (max {max_chars} bytes)")
+    try:
+        if len(text.encode("utf-8")) > max_chars:
+            raise ValueError(f"{field_name} is too large (max {max_chars} bytes)")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{field_name} contains invalid unicode") from exc
     return text
 
 
@@ -346,7 +353,11 @@ def save_alarm_store(store: dict[str, Any], path: Path | None = None) -> None:
         ),
     }
     rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-    if len(rendered.encode("utf-8")) > MAX_ALARM_STORE_BYTES:
+    try:
+        rendered_bytes = len(rendered.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise ValueError("alarm store contains invalid unicode") from exc
+    if rendered_bytes > MAX_ALARM_STORE_BYTES:
         raise RuntimeError("alarm store is too large")
     try:
         write_text_atomically_without_following_symlinks(

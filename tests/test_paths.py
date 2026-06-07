@@ -208,6 +208,11 @@ class PathsTest(unittest.TestCase):
             ):
                 self.assertEqual(paths.xdg_data_home(), Path("/home/example") / ".local" / "share")
 
+    def test_xdg_paths_reject_unencodable_roots(self) -> None:
+        with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):
+            with mock.patch("speed_of_cinnamon.paths.os.environ.__getitem__", return_value="/tmp/root\ud800"):
+                self.assertEqual(paths.xdg_data_home(), Path("/home/example") / ".local" / "share")
+
     def test_xdg_paths_reject_null_roots(self) -> None:
         with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):
             with mock.patch.dict(

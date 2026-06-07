@@ -89,6 +89,10 @@ class SecurityParserTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "invalid control character"):
                     parse_security_directives(text)
 
+    def test_parse_security_directives_rejects_unencodable_transcript(self) -> None:
+        with self.assertRaisesRegex(ValueError, "transcript contains invalid unicode"):
+            parse_security_directives("blacklisteintrag: geheim\ud800")
+
     def test_parse_security_directives_detects_show_phrase_with_open(self) -> None:
         text = "Bitte Blacklist öffnen"
         directives = parse_security_directives(text)
@@ -120,6 +124,10 @@ class SecurityParserTest(unittest.TestCase):
             with self.subTest(text=repr(text)):
                 with self.assertRaisesRegex(ValueError, "invalid control character"):
                     apply_security_mode(text, [])
+
+    def test_apply_security_mode_rejects_unencodable_transcript(self) -> None:
+        with self.assertRaisesRegex(ValueError, "transcript contains invalid unicode"):
+            apply_security_mode("token: abc\ud800", [])
 
     def test_apply_security_mode_masks_spaced_iban_and_hyphenated_single_name(self) -> None:
         text = "mein name ist Jean-Luc und IBAN DE44 5001 0517 5407 3249 31"
@@ -323,6 +331,12 @@ class SecurityParserTest(unittest.TestCase):
 
     def test_apply_blacklist_mode_ignores_non_text_direct_entries(self) -> None:
         sanitized, count = apply_blacklist_mode("visible geheim", ["geheim", True])  # type: ignore[list-item]
+
+        self.assertEqual(count, 1)
+        self.assertEqual(sanitized, "visible [redacted blacklist item]")
+
+    def test_apply_blacklist_mode_ignores_unencodable_direct_entries(self) -> None:
+        sanitized, count = apply_blacklist_mode("visible geheim", ["\ud800", "geheim"])
 
         self.assertEqual(count, 1)
         self.assertEqual(sanitized, "visible [redacted blacklist item]")

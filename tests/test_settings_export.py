@@ -32,9 +32,17 @@ class SettingsExportTest(unittest.TestCase):
         with self.assertRaisesRegex(SettingsExportError, "invalid null byte"):
             write_export(Path("settings\x00.json"), {"language": "en"})
 
+    def test_write_export_rejects_unencodable_path(self) -> None:
+        with self.assertRaisesRegex(SettingsExportError, "path is invalid"):
+            write_export(Path("settings\ud800.json"), {"language": "en"})
+
     def test_read_export_rejects_null_byte_path(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "invalid null byte"):
             read_export(Path("settings\x00.json"))
+
+    def test_read_export_rejects_unencodable_path(self) -> None:
+        with self.assertRaisesRegex(SettingsExportError, "path is invalid"):
+            read_export(Path("settings\ud800.json"))
 
     def test_write_export_rejects_control_character_path(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "invalid control character"):
@@ -123,6 +131,10 @@ class SettingsExportTest(unittest.TestCase):
         with self.assertRaisesRegex(SettingsExportError, "invalid control character"):
             _sanitize_text_field("value\\rextra", field_name="setting value")
 
+    def test_sanitize_text_field_rejects_unencodable_text(self) -> None:
+        with self.assertRaisesRegex(SettingsExportError, "invalid Unicode characters"):
+            _sanitize_text_field("value\ud800", field_name="setting value")
+
     def test_read_export_rejects_oversized_path(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "path is invalid"):
             read_export(Path("a" * (MAX_SETTINGS_EXPORT_PATH_CHARS + 1)))
@@ -168,6 +180,14 @@ class SettingsExportTest(unittest.TestCase):
         path = Path("a" * (MAX_SETTINGS_EXPORT_PATH_CHARS + 1))
         with self.assertRaisesRegex(SettingsExportError, "path is invalid"):
             write_export(path, {"language": "en"})
+
+    @mock.patch("speed_of_cinnamon.settings_export.json.dumps", return_value='{"setting":"\ud800"}')
+    def test_write_export_rejects_unencodable_rendered_payload(self, mocked_dumps: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            with self.assertRaisesRegex(SettingsExportError, "settings export payload contains invalid Unicode"):
+                write_export(path, {"language": "en"})
+        mocked_dumps.assert_called_once()
 
     def test_read_export_rejects_invalid_utf8_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -716,6 +736,14 @@ class SettingsExportTest(unittest.TestCase):
     def test_normalize_setting_rejects_boolean_numeric_field(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "must be an integer"):
             normalize_setting("typing-delay-ms", True)
+
+    def test_normalize_setting_rejects_null_text_field(self) -> None:
+        with self.assertRaisesRegex(SettingsExportError, "must be text"):
+            normalize_setting("language", None)
+
+    def test_build_export_rejects_null_text_setting_value(self) -> None:
+        with self.assertRaisesRegex(SettingsExportError, "must be text"):
+            build_export({"language": None})
 
     def test_write_export_rejects_oversized_setting_value(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

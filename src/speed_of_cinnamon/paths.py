@@ -37,6 +37,13 @@ def _contains_control_chars(value: str) -> bool:
     return any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in value)
 
 
+def _is_oversized_utf8_text(value: str, *, max_chars: int) -> bool:
+    try:
+        return len(value.encode("utf-8")) > max_chars
+    except UnicodeEncodeError:
+        return True
+
+
 def _xdg_path(environment_variable: str, default: Path) -> Path:
     if isinstance(environment_variable, bool) or not isinstance(environment_variable, str):
         raise RuntimeError("environment variable name must be text")
@@ -51,7 +58,9 @@ def _xdg_path(environment_variable: str, default: Path) -> Path:
     normalized = (value or "").strip()
     if not normalized:
         return default
-    if len(normalized) > MAX_XDG_PATH_CHARS or len(normalized.encode("utf-8")) > MAX_XDG_PATH_CHARS:
+    if len(normalized) > MAX_XDG_PATH_CHARS or _is_oversized_utf8_text(
+        normalized, max_chars=MAX_XDG_PATH_CHARS
+    ):
         return default
     candidate = Path(normalized).expanduser()
     if not candidate.is_absolute():

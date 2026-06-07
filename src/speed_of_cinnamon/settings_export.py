@@ -144,6 +144,13 @@ _ALLOWED_SETTING_TEXT_VALUES: dict[str, frozenset[str]] = {
 }
 
 
+def _utf8_byte_count(value: str, *, field_name: str) -> int:
+    try:
+        return len(value.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise SettingsExportError(f"{field_name} contains invalid Unicode characters") from exc
+
+
 class SettingsExportError(RuntimeError):
     pass
 
@@ -154,8 +161,11 @@ def _assert_clean_path(path: Path, *, field_name: str) -> None:
     text = str(path)
     if not text or len(text) > MAX_SETTINGS_EXPORT_PATH_CHARS:
         raise SettingsExportError(f"{field_name} path is invalid")
-    if len(text.encode("utf-8")) > MAX_SETTINGS_EXPORT_PATH_CHARS:
-        raise SettingsExportError(f"{field_name} path is invalid")
+    try:
+        if _utf8_byte_count(text, field_name=f"{field_name} path") > MAX_SETTINGS_EXPORT_PATH_CHARS:
+            raise SettingsExportError(f"{field_name} path is invalid")
+    except SettingsExportError as exc:
+        raise SettingsExportError(f"{field_name} path is invalid") from exc
     if _contains_escaped_null(text):
         raise SettingsExportError(f"{field_name} contains invalid null byte")
     if _contains_http_header_control_chars(text):
@@ -281,7 +291,7 @@ def _sanitize_text_field(value: object, *, field_name: str) -> str:
         raise SettingsExportError(f"{field_name} contains invalid control character")
     if len(text) > MAX_SETTINGS_TEXT_CHARS:
         raise SettingsExportError(f"{field_name} is too long")
-    if len(text.encode("utf-8")) > MAX_SETTINGS_TEXT_CHARS:
+    if _utf8_byte_count(text, field_name=field_name) > MAX_SETTINGS_TEXT_CHARS:
         raise SettingsExportError(f"{field_name} is too long (max {MAX_SETTINGS_TEXT_CHARS} bytes)")
     return text
 
@@ -343,7 +353,7 @@ def normalize_setting(key: str, value: Any) -> Any:
                 )
             return parsed
         return parsed
-    text = _sanitize_text_field(value if value is not None else default, field_name=f"setting {key}")
+    text = _sanitize_text_field(value, field_name=f"setting {key}")
     _reject_secret_bearing_url_setting(key, text)
     allowed_values = _ALLOWED_SETTING_TEXT_VALUES.get(key)
     if allowed_values is not None and text not in allowed_values:
@@ -352,10 +362,13 @@ def normalize_setting(key: str, value: Any) -> Any:
 
 
 def normalize_settings(values: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: normalize_setting(key, values.get(key, default))
-        for key, (_, default) in EXPORTABLE_SETTINGS.items()
-    }
+    normalized: dict[str, Any] = {}
+    for key, (_, default) in EXPORTABLE_SETTINGS.items():
+        if key in values:
+            normalized[key] = normalize_setting(key, values[key])
+        else:
+            normalized[key] = default
+    return normalized
 
 
 def normalize_alarm_store(value: Any) -> dict[str, Any]:
@@ -415,7 +428,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
     _assert_clean_path(path, field_name="settings export path")
     payload = build_export(settings, alarm_store)
     rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-    if len(rendered.encode("utf-8")) > MAX_SETTINGS_EXPORT_BYTES:
+    if _utf8_byte_count(rendered, field_name="settings export payload") > MAX_SETTINGS_EXPORT_BYTES:
         raise SettingsExportError(f"settings export is too large: {path}")
     parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name="settings export directory")
     temp_name = ""
@@ -458,7 +471,7 @@ def read_export(path: Path) -> dict[str, Any]:
     _assert_clean_path(path, field_name="settings export path")
     try:
         text = _read_text_capped_without_following_symlinks(path)
-        if len(text.encode("utf-8")) > MAX_SETTINGS_EXPORT_BYTES:
+        if _utf8_byte_count(text, field_name="settings export content") > MAX_SETTINGS_EXPORT_BYTES:
             raise SettingsExportError(f"settings export is too large: {path}")
         if _contains_escaped_null(text):
             raise SettingsExportError("settings export contains invalid null byte")
