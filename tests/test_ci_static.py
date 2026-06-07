@@ -844,6 +844,19 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("speed-of-cinnamon-alarms\\.1(\\.gz)?", rpm_verifier)
         self.assertIn("docs/man/speed-of-cinnamon.1", install_local)
         self.assertIn('SPEED_OF_CINNAMON_TEST_HOME:-0', install_local)
+        self.assertIn('readonly REQUIRED_TOOLS=(dirname find grep getent id mktemp realpath cut python3)', install_local)
+        self.assertIn("check_required_tools()", install_local)
+        self.assertIn("missing_tool", install_local)
+        self.assertIn("required tool missing:", install_local)
+        self.assertIn('repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"', install_local)
+        self.assertNotIn("for tool in find grep command realpath; do", install_local)
+        self.assertIn('dbus_send_command=""', install_local)
+        self.assertIn(
+            'if [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" && -n "${account_home}" && "${HOME}" == "${account_home}" ]]; then',
+            install_local,
+        )
+        self.assertIn('dbus_send_command="$(command -v -- dbus-send || true)"', install_local)
+        self.assertIn('if [[ -n "${dbus_send_command}" ]]; then', install_local)
         self.assertIn("reject_unsafe_tree()", install_local)
         self.assertIn('find "${tree}" \\( -type l -o -type f -links +1 \\) -print -quit', install_local)
         self.assertIn("reject_unsafe_file()", install_local)
@@ -1050,6 +1063,13 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("squashfs-root/meta/snap.yaml", verify_snap)
         self.assertIn("squashfs-root/bin/speed-of-cinnamon", verify_snap)
         self.assertIn("squashfs-root/src/speed_of_cinnamon/cli.py", verify_snap)
+        self.assertIn("REQUIRED_REGULAR_ENTRIES = {", verify_snap)
+        self.assertIn("for required_entry in REQUIRED_REGULAR_ENTRIES:", verify_snap)
+        self.assertIn('required entry is not regular file', verify_snap)
+        self.assertLess(
+            verify_snap.index("for required_entry in REQUIRED_REGULAR_ENTRIES:"),
+            verify_snap.index("unsquashfs -cat"),
+        )
         self.assertIn('unsquashfs -cat "${snap_snapshot}" meta/snap.yaml > "${snap_yaml}"', verify_snap)
         self.assertIn('unsquashfs -cat "${snap_snapshot}" bin/speed-of-cinnamon > "${snap_backend}"', verify_snap)
         self.assertIn("src/speed_of_cinnamon/cli.py", verify_snap)

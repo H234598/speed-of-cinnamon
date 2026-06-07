@@ -70,7 +70,7 @@ class ModelsTest(unittest.TestCase):
         self.assertTrue(any(isinstance(handler, models.urllib.request.ProxyHandler) for handler in handlers))
         self.assertTrue(any(getattr(handler, "proxies", None) == {} for handler in handlers))
 
-    def test_sha1_file_uses_cached_checksum(self) -> None:
+    def test_sha1_file_rehashes_cached_checksum_before_returning(self) -> None:
         spec = models.ModelSpec(
             name="cached",
             filename="ggml-cached.bin",
@@ -100,7 +100,7 @@ class ModelsTest(unittest.TestCase):
 
             self.assertEqual(first, second)
             self.assertEqual(first, spec.sha1)
-            self.assertEqual(sha1_ctor.call_count, 1)
+            self.assertEqual(sha1_ctor.call_count, 2)
             self.assertTrue(cache_path.exists())
             self.assertTrue(
                 any(
@@ -118,6 +118,29 @@ class ModelsTest(unittest.TestCase):
                 )
             )
             self.assertIn(spec.sha1, cache_path.read_text(encoding="utf-8"))
+
+    def test_sha1_file_ignores_poisoned_checksum_cache_digest(self) -> None:
+        payload = b"trusted model bytes"
+        expected = hashlib.sha1(payload).hexdigest()
+        poisoned = "0" * 40
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            path = Path(tmp) / "model.bin"
+            path.write_bytes(payload)
+            stat = path.stat()
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True)
+            cache_path.write_text(
+                json.dumps({str(path): {"checksum": poisoned, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}}),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(models.sha1_file(path), expected)
+            self.assertNotEqual(expected, poisoned)
 
     def test_sha1_file_rejects_hardlinked_model_file(self) -> None:
         with (
@@ -2140,7 +2163,7 @@ class ModelsTest(unittest.TestCase):
 
             self.assertEqual(path.stat().st_size, original_stat.st_size)
             self.assertEqual(path.stat().st_mtime_ns, original_stat.st_mtime_ns)
-            self.assertEqual(models.sha1_file(path), spec.sha1)
+            self.assertEqual(models.sha1_file(path), hashlib.sha1(bad_data, usedforsecurity=False).hexdigest())
             self.assertEqual(models.default_whisper_cpp_model_path(), "")
 
     def test_default_model_path_skips_english_only_model_for_non_english_language(self) -> None:

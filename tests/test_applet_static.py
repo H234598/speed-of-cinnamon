@@ -562,7 +562,7 @@ class AppletStaticTest(unittest.TestCase):
 
     def test_auto_relisten_pending_token_is_not_cleared_during_running_command(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
-        apply_index = source.index("_applyPayload: function(payload)")
+        apply_index = source.index("_applyPayload: function(payload, statusRefreshToken)")
         maybe_index = source.index("this._maybeAutoTranscribeRecorded(payload);", apply_index)
         guarded_reset = source.index(
             "if (!this.isCommandRunning && !this.autoRelistenManualStopRequested) {",
@@ -668,10 +668,33 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._statusCommandRunning = false;", source)
         self.assertIn("_refreshStatus: function() {", source)
         self.assertIn("if (this._statusCommandRunning) {", source)
+        self.assertIn("if (this.isCommandRunning) {", source)
         self.assertIn("this._statusCommandRunning = true;", source)
         self.assertIn("try {", source)
         self.assertIn("} finally {", source)
         self.assertIn("this._statusCommandRunning = false;", source)
+
+    def test_status_refresh_applies_only_latest_response(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("this._statusRefreshToken = 0;", source)
+        refresh_index = source.index("_refreshStatus: function() {")
+        self.assertIn("let statusRefreshToken = ++this._statusRefreshToken;", source[refresh_index:source.index("},", refresh_index)])
+        self.assertIn("this._applyPayload(payload, statusRefreshToken);", source[refresh_index:source.index("},", refresh_index)])
+
+        apply_index = source.index("_applyPayload: function(payload, statusRefreshToken) {")
+        self.assertIn("if (typeof statusRefreshToken === \"number\" && statusRefreshToken !== this._statusRefreshToken) {", source)
+        guard_return = source.index("return;", apply_index)
+        guard_end = source.index("let status = payload.status", apply_index)
+        self.assertLess(guard_return, guard_end)
+        self.assertIn('if (typeof statusRefreshToken !== "number") {', source[apply_index:guard_end])
+        self.assertIn("this._statusRefreshToken++;", source[apply_index:guard_end])
+
+        spawn_index = source.index("_spawnJson: function(args, callback, options) {")
+        spawn_end = source.index("_spawnText: function(args, callback, options) {", spawn_index)
+        self.assertIn("_isStatusCommandArgs: function(args) {", source[:spawn_index])
+        self.assertIn("if (!this._isStatusCommandArgs(normalizedArgs)) {", source[spawn_index:spawn_end])
+        self.assertIn("this._statusRefreshToken++;", source[spawn_index:spawn_end])
 
     def test_status_checks_use_spawn_json_timeout(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -1094,7 +1117,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._restoreTargetWindowForPaste()", source)
         self.assertIn('this._pasteClipboardAfterFocus(submitWithReturn, text)', source)
         self.assertIn(
-            'this._setStatus("done", _("Copied to clipboard; target window could not be restored for automatic paste"), transcript);',
+            'this._setStatus("error", _("Target window could not be restored for automatic paste"), transcript);',
             source,
         )
         self.assertIn('this._setStatus("error", _("Target window unavailable for direct typing"), transcript);', source)
@@ -1130,6 +1153,10 @@ class AppletStaticTest(unittest.TestCase):
         duplicate_finish_index = source.index("this._finishPendingRelisten();", duplicate_index)
         duplicate_return_index = source.index("return;", duplicate_index)
         self.assertLess(duplicate_finish_index, duplicate_return_index)
+        self.assertIn(
+            "if (!completed) {\n          this._forgetAutoInsertFingerprint(insertFingerprint);\n        }",
+            source,
+        )
         self.assertIn("_hasAutoInsertFingerprint: function(fingerprint)", source)
         self.assertIn("_reserveAutoInsertFingerprint: function(fingerprint)", source)
         self.assertIn("_rememberAutoInsertFingerprint: function(fingerprint)", source)
@@ -1183,13 +1210,23 @@ class AppletStaticTest(unittest.TestCase):
 
     def test_manual_relisten_stop_finishes_recording_that_started_while_command_was_running(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
-        apply_index = source.index("_applyPayload: function(payload)")
+        apply_index = source.index("_applyPayload: function(payload, statusRefreshToken)")
         apply_end = source.index("_applyMicrophoneLevel: function", apply_index)
 
         self.assertIn('(payload.status === "recording" || payload.status === "recorded")', source[apply_index:apply_end])
         self.assertIn("this.autoRelistenManualStopRequested &&", source[apply_index:apply_end])
         self.assertIn("this._toggleRecording();", source[apply_index:apply_end])
         self.assertIn("if (!this.isCommandRunning && !this.autoRelistenManualStopRequested) {", source[apply_index:apply_end])
+
+    def test_apply_payload_does_not_clear_manual_relisten_stop_for_payload_error(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        apply_index = source.index("_applyPayload: function(payload, statusRefreshToken) {")
+        error_index = source.index("if (payload.error) {", apply_index)
+        error_end = source.index("let hasTranscript", error_index)
+        error_block = source[error_index:error_end]
+
+        self.assertIn("if (payload.error) {", error_block)
+        self.assertNotIn("this.autoRelistenManualStopRequested = false;", error_block)
 
     def test_failed_relisten_restart_clears_pending_token(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -1420,7 +1457,14 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("nonTextTargets.slice(0, 6).join(\", \")", source)
         self.assertIn("this._shortMenuText(description, 160)", source)
         self.assertIn("_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn)", source)
-        self.assertIn('if (!this._closeMenuForKeyboardInsert()) {\n        this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);\n        return false;\n      }\n      let restored = this._restoreTargetWindowForPaste();', source)
+        copy_index = source.index("_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn)")
+        copy_end = source.index("_confirmClipboardOverwriteForPaste: function", copy_index)
+        copy_body = source[copy_index:copy_end]
+        restore_index = copy_body.index("let restored = this._restoreTargetWindowForPaste();")
+        guarded_clipboard_index = copy_body.index("this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);", restore_index)
+        self.assertIn('this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);', copy_body)
+        self.assertIn('this._setStatus("error", _("Target window could not be restored for automatic paste"), transcript);', copy_body)
+        self.assertLess(restore_index, guarded_clipboard_index)
         self.assertIn('  _describeNonTextClipboardPayload: function() {', source)
         self.assertIn('_confirmClipboardOverwriteForPaste: function(clipboardSnapshot, transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback)', source)
         self.assertIn('if (method === "clipboard-paste" && !canPasteWithKeyboard) {', source)
@@ -1476,6 +1520,32 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (!dialog.open()) {', source)
         self.assertIn('this._setStatus("error", _("Clipboard overwrite prompt could not be opened"), transcript);', source)
         self.assertIn("if (result === null) {\n        return;\n      }", source)
+
+    def test_applet_prevents_false_success_when_automatic_paste_could_not_start(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        fn_index = source.index(
+            "_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn)"
+        )
+        confirm_index = source.index(
+            "_confirmClipboardOverwriteForPaste: function(clipboardSnapshot, transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback)",
+            fn_index,
+        )
+        fn_body = source[fn_index:confirm_index]
+
+        close_menu_index = fn_body.index("if (!this._closeMenuForKeyboardInsert()) {")
+        restore_index = fn_body.index("let restored = this._restoreTargetWindowForPaste();")
+        paste_command_index = fn_body.index('if (this._pasteClipboardAfterFocus(submitWithReturn, text)) {')
+
+        self.assertNotIn("this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);", fn_body[close_menu_index:restore_index])
+        self.assertIn("this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);", fn_body[restore_index:paste_command_index])
+        self.assertIn(
+            'if (!restored) {\n      this._setStatus("error", _("Target window could not be restored for automatic paste"), transcript);\n      return false;\n    }',
+            fn_body,
+        )
+        self.assertIn(
+            'this._setStatus("done", _("Copied to clipboard; automatic paste command could not be started"), transcript);\n    return false;',
+            fn_body,
+        )
 
     def test_history_entries_can_be_copied_or_inserted(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

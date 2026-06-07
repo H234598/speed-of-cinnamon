@@ -441,6 +441,7 @@ MyApplet.prototype = {
     this.lastTranscript = "";
     this.lastMessage = "";
     this.isCommandRunning = false;
+    this._statusRefreshToken = 0;
     this._statusCommandRunning = false;
     this._doctorCommandRunning = false;
     this.microphoneLevel = null;
@@ -2089,10 +2090,14 @@ MyApplet.prototype = {
     if (this._statusCommandRunning) {
       return;
     }
+    if (this.isCommandRunning) {
+      return;
+    }
     this._statusCommandRunning = true;
+    let statusRefreshToken = ++this._statusRefreshToken;
     this._spawnJson(this._statusArgs(), (payload) => {
       try {
-        this._applyPayload(payload);
+        this._applyPayload(payload, statusRefreshToken);
       } finally {
         this._statusCommandRunning = false;
       }
@@ -4286,6 +4291,18 @@ MyApplet.prototype = {
     });
   },
 
+  _isStatusCommandArgs: function(args) {
+    if (!Array.isArray(args)) {
+      return false;
+    }
+    for (let i = 0; i < args.length; i++) {
+      if (String(args[i] || "") === "status") {
+        return true;
+      }
+    }
+    return false;
+  },
+
   _spawnJson: function(args, callback, options) {
     options = options || {};
     let timeoutId = 0;
@@ -4316,6 +4333,9 @@ MyApplet.prototype = {
 
     try {
       normalizedArgs = this._coerceSpawnArgs(args);
+      if (!this._isStatusCommandArgs(normalizedArgs)) {
+        this._statusRefreshToken++;
+      }
       let timeoutMs = Object.prototype.hasOwnProperty.call(options, "timeoutMs")
         ? Number(options.timeoutMs)
         : CLI_COMMAND_TIMEOUT_MS;
@@ -4401,7 +4421,13 @@ MyApplet.prototype = {
     }
   },
 
-  _applyPayload: function(payload) {
+  _applyPayload: function(payload, statusRefreshToken) {
+    if (typeof statusRefreshToken === "number" && statusRefreshToken !== this._statusRefreshToken) {
+      return;
+    }
+    if (typeof statusRefreshToken !== "number") {
+      this._statusRefreshToken++;
+    }
     let status = payload.status || (payload.error ? "error" : "idle");
     this._applyPayloadLanguage(payload);
     this._updateRecordingTiming(payload, status);
@@ -4409,7 +4435,6 @@ MyApplet.prototype = {
     if (payload.error) {
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
-      this.autoRelistenManualStopRequested = false;
       this._setStatus("error", payload.error, this.lastTranscript);
       this._maybeWarnRejectedArtifactPassphrase(payload.error);
       return;
@@ -5209,30 +5234,32 @@ MyApplet.prototype = {
   },
 
   _copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn) {
-    this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
     if (method === "clipboard") {
+      this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
       this._setStatus("done", _("Copied to clipboard"), transcript);
       return true;
     }
-    if (canPasteWithKeyboard) {
-      if (!this._closeMenuForKeyboardInsert()) {
-        this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);
-        return false;
-      }
-      let restored = this._restoreTargetWindowForPaste();
-      if (!restored) {
-        this._setStatus("done", _("Copied to clipboard; target window could not be restored for automatic paste"), transcript);
-        return true;
-      }
-      if (this._pasteClipboardAfterFocus(submitWithReturn, text)) {
-        this._setStatus("done", restored ? _("Copied and pasted into target window") : _("Copied and pasted"), transcript);
-      } else {
-        this._setStatus("done", _("Copied to clipboard; automatic paste command could not be started"), transcript);
-      }
+    if (!canPasteWithKeyboard) {
+      this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
+      this._setStatus("done", _("Copied to clipboard; install xdotool or wtype for automatic paste"), transcript);
       return true;
     }
-    this._setStatus("done", _("Copied to clipboard; install xdotool or wtype for automatic paste"), transcript);
-    return true;
+    if (!this._closeMenuForKeyboardInsert()) {
+      this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);
+      return false;
+    }
+    let restored = this._restoreTargetWindowForPaste();
+    if (!restored) {
+      this._setStatus("error", _("Target window could not be restored for automatic paste"), transcript);
+      return false;
+    }
+    this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
+    if (this._pasteClipboardAfterFocus(submitWithReturn, text)) {
+      this._setStatus("done", _("Copied and pasted into target window"), transcript);
+      return true;
+    }
+    this._setStatus("done", _("Copied to clipboard; automatic paste command could not be started"), transcript);
+    return false;
   },
 
   _confirmClipboardOverwriteForPaste: function(clipboardSnapshot, transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback) {

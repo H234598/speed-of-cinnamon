@@ -30,6 +30,7 @@ from .path_safety import (
     assert_fd_is_regular_private_file,
     assert_no_symlink_ancestors,
     ensure_directory_without_following_symlinks,
+    open_directory_without_following_symlinks,
     open_file_without_following_symlinks,
     read_text_without_following_symlinks,
     write_bytes_atomically_without_following_symlinks,
@@ -511,7 +512,7 @@ class TranscriberConfig:
     language: str = "en"
 
 
-def validate_audio_file(path: Path) -> Path:
+def _validate_audio_path_shape(path: Path) -> Path:
     if not isinstance(path, Path):
         raise TranscriptionError("audio path must be a Path")
     if _contains_escaped_null(str(path)):
@@ -537,14 +538,23 @@ def validate_audio_file(path: Path) -> Path:
         raise TranscriptionError(f"audio file stem is too long: {path}")
     if len(normalized.stem.encode("utf-8")) > MAX_AUDIO_STEM_CHARS:
         raise TranscriptionError(f"audio file stem is too long: {path}")
+    return normalized
+
+
+def _validate_audio_extension(path: Path) -> None:
+    if path.suffix.lower() not in ALLOWED_AUDIO_EXTENSIONS:
+        raise TranscriptionError(f"unsupported audio extension: {path.suffix}")
+
+
+def validate_audio_file(path: Path) -> Path:
+    normalized = _validate_audio_path_shape(path)
     try:
         stat_result = normalized.stat()
     except OSError as exc:
         raise TranscriptionError(f"audio file is missing or empty: {path}") from exc
     if not stat_module.S_ISREG(stat_result.st_mode):
         raise TranscriptionError(f"audio path is not a regular file: {path}")
-    if normalized.suffix.lower() not in ALLOWED_AUDIO_EXTENSIONS:
-        raise TranscriptionError(f"unsupported audio extension: {normalized.suffix}")
+    _validate_audio_extension(normalized)
     if stat_result.st_size == 0:
         raise TranscriptionError(f"audio file is missing or empty: {path}")
     if stat_result.st_size > MAX_AUDIO_FILE_BYTES:
@@ -554,39 +564,87 @@ def validate_audio_file(path: Path) -> Path:
     return normalized
 
 
-def _read_private_file_bytes(path: Path, *, field_name: str, max_bytes: int | None = None) -> bytes:
+def _read_private_file_bytes(
+    path: Path,
+    *,
+    field_name: str,
+    max_bytes: int | None = None,
+    expected_snapshot: tuple[int, int, int, int, int] | None = None,
+) -> bytes:
+    if not isinstance(path, Path):
+        raise TranscriptionError("path must be a Path")
     if max_bytes is not None and (isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0):
         raise TranscriptionError("max_bytes must be a non-negative integer")
+    if isinstance(field_name, bool) or not isinstance(field_name, str):
+        raise TranscriptionError("field_name must be text")
+    if expected_snapshot is not None and (
+        not isinstance(expected_snapshot, tuple)
+        or len(expected_snapshot) != 5
+        or any(isinstance(part, bool) or not isinstance(part, int) for part in expected_snapshot)
+    ):
+        raise TranscriptionError(f"failed to read {field_name}: {path}")
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
         raise TranscriptionError(f"secure {field_name} open is not supported on this platform")
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
-    try:
-        assert_no_symlink_ancestors(path, field_name=field_name)
-    except RuntimeError as exc:
-        raise TranscriptionError(f"failed to read {field_name}: {path}") from exc
     fd: int | None = None
+    parent_fd: int | None = None
+
+    def _snapshot_fd(fd: int) -> tuple[int, int, int, int, int]:
+        file_stat = os.fstat(fd)
+        return (
+            file_stat.st_dev,
+            file_stat.st_ino,
+            file_stat.st_mode,
+            getattr(file_stat, "st_nlink", 1),
+            file_stat.st_size,
+        )
+
     try:
-        fd = os.open(path, os.O_RDONLY | nofollow_flag | nonblock_flag)
+        parent_fd = open_directory_without_following_symlinks(path.parent, field_name=f"{field_name} directory")
+        fd = os.open(path.name, os.O_RDONLY | nofollow_flag | nonblock_flag, dir_fd=parent_fd)
         assert_fd_is_regular_private_file(fd, field_name=field_name)
+        observed_snapshot = _snapshot_fd(fd)
+        if expected_snapshot is not None and observed_snapshot != expected_snapshot:
+            raise TranscriptionError(f"{field_name} changed between validation and read")
     except OSError as exc:
+        if parent_fd is not None:
+            with suppress(OSError):
+                os.close(parent_fd)
+            parent_fd = None
         raise TranscriptionError(f"failed to read {field_name}: {path}") from exc
+    except TranscriptionError:
+        if fd is not None:
+            with suppress(OSError):
+                os.close(fd)
+            fd = None
+        if parent_fd is not None:
+            with suppress(OSError):
+                os.close(parent_fd)
+            parent_fd = None
+        raise
     except RuntimeError as exc:
         if fd is not None:
-            try:
+            with suppress(OSError):
                 os.close(fd)
-            except OSError:
-                pass
+            fd = None
+        if parent_fd is not None:
+            with suppress(OSError):
+                os.close(parent_fd)
+            parent_fd = None
         raise TranscriptionError(f"failed to read {field_name}: {path}") from exc
     try:
         handle = os.fdopen(fd, "rb")
         fd = None
     except OSError as exc:
         if fd is not None:
-            try:
+            with suppress(OSError):
                 os.close(fd)
-            except OSError:
-                pass
+            fd = None
+        if parent_fd is not None:
+            with suppress(OSError):
+                os.close(parent_fd)
+            parent_fd = None
         raise TranscriptionError(f"failed to read {field_name}: {path}") from exc
     try:
         if max_bytes is None:
@@ -599,6 +657,57 @@ def _read_private_file_bytes(path: Path, *, field_name: str, max_bytes: int | No
         raise TranscriptionError(f"failed to read {field_name}: {path}") from exc
     finally:
         handle.close()
+        if parent_fd is not None:
+            with suppress(OSError):
+                os.close(parent_fd)
+
+
+def _snapshot_private_file(path: Path, *, field_name: str) -> tuple[int, int, int, int, int]:
+    if not isinstance(path, Path):
+        raise TranscriptionError("path must be a Path")
+    if isinstance(field_name, bool) or not isinstance(field_name, str):
+        raise TranscriptionError("field_name must be text")
+    try:
+        assert_no_symlink_ancestors(path, field_name=field_name)
+    except RuntimeError as exc:
+        raise TranscriptionError(f"failed to snapshot {field_name}: {path}") from exc
+    nonblock_flag = getattr(os, "O_NONBLOCK", 0)
+    fd: int | None = None
+    file_stat: os.stat_result | None = None
+    try:
+        fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name=field_name)
+        assert_fd_is_regular_private_file(fd, field_name=field_name)
+        file_stat = os.fstat(fd)
+    except OSError as exc:
+        raise TranscriptionError(f"failed to snapshot {field_name}: {path}") from exc
+    except RuntimeError as exc:
+        raise TranscriptionError(f"failed to snapshot {field_name}: {path}") from exc
+    finally:
+        if fd is not None:
+            with suppress(OSError):
+                os.close(fd)
+    return (
+        file_stat.st_dev,
+        file_stat.st_ino,
+        file_stat.st_mode,
+        getattr(file_stat, "st_nlink", 1),
+        file_stat.st_size,
+    )
+
+
+def _validate_audio_file_for_upload(path: Path) -> tuple[Path, tuple[int, int, int, int, int]]:
+    normalized = _validate_audio_path_shape(path)
+    snapshot = _snapshot_private_file(normalized, field_name="audio file for API upload")
+    if not stat_module.S_ISREG(snapshot[2]):
+        raise TranscriptionError(f"audio path is not a regular file: {path}")
+    _validate_audio_extension(normalized)
+    if snapshot[4] == 0:
+        raise TranscriptionError(f"audio file is missing or empty: {path}")
+    if snapshot[4] > MAX_AUDIO_FILE_BYTES:
+        raise TranscriptionError(
+            f"audio file is too large: {snapshot[4]} bytes (max {MAX_AUDIO_FILE_BYTES})"
+        )
+    return normalized, snapshot
 
 
 def _assert_text_length(value: str, *, field_name: str, max_chars: int | None = None) -> str:
@@ -753,19 +862,13 @@ def transcribe_with_openai_whisper(
                 if existing_snapshot is not None:
                     _restore_existing_file_snapshot(generated, existing_snapshot)
                 else:
-                    try:
-                        _remove_generated_transcript_file(generated, field_name="generated transcript")
-                    except (OSError, TranscriptionError):
-                        pass
+                    _remove_generated_transcript_file(generated, field_name="generated transcript")
                 raise
             if not write_transcript:
                 if existing_snapshot is not None:
                     _restore_existing_file_snapshot(generated, existing_snapshot)
                 else:
-                    try:
-                        _remove_generated_transcript_file(generated, field_name="generated transcript")
-                    except (OSError, TranscriptionError):
-                        pass
+                    _remove_generated_transcript_file(generated, field_name="generated transcript")
             return text
         primary_error: BaseException | None = None
         try:
@@ -875,19 +978,13 @@ def transcribe_with_whisper_cpp(
                 if existing_snapshot is not None:
                     _restore_existing_file_snapshot(generated_path, existing_snapshot)
                 else:
-                    try:
-                        _remove_generated_transcript_file(generated_path, field_name="generated sidecar")
-                    except (OSError, TranscriptionError):
-                        pass
+                    _remove_generated_transcript_file(generated_path, field_name="generated sidecar")
                 raise
             if not write_transcript:
                 if existing_snapshot is not None:
                     _restore_existing_file_snapshot(generated_path, existing_snapshot)
                 else:
-                    try:
-                        _remove_generated_transcript_file(generated_path, field_name="generated sidecar")
-                    except (OSError, TranscriptionError):
-                        pass
+                    _remove_generated_transcript_file(generated_path, field_name="generated sidecar")
             return text
         primary_error: BaseException | None = None
         try:
@@ -1092,6 +1189,7 @@ def _multipart_form_data(
     fields: dict[str, str],
     file_field: str,
     file_path: Path,
+    expected_file_snapshot: tuple[int, int, int, int, int] | None = None,
 ) -> tuple[bytearray, str]:
     boundary = "speed-of-cinnamon-" + uuid.uuid4().hex
     body = bytearray()
@@ -1104,6 +1202,7 @@ def _multipart_form_data(
             file_path,
             field_name="audio file for API upload",
             max_bytes=MAX_AUDIO_FILE_BYTES,
+            expected_snapshot=expected_file_snapshot,
         )
     except TranscriptionError as exc:
         raise TranscriptionError(str(exc)) from exc
@@ -1139,7 +1238,7 @@ def transcribe_with_openai_compatible_api(
     write_transcript: bool = True,
     openai_compatible_service_tier_fallback: bool = False,
 ) -> str:
-    audio_path = validate_audio_file(audio_path)
+    audio_path, audio_snapshot = _validate_audio_file_for_upload(audio_path)
     if _contains_escaped_null(model):
         raise TranscriptionError("OpenAI-compatible speech model contains invalid null byte")
     if _contains_http_header_control_chars(model):
@@ -1184,7 +1283,12 @@ def transcribe_with_openai_compatible_api(
     allow_service_tier_fallback = use_flex_processing and openai_compatible_service_tier_fallback
 
     def _request_transcription(request_fields: dict[str, str]) -> str:
-        body, boundary = _multipart_form_data(request_fields, "file", audio_path)
+        body, boundary = _multipart_form_data(
+            request_fields,
+            "file",
+            audio_path,
+            expected_file_snapshot=audio_snapshot,
+        )
         headers = {
             "Content-Type": f"multipart/form-data; boundary={boundary}",
             "Accept": "application/json",

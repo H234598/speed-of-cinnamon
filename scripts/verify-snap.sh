@@ -176,6 +176,10 @@ REQUIRED_ENTRIES = {
     "squashfs-root/bin/speed-of-cinnamon",
     "squashfs-root/src/speed_of_cinnamon/cli.py",
 }
+REQUIRED_REGULAR_ENTRIES = {
+    "squashfs-root/meta/snap.yaml",
+    "squashfs-root/bin/speed-of-cinnamon",
+}
 
 
 def contains_unsafe_text(value: str) -> bool:
@@ -208,7 +212,7 @@ def validate_symlink_target(path: PurePosixPath, target_text: str) -> None:
         raise SystemExit(f"snap package contains unsafe link target: {path} -> {target_text}")
 
 
-seen: set[str] = set()
+seen: dict[str, str] = {}
 for raw in Path(sys.argv[1]).read_text(encoding="utf-8").split("\n"):
     if not raw:
         continue
@@ -230,7 +234,7 @@ for raw in Path(sys.argv[1]).read_text(encoding="utf-8").split("\n"):
         validate_symlink_target(path, link_target)
     if path_text in seen:
         raise SystemExit(f"snap package contains duplicate entry: {path_text}")
-    seen.add(path_text)
+    seen[path_text] = mode
     try:
         size = int(size_text)
     except ValueError:
@@ -238,9 +242,13 @@ for raw in Path(sys.argv[1]).read_text(encoding="utf-8").split("\n"):
     if size < 0:
         raise SystemExit(f"snap package contains negative entry size for {path_text}: {size_text}")
 
-missing = REQUIRED_ENTRIES - seen
+missing = REQUIRED_ENTRIES - seen.keys()
 if missing:
     raise SystemExit(f"snap package is missing required entries: {sorted(missing)}")
+
+for required_entry in REQUIRED_REGULAR_ENTRIES:
+    if seen[required_entry][0] != "-":
+        raise SystemExit(f"snap package required entry is not regular file: {required_entry} ({seen[required_entry]})")
 PY
 
 snap_yaml="${tmp_dir}/snap.yaml"

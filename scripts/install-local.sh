@@ -5,8 +5,29 @@ IFS=$'\n\t'
 readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export PATH="${TRUSTED_COMMAND_PATH}"
 
-repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly REQUIRED_TOOLS=(dirname find grep getent id mktemp realpath cut python3)
+
+check_required_tools() {
+  local missing_tool
+  local tool
+
+  for tool in "${REQUIRED_TOOLS[@]}"; do
+    if ! command -v -- "${tool}" >/dev/null 2>&1; then
+      missing_tool=1
+      printf 'required tool missing: %s\n' "${tool}" >&2
+    fi
+  done
+
+  if [[ "${missing_tool:-0}" != "0" ]]; then
+    exit 1
+  fi
+}
+
+check_required_tools
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 uuid="speed-of-cinnamon@H234598"
+
 if [[ -z "${HOME:-}" ]]; then
   printf 'HOME must be set.\n' >&2
   exit 1
@@ -20,6 +41,15 @@ if [[ "${SPEED_OF_CINNAMON_TEST_HOME:-0}" != "1" && ( -z "${account_home}" || "$
   printf 'Refusing to run with mismatched HOME: %s (expected %s).\n' "${HOME}" "${account_home}" >&2
   exit 1
 fi
+
+dbus_send_command=""
+if [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" && -n "${account_home}" && "${HOME}" == "${account_home}" ]]; then
+  dbus_send_command="$(command -v -- dbus-send || true)"
+  if [[ -z "${dbus_send_command}" ]]; then
+    printf 'dbus-send not available; Cinnamon applet reload will be skipped.\n' >&2
+  fi
+fi
+
 if [[ -L "${HOME}" ]]; then
   printf 'HOME must not be a symlink: %s\n' "${HOME}" >&2
   exit 1
@@ -32,12 +62,6 @@ if [[ ! -d "${HOME}" ]]; then
   printf 'HOME must be an existing directory: %s\n' "${HOME}" >&2
   exit 1
 fi
-for tool in find grep command realpath; do
-  if ! command -v -- "${tool}" >/dev/null 2>&1; then
-    printf '%s not found.\n' "${tool}" >&2
-    exit 1
-  fi
-done
 resolve_python3() {
   local candidate
   local resolved
@@ -322,9 +346,8 @@ if ! command -v -- whisper >/dev/null 2>&1 \
     printf 'ASR backend missing. On Fedora install python3-pywhispercpp, then run: speed-of-cinnamon download-model tiny --json\n'
 fi
 account_home="$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f6 || true)"
-if [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" && -n "${account_home}" && "${HOME}" == "${account_home}" ]] \
-    && command -v -- dbus-send >/dev/null 2>&1; then
-    if dbus-send --session --dest=org.Cinnamon.LookingGlass --type=method_call \
+if [[ -n "${dbus_send_command}" ]]; then
+    if "${dbus_send_command}" --session --dest=org.Cinnamon.LookingGlass --type=method_call \
         /org/Cinnamon/LookingGlass org.Cinnamon.LookingGlass.ReloadExtension \
         string:"${uuid}" string:'APPLET' >/dev/null 2>&1; then
         printf 'Reloaded Cinnamon applet %s\n' "${uuid}"

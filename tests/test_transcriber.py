@@ -592,6 +592,24 @@ class TranscriberTest(unittest.TestCase):
                     max_bytes=4,
                 )
 
+    @mock.patch("speed_of_cinnamon.transcriber.os.open", wraps=transcriber_module.os.open)
+    def test_read_private_file_bytes_opens_file_relative_to_parent_fd(self, mocked_open: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.wav"
+            path.write_bytes(b"audio")
+            data = transcriber_module._read_private_file_bytes(path, field_name="audio file for API upload")
+        self.assertEqual(data, b"audio")
+        self.assertTrue(
+            any(
+                isinstance(args[0], str)
+                and args[0] == path.name
+                and "dir_fd" in kwargs
+                and isinstance(kwargs.get("dir_fd"), int)
+                and (args[1] & os.O_NOFOLLOW if len(args) > 1 else 0)
+                for args, kwargs in mocked_open.call_args_list
+            )
+        )
+
     def test_validate_audio_file_rejects_oversized_path_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ("😀" * ((MAX_AUDIO_PATH_CHARS // 4) + 1))
@@ -808,6 +826,33 @@ class TranscriberTest(unittest.TestCase):
 
             self.assertEqual(result, "hello whisper")
             self.assertFalse(text.exists())
+
+    def test_openai_whisper_fails_when_cleanup_fails_with_write_transcript_false(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0] if args else kwargs["args"]
+            assert isinstance(command, list)
+            output_dir = Path(command[command.index("--output_dir") + 1])
+            (output_dir / "sample.txt").write_text("hello whisper\n", encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text = Path(tmp) / "sample.txt"
+
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.shutil.which", return_value="/usr/bin/whisper"),
+                mock.patch("speed_of_cinnamon.transcriber._run_transcriber_process", side_effect=fake_run),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._remove_generated_transcript_file",
+                    side_effect=TranscriptionError("failed to remove generated transcript"),
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    TranscriptionError,
+                    "failed to remove generated transcript",
+                ):
+                    transcribe_with_openai_whisper(audio, "en", text, write_transcript=False)
 
     def test_openai_whisper_keeps_existing_matching_text_path_when_not_writing(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
@@ -1264,6 +1309,33 @@ class TranscriberTest(unittest.TestCase):
 
             self.assertEqual(result, "hallo cinnamon")
             self.assertFalse(text.exists())
+
+    def test_whisper_cpp_fails_when_cleanup_fails_with_write_transcript_false(self) -> None:
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            text.write_text("hallo cinnamon\n", encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text = Path(tmp) / "sample.txt"
+            model = Path(tmp) / "ggml-base.bin"
+            model.write_bytes(b"model")
+
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.resolve_whisper_cpp_command", return_value="whisper-cli"),
+                mock.patch("speed_of_cinnamon.transcriber.shutil.which", return_value="/usr/bin/whisper-cli"),
+                mock.patch("speed_of_cinnamon.transcriber._run_transcriber_process", side_effect=fake_run),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._remove_generated_transcript_file",
+                    side_effect=TranscriptionError("failed to remove generated transcript"),
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    TranscriptionError,
+                    "failed to remove generated transcript",
+                ):
+                    transcribe_with_whisper_cpp(audio, "de", text, str(model), write_transcript=False)
 
     def test_whisper_cpp_keeps_existing_text_path_when_not_writing(self) -> None:
         def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
@@ -1774,6 +1846,44 @@ class TranscriberTest(unittest.TestCase):
                     "gpt-4o-transcribe",
                     "https://api.openai.com/v1",
                 )
+
+    def test_openai_compatible_api_rejects_audio_path_swap_between_validation_and_upload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            replacement = Path(tmp) / "replacement.wav"
+            replacement.write_bytes(b"replacement")
+            snapshot_calls: list[tuple[Path, str]] = []
+            real_snapshot = transcriber_module._snapshot_private_file
+
+            def snapshot_and_swap(path: Path, *, field_name: str) -> tuple[int, int, int, int, int]:
+                snapshot_calls.append((path, field_name))
+                snapshot = real_snapshot(path, field_name=field_name)
+                replacement.replace(path)
+                return snapshot
+
+            def blocked_request(*_args: object, **_kwargs: object) -> object:
+                self.fail("request should not be made after upload path swap")
+
+            with (
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._snapshot_private_file",
+                    side_effect=snapshot_and_swap,
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._open_http_request",
+                    side_effect=blocked_request,
+                ),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "changed between validation and read"):
+                    transcribe_with_openai_compatible_api(
+                        audio,
+                        "de",
+                        Path(tmp) / "sample.txt",
+                        "gpt-4o-transcribe",
+                        "https://api.openai.com/v1",
+                    )
+        self.assertEqual(snapshot_calls, [(audio, "audio file for API upload")])
 
     def test_openai_compatible_api_requires_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

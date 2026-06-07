@@ -292,17 +292,6 @@ def _cached_or_computed_sha1(path: Path) -> str:
     try:
         with os.fdopen(fd, "rb") as handle:
             info = os.fstat(handle.fileno())
-            key = str(path)
-            cached = _model_checksum_cache.get(key)
-            if (
-                isinstance(cached, dict)
-                and cached.get("size") == info.st_size
-                and cached.get("mtime_ns") == info.st_mtime_ns
-            ):
-                checksum = cached.get("checksum")
-                if isinstance(checksum, str):
-                    return checksum
-
             digest = hashlib.sha1(usedforsecurity=False)
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
