@@ -254,7 +254,10 @@ def _completed_output_bytes(value: object, *, field_name: str) -> bytes:
     if isinstance(value, bytes):
         payload = value
     elif isinstance(value, str):
-        payload = value.encode("utf-8")
+        try:
+            payload = value.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise RecorderError(f"ffmpeg command {field_name} contains invalid UTF-8") from exc
     else:
         return b""
     if len(payload) > MAX_FFMPEG_OUTPUT_BYTES:
@@ -834,9 +837,13 @@ def _assert_valid_input_device(value: str) -> None:
         raise RecorderError("recording input device contains invalid null byte")
     if _contains_http_header_control_chars(value):
         raise RecorderError("recording input device contains invalid control character")
+    try:
+        encoded_value = value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise RecorderError("recording input device contains invalid UTF-8") from exc
     if len(value) > MAX_RECORDING_INPUT_DEVICE_CHARS:
         raise RecorderError("recording input device name is too long")
-    if len(value.encode("utf-8")) > MAX_RECORDING_INPUT_DEVICE_CHARS:
+    if len(encoded_value) > MAX_RECORDING_INPUT_DEVICE_CHARS:
         raise RecorderError(f"recording input device name is too long (max {MAX_RECORDING_INPUT_DEVICE_CHARS} bytes)")
 
 
@@ -956,24 +963,44 @@ def validate_recording_path(
         raise RecorderError("recording artifact path must be a path")
     normalized_suffixes = _normalize_suffixes(suffix)
     path_text = str(path)
+    try:
+        path_text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise RecorderError("recording artifact path contains invalid UTF-8") from exc
     if _contains_escaped_null(path_text):
         raise RecorderError("recording artifact path contains invalid null byte")
     if _contains_http_header_control_chars(path_text):
         raise RecorderError("recording artifact path contains invalid control character")
     normalized = path.expanduser()
+    try:
+        str(normalized).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise RecorderError("recording artifact path contains invalid UTF-8") from exc
     assert_no_symlink_ancestors(normalized, field_name="recording artifact path")
     normalized = normalized.resolve(strict=False)
     if len(str(normalized)) > MAX_RECORDING_PATH_CHARS:
         raise RecorderError("recording artifact path is too long")
-    if len(str(normalized).encode("utf-8")) > MAX_RECORDING_PATH_CHARS:
+    try:
+        normalized_bytes = str(normalized).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise RecorderError("recording artifact path contains invalid UTF-8") from exc
+    if len(normalized_bytes) > MAX_RECORDING_PATH_CHARS:
         raise RecorderError(f"recording artifact path is too long (max {MAX_RECORDING_PATH_CHARS} bytes)")
     if len(normalized.name) > MAX_RECORDING_PATH_CHARS:
         raise RecorderError("recording artifact file name is too long")
-    if len(normalized.name.encode("utf-8")) > MAX_RECORDING_PATH_CHARS:
+    try:
+        normalized_name_bytes = normalized.name.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise RecorderError("recording artifact path contains invalid UTF-8") from exc
+    if len(normalized_name_bytes) > MAX_RECORDING_PATH_CHARS:
         raise RecorderError("recording artifact file name is too long")
     if len(normalized.stem) > MAX_RECORDING_STEM_CHARS:
         raise RecorderError("recording artifact stem is too long")
-    if len(normalized.stem.encode("utf-8")) > MAX_RECORDING_STEM_CHARS:
+    try:
+        normalized_stem_bytes = normalized.stem.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise RecorderError("recording artifact path contains invalid UTF-8") from exc
+    if len(normalized_stem_bytes) > MAX_RECORDING_STEM_CHARS:
         raise RecorderError(f"recording artifact stem is too long (max {MAX_RECORDING_STEM_CHARS} bytes)")
     if normalized.suffix.lower() not in normalized_suffixes:
         if len(normalized_suffixes) == 1:

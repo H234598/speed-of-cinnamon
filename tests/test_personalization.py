@@ -32,6 +32,10 @@ class PersonalizationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be text"):
             normalize_context(123)  # type: ignore[arg-type]
 
+    def test_context_rejects_surrogate_characters(self) -> None:
+        with self.assertRaisesRegex(ValueError, "contains invalid UTF-8"):
+            normalize_context("bad\ud800text")
+
     def test_context_rejects_oversized_input(self) -> None:
         with self.assertRaisesRegex(ValueError, "personal context is too large"):
             normalize_context("x" * (MAX_PERSONAL_CONTEXT_CHARS + 1))
@@ -59,6 +63,10 @@ class PersonalizationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be text"):
             vocabulary_terms(True)  # type: ignore[arg-type]
 
+    def test_vocabulary_rejects_surrogate_characters(self) -> None:
+        with self.assertRaisesRegex(ValueError, "contains invalid UTF-8"):
+            vocabulary_terms("bad\ud800text")
+
     def test_vocabulary_rejects_oversized_input(self) -> None:
         with self.assertRaisesRegex(ValueError, "vocabulary is too large"):
             vocabulary_terms("x" * (MAX_VOCABULARY_CHARS + 1))
@@ -82,6 +90,10 @@ class PersonalizationTest(unittest.TestCase):
     def test_prompt_rejects_oversized_context(self) -> None:
         with self.assertRaisesRegex(ValueError, "personal context is too large"):
             build_personalization_prompt("x" * (MAX_PERSONAL_CONTEXT_CHARS + 1), "PipeWire")
+
+    def test_prompt_rejects_surrogate_characters(self) -> None:
+        with self.assertRaisesRegex(ValueError, "contains invalid UTF-8"):
+            build_personalization_prompt("bad\ud800text", "PipeWire")
 
     def test_command_environment_exposes_prompt(self) -> None:
         env = command_environment("Use project terms.", "PipeWire")

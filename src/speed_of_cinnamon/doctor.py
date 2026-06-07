@@ -148,6 +148,10 @@ def _validate_remote_http_url(value: str, *, field_name: str) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         raise ValueError(f"{field_name} must be text")
     raw = value or ""
+    try:
+        raw.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{field_name} contains invalid UTF-8") from exc
     if _contains_escaped_null(raw):
         raise ValueError(f"{field_name} contains invalid null byte")
     if _contains_http_header_control_chars(raw):
@@ -559,6 +563,10 @@ def parse_settings_json(value: str) -> dict[str, object]:
         raise ValueError("settings JSON must be text")
     if not value:
         return {}
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("settings JSON contains invalid UTF-8") from exc
     if _contains_escaped_null(value):
         raise ValueError("settings JSON contains invalid null byte")
     if _contains_http_header_control_chars(value):
@@ -567,7 +575,34 @@ def parse_settings_json(value: str) -> dict[str, object]:
         raise ValueError(f"settings JSON is too large (max {MAX_SETTINGS_JSON_CHARS} characters)")
     if len(value.encode("utf-8")) > MAX_SETTINGS_JSON_CHARS:
         raise ValueError(f"settings JSON is too large (max {MAX_SETTINGS_JSON_CHARS} bytes)")
-    parsed = json.loads(value)
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"settings JSON could not be parsed: {exc}") from exc
+    _validate_json_string_encoding(parsed, field_name="settings JSON")
     if not isinstance(parsed, dict):
         raise ValueError("settings JSON must be an object")
     return parsed
+
+
+def _validate_json_string_encoding(value: object, *, field_name: str) -> None:
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ValueError(f"{field_name} contains invalid UTF-8") from exc
+        return
+    if isinstance(value, list):
+        for item in value:
+            _validate_json_string_encoding(item, field_name=field_name)
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if isinstance(key, str):
+                try:
+                    key.encode("utf-8")
+                except UnicodeEncodeError as exc:
+                    raise ValueError(f"{field_name} contains invalid UTF-8") from exc
+            else:
+                raise ValueError(f"{field_name} contains invalid object key")
+            _validate_json_string_encoding(child, field_name=field_name)
+    return

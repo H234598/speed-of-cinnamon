@@ -621,11 +621,15 @@ def _command_path(command: str) -> str:
 def _assert_text_limit(value: str, *, field_name: str, max_chars: int) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         raise RuntimeError(f"{field_name} must be text")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise RuntimeError(f"{field_name} contains invalid UTF-8") from exc
     if len(value) > max_chars:
         if field_name == "audio file path":
             raise RuntimeError(f"{field_name} is too long (max {max_chars} characters)")
         raise RuntimeError(f"{field_name} is too large (max {max_chars} characters)")
-    if len(value.encode("utf-8")) > max_chars:
+    if len(encoded) > max_chars:
         if field_name == "audio file path":
             raise RuntimeError(f"{field_name} is too long (max {max_chars} bytes)")
         raise RuntimeError(f"{field_name} is too large (max {max_chars} bytes)")
@@ -1515,7 +1519,10 @@ def _raise_recording_cleanup_failure(store: StateStore, failures: list[tuple[str
 
 def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) -> tuple[Path, str]:
     mode = _artifact_encryption_mode(args)
-    payload = text.encode("utf-8")
+    try:
+        payload = text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise RuntimeError("failed to write transcript file: transcript text is not valid UTF-8") from exc
     if mode == ARTIFACT_ENCRYPTION_OFF:
         _write_text_atomic(path, text)
         return path, ARTIFACT_ENCRYPTION_OFF

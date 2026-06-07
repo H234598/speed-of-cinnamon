@@ -92,7 +92,11 @@ def _assert_text_length(value: str, *, field_name: str, max_chars: int | None = 
         raise PostProcessError(f"{field_name} contains invalid null byte")
     if len(value) > max_chars:
         raise PostProcessError(f"{field_name} is too large (max {max_chars} characters)")
-    if len(value.encode("utf-8")) > max_chars:
+    try:
+        encoded_length = len(value.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise PostProcessError(f"{field_name} contains invalid UTF-8") from exc
+    if encoded_length > max_chars:
         raise PostProcessError(f"{field_name} is too large (max {max_chars} bytes)")
     return value
 

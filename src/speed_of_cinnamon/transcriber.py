@@ -528,11 +528,20 @@ class TranscriberConfig:
 def _validate_audio_path_shape(path: Path) -> Path:
     if not isinstance(path, Path):
         raise TranscriptionError("audio path must be a Path")
-    if _contains_escaped_null(str(path)):
+    path_text = str(path)
+    try:
+        path_text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise TranscriptionError("audio path contains invalid UTF-8") from exc
+    if _contains_escaped_null(path_text):
         raise TranscriptionError("audio path contains invalid null byte")
-    if _contains_http_header_control_chars(str(path)):
+    if _contains_http_header_control_chars(path_text):
         raise TranscriptionError("audio path contains invalid control character")
     normalized = path.expanduser()
+    try:
+        str(normalized).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise TranscriptionError("audio path contains invalid UTF-8") from exc
     try:
         assert_no_symlink_ancestors(normalized, field_name="audio path")
     except RuntimeError as exc:
@@ -541,15 +550,27 @@ def _validate_audio_path_shape(path: Path) -> Path:
         raise TranscriptionError(f"audio path must not be a symlink: {path}")
     if len(str(normalized)) > MAX_AUDIO_PATH_CHARS:
         raise TranscriptionError(f"audio file path is too long: {path}")
-    if len(str(normalized).encode("utf-8")) > MAX_AUDIO_PATH_CHARS:
+    try:
+        normalized_bytes = str(normalized).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise TranscriptionError("audio path contains invalid UTF-8") from exc
+    if len(normalized_bytes) > MAX_AUDIO_PATH_CHARS:
         raise TranscriptionError(f"audio file path is too long: {path}")
     if len(normalized.name) > MAX_AUDIO_PATH_CHARS:
         raise TranscriptionError(f"audio file name is too long: {path}")
-    if len(normalized.name.encode("utf-8")) > MAX_AUDIO_PATH_CHARS:
+    try:
+        normalized_name_bytes = normalized.name.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise TranscriptionError("audio path contains invalid UTF-8") from exc
+    if len(normalized_name_bytes) > MAX_AUDIO_PATH_CHARS:
         raise TranscriptionError(f"audio file name is too long: {path}")
     if len(normalized.stem) > MAX_AUDIO_STEM_CHARS:
         raise TranscriptionError(f"audio file stem is too long: {path}")
-    if len(normalized.stem.encode("utf-8")) > MAX_AUDIO_STEM_CHARS:
+    try:
+        normalized_stem_bytes = normalized.stem.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise TranscriptionError("audio path contains invalid UTF-8") from exc
+    if len(normalized_stem_bytes) > MAX_AUDIO_STEM_CHARS:
         raise TranscriptionError(f"audio file stem is too long: {path}")
     return normalized
 
@@ -915,7 +936,11 @@ def _assert_text_length(value: str, *, field_name: str, max_chars: int | None = 
         raise TranscriptionError(f"{field_name} contains invalid null byte")
     if len(value) > max_chars:
         raise TranscriptionError(f"{field_name} is too large (max {max_chars} characters)")
-    if len(value.encode("utf-8")) > max_chars:
+    try:
+        encoded_value = value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise TranscriptionError(f"{field_name} contains invalid UTF-8") from exc
+    if len(encoded_value) > max_chars:
         raise TranscriptionError(f"{field_name} is too large (max {max_chars} bytes)")
     return value
 
@@ -1452,9 +1477,16 @@ def _multipart_form_data(
     for key, value in fields.items():
         if _contains_multipart_control_chars(key) or _contains_multipart_control_chars(value):
             raise TranscriptionError("multipart form field contains invalid control character")
+        try:
+            encoded_key = key.encode("utf-8")
+            encoded_value = value.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise TranscriptionError("multipart form field contains invalid UTF-8") from exc
         body.extend(f"--{boundary}\r\n".encode("utf-8"))
-        body.extend(f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("utf-8"))
-        body.extend(value.encode("utf-8"))
+        body.extend(b'Content-Disposition: form-data; name="')
+        body.extend(encoded_key)
+        body.extend(b'"\r\n\r\n')
+        body.extend(encoded_value)
         body.extend(b"\r\n")
     body.extend(f"--{boundary}\r\n".encode("utf-8"))
     body.extend(

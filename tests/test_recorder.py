@@ -12,12 +12,14 @@ from unittest import mock
 from speed_of_cinnamon import recorder as recorder_module
 from speed_of_cinnamon.recorder import (
     RecorderCommand,
+    _assert_valid_input_device,
     RecorderError,
     SilenceDetectionResult,
     SILENCE_DETECT_DURATION_SECONDS,
     SILENCE_DETECT_NOISE,
     _ensure_file_head,
     _file_size,
+    _completed_output_bytes,
     choose_recorder,
     detect_silent_recording,
     _run_kill,
@@ -616,6 +618,18 @@ class RecorderTest(unittest.TestCase):
             with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
                 with self.assertRaises(RecorderError):
                     validate_recording_path(Path(tmp) / "sample.txt", suffix=".wav")
+
+    def test_completed_output_bytes_rejects_malformed_utf8(self) -> None:
+        with self.assertRaisesRegex(RecorderError, "invalid UTF-8"):
+            _completed_output_bytes("\ud800", field_name="stdout")
+
+    def test_assert_valid_input_device_rejects_malformed_utf8(self) -> None:
+        with self.assertRaisesRegex(RecorderError, "invalid UTF-8"):
+            _assert_valid_input_device("\ud800")
+
+    def test_validate_recording_path_rejects_malformed_utf8(self) -> None:
+        with self.assertRaisesRegex(RecorderError, "invalid UTF-8"):
+            validate_recording_path(Path("\ud800.wav"), suffix=".wav")
 
     def test_validate_recording_path_rejects_null_byte(self) -> None:
         with self.assertRaisesRegex(RecorderError, "invalid null byte"):

@@ -26,6 +26,7 @@ from speed_of_cinnamon.transcriber import (
     _read_file_head,
     _read_response_text,
     _read_text_file,
+    _validate_audio_path_shape,
     _assert_text_length,
     _contains_escaped_null,
     _contains_http_header_control_chars,
@@ -629,6 +630,10 @@ class TranscriberTest(unittest.TestCase):
             with self.assertRaisesRegex(TranscriptionError, "audio file path is too long"):
                 validate_audio_file(path)
 
+    def test_validate_audio_path_shape_rejects_malformed_utf8(self) -> None:
+        with self.assertRaisesRegex(TranscriptionError, "invalid UTF-8"):
+            _validate_audio_path_shape(Path("\ud800.wav"))
+
     def test_assert_text_length_rejects_non_text(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "must be text"):
             _assert_text_length(12, field_name="text")
@@ -637,6 +642,10 @@ class TranscriberTest(unittest.TestCase):
         with mock.patch("speed_of_cinnamon.transcriber.MAX_TRANSCRIPT_TEXT_CHARS", 4):
             with self.assertRaisesRegex(TranscriptionError, "is too large"):
                 _assert_text_length("😀😀", field_name="transcript")
+
+    def test_assert_text_length_rejects_malformed_utf8(self) -> None:
+        with self.assertRaisesRegex(TranscriptionError, "invalid UTF-8"):
+            _assert_text_length("\ud800", field_name="transcript")
 
     def test_assert_text_length_rejects_null_byte(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "transcript contains invalid null byte"):
@@ -2024,6 +2033,17 @@ class TranscriberTest(unittest.TestCase):
             )
         self.assertIsInstance(body, bytearray)
         self.assertIn(b"audio", body)
+
+    def test_multipart_form_data_rejects_malformed_utf8_value(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio_path = Path(tmp) / "sample.wav"
+            audio_path.write_bytes(b"audio")
+            with self.assertRaisesRegex(TranscriptionError, "invalid UTF-8"):
+                _multipart_form_data(
+                    {"model": "\ud800", "language": "en", "response_format": "json"},
+                    "file",
+                    audio_path,
+                )
 
     def test_multipart_form_data_rejects_symlink_audio_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

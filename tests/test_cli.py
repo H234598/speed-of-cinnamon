@@ -758,6 +758,14 @@ class CliTest(unittest.TestCase):
         self.assertTrue(plaintext_exists)
         self.assertFalse(encrypted_exists)
 
+    def test_write_stored_transcript_rejects_unencodable_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = Path(tmp) / "input.txt"
+            args = argparse.Namespace(artifact_encryption="off")
+            with self.assertRaisesRegex(RuntimeError, "failed to write transcript file"):
+                cli._write_stored_transcript(transcript, "secret\ud800text", args)
+            self.assertFalse(transcript.exists())
+
     @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
     def test_transcribe_file_prepares_private_transient_transcript_for_encrypted_storage(
         self,
@@ -8167,6 +8175,10 @@ class CliTest(unittest.TestCase):
     def test_assert_text_limit_rejects_oversized_bytes(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "is too large"):
             cli._assert_text_limit("😀😀", field_name="value", max_chars=4)
+
+    def test_assert_text_limit_rejects_surrogate_characters(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "contains invalid UTF-8"):
+            cli._assert_text_limit("bad\ud800text", field_name="value", max_chars=20)
 
     def test_coerce_path_rejects_non_text_value(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "must be text"):

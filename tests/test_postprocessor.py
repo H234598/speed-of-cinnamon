@@ -931,6 +931,14 @@ class PostProcessorTest(unittest.TestCase):
         with self.assertRaisesRegex(PostProcessError, "post-process output contains invalid null byte"):
             _assert_text_length("hello\x00secret", field_name="post-process output")
 
+    def test_assert_text_length_rejects_unpaired_utf16_surrogate(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "post-process output contains invalid UTF-8"):
+            _assert_text_length("\ud800", field_name="post-process output")
+
+    def test_assert_text_length_rejects_surrogate_pair_literal(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "post-process output contains invalid UTF-8"):
+            _assert_text_length("\ud83d\ude00", field_name="post-process output")
+
     def test_post_process_text_rejects_non_text_language(self) -> None:
         with self.assertRaisesRegex(PostProcessError, "language must be text"):
             post_process_text("hello", 123, "command")  # type: ignore[arg-type]

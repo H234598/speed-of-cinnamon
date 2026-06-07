@@ -683,9 +683,17 @@ class DoctorTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "contains invalid control character"):
             doctor.parse_settings_json('{"language":"en\x85"}')
 
+    def test_parse_settings_json_rejects_surrogate_character(self) -> None:
+        with self.assertRaisesRegex(ValueError, "contains invalid UTF-8"):
+            doctor.parse_settings_json('{"language":"\\ud800"}')
+
     def test_validate_remote_http_url_rejects_leading_control_character(self) -> None:
         with self.assertRaisesRegex(ValueError, "contains invalid control character"):
             doctor._validate_remote_http_url("\x85https://api.example.test/v1", field_name="remote endpoint URL")
+
+    def test_validate_remote_http_url_rejects_surrogate_character(self) -> None:
+        with self.assertRaisesRegex(ValueError, "contains invalid UTF-8"):
+            doctor._validate_remote_http_url("https://api.example.test/\ud800", field_name="remote endpoint URL")
 
     def test_validate_remote_http_url_rejects_remote_plain_http(self) -> None:
         with self.assertRaisesRegex(ValueError, "must use https:// unless host is local loopback"):
