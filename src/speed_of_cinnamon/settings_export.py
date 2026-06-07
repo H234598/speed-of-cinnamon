@@ -312,7 +312,7 @@ def _reject_secret_bearing_url_setting(key: str, text: str) -> None:
         parsed.port
     except ValueError as exc:
         raise SettingsExportError(f"setting {key} has invalid port") from exc
-    if parsed.username or parsed.password:
+    if "@" in parsed.netloc or parsed.username is not None or parsed.password is not None:
         raise SettingsExportError(f"setting {key} must not contain URL credentials")
     if parsed.query or parsed.fragment:
         raise SettingsExportError(f"setting {key} must not contain URL query or fragment")

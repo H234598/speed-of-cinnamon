@@ -663,7 +663,7 @@ def _validate_ollama_http_url(url: str, *, field_name: str) -> str:
         parsed.port
     except ValueError as exc:
         raise RuntimeError(f"{field_name} has invalid port") from exc
-    if parsed.username or parsed.password:
+    if "@" in parsed.netloc or parsed.username is not None or parsed.password is not None:
         raise RuntimeError(f"{field_name} must not contain userinfo")
     if parsed.query or parsed.fragment:
         raise RuntimeError(f"{field_name} must not contain query or fragment")
@@ -684,7 +684,7 @@ def _validate_openai_compatible_http_url(url: str, field_name: str) -> str:
         parsed.port
     except ValueError as exc:
         raise RuntimeError(f"{field_name} has invalid port") from exc
-    if parsed.username or parsed.password:
+    if "@" in parsed.netloc or parsed.username is not None or parsed.password is not None:
         raise RuntimeError(f"{field_name} must not contain userinfo")
     if parsed.query or parsed.fragment:
         raise RuntimeError(f"{field_name} must not contain query or fragment")
@@ -2916,6 +2916,7 @@ def finalize_recording(
             field_name="keep_recording_artifacts",
         )
         _coerce_bool(getattr(args, "skip_silent_auto_relisten", False), field_name="skip_silent_auto_relisten")
+        artifact_encryption = _artifact_encryption_mode(args)
         if state.status != "finalizing":
             state = store.update(
                 status="finalizing",
@@ -2939,9 +2940,17 @@ def finalize_recording(
         silence = detect_silent_recording(audio_path)
         if silence.silent:
             cleanup_log_path = state.log_path
+            recording_encryption = ARTIFACT_ENCRYPTION_OFF
             if not keep_recording_artifacts:
                 done_audio_path = None
                 done_log_path = None
+            elif done_audio_path:
+                plaintext_done_audio_path = Path(done_audio_path)
+                encrypted_audio_path, recording_encryption = _encrypt_kept_recording_artifact(plaintext_done_audio_path, args)
+                if encrypted_audio_path != plaintext_done_audio_path:
+                    done_audio_path = str(encrypted_audio_path)
+                if artifact_encryption != ARTIFACT_ENCRYPTION_OFF:
+                    done_log_path = None
             state.audio_path = done_audio_path
             state.log_path = done_log_path
             state.transcript_path = ""
@@ -2956,20 +2965,29 @@ def finalize_recording(
                 inserted=False,
                 error="",
             )
+            cleanup_failures: list[tuple[str, str, str]] = []
             if not keep_recording_artifacts:
                 audio_deleted = remove_file(str(audio_path), suffix=audio_suffix)
                 log_deleted = remove_file(cleanup_log_path, suffix=".log")
-                cleanup_failures: list[tuple[str, str, str]] = []
                 if not audio_deleted:
                     cleanup_failures.append(("audio_path", str(audio_path), "recording audio artifact"))
                 if cleanup_log_path and not log_deleted:
                     cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
-                _raise_recording_cleanup_failure(store, cleanup_failures)
+            elif artifact_encryption != ARTIFACT_ENCRYPTION_OFF and cleanup_log_path:
+                log_deleted = remove_file(cleanup_log_path, suffix=".log")
+                if not log_deleted:
+                    cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
+            _raise_recording_cleanup_failure(store, cleanup_failures)
             return {
                 "status": done.status,
                 "message": "silent recording skipped",
                 "transcript": "",
                 "transcript_path": "",
+                "artifact_encryption": artifact_encryption,
+                "transcript_encryption": ARTIFACT_ENCRYPTION_OFF,
+                "transcript_encrypted": False,
+                "recording_encryption": recording_encryption,
+                "recording_encrypted": recording_encryption != ARTIFACT_ENCRYPTION_OFF,
                 "inserted": False,
                 "recording_artifact_cap": artifact_cleanup,
                 "language": language,
@@ -2982,7 +3000,6 @@ def finalize_recording(
             }
 
         text_path = transcript_dir() / f"{audio_path.stem}.txt"
-        artifact_encryption = _artifact_encryption_mode(args)
         transcriber_text_path = _transcript_work_path(text_path, artifact_encryption)
         transient_text_stat = _prepare_transient_transcript_path(transcriber_text_path, text_path)
         transcript_audio_path = audio_path
@@ -3079,6 +3096,9 @@ def finalize_recording(
                 stabilized_audio_path = encrypted_audio_path
                 if plaintext_done_audio_path == audio_path:
                     remove_original_after_state_update = False
+            if artifact_encryption != ARTIFACT_ENCRYPTION_OFF and done_log_path:
+                cleanup_log_path = done_log_path
+                done_log_path = None
 
         done = store.update(
             status="done",

@@ -434,7 +434,7 @@ def _assert_download_url(
         parsed.port
     except ValueError as exc:
         raise ModelError(f"{field_name} has invalid port") from exc
-    if parsed.username or parsed.password:
+    if "@" in parsed.netloc or parsed.username is not None or parsed.password is not None:
         raise ModelError(f"{field_name} must not contain userinfo")
     if parsed.fragment:
         raise ModelError(f"{field_name} must not contain fragment")

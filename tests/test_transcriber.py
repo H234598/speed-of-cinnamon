@@ -2630,6 +2630,20 @@ class TranscriberTest(unittest.TestCase):
                     openai_compatible_url="https://user:secret@example.com/v1",
                 )
 
+    def test_openai_compatible_api_rejects_empty_url_userinfo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with self.assertRaisesRegex(TranscriptionError, "must not contain userinfo"):
+                transcribe(
+                    audio,
+                    "en",
+                    Path(tmp) / "sample.txt",
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-transcribe",
+                    openai_compatible_url="https://@example.com/v1",
+                )
+
     def test_openai_compatible_api_rejects_url_query_or_fragment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"

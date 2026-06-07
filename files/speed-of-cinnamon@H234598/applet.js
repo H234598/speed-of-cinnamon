@@ -4109,9 +4109,11 @@ MyApplet.prototype = {
     if (totalBytes > MAX_CLI_COMMAND_BYTES) {
       throw new Error("Backend command is too large");
     }
-    if (!this._isAllowedCliCommand(normalized[0])) {
+    let resolvedCommand = this._resolveAllowedCliCommand(normalized[0]);
+    if (resolvedCommand === null) {
       throw new Error("Backend command is not executable");
     }
+    normalized[0] = resolvedCommand;
     return normalized;
   },
 
@@ -4198,17 +4200,21 @@ MyApplet.prototype = {
   },
 
   _isAllowedCliCommand: function(command) {
+    return this._resolveAllowedCliCommand(command) !== null;
+  },
+
+  _resolveAllowedCliCommand: function(command) {
     let value = String(command || "").trim();
     if (value === "") {
-      return false;
+      return null;
     }
     if (value.indexOf("/") >= 0) {
       if (value.charAt(0) !== "/") {
-        return false;
+        return null;
       }
-      return GLib.file_test(value, GLib.FileTest.IS_EXECUTABLE);
+      return GLib.file_test(value, GLib.FileTest.IS_EXECUTABLE) ? value : null;
     }
-    return GLib.find_program_in_path(value) !== null;
+    return GLib.find_program_in_path(value);
   },
 
   _parseSpawnOutput: function(stdout) {
@@ -4294,6 +4300,7 @@ MyApplet.prototype = {
         callback("");
       }
     });
+    return process;
   },
 
   _isStatusCommandArgs: function(args) {
@@ -4313,9 +4320,24 @@ MyApplet.prototype = {
     let timeoutId = 0;
     let done = false;
     let normalizedArgs;
+    let activeProcess = null;
     let callbackFn = typeof callback === "function" ? callback : function() {};
     let applet = this;
     let spawnGeneration = this.spawnGeneration;
+
+    const terminateActiveProcess = function() {
+      if (!activeProcess) {
+        return;
+      }
+      try {
+        if (!activeProcess.get_if_exited()) {
+          activeProcess.force_exit();
+        }
+      } catch (err) {
+        global.logError(err);
+      }
+      activeProcess = null;
+    };
 
     const finalize = function(payload) {
       if (done) {
@@ -4346,6 +4368,7 @@ MyApplet.prototype = {
         : CLI_COMMAND_TIMEOUT_MS;
       if (timeoutMs > 0) {
         timeoutId = Mainloop.timeout_add(Math.max(250, timeoutMs), () => {
+          terminateActiveProcess();
           finalize({ status: "error", error: "Backend command timed out" });
           return false;
         });
@@ -4360,11 +4383,7 @@ MyApplet.prototype = {
         let inputText = Object.prototype.hasOwnProperty.call(options, "inputText")
           ? String(options.inputText || "")
           : null;
-        if (backendEnv || inputText !== null) {
-          this._spawnJsonWithBackendEnvironment(normalizedArgs, backendEnv || {}, handleOutput, inputText);
-        } else {
-          Util.spawn_async(normalizedArgs, handleOutput);
-        }
+        activeProcess = this._spawnJsonWithBackendEnvironment(normalizedArgs, backendEnv || {}, handleOutput, inputText);
       });
     } catch (err) {
       finalize({ status: "error", error: String(err) });
@@ -4375,9 +4394,24 @@ MyApplet.prototype = {
     options = options || {};
     let timeoutId = 0;
     let done = false;
+    let activeProcess = null;
     let callbackFn = typeof callback === "function" ? callback : function() {};
     let applet = this;
     let spawnGeneration = this.spawnGeneration;
+
+    const terminateActiveProcess = function() {
+      if (!activeProcess) {
+        return;
+      }
+      try {
+        if (!activeProcess.get_if_exited()) {
+          activeProcess.force_exit();
+        }
+      } catch (err) {
+        global.logError(err);
+      }
+      activeProcess = null;
+    };
 
     const finalize = function(output) {
       if (done) {
@@ -4405,11 +4439,12 @@ MyApplet.prototype = {
         : CLI_COMMAND_TIMEOUT_MS;
       if (timeoutMs > 0) {
         timeoutId = Mainloop.timeout_add(Math.max(250, timeoutMs), () => {
+          terminateActiveProcess();
           finalize("");
           return false;
         });
       }
-      Util.spawn_async(normalizedArgs, (stdout) => {
+      activeProcess = this._spawnJsonWithBackendEnvironment(normalizedArgs, {}, (stdout) => {
         if (done) {
           return;
         }

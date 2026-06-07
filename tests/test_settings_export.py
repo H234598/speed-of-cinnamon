@@ -184,6 +184,10 @@ class SettingsExportTest(unittest.TestCase):
             with self.assertRaisesRegex(SettingsExportError, "is too long"):
                 _sanitize_text_field("😀" * 2, field_name="setting value")
 
+    def test_normalize_setting_rejects_empty_url_userinfo(self) -> None:
+        with self.assertRaisesRegex(SettingsExportError, "must not contain URL credentials"):
+            normalize_setting("openai-compatible-url", "https://@api.example.test/v1")
+
     def test_write_export_rejects_oversized_path(self) -> None:
         path = Path("a" * (MAX_SETTINGS_EXPORT_PATH_CHARS + 1))
         with self.assertRaisesRegex(SettingsExportError, "path is invalid"):

@@ -730,6 +730,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_spawnJson: function(args, callback, options) {", source)
         self.assertIn('Object.prototype.hasOwnProperty.call(options, "timeoutMs")', source)
         self.assertIn("if (timeoutMs > 0) {", source)
+        self.assertIn("let activeProcess = null;", source)
+        self.assertIn("const terminateActiveProcess = function() {", source)
+        self.assertIn("activeProcess.force_exit();", source)
+        self.assertIn('activeProcess = this._spawnJsonWithBackendEnvironment(normalizedArgs, backendEnv || {}, handleOutput, inputText);', source)
+        self.assertNotIn("Util.spawn_async(normalizedArgs, handleOutput);", source)
 
     def test_doctor_checks_use_spawn_json_timeout(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -1071,6 +1076,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (totalBytes > MAX_CLI_COMMAND_BYTES) {", source)
         self.assertIn("if (String(args[0] || \"\").trim() === \"\") {", source)
         self.assertIn("_isAllowedCliCommand: function(command) {", source)
+        self.assertIn("_resolveAllowedCliCommand: function(command) {", source)
+        self.assertIn("let resolvedCommand = this._resolveAllowedCliCommand(normalized[0]);", source)
+        self.assertIn("normalized[0] = resolvedCommand;", source)
+        self.assertIn("return GLib.find_program_in_path(value);", source)
         self.assertIn("_parseSpawnOutput: function(stdout) {", source)
         self.assertIn("if (utf8ByteLength(output) > MAX_SPAWN_JSON_BYTES) {", source)
         self.assertIn("if (utf8ByteLength(output) > MAX_SPAWN_TEXT_BYTES) {", source)

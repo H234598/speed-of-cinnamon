@@ -463,6 +463,18 @@ class DoctorTest(unittest.TestCase):
         self.assertNotIn("secret-token", serialized)
         self.assertNotIn("user:secret-token", serialized)
 
+    def test_external_api_transcriber_rejects_empty_url_userinfo(self) -> None:
+        payload = doctor.report({
+            "recorder": "auto",
+            "transcriber": "openai-compatible",
+            "openai-compatible-model": "whisper-large-v3",
+            "openai-compatible-url": "https://@api.example.test/v1",
+            "insert-method": "none",
+        })
+
+        self.assertFalse(payload["configured"]["transcriber"]["ok"])
+        self.assertIn("must not contain userinfo", payload["configured"]["transcriber"]["detail"])
+
     def test_ollama_postprocessor_requires_model(self) -> None:
         tools = {"python3", "pw-record"}
         settings = {
@@ -564,6 +576,24 @@ class DoctorTest(unittest.TestCase):
         self.assertIn("must not contain userinfo", payload["configured"]["postprocessor"]["detail"])
         self.assertNotIn("secret-token", serialized)
         self.assertNotIn("user:secret-token", serialized)
+
+    def test_ollama_postprocessor_rejects_empty_url_userinfo(self) -> None:
+        tools = {"python3", "pw-record"}
+        settings = {
+            "recorder": "auto",
+            "transcriber": "command",
+            "transcriber-command": "printf ok",
+            "insert-method": "none",
+            "post-process-backend": "ollama",
+            "ollama-model": "llama3.2:3b",
+            "ollama-url": "http://@127.0.0.1:11434",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
+            payload = doctor.report(settings)
+
+        self.assertFalse(payload["ok"])
+        self.assertFalse(payload["configured"]["postprocessor"]["ok"])
+        self.assertIn("must not contain userinfo", payload["configured"]["postprocessor"]["detail"])
 
     def test_openai_compatible_postprocessor_rejects_url_query_without_echoing_secret(self) -> None:
         tools = {"python3", "pw-record"}

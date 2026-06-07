@@ -2161,6 +2161,12 @@ class CliTest(unittest.TestCase):
         self.assertIn("openai-compatible url must not contain query or fragment", payload["error"])
         self.assertNotIn("api_key=secret", json.dumps(payload))
 
+    def test_text_model_url_validators_reject_empty_userinfo(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "ollama url must not contain userinfo"):
+            cli._validate_ollama_http_url("http://@127.0.0.1:11434", field_name="ollama url")
+        with self.assertRaisesRegex(RuntimeError, "openai-compatible url must not contain userinfo"):
+            cli._validate_openai_compatible_http_url("https://@api.example.test/v1", "openai-compatible url")
+
     @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models")
     def test_text_models_rejects_remote_plain_http_openai_url(self, mocked_list: mock.Mock) -> None:
         stdout = io.StringIO()
@@ -6331,6 +6337,7 @@ class CliTest(unittest.TestCase):
             final_state = store.read()
             encrypted_audio = Path(final_state.audio_path)
             encrypted_transcript = Path(final_state.transcript_path)
+            final_log_path = final_state.log_path
             with mock.patch.dict(os.environ, env, clear=False):
                 decrypted_audio = artifact_crypto.read_decrypted_bytes_from_file(
                     encrypted_audio,
@@ -6344,6 +6351,7 @@ class CliTest(unittest.TestCase):
                 ).decode("utf-8")
             original_exists = original.exists()
             temp_trimmed_exists = temp_trimmed.exists()
+            log_exists = log.exists()
 
         self.assertEqual(payload["status"], "done")
         self.assertEqual(payload["transcript"], "transcript")
@@ -6353,6 +6361,8 @@ class CliTest(unittest.TestCase):
         self.assertTrue(encrypted_transcript.name.endswith(".txt.socenc"))
         self.assertFalse(original_exists)
         self.assertFalse(temp_trimmed_exists)
+        self.assertFalse(log_exists)
+        self.assertEqual(final_log_path, "")
         self.assertEqual(decrypted_audio, b"trimmed-audio")
         self.assertEqual(decrypted_transcript, "transcript\n")
         self.assertEqual(final_state.transcript, "")
@@ -6502,6 +6512,63 @@ class CliTest(unittest.TestCase):
             self.assertTrue(log.exists())
             mocked_transcribe.assert_not_called()
             mocked_insert.assert_not_called()
+
+    def test_finalize_encrypts_kept_silent_recording_with_passphrase(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "silent.wav"
+            log = recordings_root / "silent.log"
+            audio.write_bytes(b"silent-audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=True)
+            args.skip_silent_auto_relisten = True
+            args.artifact_encryption = "passphrase"
+            strong_passphrase = artifact_crypto._b64encode(bytes(range(32)))
+            env = {
+                "XDG_CACHE_HOME": tmp,
+                "XDG_STATE_HOME": tmp,
+                artifact_crypto.PASSPHRASE_ENV: strong_passphrase,
+            }
+            silence = cli.SilenceDetectionResult(True, True, 3.0, 3.0, 0.0, 0.0, "silent recording")
+            with (
+                mock.patch.dict(os.environ, env, clear=False),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=silence),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript") as mocked_transcribe,
+                mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True) as mocked_insert,
+            ):
+                payload = cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+            encrypted_audio = Path(final_state.audio_path)
+            final_log_path = final_state.log_path
+            with mock.patch.dict(os.environ, env, clear=False):
+                decrypted_audio = artifact_crypto.read_decrypted_bytes_from_file(
+                    encrypted_audio,
+                    kind="recording",
+                    field_name="recording audio file",
+                )
+            audio_exists = audio.exists()
+            log_exists = log.exists()
+
+        self.assertEqual(payload["status"], "done")
+        self.assertTrue(payload["silence_detected"])
+        self.assertEqual(payload["transcript"], "")
+        self.assertEqual(payload["artifact_encryption"], "passphrase")
+        self.assertEqual(payload["recording_encryption"], "passphrase")
+        self.assertTrue(payload["recording_encrypted"])
+        self.assertTrue(encrypted_audio.name.endswith(".wav.socenc"))
+        self.assertEqual(decrypted_audio, b"silent-audio")
+        self.assertFalse(audio_exists)
+        self.assertFalse(log_exists)
+        self.assertEqual(final_log_path, "")
+        mocked_transcribe.assert_not_called()
+        mocked_insert.assert_not_called()
 
     def test_finalize_skips_silent_initial_recording_without_transcribing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

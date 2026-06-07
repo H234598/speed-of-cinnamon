@@ -183,7 +183,7 @@ def _validate_remote_http_url(value: str, *, field_name: str) -> str:
         parsed.port
     except ValueError as exc:
         raise ValueError(f"{field_name} has invalid port") from exc
-    if parsed.username or parsed.password:
+    if "@" in parsed.netloc or parsed.username is not None or parsed.password is not None:
         raise ValueError(f"{field_name} must not contain userinfo")
     if parsed.query or parsed.fragment:
         raise ValueError(f"{field_name} must not contain query or fragment")

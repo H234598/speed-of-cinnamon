@@ -583,6 +583,16 @@ class PostProcessorTest(unittest.TestCase):
                 openai_compatible_url="https://user:secret@example.com/v1",
             )
 
+    def test_openai_compatible_backend_rejects_empty_url_userinfo(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "must not contain userinfo"):
+            post_process_text(
+                "hello",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="local",
+                openai_compatible_url="https://@example.com/v1",
+            )
+
     def test_ollama_backend_rejects_url_query(self) -> None:
         with self.assertRaisesRegex(PostProcessError, "must not contain query or fragment"):
             post_process_text(

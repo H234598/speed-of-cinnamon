@@ -2807,6 +2807,13 @@ class ModelsTest(unittest.TestCase):
                 allowed_hosts={"huggingface.co"},
             )
 
+    def test_assert_download_url_rejects_empty_userinfo_on_allowed_host(self) -> None:
+        with self.assertRaisesRegex(models.ModelError, "must not contain userinfo"):
+            models._assert_download_url(
+                "https://@huggingface.co/example/model.bin",
+                allowed_hosts={"huggingface.co"},
+            )
+
     def test_assert_download_url_rejects_invalid_port(self) -> None:
         with self.assertRaisesRegex(models.ModelError, "has invalid port"):
             models._assert_download_url("https://huggingface.co:bad/model.bin")

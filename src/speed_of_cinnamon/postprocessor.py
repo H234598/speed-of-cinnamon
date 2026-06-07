@@ -131,7 +131,7 @@ def _validate_http_url(url: str, *, field_name: str, allow_query_fragment: bool 
         parsed.port
     except ValueError as exc:
         raise PostProcessError(f"{field_name} has invalid port") from exc
-    if parsed.username or parsed.password:
+    if "@" in parsed.netloc or parsed.username is not None or parsed.password is not None:
         raise PostProcessError(f"{field_name} must not contain userinfo")
     if not allow_query_fragment and (parsed.query or parsed.fragment):
         raise PostProcessError(f"{field_name} must not contain query or fragment")

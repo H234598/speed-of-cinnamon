@@ -1389,7 +1389,7 @@ def _validate_openai_compatible_api_url(
         parsed.port
     except ValueError as exc:
         raise TranscriptionError(f"{field_name} has invalid port") from exc
-    if parsed.username or parsed.password:
+    if "@" in parsed.netloc or parsed.username is not None or parsed.password is not None:
         raise TranscriptionError(f"{field_name} must not contain userinfo")
     if not allow_query_fragment and (parsed.query or parsed.fragment):
         raise TranscriptionError(f"{field_name} must not contain query or fragment")
