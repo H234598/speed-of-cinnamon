@@ -1792,3 +1792,37 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.settings.setValue("whisper-model", this.whisperModel)', source)
         self.assertIn('this._setStatus("ready", _("Voice model: automatic"), this.lastTranscript)', source)
         self.assertIn("this._refreshModelMenu();", source)
+
+    def test_auto_paste_matches_identity_markers_with_bounded_short_tokens(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        excelStart = source.index('"excel": [')
+        excelEnd = source.index('"teams": [', excelStart)
+        self.assertNotIn('"et",', source[excelStart:excelEnd])
+        self.assertIn('"excel": [', source)
+        self.assertIn('"microsoft excel"', source)
+        self.assertIn("_windowIdentityValueMatchesMarker: function(value, marker)", source)
+        self.assertIn('if (markerValue.length > 3 || /[^a-z0-9]/.test(markerValue)) {', source)
+        self.assertIn('let boundaryBefore = before === "" || /[^a-z0-9]/.test(before);', source)
+        self.assertIn('_windowIdentityMatchesAutoPaste: function(marker)', source)
+
+    def test_applet_marks_text_uri_clipboard_targets_as_non_text(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn('const NON_TEXT_TEXT_CLIPBOARD_TARGETS = {', source)
+        self.assertIn('"text/uri-list": true,', source)
+        self.assertIn('"text/x-moz-url": true', source)
+        self.assertIn('let rawTarget = String(lines[i]).trim().toLowerCase();', source)
+        self.assertIn('let target = rawTarget.split(";", 1)[0];', source)
+        self.assertIn('if (NON_TEXT_TEXT_CLIPBOARD_TARGETS[target]) {', source)
+        self.assertIn('nonTextTargets.push(target);', source)
+
+    def test_tooltip_shows_private_transcript_length_only(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("_shortTranscript: function() {", source)
+        self.assertIn('let transcriptLength = String(this.lastTranscript).length;', source)
+        self.assertIn('return _("Transcript preview hidden (length: ") + String(transcriptLength) + " chars)";', source)
+        self.assertIn('set_applet_tooltip(tooltip + "\\n" + this._shortTranscript())', source)
+        self.assertNotIn('let clean = this.lastTranscript.replace(/\\s+/g, " ").trim();', source)
+        self.assertNotIn('clean.length > 80 ? clean.slice(0, 77) + "..." : clean;', source)

@@ -814,6 +814,7 @@ def _staged_audio_file_for_local_backend(
     staging_path: Path | None = None
     target_fd: int | None = None
     staging_hasher = hashlib.sha256() if expected_snapshot_digest is not None else None
+    body_error: BaseException | None = None
     try:
         staging_dir = Path(tempfile.mkdtemp(prefix=".sc-audio-"))
         staging_path = staging_dir / audio_path.name
@@ -878,11 +879,10 @@ def _staged_audio_file_for_local_backend(
             raise TranscriptionError("failed to stage audio file for backend access")
         if stat_module.S_IMODE(staging_stat.st_mode) != 0o600:
             raise TranscriptionError("failed to stage audio file for backend access")
-        body_failed = False
         try:
             yield staging_path
-        except BaseException:
-            body_failed = True
+        except BaseException as exc:
+            body_error = exc
             raise
     finally:
         cleanup_errors: list[str] = []
@@ -900,8 +900,18 @@ def _staged_audio_file_for_local_backend(
                 pass
             except OSError:
                 cleanup_errors.append("staged audio directory")
-        if cleanup_errors and not locals().get("body_failed", True):
-            raise TranscriptionError("failed to clean up " + ", ".join(cleanup_errors))
+        if cleanup_errors:
+            cleanup_error_message = "failed to clean up " + ", ".join(cleanup_errors)
+            if body_error is None:
+                raise TranscriptionError(cleanup_error_message)
+            if hasattr(body_error, "add_note"):
+                body_error.add_note(cleanup_error_message)
+            else:
+                body_error_message = str(body_error)
+                if body_error_message:
+                    body_error.args = (f"{body_error_message}; {cleanup_error_message}",)
+                else:
+                    body_error.args = (cleanup_error_message,)
 
 
 def _validate_audio_file_for_upload(path: Path) -> tuple[Path, tuple[int, int, int, int, int, int, str]]:
@@ -1009,12 +1019,7 @@ def transcribe_with_template(
         if existing_snapshot is not None:
             _restore_existing_file_snapshot(text_path, existing_snapshot)
             return
-        try:
-            _remove_generated_transcript_file(text_path, field_name="transcript path")
-        except FileNotFoundError:
-            pass
-        except TranscriptionError:
-            pass
+        _remove_generated_transcript_file(text_path, field_name="transcript path")
 
     try:
         segments = split_command_chain(command, label="transcriber")
@@ -1028,7 +1033,13 @@ def transcribe_with_template(
             vocabulary=vocabulary,
         )
     except CommandChainError as exc:
-        restore_text_path()
+        try:
+            restore_text_path()
+        except TranscriptionError as restore_exc:
+            command_error = TranscriptionError(_sanitize_local_command_error(str(exc)))
+            if hasattr(command_error, "add_note"):
+                command_error.add_note(f"transcript cleanup failed: {restore_exc}")
+            raise command_error from exc
         raise TranscriptionError(_sanitize_local_command_error(str(exc))) from exc
 
     try:
@@ -1036,8 +1047,12 @@ def transcribe_with_template(
             output = _read_text_file(text_path, size_field_name="transcript file text")
             return _assert_text_length(output.strip(), field_name="transcript file text")
         return _assert_text_length(output, field_name="transcript")
-    except Exception:
-        restore_text_path()
+    except Exception as exc:
+        try:
+            restore_text_path()
+        except TranscriptionError as restore_exc:
+            if hasattr(exc, "add_note"):
+                exc.add_note(f"transcript cleanup failed: {restore_exc}")
         raise
 
 

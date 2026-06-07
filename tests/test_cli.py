@@ -382,6 +382,7 @@ class CliTest(unittest.TestCase):
                     "printf test",
                     "--post-process-command",
                     "python3 -c 'import sys; print(sys.stdin.read().upper())'",
+                    "--confirm-plaintext-output",
                     "--json",
                 ])
             payload = json.loads(stdout.getvalue())
@@ -414,6 +415,7 @@ class CliTest(unittest.TestCase):
                     "command",
                     "--transcriber-command",
                     "printf test",
+                    "--confirm-plaintext-output",
                     "--json",
                 ])
             payload = json.loads(stdout.getvalue())
@@ -444,6 +446,7 @@ class CliTest(unittest.TestCase):
                     str(audio),
                     "--transcriber",
                     "openai",
+                    "--confirm-plaintext-output",
                     "--json",
                 ])
         payload = json.loads(stdout.getvalue())
@@ -488,6 +491,7 @@ class CliTest(unittest.TestCase):
                     "gpt-4o-mini",
                     "--openai-compatible-api-key",
                     "secret",
+                    "--confirm-plaintext-output",
                     "--json",
                 ])
         payload = json.loads(stdout.getvalue())
@@ -528,6 +532,7 @@ class CliTest(unittest.TestCase):
                     "--openai-compatible-api-key",
                     "secret",
                     "--no-openai-compatible-flex-processing",
+                    "--confirm-plaintext-output",
                     "--json",
                 ])
         payload = json.loads(stdout.getvalue())
@@ -562,6 +567,7 @@ class CliTest(unittest.TestCase):
                     "gpt-4o-transcribe",
                     "--openai-compatible-api-key",
                     "secret",
+                    "--confirm-plaintext-output",
                     "--json",
                 ])
         payload = json.loads(stdout.getvalue())
@@ -589,6 +595,7 @@ class CliTest(unittest.TestCase):
                     "template",
                     "--transcriber-command",
                     "printf ok",
+                    "--confirm-plaintext-output",
                     "--json",
                 ])
         payload = json.loads(stdout.getvalue())
@@ -610,6 +617,7 @@ class CliTest(unittest.TestCase):
                     str(audio),
                     "--transcriber",
                     "faster-whisper",
+                    "--confirm-plaintext-output",
                     "--json",
                 ])
         payload = json.loads(stdout.getvalue())
@@ -646,6 +654,7 @@ class CliTest(unittest.TestCase):
                     "Use project terms.",
                     "--vocabulary",
                     "PipeWire",
+                    "--confirm-plaintext-output",
                     "--json",
                 ])
             payload = json.loads(stdout.getvalue())
@@ -896,6 +905,75 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["transcript"], "encrypted ok")
         self.assertFalse(payload["transcript_output_redacted"])
         self.assertTrue(payload["transcript_encrypted"])
+
+    @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="plaintext ok")
+    @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
+    def test_transcribe_file_redacts_plaintext_output_when_artifact_encryption_off_without_confirm(
+        self,
+        mocked_validate: mock.Mock,
+        _mocked_transcribe: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            mocked_validate.return_value = audio
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf plaintext",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+            transcript_path = Path(payload["transcript_path"])
+            transcript_file = transcript_path.read_text(encoding="utf-8").strip()
+            transcript_exists = transcript_path.exists()
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["transcript"], "")
+        self.assertTrue(payload["transcript_output_redacted"])
+        self.assertFalse(payload["transcript_encrypted"])
+        self.assertTrue(transcript_exists)
+        self.assertEqual(transcript_file, "plaintext ok")
+        self.assertFalse(payload["transcript_path"].endswith(".socenc"))
+
+    @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="plaintext ok")
+    @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
+    def test_transcribe_file_can_confirm_plaintext_output_when_artifact_encryption_off(
+        self,
+        mocked_validate: mock.Mock,
+        _mocked_transcribe: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            mocked_validate.return_value = audio
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf plaintext",
+                    "--confirm-plaintext-output",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+            transcript_path = Path(payload["transcript_path"])
+            transcript_file = transcript_path.read_text(encoding="utf-8").strip()
+            transcript_exists = transcript_path.exists()
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["transcript"], "plaintext ok")
+        self.assertFalse(payload["transcript_output_redacted"])
+        self.assertFalse(payload["transcript_encrypted"])
+        self.assertEqual(transcript_file, "plaintext ok")
+        self.assertTrue(transcript_exists)
+        self.assertFalse(payload["transcript_path"].endswith(".socenc"))
 
     def test_reencrypting_socenc_recording_removes_plaintext_sibling(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1221,6 +1299,7 @@ class CliTest(unittest.TestCase):
                     "command",
                     "--transcriber-command",
                     "printf transcript",
+                    "--confirm-plaintext-output",
                     "--json",
                 ])
             payload = json.loads(stdout.getvalue())
@@ -1274,6 +1353,7 @@ class CliTest(unittest.TestCase):
                     "openai-compatible",
                     "--ollama-model",
                     "llama3.2:3b",
+                    "--confirm-plaintext-output",
                     "--json",
                 ])
         self.assertEqual(code, 0)
@@ -1309,6 +1389,7 @@ class CliTest(unittest.TestCase):
                     str(audio),
                     "--post-process-backend",
                     "openai-compatible",
+                    "--confirm-plaintext-output",
                     "--json",
                 ])
 
@@ -1370,6 +1451,7 @@ class CliTest(unittest.TestCase):
                     "command",
                     "--post-process-command",
                     "cat",
+                    "--confirm-plaintext-output",
                     "--json",
                 ])
         self.assertEqual(code, 0)
@@ -1419,6 +1501,7 @@ class CliTest(unittest.TestCase):
                     "printf roher text",
                     "--post-process-backend",
                     "none",
+                    "--confirm-plaintext-output",
                     "--json",
                 ])
 

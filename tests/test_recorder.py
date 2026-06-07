@@ -20,6 +20,7 @@ from speed_of_cinnamon.recorder import (
     _ensure_file_head,
     _file_size,
     _completed_output_bytes,
+    _decode_ffmpeg_output,
     choose_recorder,
     detect_silent_recording,
     _run_kill,
@@ -622,6 +623,17 @@ class RecorderTest(unittest.TestCase):
     def test_completed_output_bytes_rejects_malformed_utf8(self) -> None:
         with self.assertRaisesRegex(RecorderError, "invalid UTF-8"):
             _completed_output_bytes("\ud800", field_name="stdout")
+
+    def test_decode_ffmpeg_output_rejects_malformed_utf8(self) -> None:
+        with self.assertRaisesRegex(RecorderError, "invalid UTF-8"):
+            _decode_ffmpeg_output(b"ok\xff")
+
+    def test_decode_ffmpeg_output_trims_str_and_bytes(self) -> None:
+        self.assertEqual(_decode_ffmpeg_output("  bad audio  "), "bad audio")
+        self.assertEqual(_decode_ffmpeg_output(b"  bad audio  "), "bad audio")
+
+    def test_decode_ffmpeg_output_returns_empty_for_non_text(self) -> None:
+        self.assertEqual(_decode_ffmpeg_output(123), "")
 
     def test_assert_valid_input_device_rejects_malformed_utf8(self) -> None:
         with self.assertRaisesRegex(RecorderError, "invalid UTF-8"):

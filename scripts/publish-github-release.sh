@@ -531,31 +531,24 @@ if remote_repo="$(resolve_github_remote_repo)"; then
 else
   remote_repo=""
 fi
-if [[ -n "${repo}" && "${repo}" != "${RELEASE_TARGET_REPOSITORY}" ]]; then
-  printf 'release repository is fixed to %s: %s is not allowed\n' "${RELEASE_TARGET_REPOSITORY}" "${repo}" >&2
-  exit 1
-fi
 if [[ -z "${repo}" && -z "${remote_repo}" ]]; then
   printf 'GITHUB_REPOSITORY is not set and origin is not a GitHub repository; cannot verify target repository safely.\n' >&2
+  exit 1
+fi
+if [[ -n "${repo}" && "${repo}" != "${RELEASE_TARGET_REPOSITORY}" ]]; then
+  printf 'release repository is fixed to %s: %s is not allowed\n' "${RELEASE_TARGET_REPOSITORY}" "${repo}" >&2
   exit 1
 fi
 if [[ -n "${remote_repo}" && "${remote_repo}" != "${RELEASE_TARGET_REPOSITORY}" ]]; then
   printf 'checked out origin is not the allowed release repository: %s\n' "${remote_repo}" >&2
   exit 1
 fi
-if [[ -n "${repo}" && "${repo}" != "${RELEASE_TARGET_REPOSITORY}" ]]; then
-  printf 'GITHUB_REPOSITORY must be the allowed release repository (%s), got %s\n' "${RELEASE_TARGET_REPOSITORY}" "${repo}" >&2
-  exit 1
-fi
-if [[ -n "${remote_repo}" && "${repo}" != "${remote_repo}" ]]; then
-  printf 'checked out origin (%s) does not match GITHUB_REPOSITORY (%s).\n' "${remote_repo}" "${repo}" >&2
-  exit 1
-fi
 if [[ -z "${repo}" ]]; then
   repo="${RELEASE_TARGET_REPOSITORY}"
 else
-  if [[ "${remote_repo}" == "${RELEASE_TARGET_REPOSITORY}" || "${repo}" == "${RELEASE_TARGET_REPOSITORY}" ]]; then
-    repo="${RELEASE_TARGET_REPOSITORY}"
+  if [[ -n "${remote_repo}" && "${repo}" != "${remote_repo}" ]]; then
+    printf 'checked out origin (%s) does not match GITHUB_REPOSITORY (%s).\n' "${remote_repo}" "${repo}" >&2
+    exit 1
   fi
 fi
 if [[ "${repo}" != "${RELEASE_TARGET_REPOSITORY}" ]]; then

@@ -4097,12 +4097,13 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
     if cleanup_failed_paths:
         status = "error"
         message = f"{message}; {_cleanup_failure_error(cleanup_failed_paths)}"
+    reveal_transcript = _confirm_plaintext_transcript_output(args)
     return {
         "status": status,
         "message": message,
         **({"error": message, "cleanup_failed_paths": cleanup_failed_paths} if cleanup_failed_paths else {}),
-        "transcript": _transcript_payload_text(text, transcript_encryption, args),
-        "transcript_output_redacted": bool(text) and transcript_encryption != ARTIFACT_ENCRYPTION_OFF and not _confirm_plaintext_transcript_output(args),
+        "transcript": text if reveal_transcript else "",
+        "transcript_output_redacted": bool(text) and not reveal_transcript,
         "transcript_path": str(stored_text_path),
         "security": _public_security_post_processing(security_post_processing),
         "transcript_file_cap": transcript_cleanup,
@@ -4454,7 +4455,7 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_file.add_argument(
         "--confirm-plaintext-output",
         action="store_true",
-        help="allow full transcript text in command output even when the stored transcript is encrypted",
+        help="allow full transcript text in command output; transcript remains redacted by default",
     )
     transcribe_file.set_defaults(handler=command_transcribe_file)
     return parser

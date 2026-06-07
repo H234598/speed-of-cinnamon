@@ -1133,11 +1133,15 @@ def _clipboard_targets_contain_non_text_payload(targets: str) -> bool:
         "string",
         "utf8_string",
     }
+    non_text_text_targets = {"text/uri-list", "text/x-moz-url"}
     saw_text_target = False
     for line in str(targets or "").splitlines():
-        target = line.strip().lower()
+        raw_target = line.strip().lower()
+        target = raw_target.split(";", 1)[0]
         if not target or target in ignored:
             continue
+        if target in non_text_text_targets:
+            return True
         if target in known_text_targets or target.startswith("text/"):
             saw_text_target = True
             continue

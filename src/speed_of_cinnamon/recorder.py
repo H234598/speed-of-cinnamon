@@ -285,7 +285,10 @@ def _read_ffmpeg_output(handle: io.BufferedRandom, *, completed_output: object, 
 
 def _decode_ffmpeg_output(payload: object) -> str:
     if isinstance(payload, bytes):
-        return payload.decode("utf-8", errors="ignore").strip()
+        try:
+            return payload.decode("utf-8").strip()
+        except UnicodeDecodeError as exc:
+            raise RecorderError("ffmpeg output contains invalid UTF-8") from exc
     if isinstance(payload, str):
         return payload.strip()
     return ""

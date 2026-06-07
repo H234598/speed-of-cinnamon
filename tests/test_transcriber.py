@@ -427,6 +427,64 @@ class TranscriberTest(unittest.TestCase):
 
             self.assertFalse(text.exists())
 
+    def test_template_with_text_placeholder_reports_cleanup_error_on_read_error(self) -> None:
+        def command_writes_invalid(*_args: object, **_kwargs: object) -> str:
+            text.write_bytes(b"invalid\\x00text")
+            return "generated transcript"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text = Path(tmp) / "sample.txt"
+
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.split_command_chain", return_value=[("cmd",)]),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber.run_command_chain",
+                    side_effect=command_writes_invalid,
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._remove_generated_transcript_file",
+                    side_effect=TranscriptionError("failed to remove generated transcript"),
+                ),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "failed to read generated transcript") as raised:
+                    transcribe_with_template("{text}", audio, "en", text)
+
+        self.assertTrue(
+            any(
+                "transcript cleanup failed: failed to remove generated transcript" in note
+                for note in getattr(raised.exception, "__notes__", [])
+            )
+        )
+
+    def test_template_with_text_placeholder_reports_cleanup_error_on_command_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text = Path(tmp) / "sample.txt"
+
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.split_command_chain", return_value=[("cmd",)]),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber.run_command_chain",
+                    side_effect=CommandChainError("command failed"),
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._remove_generated_transcript_file",
+                    side_effect=TranscriptionError("failed to remove generated transcript"),
+                ),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "command failed") as raised:
+                    transcribe_with_template("{text}", audio, "en", text)
+
+            self.assertTrue(
+                any(
+                    "transcript cleanup failed: failed to remove generated transcript" in note
+                    for note in getattr(raised.exception, "__notes__", [])
+                )
+            )
+
     def test_read_file_head_rejects_invalid_utf8(self) -> None:
         with tempfile.TemporaryFile() as handle:
             handle.write(b"ok\xff")
@@ -1391,7 +1449,7 @@ class TranscriberTest(unittest.TestCase):
                 with transcriber_module._staged_audio_file_for_local_backend(audio, expected_snapshot=snapshot) as staged:
                     (staged.parent / "leftover").write_bytes(b"leftover")
 
-    def test_staged_audio_cleanup_does_not_mask_backend_error(self) -> None:
+    def test_staged_audio_cleanup_reports_failure_after_backend_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
             audio.write_bytes(b"audio")
@@ -1401,10 +1459,17 @@ class TranscriberTest(unittest.TestCase):
                 include_hash=True,
             )
 
-            with self.assertRaisesRegex(RuntimeError, "backend failed"):
+            with self.assertRaisesRegex(RuntimeError, "backend failed") as raised:
                 with transcriber_module._staged_audio_file_for_local_backend(audio, expected_snapshot=snapshot) as staged:
                     (staged.parent / "leftover").write_bytes(b"leftover")
                     raise RuntimeError("backend failed")
+
+            self.assertTrue(
+                any(
+                    "failed to clean up staged audio directory" in note
+                    for note in getattr(raised.exception, "__notes__", [])
+                )
+            )
 
     def test_resolve_whisper_cpp_accepts_fedora_pwcpp(self) -> None:
         def which(command: str, path: str | None = None) -> str | None:

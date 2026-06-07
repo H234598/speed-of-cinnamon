@@ -29,6 +29,10 @@ const PASTE_FOCUS_DELAY_MS = 120;
 const PASTE_SUBMIT_DELAY_MS = 300;
 const CLIPBOARD_READY_RETRY_MS = 40;
 const CLIPBOARD_READY_TIMEOUT_MS = 1000;
+const NON_TEXT_TEXT_CLIPBOARD_TARGETS = {
+  "text/uri-list": true,
+  "text/x-moz-url": true
+};
 const SELF_PROTECTION_NOTICE_COOLDOWN_MS = 3000;
 const CLIPBOARD_OVERWRITE_APPROVAL_TTL_MS = 5000;
 const CLIPBOARD_TARGET_TIMEOUT_SECONDS = 1;
@@ -204,7 +208,6 @@ const AUTO_PASTE_IDENTITY_MARKERS = {
   "excel": [
     "calc",
     "chrome-excel.office.com",
-    "et",
     "excel",
     "freeoffice",
     "libreoffice",
@@ -5093,10 +5096,36 @@ MyApplet.prototype = {
     for (let i = 0; i < values.length; i++) {
       let value = values[i];
       for (let j = 0; j < allowed.length; j++) {
-        if (value.indexOf(allowed[j]) >= 0) {
+        if (this._windowIdentityValueMatchesMarker(value, allowed[j])) {
           return true;
         }
       }
+    }
+    return false;
+  },
+
+  _windowIdentityValueMatchesMarker: function(value, marker) {
+    let haystack = String(value || "").toLowerCase();
+    let markerValue = String(marker || "").trim().toLowerCase();
+    if (!haystack || !markerValue) {
+      return false;
+    }
+    if (haystack.indexOf(markerValue) < 0) {
+      return false;
+    }
+    if (markerValue.length > 3 || /[^a-z0-9]/.test(markerValue)) {
+      return true;
+    }
+    let index = haystack.indexOf(markerValue);
+    while (index >= 0) {
+      let before = index === 0 ? "" : haystack[index - 1];
+      let after = index + markerValue.length >= haystack.length ? "" : haystack[index + markerValue.length];
+      let boundaryBefore = before === "" || /[^a-z0-9]/.test(before);
+      let boundaryAfter = after === "" || /[^a-z0-9]/.test(after);
+      if (boundaryBefore && boundaryAfter) {
+        return true;
+      }
+      index = haystack.indexOf(markerValue, index + markerValue.length);
     }
     return false;
   },
@@ -5189,8 +5218,13 @@ MyApplet.prototype = {
     let lines = String(targets || "").split("\n");
     let nonTextTargets = [];
     for (let i = 0; i < lines.length; i++) {
-      let target = String(lines[i]).trim().toLowerCase();
+      let rawTarget = String(lines[i]).trim().toLowerCase();
+      let target = rawTarget.split(";", 1)[0];
       if (!target || ignored[target]) {
+        continue;
+      }
+      if (NON_TEXT_TEXT_CLIPBOARD_TARGETS[target]) {
+        nonTextTargets.push(target);
         continue;
       }
       if (knownTextTargets[target] || target.indexOf("text/") === 0) {
@@ -6139,8 +6173,8 @@ MyApplet.prototype = {
     if (!this.lastTranscript) {
       return _("No transcript yet");
     }
-    let clean = this.lastTranscript.replace(/\s+/g, " ").trim();
-    return clean.length > 80 ? clean.slice(0, 77) + "..." : clean;
+    let transcriptLength = String(this.lastTranscript).length;
+    return _("Transcript preview hidden (length: ") + String(transcriptLength) + " chars)";
   },
 
   _formatSeconds: function(seconds) {

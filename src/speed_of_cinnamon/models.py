@@ -1528,6 +1528,8 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
             if previous_cache_entry_exists and previous_cache_entry is not None:
                 _model_checksum_cache[str(path)] = dict(previous_cache_entry)
                 _write_model_checksum_cache()
+            else:
+                _model_checksum_cache.pop(str(path), None)
         raise
     if backup_path is not None:
         try:
