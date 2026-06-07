@@ -260,8 +260,9 @@ retained recording files are protected. The default is `Secret Service keyring`,
 desktop keyring. `Passphrase` mode uses `SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE`, an existing
 `~/.config/speed-of-cinnamon/artifact.key`, `SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE`, or a newly generated default key
 file when no explicit source exists. Prefer the file variable for explicit deployments. If keyring mode cannot use the
-desktop keyring from CLI context, it tries the same passphrase fallback. Weak explicit sources are rejected; a weak
-generated default key file is replaced. Without a usable key source, encrypted writes fail closed.
+desktop keyring, passphrase fallback is allowed only when `SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE` or
+`SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE` is set explicitly; otherwise encrypted writes fail closed. Weak explicit
+sources are rejected; a weak generated default key file is replaced.
 Files ending in `.socenc` must be valid Speed of Cinnamon encrypted envelopes. Plaintext or malformed `.socenc` files are
 rejected or skipped instead of being treated as transcript or recording content.
 

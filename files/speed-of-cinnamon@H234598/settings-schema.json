@@ -567,7 +567,7 @@
   "openai-compatible-flex-processing": {
     "type": "switch",
     "description": "OpenAI Flex processing",
-    "tooltip": "Use OpenAI Flex processing for OpenAI API speech-to-text and text polishing requests. This adds service_tier=flex only for api.openai.com calls.",
+    "tooltip": "Use OpenAI Flex processing for OpenAI API speech-to-text and text polishing requests. This adds service_tier=flex only for api.openai.com calls. If OpenAI rejects the Flex service_tier, the request fails visibly instead of silently retrying without Flex; turn this off when standard processing is intended.",
     "default": true
   },
   "openai-compatible-api-key": {
@@ -586,7 +586,7 @@
   "artifact-encryption": {
     "type": "combobox",
     "description": "Stored transcript and recording encryption",
-    "tooltip": "Controls encryption for stored transcript files and retained recording files. Secret Service keyring is the recommended desktop mode. Passphrase mode uses SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE, an existing ~/.config/speed-of-cinnamon/artifact.key, SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE, or generates ~/.config/speed-of-cinnamon/artifact.key at runtime when no passphrase source exists. This is also the passphrase fallback for keyring failures. Off stores files as plaintext. Applet transcript export bundles remain encrypted even when stored-artifact encryption is Off.",
+    "tooltip": "Controls encryption for stored transcript files and retained recording files. Secret Service keyring is the recommended desktop mode. Passphrase mode uses SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE, an existing ~/.config/speed-of-cinnamon/artifact.key, SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE, or generates ~/.config/speed-of-cinnamon/artifact.key at runtime when no passphrase source exists. Keyring failure falls back to passphrase only when SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE or SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE is set explicitly. Off stores files as plaintext. Applet transcript export bundles remain encrypted even when stored-artifact encryption is Off.",
     "options": {
       "Secret Service keyring": "keyring",
       "Passphrase": "passphrase",
@@ -596,8 +596,8 @@
   },
   "artifact-encryption-help-keyring": {
     "type": "label",
-    "description": "Keyring: Uses the desktop Secret Service and is recommended for normal desktop use.\nFallback and fail closed: If Keyring fails, Speed of Cinnamon falls back to Passphrase and can generate the default key file at runtime. If encryption is selected but no usable key source can be read or generated, stored transcript and recording writes fail closed instead of silently keeping plaintext.\nWarning popup: If the backend ever reports that a stored artifact was written without encryption while encryption is expected, the applet shows a critical warning popup.",
-    "tooltip": "Recommended for normal desktop use. Stores the encryption key in the desktop Secret Service and only uses the passphrase fallback when the keyring path fails.",
+    "description": "Keyring: Uses the desktop Secret Service and is recommended for normal desktop use.\nFallback and fail closed: If Keyring fails, Speed of Cinnamon falls back to Passphrase only when SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE or SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE is set explicitly. Otherwise stored transcript and recording writes fail closed instead of silently keeping plaintext.\nWarning popup: If the backend ever reports that a stored artifact was written without encryption while encryption is expected, the applet shows a critical warning popup.",
+    "tooltip": "Recommended for normal desktop use. Stores the encryption key in the desktop Secret Service. Passphrase fallback after keyring failure requires an explicit passphrase file or environment passphrase.",
     "dependency": "artifact-encryption=keyring"
   },
   "artifact-encryption-help-passphrase": {

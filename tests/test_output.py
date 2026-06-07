@@ -548,7 +548,7 @@ class OutputTest(unittest.TestCase):
             resolved_command="/usr/bin/xdotool",
         )
 
-    def test_paste_from_clipboard_falls_back_to_wtype_before_xdotool_key_attempt(self) -> None:
+    def test_paste_from_clipboard_does_not_fallback_to_wtype_if_xdotool_is_unreliable(self) -> None:
         def fake_which(command: str, path: str | None = None) -> str | None:
             del path
             if command == "xdotool":
@@ -561,21 +561,11 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output.shutil.which", side_effect=fake_which),
             mock.patch("speed_of_cinnamon.output._active_x_window_snapshot", side_effect=OutputError("xdotool unavailable")),
             mock.patch("speed_of_cinnamon.output._run_with_input") as mocked_run,
-            mock.patch("speed_of_cinnamon.output.log_event") as mocked_log,
         ):
-            paste_from_clipboard()
+            with self.assertRaisesRegex(OutputError, "xdotool unavailable"):
+                paste_from_clipboard()
 
-        mocked_log.assert_called_once_with(
-            "warning",
-            "clipboard_paste_xdotool_failed_falling_back_to_wtype",
-            error="xdotool unavailable",
-        )
-        mocked_run.assert_called_once_with(
-            ["wtype", "-M", "ctrl", "v", "-m", "ctrl"],
-            "",
-            timeout=10,
-            resolved_command="/usr/bin/wtype",
-        )
+        mocked_run.assert_not_called()
 
     def test_paste_from_clipboard_reports_xdotool_error_without_wtype_fallback(self) -> None:
         def fake_which(command: str, path: str | None = None) -> str | None:

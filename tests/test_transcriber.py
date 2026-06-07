@@ -1641,7 +1641,7 @@ class TranscriberTest(unittest.TestCase):
         self.assertEqual(result, "hello api")
         self.assertNotIn(b'name="service_tier"', captured["data"])
 
-    def test_openai_compatible_api_falls_back_when_transcription_flex_is_rejected(self) -> None:
+    def test_openai_compatible_api_fails_when_transcription_flex_is_rejected_without_opt_in(self) -> None:
         class Response:
             def __enter__(self):
                 return self
@@ -1674,18 +1674,18 @@ class TranscriberTest(unittest.TestCase):
             audio.write_bytes(b"audio")
             text_path = Path(tmp) / "sample.txt"
             with mock.patch("speed_of_cinnamon.transcriber._open_http_request", side_effect=fake_open_http_request):
-                result = transcribe(
-                    audio,
-                    "de",
-                    text_path,
-                    backend="openai-compatible",
-                    openai_compatible_model="gpt-4o-transcribe",
-                    openai_compatible_url="https://api.openai.com/v1",
-                    openai_compatible_api_key="secret",
-                )
-        self.assertEqual(result, "hello fallback")
+                with self.assertRaisesRegex(TranscriptionError, "OpenAI-compatible speech API failed \\(400\\)"):
+                    transcribe(
+                        audio,
+                        "de",
+                        text_path,
+                        backend="openai-compatible",
+                        openai_compatible_model="gpt-4o-transcribe",
+                        openai_compatible_url="https://api.openai.com/v1",
+                        openai_compatible_api_key="secret",
+                    )
+        self.assertEqual(len(requests), 1)
         self.assertIn(b'name="service_tier"', requests[0].data)
-        self.assertNotIn(b'name="service_tier"', requests[1].data)
 
     def test_openai_compatible_api_uses_bytearray_body_for_fallback_request(self) -> None:
         class Response:
@@ -1728,6 +1728,7 @@ class TranscriberTest(unittest.TestCase):
                     openai_compatible_model="gpt-4o-transcribe",
                     openai_compatible_url="https://api.openai.com/v1",
                     openai_compatible_api_key="secret",
+                    openai_compatible_service_tier_fallback=True,
                 )
         self.assertEqual(result, "hello fallback")
         self.assertEqual(len(requests), 2)

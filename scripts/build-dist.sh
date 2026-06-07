@@ -124,6 +124,47 @@ finally:
 PY
 }
 
+write_regular_file_from_stdin() {
+  local path=$1
+  local label=$2
+
+  python3 -c '
+import os
+import stat
+import sys
+
+path, label = sys.argv[1:3]
+payload = sys.stdin.buffer.read()
+flags = os.O_WRONLY | os.O_CREAT
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+try:
+    fd = os.open(path, flags, 0o600)
+except OSError as exc:
+    print(f"failed to open {label} for writing: {path}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+try:
+    file_stat = os.fstat(fd)
+    if not stat.S_ISREG(file_stat.st_mode):
+        print(f"{label} must be a regular file: {path}", file=sys.stderr)
+        raise SystemExit(1)
+    if getattr(file_stat, "st_nlink", 1) != 1:
+        print(f"{label} must not be hardlinked: {path}", file=sys.stderr)
+        raise SystemExit(1)
+    os.ftruncate(fd, 0)
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            print(f"failed to write {label}: {path}", file=sys.stderr)
+            raise SystemExit(1)
+        view = view[written:]
+    os.fsync(fd)
+finally:
+    os.close(fd)
+' "${path}" "${label}"
+}
+
 replace_with_finalize_lock() {
   local lock_path=$1
   local staging_path=$2
@@ -214,7 +255,7 @@ if find "${work_dir}/${package}" -type l -print -quit | grep -q .; then
   exit 1
 fi
 
-cat > "${work_dir}/${package}/RELEASE-MANIFEST.txt" <<EOF
+write_regular_file_from_stdin "${work_dir}/${package}/RELEASE-MANIFEST.txt" "release manifest" <<EOF
 ${package}
 
 Contains:
@@ -233,8 +274,8 @@ fsync_regular_file "${staging_tarball}" "staged dist tarball"
 checksum_value="$(sha256sum "${staging_tarball}")"
 checksum_value="${checksum_value%% *}"
 staging_checksum="$(mktemp "${dist_dir}/.${package}.tar.gz.sha256.XXXXXX")"
-printf '%s  %s\n' "${checksum_value}" "${package}.tar.gz" > "${staging_checksum}"
-fsync_regular_file "${staging_checksum}" "staged dist checksum"
+printf '%s  %s\n' "${checksum_value}" "${package}.tar.gz" \
+  | write_regular_file_from_stdin "${staging_checksum}" "staged dist checksum"
 replace_with_finalize_lock \
   "${dist_finalize_lock}" \
   "${staging_tarball}" \

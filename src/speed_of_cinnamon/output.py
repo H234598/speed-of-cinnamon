@@ -1100,9 +1100,7 @@ def paste_from_clipboard(expected_window_snapshot: tuple[str, str, str] | None =
             )
             return
     wtype = _which("wtype")
-    if wtype:
-        if xdotool_error is not None:
-            log_event("warning", "clipboard_paste_xdotool_failed_falling_back_to_wtype", error=str(xdotool_error))
+    if wtype and xdotool_error is None:
         _run_with_input(
             ["wtype", "-M", "ctrl", "v", "-m", "ctrl"],
             "",

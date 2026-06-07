@@ -554,6 +554,46 @@ if [[ "${notes_file_abs}" != "${notes_tmp_root}/speed-of-cinnamon-release-notes-
   exit 1
 fi
 notes_file="${notes_file_abs}"
+write_regular_file_from_stdin() {
+  local path=$1
+  local label=$2
+
+  python3 -c '
+import os
+import stat
+import sys
+
+path, label = sys.argv[1:3]
+payload = sys.stdin.buffer.read()
+flags = os.O_WRONLY | os.O_CREAT
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+try:
+    fd = os.open(path, flags, 0o600)
+except OSError as exc:
+    print(f"failed to open {label} for writing: {path}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+try:
+    file_stat = os.fstat(fd)
+    if not stat.S_ISREG(file_stat.st_mode):
+        print(f"{label} must be a regular file: {path}", file=sys.stderr)
+        raise SystemExit(1)
+    if getattr(file_stat, "st_nlink", 1) != 1:
+        print(f"{label} must not be hardlinked: {path}", file=sys.stderr)
+        raise SystemExit(1)
+    os.ftruncate(fd, 0)
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            print(f"failed to write {label}: {path}", file=sys.stderr)
+            raise SystemExit(1)
+        view = view[written:]
+    os.fsync(fd)
+finally:
+    os.close(fd)
+' "${path}" "${label}"
+}
 cleanup_notes() {
   cleanup_release_state
   "${safe_fs_cmd[@]}" remove-leaf publish "${notes_file}" >/dev/null 2>&1 || true
@@ -565,7 +605,7 @@ cleanup_notes() {
   fi
 }
 trap cleanup_notes EXIT
-cat > "${notes_file}" <<EOF
+write_regular_file_from_stdin "${notes_file}" "release notes file" <<EOF
 Speed of Cinnamon ${tag}
 
 Cinnamon-native voice typing for Fedora Cinnamon.
@@ -581,7 +621,6 @@ Assets:
 - Source RPM (generic): ${generic_src_label}
 - Snap package: ${snap_label}
 EOF
-fsync_regular_file "${notes_file}" "release notes file"
 
 if [[ "${dry_run}" == "true" ]]; then
   printf 'Dry-run mode enabled. Build and assets validated for tag %s.\n' "${tag}"
@@ -617,11 +656,11 @@ if gh release view "${tag}" --repo "${repo}" >/dev/null 2>&1; then
     exit 1
   fi
   existing_notes_file="${existing_notes_file_abs}"
-  if ! gh release view "${tag}" --repo "${repo}" --json body --jq '.body // ""' > "${existing_notes_file}"; then
+  if ! gh release view "${tag}" --repo "${repo}" --json body --jq '.body // ""' \
+      | write_regular_file_from_stdin "${existing_notes_file}" "existing release notes file"; then
     printf 'failed to snapshot existing release notes for rollback: %s\n' "${tag}" >&2
     exit 1
   fi
-  fsync_regular_file "${existing_notes_file}" "existing release notes file"
   for asset_ref in "${upload_refs[@]}"; do
     asset_name="$(basename "${asset_ref}")"
     if grep -Fxq -- "${asset_name}" <<<"${existing_assets}"; then

@@ -536,6 +536,7 @@ vocabulary to the Ollama server and expects the polished text in the `response` 
 post-processed text. The OpenAI-compatible backend calls `/v1/chat/completions` with `stream=false` and the same context.
 For OpenAI API hosts, Flex processing is enabled by default for speech-to-text and text polishing; use
 `--no-openai-compatible-flex-processing` to disable it. The Flex flag is not sent to local OpenAI-compatible servers.
+If OpenAI rejects the Flex `service_tier`, the request fails visibly instead of silently retrying without Flex.
 If your server requires a bearer token, set `SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY` in the
 environment that starts the backend.
 

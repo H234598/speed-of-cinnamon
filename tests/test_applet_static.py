@@ -1291,10 +1291,15 @@ class AppletStaticTest(unittest.TestCase):
             set(schema["artifact-encryption"]["options"].values()),
             {"keyring", "passphrase", "off"},
         )
-        self.assertIn("passphrase fallback", schema["artifact-encryption"]["tooltip"])
+        self.assertIn("passphrase only when", schema["artifact-encryption"]["tooltip"])
+        self.assertIn("is set explicitly", schema["artifact-encryption"]["tooltip"])
+        self.assertIn("fails visibly", schema["openai-compatible-flex-processing"]["tooltip"])
+        self.assertIn("instead of silently retrying without Flex", schema["openai-compatible-flex-processing"]["tooltip"])
         self.assertEqual(schema["artifact-encryption-help-keyring"]["type"], "label")
         self.assertEqual(schema["artifact-encryption-help-keyring"]["dependency"], "artifact-encryption=keyring")
         self.assertIn("fail closed", schema["artifact-encryption-help-keyring"]["description"])
+        self.assertIn("is set explicitly", schema["artifact-encryption-help-keyring"]["description"])
+        self.assertNotIn("generate the default key file", schema["artifact-encryption-help-keyring"]["description"])
         self.assertIn("critical warning popup", schema["artifact-encryption-help-keyring"]["description"])
         self.assertEqual(schema["artifact-encryption-help-passphrase"]["type"], "label")
         self.assertEqual(schema["artifact-encryption-help-passphrase"]["dependency"], "artifact-encryption=passphrase")

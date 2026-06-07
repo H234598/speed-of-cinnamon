@@ -1137,6 +1137,7 @@ def transcribe_with_openai_compatible_api(
     api_key: str = "",
     flex_processing: bool = True,
     write_transcript: bool = True,
+    openai_compatible_service_tier_fallback: bool = False,
 ) -> str:
     audio_path = validate_audio_file(audio_path)
     if _contains_escaped_null(model):
@@ -1161,6 +1162,8 @@ def transcribe_with_openai_compatible_api(
     ).strip()
     if not isinstance(flex_processing, bool):
         raise TranscriptionError("OpenAI-compatible flex processing must be a boolean")
+    if not isinstance(openai_compatible_service_tier_fallback, bool):
+        raise TranscriptionError("OpenAI-compatible service tier fallback must be a boolean")
     endpoint = _openai_compatible_endpoint(url, "/audio/transcriptions")
     endpoint_display = _safe_url_display(endpoint, field_name="OpenAI-compatible API URL")
     is_openai_api = _is_openai_api_endpoint(endpoint)
@@ -1178,6 +1181,7 @@ def transcribe_with_openai_compatible_api(
     use_flex_processing = flex_processing and is_openai_api
     if use_flex_processing:
         fields["service_tier"] = "flex"
+    allow_service_tier_fallback = use_flex_processing and openai_compatible_service_tier_fallback
 
     def _request_transcription(request_fields: dict[str, str]) -> str:
         body, boundary = _multipart_form_data(request_fields, "file", audio_path)
@@ -1206,7 +1210,7 @@ def transcribe_with_openai_compatible_api(
             with suppress(Exception):
                 exc.close()
         raw_detail = _openai_compatible_error_detail(raw_error) or exc.reason or str(exc)
-        if use_flex_processing and _is_flex_service_tier_rejected(raw_detail):
+        if allow_service_tier_fallback and _is_flex_service_tier_rejected(raw_detail):
             fallback_fields = dict(fields)
             fallback_fields.pop("service_tier", None)
             try:
@@ -1348,6 +1352,7 @@ def transcribe(
     openai_compatible_url: str = DEFAULT_OPENAI_COMPATIBLE_URL,
     openai_compatible_api_key: str = "",
     openai_compatible_flex_processing: bool = True,
+    openai_compatible_service_tier_fallback: bool = False,
 ) -> str:
     if not isinstance(audio_path, Path):
         raise TranscriptionError("audio path must be a Path")
@@ -1388,6 +1393,8 @@ def transcribe(
         openai_compatible_api_key = _coerce_environment_value("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY") or ""
     if not isinstance(openai_compatible_flex_processing, bool):
         raise TranscriptionError("OpenAI-compatible flex processing must be a boolean")
+    if not isinstance(openai_compatible_service_tier_fallback, bool):
+        raise TranscriptionError("OpenAI-compatible service tier fallback must be a boolean")
     if _contains_escaped_null(openai_compatible_model):
         raise TranscriptionError("OpenAI-compatible speech model contains invalid null byte")
     if _contains_escaped_null(openai_compatible_api_key):
@@ -1461,6 +1468,7 @@ def transcribe(
             openai_compatible_url,
             openai_compatible_api_key,
             openai_compatible_flex_processing,
+            openai_compatible_service_tier_fallback=openai_compatible_service_tier_fallback,
             write_transcript=False,
         )
     else:

@@ -384,6 +384,10 @@ def _explicit_passphrase_file() -> Path | None:
     return None
 
 
+def _explicit_passphrase_source_configured() -> bool:
+    return bool(os.environ.get(PASSPHRASE_ENV)) or _explicit_passphrase_file() is not None
+
+
 def _configured_passphrase_file(*, include_default: bool = True) -> Path | None:
     explicit_path = _explicit_passphrase_file()
     if explicit_path is not None:
@@ -571,6 +575,11 @@ def _key_for_encryption(requested_mode: str) -> tuple[KeyMaterial, dict[str, obj
     try:
         return KeyMaterial(mode=ARTIFACT_ENCRYPTION_KEYRING, key=_load_keyring_key()), {"kdf": "none"}
     except ArtifactCryptoError as keyring_error:
+        if not _explicit_passphrase_source_configured():
+            raise ArtifactCryptoError(
+                "Secret Service keyring is unavailable and passphrase fallback failed; "
+                f"set {PASSPHRASE_FILE_ENV} or {PASSPHRASE_ENV} explicitly"
+            ) from keyring_error
         try:
             key, salt = _passphrase_key_for_encryption(allow_implicit_default=False)
         except ArtifactCryptoError as passphrase_error:

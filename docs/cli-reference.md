@@ -163,7 +163,9 @@ speed-of-cinnamon toggle \
 For OpenAI API calls, Flex processing is enabled by default for speech-to-text
 and text polishing. Disable it with `--no-openai-compatible-flex-processing`.
 The flag is only sent to `api.openai.com`, not to local OpenAI-compatible
-servers.
+servers. If OpenAI rejects the Flex `service_tier`, the request fails visibly
+instead of silently retrying without Flex; disable Flex explicitly when standard
+processing is intended.
 
 List local text models:
 
@@ -292,9 +294,9 @@ speed-of-cinnamon toggle --artifact-encryption keyring --keep-recording-artifact
 `SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE`, an existing `~/.config/speed-of-cinnamon/artifact.key`,
 `SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE`, or a newly generated default key file when no explicit source exists. Prefer
 the file variable for explicit deployments to avoid shell history exposure. Keyring mode stores one random master key in
-the desktop Secret Service through `secret-tool`. If keyring access fails in CLI mode, the backend tries the same
-passphrase fallback. Weak explicit sources are rejected; a weak generated default key file is replaced. If no usable key
-source is available, encrypted writes fail closed instead of writing a plaintext archive file.
+the desktop Secret Service through `secret-tool`. If keyring access fails, passphrase fallback is allowed only when
+`SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE` or `SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE` is set explicitly; otherwise
+encrypted writes fail closed. Weak explicit sources are rejected; a weak generated default key file is replaced.
 Files ending in `.socenc` must be valid Speed of Cinnamon encrypted envelopes. Plaintext or malformed `.socenc` files are
 rejected or skipped instead of being treated as transcript or recording content.
 When stored transcript encryption is enabled, transcript text is redacted from command JSON output unless

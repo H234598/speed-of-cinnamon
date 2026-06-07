@@ -146,7 +146,7 @@ class ArtifactCryptoTest(unittest.TestCase):
                 with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file must be private"):
                     artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
 
-    def test_keyring_mode_falls_back_to_passphrase_when_cli_keyring_fails(self) -> None:
+    def test_keyring_mode_falls_back_to_passphrase_when_explicit_env_is_set(self) -> None:
         with (
             mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: SECOND_STRONG_PASSPHRASE}, clear=False),
             mock.patch("speed_of_cinnamon.artifact_crypto._load_keyring_key", side_effect=artifact_crypto.ArtifactCryptoError("no dbus")),
@@ -155,6 +155,20 @@ class ArtifactCryptoTest(unittest.TestCase):
             self.assertEqual(mode, "passphrase")
             self.assertIn(b'"fallback_from":"keyring"', encrypted)
             self.assertEqual(artifact_crypto.decrypt_bytes(encrypted, kind="transcript"), b"payload")
+
+    def test_keyring_mode_falls_back_to_passphrase_when_explicit_file_is_set(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "passphrase.txt"
+            path.write_text(STRONG_PASSPHRASE + "\n", encoding="utf-8")
+            path.chmod(0o600)
+            with (
+                mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_FILE_ENV: str(path)}, clear=False),
+                mock.patch("speed_of_cinnamon.artifact_crypto._load_keyring_key", side_effect=artifact_crypto.ArtifactCryptoError("no dbus")),
+            ):
+                encrypted, mode = artifact_crypto.encrypt_bytes(b"payload", "keyring", kind="transcript")
+                self.assertEqual(mode, "passphrase")
+                self.assertIn(b'"fallback_from":"keyring"', encrypted)
+                self.assertEqual(artifact_crypto.decrypt_bytes(encrypted, kind="transcript"), b"payload")
 
     def test_keyring_mode_does_not_generate_default_passphrase_fallback_when_cli_keyring_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

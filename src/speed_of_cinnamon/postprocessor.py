@@ -719,6 +719,7 @@ def post_process_with_openai_compatible(
     prompt: str = "",
     api_key: str = "",
     flex_processing: bool = True,
+    openai_compatible_service_tier_fallback: bool = False,
 ) -> str:
     if not isinstance(model, str) or isinstance(model, bool):
         raise PostProcessError("openai-compatible model must be text")
@@ -728,6 +729,8 @@ def post_process_with_openai_compatible(
         raise PostProcessError("api key must be text")
     if not isinstance(flex_processing, bool):
         raise PostProcessError("OpenAI-compatible flex processing must be a boolean")
+    if not isinstance(openai_compatible_service_tier_fallback, bool):
+        raise PostProcessError("OpenAI-compatible service tier fallback must be a boolean")
     model_name = _assert_openai_compatible_text(
         str(model or ""),
         field_name="openai-compatible model",
@@ -748,6 +751,7 @@ def post_process_with_openai_compatible(
     use_flex_processing = flex_processing and _is_openai_api_endpoint(endpoint)
     if use_flex_processing:
         payload["service_tier"] = "flex"
+    allow_service_tier_fallback = use_flex_processing and openai_compatible_service_tier_fallback
 
     def _request_chat_completion(request_payload: dict[str, object]) -> str:
         request = urllib.request.Request(
@@ -770,7 +774,7 @@ def post_process_with_openai_compatible(
             with suppress(Exception):
                 exc.close()
         detail = _sanitize_remote_error_detail(_openai_compatible_error_detail(raw_error) or exc.reason or str(exc))
-        if use_flex_processing and _is_flex_service_tier_rejected(detail):
+        if allow_service_tier_fallback and _is_flex_service_tier_rejected(detail):
             fallback_payload = dict(payload)
             fallback_payload.pop("service_tier", None)
             try:
@@ -829,6 +833,7 @@ def post_process_text(
     openai_compatible_url: str = DEFAULT_OPENAI_COMPATIBLE_URL,
     openai_compatible_api_key: str = "",
     openai_compatible_flex_processing: bool = True,
+    openai_compatible_service_tier_fallback: bool = False,
 ) -> str:
     if not isinstance(text, str) or isinstance(text, bool):
         raise PostProcessError("text must be text")
@@ -850,6 +855,8 @@ def post_process_text(
         raise PostProcessError("openai-compatible API key must be text")
     if not isinstance(openai_compatible_flex_processing, bool):
         raise PostProcessError("OpenAI-compatible flex processing must be a boolean")
+    if not isinstance(openai_compatible_service_tier_fallback, bool):
+        raise PostProcessError("OpenAI-compatible service tier fallback must be a boolean")
     raw_backend = backend or "command"
     if _contains_escaped_null(raw_backend):
         raise PostProcessError("backend contains invalid null byte")
@@ -881,6 +888,7 @@ def post_process_text(
             ollama_prompt,
             openai_compatible_api_key,
             openai_compatible_flex_processing,
+            openai_compatible_service_tier_fallback,
         )
     if normalized_backend not in {"command", "custom"}:
         raise PostProcessError(f"unknown post-process backend: {backend}")
