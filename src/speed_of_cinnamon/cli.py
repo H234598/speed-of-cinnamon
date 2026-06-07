@@ -2151,6 +2151,39 @@ def _remove_recording_artifact(path_value: str | None) -> bool:
     return remove_file(path_value, suffix=".wav") or remove_file(path_value, suffix=".flac")
 
 
+def _recording_artifact_missing_but_safe(path_value: str | None, *, suffix: str | tuple[str, ...]) -> bool:
+    if not path_value:
+        return False
+    try:
+        path_value = _assert_clean_text(path_value, field_name="path", max_chars=MAX_PATH_CHARS)
+        path = validate_recording_path(
+            Path(path_value),
+            suffix=suffix,
+            require_recordings_dir=True,
+        )
+        path.lstat()
+    except FileNotFoundError:
+        return True
+    except (RecorderError, RuntimeError, ValueError, OSError, TypeError):
+        return False
+    return False
+
+
+def _transcript_artifact_missing_but_safe(path: Path | None) -> bool:
+    if not isinstance(path, Path) or not _is_transcript_artifact(path):
+        return False
+    try:
+        assert_safe_path_components(path, field_name="transcript file")
+        assert_no_symlink_ancestors(path, field_name="transcript file")
+        path.resolve(strict=False).relative_to(transcript_dir().resolve(strict=False))
+        path.lstat()
+    except FileNotFoundError:
+        return True
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return False
+
+
 def _stabilize_recording_artifact_path(artifact_path: Path) -> Path:
     if not isinstance(artifact_path, Path):
         raise RuntimeError("recording artifact path is invalid")
@@ -3140,13 +3173,23 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
 
         audio_deleted = _remove_recording_artifact(discarded_audio_path)
         log_deleted = remove_file(state.log_path, suffix=".log")
-        transcript_path = normalized_path(state.transcript_path)
+        if not audio_deleted and discarded_audio_path:
+            if Path(str(discarded_audio_path)).name.lower().endswith(ENCRYPTED_RECORDING_ARTIFACT_SUFFIXES):
+                audio_deleted = _recording_artifact_missing_but_safe(discarded_audio_path, suffix=".socenc")
+            else:
+                audio_deleted = _recording_artifact_missing_but_safe(discarded_audio_path, suffix=(".wav", ".flac"))
+        if not log_deleted and state.log_path:
+            log_deleted = _recording_artifact_missing_but_safe(state.log_path, suffix=".log")
         transcript_deleted = True
-        if transcript_path is not None:
+        if state.transcript_path:
+            transcript_path: Path | None = None
             try:
+                transcript_path = Path(_assert_clean_text(state.transcript_path, field_name="transcript path", max_chars=MAX_PATH_CHARS))
                 transcript_deleted = _remove_transcript_file(transcript_path)
             except RuntimeError:
                 transcript_deleted = False
+            if not transcript_deleted and transcript_path is not None:
+                transcript_deleted = _transcript_artifact_missing_but_safe(transcript_path)
         if (
             (discarded_audio_path and not audio_deleted)
             or (state.log_path and not log_deleted)

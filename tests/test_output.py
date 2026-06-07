@@ -1573,12 +1573,13 @@ class OutputTest(unittest.TestCase):
                 finally:
                     _release_clipboard_dedup_lock(acquired)
 
-    @mock.patch("speed_of_cinnamon.output.os.unlink")
+    @mock.patch("speed_of_cinnamon.output.os.unlink", wraps=os.unlink)
     def test_clipboard_dedupe_lock_release_uses_directory_fd_unlink(self, mocked_unlink: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):
                 lock_path = output_module.state_dir() / output_module.CLIPBOARD_DEDUP_LOCK_FILE
                 lock_path.parent.mkdir(parents=True, exist_ok=True)
+                lock_path.write_text(f"{os.getpid()}\n", encoding="utf-8")
 
                 _release_clipboard_dedup_lock(lock_path)
 
@@ -1605,6 +1606,30 @@ class OutputTest(unittest.TestCase):
                 self.assertFalse(lock_path.exists())
 
         self.assertTrue(any(stat.S_ISDIR(mode) for mode in fsync_modes))
+
+    def test_clipboard_dedupe_lock_release_does_not_delete_replaced_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):
+                lock_path = _acquire_clipboard_dedup_lock()
+                self.assertIsNotNone(lock_path)
+                assert lock_path is not None
+                lock_path.unlink()
+                lock_path.write_text("999999999\nforeign-identity\n", encoding="utf-8")
+
+                _release_clipboard_dedup_lock(lock_path)
+
+                self.assertEqual(lock_path.read_text(encoding="utf-8"), "999999999\nforeign-identity\n")
+
+    def test_clipboard_dedupe_lock_release_does_not_delete_foreign_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):
+                lock_path = output_module.state_dir() / output_module.CLIPBOARD_DEDUP_LOCK_FILE
+                lock_path.parent.mkdir(parents=True, exist_ok=True)
+                lock_path.write_text(f"{os.getpid()}\nforeign-identity\n", encoding="utf-8")
+
+                _release_clipboard_dedup_lock(lock_path)
+
+                self.assertEqual(lock_path.read_text(encoding="utf-8"), f"{os.getpid()}\nforeign-identity\n")
 
     def test_clear_clipboard_dedup_state_uses_dir_fd_unlink_and_fsync(self) -> None:
         fsync_modes: list[int] = []
@@ -1739,6 +1764,21 @@ class OutputTest(unittest.TestCase):
                     self.assertIsNone(_acquire_clipboard_dedup_lock())
 
                 self.assertEqual(lock_path.read_text(encoding="utf-8").strip(), str(os.getpid()))
+
+    def test_clipboard_dedupe_lock_write_failure_does_not_delete_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):
+                lock_path = output_module.state_dir() / output_module.CLIPBOARD_DEDUP_LOCK_FILE
+
+                def replace_then_fail(_fd: int, _payload: bytes) -> int:
+                    lock_path.unlink()
+                    lock_path.write_text("999999999\nforeign-identity\n", encoding="utf-8")
+                    raise OSError("write failed")
+
+                with mock.patch("speed_of_cinnamon.output.os.write", side_effect=replace_then_fail):
+                    self.assertIsNone(_acquire_clipboard_dedup_lock())
+
+                self.assertEqual(lock_path.read_text(encoding="utf-8"), "999999999\nforeign-identity\n")
 
     def test_type_text_with_invalid_delay_clamps_to_zero(self) -> None:
         calls: list[list[str]] = []

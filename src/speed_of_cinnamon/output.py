@@ -470,6 +470,27 @@ def _same_clipboard_lock_snapshot(first: os.stat_result, second: os.stat_result)
     )
 
 
+def _unlink_clipboard_lock_at(
+    parent_fd: int,
+    path: Path,
+    *,
+    expected_stat: os.stat_result | None = None,
+) -> bool:
+    try:
+        current = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    if not stat.S_ISREG(current.st_mode):
+        return False
+    if getattr(current, "st_nlink", 1) != 1:
+        return False
+    if expected_stat is not None and not _same_clipboard_lock_snapshot(current, expected_stat):
+        return False
+    os.unlink(path.name, dir_fd=parent_fd)
+    os.fsync(parent_fd)
+    return True
+
+
 def _acquire_clipboard_dedup_lock() -> Path | None:
     try:
         path = _clipboard_dedup_lock_path()
@@ -488,6 +509,7 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
     try:
         for _attempt in range(2):
             now = time.time()
+            created_stat: os.stat_result | None = None
             try:
                 fd = os.open(
                     path.name,
@@ -495,6 +517,7 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                     0o600,
                     dir_fd=parent_fd,
             )
+                created_stat = os.fstat(fd)
             except FileExistsError:
                 try:
                     existing = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
@@ -525,8 +548,8 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                 if not _same_clipboard_lock_snapshot(existing, current):
                     return None
                 try:
-                    os.unlink(path.name, dir_fd=parent_fd)
-                    os.fsync(parent_fd)
+                    if not _unlink_clipboard_lock_at(parent_fd, path, expected_stat=current):
+                        return None
                 except OSError:
                     return None
                 continue
@@ -545,8 +568,7 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                 except OSError:
                     pass
                 try:
-                    os.unlink(path.name, dir_fd=parent_fd)
-                    os.fsync(parent_fd)
+                    _unlink_clipboard_lock_at(parent_fd, path, expected_stat=created_stat)
                 except OSError:
                     pass
                 return None
@@ -575,8 +597,15 @@ def _release_clipboard_dedup_lock(path: Path | None) -> None:
         return
     try:
         try:
-            os.unlink(path.name, dir_fd=parent_fd)
-            os.fsync(parent_fd)
+            current = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            owner_pid = _read_clipboard_dedup_lock_pid_at(parent_fd, path.name)
+            if owner_pid != os.getpid():
+                return
+            owner_identity = _read_clipboard_dedup_lock_identity_at(parent_fd, path.name)
+            current_identity = _clipboard_lock_identity_for_pid(os.getpid())
+            if owner_identity is not None and owner_identity != current_identity:
+                return
+            _unlink_clipboard_lock_at(parent_fd, path, expected_stat=current)
         except OSError:
             pass
     finally:

@@ -6416,6 +6416,141 @@ class CliTest(unittest.TestCase):
         self.assertFalse(log.exists())
         self.assertEqual(final_state.status, "idle")
 
+    def test_cancel_treats_missing_safe_artifacts_as_already_discarded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            transcripts = tmp_path / "speed-of-cinnamon" / "transcripts"
+            recordings.mkdir(parents=True)
+            transcripts.mkdir(parents=True)
+            audio = recordings / "missing.wav"
+            log = recordings / "missing.log"
+            transcript = transcripts / "missing.txt"
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(
+                RecordingState(
+                    status="finalizing",
+                    audio_path=str(audio),
+                    log_path=str(log),
+                    transcript_path=str(transcript),
+                )
+            )
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "idle")
+        self.assertTrue(payload["audio_deleted"])
+        self.assertTrue(payload["log_deleted"])
+        self.assertTrue(payload["transcript_deleted"])
+        self.assertEqual(final_state.status, "idle")
+        self.assertFalse(final_state.audio_path)
+        self.assertFalse(final_state.log_path)
+        self.assertFalse(final_state.transcript_path)
+
+    def test_cancel_missing_outside_artifacts_still_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            audio = tmp_path / "missing.wav"
+            log = tmp_path / "missing.log"
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="finalizing", audio_path=str(audio), log_path=str(log)))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["message"], "failed to discard recording artifacts")
+        self.assertFalse(payload["audio_deleted"])
+        self.assertFalse(payload["log_deleted"])
+        self.assertEqual(final_state.status, "error")
+        self.assertEqual(final_state.audio_path, str(audio))
+        self.assertEqual(final_state.log_path, str(log))
+
+    def test_cancel_missing_outside_transcript_still_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            transcript = tmp_path / "missing.txt"
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="finalizing", transcript_path=str(transcript)))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["message"], "failed to discard recording artifacts")
+        self.assertFalse(payload["transcript_deleted"])
+        self.assertEqual(final_state.status, "error")
+        self.assertEqual(final_state.transcript_path, str(transcript))
+
+    def test_cancel_transcript_symlink_still_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            transcripts = tmp_path / "speed-of-cinnamon" / "transcripts"
+            transcripts.mkdir(parents=True)
+            target = tmp_path / "outside.txt"
+            target.write_text("secret", encoding="utf-8")
+            transcript = transcripts / "link.txt"
+            transcript.symlink_to(target)
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="finalizing", transcript_path=str(transcript)))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+            transcript_is_symlink = transcript.is_symlink()
+            target_exists = target.exists()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "error")
+        self.assertFalse(payload["transcript_deleted"])
+        self.assertEqual(final_state.status, "error")
+        self.assertEqual(final_state.transcript_path, str(transcript))
+        self.assertTrue(transcript_is_symlink)
+        self.assertTrue(target_exists)
+
+    def test_cancel_transcript_hardlink_still_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            transcripts = tmp_path / "speed-of-cinnamon" / "transcripts"
+            transcripts.mkdir(parents=True)
+            source = transcripts / "source.txt"
+            source.write_text("secret", encoding="utf-8")
+            transcript = transcripts / "hardlink.txt"
+            os.link(source, transcript)
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="finalizing", transcript_path=str(transcript)))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+            source_exists = source.exists()
+            transcript_exists = transcript.exists()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "error")
+        self.assertFalse(payload["transcript_deleted"])
+        self.assertEqual(final_state.status, "error")
+        self.assertEqual(final_state.transcript_path, str(transcript))
+        self.assertTrue(source_exists)
+        self.assertTrue(transcript_exists)
+
     def test_cancel_removes_transcript_artifact_before_idle_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
