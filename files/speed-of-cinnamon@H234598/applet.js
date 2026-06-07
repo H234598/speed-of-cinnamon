@@ -1739,7 +1739,7 @@ MyApplet.prototype = {
       "zenity",
       "--entry",
       "--title=Auto-Submitt",
-      "--text=Built-in marker names match known window classes/app IDs. Custom strings match the full window title case-insensitively. Empty disables Auto-Submitt.",
+      "--text=Built-in marker names match known window classes/app IDs; codex also matches the window title. Custom strings match the full window title case-insensitively. Empty disables Auto-Submitt.",
       "--entry-text=" + current
     ];
   },
@@ -5752,7 +5752,8 @@ MyApplet.prototype = {
     let autoPasteTarget = this._windowTitleMatchesAutoPaste();
     let canPasteWithKeyboard = GLib.find_program_in_path("xdotool") || GLib.find_program_in_path("wtype");
     let submitWithReturn = autoPasteTarget && method === "clipboard-paste" && canPasteWithKeyboard;
-    let text = this._preparedTranscriptText(transcript, submitWithReturn);
+    let suppressAutoPasteEnter = method !== "clipboard-paste" || submitWithReturn;
+    let text = this._preparedTranscriptText(transcript, suppressAutoPasteEnter);
     if (method === "none") {
       this._setStatus("done", _("Insertion disabled"), transcript);
       return true;

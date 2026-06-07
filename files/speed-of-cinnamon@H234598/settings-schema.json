@@ -409,7 +409,7 @@
   "auto-paste-window-title": {
     "type": "entry",
     "description": "Auto-Submitt target markers",
-    "tooltip": "Built-in marker names match known window classes/app IDs; custom strings match the full window title case-insensitively. Matching targets receive a trailing Enter after Clipboard and paste. Empty disables Auto-Submitt. Max 4096 chars.",
+    "tooltip": "Built-in marker names match known window classes/app IDs; codex also matches the window title; custom strings match the full window title case-insensitively. Matching targets receive Enter only after Clipboard and paste, not after Clipboard only. Empty disables Auto-Submitt. Max 4096 chars.",
     "default": "codex"
   },
   "cli-path": {

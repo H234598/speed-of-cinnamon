@@ -5,7 +5,7 @@ IFS=$'\n\t'
 readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export PATH="${TRUSTED_COMMAND_PATH}"
 
-repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "${repo_dir}"
 safe_fs="${repo_dir}/scripts/safe-local-fs.py"
 safe_fs_cmd=(python3 "${safe_fs}")

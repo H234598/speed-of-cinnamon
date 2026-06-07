@@ -5,7 +5,7 @@ IFS=$'\n\t'
 readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export PATH="${TRUSTED_COMMAND_PATH}"
 
-repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 expected_wiki_url="https://github.com/H234598/speed-of-cinnamon.wiki.git"
 wiki_url="${WIKI_URL:-${expected_wiki_url}}"
 safe_fs="${repo_dir}/scripts/safe-local-fs.py"

@@ -1207,20 +1207,43 @@ def _unlink_regular_leaf_with_parent_fsync(
         os.close(parent_fd)
 
 
-def _remove_transient_transcript_path(path: Path, storage_path: Path) -> None:
+def _remove_transient_transcript_path(path: Path, storage_path: Path) -> bool:
     if path == storage_path:
-        return
+        return False
     try:
         path.relative_to(transcript_dir())
     except ValueError:
-        return
+        return False
     if not path.name.startswith(".") or not path.name.endswith(".tmp.txt"):
-        return
+        return False
     try:
         assert_no_symlink_ancestors(path, field_name="transient transcript file")
         _unlink_regular_leaf_with_parent_fsync(path, field_name="transient transcript file")
-    except (FileNotFoundError, RuntimeError):
+        return True
+    except FileNotFoundError:
+        return False
+    except RuntimeError as exc:
+        raise RuntimeError(f"failed to delete transient transcript file: {path}") from exc
+
+
+def _raise_recording_cleanup_failure(store: StateStore, failures: list[tuple[str, str, str]]) -> None:
+    if not failures:
         return
+    failed_labels = ", ".join(label for _, _, label in failures)
+    error_text = f"failed to delete recording artifact(s): {failed_labels}"
+    error_update: dict[str, object] = {
+        "status": "error",
+        "stopped_at": now_iso(),
+        "error": error_text,
+    }
+    for field_name, path_text, _label in failures:
+        error_update[field_name] = path_text
+    try:
+        store.update(**error_update)
+    except Exception as exc:
+        update_error = _redact_error_for_user(str(exc))
+        raise RuntimeError(f"{error_text}; failed to persist cleanup error state: {update_error}") from exc
+    raise RuntimeError(error_text)
 
 
 def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) -> tuple[Path, str]:
@@ -2521,6 +2544,12 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             if not keep_recording_artifacts:
                 audio_deleted = remove_file(str(audio_path), suffix=audio_suffix)
                 log_deleted = remove_file(cleanup_log_path, suffix=".log")
+                cleanup_failures: list[tuple[str, str, str]] = []
+                if not audio_deleted:
+                    cleanup_failures.append(("audio_path", str(audio_path), "recording audio artifact"))
+                if cleanup_log_path and not log_deleted:
+                    cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
+                _raise_recording_cleanup_failure(store, cleanup_failures)
             return {
                 "status": done.status,
                 "message": "silent recording skipped",
@@ -2546,6 +2575,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             transcript_audio_path = trimmed_audio_path
         except RecorderError:
             transcript_audio_path = audio_path
+        transcription_error: Exception | None = None
         try:
             text = transcribe(
                 audio_path=transcript_audio_path,
@@ -2558,10 +2588,19 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
                 vocabulary=args.vocabulary,
                 **_openai_compatible_transcribe_kwargs(args, normalized_transcriber),
             )
+        except Exception as exc:
+            transcription_error = exc
+            raise
         finally:
-            _remove_transient_transcript_path(transcriber_text_path, text_path)
-            if trimmed_audio_path is not None and not keep_recording_artifacts:
-                remove_file(str(trimmed_audio_path), suffix=".flac")
+            try:
+                _remove_transient_transcript_path(transcriber_text_path, text_path)
+                if trimmed_audio_path is not None and trimmed_audio_path != audio_path and not keep_recording_artifacts:
+                    if not remove_file(str(trimmed_audio_path), suffix=".flac"):
+                        raise RuntimeError(f"failed to delete transient trimmed recording artifact: {trimmed_audio_path}")
+            except RuntimeError as cleanup_exc:
+                if transcription_error is not None:
+                    raise RuntimeError(f"{transcription_error}; {cleanup_exc}") from cleanup_exc
+                raise
 
         if _is_empty_transcript_text(text):
             text = ""
@@ -2630,12 +2669,19 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             inserted=inserted,
             error="",
         )
+        cleanup_failures: list[tuple[str, str, str]] = []
         if remove_original_after_state_update:
-            remove_file(str(audio_path), suffix=audio_suffix)
+            if not remove_file(str(audio_path), suffix=audio_suffix):
+                cleanup_failures.append(("audio_path", str(audio_path), "original recording artifact"))
         if cleanup_audio_path is not None:
             audio_deleted = remove_file(str(cleanup_audio_path), suffix=audio_suffix)
-        if cleanup_log_path is not None:
+            if not audio_deleted:
+                cleanup_failures.append(("audio_path", str(cleanup_audio_path), "recording audio artifact"))
+        if cleanup_log_path:
             log_deleted = remove_file(cleanup_log_path, suffix=".log")
+            if not log_deleted:
+                cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
+        _raise_recording_cleanup_failure(store, cleanup_failures)
         state = done
         artifact_cleanup_active_paths: set[Path] = set()
         if stabilized_audio_path is not None:

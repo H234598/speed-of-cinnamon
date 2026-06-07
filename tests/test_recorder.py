@@ -779,6 +779,36 @@ class RecorderTest(unittest.TestCase):
 
             self.assertEqual(target.read_bytes(), b"foreign-data")
 
+    def test_start_recorder_rejects_log_leaf_rename_swap_before_open(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            original = base / "session.log"
+            original.write_bytes(b"original")
+            foreign = base / "foreign.log"
+            foreign.write_bytes(b"foreign")
+            swapped = False
+            real_open = os.open
+
+            def swapping_open(path: object, flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:
+                nonlocal swapped
+                if path == original.name and not swapped and not (flags & os.O_CREAT):
+                    original.unlink()
+                    os.link(foreign, original)
+                    swapped = True
+                return real_open(path, flags, mode, dir_fd=dir_fd)
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.os.open", side_effect=swapping_open),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+            ):
+                with self.assertRaisesRegex(RecorderError, "recorder log file must not be hardlinked"):
+                    start_recorder(command, original)
+
+            self.assertTrue(swapped)
+            self.assertEqual(foreign.read_bytes(), b"foreign")
+
     def test_start_recorder_rejects_symlink_log_parent_after_validation(self) -> None:
         command = RecorderCommand(name="noop", argv=["true"])
         with tempfile.TemporaryDirectory() as tmp:
@@ -934,6 +964,7 @@ class RecorderTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             log_path = Path(tmp) / "session.log"
             log_path.write_text("previous content", encoding="utf-8")
+            log_path.chmod(0o600)
             with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
                 with self.assertRaisesRegex(RecorderError, "failed to start noop"):
                     start_recorder(command, log_path)
@@ -946,6 +977,7 @@ class RecorderTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             log_path = Path(tmp) / "session.log"
             log_path.write_text("", encoding="utf-8")
+            log_path.chmod(0o600)
             with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
                 with self.assertRaisesRegex(RecorderError, "failed to start noop"):
                     start_recorder(command, log_path)

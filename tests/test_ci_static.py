@@ -1098,10 +1098,16 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn('snap file path contains control characters: %s', verify_snap)
 
     def test_build_snap_and_verify_rpm_guard_paths_against_canonical_repo_dir(self) -> None:
+        build_dist = (REPO_ROOT / "scripts" / "build-dist.sh").read_text(encoding="utf-8")
+        build_rpm = (REPO_ROOT / "scripts" / "build-rpm.sh").read_text(encoding="utf-8")
         build_snap = (REPO_ROOT / "scripts" / "build-snap.sh").read_text(encoding="utf-8")
+        publish_wiki = (REPO_ROOT / "scripts" / "publish-wiki.sh").read_text(encoding="utf-8")
         verify_rpm = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(encoding="utf-8")
 
+        self.assertIn('repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"', build_dist)
+        self.assertIn('repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"', build_rpm)
         self.assertIn('repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"', build_snap)
+        self.assertIn('repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"', publish_wiki)
         self.assertIn('repo_tmp_abs="$(realpath "${repo_tmp_root}")"', build_snap)
         self.assertIn('if [[ "${repo_tmp_abs}" == "${repo_dir}" || "${repo_tmp_abs}" == "${repo_dir}/"* ]]; then', build_snap)
         self.assertIn('repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"', verify_rpm)

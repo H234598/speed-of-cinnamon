@@ -1208,39 +1208,26 @@ def _open_recorder_log_file(log_path: Path) -> tuple[io.BufferedWriter, bool]:
     except OSError as exc:
         raise RecorderError(f"failed to open recorder log file {log_path}: {exc}") from exc
     created = False
+    fd: int | None = None
     try:
         try:
-            existing = os.stat(log_path.name, dir_fd=parent_fd, follow_symlinks=False)
-        except FileNotFoundError:
-            existing = None
-        if existing is not None:
-            if stat.S_ISLNK(existing.st_mode):
-                raise RecorderError(f"failed to open recorder log file {log_path}: recorder log file must not be a symlink")
-            if not stat.S_ISREG(existing.st_mode):
-                raise RecorderError(f"failed to open recorder log file {log_path}: recorder log file must be a regular file")
-            if getattr(existing, "st_nlink", 1) != 1:
-                raise RecorderError(f"failed to open recorder log file {log_path}: recorder log file must not be hardlinked")
-            flags = os.O_WRONLY | os.O_APPEND | nofollow_flag
-        else:
-            flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_EXCL | nofollow_flag
+            fd = os.open(log_path.name, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_EXCL | nofollow_flag, 0o600, dir_fd=parent_fd)
             created = True
-        try:
-            fd = os.open(log_path.name, flags, 0o600, dir_fd=parent_fd)
         except FileExistsError:
             fd = os.open(log_path.name, os.O_WRONLY | os.O_APPEND | nofollow_flag, 0o600, dir_fd=parent_fd)
             created = False
+        assert_fd_is_regular_private_file(fd, field_name="recorder log file", require_private_mode=True)
+        handle = os.fdopen(fd, "ab")
+        fd = None
+        return handle, created
     except RecorderError:
         raise
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
         raise RecorderError(f"failed to open recorder log file {log_path}: {exc}") from exc
     finally:
+        if fd is not None:
+            os.close(fd)
         os.close(parent_fd)
-    try:
-        assert_fd_is_regular_private_file(fd, field_name="recorder log file")
-        return os.fdopen(fd, "ab"), created
-    except (OSError, RuntimeError) as exc:
-        os.close(fd)
-        raise RecorderError(f"failed to open recorder log file {log_path}: {exc}") from exc
 
 
 def _unlink_recorder_log_if_same(log_path: Path, expected_stat: os.stat_result) -> None:
