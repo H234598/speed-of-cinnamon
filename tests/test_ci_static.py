@@ -325,6 +325,16 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn("sudo rm -rf /usr/share/ollama", applet_text)
         self.assertIn("Leaving /usr/share/ollama in place; inspect and remove it manually if desired.", applet_text)
 
+        publish_script = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
+        verify_script = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(encoding="utf-8")
+
+        self.assertIn('readonly RELEASE_TARGET_REPOSITORY="H234598/speed-of-cinnamon"', publish_script)
+        self.assertIn("if [[ -z \"${repo}\" && -z \"${remote_repo}\" ]]; then", publish_script)
+        self.assertIn("rpm -qp --scripts", verify_script)
+        self.assertIn("rpm -qp --triggers", verify_script)
+        self.assertIn("{FILECAPS}", verify_script)
+        self.assertRegex(verify_script, r"mode\s*&\s*0o6000")
+
     def test_runtime_code_does_not_read_full_environment(self) -> None:
         src_root = REPO_ROOT / "src"
         offenders: list[str] = []
@@ -683,8 +693,9 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("resolve_github_remote_repo()", publish_script)
         self.assertIn("git remote get-url origin", publish_script)
         self.assertIn('remote_url="${remote_url%.git}"', publish_script)
-        self.assertIn("GITHUB_REPOSITORY is not set and origin is not a GitHub repository.", publish_script)
-        self.assertIn("repository value does not match checked out origin", publish_script)
+        self.assertIn("GITHUB_REPOSITORY is not set and origin is not a GitHub repository; cannot verify target repository safely.", publish_script)
+        self.assertIn("checked out origin (%s) does not match GITHUB_REPOSITORY (%s).", publish_script)
+        self.assertIn('readonly RELEASE_TARGET_REPOSITORY="H234598/speed-of-cinnamon"', publish_script)
         self.assertNotIn('repo="${GITHUB_REPOSITORY:-H234598/speed-of-cinnamon}"', publish_script)
 
     def test_wiki_publish_does_not_bootstrap_after_clone_failure(self) -> None:

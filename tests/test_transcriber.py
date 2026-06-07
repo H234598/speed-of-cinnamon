@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import io
+import sys
 import stat as stat_module
 import subprocess
 import tempfile
@@ -1233,6 +1234,32 @@ class TranscriberTest(unittest.TestCase):
                 with self.assertRaisesRegex(TranscriptionError, "is not available"):
                     transcribe_with_openai_whisper(audio, "en", text)
 
+    def test_openai_whisper_fails_closed_if_audio_is_swapped_after_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            replacement = Path(tmp) / "replacement.wav"
+            replacement.write_bytes(b"replacement")
+            text = Path(tmp) / "sample.txt"
+            real_validate = transcriber_module.validate_audio_file
+
+            def validate_and_swap(path: Path) -> Path:
+                validated = real_validate(path)
+                audio.unlink()
+                audio.symlink_to(replacement)
+                return validated
+
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.validate_audio_file", side_effect=validate_and_swap),
+                mock.patch("speed_of_cinnamon.transcriber._command_path", return_value="/usr/bin/whisper"),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._run_limited_process",
+                    side_effect=AssertionError("backend executed"),
+                ),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "failed to stage audio file for backend access"):
+                    transcribe_with_openai_whisper(audio, "en", text)
+
     def test_resolve_whisper_cpp_accepts_fedora_pwcpp(self) -> None:
         def which(command: str, path: str | None = None) -> str | None:
             return "/usr/bin/pwcpp" if command == "pwcpp" else None
@@ -1263,7 +1290,11 @@ class TranscriberTest(unittest.TestCase):
             self.assertEqual(text.read_text(encoding="utf-8").strip(), "hallo cinnamon")
             self.assertFalse(generated.exists())
             command = mocked_run.call_args.args[0]
-            self.assertEqual(command, ["/usr/bin/pwcpp", "-m", str(model), "--language", "de", "-otxt", str(audio)])
+            self.assertEqual(
+                command[:6],
+                ["/usr/bin/pwcpp", "-m", str(model), "--language", "de", "-otxt"],
+            )
+            self.assertTrue(Path(command[-1]).name == audio.name)
 
     def test_whisper_cpp_restores_existing_pwcpp_sidecar_after_writing(self) -> None:
         def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
@@ -1425,6 +1456,42 @@ class TranscriberTest(unittest.TestCase):
                     transcribe_with_whisper_cpp(audio, "de", text, str(model))
 
             self.assertEqual(text.read_text(encoding="utf-8"), "alt")
+
+    def test_whisper_cpp_fails_closed_if_audio_is_swapped_after_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            replacement = Path(tmp) / "replacement.wav"
+            replacement.write_bytes(b"replacement")
+            text = Path(tmp) / "sample.txt"
+            model = Path(tmp) / "ggml-base.bin"
+            model.write_bytes(b"model")
+            real_validate = transcriber_module.validate_audio_file
+
+            def validate_and_swap(path: Path) -> Path:
+                validated = real_validate(path)
+                audio.unlink()
+                audio.symlink_to(replacement)
+                return validated
+
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.validate_audio_file", side_effect=validate_and_swap),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber.model_supports_language",
+                    return_value=True,
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber.resolve_whisper_cpp_command",
+                    return_value="whisper-cli",
+                ),
+                mock.patch("speed_of_cinnamon.transcriber.shutil.which", return_value="/usr/bin/whisper-cli"),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._run_limited_process",
+                    side_effect=AssertionError("backend executed"),
+                ),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "failed to stage audio file for backend access"):
+                    transcribe_with_whisper_cpp(audio, "de", text, str(model))
 
     def test_command_stdout_is_saved_as_transcript(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2377,6 +2444,39 @@ class TranscriberTest(unittest.TestCase):
         self.assertNotIn("secret-model", message)
         self.assertNotIn("private transcript", message)
         self.assertNotIn("token=secret", message)
+
+    def test_faster_whisper_fails_closed_if_audio_is_swapped_after_validation(self) -> None:
+        class FakeFasterWhisper:
+            class WhisperModel:
+                def __init__(self, *_args: object, **_kwargs: object) -> None:
+                    raise AssertionError("backend executed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            replacement = Path(tmp) / "replacement.wav"
+            replacement.write_bytes(b"replacement")
+            text_path = Path(tmp) / "sample.txt"
+            model = Path(tmp) / "ct2-base-int8"
+            model.write_bytes(b"model")
+            real_validate = transcriber_module.validate_audio_file
+
+            def validate_and_swap(path: Path) -> Path:
+                validated = real_validate(path)
+                audio.unlink()
+                audio.symlink_to(replacement)
+                return validated
+
+            with (
+                mock.patch.dict("sys.modules", {"faster_whisper": FakeFasterWhisper}),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber.model_supports_language",
+                    return_value=True,
+                ),
+                mock.patch("speed_of_cinnamon.transcriber.validate_audio_file", side_effect=validate_and_swap),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "failed to stage audio file for backend access"):
+                    transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model))
 
     def test_auto_prefers_custom_command(self) -> None:
         config = TranscriberConfig(command_template="printf custom")

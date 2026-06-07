@@ -234,6 +234,14 @@ class ArtifactCryptoTest(unittest.TestCase):
         with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "envelope is missing"):
             artifact_crypto.decrypt_bytes(b"plaintext", kind="transcript", require_encrypted=True)
 
+    def test_read_decrypted_bytes_from_file_rejects_explicit_zero_max_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.bin"
+            with mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: STRONG_PASSPHRASE}, clear=False):
+                encrypted, _mode = artifact_crypto.encrypt_bytes(b"private transcript", "passphrase", kind="transcript")
+                path.write_bytes(encrypted)
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "is too large"):
+                    artifact_crypto.read_decrypted_bytes_from_file(path, kind="transcript", field_name="artifact", max_bytes=0)
 
 if __name__ == "__main__":
     unittest.main()

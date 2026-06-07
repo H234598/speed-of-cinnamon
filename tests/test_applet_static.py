@@ -114,7 +114,15 @@ class AppletStaticTest(unittest.TestCase):
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
 
         self.assertEqual(schema["transcriber"]["options"]["OpenAI-compatible external API"], "openai-compatible")
+        self.assertEqual(schema["layout"]["backend-section"]["title"], "Voice model (menu: Recording > Voice model)")
+        self.assertIn("voice-model-help", schema["layout"]["backend-section"]["keys"])
+        self.assertIn("transcriber", schema["layout"]["backend-section"]["keys"])
+        self.assertIn("whisper-model", schema["layout"]["backend-section"]["keys"])
+        self.assertIn("transcriber-command", schema["layout"]["backend-section"]["keys"])
+        self.assertIn("cli-path", schema["layout"]["backend-section"]["keys"])
         self.assertIn("openai-compatible-api-key", schema["layout"]["backend-section"]["keys"])
+        self.assertIn("Recording > Voice model", schema["voice-model-help"]["description"])
+        self.assertIn("No option was removed", schema["voice-model-help"]["tooltip"])
         self.assertIn('this.openaiCompatibleApiKey = "";', source)
         self.assertIn('"openai-compatible-api-key": "openai-compatible API key"', source)
         self.assertIn('"openai-compatible-api-key", "openaiCompatibleApiKey"', source)
@@ -940,9 +948,21 @@ class AppletStaticTest(unittest.TestCase):
         self.assertEqual(schema["layout"]["main-menu-map-section"]["title"], "Main menu settings")
         self.assertIn("main-menu-settings-map", schema)
         self.assertIn("All persistent settings from the applet menu are available here", schema["main-menu-settings-map"]["description"])
+        self.assertIn("Voice model settings mirror Recording > Voice model", schema["main-menu-settings-map"]["description"])
+        self.assertIn("Text model and polishing settings mirror Text and output > Text model", schema["main-menu-settings-map"]["description"])
         self.assertIn("menu: Recording", schema["layout"]["recording-section"]["title"])
+        self.assertIn("input-device-default", schema["layout"]["recording-section"]["keys"])
+        self.assertIn("input-device", schema["layout"]["recording-section"]["keys"])
+        self.assertEqual(schema["input-device-default"]["callback"], "_selectDefaultInputSource")
+        self.assertIn("System default", schema["input-device-default"]["tooltip"])
+        self.assertEqual(schema["input-device"]["description"], "Custom input source name")
+        self.assertIn("ability to enter a specific source manually", schema["input-device-default"]["tooltip"])
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        self.assertIn("_selectDefaultInputSource: function()", source)
+        self.assertIn('this._selectInputSource("", _("system default"));', source)
+        self.assertEqual(schema["layout"]["text-polishing-section"]["title"], "Text model and text polishing (menu: Text and output > Text model)")
         self.assertIn("menu: Text and output", schema["layout"]["output-section"]["title"])
-        self.assertIn("Voice model", schema["layout"]["backend-section"]["title"])
+        self.assertEqual(schema["layout"]["backend-section"]["title"], "Voice model (menu: Recording > Voice model)")
         self.assertIn("Max 4096 chars", schema["transcriber-command"]["tooltip"])
         self.assertIn("Max 4096 chars", schema["post-process-command"]["tooltip"])
         self.assertIn("Max 4096 chars", schema["post-process-prompt"]["tooltip"])
@@ -1490,7 +1510,8 @@ class AppletStaticTest(unittest.TestCase):
             'if (targets === null || targets === undefined) {\n      return {\n        signature: "unknown",\n        hasNonTextPayload: true,',
             source,
         )
-        self.assertIn('if (originalClipboardSignature === "unknown") {', source)
+        self.assertIn('let originalPayloadFingerprint = clipboardSnapshot && clipboardSnapshot.payloadFingerprint ? clipboardSnapshot.payloadFingerprint : "unknown";', source)
+        self.assertIn('if (originalClipboardSignature === "unknown" || originalPayloadFingerprint === "unknown") {', source)
         self.assertIn('this._setStatus("ready", _("Clipboard state unavailable; overwrite cancelled"), transcript);', source)
         self.assertIn('return ["clipboard"];', source)
 
@@ -1507,19 +1528,60 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('key: Clutter.KEY_Escape,', source)
         self.assertIn('let completed = false;', source)
         self.assertIn('let originalClipboardSignature = clipboardSnapshot && clipboardSnapshot.signature ? clipboardSnapshot.signature : "unknown";', source)
-        self.assertIn('if (originalClipboardSignature === "unknown") {', source)
+        self.assertIn('let originalPayloadFingerprint = clipboardSnapshot && clipboardSnapshot.payloadFingerprint ? clipboardSnapshot.payloadFingerprint : "unknown";', source)
+        self.assertIn('if (originalClipboardSignature === "unknown" || originalPayloadFingerprint === "unknown") {', source)
         self.assertIn('this._setStatus("ready", _("Clipboard state unavailable; overwrite cancelled"), transcript);', source)
         self.assertIn('let currentClipboardSnapshot = this._clipboardPayloadSnapshot();', source)
-        self.assertIn('if (currentClipboardSnapshot.signature === "unknown" || currentClipboardSnapshot.signature !== originalClipboardSignature) {', source)
+        self.assertIn('if (!this._clipboardPayloadSignaturesMatch(clipboardSnapshot, currentClipboardSnapshot)) {', source)
         self.assertIn('if (completed) {\n        return;\n      }', source)
         self.assertIn('completed = true;', source)
         self.assertIn('complete(false);', source)
         self.assertNotIn('this.clipboard.set_text(St.ClipboardType.CLIPBOARD, "");', source)
         self.assertIn("this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);", source)
+        self.assertIn('this._setClipboardOverwriteApproval(currentClipboardSnapshot);', source)
         self.assertIn("complete(this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn));", source)
         self.assertIn('if (!dialog.open()) {', source)
         self.assertIn('this._setStatus("error", _("Clipboard overwrite prompt could not be opened"), transcript);', source)
         self.assertIn("if (result === null) {\n        return;\n      }", source)
+
+    def test_applet_tracks_explicit_clipboard_overwrite_approval_state(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("const CLIPBOARD_OVERWRITE_APPROVAL_TTL_MS = 5000;", source)
+        self.assertIn("this._clipboardOverwriteApproval = null;", source)
+        self.assertIn("_setClipboardOverwriteApproval: function(snapshot) {", source)
+        self.assertIn("_hasValidClipboardOverwriteApproval: function(snapshot) {", source)
+        self.assertIn("_clearClipboardOverwriteApproval: function() {", source)
+        self.assertIn("if (this._hasValidClipboardOverwriteApproval(clipboardSnapshot)) {", source)
+        self.assertIn("this._clearClipboardOverwriteApproval();", source)
+
+    def test_applet_tracks_non_text_payload_fingerprint_beyond_targets(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("_clipboardPayloadFingerprintFromTargets: function(targets)", source)
+        self.assertIn("_clipboardPayloadFingerprintFromText: function(payload, targetLabel)", source)
+        self.assertIn("_clipboardPayloadSignaturesMatch: function(snapshotA, snapshotB)", source)
+        self.assertIn("payloadFingerprint: this._clipboardPayloadFingerprintFromTargets(targets),", source)
+        self.assertIn("payloadFingerprint: \"unknown\",", source)
+        self.assertIn('if (snapshotA.payloadFingerprint === "unknown" || snapshotB.payloadFingerprint === "unknown") {', source)
+
+    def test_applet_rechecks_clipboard_text_before_keyboard_spawn(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "_spawnKeyboardWhenClipboardReady: function(args, followUpArgs, expectedClipboardText, deadlineMs, expectedTargetWindow)",
+            source,
+        )
+        self.assertIn(
+            "_spawnKeyboardArgs: function(args, followUpArgs, expectedTargetWindow, expectedClipboardText, expectedClipboardDeadlineMs)",
+            source,
+        )
+        self.assertIn('if (expectedClipboardText !== undefined && expectedClipboardText !== null) {', source)
+        self.assertIn('String(clipboardText || "") !== expected', source)
+        self.assertIn(
+            'this._setStatus("error", _("Clipboard changed before automatic paste"), this.lastTranscript);',
+            source,
+        )
 
     def test_applet_prevents_false_success_when_automatic_paste_could_not_start(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

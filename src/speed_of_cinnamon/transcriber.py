@@ -12,7 +12,7 @@ import uuid
 import urllib.parse
 import urllib.error
 import urllib.request
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -695,6 +695,55 @@ def _snapshot_private_file(path: Path, *, field_name: str) -> tuple[int, int, in
     )
 
 
+@contextmanager
+def _staged_audio_file_for_local_backend(audio_path: Path):
+    nonblock_flag = getattr(os, "O_NONBLOCK", 0)
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise TranscriptionError("failed to stage audio file for backend access")
+    source_fd: int | None = None
+    parent_fd: int | None = None
+    staging_dir: Path | None = None
+    staging_path: Path | None = None
+    try:
+        staging_dir = Path(tempfile.mkdtemp(prefix=".sc-audio-"))
+        staging_path = staging_dir / audio_path.name
+        try:
+            parent_fd = open_directory_without_following_symlinks(audio_path.parent, field_name="audio file directory")
+            source_fd = os.open(audio_path.name, os.O_RDONLY | nofollow_flag | nonblock_flag, dir_fd=parent_fd)
+            assert_fd_is_regular_private_file(source_fd, field_name="audio file for backend")
+            with os.fdopen(source_fd, "rb") as source:
+                source_fd = None
+                with open(staging_path, "wb") as target:
+                    shutil.copyfileobj(source, target)
+            if staging_path.stat().st_size == 0:
+                raise TranscriptionError("audio file is missing or empty")
+        except Exception as exc:
+            if source_fd is not None:
+                with suppress(OSError):
+                    os.close(source_fd)
+                source_fd = None
+            raise TranscriptionError("failed to stage audio file for backend access") from exc
+        finally:
+            if source_fd is not None:
+                with suppress(OSError):
+                    os.close(source_fd)
+            if parent_fd is not None:
+                with suppress(OSError):
+                    os.close(parent_fd)
+        if staging_path is None or staging_dir is None:
+            raise TranscriptionError("failed to stage audio file for backend access")
+        os.chmod(staging_path, 0o600)
+        yield staging_path
+    finally:
+        if staging_path is not None:
+            with suppress(OSError):
+                staging_path.unlink()
+        if staging_dir is not None:
+            with suppress(OSError):
+                staging_dir.rmdir()
+
+
 def _validate_audio_file_for_upload(path: Path) -> tuple[Path, tuple[int, int, int, int, int]]:
     normalized = _validate_audio_path_shape(path)
     snapshot = _snapshot_private_file(normalized, field_name="audio file for API upload")
@@ -834,59 +883,60 @@ def transcribe_with_openai_whisper(
     except TranscriptionError as exc:
         raise TranscriptionError("OpenAI whisper command is not installed") from exc
     output_dir = text_path.parent
-    generated = output_dir / f"{audio_path.stem}.txt"
-    existing_snapshot = _snapshot_existing_file(generated)
-    try:
-        _run_limited_process(
-            [
-                "whisper",
-                str(audio_path),
-                "--language",
-                language,
-                "--output_format",
-                "txt",
-                "--output_dir",
-                str(output_dir),
-            ],
-        )
-    except Exception:
+    existing_snapshot = _snapshot_existing_file(output_dir / f"{audio_path.stem}.txt")
+    with _staged_audio_file_for_local_backend(audio_path) as staged_audio_path:
+        generated = output_dir / f"{audio_path.stem}.txt"
+        try:
+            _run_limited_process(
+                [
+                    "whisper",
+                    str(staged_audio_path),
+                    "--language",
+                    language,
+                    "--output_format",
+                    "txt",
+                    "--output_dir",
+                    str(output_dir),
+                ],
+            )
+        except Exception:
+            if generated.exists():
+                _restore_or_remove_generated_transcript(generated, existing_snapshot)
+            raise
         if generated.exists():
-            _restore_or_remove_generated_transcript(generated, existing_snapshot)
-        raise
-    if generated.exists():
-        if generated == text_path:
+            if generated == text_path:
+                try:
+                    text = _read_text_file(generated, size_field_name="transcript").strip()
+                    _assert_text_length(text, field_name="transcript")
+                except Exception:
+                    if existing_snapshot is not None:
+                        _restore_existing_file_snapshot(generated, existing_snapshot)
+                    else:
+                        _remove_generated_transcript_file(generated, field_name="generated transcript")
+                    raise
+                if not write_transcript:
+                    if existing_snapshot is not None:
+                        _restore_existing_file_snapshot(generated, existing_snapshot)
+                    else:
+                        _remove_generated_transcript_file(generated, field_name="generated transcript")
+                return text
+            primary_error: BaseException | None = None
             try:
                 text = _read_text_file(generated, size_field_name="transcript").strip()
                 _assert_text_length(text, field_name="transcript")
-            except Exception:
-                if existing_snapshot is not None:
-                    _restore_existing_file_snapshot(generated, existing_snapshot)
-                else:
-                    _remove_generated_transcript_file(generated, field_name="generated transcript")
+                if write_transcript:
+                    _write_text_atomic(text_path, text + "\n")
+            except BaseException as exc:
+                primary_error = exc
                 raise
-            if not write_transcript:
-                if existing_snapshot is not None:
-                    _restore_existing_file_snapshot(generated, existing_snapshot)
-                else:
-                    _remove_generated_transcript_file(generated, field_name="generated transcript")
+            finally:
+                try:
+                    _restore_or_remove_generated_transcript(generated, existing_snapshot)
+                except TranscriptionError as exc:
+                    if primary_error is None:
+                        raise
             return text
-        primary_error: BaseException | None = None
-        try:
-            text = _read_text_file(generated, size_field_name="transcript").strip()
-            _assert_text_length(text, field_name="transcript")
-            if write_transcript:
-                _write_text_atomic(text_path, text + "\n")
-        except BaseException as exc:
-            primary_error = exc
-            raise
-        finally:
-            try:
-                _restore_or_remove_generated_transcript(generated, existing_snapshot)
-            except TranscriptionError as exc:
-                if primary_error is None:
-                    raise
-        return text
-    raise TranscriptionError("whisper completed but did not produce a transcript")
+        raise TranscriptionError("whisper completed but did not produce a transcript")
 
 
 def resolve_whisper_cpp_command() -> str | None:
@@ -960,49 +1010,71 @@ def transcribe_with_whisper_cpp(
     command = resolve_whisper_cpp_command()
     if not command:
         raise TranscriptionError("whisper.cpp command is not installed")
-
-    invocation, generated_path = _whisper_cpp_invocation(command, audio_path, language, text_path, model_path)
-    existing_snapshot = _snapshot_existing_file(generated_path)
-    try:
-        _run_limited_process(invocation)
-    except Exception:
-        if generated_path.exists():
-            _restore_or_remove_generated_transcript(generated_path, existing_snapshot)
-        raise
-    if generated_path.exists():
-        if generated_path == text_path:
+    normalized_command = Path(command).name
+    with _staged_audio_file_for_local_backend(audio_path) as staged_audio_path:
+        invocation, generated_path = _whisper_cpp_invocation(
+            command,
+            staged_audio_path,
+            language,
+            text_path,
+            model_path,
+        )
+        generated_candidates = [generated_path]
+        if normalized_command == "pwcpp":
+            legacy_generated_path = audio_path.with_name(f"{audio_path.name}.txt")
+            if legacy_generated_path != generated_path:
+                generated_candidates.insert(0, legacy_generated_path)
+        snapshots: dict[Path, tuple[int, int, int, int, int] | None] = {}
+        for candidate in generated_candidates:
+            if candidate.exists():
+                snapshots[candidate] = _snapshot_existing_file(candidate)
+        try:
+            _run_limited_process(invocation)
+        except Exception:
+            for candidate in generated_candidates:
+                if candidate.exists():
+                    _restore_or_remove_generated_transcript(candidate, snapshots.get(candidate))
+            raise
+        active_generated_path = next(
+            (candidate for candidate in generated_candidates if candidate.exists()),
+            None,
+        )
+        if active_generated_path is not None:
+            existing_snapshot = snapshots.get(active_generated_path)
+            generated_path = active_generated_path
+            if generated_path == text_path:
+                try:
+                    text = _read_text_file(generated_path, size_field_name="transcript").strip()
+                    _assert_text_length(text, field_name="transcript")
+                except Exception:
+                    if existing_snapshot is not None:
+                        _restore_existing_file_snapshot(generated_path, existing_snapshot)
+                    else:
+                        _remove_generated_transcript_file(generated_path, field_name="generated sidecar")
+                    raise
+                if not write_transcript:
+                    if existing_snapshot is not None:
+                        _restore_existing_file_snapshot(generated_path, existing_snapshot)
+                    else:
+                        _remove_generated_transcript_file(generated_path, field_name="generated sidecar")
+                return text
+            primary_error: BaseException | None = None
             try:
                 text = _read_text_file(generated_path, size_field_name="transcript").strip()
                 _assert_text_length(text, field_name="transcript")
-            except Exception:
-                if existing_snapshot is not None:
-                    _restore_existing_file_snapshot(generated_path, existing_snapshot)
-                else:
-                    _remove_generated_transcript_file(generated_path, field_name="generated sidecar")
+                if write_transcript:
+                    _write_text_atomic(text_path, text + "\n")
+            except BaseException as exc:
+                primary_error = exc
                 raise
-            if not write_transcript:
-                if existing_snapshot is not None:
-                    _restore_existing_file_snapshot(generated_path, existing_snapshot)
-                else:
-                    _remove_generated_transcript_file(generated_path, field_name="generated sidecar")
+            finally:
+                try:
+                    _restore_or_remove_generated_transcript(generated_path, existing_snapshot)
+                except TranscriptionError as exc:
+                    if primary_error is None:
+                        raise
             return text
-        primary_error: BaseException | None = None
-        try:
-            text = _read_text_file(generated_path, size_field_name="transcript").strip()
-            _assert_text_length(text, field_name="transcript")
-            if write_transcript:
-                _write_text_atomic(text_path, text + "\n")
-        except BaseException as exc:
-            primary_error = exc
-            raise
-        finally:
-            try:
-                _restore_or_remove_generated_transcript(generated_path, existing_snapshot)
-            except TranscriptionError as exc:
-                if primary_error is None:
-                    raise
-        return text
-    raise TranscriptionError("whisper.cpp completed but did not produce a transcript")
+        raise TranscriptionError("whisper.cpp completed but did not produce a transcript")
 
 
 def faster_whisper_available() -> bool:
@@ -1032,17 +1104,18 @@ def transcribe_with_faster_whisper(
     except ImportError as exc:
         raise TranscriptionError("faster-whisper is not installed") from exc
 
-    try:
-        model = WhisperModel(model_path, device="cpu", compute_type="int8")
-        segments, _info = model.transcribe(
-            str(audio_path),
-            language=language or None,
-            task="transcribe",
-            beam_size=5,
-        )
-        text = " ".join(segment.text.strip() for segment in segments).strip()
-    except Exception as exc:
-        raise TranscriptionError("faster-whisper failed: error detail redacted") from exc
+    with _staged_audio_file_for_local_backend(audio_path) as staged_audio_path:
+        try:
+            model = WhisperModel(model_path, device="cpu", compute_type="int8")
+            segments, _info = model.transcribe(
+                str(staged_audio_path),
+                language=language or None,
+                task="transcribe",
+                beam_size=5,
+            )
+            text = " ".join(segment.text.strip() for segment in segments).strip()
+        except Exception as exc:
+            raise TranscriptionError("faster-whisper failed: error detail redacted") from exc
     _assert_text_length(text, field_name="transcript")
     if write_transcript:
         _write_text_atomic(text_path, text + "\n")

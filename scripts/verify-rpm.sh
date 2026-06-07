@@ -166,12 +166,31 @@ if [[ "$(stat -c '%h' "${rpm_snapshot}")" -ne 1 ]]; then
 fi
 
 metadata_file="${tmp_dir}/rpm-metadata.txt"
+scriptlets_file="${tmp_dir}/rpm-scriptlets.txt"
+triggers_file="${tmp_dir}/rpm-triggers.txt"
 rpm -qp --qf 'name=%{NAME}\nversion=%{VERSION}\narch=%{ARCH}\npackager=%{PACKAGER}\nvendor=%{VENDOR}\nurl=%{URL}\n' "${rpm_snapshot}" > "${metadata_file}"
 grep -Fxq 'name=speed-of-cinnamon' "${metadata_file}"
 grep -Fxq 'arch=noarch' "${metadata_file}"
 grep -Fxq 'packager=H234598 <54270221+H234598@users.noreply.github.com>' "${metadata_file}"
 grep -Fxq 'vendor=H234598' "${metadata_file}"
 grep -Fxq 'url=https://github.com/H234598/speed-of-cinnamon' "${metadata_file}"
+
+if ! rpm -qp --scripts "${rpm_snapshot}" > "${scriptlets_file}"; then
+  printf 'failed to query RPM scriptlets: %s\n' "${rpm_snapshot}" >&2
+  exit 1
+fi
+if [[ -s "${scriptlets_file}" ]]; then
+  printf 'RPM scriptlets are not allowed for release packages: %s\n' "${rpm_snapshot}" >&2
+  exit 1
+fi
+if ! rpm -qp --triggers "${rpm_snapshot}" > "${triggers_file}"; then
+  printf 'failed to query RPM triggers: %s\n' "${rpm_snapshot}" >&2
+  exit 1
+fi
+if [[ -s "${triggers_file}" ]]; then
+  printf 'RPM triggers are not allowed for release packages: %s\n' "${rpm_snapshot}" >&2
+  exit 1
+fi
 
 required_files=(
   /usr/bin/speed-of-cinnamon
@@ -213,7 +232,7 @@ for entry in file_list.read_text(encoding="utf-8").split("\n"):
         raise SystemExit(f"RPM package contains unexpected path entry: {entry}")
 PY
 
-rpm -qp --qf '[%{FILENAMES}\t%{FILEMODES:octal}\t%{FILELINKTOS}\n]' "${rpm_snapshot}" > "${file_metadata}"
+rpm -qp --qf '[%{FILENAMES}\t%{FILEMODES:octal}\t%{FILECAPS}\t%{FILELINKTOS}\n]' "${rpm_snapshot}" > "${file_metadata}"
 python3 - <<'PY' "${file_list}" "${file_metadata}"
 from pathlib import Path
 import stat
@@ -225,10 +244,10 @@ seen: set[str] = set()
 for raw in Path(sys.argv[2]).read_text(encoding="utf-8").split("\n"):
     if not raw:
         continue
-    parts = raw.split("\t", 2)
-    if len(parts) != 3:
+    parts = raw.split("\t", 3)
+    if len(parts) != 4:
         raise SystemExit(f"RPM package contains malformed file metadata: {raw!r}")
-    entry, mode_text, link_target = parts
+    entry, mode_text, file_caps, link_target = parts
     if entry in seen:
         raise SystemExit(f"RPM package contains duplicate file entry: {entry}")
     seen.add(entry)
@@ -236,6 +255,10 @@ for raw in Path(sys.argv[2]).read_text(encoding="utf-8").split("\n"):
         mode = int(mode_text, 8)
     except ValueError:
         raise SystemExit(f"RPM package contains malformed file mode for {entry}: {mode_text!r}") from None
+    if mode & 0o6000:
+        raise SystemExit(f"RPM package contains privileged file mode for {entry}: {mode_text!r}")
+    if file_caps:
+        raise SystemExit(f"RPM package contains file capabilities on {entry}: {file_caps!r}")
     file_type = stat.S_IFMT(mode)
     if file_type not in (stat.S_IFREG, stat.S_IFDIR):
         raise SystemExit(f"RPM package contains unsupported file type: {entry}")

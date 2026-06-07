@@ -708,5 +708,9 @@ def read_decrypted_bytes_from_file(
     max_bytes: int | None = None,
     require_encrypted: bool = False,
 ) -> bytes:
-    data = read_private_bytes(path, field_name=field_name, max_bytes=max_bytes or MAX_ENCRYPTED_ARTIFACT_BYTES)
+    data = read_private_bytes(
+        path,
+        field_name=field_name,
+        max_bytes=(MAX_ENCRYPTED_ARTIFACT_BYTES if max_bytes is None else max_bytes),
+    )
     return decrypt_bytes(data, kind=kind, require_encrypted=require_encrypted)

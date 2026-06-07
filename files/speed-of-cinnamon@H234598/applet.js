@@ -30,6 +30,7 @@ const PASTE_SUBMIT_DELAY_MS = 120;
 const CLIPBOARD_READY_RETRY_MS = 40;
 const CLIPBOARD_READY_TIMEOUT_MS = 1000;
 const SELF_PROTECTION_NOTICE_COOLDOWN_MS = 3000;
+const CLIPBOARD_OVERWRITE_APPROVAL_TTL_MS = 5000;
 const CLIPBOARD_TARGET_TIMEOUT_SECONDS = 1;
 const MAX_CLIPBOARD_TARGET_OUTPUT_BYTES = 65536;
 const MAX_XDOTOOL_TARGET_OUTPUT_BYTES = 4096;
@@ -470,6 +471,7 @@ MyApplet.prototype = {
     this.displayTimer = 0;
     this.setupCheckTimer = 0;
     this.pasteTimer = 0;
+    this._clipboardOverwriteApproval = null;
     this.alarmTimer = 0;
     this.ollamaInstallWatchTimer = 0;
     this.ollamaInstallWatchPolls = 0;
@@ -1019,6 +1021,7 @@ MyApplet.prototype = {
     this._clearDisplayTimer();
     this._clearSetupCheckTimer();
     this._clearPasteTimer();
+    this._clearClipboardOverwriteApproval();
     this._clearAlarmTimer();
     this._clearOllamaInstallWatchTimer();
     this._clearExternalApiEnvMonitor();
@@ -2782,6 +2785,10 @@ MyApplet.prototype = {
       return;
     }
     this._setStatus("ready", message, this.lastTranscript);
+  },
+
+  _selectDefaultInputSource: function() {
+    this._selectInputSource("", _("system default"));
   },
 
   _refreshModelMenu: function() {
@@ -5195,14 +5202,97 @@ MyApplet.prototype = {
         signature: "unknown",
         hasNonTextPayload: true,
         description: _("clipboard contents"),
+        payloadFingerprint: "unknown",
       };
     }
     let targetSignature = Array.isArray(targets) ? targets.join("\n") : String(targets || "");
     return {
       signature: targetSignature,
       hasNonTextPayload: this._clipboardTargetsContainNonTextPayload(targets),
+      payloadFingerprint: this._clipboardPayloadFingerprintFromTargets(targets),
       description: this._clipboardPayloadDescriptionFromTargets(targets),
     };
+  },
+
+  _clipboardPayloadFingerprintFromTargets: function(targets) {
+    let nonTextTargets = this._clipboardNonTextPayloadTargets(targets);
+    if (!Array.isArray(nonTextTargets) || nonTextTargets.length === 0) {
+      return "no-nontext";
+    }
+    let sampleTarget = String(nonTextTargets[0]);
+    let payload = null;
+    if (GLib.find_program_in_path("xclip")) {
+      payload = this._clipboardTargetList("xclip", ["-selection", "clipboard", "-t", sampleTarget, "-out"]);
+    } else if (GLib.find_program_in_path("xsel")) {
+      payload = this._clipboardTargetList("xsel", ["--clipboard", "--output", "--target", sampleTarget]);
+    } else if (GLib.find_program_in_path("wl-paste")) {
+      payload = this._clipboardTargetList("wl-paste", ["--type", sampleTarget]);
+    }
+    if (payload === null || payload === undefined) {
+      return "unknown";
+    }
+    return this._clipboardPayloadFingerprintFromText(String(payload), sampleTarget);
+  },
+
+  _clipboardPayloadFingerprintFromText: function(payload, targetLabel) {
+    let data = ByteArray.fromString(String(payload || ""));
+    if (data.length === 0) {
+      return String(targetLabel || "") + ":0";
+    }
+    let step = Math.max(1, Math.floor(data.length / 16));
+    let rollingHash = 0;
+    for (let i = 0; i < data.length; i += step) {
+      rollingHash = ((rollingHash * 31) + data[i]) >>> 0;
+    }
+    return String(targetLabel || "") + ":" + String(data.length) + ":" + String(rollingHash);
+  },
+
+  _clipboardPayloadSignaturesMatch: function(snapshotA, snapshotB) {
+    if (!snapshotA || !snapshotB) {
+      return false;
+    }
+    if (snapshotA.signature === "unknown" || snapshotB.signature === "unknown") {
+      return false;
+    }
+    if (snapshotA.payloadFingerprint === "unknown" || snapshotB.payloadFingerprint === "unknown") {
+      return false;
+    }
+    return (
+      String(snapshotA.signature) === String(snapshotB.signature) &&
+      String(snapshotA.payloadFingerprint) === String(snapshotB.payloadFingerprint)
+    );
+  },
+
+  _setClipboardOverwriteApproval: function(snapshot) {
+    if (!snapshot || snapshot.signature === "unknown" || snapshot.payloadFingerprint === "unknown") {
+      return;
+    }
+    this._clipboardOverwriteApproval = {
+      signature: String(snapshot.signature || ""),
+      payloadFingerprint: String(snapshot.payloadFingerprint || ""),
+      expiresAtMs: Date.now() + CLIPBOARD_OVERWRITE_APPROVAL_TTL_MS,
+    };
+  },
+
+  _hasValidClipboardOverwriteApproval: function(snapshot) {
+    if (!this._clipboardOverwriteApproval) {
+      return false;
+    }
+    if (Date.now() > this._clipboardOverwriteApproval.expiresAtMs) {
+      this._clearClipboardOverwriteApproval();
+      return false;
+    }
+    if (!snapshot || snapshot.signature === "unknown" || snapshot.payloadFingerprint === "unknown") {
+      return false;
+    }
+    return (
+      String(this._clipboardOverwriteApproval.signature) === String(snapshot.signature) &&
+      String(this._clipboardOverwriteApproval.payloadFingerprint) === String(snapshot.payloadFingerprint)
+    );
+  },
+
+  _clearClipboardOverwriteApproval: function() {
+    this._clipboardOverwriteApproval = null;
   },
 
   _describeNonTextClipboardPayload: function() {
@@ -5265,7 +5355,8 @@ MyApplet.prototype = {
   _confirmClipboardOverwriteForPaste: function(clipboardSnapshot, transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback) {
     let nonTextDescription = clipboardSnapshot && clipboardSnapshot.description ? clipboardSnapshot.description : _("unknown");
     let originalClipboardSignature = clipboardSnapshot && clipboardSnapshot.signature ? clipboardSnapshot.signature : "unknown";
-    if (originalClipboardSignature === "unknown") {
+    let originalPayloadFingerprint = clipboardSnapshot && clipboardSnapshot.payloadFingerprint ? clipboardSnapshot.payloadFingerprint : "unknown";
+    if (originalClipboardSignature === "unknown" || originalPayloadFingerprint === "unknown") {
       this._setStatus("ready", _("Clipboard state unavailable; overwrite cancelled"), transcript);
       if (typeof completionCallback === "function") {
         completionCallback(false);
@@ -5301,11 +5392,12 @@ MyApplet.prototype = {
         action: function() {
           dialog.close();
           let currentClipboardSnapshot = this._clipboardPayloadSnapshot();
-          if (currentClipboardSnapshot.signature === "unknown" || currentClipboardSnapshot.signature !== originalClipboardSignature) {
+          if (!this._clipboardPayloadSignaturesMatch(clipboardSnapshot, currentClipboardSnapshot)) {
             this._setStatus("ready", _("Clipboard changed; overwrite cancelled"), transcript);
             complete(false);
             return;
           }
+          this._setClipboardOverwriteApproval(currentClipboardSnapshot);
           complete(this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn));
         }.bind(this),
       }
@@ -5398,7 +5490,7 @@ MyApplet.prototype = {
           return;
         }
         if (String(clipboardText || "") === expected) {
-          this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow);
+          this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow, expected, deadlineMs);
           return;
         }
         if (Date.now() >= deadlineMs) {
@@ -5422,7 +5514,37 @@ MyApplet.prototype = {
     }
   },
 
-  _spawnKeyboardArgs: function(args, followUpArgs, expectedTargetWindow) {
+  _spawnKeyboardArgs: function(args, followUpArgs, expectedTargetWindow, expectedClipboardText, expectedClipboardDeadlineMs) {
+    if (expectedClipboardText !== undefined && expectedClipboardText !== null) {
+      let expected = String(expectedClipboardText);
+      try {
+        this.clipboard.get_text(St.ClipboardType.CLIPBOARD, (clipboard, clipboardText) => {
+          if (this.appletRemoved) {
+            return;
+          }
+          if (String(clipboardText || "") !== expected) {
+            if (expectedClipboardDeadlineMs && Date.now() >= expectedClipboardDeadlineMs) {
+              this._setStatus("error", _("Clipboard changed before automatic paste"), this.lastTranscript);
+              return;
+            }
+            this.pasteTimer = Mainloop.timeout_add(CLIPBOARD_READY_RETRY_MS, () => {
+              this.pasteTimer = 0;
+              if (this.appletRemoved) {
+                return false;
+              }
+              this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow, expected, expectedClipboardDeadlineMs);
+              return false;
+            });
+            return;
+          }
+          this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow);
+        });
+      } catch (err) {
+        global.logError(err);
+        this._setStatus("error", _("Clipboard changed before automatic paste"), this.lastTranscript);
+      }
+      return;
+    }
     if (!this._targetXWindowMatchesSnapshot(expectedTargetWindow)) {
       this._setStatus("error", _("Target window changed before automatic paste"), this.lastTranscript);
       return;
@@ -5665,6 +5787,11 @@ MyApplet.prototype = {
     }
     let clipboardSnapshot = this._clipboardPayloadSnapshot();
     if (method === "clipboard-paste" && clipboardSnapshot.hasNonTextPayload) {
+      if (this._hasValidClipboardOverwriteApproval(clipboardSnapshot)) {
+        this._clearClipboardOverwriteApproval();
+        return this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn);
+      }
+      this._clearClipboardOverwriteApproval();
       this._confirmClipboardOverwriteForPaste(
         clipboardSnapshot,
         transcript,

@@ -71,6 +71,7 @@
         "auto-relisten",
         "keep-recording-artifacts",
         "recorder",
+        "input-device-default",
         "input-device"
       ]
     },
@@ -113,7 +114,7 @@
     },
     "text-polishing-section": {
       "type": "section",
-      "title": "Text polishing (menu: Text model)",
+      "title": "Text model and text polishing (menu: Text and output > Text model)",
       "keys": [
         "text-polishing-help",
         "post-process-backend",
@@ -137,16 +138,17 @@
     },
     "backend-section": {
       "type": "section",
-      "title": "Voice model and external API (menu: Voice model / Text model)",
+      "title": "Voice model (menu: Recording > Voice model)",
       "keys": [
-        "cli-path",
+        "voice-model-help",
         "transcriber",
         "whisper-model",
         "transcriber-command",
         "openai-compatible-url",
         "openai-compatible-model",
         "openai-compatible-flex-processing",
-        "openai-compatible-api-key"
+        "openai-compatible-api-key",
+        "cli-path"
       ]
     },
     "about-section": {
@@ -163,7 +165,7 @@
   },
   "main-menu-settings-map": {
     "type": "label",
-    "description": "All persistent settings from the applet menu are available here. Recording options are in Recording, output and Auto-Submitt are in Text output, personal context and vocabulary are in Personalization, text polishing prompts are in Text polishing, and voice/backend values are in Voice model and external API. Dynamic actions such as downloading models, opening transcript folders, listing or exporting transcript documents, diagnostics, cleanup, and alarm commands remain in the applet panel menu."
+    "description": "All persistent settings from the applet menu are available here. Recording options mirror the Recording menu. Voice model settings mirror Recording > Voice model. Text model and polishing settings mirror Text and output > Text model. Output and Auto-Submitt are in Text output, personal context and vocabulary are in Personalization. Dynamic actions such as downloading or removing models, opening transcript folders, listing or exporting transcript documents, diagnostics, cleanup, and alarm commands remain in the applet panel menu."
   },
   "settings-logo-header": {
     "type": "custom",
@@ -305,9 +307,15 @@
   },
   "input-device": {
     "type": "entry",
-    "description": "Input source",
-    "tooltip": "Optional PipeWire/Pulse source name. Max 4096 chars. Leave empty for the current default. Run 'speed-of-cinnamon list-inputs --json' to inspect available sources.",
+    "description": "Custom input source name",
+    "tooltip": "Optional PipeWire/Pulse source name for a non-default microphone. Max 4096 chars. Leave empty, or use the System default button above, for the current default. Run 'speed-of-cinnamon list-inputs --json' to inspect available sources.",
     "default": ""
+  },
+  "input-device-default": {
+    "type": "button",
+    "description": "Use system default input source",
+    "tooltip": "Mirrors the Recording > Input source > System default entry from the applet menu. It clears the custom input source field without removing the ability to enter a specific source manually.",
+    "callback": "_selectDefaultInputSource"
   },
   "personalization-help": {
     "type": "label",
@@ -412,8 +420,8 @@
   },
   "transcriber": {
     "type": "combobox",
-    "description": "Voice model backend",
-    "tooltip": "Automatic uses the selected Voice model to choose the local engine. Leave this on Automatic unless you need a command override.",
+    "description": "Voice model mode",
+    "tooltip": "Mirrors the Recording > Voice model menu. Automatic uses the selected voice model to choose the local engine. External API uses the OpenAI-compatible speech settings below. Leave this on Automatic unless you need a specific backend or a custom command.",
     "options": {
       "Automatic": "auto",
       "OpenAI Whisper command": "whisper",
@@ -424,16 +432,21 @@
     },
     "default": "auto"
   },
+  "voice-model-help": {
+    "type": "label",
+    "description": "These settings mirror the persistent choices from Recording > Voice model: Automatic voice model, local model file or directory, External API speech recognition, and custom command mode. Menu-only actions such as downloading models, removing models, and opening model folders remain in the applet click menu.",
+    "tooltip": "No option was removed from the applet menu. This settings page stores the persistent values; the click menu still handles dynamic actions that need live model discovery or file operations."
+  },
   "whisper-model": {
     "type": "filechooser",
-    "description": "Voice model",
-    "tooltip": "Model selected from the Voice menu, or a custom local model file or directory. Max 4096 chars.",
+    "description": "Selected voice model path",
+    "tooltip": "Model selected from Recording > Voice model, or a custom local model file or directory. Leave empty for Automatic voice model. Max 4096 chars.",
     "default": ""
   },
   "transcriber-command": {
     "type": "entry",
-    "description": "Transcriber command template",
-    "tooltip": "Used by the Custom command transcriber, or by Automatic when filled. Max 4096 chars. The template is executed as arguments (no shell expansion), with direct support for `&&`-chained commands only. Placeholders: {audio}, {language}, {text}, {output_dir}, {output_base}, {context}, {vocabulary}, {prompt}. The command must print the transcript or write it to {text}.",
+    "description": "Custom voice transcriber command",
+    "tooltip": "Used by the Custom command voice mode, or by Automatic when filled. Max 4096 chars. The template is executed as arguments (no shell expansion), with direct support for `&&`-chained commands only. Placeholders: {audio}, {language}, {text}, {output_dir}, {output_base}, {context}, {vocabulary}, {prompt}. The command must print the transcript or write it to {text}.",
     "default": ""
   },
   "post-process-backend": {
