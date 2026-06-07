@@ -268,6 +268,39 @@ class CommandChainTest(unittest.TestCase):
             with self.assertRaisesRegex(CommandChainError, "output exceeded"):
                 run_command_chain([("cmd",)], "", label="post-process", max_output_chars=5)
 
+    def test_run_command_chain_allows_multibyte_output_within_character_limit(self) -> None:
+        captured: dict[str, int] = {}
+        output_text = "\U0001f600" * 4
+        raw_output_text = f"{output_text}\n"
+
+        def fake_run(argv: list[str], input_bytes: bytes, **kwargs: object) -> tuple[int, bytes, bytes]:
+            del argv, input_bytes
+            captured["max_output_bytes"] = int(kwargs["max_output_bytes"])
+            return 0, raw_output_text.encode("utf-8"), b""
+
+        with (
+            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
+            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=fake_run),
+        ):
+            result = run_command_chain([("cmd",)], "", label="post-process", max_output_chars=4)
+
+        self.assertEqual(result, output_text)
+        self.assertGreaterEqual(captured["max_output_bytes"], len(raw_output_text.encode("utf-8")))
+
+    def test_run_command_chain_rejects_multibyte_output_over_character_limit(self) -> None:
+        output_text = "\U0001f600" * 5
+
+        def fake_run(argv: list[str], input_bytes: bytes, **kwargs: object) -> tuple[int, bytes, bytes]:
+            del argv, input_bytes, kwargs
+            return 0, output_text.encode("utf-8"), b""
+
+        with (
+            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
+            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=fake_run),
+        ):
+            with self.assertRaisesRegex(CommandChainError, "output exceeded 4 characters"):
+                run_command_chain([("cmd",)], "", label="post-process", max_output_chars=4)
+
     def test_run_command_chain_bounded_runner_rejects_large_live_output(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "output exceeded"):
             run_command_chain(
@@ -308,6 +341,34 @@ class CommandChainTest(unittest.TestCase):
         self.assertIn("post-process command failed: exit code 2; command output redacted", message)
         self.assertNotIn("sk-secret-token", message)
         self.assertNotIn("private-token", message)
+
+    def test_run_command_chain_allows_multibyte_input_within_character_limit(self) -> None:
+        input_text = "\U0001f600" * 4
+        captured: dict[str, bytes] = {}
+
+        def fake_run(argv: list[str], input_bytes: bytes, **kwargs: object) -> tuple[int, bytes, bytes]:
+            del argv, kwargs
+            captured["input_bytes"] = input_bytes
+            return 0, b"ok", b""
+
+        with (
+            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
+            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=fake_run),
+        ):
+            result = run_command_chain([("cmd",)], input_text, label="post-process", max_input_chars=4)
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(captured["input_bytes"], input_text.encode("utf-8"))
+
+    def test_run_command_chain_rejects_multibyte_input_over_character_limit(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
+            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output") as mocked_run,
+        ):
+            with self.assertRaisesRegex(CommandChainError, "input exceeded 4 characters"):
+                run_command_chain([("cmd",)], "\U0001f600" * 5, label="post-process", max_input_chars=4)
+
+        mocked_run.assert_not_called()
 
     def test_run_command_chain_redacts_timed_out_command_argv(self) -> None:
         with self.assertRaises(CommandChainError) as cm:

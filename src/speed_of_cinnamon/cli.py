@@ -146,7 +146,8 @@ MAX_TRANSCRIPTS_DOCUMENT_JSON_BYTES = 240_000
 MAX_TRANSCRIPTS_EXPORT_CHARS = 64_000_000
 HISTORY_PREVIEW_REDACTED_TEXT = "[transcript preview redacted]"
 HISTORY_METADATA_REDACTED_TEXT = "[transcript metadata redacted]"
-TRANSCRIPT_DISPLAY_CONTROL_RE = re.compile(r"[\x00-\x09\x0b-\x1f\x7f-\x9f]")
+TRANSCRIPT_DISPLAY_CONTROL_RE = re.compile(r"[\x00-\x09\x0b-\x1f\x7f-\x9f\u2028\u2029]")
+TRANSCRIPT_METADATA_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 EMPTY_TRANSCRIPT_MARKERS = frozenset(
     {
         "leere aufnahme",
@@ -1179,6 +1180,18 @@ def _sanitize_transcript_display_text(text: str) -> str:
     return TRANSCRIPT_DISPLAY_CONTROL_RE.sub(lambda match: f"\\u{ord(match.group(0)):04x}", text)
 
 
+def _sanitize_transcript_metadata_text(text: str) -> str:
+    if isinstance(text, bool) or not isinstance(text, str):
+        raise RuntimeError("transcript metadata text must be text")
+    return TRANSCRIPT_METADATA_CONTROL_RE.sub(lambda match: f"\\u{ord(match.group(0)):04x}", text)
+
+
+def _transcript_display_name(path: Path) -> str:
+    if not isinstance(path, Path):
+        raise RuntimeError("transcript path must be a path")
+    return _sanitize_transcript_metadata_text(path.name)
+
+
 def _redact_history_previews(transcripts: list[dict[str, object]]) -> list[dict[str, object]]:
     redacted: list[dict[str, object]] = []
     for entry in transcripts:
@@ -1673,7 +1686,7 @@ _TRANSCRIPT_READ_EXCEPTIONS = (OSError, RuntimeError, ValueError, UnicodeDecodeE
 
 
 def _transcript_read_failure(path: Path, exc: BaseException) -> RuntimeError:
-    return RuntimeError(f"failed to read transcript {path.name}: {_redact_error_for_user(str(exc))}")
+    return RuntimeError(f"failed to read transcript {_transcript_display_name(path)}: {_redact_error_for_user(str(exc))}")
 
 
 def _collect_transcript_history(limit: int = 10) -> tuple[list[dict[str, object]], int]:
@@ -1700,7 +1713,7 @@ def _collect_transcript_history(limit: int = 10) -> tuple[list[dict[str, object]
         entries.append(
             {
                 "path": str(path),
-                "name": path.name,
+                "name": _transcript_display_name(path),
                 "modified_at": modified_at,
                 "preview": transcript_preview(text),
             }
@@ -1747,11 +1760,11 @@ def build_transcripts_document(
         if not text:
             continue
         display_text = _sanitize_transcript_display_text(text)
+        display_name = _transcript_display_name(path)
         modified_at = datetime.fromtimestamp(mtime, timezone.utc).isoformat()
         entry = [
-            f"===== {path.name} =====",
+            f"===== {display_name} =====",
             f"Modified: {modified_at}",
-            f"Path: {path}",
             "",
             display_text,
             "",
@@ -1764,7 +1777,7 @@ def build_transcripts_document(
                     lines.extend(
                         [
                             "===== transcript list truncated =====",
-                            f"Stopped before {path.name} because the display limit was reached.",
+                            f"Stopped before {display_name} because the display limit was reached.",
                             "",
                         ]
                     )
@@ -3959,6 +3972,18 @@ def command_alarms_check(args: argparse.Namespace) -> dict[str, object]:
     return check_due_alarms(mark=mark, catch_up_minutes=catch_up_minutes)
 
 
+def _diagnostics_state_payload(state: RecordingState) -> dict[str, object]:
+    state_payload = asdict(state)
+    state_payload["transcript_length"] = len(str(state_payload.get("transcript") or ""))
+    state_payload.pop("transcript", None)
+    for field_name in ("audio_path", "log_path", "transcript_path", "process_identity"):
+        value = state_payload.pop(field_name, None)
+        state_payload[f"{field_name}_present"] = bool(value)
+    if isinstance(state_payload.get("error"), str):
+        state_payload["error"] = _redact_error_for_user(str(state_payload.get("error") or ""))
+    return state_payload
+
+
 def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
     settings_json = getattr(args, "settings_json", "")
     settings = _parse_cli_settings_json(settings_json)
@@ -3990,12 +4015,10 @@ def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
         source_payload = {"ok": False, "error": _redact_error_for_user(str(exc))}
 
     transcript_entries = [
-        {key: entry[key] for key in ("name", "path", "modified_at") if key in entry}
+        {key: entry[key] for key in ("name", "modified_at") if key in entry}
         for entry in read_transcript_history(5)
     ]
-    state_payload = asdict(build_store(args).read())
-    state_payload["transcript_length"] = len(str(state_payload.get("transcript") or ""))
-    state_payload.pop("transcript", None)
+    state_payload = _diagnostics_state_payload(build_store(args).read())
     state_file_path = normalized_path(args.state_file)
     if state_file_path is None:
         state_file_path = _coerce_path(str(args.state_file), field_name="state file")

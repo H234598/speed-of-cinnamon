@@ -231,6 +231,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._notify(_("Could not start uninstall terminal"), safeError, true);', source)
         self.assertIn('this._notify(_("Could not start setup terminal"), safeError, true);', source)
 
+    def test_settings_export_status_does_not_render_local_path(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertNotIn('_("Exported settings: ") + payload.path', source)
+        self.assertIn('_("Exported settings")', source)
+
     def test_applet_registers_optional_language_specific_hotkeys(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
@@ -769,6 +775,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('_setStatus("done", _("Saved diagnostics"), this.lastTranscript)', source)
         self.assertNotIn("payload.saved_path", source)
         self.assertNotIn('Saved diagnostics: "', source)
+
+    def test_transcript_export_status_does_not_render_local_path(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn('let message = _("Exported encrypted transcript bundle");', source)
+        self.assertNotIn('_("Exported encrypted transcript bundle: ") + path', source)
+        self.assertIn('this._openFolder(GLib.path_get_dirname(path), _("Opened transcript export folder"));', source)
 
     def test_imported_settings_are_type_hardened_before_persistence(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

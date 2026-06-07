@@ -440,8 +440,8 @@ def run_command_chain(
     output = input_text
 
     for segment in segments:
-        if len(input_bytes) > max_input_chars:
-            raise CommandChainError(f"{label} command input exceeded {max_input_chars} bytes")
+        if len(output) > max_input_chars:
+            raise CommandChainError(f"{label} command input exceeded {max_input_chars} characters")
 
         cmd = list(segment)
         if len(cmd) > MAX_COMMAND_SEGMENT_TOKENS:
@@ -466,11 +466,12 @@ def run_command_chain(
             raise CommandChainError(f"{label} command contains invalid control character")
         runtime_command = _command_path(executable)
         try:
+            max_output_bytes = (max_output_chars * 4) + 4096
             returncode, stdout_data, stderr_data = run_process_bounded_output(
                 [runtime_command, *cmd[1:]],
                 input_bytes,
                 timeout_seconds=timeout_seconds,
-                max_output_bytes=max_output_chars,
+                max_output_bytes=max_output_bytes,
                 env=env,
                 label=label,
             )
@@ -478,9 +479,12 @@ def run_command_chain(
                 detail = _command_failure_detail(returncode, len(stdout_data), len(stderr_data))
                 raise CommandChainError(f"{label} command failed: {detail}")
             try:
-                segment_output = stdout_data[:max_output_chars].decode("utf-8").strip()
+                decoded_output = stdout_data.decode("utf-8")
             except UnicodeDecodeError as exc:
                 raise CommandChainError(f"command output is not valid UTF-8: {exc}") from exc
+            segment_output = decoded_output.strip()
+            if len(segment_output) > max_output_chars:
+                raise CommandChainError(f"{label} command output exceeded {max_output_chars} characters")
             if _contains_escaped_null(segment_output):
                 raise CommandChainError("command output contains invalid null byte")
             if _contains_command_output_control_chars(segment_output):

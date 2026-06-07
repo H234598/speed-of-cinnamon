@@ -2826,6 +2826,8 @@ class CliTest(unittest.TestCase):
         self.assertIn(newer_text.strip(), document)
         self.assertIn(older_text.strip(), document)
         self.assertNotIn("temporary plaintext leak", document)
+        self.assertNotIn("Path:", document)
+        self.assertNotIn(str(transcript_dir), document)
         self.assertLess(document.index("===== newer.txt ====="), document.index("===== older.txt ====="))
 
     def test_transcripts_document_escapes_control_characters(self) -> None:
@@ -2833,6 +2835,7 @@ class CliTest(unittest.TestCase):
             transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
             transcript_dir.mkdir(parents=True)
             (transcript_dir / "ansi.txt").write_text("\x1b[31mALERT\x1b[0m\nsafe\n", encoding="utf-8")
+            (transcript_dir / "bad\nname\u2028.txt").write_text("named transcript\n", encoding="utf-8")
             stdout = io.StringIO()
             with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
                 code = cli.run(["transcripts-document", "--limit", "1000", "--confirm-plaintext", "--json"])
@@ -2841,7 +2844,22 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertNotIn("\x1b", document)
         self.assertIn("\\u001b[31mALERT\\u001b[0m", document)
+        self.assertNotIn("bad\nname\u2028.txt", document)
+        self.assertIn("bad\\u000aname\\u2028.txt", document)
         self.assertIn("safe", document)
+
+    def test_history_sanitizes_transcript_file_names_when_plaintext_confirmed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            (transcript_dir / "bad\nname\u2029.txt").write_text("named transcript\n", encoding="utf-8")
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["history", "--limit", "1", "--confirm-plaintext", "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["transcripts"][0]["name"], "bad\\u000aname\\u2029.txt")
 
     def test_transcripts_document_requires_plaintext_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2986,6 +3004,7 @@ class CliTest(unittest.TestCase):
         unlink_leaf.assert_any_call(stale_export, field_name="transcript export")
         self.assertNotIn(transcript_text.encode("utf-8"), encrypted_payload)
         self.assertIn(transcript_text.strip(), decrypted)
+        self.assertNotIn(str(transcript_dir), decrypted)
 
     def test_plaintext_transcripts_export_escapes_control_characters(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4355,10 +4374,26 @@ class CliTest(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as tmp:
             transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            recordings_dir = Path(tmp) / "speed-of-cinnamon" / "recordings"
             transcript_dir.mkdir(parents=True)
+            recordings_dir.mkdir(parents=True)
             (transcript_dir / "secret.txt").write_text("secret dictated words\n", encoding="utf-8")
+            audio_path = recordings_dir / "secret.flac"
+            log_path = recordings_dir / "secret.log"
+            transcript_path = transcript_dir / "secret.txt"
+            audio_path.write_bytes(b"audio")
+            log_path.write_text("log\n", encoding="utf-8")
             state_file = Path(tmp) / "state.json"
-            StateStore(state_file).write(RecordingState(status="done", transcript="secret dictated words"))
+            StateStore(state_file).write(
+                RecordingState(
+                    status="done",
+                    audio_path=str(audio_path),
+                    log_path=str(log_path),
+                    transcript_path=str(transcript_path),
+                    process_identity="private-process-identity",
+                    transcript="secret dictated words",
+                )
+            )
             stdout = io.StringIO()
             with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
                 add_alarm("09:00", name="private alarm name")
@@ -4372,7 +4407,21 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["alarms"]["configured"], 1)
         self.assertIn("recent_transcripts", payload)
         self.assertEqual(payload["state"]["transcript_length"], len("secret dictated words"))
+        self.assertTrue(payload["state"]["audio_path_present"])
+        self.assertTrue(payload["state"]["log_path_present"])
+        self.assertTrue(payload["state"]["transcript_path_present"])
+        self.assertTrue(payload["state"]["process_identity_present"])
+        self.assertNotIn("audio_path", payload["state"])
+        self.assertNotIn("log_path", payload["state"])
+        self.assertNotIn("transcript_path", payload["state"])
+        self.assertNotIn("process_identity", payload["state"])
+        self.assertEqual(payload["recent_transcripts"][0]["name"], "secret.txt")
+        self.assertNotIn("path", payload["recent_transcripts"][0])
         self.assertNotIn("secret dictated words", encoded)
+        self.assertNotIn(str(audio_path), encoded)
+        self.assertNotIn(str(log_path), encoded)
+        self.assertNotIn(str(transcript_dir / "secret.txt"), encoded)
+        self.assertNotIn("private-process-identity", encoded)
         self.assertNotIn("private alarm name", encoded)
         self.assertNotIn("preview", encoded)
         self.assertNotIn('"text"', encoded)

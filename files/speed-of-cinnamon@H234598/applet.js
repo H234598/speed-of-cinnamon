@@ -3842,7 +3842,7 @@ MyApplet.prototype = {
         this._notify(_("Speed of Cinnamon transcript export"), message, true);
         return;
       }
-      let message = _("Exported encrypted transcript bundle: ") + path;
+      let message = _("Exported encrypted transcript bundle");
       this._setStatus("done", message, this.lastTranscript);
       this._notify(_("Speed of Cinnamon transcript export"), message, false);
       this._openFolder(GLib.path_get_dirname(path), _("Opened transcript export folder"));
@@ -4020,7 +4020,7 @@ MyApplet.prototype = {
         this._setStatus("error", payload.error, this.lastTranscript);
         return;
       }
-      this._setStatus("done", _("Exported settings: ") + payload.path, this.lastTranscript);
+      this._setStatus("done", _("Exported settings"), this.lastTranscript);
     }, { inputText: JSON.stringify(this._settingsSnapshotForCli()) });
   },
 
