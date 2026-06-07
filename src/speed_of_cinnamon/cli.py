@@ -398,13 +398,12 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                 owner_pid = _read_finalization_lock_pid(lock_path)
                 owner_identity = _read_finalization_lock_identity(lock_path)
                 if owner_pid is not None and process_is_alive(owner_pid):
-                    if owner_identity is not None:
-                        owner_current_identity = _finalization_lock_identity_for_pid(owner_pid)
-                        if owner_current_identity is not None and owner_identity == owner_current_identity:
-                            return None
-                        if owner_current_identity is None and now - existing.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS:
-                            return None
-                    elif now - existing.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS:
+                    if owner_identity is None:
+                        return None
+                    owner_current_identity = _finalization_lock_identity_for_pid(owner_pid)
+                    if owner_current_identity is None:
+                        return None
+                    if owner_identity == owner_current_identity:
                         return None
                 if owner_pid is None and now - existing.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS:
                     return None
@@ -2652,8 +2651,14 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
-def finalize_recording(args: argparse.Namespace, store: StateStore, state: RecordingState) -> dict[str, object]:
-    lock_path = _acquire_finalization_lock(store.path)
+def finalize_recording(
+    args: argparse.Namespace,
+    store: StateStore,
+    state: RecordingState,
+    *,
+    finalization_lock_path: Path | None = None,
+) -> dict[str, object]:
+    lock_path = finalization_lock_path if finalization_lock_path is not None else _acquire_finalization_lock(store.path)
     if lock_path is None:
         return {"status": "finalizing", "message": "finalization already in progress"}
 
@@ -3044,30 +3049,46 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
             if state.audio_path:
                 return finalize_recording(args, store, state)
             return {"status": "finalizing", "message": "finalization in progress"}
-        if state.status in {"recorded", "processing"} and state.audio_path:
+        if state.status in {"recorded", "processing"}:
             return finalize_recording(args, store, state)
         return {"status": state.status, "message": "not recording"}
 
-    if _recording_process_verified_alive(state):
-        stopped = stop_process(
-            _coerce_int(state.pid, field_name="state pid"),
-            expected_process_identity=state.process_identity,
-        )
-        if not stopped:
-            error_text = "recording process could not be stopped safely; recording state preserved"
-            store.update(
-                status="recording",
-                error=error_text,
-                inserted=False,
+    lock_path = _acquire_finalization_lock(store.path)
+    if lock_path is None:
+        return {"status": "finalizing", "message": "finalization already in progress"}
+    try:
+        state = store.read()
+        _raise_if_state_unreadable(state)
+        if state.status != "recording":
+            if state.status == "finalizing":
+                if state.audio_path:
+                    return finalize_recording(args, store, state, finalization_lock_path=lock_path)
+                return {"status": "finalizing", "message": "finalization in progress"}
+            if state.status in {"recorded", "processing"}:
+                return finalize_recording(args, store, state, finalization_lock_path=lock_path)
+            return {"status": state.status, "message": "not recording"}
+        if _recording_process_verified_alive(state):
+            stopped = stop_process(
+                _coerce_int(state.pid, field_name="state pid"),
+                expected_process_identity=state.process_identity,
             )
-            return {"status": "recording", "message": error_text, "error": error_text}
-    state = store.update(
-        status="recorded",
-        stopped_at=now_iso(),
-        error="",
-        inserted=False,
-    )
-    return finalize_recording(args, store, state)
+            if not stopped:
+                error_text = "recording process could not be stopped safely; recording state preserved"
+                store.update(
+                    status="recording",
+                    error=error_text,
+                    inserted=False,
+                )
+                return {"status": "recording", "message": error_text, "error": error_text}
+        state = store.update(
+            status="recorded",
+            stopped_at=now_iso(),
+            error="",
+            inserted=False,
+        )
+        return finalize_recording(args, store, state, finalization_lock_path=lock_path)
+    finally:
+        _release_finalization_lock(lock_path)
 
 
 def command_cancel(args: argparse.Namespace) -> dict[str, object]:
@@ -3082,11 +3103,6 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
     try:
         state = store.read()
         _raise_if_state_unreadable(state)
-        if state.status == "finalizing":
-            return {
-                "status": "finalizing",
-                "message": "finalization in progress; use cancel after completion",
-            }
         if state.status == "recording" and _recording_process_verified_alive(state):
             stopped = stop_process(
                 _coerce_int(state.pid, field_name="state pid"),
@@ -3110,7 +3126,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
         error_message = "discarding recording artifacts"
         store.write(
             RecordingState(
-                status="error",
+                status="finalizing",
                 audio_path=state.audio_path,
                 log_path=state.log_path,
                 transcript_path=state.transcript_path,
@@ -3119,7 +3135,6 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 recorder=state.recorder,
                 input_device=state.input_device,
                 max_seconds=state.max_seconds,
-                error=error_message,
             )
         )
 
@@ -3196,6 +3211,8 @@ def command_toggle(args: argparse.Namespace) -> dict[str, object]:
         if state.audio_path:
             store.update(status="processing", stopped_at=state.stopped_at or now_iso())
             return command_stop(args)
+    if state.status in {"recorded", "processing"}:
+        return command_stop(args)
     return command_start(args)
 
 

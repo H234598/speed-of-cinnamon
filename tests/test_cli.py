@@ -5068,6 +5068,36 @@ class CliTest(unittest.TestCase):
             self.assertIsNone(acquired)
             self.assertEqual(lock_path.read_text(encoding="ascii"), "12345\nowner-identity\n")
 
+    def test_finalization_lock_does_not_reclaim_stale_live_pid_only_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            lock_path.write_text(f"{os.getpid()}\n", encoding="ascii")
+            lock_path.chmod(0o600)
+            old = time.time() - cli.MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS - 10
+            os.utime(lock_path, (old, old))
+
+            acquired = cli._acquire_finalization_lock(state_file)
+
+        self.assertIsNone(acquired)
+
+    def test_finalization_lock_does_not_reclaim_live_owner_when_identity_unreadable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            lock_path.write_text("12345\nowner-identity\n", encoding="ascii")
+            lock_path.chmod(0o600)
+            old = time.time() - cli.MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS - 10
+            os.utime(lock_path, (old, old))
+
+            with (
+                mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=True),
+                mock.patch("speed_of_cinnamon.cli._finalization_lock_identity_for_pid", return_value=None),
+            ):
+                acquired = cli._acquire_finalization_lock(state_file)
+
+        self.assertIsNone(acquired)
+
     def test_finalization_lock_reclaims_dead_owner(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "state.json"
@@ -5103,16 +5133,17 @@ class CliTest(unittest.TestCase):
 
             self.assertEqual(lock_path.read_text(encoding="ascii").strip(), str(os.getpid()))
 
-    def test_finalization_lock_reclaims_stale_pid_only_lock(self) -> None:
+    def test_finalization_lock_reclaims_stale_dead_pid_only_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "state.json"
             lock_path = cli._finalization_lock_path(state_file)
-            lock_path.write_text(f"{os.getpid()}\n", encoding="ascii")
+            lock_path.write_text("999999999\n", encoding="ascii")
             lock_path.chmod(0o600)
             old = time.time() - cli.MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS - 1
             os.utime(lock_path, (old, old))
 
-            acquired = cli._acquire_finalization_lock(state_file)
+            with mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=False):
+                acquired = cli._acquire_finalization_lock(state_file)
             try:
                 self.assertEqual(acquired, lock_path)
                 self.assertEqual(lock_path.read_text(encoding="ascii").splitlines()[0], str(os.getpid()))
@@ -6326,6 +6357,65 @@ class CliTest(unittest.TestCase):
         self.assertTrue(audio_exists)
         self.assertTrue(log_exists)
 
+    def test_cancel_marks_state_finalizing_without_error_during_artifact_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "recording.wav"
+            log = recordings / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="recorded", audio_path=str(audio), log_path=str(log)))
+            observed_state: dict[str, object] = {}
+            original_remove_recording_artifact = cli._remove_recording_artifact
+
+            def fake_remove_recording_artifact(path_value: str | None) -> bool:
+                current = store.read()
+                observed_state["status"] = current.status
+                observed_state["error"] = current.error
+                return original_remove_recording_artifact(path_value)
+
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli._remove_recording_artifact", side_effect=fake_remove_recording_artifact),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "idle")
+        self.assertEqual(observed_state["status"], "finalizing")
+        self.assertEqual(observed_state["error"], "")
+
+    def test_cancel_retries_finalizing_state_without_lock_discards_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "recording.wav"
+            log = recordings / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="finalizing", audio_path=str(audio), log_path=str(log)))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "idle")
+        self.assertFalse(audio.exists())
+        self.assertFalse(log.exists())
+        self.assertEqual(final_state.status, "idle")
+
     def test_cancel_removes_transcript_artifact_before_idle_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -6803,6 +6893,39 @@ class CliTest(unittest.TestCase):
         self.assertEqual(final_state.audio_path, str(audio))
         self.assertEqual(final_state.log_path, str(log))
 
+    def test_cancel_reclaimed_finalizing_state_discards_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recorded.wav"
+            log = recordings_root / "recorded.log"
+            audio.write_bytes(b"audio")
+            log.write_text("log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="finalizing", audio_path=str(audio), log_path=str(log)))
+            lock_path = cli._finalization_lock_path(state_file)
+            lock_path.write_text("999999999\n", encoding="ascii")
+            lock_path.chmod(0o600)
+            old = time.time() - cli.MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS - 10
+            os.utime(lock_path, (old, old))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+            audio_exists = audio.exists()
+            log_exists = log.exists()
+            lock_exists = lock_path.exists()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "idle")
+        self.assertFalse(audio_exists)
+        self.assertFalse(log_exists)
+        self.assertFalse(lock_exists)
+        self.assertEqual(final_state.status, "idle")
+
     @mock.patch("speed_of_cinnamon.cli.stop_process")
     @mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=True)
     def test_cancel_running_recording_stops_process(self, mocked_alive: mock.Mock, mocked_stop: mock.Mock) -> None:
@@ -6877,6 +7000,72 @@ class CliTest(unittest.TestCase):
         self.assertEqual(final_state.status, "recording")
         mocked_alive.assert_called_once_with(1234)
         mocked_stop.assert_called_once_with(1234, expected_process_identity="owner-identity")
+        mocked_finalize.assert_not_called()
+
+    def test_stop_holds_finalization_lock_before_recorded_state_can_be_canceled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recorded.wav"
+            audio.write_bytes(b"audio")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="recording", pid=1234, audio_path=str(audio)))
+            args = self._build_finalize_args(insert_method="none")
+            args.state_file = str(state_file)
+            cancel_result: dict[str, object] = {}
+
+            def fake_finalize(*_args: object, **kwargs: object) -> dict[str, object]:
+                self.assertIsNotNone(kwargs.get("finalization_lock_path"))
+                cancel_args = self._build_finalize_args(insert_method="none")
+                cancel_args.state_file = str(state_file)
+                cancel_result.update(cli.command_cancel(cancel_args))
+                return {"status": "done"}
+
+            def fake_process_is_alive(pid: object) -> bool:
+                return pid == os.getpid()
+
+            with (
+                mock.patch("speed_of_cinnamon.cli.process_is_alive", side_effect=fake_process_is_alive),
+                mock.patch("speed_of_cinnamon.cli.finalize_recording", side_effect=fake_finalize),
+            ):
+                result = cli.command_stop(args)
+            audio_exists = audio.exists()
+
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(cancel_result["status"], "finalizing")
+        self.assertTrue(audio_exists)
+
+    def test_stop_rereads_state_after_finalization_lock_before_transition(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recorded.wav"
+            audio.write_bytes(b"audio")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="recording", pid=1234, audio_path=str(audio)))
+            args = self._build_finalize_args(insert_method="none")
+            args.state_file = str(state_file)
+            original_acquire_finalization_lock = cli._acquire_finalization_lock
+
+            def acquire_and_complete(state_path: Path) -> Path | None:
+                lock_path = original_acquire_finalization_lock(state_path)
+                store.write(RecordingState(status="done", transcript="already handled", inserted=True))
+                return lock_path
+
+            with (
+                mock.patch("speed_of_cinnamon.cli._acquire_finalization_lock", side_effect=acquire_and_complete),
+                mock.patch("speed_of_cinnamon.cli.finalize_recording") as mocked_finalize,
+            ):
+                result = cli.command_stop(args)
+            final_state = store.read()
+
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(final_state.status, "done")
+        self.assertEqual(final_state.transcript, "already handled")
         mocked_finalize.assert_not_called()
 
     @mock.patch("speed_of_cinnamon.cli.stop_process")
@@ -6972,6 +7161,43 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(final_state.status, "error")
         self.assertIn("missing or empty", final_state.error)
+
+    def test_stop_recorded_without_audio_path_persists_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="recorded"))
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = cli.run(["stop", "--state-file", str(state_file), "--insert-method", "none", "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("no recording is available", payload["error"])
+        self.assertEqual(final_state.status, "error")
+        self.assertIn("no recording is available", final_state.error)
+
+    def test_toggle_processing_without_audio_path_does_not_start_recording(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing"))
+            stdout = io.StringIO()
+            with (
+                mock.patch("speed_of_cinnamon.cli.start_recorder") as mocked_start,
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["toggle", "--state-file", str(state_file), "--insert-method", "none", "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("no recording is available", payload["error"])
+        self.assertEqual(final_state.status, "error")
+        mocked_start.assert_not_called()
 
     @mock.patch("speed_of_cinnamon.cli.command_status", side_effect=RuntimeError("command failed: Bearer sk-secret token=abc123"))
     @mock.patch("speed_of_cinnamon.cli.log_event")

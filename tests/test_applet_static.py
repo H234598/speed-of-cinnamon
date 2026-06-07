@@ -574,14 +574,14 @@ class AppletStaticTest(unittest.TestCase):
         silent_index = source.index('if (payload.status === "done" && payload.silence_detected)')
         transcript_index = source.index('if (payload.status === "done" && hasTranscript)')
         empty_index = source.index('if (payload.status === "done" && this.autoRelistenPending)')
-        reset_index = source.index("this.autoRelistenPending = false;", empty_index)
-        restart_index = source.index("relistenStarted = this._restartRelistenRecording();", empty_index)
+        finish_index = source.index("_finishPendingRelisten: function()")
+        restart_index = source.index("relistenStarted = this._restartRelistenRecording();", finish_index)
         status_index = source.index('payload.message || _("Recording finished without transcript")', empty_index)
 
         self.assertLess(silent_index, transcript_index)
         self.assertLess(transcript_index, empty_index)
-        self.assertLess(empty_index, reset_index)
-        self.assertLess(reset_index, restart_index)
+        self.assertLess(empty_index, finish_index)
+        self.assertNotIn("this.autoRelistenPending = false;", source[finish_index:restart_index])
         self.assertLess(restart_index, status_index)
 
     def test_auto_relisten_pending_token_is_not_cleared_during_running_command(self) -> None:
@@ -1312,15 +1312,28 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (payload.error) {", error_block)
         self.assertNotIn("this.autoRelistenManualStopRequested = false;", error_block)
 
-    def test_failed_relisten_restart_clears_pending_token(self) -> None:
+    def test_relisten_restart_clears_pending_only_after_restart_resolution(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         finish_index = source.index("_finishPendingRelisten: function()")
         return_index = source.index("return relistenStarted;", finish_index)
         block = source[finish_index:return_index]
+        started_index = block.index("if (relistenStarted) {")
+        failed_index = block.index("} else if (shouldRelisten) {", started_index)
+        started_block = block[started_index:failed_index]
+        restart_index = source.index("_restartRelistenRecording: function()")
+        restart_end = source.index("_preparedTranscriptText: function", restart_index)
+        restart_block = source[restart_index:restart_end]
 
-        self.assertIn("this.autoRelistenPending = false;", block)
+        self.assertNotIn("this.autoRelistenPending = false;", started_block)
+        self.assertNotIn('this.autoRelistenPendingToken = "";', started_block)
+        self.assertIn("} else if (shouldRelisten) {\n      this.autoRelistenPending = false;", block)
         self.assertIn('this.autoRelistenPendingToken = "";', block)
         self.assertNotIn("} else if (!shouldRelisten) {", block)
+        self.assertIn("if (payload.error) {\n        this.autoRelistenPending = false;", restart_block)
+        self.assertIn('payload.status === "recording" || payload.status === "recorded"', restart_block)
+        self.assertIn('this.autoRelistenPendingToken = "";', restart_block)
+        apply_index = restart_block.index("this._applyPayload(payload);")
+        self.assertNotIn("this.autoRelistenManualStopRequested = false;", restart_block[:apply_index])
 
     def test_applet_uses_gio_for_desktop_links_and_folders(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

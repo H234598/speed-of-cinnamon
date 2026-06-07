@@ -5756,13 +5756,17 @@ MyApplet.prototype = {
       this.notificationSessionActive = true;
       relistenStarted = this._restartRelistenRecording();
     }
-    this.autoRelistenPending = false;
-    this.autoRelistenPendingToken = "";
-    this.autoRelistenManualStopRequested = false;
     if (relistenStarted) {
       this.notificationSessionActive = true;
     } else if (shouldRelisten) {
+      this.autoRelistenPending = false;
+      this.autoRelistenPendingToken = "";
+      this.autoRelistenManualStopRequested = false;
       this.notificationSessionActive = previousNotificationSessionActive;
+    } else {
+      this.autoRelistenPending = false;
+      this.autoRelistenPendingToken = "";
+      this.autoRelistenManualStopRequested = false;
     }
     return relistenStarted;
   },
@@ -5951,6 +5955,10 @@ MyApplet.prototype = {
         this.autoRelistenPendingToken = "";
         this._setStatus("error", payload.error, this.lastTranscript);
         return;
+      }
+      if (payload.status === "recording" || payload.status === "recorded") {
+        this.autoRelistenPending = false;
+        this.autoRelistenPendingToken = "";
       }
       this._applyPayload(payload);
     });
