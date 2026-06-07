@@ -83,7 +83,12 @@ def open_directory_without_following_symlinks(path: Path, *, field_name: str = "
     return open_file_without_following_symlinks(path, os.O_RDONLY | directory_flag, field_name=field_name)
 
 
-def assert_fd_is_regular_private_file(fd: int, *, field_name: str = "path") -> None:
+def assert_fd_is_regular_private_file(
+    fd: int,
+    *,
+    field_name: str = "path",
+    require_private_mode: bool = False,
+) -> None:
     try:
         file_stat = os.fstat(fd)
     except OSError as exc:
@@ -92,6 +97,10 @@ def assert_fd_is_regular_private_file(fd: int, *, field_name: str = "path") -> N
         raise RuntimeError(f"{field_name} must be a regular file")
     if getattr(file_stat, "st_nlink", 1) != 1:
         raise RuntimeError(f"{field_name} must not be hardlinked")
+    if hasattr(os, "getuid") and file_stat.st_uid != os.getuid():
+        raise RuntimeError(f"{field_name} must be owned by the current user")
+    if require_private_mode and file_stat.st_mode & 0o077:
+        raise RuntimeError(f"{field_name} must be private")
 
 
 def assert_fd_is_private_directory(fd: int, *, field_name: str = "path") -> None:
@@ -154,6 +163,7 @@ def read_text_without_following_symlinks(
     field_name: str = "path",
     encoding: str = "utf-8",
     max_bytes: int | None = None,
+    require_private_mode: bool = False,
 ) -> str:
     if not isinstance(path, Path):
         raise RuntimeError(f"{field_name} must be a path")
@@ -166,7 +176,11 @@ def read_text_without_following_symlinks(
         raise OSError(str(exc)) from exc
     try:
         try:
-            assert_fd_is_regular_private_file(fd, field_name=field_name)
+            assert_fd_is_regular_private_file(
+                fd,
+                field_name=field_name,
+                require_private_mode=require_private_mode,
+            )
         except RuntimeError as exc:
             raise OSError(str(exc)) from exc
         if max_bytes is None:
@@ -239,6 +253,7 @@ def _write_atomically_without_following_symlinks(
         if temp_name:
             try:
                 os.unlink(temp_name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
             except OSError:
                 pass
         raise

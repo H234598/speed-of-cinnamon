@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import os
+import stat as stat_module
 import tempfile
 import unittest
 from contextlib import redirect_stderr
@@ -315,6 +316,7 @@ class AppLoggingTest(unittest.TestCase):
             log_dir = Path(tmp)
             old_daily = log_dir / "speed-of-cinnamon-2026-06-01.log"
             old_daily.write_text("old\n", encoding="utf-8")
+            old_daily.chmod(0o600)
 
             app_logging.maintain_logs(log_dir, today=date(2026, 6, 5))
 
@@ -328,6 +330,7 @@ class AppLoggingTest(unittest.TestCase):
             target = Path(tmp) / "pwned-daily"
             old_daily = log_dir / "speed-of-cinnamon-2026-06-01.log"
             old_daily.write_text("old\n", encoding="utf-8")
+            old_daily.chmod(0o600)
             tmp_target = old_daily.with_suffix(old_daily.suffix + ".tmp")
             tmp_target.symlink_to(target)
 
@@ -345,6 +348,7 @@ class AppLoggingTest(unittest.TestCase):
             real_dir.mkdir()
             old_daily = real_dir / "speed-of-cinnamon-2026-06-01.log"
             old_daily.write_text("old\n", encoding="utf-8")
+            old_daily.chmod(0o600)
             symlink_dir = base / "logs"
             symlink_dir.symlink_to(real_dir, target_is_directory=True)
 
@@ -403,8 +407,10 @@ class AppLoggingTest(unittest.TestCase):
             may_daily = log_dir / "speed-of-cinnamon-2026-05-30.log"
             may_gz = log_dir / "speed-of-cinnamon-2026-05-31.log.gz"
             may_daily.write_text("may-30\n", encoding="utf-8")
+            may_daily.chmod(0o600)
             with gzip.open(may_gz, "wt", encoding="utf-8") as handle:
                 handle.write("may-31\n")
+            may_gz.chmod(0o600)
 
             app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 
@@ -417,16 +423,81 @@ class AppLoggingTest(unittest.TestCase):
             self.assertIn("may-30", content)
             self.assertIn("may-31", content)
 
+    def test_maintain_logs_monthly_merge_deletes_sources_with_dir_fd_and_fsync(self) -> None:
+        fsync_modes: list[int] = []
+        real_fsync = os.fsync
+
+        def record_fsync(fd: int) -> None:
+            fsync_modes.append(os.fstat(fd).st_mode)
+            real_fsync(fd)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            may_daily = log_dir / "speed-of-cinnamon-2026-05-30.log"
+            may_daily.write_text("may-30\n", encoding="utf-8")
+            may_daily.chmod(0o600)
+
+            with (
+                mock.patch("speed_of_cinnamon.app_logging.os.unlink", wraps=os.unlink) as mocked_unlink,
+                mock.patch("speed_of_cinnamon.app_logging.os.fsync", side_effect=record_fsync),
+            ):
+                app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
+
+            archive = log_dir / "speed-of-cinnamon-2026-05.log.gz"
+            self.assertTrue(archive.exists())
+            self.assertFalse(may_daily.exists())
+
+        unlink_calls = [
+            (args, kwargs)
+            for args, kwargs in mocked_unlink.call_args_list
+            if args and args[0] == may_daily.name
+        ]
+        self.assertEqual(len(unlink_calls), 1)
+        self.assertIsInstance(unlink_calls[0][1].get("dir_fd"), int)
+        self.assertTrue(any(stat_module.S_ISDIR(mode) for mode in fsync_modes))
+
+    def test_maintain_logs_monthly_merge_rejects_source_swap_before_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            may_daily = log_dir / "speed-of-cinnamon-2026-05-30.log"
+            may_daily.write_text("may-30\n", encoding="utf-8")
+            may_daily.chmod(0o600)
+            real_replace = os.replace
+
+            def replace_and_swap(src: object, dst: object, *args: object, **kwargs: object) -> None:
+                real_replace(src, dst, *args, **kwargs)
+                may_daily.unlink()
+                may_daily.write_text("attacker\n", encoding="utf-8")
+
+            with mock.patch("speed_of_cinnamon.app_logging.os.replace", side_effect=replace_and_swap):
+                with self.assertRaisesRegex(RuntimeError, "monthly log source changed before deletion"):
+                    app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
+
+            self.assertTrue((log_dir / "speed-of-cinnamon-2026-05.log.gz").exists())
+            self.assertTrue(may_daily.exists())
+            self.assertEqual(may_daily.read_text(encoding="utf-8"), "attacker\n")
+
     def test_maintain_logs_merge_retain_existing_archive_on_replace_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             old_archive = log_dir / "speed-of-cinnamon-2026-05.log.gz"
             old_daily = log_dir / "speed-of-cinnamon-2026-05-30.log"
             old_daily.write_text("may-30\n", encoding="utf-8")
+            old_daily.chmod(0o600)
             with gzip.open(old_archive, "wt", encoding="utf-8") as handle:
                 handle.write("legacy\n")
+            old_archive.chmod(0o600)
+            fsync_modes: list[int] = []
+            real_fsync = os.fsync
 
-            with mock.patch("speed_of_cinnamon.app_logging.os.replace", side_effect=PermissionError("replace failed")):
+            def record_fsync(fd: int) -> None:
+                fsync_modes.append(os.fstat(fd).st_mode)
+                real_fsync(fd)
+
+            with (
+                mock.patch("speed_of_cinnamon.app_logging.os.replace", side_effect=PermissionError("replace failed")),
+                mock.patch("speed_of_cinnamon.app_logging.os.fsync", side_effect=record_fsync),
+            ):
                 with self.assertRaises(PermissionError, msg="replace failure"):
                     app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 
@@ -434,6 +505,7 @@ class AppLoggingTest(unittest.TestCase):
             with gzip.open(old_archive, "rt", encoding="utf-8") as handle:
                 self.assertEqual(handle.read(), "legacy\n")
             self.assertTrue(old_daily.exists())
+            self.assertTrue(any(stat_module.S_ISDIR(mode) for mode in fsync_modes))
 
     def test_maintain_logs_ignores_preexisting_monthly_tmp_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -441,6 +513,7 @@ class AppLoggingTest(unittest.TestCase):
             target = Path(tmp) / "pwned-monthly"
             may_daily = log_dir / "speed-of-cinnamon-2026-05-30.log"
             may_daily.write_text("may-30\n", encoding="utf-8")
+            may_daily.chmod(0o600)
             archive = log_dir / "speed-of-cinnamon-2026-05.log.gz"
             tmp_archive = archive.with_suffix(".log.gz.tmp")
             tmp_archive.symlink_to(target)
@@ -459,6 +532,7 @@ class AppLoggingTest(unittest.TestCase):
             source = log_dir / "source.log"
             target = log_dir / "target.log.gz"
             source.write_text("content\n", encoding="utf-8")
+            source.chmod(0o600)
 
             with mock.patch("speed_of_cinnamon.app_logging.os.replace", side_effect=PermissionError("replace failed")):
                 with self.assertRaises(PermissionError, msg="replace failure"):
@@ -475,6 +549,7 @@ class AppLoggingTest(unittest.TestCase):
             source = log_dir / "source.log"
             target = log_dir / "target.log.gz"
             source.write_text("content\n", encoding="utf-8")
+            source.chmod(0o600)
             real_replace = os.replace
 
             def replace_and_swap(src: object, dst: object, *args: object, **kwargs: object) -> None:
@@ -497,13 +572,24 @@ class AppLoggingTest(unittest.TestCase):
             source = log_dir / "source.log"
             target = log_dir / "target.log.gz"
             source.write_text("content\n", encoding="utf-8")
+            source.chmod(0o600)
 
-            with mock.patch("speed_of_cinnamon.app_logging.os.fsync", wraps=os.fsync) as mocked_fsync:
+            with (
+                mock.patch("speed_of_cinnamon.app_logging.os.fsync", wraps=os.fsync) as mocked_fsync,
+                mock.patch("speed_of_cinnamon.app_logging.os.unlink", wraps=os.unlink) as mocked_unlink,
+            ):
                 app_logging._gzip_file(source, target)
 
             self.assertTrue(target.exists())
             self.assertFalse(source.exists())
             self.assertGreaterEqual(mocked_fsync.call_count, 3)
+            unlink_calls = [
+                (args, kwargs)
+                for args, kwargs in mocked_unlink.call_args_list
+                if args and args[0] == source.name
+            ]
+            self.assertEqual(len(unlink_calls), 1)
+            self.assertIsInstance(unlink_calls[0][1].get("dir_fd"), int)
 
     def test_gzip_file_rejects_fifo_source_without_blocking(self) -> None:
         if not hasattr(os, "mkfifo"):
@@ -550,10 +636,18 @@ class AppLoggingTest(unittest.TestCase):
             active.write_bytes(b"a" * 10)
 
             with mock.patch("speed_of_cinnamon.app_logging.MAX_TOTAL_LOG_BYTES", 55):
-                app_logging.maintain_logs(log_dir, today=date.today())
+                with mock.patch("speed_of_cinnamon.app_logging.os.unlink", wraps=os.unlink) as mocked_unlink:
+                    app_logging.maintain_logs(log_dir, today=date.today())
 
             self.assertFalse(oldest.exists())
             self.assertTrue(active.exists())
+            unlink_calls = [
+                (args, kwargs)
+                for args, kwargs in mocked_unlink.call_args_list
+                if args and args[0] == oldest.name
+            ]
+            self.assertEqual(len(unlink_calls), 1)
+            self.assertIsInstance(unlink_calls[0][1].get("dir_fd"), int)
 
     def test_enforce_total_size_limit_rejects_path_swap_before_delete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

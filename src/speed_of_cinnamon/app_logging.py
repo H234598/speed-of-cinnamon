@@ -462,6 +462,7 @@ def _log_temp_name_matches_fd(parent_fd: int, temp_name: str, fd: int) -> bool:
 def _unlink_log_temp(parent_fd: int, temp_name: str) -> None:
     try:
         os.unlink(temp_name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
     except OSError:
         pass
 
@@ -516,6 +517,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
             _assert_regular_unlinked_file(archive, field_name="monthly log archive")
         temp_fd, parent_fd, temp_name = _create_log_temp_file(directory, prefix=archive.stem, suffix=".tmp")
         try:
+            source_stats: dict[Path, os.stat_result] = {}
             try:
                 raw_output = os.fdopen(temp_fd, "wb")
             except Exception:
@@ -526,7 +528,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
                     for path in sorted(existing + paths, key=lambda item: item.name):
                         if not path.exists():
                             continue
-                        _assert_regular_unlinked_file(path, field_name="monthly log source")
+                        source_stats[path] = _assert_regular_unlinked_file(path, field_name="monthly log source")
                         _copy_log_content(path, output)
                 raw_output.flush()
                 os.fsync(raw_output.fileno())
@@ -534,14 +536,18 @@ def _merge_old_months(directory: Path, today: date) -> None:
                     raise RuntimeError("monthly log temporary archive was replaced")
             os.replace(temp_name, archive.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
             os.fsync(parent_fd)
+            for path in paths:
+                original_stat = source_stats.get(path)
+                if original_stat is None:
+                    continue
+                _assert_same_log_file_identity(path, original_stat, field_name="monthly log source")
+                os.unlink(path.name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
         except Exception:
             _unlink_log_temp(parent_fd, temp_name)
             raise
         finally:
             os.close(parent_fd)
-        for path in paths:
-            if path.exists():
-                path.unlink()
 
 
 def _copy_log_content(path: Path, output: gzip.GzipFile) -> None:
@@ -563,6 +569,29 @@ def _assert_same_log_file_identity(path: Path, expected_stat: os.stat_result, *,
         or getattr(current_stat, "st_nlink", 1) != getattr(expected_stat, "st_nlink", 1)
     ):
         raise RuntimeError(f"{field_name} changed before deletion: {path}")
+
+
+def _unlink_log_file_with_parent_fsync(path: Path, expected_stat: os.stat_result, *, field_name: str) -> bool:
+    parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name=f"{field_name} directory")
+    try:
+        try:
+            current_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        if (
+            current_stat.st_dev != expected_stat.st_dev
+            or current_stat.st_ino != expected_stat.st_ino
+            or current_stat.st_mode != expected_stat.st_mode
+            or getattr(current_stat, "st_nlink", 1) != getattr(expected_stat, "st_nlink", 1)
+        ):
+            raise RuntimeError(f"{field_name} changed before deletion: {path}")
+        if not stat_module.S_ISREG(current_stat.st_mode):
+            raise RuntimeError(f"{field_name} must be a regular file: {path}")
+        os.unlink(path.name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
+        return True
+    finally:
+        os.close(parent_fd)
 
 
 def _gzip_file(source: Path, target: Path) -> None:
@@ -598,8 +627,7 @@ def _gzip_file(source: Path, target: Path) -> None:
         os.replace(temp_name, target.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         os.fsync(parent_fd)
         _assert_same_log_file_identity(source, source_stat, field_name="log source file")
-        source.unlink()
-        os.fsync(parent_fd)
+        _unlink_log_file_with_parent_fsync(source, source_stat, field_name="log source file")
     except Exception:
         _unlink_log_temp(parent_fd, temp_name)
         raise
@@ -643,7 +671,7 @@ def _enforce_total_size_limit(directory: Path) -> None:
         if total <= MAX_TOTAL_LOG_BYTES:
             break
         _assert_same_log_file_identity(path, original_stat, field_name="log file")
-        path.unlink()
+        _unlink_log_file_with_parent_fsync(path, original_stat, field_name="log file")
         total -= size
 
 

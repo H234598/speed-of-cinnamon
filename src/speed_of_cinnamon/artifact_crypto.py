@@ -266,7 +266,11 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
         if parent_stat.st_mode & 0o077:
             raise ArtifactCryptoError("artifact encryption passphrase file directory must be private")
         temp_fd, temp_name = _create_private_temp_passphrase_file(parent_fd, path.name)
-        assert_fd_is_regular_private_file(temp_fd, field_name="artifact encryption passphrase temporary file")
+        assert_fd_is_regular_private_file(
+            temp_fd,
+            field_name="artifact encryption passphrase temporary file",
+            require_private_mode=True,
+        )
         file_stat = os.fstat(temp_fd)
         if hasattr(os, "getuid") and file_stat.st_uid != os.getuid():
             raise ArtifactCryptoError("artifact encryption passphrase file must be owned by the current user")
@@ -300,6 +304,7 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
         if temp_name and parent_fd >= 0:
             try:
                 os.unlink(temp_name, dir_fd=parent_fd)
+                _fsync_fd(parent_fd)
             except OSError:
                 pass
         if parent_fd >= 0:
@@ -339,9 +344,15 @@ def _read_private_passphrase_file(
         raise ArtifactCryptoError("artifact encryption passphrase file could not be read") from exc
     try:
         try:
-            assert_fd_is_regular_private_file(fd, field_name="artifact encryption passphrase file")
+            assert_fd_is_regular_private_file(
+                fd,
+                field_name="artifact encryption passphrase file",
+                require_private_mode=True,
+            )
             file_stat = os.fstat(fd)
         except (OSError, RuntimeError) as exc:
+            if "must be private" in str(exc):
+                raise ArtifactCryptoError("artifact encryption passphrase file must be private") from exc
             raise ArtifactCryptoError("artifact encryption passphrase file is not private") from exc
         if hasattr(os, "getuid") and file_stat.st_uid != os.getuid():
             raise ArtifactCryptoError("artifact encryption passphrase file must be owned by the current user")

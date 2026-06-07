@@ -82,9 +82,9 @@ def _locked_alarm_store(path: Path | None = None) -> Iterator[Path]:
         os.close(parent_fd)
         raise RuntimeError("failed to open alarm store lock file") from exc
     try:
-        assert_fd_is_regular_private_file(fd, field_name="alarm store lock file")
+        assert_fd_is_regular_private_file(fd, field_name="alarm store lock file", require_private_mode=True)
         fcntl.flock(fd, fcntl.LOCK_EX)
-        assert_fd_is_regular_private_file(fd, field_name="alarm store lock file")
+        assert_fd_is_regular_private_file(fd, field_name="alarm store lock file", require_private_mode=True)
         yield store_path
     finally:
         try:

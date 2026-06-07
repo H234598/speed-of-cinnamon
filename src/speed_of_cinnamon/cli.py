@@ -238,7 +238,7 @@ def _read_finalization_lock_pid(lock_path: Path) -> int | None:
     try:
         assert_no_symlink_ancestors(lock_path, field_name="finalization lock")
         fd = os.open(str(lock_path), os.O_RDONLY | nofollow_flag | nonblock_flag)
-        assert_fd_is_regular_private_file(fd, field_name="finalization lock")
+        assert_fd_is_regular_private_file(fd, field_name="finalization lock", require_private_mode=True)
         with os.fdopen(fd, "rb") as handle:
             fd = None
             raw = handle.read(512)
@@ -293,6 +293,7 @@ def _read_finalization_lock_identity(lock_path: Path) -> str | None:
             lock_path,
             field_name="finalization lock",
             max_bytes=MAX_FINALIZATION_LOCK_BYTES,
+            require_private_mode=True,
         )
     except (OSError, RuntimeError, UnicodeDecodeError):
         return None
@@ -324,6 +325,36 @@ def _same_finalization_lock_snapshot(
     )
 
 
+def _same_finalization_lock_identity(current: os.stat_result, expected: os.stat_result) -> bool:
+    return (
+        current.st_dev == expected.st_dev
+        and current.st_ino == expected.st_ino
+        and current.st_mode == expected.st_mode
+        and getattr(current, "st_nlink", 1) == getattr(expected, "st_nlink", 1)
+    )
+
+
+def _unlink_finalization_lock_at(
+    parent_fd: int,
+    lock_path: Path,
+    *,
+    expected_stat: os.stat_result | None = None,
+) -> bool:
+    try:
+        current = os.stat(lock_path.name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    if not stat_module.S_ISREG(current.st_mode):
+        return False
+    if getattr(current, "st_nlink", 1) != 1:
+        return False
+    if expected_stat is not None and not _same_finalization_lock_identity(current, expected_stat):
+        return False
+    os.unlink(lock_path.name, dir_fd=parent_fd)
+    os.fsync(parent_fd)
+    return True
+
+
 def _acquire_finalization_lock(state_path: Path) -> Path | None:
     lock_path = _finalization_lock_path(state_path)
     try:
@@ -343,6 +374,7 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
     try:
         for _attempt in range(2):
             now = time.time()
+            created_stat: os.stat_result | None = None
             try:
                 fd = os.open(
                     lock_path.name,
@@ -350,6 +382,7 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                     0o600,
                     dir_fd=parent_fd,
                 )
+                created_stat = os.fstat(fd)
             except FileExistsError:
                 try:
                     existing = lock_path.lstat()
@@ -381,7 +414,8 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                 if not _same_finalization_lock_snapshot(existing, current):
                     return None
                 try:
-                    lock_path.unlink()
+                    if not _unlink_finalization_lock_at(parent_fd, lock_path, expected_stat=current):
+                        return None
                 except OSError:
                     return None
                 continue
@@ -400,7 +434,7 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                 except OSError:
                     pass
                 try:
-                    lock_path.unlink()
+                    _unlink_finalization_lock_at(parent_fd, lock_path, expected_stat=created_stat)
                 except OSError:
                     pass
                 return None
@@ -408,7 +442,7 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                 os.close(fd)
             except OSError:
                 try:
-                    lock_path.unlink()
+                    _unlink_finalization_lock_at(parent_fd, lock_path, expected_stat=created_stat)
                 except OSError:
                     pass
                 return None
@@ -425,9 +459,30 @@ def _release_finalization_lock(lock_path: Path | None) -> None:
     if not lock_path:
         return
     try:
-        lock_path.unlink()
+        parent_fd = ensure_directory_without_following_symlinks(
+            lock_path.parent,
+            field_name="finalization lock directory",
+        )
     except OSError:
-        pass
+        return
+    try:
+        try:
+            current = os.stat(lock_path.name, dir_fd=parent_fd, follow_symlinks=False)
+            owner_pid = _read_finalization_lock_pid(lock_path)
+            if owner_pid != os.getpid():
+                return
+            owner_identity = _read_finalization_lock_identity(lock_path)
+            current_identity = _finalization_lock_identity_for_pid(os.getpid())
+            if owner_identity is not None and owner_identity != current_identity:
+                return
+            _unlink_finalization_lock_at(parent_fd, lock_path, expected_stat=current)
+        except OSError:
+            pass
+    finally:
+        try:
+            os.close(parent_fd)
+        except OSError:
+            pass
 
 
 def _is_unsafe_env_var(name: str) -> bool:

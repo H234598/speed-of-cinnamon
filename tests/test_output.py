@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import unittest
 import tempfile
@@ -1451,6 +1452,51 @@ class OutputTest(unittest.TestCase):
         args, kwargs = mocked_unlink.call_args
         self.assertEqual(args[0], lock_path.name)
         self.assertIsInstance(kwargs.get("dir_fd"), int)
+
+    def test_clipboard_dedupe_lock_release_fsyncs_parent_directory(self) -> None:
+        fsync_modes: list[int] = []
+        real_fsync = os.fsync
+
+        def record_fsync(fd: int) -> None:
+            fsync_modes.append(os.fstat(fd).st_mode)
+            real_fsync(fd)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):
+                lock_path = _acquire_clipboard_dedup_lock()
+                self.assertIsNotNone(lock_path)
+                with mock.patch("speed_of_cinnamon.output.os.fsync", side_effect=record_fsync):
+                    _release_clipboard_dedup_lock(lock_path)
+
+                self.assertFalse(lock_path.exists())
+
+        self.assertTrue(any(stat.S_ISDIR(mode) for mode in fsync_modes))
+
+    def test_clear_clipboard_dedup_state_uses_dir_fd_unlink_and_fsync(self) -> None:
+        fsync_modes: list[int] = []
+        real_fsync = os.fsync
+
+        def record_fsync(fd: int) -> None:
+            fsync_modes.append(os.fstat(fd).st_mode)
+            real_fsync(fd)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):
+                state_path = output_module._clipboard_dedup_state_path()
+                self.assertTrue(output_module._write_clipboard_dedup_state("secret text", 123.0))
+                with (
+                    mock.patch("speed_of_cinnamon.output.os.unlink", wraps=os.unlink) as mocked_unlink,
+                    mock.patch("speed_of_cinnamon.output.os.fsync", side_effect=record_fsync),
+                ):
+                    output_module._clear_clipboard_dedup_state()
+
+                self.assertFalse(state_path.exists())
+
+        mocked_unlink.assert_called_once()
+        args, kwargs = mocked_unlink.call_args
+        self.assertEqual(args[0], state_path.name)
+        self.assertIsInstance(kwargs.get("dir_fd"), int)
+        self.assertTrue(any(stat.S_ISDIR(mode) for mode in fsync_modes))
 
     def test_clipboard_dedupe_lock_rejects_hardlinked_existing_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

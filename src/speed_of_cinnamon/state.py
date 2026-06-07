@@ -106,9 +106,9 @@ class StateStore:
             os.close(parent_fd)
             raise RuntimeError("failed to open state lock file") from exc
         try:
-            assert_fd_is_regular_private_file(fd, field_name="state lock file")
+            assert_fd_is_regular_private_file(fd, field_name="state lock file", require_private_mode=True)
             fcntl.flock(fd, fcntl.LOCK_EX)
-            assert_fd_is_regular_private_file(fd, field_name="state lock file")
+            assert_fd_is_regular_private_file(fd, field_name="state lock file", require_private_mode=True)
             yield
         except RuntimeError:
             raise

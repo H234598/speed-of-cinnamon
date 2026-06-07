@@ -393,6 +393,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
         if temp_name:
             try:
                 os.unlink(temp_name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
             except OSError:
                 pass
         raise SettingsExportError(f"failed to write settings export: {path}") from exc

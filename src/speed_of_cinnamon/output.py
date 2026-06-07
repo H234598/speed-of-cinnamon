@@ -511,6 +511,7 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                     return None
                 try:
                     os.unlink(path.name, dir_fd=parent_fd)
+                    os.fsync(parent_fd)
                 except OSError:
                     return None
                 continue
@@ -530,6 +531,7 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                     pass
                 try:
                     os.unlink(path.name, dir_fd=parent_fd)
+                    os.fsync(parent_fd)
                 except OSError:
                     pass
                 return None
@@ -559,6 +561,7 @@ def _release_clipboard_dedup_lock(path: Path | None) -> None:
     try:
         try:
             os.unlink(path.name, dir_fd=parent_fd)
+            os.fsync(parent_fd)
         except OSError:
             pass
     finally:
@@ -631,15 +634,41 @@ def _reserve_clipboard_insertion_memory(text: str, method: str) -> tuple[str, st
     return snapshot
 
 
+def _unlink_clipboard_state_file(path: Path) -> bool:
+    try:
+        parent_fd = ensure_directory_without_following_symlinks(
+            path.parent,
+            field_name="clipboard dedupe state directory",
+        )
+    except OSError:
+        return False
+    try:
+        try:
+            current = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        if not stat.S_ISREG(current.st_mode):
+            return False
+        if getattr(current, "st_nlink", 1) != 1:
+            return False
+        os.unlink(path.name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            os.close(parent_fd)
+        except OSError:
+            pass
+
+
 def _clear_clipboard_dedup_state() -> None:
     try:
         path = _clipboard_dedup_state_path()
     except RuntimeError:
         return
-    try:
-        path.unlink()
-    except OSError:
-        pass
+    _unlink_clipboard_state_file(path)
 
 
 def _restore_clipboard_dedup_state(snapshot: tuple[str, float], *, pending: bool = False) -> None:

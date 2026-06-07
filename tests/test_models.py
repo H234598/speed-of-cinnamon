@@ -1097,6 +1097,37 @@ class ModelsTest(unittest.TestCase):
             self.assertFalse(path.exists())
             self.assertEqual(list(path.parent.glob(f".{spec.filename}.*")), [])
 
+    def test_download_model_checksum_mismatch_removes_temp_file_safely(self) -> None:
+        data = b"tampered"
+        spec = models.ModelSpec(
+            name="test-checksum-cleanup",
+            filename="ggml-test-checksum-cleanup.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(b"expected").hexdigest(),
+            description="test checksum cleanup",
+        )
+        cleanup_calls: list[tuple[Path, Path, str]] = []
+        original_unlink = models._unlink_model_file_leaf
+
+        def record_unlink(path: Path, root: Path, *, field_name: str = "model file") -> bool:
+            cleanup_calls.append((path, root, field_name))
+            return original_unlink(path, root, field_name=field_name)
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
+            mock.patch.object(models, "_unlink_model_file_leaf", side_effect=record_unlink),
+        ):
+            path = models.model_path(spec)
+            with self.assertRaisesRegex(models.ModelError, "downloaded checksum mismatch"):
+                models.download_model("test-checksum-cleanup")
+
+            self.assertFalse(path.exists())
+            self.assertTrue(any(field_name == "temporary model file" for _, _, field_name in cleanup_calls))
+            self.assertEqual(list(path.parent.glob(f".{spec.filename}.*")), [])
+
     def test_ctranslate2_directory_model_requires_matching_file_hashes(self) -> None:
         config = b"config"
         model_data = b"model"
@@ -1278,6 +1309,13 @@ class ModelsTest(unittest.TestCase):
             description="test failed single-file temporary cleanup",
         )
         oversized_content_length = models.MODEL_SIZE_SLACK_BYTES + 2048
+        fsync_modes: list[int] = []
+        real_fsync = os.fsync
+
+        def record_fsync(fd: int) -> None:
+            fsync_modes.append(os.fstat(fd).st_mode)
+            real_fsync(fd)
+
         with (
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
@@ -1286,6 +1324,7 @@ class ModelsTest(unittest.TestCase):
                 "speed_of_cinnamon.models._open_model_download_url",
                 return_value=FakeResponseWithLength(b"", oversized_content_length),
             ),
+            mock.patch("speed_of_cinnamon.models.os.fsync", side_effect=record_fsync),
         ):
             path = models.model_path(spec)
 
@@ -1294,6 +1333,7 @@ class ModelsTest(unittest.TestCase):
 
             self.assertTrue(path.parent.exists())
             self.assertEqual([], list(path.parent.iterdir()))
+            self.assertTrue(any(models.stat_module.S_ISDIR(mode) for mode in fsync_modes))
 
     def test_download_directory_model_uses_fd_based_temporary_directory(self) -> None:
         data = b"small model file"

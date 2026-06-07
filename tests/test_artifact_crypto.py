@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -102,15 +103,24 @@ class ArtifactCryptoTest(unittest.TestCase):
     def test_default_passphrase_generation_failure_leaves_no_partial_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "artifact.key"
+            fsync_modes: list[int] = []
+            real_fsync = os.fsync
+
+            def record_fsync(fd: int) -> None:
+                fsync_modes.append(os.fstat(fd).st_mode)
+                real_fsync(fd)
+
             with (
                 mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: ""}, clear=False),
                 mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
                 mock.patch("speed_of_cinnamon.artifact_crypto.os.write", side_effect=OSError("disk full")),
+                mock.patch("speed_of_cinnamon.artifact_crypto.os.fsync", side_effect=record_fsync),
             ):
                 with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be generated"):
                     artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
 
             self.assertFalse(path.exists())
+            self.assertTrue(any(stat.S_ISDIR(mode) for mode in fsync_modes))
 
     def test_default_passphrase_rotation_failure_keeps_existing_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

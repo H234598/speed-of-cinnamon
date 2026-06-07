@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import tempfile
 import unittest
 from unittest import mock
@@ -529,12 +530,23 @@ class SettingsExportTest(unittest.TestCase):
     def test_write_export_removes_temp_file_when_file_fsync_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
-            with mock.patch("speed_of_cinnamon.settings_export.os.fsync", side_effect=OSError("sync failed")):
+            fsynced_modes: list[int] = []
+            real_fsync = os.fsync
+
+            def failing_file_fsync(fd: int) -> None:
+                mode = os.fstat(fd).st_mode
+                fsynced_modes.append(mode)
+                if stat.S_ISREG(mode):
+                    raise OSError("sync failed")
+                real_fsync(fd)
+
+            with mock.patch("speed_of_cinnamon.settings_export.os.fsync", side_effect=failing_file_fsync):
                 with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
                     write_export(path, {"language": "en"})
 
             self.assertFalse(path.exists())
             self.assertEqual(list(Path(tmp).iterdir()), [])
+            self.assertTrue(any(stat.S_ISDIR(mode) for mode in fsynced_modes))
 
     @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
     def test_write_export_uses_secure_parent_directory_open(self, mocked_open: mock.Mock) -> None:

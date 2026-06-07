@@ -336,13 +336,13 @@ def _acquire_blacklist_lock(path: Path) -> int:
         os.close(parent_fd)
         raise ValueError("failed to open blacklist lock file") from exc
     try:
-        assert_fd_is_regular_private_file(fd, field_name="blacklist lock file")
+        assert_fd_is_regular_private_file(fd, field_name="blacklist lock file", require_private_mode=True)
         try:
             os.fchmod(fd, 0o600)
         except OSError:
             pass
         fcntl.flock(fd, fcntl.LOCK_EX)
-        assert_fd_is_regular_private_file(fd, field_name="blacklist lock file")
+        assert_fd_is_regular_private_file(fd, field_name="blacklist lock file", require_private_mode=True)
     except (OSError, RuntimeError) as exc:
         os.close(fd)
         raise ValueError("failed to lock blacklist file") from exc

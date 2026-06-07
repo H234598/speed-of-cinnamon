@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import stat
+import types
 import tempfile
 import unittest
 from pathlib import Path
@@ -80,12 +82,23 @@ class PathSafetyTest(unittest.TestCase):
     def test_atomic_write_removes_temp_file_when_file_fsync_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "settings.json"
-            with mock.patch.object(path_safety.os, "fsync", side_effect=OSError("sync failed")):
+            fsynced_modes: list[int] = []
+            real_fsync = os.fsync
+
+            def failing_file_fsync(fd: int) -> None:
+                mode = os.fstat(fd).st_mode
+                fsynced_modes.append(mode)
+                if stat.S_ISREG(mode):
+                    raise OSError("sync failed")
+                real_fsync(fd)
+
+            with mock.patch.object(path_safety.os, "fsync", side_effect=failing_file_fsync):
                 with self.assertRaisesRegex(OSError, "sync failed"):
                     path_safety.write_text_atomically_without_following_symlinks(target, "{}")
 
             self.assertFalse(target.exists())
             self.assertEqual(list(Path(tmp).iterdir()), [])
+            self.assertTrue(any(stat.S_ISDIR(mode) for mode in fsynced_modes))
 
     def test_read_text_without_following_symlinks_does_not_double_close_fd_on_read_error(self) -> None:
         class _FailingHandle:
@@ -146,6 +159,48 @@ class PathSafetyTest(unittest.TestCase):
 
             with self.assertRaisesRegex(OSError, "must not be hardlinked"):
                 path_safety.read_text_without_following_symlinks(hardlink, field_name="state file path")
+
+    def test_read_text_rejects_world_writable_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.txt"
+            path.write_text("secret\n", encoding="utf-8")
+            path.chmod(0o666)
+
+            with self.assertRaisesRegex(OSError, "must be private"):
+                path_safety.read_text_without_following_symlinks(
+                    path,
+                    field_name="state file path",
+                    require_private_mode=True,
+                )
+
+    def test_read_text_rejects_file_with_foreign_owner(self) -> None:
+        with mock.patch.object(path_safety, "open_file_without_following_symlinks", return_value=123):
+            with mock.patch.object(
+                path_safety.os,
+                "fstat",
+                return_value=types.SimpleNamespace(
+                    st_mode=0o100600,
+                    st_nlink=1,
+                    st_uid=path_safety.os.getuid() + 1,
+                ),
+            ):
+                with mock.patch.object(path_safety.os, "close"):
+                    with self.assertRaisesRegex(OSError, "must be owned by the current user"):
+                        path_safety.read_text_without_following_symlinks(
+                            Path("/state.txt"),
+                            field_name="state file path",
+                        )
+
+    def test_read_text_rejects_symlink_leaf(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            real = root / "real.txt"
+            real.write_text("secret\n", encoding="utf-8")
+            link = root / "state-link.txt"
+            os.symlink(real, link)
+
+            with self.assertRaises(OSError):
+                path_safety.read_text_without_following_symlinks(link, field_name="state file path")
 
     def test_read_text_rejects_fifo_without_blocking(self) -> None:
         if not hasattr(os, "mkfifo"):

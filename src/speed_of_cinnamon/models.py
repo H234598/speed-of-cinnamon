@@ -1122,6 +1122,19 @@ def _download_url_to_file(url: str, tmp_dir: Path, size_limit: int, model_name: 
     return _download_url_to_file_with_fd(url, tmp_dir, None, size_limit, model_name, prefix=prefix)
 
 
+def _unlink_temporary_download_path(path: Path) -> None:
+    parent_fd: int | None = None
+    try:
+        parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name="model temporary directory")
+        os.unlink(path.name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
+    except OSError:
+        return
+    finally:
+        if parent_fd is not None:
+            os.close(parent_fd)
+
+
 def _create_temporary_file_in_parent_directory(parent_fd: int, *, prefix: str) -> tuple[str, int]:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
@@ -1227,9 +1240,9 @@ def _download_url_to_file_with_fd(
         if tmp_dir_fd is not None and temporary_name is not None:
             with suppress(OSError):
                 os.unlink(temporary_name, dir_fd=tmp_dir_fd)
+                os.fsync(tmp_dir_fd)
         elif tmp_path is not None:
-            with suppress(OSError):
-                tmp_path.unlink()
+            _unlink_temporary_download_path(tmp_path)
         raise
     finally:
         if close_tmp_dir_fd and tmp_dir_fd is not None:
@@ -1440,7 +1453,7 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
         if tmp_path is not None:
             _clear_model_checksum_cache(tmp_path)
             try:
-                tmp_path.unlink()
+                _unlink_model_file_leaf(tmp_path, root, field_name="temporary model file")
             except FileNotFoundError:
                 pass
         if replaced_path:

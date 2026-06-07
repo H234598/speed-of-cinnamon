@@ -3288,6 +3288,7 @@ class CliTest(unittest.TestCase):
             )
             lock_path = cli._finalization_lock_path(state_file)
             lock_path.write_text(f"{os.getpid()}\n", encoding="ascii")
+            lock_path.chmod(0o600)
 
             stdout = io.StringIO()
             with (
@@ -4685,6 +4686,7 @@ class CliTest(unittest.TestCase):
             self.assertIsNotNone(identity)
             identity_line = f"{identity}\n" if identity else ""
             lock_path.write_text(f"{os.getpid()}\n{identity_line}", encoding="ascii")
+            lock_path.chmod(0o600)
 
             acquired = cli._acquire_finalization_lock(state_file)
 
@@ -4713,6 +4715,37 @@ class CliTest(unittest.TestCase):
                 self.assertIsInstance(kwargs.get("dir_fd"), int)
             finally:
                 cli._release_finalization_lock(acquired)
+
+    def test_finalization_lock_release_fsyncs_parent_directory(self) -> None:
+        fsync_modes: list[int] = []
+        real_fsync = os.fsync
+
+        def record_fsync(fd: int) -> None:
+            fsync_modes.append(os.fstat(fd).st_mode)
+            real_fsync(fd)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._acquire_finalization_lock(state_file)
+            self.assertIsNotNone(lock_path)
+            with mock.patch("speed_of_cinnamon.cli.os.fsync", side_effect=record_fsync):
+                cli._release_finalization_lock(lock_path)
+
+            self.assertFalse(lock_path.exists())
+
+        self.assertTrue(any(cli.stat_module.S_ISDIR(mode) for mode in fsync_modes))
+
+    def test_finalization_lock_release_does_not_delete_foreign_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            lock_path.write_text("12345\nforeign-identity\n", encoding="ascii")
+            lock_path.chmod(0o600)
+
+            cli._release_finalization_lock(lock_path)
+
+            self.assertTrue(lock_path.exists())
+            self.assertEqual(lock_path.read_text(encoding="ascii"), "12345\nforeign-identity\n")
 
     def test_finalization_lock_rejects_hardlinked_existing_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4757,6 +4790,7 @@ class CliTest(unittest.TestCase):
             state_file = Path(tmp) / "state.json"
             lock_path = cli._finalization_lock_path(state_file)
             lock_path.write_text("12345\nowner-identity\n", encoding="ascii")
+            lock_path.chmod(0o600)
 
             with mock.patch.object(cli, "MAX_FINALIZATION_LOCK_BYTES", 4):
                 identity = cli._read_finalization_lock_identity(lock_path)
@@ -4768,6 +4802,7 @@ class CliTest(unittest.TestCase):
             state_file = Path(tmp) / "state.json"
             lock_path = cli._finalization_lock_path(state_file)
             lock_path.write_text("12345\nowner-identity\n", encoding="ascii")
+            lock_path.chmod(0o600)
 
             def fake_identity(pid: int) -> str | None:
                 return "owner-identity" if pid == 12345 else "self-identity"
@@ -4786,6 +4821,7 @@ class CliTest(unittest.TestCase):
             state_file = Path(tmp) / "state.json"
             lock_path = cli._finalization_lock_path(state_file)
             lock_path.write_text("999999999\n", encoding="ascii")
+            lock_path.chmod(0o600)
 
             acquired = cli._acquire_finalization_lock(state_file)
             try:
@@ -4799,10 +4835,12 @@ class CliTest(unittest.TestCase):
             state_file = Path(tmp) / "state.json"
             lock_path = cli._finalization_lock_path(state_file)
             lock_path.write_text("12345\nforeign-identity\n", encoding="ascii")
+            lock_path.chmod(0o600)
 
             def replace_lock(_path: Path) -> int:
                 lock_path.unlink()
                 lock_path.write_text(f"{os.getpid()}\n", encoding="ascii")
+                lock_path.chmod(0o600)
                 return 12345
 
             with (
@@ -4818,6 +4856,7 @@ class CliTest(unittest.TestCase):
             state_file = Path(tmp) / "state.json"
             lock_path = cli._finalization_lock_path(state_file)
             lock_path.write_text(f"{os.getpid()}\n", encoding="ascii")
+            lock_path.chmod(0o600)
             old = time.time() - cli.MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS - 1
             os.utime(lock_path, (old, old))
 
@@ -4833,6 +4872,7 @@ class CliTest(unittest.TestCase):
             state_file = Path(tmp) / "state.json"
             lock_path = cli._finalization_lock_path(state_file)
             lock_path.write_text(f"{os.getpid()}\nother-identity\n", encoding="ascii")
+            lock_path.chmod(0o600)
 
             acquired = cli._acquire_finalization_lock(state_file)
             try:
@@ -4846,6 +4886,7 @@ class CliTest(unittest.TestCase):
             state_file = Path(tmp) / "state.json"
             lock_path = cli._finalization_lock_path(state_file)
             lock_path.write_text("", encoding="ascii")
+            lock_path.chmod(0o600)
             old = time.time() - cli.MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS - 1
             os.utime(lock_path, (old, old))
 
