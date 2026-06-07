@@ -1560,8 +1560,8 @@ class ModelsTest(unittest.TestCase):
                 )
 
         error = str(raised.exception)
-        self.assertIn("host is not allowed", error)
-        self.assertNotIn("user", error)
+        self.assertIn("must not contain userinfo", error)
+        self.assertNotIn("user:secret", error)
         self.assertNotIn("secret", error)
         self.assertNotIn("example.com", error)
 
@@ -2735,6 +2735,27 @@ class ModelsTest(unittest.TestCase):
     def test_assert_download_url_rejects_remote_plain_http(self) -> None:
         with self.assertRaisesRegex(models.ModelError, "must use https:// unless host is local loopback"):
             models._assert_download_url("http://example.com/model.bin")
+
+    def test_assert_download_url_rejects_userinfo_on_allowed_host(self) -> None:
+        with self.assertRaisesRegex(models.ModelError, "must not contain userinfo"):
+            models._assert_download_url(
+                "https://user:secret@huggingface.co/example/model.bin",
+                allowed_hosts={"huggingface.co"},
+            )
+
+    def test_assert_download_url_rejects_invalid_port(self) -> None:
+        with self.assertRaisesRegex(models.ModelError, "has invalid port"):
+            models._assert_download_url("https://huggingface.co:bad/model.bin")
+
+    def test_assert_download_url_rejects_fragment(self) -> None:
+        with self.assertRaisesRegex(models.ModelError, "must not contain fragment"):
+            models._assert_download_url("https://huggingface.co/example/model.bin#token")
+
+    def test_assert_download_url_rejects_oversize_url(self) -> None:
+        url = "https://huggingface.co/" + ("a" * models.MAX_MODEL_DOWNLOAD_URL_CHARS)
+
+        with self.assertRaisesRegex(models.ModelError, "is too large"):
+            models._assert_download_url(url)
 
     def test_assert_download_url_allows_loopback_plain_http(self) -> None:
         url = "http://127.0.0.1:8000/model.bin"

@@ -638,6 +638,10 @@ class TranscriberTest(unittest.TestCase):
             with self.assertRaisesRegex(TranscriptionError, "is too large"):
                 _assert_text_length("😀😀", field_name="transcript")
 
+    def test_assert_text_length_rejects_null_byte(self) -> None:
+        with self.assertRaisesRegex(TranscriptionError, "transcript contains invalid null byte"):
+            _assert_text_length("hello\x00secret", field_name="transcript")
+
     def test_read_response_text_rejects_invalid_max_bytes(self) -> None:
         response = mock.Mock()
         response.read.return_value = b""
@@ -1937,7 +1941,7 @@ class TranscriberTest(unittest.TestCase):
                     400,
                     "Bad Request",
                     {},
-                    io.BytesIO(b'{"error":{"message":"Invalid service_tier argument","type":"invalid_request_error"}}'),
+                    io.BytesIO(b'{"error":{"message":"service_tier not enabled for this project","type":"invalid_request_error"}}'),
                 )
             return Response()
 
@@ -2488,6 +2492,20 @@ class TranscriberTest(unittest.TestCase):
                     backend="openai-compatible",
                     openai_compatible_model="gpt-4o-transcribe",
                     openai_compatible_url="ftp://127.0.0.1:8000/v1",
+                )
+
+    def test_openai_compatible_api_rejects_malformed_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with self.assertRaisesRegex(TranscriptionError, "OpenAI-compatible API URL is invalid"):
+                transcribe(
+                    audio,
+                    "en",
+                    Path(tmp) / "sample.txt",
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-transcribe",
+                    openai_compatible_url="https://[::1",
                 )
 
     def test_openai_compatible_api_rejects_remote_plain_http_url(self) -> None:

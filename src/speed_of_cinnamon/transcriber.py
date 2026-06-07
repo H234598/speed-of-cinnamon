@@ -905,6 +905,8 @@ def _assert_text_length(value: str, *, field_name: str, max_chars: int | None = 
         raise TranscriptionError("max_chars must be an integer")
     if max_chars <= 0:
         raise TranscriptionError("max_chars must be positive")
+    if _contains_escaped_null(value):
+        raise TranscriptionError(f"{field_name} contains invalid null byte")
     if len(value) > max_chars:
         raise TranscriptionError(f"{field_name} is too large (max {max_chars} characters)")
     if len(value.encode("utf-8")) > max_chars:
@@ -1293,8 +1295,13 @@ def _is_openai_api_endpoint(endpoint: str) -> bool:
 
 
 def _is_flex_service_tier_rejected(detail: str) -> bool:
-    normalized = detail.lower()
-    return "service_tier" in normalized and ("invalid" in normalized or "unsupported" in normalized)
+    normalized = detail.lower().replace("-", "_")
+    mentions_service_tier = any(marker in normalized for marker in ("service_tier", "service tier", "servicetier"))
+    rejects_service_tier = any(
+        marker in normalized
+        for marker in ("invalid", "unsupported", "not available", "not enabled", "rejected", "unrecognized", "unknown")
+    )
+    return mentions_service_tier and rejects_service_tier
 
 
 def _validate_openai_compatible_api_url(
@@ -1309,7 +1316,10 @@ def _validate_openai_compatible_api_url(
     base = _assert_text_length(url, field_name=field_name, max_chars=MAX_OPENAI_URL_CHARS).strip()
     if not base:
         raise TranscriptionError(f"{field_name} is required")
-    parsed = urllib.parse.urlparse(base)
+    try:
+        parsed = urllib.parse.urlparse(base)
+    except ValueError as exc:
+        raise TranscriptionError(f"{field_name} is invalid") from exc
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise TranscriptionError(f"{field_name} must use http:// or https://")
     if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):

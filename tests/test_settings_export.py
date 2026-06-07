@@ -306,6 +306,12 @@ class SettingsExportTest(unittest.TestCase):
             build_export({"openai-compatible-url": "https://api.example.test/v1?api_key=secret-token"})
         with self.assertRaisesRegex(SettingsExportError, "ollama-url must not contain URL query or fragment"):
             build_export({"ollama-url": "http://127.0.0.1:11434#secret-token"})
+        with self.assertRaisesRegex(SettingsExportError, "openai-compatible-url must use https:// unless host is local loopback"):
+            build_export({"openai-compatible-url": "http://api.example.test/v1"})
+        with self.assertRaisesRegex(SettingsExportError, "ollama-url must use https:// unless host is local loopback"):
+            build_export({"ollama-url": "http://api.example.test:11434"})
+        with self.assertRaisesRegex(SettingsExportError, "openai-compatible-url must use http:// or https://"):
+            build_export({"openai-compatible-url": "ftp://127.0.0.1:8000/v1"})
 
     def test_build_export_rejects_unknown_mode_values(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "setting insert-method has unsupported value"):

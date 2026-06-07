@@ -32,6 +32,7 @@ HUGGING_FACE_DOWNLOAD_HOST = "huggingface.co"
 HUGGING_FACE_STORAGE_REDIRECT_HOSTS = {"cas-bridge.xethub.hf.co", "cdn-lfs.huggingface.co"}
 MAX_MODEL_DOWNLOAD_BYTES = 1_200_000_000
 MAX_MODEL_DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+MAX_MODEL_DOWNLOAD_URL_CHARS = 16_384
 MODEL_SIZE_SLACK_BYTES = 32 * 1024 * 1024
 MAX_MODEL_CHECKSUM_JSON_BYTES = 1_000_000
 MAX_MODEL_CHECKSUM_PATH_CHARS = 1_024
@@ -402,13 +403,28 @@ def _assert_download_url(
     normalized = raw.strip()
     if not normalized:
         raise ModelError(f"{field_name} is required")
-    parsed = urllib.parse.urlparse(normalized)
+    if len(normalized) > MAX_MODEL_DOWNLOAD_URL_CHARS:
+        raise ModelError(f"{field_name} is too large (max {MAX_MODEL_DOWNLOAD_URL_CHARS} characters)")
+    if len(normalized.encode("utf-8")) > MAX_MODEL_DOWNLOAD_URL_CHARS:
+        raise ModelError(f"{field_name} is too large (max {MAX_MODEL_DOWNLOAD_URL_CHARS} bytes)")
+    try:
+        parsed = urllib.parse.urlparse(normalized)
+    except ValueError as exc:
+        raise ModelError(f"{field_name} is invalid") from exc
     if parsed.scheme not in {"http", "https"}:
         raise ModelError(f"{field_name} must use http:// or https://")
     if not parsed.netloc:
         raise ModelError(f"{field_name} is missing network location")
     if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
         raise ModelError(f"{field_name} must use https:// unless host is local loopback")
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise ModelError(f"{field_name} has invalid port") from exc
+    if parsed.username or parsed.password:
+        raise ModelError(f"{field_name} must not contain userinfo")
+    if parsed.fragment:
+        raise ModelError(f"{field_name} must not contain fragment")
     hostname = (parsed.hostname or "").lower()
     if allowed_urls is not None and normalized not in allowed_urls:
         raise ModelError(f"{field_name} is not allowed")

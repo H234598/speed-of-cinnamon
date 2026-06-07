@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from . import __version__
 from .alarms import MAX_ALARM_COUNT, STORE_VERSION as ALARM_STORE_VERSION
 from .alarms import normalize_alarm
+from .http_safety import is_loopback_hostname
 from .paths import APP_ID
 from .recorder import MAX_RECORDING_SECONDS
 from .path_safety import (
@@ -292,6 +293,10 @@ def _reject_secret_bearing_url_setting(key: str, text: str) -> None:
         parsed = urlsplit(text)
     except ValueError as exc:
         raise SettingsExportError(f"setting {key} is not a valid URL") from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise SettingsExportError(f"setting {key} must use http:// or https://")
+    if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
+        raise SettingsExportError(f"setting {key} must use https:// unless host is local loopback")
     if parsed.username or parsed.password:
         raise SettingsExportError(f"setting {key} must not contain URL credentials")
     if parsed.query or parsed.fragment:

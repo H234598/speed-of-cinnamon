@@ -17,6 +17,7 @@ from speed_of_cinnamon.postprocessor import (
     _coerce_environment_text,
     _quote,
     _assert_text_length,
+    _read_response_text,
     _openai_compatible_headers,
     _open_http_request,
     _validate_same_origin_redirect,
@@ -66,6 +67,16 @@ class FakeBytesResponse:
 
     def read(self, size: int = -1) -> bytes:
         return self.buffer.read(size)
+
+
+class FakeChunkedResponse:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self.chunks = list(chunks)
+
+    def read(self, size: int = -1) -> bytes:
+        if not self.chunks:
+            return b""
+        return self.chunks.pop(0)
 
 
 class PostProcessorTest(unittest.TestCase):
@@ -218,6 +229,30 @@ class PostProcessorTest(unittest.TestCase):
                     backend="ollama",
                     ollama_model="llama3.2:3b",
                 )
+
+    def test_read_response_text_rejects_non_bytes_payload(self) -> None:
+        response = mock.Mock()
+        response.read.return_value = "not-bytes"
+        with self.assertRaisesRegex(PostProcessError, "remote response chunk must be bytes"):
+            _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
+
+    def test_read_response_text_rejects_invalid_max_bytes(self) -> None:
+        response = FakeBytesResponse(b"{}")
+
+        with self.assertRaisesRegex(PostProcessError, "max response bytes must be an integer"):
+            _read_response_text(response, True)  # type: ignore[arg-type]
+
+    def test_read_response_text_rejects_negative_max_bytes(self) -> None:
+        response = FakeBytesResponse(b"{}")
+
+        with self.assertRaisesRegex(PostProcessError, "max response bytes must be non-negative"):
+            _read_response_text(response, -1)
+
+    def test_read_response_text_checks_all_chunks_for_size(self) -> None:
+        response = FakeChunkedResponse([b"{}", b"hidden"])
+
+        with self.assertRaisesRegex(PostProcessError, "remote response is too large"):
+            _read_response_text(response, 2)
 
     def test_post_process_with_ollama_rejects_invalid_utf8_response(self) -> None:
         with mock.patch(
@@ -494,6 +529,16 @@ class PostProcessorTest(unittest.TestCase):
                 ollama_url="http://127.0.0.1:11434/v1\\\\x0a",
             )
 
+    def test_ollama_backend_rejects_remote_plain_http_url(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "must use https:// unless host is local loopback"):
+            post_process_text(
+                "hello",
+                "en",
+                backend="ollama",
+                ollama_model="llama3.2:3b",
+                ollama_url="http://api.example.test:11434",
+            )
+
     def test_openai_compatible_backend_rejects_non_http_url(self) -> None:
         with self.assertRaisesRegex(PostProcessError, "must use http:// or https://"):
             post_process_text(
@@ -502,6 +547,16 @@ class PostProcessorTest(unittest.TestCase):
                 backend="openai-compatible",
                 openai_compatible_model="local",
                 openai_compatible_url="ftp://127.0.0.1:8000/v1",
+            )
+
+    def test_openai_compatible_backend_rejects_malformed_url(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "openai-compatible url is invalid"):
+            post_process_text(
+                "hello",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="local",
+                openai_compatible_url="https://[::1",
             )
 
     def test_openai_compatible_backend_rejects_remote_plain_http_url(self) -> None:
@@ -869,6 +924,10 @@ class PostProcessorTest(unittest.TestCase):
     def test_assert_text_length_rejects_non_text(self) -> None:
         with self.assertRaisesRegex(PostProcessError, "must be text"):
             _assert_text_length(123, field_name="input text")  # type: ignore[arg-type]
+
+    def test_assert_text_length_rejects_null_byte(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "post-process output contains invalid null byte"):
+            _assert_text_length("hello\x00secret", field_name="post-process output")
 
     def test_post_process_text_rejects_non_text_language(self) -> None:
         with self.assertRaisesRegex(PostProcessError, "language must be text"):

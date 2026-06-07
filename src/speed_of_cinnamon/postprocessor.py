@@ -88,6 +88,8 @@ def _assert_text_length(value: str, *, field_name: str, max_chars: int | None = 
         max_chars = MAX_POSTPROCESS_TEXT_CHARS
     if not isinstance(max_chars, int) or isinstance(max_chars, bool):
         raise PostProcessError(f"{field_name} max chars must be an integer")
+    if _contains_escaped_null(value):
+        raise PostProcessError(f"{field_name} contains invalid null byte")
     if len(value) > max_chars:
         raise PostProcessError(f"{field_name} is too large (max {max_chars} characters)")
     if len(value.encode("utf-8")) > max_chars:
@@ -113,7 +115,10 @@ def _validate_http_url(url: str, *, field_name: str, allow_query_fragment: bool 
     if not isinstance(url, str) or isinstance(url, bool):
         raise PostProcessError(f"{field_name} must be text")
     normalized = _assert_clean_url(url, field_name=field_name)
-    parsed = urllib.parse.urlparse(normalized)
+    try:
+        parsed = urllib.parse.urlparse(normalized)
+    except ValueError as exc:
+        raise PostProcessError(f"{field_name} is invalid") from exc
     if parsed.scheme not in {"http", "https"}:
         raise PostProcessError(f"{field_name} must use http:// or https://")
     if not parsed.netloc:
@@ -230,9 +235,19 @@ def _read_response_text(response: object, max_bytes: int) -> str:
         raise PostProcessError("max response bytes must be an integer")
     if max_bytes < 0:
         raise PostProcessError("max response bytes must be non-negative")
-    raw = response.read(max_bytes + 1)
-    if len(raw) > max_bytes:
-        raise PostProcessError(f"remote response is too large (max {max_bytes} bytes)")
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = response.read(65536)
+        if not chunk:
+            break
+        if not isinstance(chunk, bytes):
+            raise PostProcessError("remote response chunk must be bytes")
+        total += len(chunk)
+        if total > max_bytes:
+            raise PostProcessError(f"remote response is too large (max {max_bytes} bytes)")
+        chunks.append(chunk)
+    raw = b"".join(chunks)
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -317,6 +332,9 @@ def _safe_prompt_language(language: str) -> str:
 
 def _ollama_endpoint(url: str, path: str) -> str:
     base = _validate_http_url(url, field_name="ollama url").rstrip("/")
+    parsed = urllib.parse.urlparse(base)
+    if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
+        raise PostProcessError("ollama url must use https:// unless host is local loopback")
     return base + "/" + path.lstrip("/")
 
 
