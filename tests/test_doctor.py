@@ -691,6 +691,10 @@ class DoctorTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must use https:// unless host is local loopback"):
             doctor._validate_remote_http_url("http://api.example.test/v1", field_name="remote endpoint URL")
 
+    def test_validate_remote_http_url_rejects_malformed_url(self) -> None:
+        with self.assertRaisesRegex(ValueError, "remote endpoint URL is invalid"):
+            doctor._validate_remote_http_url("https://[::1", field_name="remote endpoint URL")
+
     def test_parse_settings_json_rejects_large_payload(self) -> None:
         with self.assertRaisesRegex(ValueError, "settings JSON is too large"):
             doctor.parse_settings_json(json.dumps({"payload": "x" * (doctor.MAX_SETTINGS_JSON_CHARS + 1)}))

@@ -2757,6 +2757,16 @@ class ModelsTest(unittest.TestCase):
         with self.assertRaisesRegex(models.ModelError, "is too large"):
             models._assert_download_url(url)
 
+    def test_download_redirect_matchers_fail_closed_for_malformed_urls(self) -> None:
+        malformed = "https://[::1"
+        allowed = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin"
+
+        self.assertFalse(models._url_matches_allowed_base(malformed, allowed))
+        self.assertIsNone(models._huggingface_resolve_parts(malformed))
+        self.assertFalse(models._huggingface_resolve_cache_redirect_matches(malformed, allowed))
+        self.assertFalse(models._huggingface_storage_redirect_matches(malformed, allowed))
+        self.assertFalse(models._download_redirect_matches_allowed_url(malformed, allowed))
+
     def test_assert_download_url_allows_loopback_plain_http(self) -> None:
         url = "http://127.0.0.1:8000/model.bin"
         self.assertEqual(models._assert_download_url(url), url)

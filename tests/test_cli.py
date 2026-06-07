@@ -1066,7 +1066,9 @@ class CliTest(unittest.TestCase):
         mocked_update.assert_called_once_with(mock.ANY, ["geheim"])
         self.assertGreaterEqual(mocked_security.call_count, 1)
         mocked_security.assert_any_call("Hallo", ["geheim"])
-        self.assertEqual(payload["security"]["blacklist_added"], ["geheim"])
+        self.assertEqual(payload["security"]["blacklist_added"], ["[redacted]"])
+        self.assertEqual(payload["security"]["blacklist_added_count"], 1)
+        self.assertNotIn("geheim", json.dumps(payload, ensure_ascii=False))
         self.assertEqual(payload["transcript"], "redacted")
         self.assertEqual(final_state.transcript, "redacted")
         mocked_insert.assert_called_once_with("redacted", "none", 0)
@@ -1113,7 +1115,9 @@ class CliTest(unittest.TestCase):
         final_state = store.read()
         self.assertEqual(payload["transcript"], "")
         self.assertEqual(final_state.transcript, "")
-        self.assertEqual(payload["security"]["blacklist_added"], ["geheim"])
+        self.assertEqual(payload["security"]["blacklist_added"], ["[redacted]"])
+        self.assertEqual(payload["security"]["blacklist_added_count"], 1)
+        self.assertNotIn("geheim", json.dumps(payload, ensure_ascii=False))
         mocked_insert.assert_not_called()
         mocked_prepare.assert_not_called()
 
@@ -1713,6 +1717,37 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("contains invalid null byte", payload["error"])
 
+    def test_text_models_rejects_malformed_ollama_url(self) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["text-models", "--ollama-url", "https://[::1", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("ollama url is invalid", payload["error"])
+
+    def test_text_models_rejects_remote_plain_http_ollama_url(self) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["text-models", "--ollama-url", "http://api.example.test:11434", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("ollama url must use https:// unless host is local loopback", payload["error"])
+
+    def test_text_models_rejects_ollama_url_userinfo_or_query(self) -> None:
+        for url, expected in (
+            ("https://user:secret@api.example.test:11434", "ollama url must not contain userinfo"),
+            ("https://api.example.test:11434?token=secret", "ollama url must not contain query or fragment"),
+        ):
+            with self.subTest(url=url):
+                stdout = io.StringIO()
+                with redirect_stdout(stdout):
+                    code = cli.run(["text-models", "--ollama-url", url, "--json"])
+                payload = json.loads(stdout.getvalue())
+                self.assertEqual(code, 1)
+                self.assertIn(expected, payload["error"])
+                self.assertNotIn("user:secret", json.dumps(payload))
+                self.assertNotIn("token=secret", json.dumps(payload))
+
     def test_install_text_model_pulls_ollama_model(self) -> None:
         completed = mock.Mock(returncode=0, stdout="ok", stderr="")
         stdout = io.StringIO()
@@ -2018,6 +2053,53 @@ class CliTest(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 1)
         self.assertIn("openai-compatible url must use http:// or https://", payload["error"])
+
+    def test_text_models_rejects_malformed_openai_url(self) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run([
+                "text-models",
+                "--backend",
+                "openai-compatible",
+                "--openai-compatible-url",
+                "https://[::1",
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("openai-compatible url is invalid", payload["error"])
+
+    def test_text_models_rejects_openai_url_userinfo(self) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run([
+                "text-models",
+                "--backend",
+                "openai-compatible",
+                "--openai-compatible-url",
+                "https://user:secret@api.example.test/v1",
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("openai-compatible url must not contain userinfo", payload["error"])
+        self.assertNotIn("user:secret", json.dumps(payload))
+
+    def test_text_models_rejects_openai_url_query_or_fragment(self) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run([
+                "text-models",
+                "--backend",
+                "openai-compatible",
+                "--openai-compatible-url",
+                "https://api.example.test/v1?api_key=secret#token",
+                "--json",
+            ])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("openai-compatible url must not contain query or fragment", payload["error"])
+        self.assertNotIn("api_key=secret", json.dumps(payload))
 
     @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models")
     def test_text_models_rejects_remote_plain_http_openai_url(self, mocked_list: mock.Mock) -> None:
@@ -7682,7 +7764,8 @@ class CliTest(unittest.TestCase):
         self.assertEqual(result["status"], "error")
         self.assertIn("failed to scan or delete 1 cleanup artifact", result["error"])
         self.assertIn(str(owner), result["cleanup_failed_paths"])
-        self.assertEqual(final_state.status, "done")
+        self.assertEqual(final_state.status, "error")
+        self.assertIn("failed to scan or delete 1 cleanup artifact", final_state.error)
         self.assertFalse(stale_exists)
         self.assertTrue(owner_is_symlink)
         self.assertTrue(target_exists)

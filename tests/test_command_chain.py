@@ -15,6 +15,7 @@ from speed_of_cinnamon.command_chain import (
     MAX_COMMAND_OUTPUT_CHARS,
     _command_path,
     _contains_escaped_null,
+    _filtered_environment,
     _filesize,
     _read_file_head,
     run_command_chain,
@@ -367,6 +368,10 @@ class CommandChainTest(unittest.TestCase):
                     validate_env(base={1: "value"})  # type: ignore[dict-key]
                 with self.assertRaisesRegex(RuntimeError, "environment values must be text"):
                     validate_env(base={"key": False})  # type: ignore[arg-type]
+                with self.assertRaisesRegex(RuntimeError, "environment key contains invalid control character"):
+                    validate_env(base={"BAD\nKEY": "value"})
+                with self.assertRaisesRegex(RuntimeError, "environment value contains invalid control character"):
+                    validate_env(base={"SAFE_KEY": "bad\x00value"})
                 with self.assertRaisesRegex(RuntimeError, "environment key is not allowed: LD_PRELOAD"):
                     validate_env(base={"LD_PRELOAD": "x"})
 
@@ -473,6 +478,12 @@ class CommandChainTest(unittest.TestCase):
             run_command_chain([("cmd",)], "", label="post-process", max_input_chars=True)  # type: ignore[arg-type]
         with self.assertRaisesRegex(CommandChainError, "timeout_seconds must be an integer"):
             run_command_chain([("cmd",)], "", label="post-process", timeout_seconds=False)  # type: ignore[arg-type]
+
+    def test_filtered_environment_rejects_control_characters_in_base(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "environment key contains invalid control character"):
+            _filtered_environment(base={"BAD\nKEY": "value"})
+        with self.assertRaisesRegex(CommandChainError, "environment value contains invalid control character"):
+            _filtered_environment(base={"SAFE_KEY": "bad\x00value"})
 
     def test_run_command_chain_rejects_non_positive_timeout(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "timeout_seconds must be positive"):

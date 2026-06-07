@@ -1215,6 +1215,7 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
             mock.patch("speed_of_cinnamon.output.paste_from_clipboard") as mocked_paste,
             mock.patch("speed_of_cinnamon.output._commit_clipboard_insertion", return_value=False),
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
         ):
             with self.assertRaisesRegex(OutputError, "failed to commit clipboard-paste insertion state"):
                 insert_text("new text", "clipboard-paste")
@@ -1233,7 +1234,7 @@ class OutputTest(unittest.TestCase):
                 )
             )
 
-        mocked_clipboard.assert_called_once_with("new text")
+        self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["new text", "previous"])
         mocked_paste.assert_called_once()
 
     def test_insert_text_does_not_restore_stale_clipboard_after_paste_failure(self) -> None:
@@ -1296,6 +1297,7 @@ class OutputTest(unittest.TestCase):
                     return_value=(True, "previous text"),
                 ),
                 mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+                mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
                 mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=17.0),
                 mock.patch("speed_of_cinnamon.output.time.time", return_value=17.0),
             ):
@@ -1304,7 +1306,7 @@ class OutputTest(unittest.TestCase):
                 self.assertFalse(insert_text("wiederholung", "clipboard-paste"))
             trusted, final_state, pending = output_module._read_clipboard_dedup_state_entry()
 
-        self.assertEqual(mocked_clipboard.call_count, 1)
+        self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["wiederholung", "previous text"])
         self.assertEqual(mocked_paste.call_count, 1)
         self.assertTrue(trusted)
         self.assertEqual(
@@ -1524,12 +1526,13 @@ class OutputTest(unittest.TestCase):
                 return_value=(True, "old clipboard"),
             ),
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
         ):
             with self.assertRaisesRegex(OutputError, "failed to commit clipboard-paste insertion state"):
                 insert_text("secure text", "clipboard-paste")
             self.assertFalse(insert_text("secure text", "clipboard-paste"))
 
-        self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["secure text"])
+        self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["secure text", "old clipboard"])
         self.assertEqual(mocked_paste.call_count, 1)
 
     def test_insert_text_does_not_restore_dedupe_state_when_paste_set_succeeds_but_commit_fails(self) -> None:

@@ -436,8 +436,11 @@ def _assert_download_url(
 def _url_matches_allowed_base(url: str, allowed_url: str) -> bool:
     if not isinstance(url, str) or not isinstance(allowed_url, str):
         return False
-    parsed = urllib.parse.urlsplit(url)
-    allowed = urllib.parse.urlsplit(allowed_url)
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        allowed = urllib.parse.urlsplit(allowed_url)
+    except ValueError:
+        return False
     return (
         parsed.scheme == allowed.scheme
         and parsed.netloc == allowed.netloc
@@ -446,7 +449,10 @@ def _url_matches_allowed_base(url: str, allowed_url: str) -> bool:
 
 
 def _huggingface_resolve_parts(url: str) -> tuple[str, str] | None:
-    parsed = urllib.parse.urlsplit(url)
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError:
+        return None
     if (parsed.hostname or "").lower() != HUGGING_FACE_DOWNLOAD_HOST:
         return None
     path = urllib.parse.unquote(parsed.path).lstrip("/")
@@ -463,7 +469,10 @@ def _huggingface_resolve_cache_redirect_matches(url: str, allowed_url: str) -> b
     allowed_parts = _huggingface_resolve_parts(allowed_url)
     if allowed_parts is None:
         return False
-    parsed = urllib.parse.urlsplit(url)
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError:
+        return False
     if (parsed.hostname or "").lower() != HUGGING_FACE_DOWNLOAD_HOST:
         return False
     repo, filename = allowed_parts
@@ -478,7 +487,10 @@ def _huggingface_storage_redirect_matches(url: str, allowed_url: str) -> bool:
     allowed_parts = _huggingface_resolve_parts(allowed_url)
     if allowed_parts is None:
         return False
-    parsed = urllib.parse.urlsplit(url)
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError:
+        return False
     if (parsed.hostname or "").lower() not in HUGGING_FACE_STORAGE_REDIRECT_HOSTS:
         return False
     _repo, filename = allowed_parts

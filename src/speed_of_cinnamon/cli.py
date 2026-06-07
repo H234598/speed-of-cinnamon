@@ -529,6 +529,10 @@ def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
                 raise RuntimeError("environment values must be text")
             if not isinstance(value, str):
                 raise RuntimeError("environment base must be a mapping")
+            if _contains_escaped_null(key) or _contains_http_header_control_chars(key):
+                raise RuntimeError("environment key contains invalid control character")
+            if _contains_escaped_null(value) or _contains_http_header_control_chars(value):
+                raise RuntimeError("environment value contains invalid control character")
             if _is_unsafe_env_var(key):
                 raise RuntimeError(f"environment key is not allowed: {key}")
             env[key] = value
@@ -636,13 +640,45 @@ def _validate_text_model_url(url: str, *, field_name: str) -> str:
     return _assert_clean_text(url, field_name=field_name, max_chars=MAX_URL_CHARS).rstrip("/")
 
 
-def _validate_openai_compatible_http_url(url: str, field_name: str) -> str:
+def _validate_ollama_http_url(url: str, *, field_name: str) -> str:
     base = _validate_text_model_url(url, field_name=field_name)
-    parsed = urllib.parse.urlparse(base)
+    try:
+        parsed = urllib.parse.urlparse(base)
+    except ValueError as exc:
+        raise RuntimeError(f"{field_name} is invalid") from exc
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise RuntimeError(f"{field_name} must use http:// or https://")
     if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
         raise RuntimeError(f"{field_name} must use https:// unless host is local loopback")
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise RuntimeError(f"{field_name} has invalid port") from exc
+    if parsed.username or parsed.password:
+        raise RuntimeError(f"{field_name} must not contain userinfo")
+    if parsed.query or parsed.fragment:
+        raise RuntimeError(f"{field_name} must not contain query or fragment")
+    return base
+
+
+def _validate_openai_compatible_http_url(url: str, field_name: str) -> str:
+    base = _validate_text_model_url(url, field_name=field_name)
+    try:
+        parsed = urllib.parse.urlparse(base)
+    except ValueError as exc:
+        raise RuntimeError(f"{field_name} is invalid") from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError(f"{field_name} must use http:// or https://")
+    if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
+        raise RuntimeError(f"{field_name} must use https:// unless host is local loopback")
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise RuntimeError(f"{field_name} has invalid port") from exc
+    if parsed.username or parsed.password:
+        raise RuntimeError(f"{field_name} must not contain userinfo")
+    if parsed.query or parsed.fragment:
+        raise RuntimeError(f"{field_name} must not contain query or fragment")
     return base
 
 
@@ -725,7 +761,7 @@ def _validate_pipeline_text_args(
         field_name="openai-compatible flex processing",
     )
     _coerce_bool(getattr(args, "soften_profanity", False), field_name="soften_profanity")
-    _validate_text_model_url(args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url")
+    _validate_ollama_http_url(args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url")
     _validate_openai_compatible_http_url(args.openai_compatible_url or DEFAULT_OPENAI_COMPATIBLE_URL, field_name="openai-compatible url")
     return language
 
@@ -1024,6 +1060,15 @@ def _merge_security_post_processing(left: dict[str, object], right: dict[str, ob
     }
 
 
+def _public_security_post_processing(security: dict[str, object]) -> dict[str, object]:
+    added = security.get("blacklist_added", [])
+    added_count = len([item for item in added if isinstance(item, str)])
+    public = dict(security)
+    public["blacklist_added"] = ["[redacted]"] * added_count
+    public["blacklist_added_count"] = added_count
+    return public
+
+
 def _apply_security_mask_only(text: str) -> tuple[str, dict[str, object]]:
     directives = parse_security_directives(text)
     entries = load_blacklist_file(blacklist_file(), strict=True)
@@ -1266,6 +1311,17 @@ def _cleanup_failed_paths(*cleanup_results: dict[str, object]) -> list[str]:
 
 def _cleanup_failure_error(failed_paths: list[str]) -> str:
     return f"failed to scan or delete {len(failed_paths)} cleanup artifact(s)"
+
+
+def _persist_cleanup_failure_state(store: StateStore, failed_paths: list[str]) -> None:
+    if not failed_paths:
+        return
+    error_text = _cleanup_failure_error(failed_paths)
+    try:
+        store.update(status="error", stopped_at=now_iso(), error=error_text)
+    except Exception as exc:
+        update_error = _redact_error_for_user(str(exc))
+        raise RuntimeError(f"{error_text}; failed to persist cleanup error state: {update_error}") from exc
 
 
 def _read_stored_transcript_text(path: Path) -> str:
@@ -3032,6 +3088,7 @@ def finalize_recording(
         status = done.status
         message = "recording finished without transcript" if not text.strip() else "transcription completed"
         if cleanup_failed_paths:
+            _persist_cleanup_failure_state(store, cleanup_failed_paths)
             status = "error"
             message = f"{message}; {_cleanup_failure_error(cleanup_failed_paths)}"
         return {
@@ -3047,7 +3104,7 @@ def finalize_recording(
             "recording_encryption": recording_encryption,
             "recording_encrypted": recording_encryption != ARTIFACT_ENCRYPTION_OFF,
             "inserted": inserted,
-            "security": security_post_processing,
+            "security": _public_security_post_processing(security_post_processing),
             "recording_artifact_cap": artifact_cleanup,
             "transcript_file_cap": transcript_cleanup,
             "transient_transcript_cleanup": transient_transcript_cleanup,
@@ -3442,7 +3499,7 @@ def command_text_models(args: argparse.Namespace) -> dict[str, object]:
             "url": url,
             **payload,
         }
-    url = _validate_text_model_url(args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url")
+    url = _validate_ollama_http_url(args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url")
     payload = _normalize_text_models_payload(list_ollama_models(url))
     if _is_local_ollama_url(url):
         try:
@@ -3485,7 +3542,7 @@ def command_install_text_model(args: argparse.Namespace) -> dict[str, object]:
         raise RuntimeError("ollama model must not be empty")
     if model.startswith("-"):
         raise RuntimeError("ollama model must not start with '-'")
-    url = _validate_text_model_url(args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url")
+    url = _validate_ollama_http_url(args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url")
     try:
         ollama = _command_path("ollama")
     except RuntimeError as exc:
@@ -4018,7 +4075,7 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         "transcript": _transcript_payload_text(text, transcript_encryption, args),
         "transcript_output_redacted": bool(text) and transcript_encryption != ARTIFACT_ENCRYPTION_OFF and not _confirm_plaintext_transcript_output(args),
         "transcript_path": str(stored_text_path),
-        "security": security_post_processing,
+        "security": _public_security_post_processing(security_post_processing),
         "transcript_file_cap": transcript_cleanup,
         "transient_transcript_cleanup": transient_transcript_cleanup,
         "artifact_encryption": artifact_encryption,

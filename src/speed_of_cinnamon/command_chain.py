@@ -99,6 +99,10 @@ def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
                 raise CommandChainError("environment values must be text")
             if not isinstance(value, str):
                 raise CommandChainError("environment base must be a mapping")
+            if _contains_escaped_null(key) or _contains_http_header_control_chars(key):
+                raise CommandChainError("environment key contains invalid control character")
+            if _contains_escaped_null(value) or _contains_http_header_control_chars(value):
+                raise CommandChainError("environment value contains invalid control character")
             if _is_unsafe_env_var(key):
                 raise CommandChainError(f"environment key is not allowed: {key}")
             env[key] = value

@@ -159,7 +159,10 @@ def _validate_remote_http_url(value: str, *, field_name: str) -> str:
         raise ValueError(f"{field_name} is too large (max {MAX_REMOTE_URL_CHARS} characters)")
     if len(normalized.encode("utf-8")) > MAX_REMOTE_URL_CHARS:
         raise ValueError(f"{field_name} is too large (max {MAX_REMOTE_URL_CHARS} bytes)")
-    parsed = urllib.parse.urlparse(normalized)
+    try:
+        parsed = urllib.parse.urlparse(normalized)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} is invalid") from exc
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError(f"{field_name} must use http:// or https://")
     if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):

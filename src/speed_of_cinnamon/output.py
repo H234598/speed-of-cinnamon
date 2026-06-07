@@ -114,6 +114,10 @@ def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
                 raise OutputError("environment values must be text")
             if not isinstance(value, str):
                 raise OutputError("environment base must be a mapping")
+            if _contains_escaped_null(key) or _contains_http_header_control_chars(key):
+                raise OutputError("environment key contains invalid control character")
+            if _contains_escaped_null(value) or _contains_http_header_control_chars(value):
+                raise OutputError("environment value contains invalid control character")
             if _is_unsafe_env_var(key):
                 raise OutputError(f"environment key is not allowed: {key}")
             env[key] = value
@@ -1428,6 +1432,8 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
                 if not operation_performed:
                     _restore_clipboard_insertion_snapshot(snapshot)
                     _restore_clipboard_dedup_state(persistent_snapshot, pending=persistent_snapshot_pending)
+                    _restore_clipboard_snapshot_after_failed_paste(text, clipboard_snapshot_available, clipboard_snapshot)
+                else:
                     _restore_clipboard_snapshot_after_failed_paste(text, clipboard_snapshot_available, clipboard_snapshot)
             _release_clipboard_dedup_lock(lock_path)
     if method == "type":

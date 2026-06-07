@@ -297,6 +297,10 @@ def _reject_secret_bearing_url_setting(key: str, text: str) -> None:
         raise SettingsExportError(f"setting {key} must use http:// or https://")
     if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
         raise SettingsExportError(f"setting {key} must use https:// unless host is local loopback")
+    try:
+        parsed.port
+    except ValueError as exc:
+        raise SettingsExportError(f"setting {key} has invalid port") from exc
     if parsed.username or parsed.password:
         raise SettingsExportError(f"setting {key} must not contain URL credentials")
     if parsed.query or parsed.fragment:
