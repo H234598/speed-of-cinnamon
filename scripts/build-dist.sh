@@ -17,6 +17,15 @@ for tool in python3 tar sha256sum mktemp find git stat realpath; do
   fi
 done
 
+if [[ -L "${safe_fs}" || ! -f "${safe_fs}" || "$(stat -c '%F' "${safe_fs}")" != "regular file" ]]; then
+  printf 'safe local filesystem helper is invalid: %s\n' "${safe_fs}" >&2
+  exit 1
+fi
+if [[ "$(stat -c '%h' "${safe_fs}")" -ne 1 ]]; then
+  printf 'safe local filesystem helper must not be hardlinked: %s\n' "${safe_fs}" >&2
+  exit 1
+fi
+
 name="$(
   python3 - <<'PY'
 import tomllib
@@ -138,7 +147,6 @@ import stat
 import sys
 
 path, label = sys.argv[1:3]
-payload = sys.stdin.buffer.read()
 flags = os.O_WRONLY | os.O_CREAT
 if hasattr(os, "O_NOFOLLOW"):
     flags |= os.O_NOFOLLOW
@@ -156,13 +164,17 @@ try:
         print(f"{label} must not be hardlinked: {path}", file=sys.stderr)
         raise SystemExit(1)
     os.ftruncate(fd, 0)
-    view = memoryview(payload)
-    while view:
-        written = os.write(fd, view)
-        if written <= 0:
-            print(f"failed to write {label}: {path}", file=sys.stderr)
-            raise SystemExit(1)
-        view = view[written:]
+    while True:
+        chunk = sys.stdin.buffer.read(1024 * 1024)
+        if not chunk:
+            break
+        view = memoryview(chunk)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                print(f"failed to write {label}: {path}", file=sys.stderr)
+                raise SystemExit(1)
+            view = view[written:]
     os.fsync(fd)
 finally:
     os.close(fd)
@@ -179,6 +191,7 @@ replace_with_finalize_lock() {
   python3 - "$lock_path" "$safe_fs" "$staging_path" "$final_path" "$staging_checksum_path" "$final_checksum_path" <<'PY'
 import os
 import subprocess
+import stat
 import sys
 
 try:
@@ -188,28 +201,63 @@ except ModuleNotFoundError:
     raise SystemExit(1)
 
 lock_path, safe_fs, staging_path, final_path, staging_checksum_path, final_checksum_path = sys.argv[1:]
+lock_parent = os.path.dirname(lock_path)
+lock_name = os.path.basename(lock_path)
 
-if os.path.islink(lock_path):
-    print(f"finalization lock must not be a symlink: {lock_path}", file=sys.stderr)
+if not lock_name:
+    print(f"finalization lock path is invalid: {lock_path}", file=sys.stderr)
     raise SystemExit(1)
 
-flags = os.O_CREAT | os.O_RDWR
+parent_flags = os.O_RDONLY
+if hasattr(os, "O_DIRECTORY"):
+    parent_flags |= os.O_DIRECTORY
 if hasattr(os, "O_NOFOLLOW"):
-    flags |= os.O_NOFOLLOW
+    parent_flags |= os.O_NOFOLLOW
+try:
+    parent_fd = os.open(lock_parent, parent_flags)
+except OSError as exc:
+    print(f"failed to open finalization lock parent safely: {lock_parent}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
 
-lock_fd = os.open(lock_path, flags, 0o600)
-with os.fdopen(lock_fd, "r+", encoding="utf-8") as lock:
-    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-    if staging_path and final_path:
-        subprocess.run(
-            [sys.executable, safe_fs, "replace", "build-dist", staging_path, final_path, "--src-kind", "file"],
-            check=True,
-        )
-    if staging_checksum_path and final_checksum_path:
-        subprocess.run(
-            [sys.executable, safe_fs, "replace", "build-dist", staging_checksum_path, final_checksum_path, "--src-kind", "file"],
-            check=True,
-        )
+try:
+    parent_stat = os.fstat(parent_fd)
+    if not stat.S_ISDIR(parent_stat.st_mode):
+        print(f"finalization lock parent must be a directory: {lock_parent}", file=sys.stderr)
+        raise SystemExit(1)
+    try:
+        lock_stat = os.stat(lock_name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        lock_stat = None
+    if lock_stat is not None:
+        if stat.S_ISLNK(lock_stat.st_mode):
+            print(f"finalization lock must not be a symlink: {lock_path}", file=sys.stderr)
+            raise SystemExit(1)
+        if not stat.S_ISREG(lock_stat.st_mode):
+            print(f"finalization lock must be a regular file: {lock_path}", file=sys.stderr)
+            raise SystemExit(1)
+        if getattr(lock_stat, "st_nlink", 1) != 1:
+            print(f"finalization lock must not be hardlinked: {lock_path}", file=sys.stderr)
+            raise SystemExit(1)
+
+    flags = os.O_CREAT | os.O_RDWR
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+
+    lock_fd = os.open(lock_name, flags, 0o600, dir_fd=parent_fd)
+    with os.fdopen(lock_fd, "r+", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        if staging_path and final_path:
+            subprocess.run(
+                [sys.executable, safe_fs, "replace", "build-dist", staging_path, final_path, "--src-kind", "file"],
+                check=True,
+            )
+        if staging_checksum_path and final_checksum_path:
+            subprocess.run(
+                [sys.executable, safe_fs, "replace", "build-dist", staging_checksum_path, final_checksum_path, "--src-kind", "file"],
+                check=True,
+            )
+finally:
+    os.close(parent_fd)
 PY
 }
 
@@ -287,7 +335,8 @@ fi
 dist_staging_dir="${dist_staging_dir_abs}"
 staging_tarball="$(mktemp "${dist_staging_dir}/.${package}.tar.gz.XXXXXX")"
 
-tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@0" -C "${work_dir}" -czf "${staging_tarball}" "${package}"
+tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@0" -C "${work_dir}" -czf - "${package}" \
+  | write_regular_file_from_stdin "${staging_tarball}" "staged dist tarball"
 fsync_regular_file "${staging_tarball}" "staged dist tarball"
 checksum_value="$(sha256sum "${staging_tarball}")"
 checksum_value="${checksum_value%% *}"

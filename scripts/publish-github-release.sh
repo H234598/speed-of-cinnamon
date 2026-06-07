@@ -217,6 +217,46 @@ verify_asset_path() {
   fi
 }
 
+verify_staged_asset_path() {
+  local asset=$1
+  local absolute
+  local link_count
+
+  if [[ "${asset}" == -* ]]; then
+    printf 'staged asset name may not start with option-like prefix: %s\n' "${asset}" >&2
+    exit 1
+  fi
+  if contains_control_chars "${asset}"; then
+    printf 'staged asset name must not contain control characters\n' >&2
+    exit 1
+  fi
+  if [[ -L "${asset}" ]]; then
+    printf 'staged asset must not be a symlink\n' >&2
+    exit 1
+  fi
+  if [[ ! -f "${asset}" ]]; then
+    printf 'staged asset is not a regular file\n' >&2
+    exit 1
+  fi
+  if ! absolute="$(realpath "${asset}" 2>/dev/null)"; then
+    printf 'failed to resolve staged asset path\n' >&2
+    exit 1
+  fi
+  if contains_control_chars "${absolute}"; then
+    printf 'staged asset path must not contain control characters\n' >&2
+    exit 1
+  fi
+  if [[ "${absolute}" != "${staging_dir}"/* ]]; then
+    printf 'staged asset is outside release staging directory\n' >&2
+    exit 1
+  fi
+  link_count="$(stat -c '%h' "${asset}")"
+  if [[ "${link_count}" -ne 1 ]]; then
+    printf 'staged asset must not be hardlinked: %s\n' "${asset}" >&2
+    exit 1
+  fi
+}
+
 resolve_github_remote_repo() {
   local remote_url
   remote_url="$(git remote get-url origin 2>/dev/null || true)"
@@ -453,7 +493,7 @@ for asset in "${assets[@]}"; do
   chmod_and_fsync_regular_file "${staged_path}" 0444 "staged release asset"
   upload_refs+=("${staged_path}")
   uploaded_asset_names+=("${staged_name}")
-  verify_asset_path "${staged_path}"
+  verify_staged_asset_path "${staged_path}"
   if [[ "${asset}" == "${source_archives[0]}" ]]; then
     source_archive_ref="${staged_path}"
   elif [[ "${asset}" == "${checksums[0]}" ]]; then
