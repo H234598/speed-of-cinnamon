@@ -179,8 +179,9 @@ class SizeCappedJsonFileHandler(logging.Handler):
                     raise RuntimeError(f"log file must not be hardlinked: {self.path}")
                 try:
                     os.fchmod(fd, 0o600)
-                except OSError:
-                    pass
+                except OSError as exc:
+                    raise RuntimeError(f"log file permissions could not be restricted: {self.path}") from exc
+                assert_fd_is_regular_private_file(fd, field_name="log file")
                 self.stream = os.fdopen(fd, "a", encoding="utf-8")
             except Exception:
                 os.close(fd)

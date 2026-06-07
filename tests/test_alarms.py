@@ -135,6 +135,7 @@ class AlarmTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
             path.write_text('{"version":1,"alarms":[],"last_checked_at":""}', encoding="utf-8")
+            path.chmod(0o600)
 
             with mock.patch(
                 "speed_of_cinnamon.alarms.read_text_without_following_symlinks",
@@ -143,13 +144,19 @@ class AlarmTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "alarm store is too large"):
                     load_alarm_store(path)
 
-        mocked_read.assert_called_once_with(path, field_name="alarm store path", max_bytes=MAX_ALARM_STORE_BYTES)
+        mocked_read.assert_called_once_with(
+            path,
+            field_name="alarm store path",
+            max_bytes=MAX_ALARM_STORE_BYTES,
+            require_private_mode=True,
+        )
 
     @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
     def test_load_alarm_store_uses_secure_open_flags(self, mocked_open: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
             path.write_text('{"version":1,"alarms":[],"last_checked_at":""}', encoding="utf-8")
+            path.chmod(0o600)
             payload = load_alarm_store(path)
         self.assertEqual(payload["version"], 1)
         self.assertTrue(mocked_open.called)
@@ -162,6 +169,15 @@ class AlarmTest(unittest.TestCase):
                 for args, kwargs in mocked_open.call_args_list
             )
         )
+
+    def test_load_alarm_store_rejects_world_readable_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            path.write_text('{"version":1,"alarms":[],"last_checked_at":""}', encoding="utf-8")
+            path.chmod(0o644)
+
+            with self.assertRaisesRegex(RuntimeError, "alarm store could not be read"):
+                load_alarm_store(path)
 
     def test_repeat_day_parser_supports_common_groups(self) -> None:
         self.assertEqual(parse_repeat_days("daily"), ["mon", "tue", "wed", "thu", "fri", "sat", "sun"])
@@ -421,6 +437,7 @@ class AlarmTest(unittest.TestCase):
                 '{"version":1,"alarms":[],"last_checked_at":""}',
                 encoding="utf-8",
             )
+            path.chmod(0o600)
             with self.assertRaisesRegex(ValueError, "catch-up minutes must be at least"):
                 check_due_alarms(path=path, catch_up_minutes=-1)
 
@@ -431,6 +448,7 @@ class AlarmTest(unittest.TestCase):
                 '{"version":1,"alarms":[],"last_checked_at":""}',
                 encoding="utf-8",
             )
+            path.chmod(0o600)
             with self.assertRaisesRegex(ValueError, "catch-up minutes must be at most"):
                 check_due_alarms(path=path, catch_up_minutes=14401)
 
@@ -441,6 +459,7 @@ class AlarmTest(unittest.TestCase):
                 '{"version":1,"alarms":[],"last_checked_at":""}',
                 encoding="utf-8",
             )
+            path.chmod(0o600)
             with self.assertRaisesRegex(ValueError, "catch-up minutes must be an integer"):
                 check_due_alarms(path=path, catch_up_minutes="5")  # type: ignore[arg-type]
 
@@ -451,6 +470,7 @@ class AlarmTest(unittest.TestCase):
                 '{"version":1,"alarms":[],"last_checked_at":""}',
                 encoding="utf-8",
             )
+            path.chmod(0o600)
             with self.assertRaisesRegex(ValueError, "mark must be a boolean"):
                 check_due_alarms(path=path, mark="true")  # type: ignore[arg-type]
 
@@ -609,6 +629,7 @@ class AlarmTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
             path.write_text("{invalid}", encoding="utf-8")
+            path.chmod(0o600)
             with self.assertRaisesRegex(RuntimeError, "alarm store could not be parsed"):
                 load_alarm_store(path)
 
@@ -619,6 +640,7 @@ class AlarmTest(unittest.TestCase):
                 '{"version":1,"alarms":[],"last_checked_at":"2026-06-01T09:00\x00"}',
                 encoding="utf-8",
             )
+            path.chmod(0o600)
             with self.assertRaisesRegex(RuntimeError, "alarm store contains invalid null byte"):
                 load_alarm_store(path)
 
@@ -629,6 +651,7 @@ class AlarmTest(unittest.TestCase):
                 '{"version":1,"alarms":[],"last_checked_at":"2026-06-01T09:00\\\\x00"}',
                 encoding="utf-8",
             )
+            path.chmod(0o600)
             with self.assertRaisesRegex(RuntimeError, "contains invalid null byte"):
                 load_alarm_store(path)
 
@@ -636,6 +659,7 @@ class AlarmTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
             path.write_text("[1, 2, 3]", encoding="utf-8")
+            path.chmod(0o600)
             with self.assertRaisesRegex(RuntimeError, "alarm store must be a JSON object"):
                 load_alarm_store(path)
 
@@ -643,6 +667,7 @@ class AlarmTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
             path.write_bytes(b"\xff")
+            path.chmod(0o600)
             with self.assertRaisesRegex(RuntimeError, "alarm store could not be parsed"):
                 load_alarm_store(path)
 
@@ -653,6 +678,7 @@ class AlarmTest(unittest.TestCase):
                 '{"version":1,"alarms":{"id":"bad"},"last_checked_at":""}',
                 encoding="utf-8",
             )
+            path.chmod(0o600)
             payload = load_alarm_store(path)
 
         self.assertEqual(payload["alarms"], [])
@@ -666,6 +692,7 @@ class AlarmTest(unittest.TestCase):
                 + '"}'
             )
             path.write_text(payload, encoding="utf-8")
+            path.chmod(0o600)
             with self.assertRaisesRegex(RuntimeError, "alarm store last_checked_at is too large"):
                 load_alarm_store(path)
 
@@ -686,6 +713,7 @@ class AlarmTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            path.chmod(0o600)
             payload = load_alarm_store(path)
 
         self.assertEqual(len(payload["alarms"]), 1)
@@ -707,6 +735,7 @@ class AlarmTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            path.chmod(0o600)
             payload = load_alarm_store(path)
 
         self.assertEqual(len(payload["alarms"]), 1)
@@ -767,6 +796,7 @@ class AlarmTest(unittest.TestCase):
                 ],
             }
             path.write_text(json.dumps(payload), encoding="utf-8")
+            path.chmod(0o600)
             loaded = load_alarm_store(path)
 
         self.assertEqual(len(loaded["alarms"]), MAX_ALARM_COUNT)

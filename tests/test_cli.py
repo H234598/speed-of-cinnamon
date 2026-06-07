@@ -423,7 +423,7 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(code, 1)
         self.assertEqual(payload["status"], "error")
-        self.assertIn("failed to delete 1 cleanup artifact", payload["error"])
+        self.assertIn("failed to scan or delete 1 cleanup artifact", payload["error"])
         self.assertEqual(payload["transcript"], "test")
         self.assertIn(str(owner), payload["cleanup_failed_paths"])
         self.assertFalse(stale_exists)
@@ -1195,6 +1195,7 @@ class CliTest(unittest.TestCase):
             blacklist = Path(tmp) / "speed-of-cinnamon" / "blacklist.txt"
             blacklist.parent.mkdir(parents=True, exist_ok=True)
             blacklist.write_text("geheim\n", encoding="utf-8")
+            blacklist.chmod(0o600)
             stdout = io.StringIO()
             with (
                 mock.patch.dict(os.environ, {"XDG_DATA_HOME": str(tmp), "XDG_STATE_HOME": str(tmp)}),
@@ -2955,6 +2956,15 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(entries, [])
 
+    def test_history_counts_unscannable_transcript_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "missing-transcripts"
+            with mock.patch("speed_of_cinnamon.cli.transcript_dir", return_value=missing):
+                entries, unreadable_count = cli._collect_transcript_history(5)
+
+        self.assertEqual(entries, [])
+        self.assertEqual(unreadable_count, 1)
+
     def test_history_candidates_skip_unsafe_transcript_entries_before_reading(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
@@ -3080,12 +3090,33 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(code, 1)
         self.assertEqual(payload["status"], "error")
-        self.assertIn("failed to delete 1 file", payload["error"])
+        self.assertIn("failed to scan or delete 1 file", payload["error"])
         self.assertEqual(payload["deleted_transient_transcripts"], 1)
         self.assertFalse(stale_exists)
         self.assertIn(str(owner), payload["failed_paths"])
         self.assertTrue(owner_is_symlink)
         self.assertTrue(target_exists)
+
+    def test_cleanup_reports_transcript_directory_scan_failure_in_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            failed_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+
+            def fail_scan() -> list[Path]:
+                raise cli.DirectoryScanError(failed_dir, field_name="transcript directory")
+
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli._safe_transcript_artifact_files", side_effect=fail_scan),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["cleanup", "--keep-transcripts", "0", "--keep-recordings", "0", "--dry-run", "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("failed to scan or delete 1 file", payload["error"])
+        self.assertIn(str(failed_dir), payload["failed_paths"])
 
     def test_cleanup_failed_paths_rejects_malformed_cleanup_results(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "missing failed_paths"):
@@ -3325,7 +3356,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual({group["stem"] for group in groups}, {"upper"})
         self.assertEqual({path.name for path in files}, {"upper.WAV", "upper.FLAC", "upper.LOG"})
 
-    def test_recording_artifact_scanners_ignore_symlinked_recordings_directory(self) -> None:
+    def test_recording_artifact_scanners_reject_symlinked_recordings_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             outside = root / "outside"
@@ -3336,11 +3367,10 @@ class CliTest(unittest.TestCase):
             link.symlink_to(outside, target_is_directory=True)
 
             with mock.patch("speed_of_cinnamon.cli.recordings_dir", return_value=link):
-                groups = cli.recording_groups()
-                files = cli.recording_artifact_files()
-
-        self.assertEqual(groups, [])
-        self.assertEqual(files, [])
+                with self.assertRaises(cli.DirectoryScanError):
+                    cli.recording_groups()
+                with self.assertRaises(cli.DirectoryScanError):
+                    cli.recording_artifact_files()
 
     def test_recording_artifact_scanners_include_temporary_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5068,6 +5098,17 @@ class CliTest(unittest.TestCase):
             self.assertFalse(lock_path.exists())
 
         self.assertTrue(any(cli.stat_module.S_ISDIR(mode) for mode in fsync_modes))
+
+    def test_finalization_lock_short_write_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+
+            with mock.patch("speed_of_cinnamon.cli.os.write", return_value=0):
+                acquired = cli._acquire_finalization_lock(state_file)
+
+            self.assertIsNone(acquired)
+            self.assertFalse(lock_path.exists())
 
     def test_finalization_lock_release_does_not_delete_foreign_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -6829,6 +6870,34 @@ class CliTest(unittest.TestCase):
         self.assertLessEqual(len(remaining), cli.MAX_TEMP_RECORDING_FILES)
         self.assertTrue(audio_exists)
 
+    def test_start_reports_recording_artifact_cap_scan_failure(self) -> None:
+        proc = mock.Mock()
+        proc.pid = 23456
+        proc.poll.return_value = None
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            state_file = Path(tmp) / "state.json"
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.choose_recorder", return_value=RecorderCommand("test-recorder", [])),
+                mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=proc),
+                mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value="proc-identity"),
+                mock.patch(
+                    "speed_of_cinnamon.cli.recording_artifact_files",
+                    side_effect=cli.DirectoryScanError(recordings, field_name="recordings directory"),
+                ),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["start", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "recording")
+        self.assertIn("failed to scan or delete 1 cleanup artifact", payload["message"])
+        self.assertEqual(payload["cleanup_failed_paths"], [str(recordings)])
+        self.assertEqual(payload["recording_artifact_cap"]["failed_paths"], [str(recordings)])
+
     def test_start_stops_recorder_and_removes_artifacts_when_state_write_fails(self) -> None:
         proc = mock.Mock()
         proc.pid = 23456
@@ -7611,7 +7680,7 @@ class CliTest(unittest.TestCase):
             target_exists = owner_target.exists()
 
         self.assertEqual(result["status"], "error")
-        self.assertIn("failed to delete 1 cleanup artifact", result["error"])
+        self.assertIn("failed to scan or delete 1 cleanup artifact", result["error"])
         self.assertIn(str(owner), result["cleanup_failed_paths"])
         self.assertEqual(final_state.status, "done")
         self.assertFalse(stale_exists)

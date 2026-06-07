@@ -447,6 +447,7 @@ class SecurityParserTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "blacklist.txt"
             path.write_text("geheim\n", encoding="utf-8")
+            path.chmod(0o600)
 
             with mock.patch(
                 "speed_of_cinnamon.security_parser.read_text_without_following_symlinks",
@@ -458,7 +459,21 @@ class SecurityParserTest(unittest.TestCase):
                     load_blacklist_file(path, strict=True)
 
         self.assertEqual(mocked_read.call_count, 2)
-        mocked_read.assert_called_with(path, field_name="blacklist file", max_bytes=_MAX_BLACKLIST_FILE_BYTES)
+        mocked_read.assert_called_with(
+            path,
+            field_name="blacklist file",
+            max_bytes=_MAX_BLACKLIST_FILE_BYTES,
+            require_private_mode=True,
+        )
+
+    def test_load_blacklist_file_rejects_world_readable_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            path.write_text("geheim\n", encoding="utf-8")
+            path.chmod(0o644)
+
+            with self.assertRaisesRegex(ValueError, "failed to read blacklist file"):
+                load_blacklist_file(path)
 
     def test_update_blacklist_file_does_not_follow_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -488,6 +503,7 @@ class SecurityParserTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            path.chmod(0o600)
             entries = load_blacklist_file(path)
 
         self.assertEqual(entries, ["geheim", "test_token", "Test Token"])

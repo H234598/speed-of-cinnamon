@@ -1114,14 +1114,19 @@ def _download_url_to_file(url: str, tmp_dir: Path, size_limit: int, model_name: 
     return _download_url_to_file_with_fd(url, tmp_dir, None, size_limit, model_name, prefix=prefix)
 
 
+def _unlink_temporary_download_name(parent_fd: int, temporary_name: str) -> None:
+    try:
+        os.unlink(temporary_name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
+    except OSError as exc:
+        raise ModelError("failed to remove temporary model file") from exc
+
+
 def _unlink_temporary_download_path(path: Path) -> None:
     parent_fd: int | None = None
     try:
         parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name="model temporary directory")
-        os.unlink(path.name, dir_fd=parent_fd)
-        os.fsync(parent_fd)
-    except OSError:
-        return
+        _unlink_temporary_download_name(parent_fd, path.name)
     finally:
         if parent_fd is not None:
             os.close(parent_fd)
@@ -1230,9 +1235,7 @@ def _download_url_to_file_with_fd(
         return tmp_path, downloaded
     except Exception:
         if tmp_dir_fd is not None and temporary_name is not None:
-            with suppress(OSError):
-                os.unlink(temporary_name, dir_fd=tmp_dir_fd)
-                os.fsync(tmp_dir_fd)
+            _unlink_temporary_download_name(tmp_dir_fd, temporary_name)
         elif tmp_path is not None:
             _unlink_temporary_download_path(tmp_path)
         raise

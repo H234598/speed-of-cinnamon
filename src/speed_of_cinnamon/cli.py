@@ -307,6 +307,16 @@ def _read_finalization_lock_identity(lock_path: Path) -> str | None:
     return identity or None
 
 
+def _write_all(fd: int, payload: bytes, *, field_name: str) -> None:
+    view = memoryview(payload)
+    offset = 0
+    while offset < len(view):
+        written = os.write(fd, view[offset:])
+        if written <= 0:
+            raise OSError(f"short write to {field_name}")
+        offset += written
+
+
 def _same_finalization_lock_snapshot(
     first: os.stat_result,
     second: os.stat_result,
@@ -427,9 +437,9 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
             try:
                 identity = _finalization_lock_identity_for_pid(os.getpid())
                 if identity is None:
-                    os.write(fd, f"{os.getpid()}\n".encode("ascii"))
+                    _write_all(fd, f"{os.getpid()}\n".encode("ascii"), field_name="finalization lock")
                 else:
-                    os.write(fd, f"{os.getpid()}\n{identity}\n".encode("ascii"))
+                    _write_all(fd, f"{os.getpid()}\n{identity}\n".encode("ascii"), field_name="finalization lock")
             except OSError:
                 try:
                     os.close(fd)
@@ -1218,12 +1228,16 @@ def _safe_stale_transient_transcript_files(max_age_seconds: int = TRANSIENT_TRAN
 
 
 def prune_stale_transient_transcripts(dry_run: bool = False) -> dict[str, object]:
-    result = prune_files_by_mtime(
-        _safe_stale_transient_transcript_files(),
-        0,
-        active_paths=set(),
-        dry_run=dry_run,
-    )
+    try:
+        files = _safe_stale_transient_transcript_files()
+    except DirectoryScanError as exc:
+        return {
+            "planned_paths": [],
+            "deleted_paths": [],
+            "failed_paths": [str(exc.directory)],
+            "skipped_active_paths": [],
+        }
+    result = prune_files_by_mtime(files, 0, active_paths=set(), dry_run=dry_run)
     if dry_run:
         return result
     for deleted_path in list(result["deleted_paths"]):
@@ -1251,7 +1265,7 @@ def _cleanup_failed_paths(*cleanup_results: dict[str, object]) -> list[str]:
 
 
 def _cleanup_failure_error(failed_paths: list[str]) -> str:
-    return f"failed to delete {len(failed_paths)} cleanup artifact(s)"
+    return f"failed to scan or delete {len(failed_paths)} cleanup artifact(s)"
 
 
 def _read_stored_transcript_text(path: Path) -> str:
@@ -1567,7 +1581,10 @@ def _collect_transcript_history(limit: int = 10) -> tuple[list[dict[str, object]
         return [], 0
     directory = transcript_dir()
 
-    candidates = heapq.nlargest(max(limit * 4, limit + 16), _transcript_history_candidates(directory))
+    try:
+        candidates = heapq.nlargest(max(limit * 4, limit + 16), _transcript_history_candidates(directory))
+    except DirectoryScanError:
+        return [], 1
 
     entries: list[dict[str, object]] = []
     unreadable_count = 0
@@ -2077,10 +2094,19 @@ def _enforce_recording_artifact_cap(
     active_paths: set[Path] | None = None,
 ) -> dict[str, object]:
     if state is None:
-        return {"deleted_paths": [], "failed_paths": []}
+        return {"planned_paths": [], "deleted_paths": [], "failed_paths": [], "skipped_active_paths": []}
     active_paths = set(active_artifact_paths(state)) | (active_paths or set())
+    try:
+        artifact_files = recording_artifact_files()
+    except DirectoryScanError as exc:
+        return {
+            "planned_paths": [],
+            "deleted_paths": [],
+            "failed_paths": [str(exc.directory)],
+            "skipped_active_paths": [],
+        }
     return prune_files_by_mtime(
-        recording_artifact_files(),
+        artifact_files,
         MAX_TEMP_RECORDING_FILES,
         active_paths,
         dry_run=False,
@@ -2282,16 +2308,23 @@ def _recording_artifact_stat(path: Path) -> os.stat_result | None:
     return file_stat
 
 
+class DirectoryScanError(RuntimeError):
+    def __init__(self, directory: Path, *, field_name: str) -> None:
+        super().__init__(f"failed to scan {field_name}")
+        self.directory = directory
+        self.field_name = field_name
+
+
 def _safe_directory_entries(directory: Path, *, field_name: str) -> list[tuple[Path, os.stat_result]]:
     try:
         directory_fd = open_directory_without_following_symlinks(directory, field_name=field_name)
-    except (OSError, RuntimeError):
-        return []
+    except (OSError, RuntimeError) as exc:
+        raise DirectoryScanError(directory, field_name=field_name) from exc
     try:
         try:
             names = os.listdir(directory_fd)
-        except OSError:
-            return []
+        except OSError as exc:
+            raise DirectoryScanError(directory, field_name=field_name) from exc
         entries: list[tuple[Path, os.stat_result]] = []
         for name in names:
             if not isinstance(name, str) or name in {"", ".", ".."} or "/" in name:
@@ -2517,7 +2550,19 @@ def prune_recording_groups(
     skipped_active_paths: list[str] = []
     skipped_group_paths: list[Path] = []
     cutoff = time.time() - max(0, max_age_days) * 24 * 60 * 60
-    groups = recording_groups()
+    try:
+        groups = recording_groups()
+    except DirectoryScanError as exc:
+        return {
+            "planned_recordings": 0,
+            "planned_logs": 0,
+            "planned_paths": [],
+            "deleted_recordings": 0,
+            "deleted_logs": 0,
+            "deleted_paths": [],
+            "failed_paths": [str(exc.directory)],
+            "skipped_active_paths": [],
+        }
     grouped_artifacts: list[Path] = []
     for index, group in enumerate(groups):
         files = group.get("files", [])
@@ -2702,16 +2747,22 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
         remove_file(str(audio_path), suffix=".wav")
         remove_file(str(log_path), suffix=".log")
         raise
-    _enforce_recording_artifact_cap(state)
+    artifact_cleanup = _enforce_recording_artifact_cap(state)
+    cleanup_failed_paths = _cleanup_failed_paths(artifact_cleanup)
+    message = "recording started"
+    if cleanup_failed_paths:
+        message = f"{message}; {_cleanup_failure_error(cleanup_failed_paths)}"
     return {
         "status": "recording",
-        "message": "recording started",
+        "message": message,
         "pid": proc.pid,
         "process_identity": process_identity,
         "audio_path": str(audio_path),
         "recorder": command.name,
         "input_device": normalized_input_device,
         "language": language,
+        "recording_artifact_cap": artifact_cleanup,
+        **({"cleanup_failed_paths": cleanup_failed_paths} if cleanup_failed_paths else {}),
     }
 
 
@@ -3645,12 +3696,22 @@ def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
     store = build_store(args)
     state = store.read()
     active_paths = active_artifact_paths(state, state_path=store.path)
-    transcript_result = prune_files_by_mtime(
-        _safe_transcript_artifact_files(),
-        keep_transcripts,
-        active_paths,
-        dry_run,
-    )
+    try:
+        transcript_files = _safe_transcript_artifact_files()
+    except DirectoryScanError as exc:
+        transcript_result = {
+            "planned_paths": [],
+            "deleted_paths": [],
+            "failed_paths": [str(exc.directory)],
+            "skipped_active_paths": [],
+        }
+    else:
+        transcript_result = prune_files_by_mtime(
+            transcript_files,
+            keep_transcripts,
+            active_paths,
+            dry_run,
+        )
     transient_transcript_result = prune_stale_transient_transcripts(dry_run)
     recording_result = prune_recording_groups(keep_recordings, active_paths, dry_run, recording_max_age_days)
     deleted_transcripts = len(transcript_result["deleted_paths"])
@@ -3668,10 +3729,10 @@ def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
     )
     verb = "would clean" if dry_run else "cleaned"
     failed_paths = transcript_result["failed_paths"] + transient_transcript_result["failed_paths"] + recording_result["failed_paths"]
-    status = "error" if failed_paths and not dry_run else "done"
+    status = "error" if failed_paths else "done"
     message = f"{verb} {total} old file(s)"
     if status == "error":
-        message = f"{message}; failed to delete {len(failed_paths)} file(s)"
+        message = f"{message}; failed to scan or delete {len(failed_paths)} file(s)"
     return {
         "status": status,
         "message": message,

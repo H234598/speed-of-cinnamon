@@ -300,6 +300,7 @@ def load_alarm_store(path: Path | None = None) -> dict[str, Any]:
             store_path,
             field_name="alarm store path",
             max_bytes=MAX_ALARM_STORE_BYTES,
+            require_private_mode=True,
         )
     except OSError as exc:
         if "too large" in str(exc):

@@ -10,6 +10,7 @@ import io
 import os
 import time
 from pathlib import Path
+from typing import BinaryIO
 
 from .app_logging import log_event
 from .path_safety import (
@@ -452,6 +453,16 @@ def _read_clipboard_dedup_lock_identity_at(parent_fd: int, name: str) -> str | N
     return identity or None
 
 
+def _write_all(fd: int, payload: bytes, *, field_name: str) -> None:
+    view = memoryview(payload)
+    offset = 0
+    while offset < len(view):
+        written = os.write(fd, view[offset:])
+        if written <= 0:
+            raise OSError(f"short write to {field_name}")
+        offset += written
+
+
 def _same_clipboard_lock_snapshot(first: os.stat_result, second: os.stat_result) -> bool:
     return (
         first.st_dev,
@@ -559,9 +570,9 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
             try:
                 identity = _clipboard_lock_identity_for_pid(os.getpid())
                 if identity is None:
-                    os.write(fd, f"{os.getpid()}\n".encode("ascii"))
+                    _write_all(fd, f"{os.getpid()}\n".encode("ascii"), field_name="clipboard dedupe lock")
                 else:
-                    os.write(fd, f"{os.getpid()}\n{identity}\n".encode("ascii"))
+                    _write_all(fd, f"{os.getpid()}\n{identity}\n".encode("ascii"), field_name="clipboard dedupe lock")
             except OSError:
                 try:
                     os.close(fd)
@@ -856,6 +867,55 @@ def _which(command_name: str) -> str | None:
     return shutil.which(command_name, path=_TRUSTED_COMMAND_PATH)
 
 
+def _bounded_command_output_bytes(
+    handle: BinaryIO,
+    completed_output: bytes | None,
+    *,
+    max_output_chars: int = MAX_OUTPUT_CHARS,
+) -> bytes | None:
+    size = _filesize(handle)
+    if size > max_output_chars:
+        return None
+    handle.seek(0)
+    output = handle.read(max_output_chars + 1)
+    if len(output) > max_output_chars:
+        return None
+    if output or completed_output is None:
+        return output
+    if len(completed_output) > max_output_chars:
+        return None
+    return completed_output
+
+
+def _run_bounded_stdout_command(
+    argv: list[str] | tuple[str, ...],
+    *,
+    timeout: int,
+    runtime_command: str,
+) -> tuple[int, bytes, bytes] | None:
+    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+        try:
+            proc = subprocess.run(  # nosec B603
+                [runtime_command, *argv[1:]],
+                input=b"",
+                text=False,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                timeout=timeout,
+                shell=False,
+                env=_filtered_environment(),
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return None
+        completed_stdout = proc.stdout if isinstance(proc.stdout, bytes) else None
+        completed_stderr = proc.stderr if isinstance(proc.stderr, bytes) else None
+        output = _bounded_command_output_bytes(stdout_file, completed_stdout)
+        error_output = _bounded_command_output_bytes(stderr_file, completed_stderr)
+    if output is None or error_output is None:
+        return None
+    return proc.returncode, output, error_output
+
+
 def _run_stdout(
     argv: list[str] | tuple[str, ...],
     *,
@@ -884,25 +944,11 @@ def _run_stdout(
         raise OutputError("command argument contains invalid control character")
 
     runtime_command = resolved_command or _command_path(command)
-    try:
-        proc = subprocess.run(  # nosec B603
-            [runtime_command, *argv[1:]],
-            input=b"",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout,
-            shell=False,
-            env=_filtered_environment(),
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+    result = _run_bounded_stdout_command(argv, timeout=timeout, runtime_command=runtime_command)
+    if result is None:
         return ""
-    if proc.returncode != 0:
-        return ""
-    output = proc.stdout or b""
-    error_output = proc.stderr or b""
-    if len(output) > MAX_OUTPUT_CHARS:
-        return ""
-    if len(error_output) > MAX_OUTPUT_CHARS:
+    returncode, output, error_output = result
+    if returncode != 0:
         return ""
     try:
         text = output.decode("utf-8")
@@ -939,23 +985,11 @@ def _run_stdout_raw(
     ):
         raise OutputError("command argument contains invalid control character")
     runtime_command = resolved_command or _command_path(command)
-    try:
-        proc = subprocess.run(  # nosec B603
-            [runtime_command, *argv[1:]],
-            input=b"",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout,
-            shell=False,
-            env=_filtered_environment(),
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+    result = _run_bounded_stdout_command(argv, timeout=timeout, runtime_command=runtime_command)
+    if result is None:
         return None
-    if proc.returncode != 0:
-        return None
-    output = proc.stdout or b""
-    error_output = proc.stderr or b""
-    if len(output) > MAX_OUTPUT_CHARS or len(error_output) > MAX_OUTPUT_CHARS:
+    returncode, output, error_output = result
+    if returncode != 0:
         return None
     try:
         text = output.decode("utf-8")

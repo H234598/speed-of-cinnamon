@@ -264,6 +264,22 @@ class AppLoggingTest(unittest.TestCase):
 
             self.assertEqual(real.read_text(encoding="utf-8"), "old\n")
 
+    def test_file_handler_does_not_write_when_log_permissions_cannot_be_restricted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            active = log_dir / f"speed-of-cinnamon-{date.today().isoformat()}.log"
+            active.write_text("old\n", encoding="utf-8")
+            active.chmod(0o666)
+            handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
+            handler.setFormatter(app_logging.JsonLogFormatter())
+            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+
+            with mock.patch("speed_of_cinnamon.app_logging.os.fchmod", side_effect=OSError("chmod denied")):
+                handler.emit(record)
+                handler.close()
+
+            self.assertEqual(active.read_text(encoding="utf-8"), "old\n")
+
     def test_file_handler_enforces_total_limit_during_maintenance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

@@ -1358,6 +1358,34 @@ class ModelsTest(unittest.TestCase):
             self.assertEqual([], list(path.parent.iterdir()))
             self.assertTrue(any(models.stat_module.S_ISDIR(mode) for mode in fsync_modes))
 
+    def test_download_model_reports_fd_temp_cleanup_failure_when_response_too_large(self) -> None:
+        spec = models.ModelSpec(
+            name="test-single-tdir-cleanup-fails",
+            filename="ggml-test-single-tdir-cleanup-fails.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(b"tiny model").hexdigest(),
+            description="test failed single-file temporary cleanup failure",
+        )
+        oversized_content_length = models.MODEL_SIZE_SLACK_BYTES + 2048
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch(
+                "speed_of_cinnamon.models._open_model_download_url",
+                return_value=FakeResponseWithLength(b"", oversized_content_length),
+            ),
+            mock.patch("speed_of_cinnamon.models.os.unlink", side_effect=OSError("cleanup denied")),
+        ):
+            path = models.model_path(spec)
+
+            with self.assertRaisesRegex(models.ModelError, "failed to remove temporary model file"):
+                models.download_model("test-single-tdir-cleanup-fails")
+
+            self.assertTrue(path.parent.exists())
+            self.assertTrue(any(child.name.startswith(f".{spec.filename}.") and child.name.endswith(".tmp") for child in path.parent.iterdir()))
+
     def test_download_directory_model_uses_fd_based_temporary_directory(self) -> None:
         data = b"small model file"
         spec = models.ModelSpec(

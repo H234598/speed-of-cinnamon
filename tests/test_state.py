@@ -231,6 +231,7 @@ class StateStoreTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
             path.write_text("{}", encoding="utf-8")
+            path.chmod(0o600)
 
             with mock.patch(
                 "speed_of_cinnamon.state.read_text_without_following_symlinks",
@@ -239,13 +240,28 @@ class StateStoreTest(unittest.TestCase):
                 state = StateStore(path).read()
 
         self.assertEqual(state.error, "state file is too large")
-        mocked_read.assert_called_once_with(path, field_name="state file path", max_bytes=MAX_STATE_FILE_BYTES)
+        mocked_read.assert_called_once_with(
+            path,
+            field_name="state file path",
+            max_bytes=MAX_STATE_FILE_BYTES,
+            require_private_mode=True,
+        )
+
+    def test_read_rejects_world_readable_state_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('{"status":"idle","transcript":"secret"}', encoding="utf-8")
+            path.chmod(0o644)
+            state = StateStore(path).read()
+
+        self.assertEqual(state.error, "state file could not be read")
 
     @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
     def test_read_uses_secure_open_flags(self, mocked_open: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
             path.write_text('{"status":"idle"}', encoding="utf-8")
+            path.chmod(0o600)
             state = StateStore(path).read()
         self.assertEqual(state.status, "idle")
         self.assertTrue(mocked_open.called)
@@ -291,6 +307,7 @@ class StateStoreTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
             path.write_text('["idle"]', encoding="utf-8")
+            path.chmod(0o600)
             state = StateStore(path).read()
         self.assertEqual(state.error, "state file is malformed")
 
@@ -299,6 +316,7 @@ class StateStoreTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
             path.write_text(f'{{"status":"{long_value}"}}', encoding="utf-8")
+            path.chmod(0o600)
             state = StateStore(path).read()
         self.assertEqual(state.error, "state file is too large")
 

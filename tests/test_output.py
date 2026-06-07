@@ -409,6 +409,35 @@ class OutputTest(unittest.TestCase):
 
         self.assertEqual(calls[0][0], "/usr/bin/xdotool")
 
+    def test_run_stdout_uses_file_backed_output_capture(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0] if args else kwargs["args"]
+            stdout = cast(BinaryIO, kwargs["stdout"])
+            stderr = cast(BinaryIO, kwargs["stderr"])
+            self.assertIsNot(stdout, subprocess.PIPE)
+            self.assertIsNot(stderr, subprocess.PIPE)
+            stdout.write(b"file output\n")
+            return subprocess.CompletedProcess(command, 0, stdout=b"ignored", stderr=b"")
+
+        with (
+            unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
+            unittest.mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+        ):
+            self.assertEqual(_run_stdout(["xdotool", "-h"]), "file output")
+
+    def test_run_stdout_rejects_file_backed_oversized_stdout(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0] if args else kwargs["args"]
+            stdout = cast(BinaryIO, kwargs["stdout"])
+            stdout.write(b"x" * (MAX_OUTPUT_CHARS + 1))
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        with (
+            unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
+            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+        ):
+            self.assertEqual(_run_stdout(["xdotool", "--help"]), "")
+
     def test_run_stdout_accepts_tuple_argv(self) -> None:
         with (
             unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
@@ -1587,6 +1616,19 @@ class OutputTest(unittest.TestCase):
         args, kwargs = mocked_unlink.call_args
         self.assertEqual(args[0], lock_path.name)
         self.assertIsInstance(kwargs.get("dir_fd"), int)
+
+    def test_clipboard_dedupe_lock_short_write_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.output.os.write", return_value=0),
+            ):
+                lock_path = output_module.state_dir() / output_module.CLIPBOARD_DEDUP_LOCK_FILE
+
+                acquired = _acquire_clipboard_dedup_lock()
+
+                self.assertIsNone(acquired)
+                self.assertFalse(lock_path.exists())
 
     def test_clipboard_dedupe_lock_release_fsyncs_parent_directory(self) -> None:
         fsync_modes: list[int] = []
