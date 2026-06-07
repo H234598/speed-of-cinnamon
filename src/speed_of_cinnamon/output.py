@@ -1190,6 +1190,8 @@ def _restore_clipboard_snapshot_after_failed_paste(inserted_text: str, snapshot_
 
 
 def paste_from_clipboard(expected_window_snapshot: tuple[str, str, str] | None = None) -> None:
+    if expected_window_snapshot is None:
+        raise OutputError("refusing automatic paste without verifiable active window")
     xdotool_error: OutputError | None = None
     xdotool = _which("xdotool")
     if xdotool:
@@ -1229,8 +1231,15 @@ def _clipboard_paste_helper_available() -> bool:
     return bool(_which("xdotool") or _which("wtype"))
 
 
-def type_text(text: str, delay_ms: int) -> None:
-    if not _which("xdotool"):
+def type_text(
+    text: str,
+    delay_ms: int,
+    expected_window_snapshot: tuple[str, str, str] | None = None,
+    *,
+    xdotool_command: str | None = None,
+) -> None:
+    xdotool = xdotool_command or _which("xdotool")
+    if not xdotool:
         raise OutputError("xdotool is required for direct typing on Cinnamon X11")
     if not isinstance(delay_ms, int) or isinstance(delay_ms, bool):
         raise OutputError("typing delay must be an integer")
@@ -1239,10 +1248,15 @@ def type_text(text: str, delay_ms: int) -> None:
         delay_ms = 0
     if delay_ms > MAX_TYPE_DELAY_MS:
         raise OutputError(f"typing delay must be at most {MAX_TYPE_DELAY_MS}")
+    if expected_window_snapshot is None:
+        raise OutputError("refusing direct typing without verifiable active window")
+    if not _active_x_window_matches_snapshot(expected_window_snapshot, xdotool_command=xdotool):
+        raise OutputError("active window changed before direct typing")
     _run_with_input(
         ["xdotool", "type", "--clearmodifiers", "--delay", str(max(delay_ms, 0)), text],
         "",
         timeout=MAX_TYPE_TIMEOUT_SECONDS,
+        resolved_command=xdotool,
     )
 
 
@@ -1419,8 +1433,8 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
                 raise OutputError("failed to reserve clipboard-paste insertion state")
             _assert_clipboard_text_snapshot_unchanged(clipboard_snapshot_available, clipboard_snapshot)
             set_clipboard(text)
-            paste_from_clipboard(expected_window_snapshot=target_window_snapshot)
             operation_performed = True
+            paste_from_clipboard(expected_window_snapshot=target_window_snapshot)
             if not _commit_clipboard_insertion(text, method, dedupe_context=dedupe_context):
                 raise OutputError("failed to commit clipboard-paste insertion state")
             committed = True
@@ -1435,6 +1449,10 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
                     _restore_clipboard_snapshot_after_failed_paste(text, clipboard_snapshot_available, clipboard_snapshot)
             _release_clipboard_dedup_lock(lock_path)
     if method == "type":
-        type_text(text, delay_ms)
+        xdotool = _which("xdotool")
+        if not xdotool:
+            raise OutputError("xdotool is required for direct typing on Cinnamon X11")
+        target_window_snapshot = _active_x_window_snapshot(xdotool_command=xdotool)
+        type_text(text, delay_ms, expected_window_snapshot=target_window_snapshot, xdotool_command=xdotool)
         return True
     raise OutputError(f"unknown insert method: {method}")

@@ -1157,6 +1157,53 @@ class RecorderTest(unittest.TestCase):
         self.assertEqual(result, "default")
         self.assertEqual(calls[0][0], "/usr/bin/pactl")
 
+    def test_run_pactl_command_sanitizes_error_controls(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0] if args else kwargs["args"]
+            stderr = kwargs["stderr"]
+            stderr.write(b"\x1b[31mboom\x1b[0m\x07")
+            return subprocess.CompletedProcess(command, 1, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/pactl"),
+            mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=fake_run),
+        ):
+            with self.assertRaisesRegex(RecorderError, "boom") as raised:
+                _run_pactl_command(["pactl", "list"], required=True)
+
+        self.assertNotIn("\x1b", str(raised.exception))
+        self.assertNotIn("\x07", str(raised.exception))
+
+    def test_run_pactl_command_redacts_sensitive_error_detail(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0] if args else kwargs["args"]
+            stderr = kwargs["stderr"]
+            stderr.write(b"failed /tmp/secret token")
+            return subprocess.CompletedProcess(command, 1, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/pactl"),
+            mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=fake_run),
+        ):
+            with self.assertRaisesRegex(RecorderError, "\\[redacted pactl error\\]") as raised:
+                _run_pactl_command(["pactl", "list", "sources"], required=True)
+
+        self.assertNotIn("/tmp/secret", str(raised.exception))
+        self.assertNotIn("token", str(raised.exception))
+
+    def test_run_pactl_command_does_not_include_argv_on_timeout(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/pactl"),
+            mock.patch(
+                "speed_of_cinnamon.recorder.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(cmd=["pactl", "secret-token"], timeout=1),
+            ),
+        ):
+            with self.assertRaisesRegex(RecorderError, "pactl command timed out") as raised:
+                _run_pactl_command(["pactl", "secret-token"], required=True)
+
+        self.assertNotIn("secret-token", str(raised.exception))
+
     def test_run_pactl_command_resolves_command_from_which(self) -> None:
         calls: list[list[str]] = []
 
@@ -1431,23 +1478,32 @@ Source #13
     def test_stop_process_rejects_missing_kill_command(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
             mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=OSError("missing")),
         ):
             with self.assertRaisesRegex(RecorderError, "failed to run kill command"):
-                stop_process(1234, timeout_seconds=0.1)
+                stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
 
     def test_stop_process_rejects_invalid_expected_process_identity(self) -> None:
         with mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234):
             with self.assertRaisesRegex(RecorderError, "expected_process_identity must be text"):
                 stop_process(1234, expected_process_identity=1234)  # type: ignore[arg-type]
 
+    def test_stop_process_requires_expected_process_identity_by_default(self) -> None:
+        with mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill:
+            with self.assertRaisesRegex(RecorderError, "expected_process_identity is required"):
+                stop_process(1234, timeout_seconds=0.1)
+
+        mocked_kill.assert_not_called()
+
     def test_stop_process_rejects_kill_timeout(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
             mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="kill", timeout=1)),
         ):
             with self.assertRaisesRegex(RecorderError, "kill command timed out"):
-                stop_process(1234, timeout_seconds=0.1)
+                stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
 
     def test_stop_process_aborts_if_expected_identity_changes(self) -> None:
         with (
@@ -1547,7 +1603,7 @@ Source #13
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", side_effect=ProcessLookupError),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            stop_process(1234, timeout_seconds=0.1)
+            stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
 
         mocked_kill.assert_not_called()
 

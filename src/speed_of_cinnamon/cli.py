@@ -43,6 +43,7 @@ from .artifact_crypto import (
     read_decrypted_bytes_from_file,
     write_encrypted_bytes_atomically,
 )
+from .command_chain import CommandChainError, run_process_bounded_output
 from .doctor import parse_settings_json, report as doctor_report
 from .http_safety import is_loopback_hostname
 from .models import (
@@ -877,6 +878,18 @@ def _read_binary_output(file: io.BufferedRandom, max_bytes: int, *, field_name: 
     return text
 
 
+def _decode_binary_output(data: bytes, *, field_name: str) -> str:
+    if not isinstance(data, bytes):
+        raise RuntimeError(f"{field_name} must be bytes")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError(f"{field_name} is not valid UTF-8: {exc}") from exc
+    if _contains_escaped_null(text):
+        raise RuntimeError(f"{field_name} contains invalid null byte")
+    return text
+
+
 def timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
 
@@ -997,6 +1010,7 @@ def _open_blacklist_document() -> bool:
                 [xdg_open, str(path)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                env=_filtered_environment(),
             )
             return True
         except OSError:
@@ -1008,6 +1022,7 @@ def _open_blacklist_document() -> bool:
                 [gio_open, "open", str(path)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                env=_filtered_environment(),
             )
             return True
         except OSError:
@@ -2809,7 +2824,7 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
         raise RuntimeError(f"no recorder backend started successfully: {detail}")
     process_identity = _recording_process_identity_for_pid(proc.pid)
     if process_identity is None:
-        stop_process(proc.pid)
+        stop_process(proc.pid, allow_unverified_process=True)
         remove_file(str(audio_path), suffix=".wav")
         remove_file(str(log_path), suffix=".log")
         raise RuntimeError("recording process identity could not be verified")
@@ -2829,7 +2844,7 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
     try:
         store.write(state)
     except Exception:
-        stop_process(proc.pid)
+        stop_process(proc.pid, allow_unverified_process=True)
         remove_file(str(audio_path), suffix=".wav")
         remove_file(str(log_path), suffix=".log")
         raise
@@ -3584,23 +3599,21 @@ def command_install_text_model(args: argparse.Namespace) -> dict[str, object]:
     if url:
         env["OLLAMA_HOST"] = url
     try:
-        with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
-            proc = subprocess.run(  # nosec B603
-                [ollama, "pull", model],
-                stdout=stdout_file,
-                stderr=stderr_file,
-                timeout=OLLAMA_PULL_TIMEOUT_SECONDS,
-                env=env,
-                shell=False,
-            )
-            stdout = _read_binary_output(stdout_file, MAX_LOG_EXCERPT_CHARS, field_name="ollama pull stdout")
-            stderr = _read_binary_output(stderr_file, MAX_LOG_EXCERPT_CHARS, field_name="ollama pull stderr")
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"ollama pull timed out after {OLLAMA_PULL_TIMEOUT_SECONDS}s") from exc
+        returncode, stdout_data, stderr_data = run_process_bounded_output(
+            [ollama, "pull", model],
+            timeout_seconds=OLLAMA_PULL_TIMEOUT_SECONDS,
+            max_output_bytes=MAX_LOG_EXCERPT_CHARS,
+            env=env,
+            label="ollama pull",
+        )
+        stdout = _decode_binary_output(stdout_data, field_name="ollama pull stdout")
+        stderr = _decode_binary_output(stderr_data, field_name="ollama pull stderr")
+    except CommandChainError as exc:
+        raise RuntimeError(str(exc)) from exc
     except OSError as exc:
         raise RuntimeError(f"failed to run ollama pull: {exc}") from exc
-    if proc.returncode != 0:
-        detail = (stderr or stdout or f"exit code {proc.returncode}").strip()
+    if returncode != 0:
+        detail = (stderr or stdout or f"exit code {returncode}").strip()
         detail = _redact_error_for_user(detail[:MAX_LOG_EXCERPT_CHARS])
         raise RuntimeError(f"ollama pull failed: {detail}")
     return {

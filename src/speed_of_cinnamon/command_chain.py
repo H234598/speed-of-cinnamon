@@ -6,6 +6,7 @@ import os
 import re
 import selectors
 import shlex
+import signal
 import subprocess  # nosec B404
 import tempfile
 import time
@@ -127,10 +128,17 @@ def _command_timeout_detail(label: str, timeout_seconds: int) -> str:
 
 
 def _terminate_bounded_process(proc: subprocess.Popen[bytes]) -> None:
+    pid = getattr(proc, "pid", None)
     try:
-        proc.kill()
-    except OSError:
+        if isinstance(pid, int) and pid > 0:
+            os.killpg(pid, signal.SIGKILL)
+        else:
+            proc.kill()
+    except ProcessLookupError:
         pass
+    except OSError:
+        with suppress(OSError):
+            proc.kill()
     try:
         proc.wait(timeout=1)
     except (OSError, subprocess.TimeoutExpired):
@@ -171,6 +179,7 @@ def run_process_bounded_output(
                 stderr=subprocess.PIPE,
                 env=env,
                 shell=False,
+                start_new_session=True,
             )
         except FileNotFoundError:
             raise
@@ -305,6 +314,18 @@ def _contains_command_control_chars(value: str) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise CommandChainError("value must be text")
     return _contains_http_header_control_chars(value)
+
+
+def _contains_command_output_control_chars(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise CommandChainError("value must be text")
+    for char in value:
+        codepoint = ord(char)
+        if codepoint in (0x09, 0x0A, 0x0D):
+            continue
+        if codepoint < 0x20 or codepoint == 0x7F or 0x80 <= codepoint <= 0x9F:
+            return True
+    return False
 
 
 def split_command_chain(command: str, label: str = "command") -> list[list[str]]:
@@ -462,6 +483,8 @@ def run_command_chain(
                 raise CommandChainError(f"command output is not valid UTF-8: {exc}") from exc
             if _contains_escaped_null(segment_output):
                 raise CommandChainError("command output contains invalid null byte")
+            if _contains_command_output_control_chars(segment_output):
+                raise CommandChainError("command output contains invalid control character")
             output = segment_output
             try:
                 input_bytes = output.encode("utf-8")

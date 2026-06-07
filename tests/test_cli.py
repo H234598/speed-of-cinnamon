@@ -1603,6 +1603,7 @@ class CliTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.cli.ensure_runtime_dirs"),
                 mock.patch("speed_of_cinnamon.cli._which", return_value="xdg-open"),
                 mock.patch("speed_of_cinnamon.cli.subprocess.Popen") as mocked_popen,
+                mock.patch.dict("os.environ", {"LD_PRELOAD": "bad", "PYTHONPATH": "/tmp/evil"}, clear=False),
                 mock.patch("pathlib.Path.write_text", side_effect=AssertionError("plain write_text used")),
             ):
                 opened = cli._open_blacklist_document()
@@ -1612,6 +1613,9 @@ class CliTest(unittest.TestCase):
         self.assertTrue(opened)
         self.assertEqual(mode, 0o600)
         mocked_popen.assert_called_once()
+        opener_env = mocked_popen.call_args.kwargs["env"]
+        self.assertNotIn("LD_PRELOAD", opener_env)
+        self.assertNotIn("PYTHONPATH", opener_env)
 
     def test_models_lists_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1840,11 +1844,10 @@ class CliTest(unittest.TestCase):
                 self.assertNotIn("token=secret", json.dumps(payload))
 
     def test_install_text_model_pulls_ollama_model(self) -> None:
-        completed = mock.Mock(returncode=0, stdout="ok", stderr="")
         stdout = io.StringIO()
         with (
             mock.patch("speed_of_cinnamon.cli.shutil.which", return_value="/usr/bin/ollama"),
-            mock.patch("speed_of_cinnamon.cli.subprocess.run", return_value=completed) as mocked_run,
+            mock.patch("speed_of_cinnamon.cli.run_process_bounded_output", return_value=(0, b"ok", b"")) as mocked_run,
             mock.patch.dict("os.environ", {"LD_PRELOAD": "bad", "PYTHONPATH": "/tmp/evil"}, clear=False),
             redirect_stdout(stdout),
         ):
@@ -1867,19 +1870,13 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("PYTHONPATH", mocked_run.call_args.kwargs["env"])
 
     def test_install_text_model_rejects_oversized_stdout(self) -> None:
-        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            stdout = kwargs["stdout"]
-            stderr = kwargs["stderr"]
-            if not isinstance(stdout, object) or not isinstance(stderr, object):
-                raise RuntimeError("expected file handles")
-            stdout.write(b"x" * (cli.MAX_LOG_EXCERPT_CHARS + 1))
-            stderr.write(b"")
-            return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
-
         stdout = io.StringIO()
         with (
             mock.patch("speed_of_cinnamon.cli.shutil.which", return_value="/usr/bin/ollama"),
-            mock.patch("speed_of_cinnamon.cli.subprocess.run", side_effect=fake_run),
+            mock.patch(
+                "speed_of_cinnamon.cli.run_process_bounded_output",
+                side_effect=cli.CommandChainError(f"ollama pull command output exceeded {cli.MAX_LOG_EXCERPT_CHARS} bytes"),
+            ),
             redirect_stdout(stdout),
         ):
             code = cli.run([
@@ -1892,22 +1889,16 @@ class CliTest(unittest.TestCase):
             ])
         payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 1)
-        self.assertIn("ollama pull stdout exceeded", payload["error"])
+        self.assertIn("ollama pull command output exceeded", payload["error"])
 
     def test_install_text_model_rejects_oversized_stderr(self) -> None:
-        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            stdout = kwargs["stdout"]
-            stderr = kwargs["stderr"]
-            if not isinstance(stdout, object) or not isinstance(stderr, object):
-                raise RuntimeError("expected file handles")
-            stdout.write(b"ok")
-            stderr.write(b"x" * (cli.MAX_LOG_EXCERPT_CHARS + 1))
-            return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
-
         stdout = io.StringIO()
         with (
             mock.patch("speed_of_cinnamon.cli.shutil.which", return_value="/usr/bin/ollama"),
-            mock.patch("speed_of_cinnamon.cli.subprocess.run", side_effect=fake_run),
+            mock.patch(
+                "speed_of_cinnamon.cli.run_process_bounded_output",
+                side_effect=cli.CommandChainError(f"ollama pull command output exceeded {cli.MAX_LOG_EXCERPT_CHARS} bytes"),
+            ),
             redirect_stdout(stdout),
         ):
             code = cli.run([
@@ -1920,22 +1911,13 @@ class CliTest(unittest.TestCase):
             ])
         payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 1)
-        self.assertIn("ollama pull stderr exceeded", payload["error"])
+        self.assertIn("ollama pull command output exceeded", payload["error"])
 
     def test_install_text_model_rejects_stdout_utf8_errors(self) -> None:
-        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            stdout = kwargs["stdout"]
-            stderr = kwargs["stderr"]
-            if not isinstance(stdout, object) or not isinstance(stderr, object):
-                raise RuntimeError("expected file handles")
-            stdout.write(b"\xff")
-            stderr.write(b"")
-            return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
-
         stdout = io.StringIO()
         with (
             mock.patch("speed_of_cinnamon.cli.shutil.which", return_value="/usr/bin/ollama"),
-            mock.patch("speed_of_cinnamon.cli.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.cli.run_process_bounded_output", return_value=(0, b"\xff", b"")),
             redirect_stdout(stdout),
         ):
             code = cli.run([
@@ -1951,19 +1933,10 @@ class CliTest(unittest.TestCase):
         self.assertIn("ollama pull stdout is not valid UTF-8", payload["error"])
 
     def test_install_text_model_rejects_stderr_null_bytes(self) -> None:
-        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            stdout = kwargs["stdout"]
-            stderr = kwargs["stderr"]
-            if not isinstance(stdout, object) or not isinstance(stderr, object):
-                raise RuntimeError("expected file handles")
-            stdout.write(b"ok")
-            stderr.write(b"bad\x00")
-            return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=b"")
-
         stdout = io.StringIO()
         with (
             mock.patch("speed_of_cinnamon.cli.shutil.which", return_value="/usr/bin/ollama"),
-            mock.patch("speed_of_cinnamon.cli.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.cli.run_process_bounded_output", return_value=(0, b"ok", b"bad\x00")),
             redirect_stdout(stdout),
         ):
             code = cli.run([
@@ -1979,17 +1952,13 @@ class CliTest(unittest.TestCase):
         self.assertIn("ollama pull stderr contains invalid null byte", payload["error"])
 
     def test_install_text_model_redacts_failed_pull_output(self) -> None:
-        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            stdout = kwargs["stdout"]
-            stderr = kwargs["stderr"]
-            stdout.write(b"")
-            stderr.write(b"failed with Bearer sk-secret-token and https://user:pass@example.test/model")
-            return subprocess.CompletedProcess(args, 1, stdout=b"", stderr=b"")
-
         stdout = io.StringIO()
         with (
             mock.patch("speed_of_cinnamon.cli.shutil.which", return_value="/usr/bin/ollama"),
-            mock.patch("speed_of_cinnamon.cli.subprocess.run", side_effect=fake_run),
+            mock.patch(
+                "speed_of_cinnamon.cli.run_process_bounded_output",
+                return_value=(1, b"", b"failed with Bearer sk-secret-token and https://user:pass@example.test/model"),
+            ),
             redirect_stdout(stdout),
         ):
             code = cli.run([
@@ -2034,21 +2003,21 @@ class CliTest(unittest.TestCase):
         with (
             mock.patch("speed_of_cinnamon.cli.shutil.which", return_value="/usr/bin/ollama"),
             mock.patch(
-                "speed_of_cinnamon.cli.subprocess.run",
-                side_effect=subprocess.TimeoutExpired(cmd=["/usr/bin/ollama", "pull"], timeout=1),
+                "speed_of_cinnamon.cli.run_process_bounded_output",
+                side_effect=cli.CommandChainError("ollama pull command timed out after 600 seconds"),
             ),
             redirect_stdout(stdout),
         ):
             code = cli.run(["install-text-model", "--model", "llama3.2:3b", "--json"])
         payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 1)
-        self.assertIn("ollama pull timed out", payload["error"])
+        self.assertIn("ollama pull command timed out", payload["error"])
 
     def test_install_text_model_reports_ollama_pull_oserror(self) -> None:
         stdout = io.StringIO()
         with (
             mock.patch("speed_of_cinnamon.cli.shutil.which", return_value="/usr/bin/ollama"),
-            mock.patch("speed_of_cinnamon.cli.subprocess.run", side_effect=OSError("boom")),
+            mock.patch("speed_of_cinnamon.cli.run_process_bounded_output", side_effect=OSError("boom")),
             redirect_stdout(stdout),
         ):
             code = cli.run(["install-text-model", "--model", "llama3.2:3b", "--json"])
@@ -7140,7 +7109,7 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(code, 1)
         self.assertIn("state write failed", payload["error"])
-        mocked_stop.assert_called_once_with(23456)
+        mocked_stop.assert_called_once_with(23456, allow_unverified_process=True)
         self.assertEqual(artifacts, [])
 
     def test_start_auto_falls_back_when_first_recorder_exits_immediately(self) -> None:

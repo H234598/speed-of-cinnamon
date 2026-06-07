@@ -92,7 +92,7 @@ def _sanitize_ffmpeg_error_detail(value: object) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
-    text = _strip_ffmpeg_terminal_controls(text).strip()
+    text = _strip_terminal_controls(text).strip()
     if not text:
         return ""
     lowered = text.lower()
@@ -111,7 +111,30 @@ def _sanitize_ffmpeg_error_detail(value: object) -> str:
     return text
 
 
-def _strip_ffmpeg_terminal_controls(text: str) -> str:
+def _sanitize_pactl_error_detail(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = _strip_terminal_controls(text).strip()
+    if not text:
+        return ""
+    lowered = text.lower()
+    if (
+        "/" in text
+        or "\\" in text
+        or "://" in text
+        or "device" in lowered
+        or "token" in lowered
+        or "secret" in lowered
+        or "password" in lowered
+    ):
+        return "[redacted pactl error]"
+    if len(text) > 160:
+        return text[:157] + "..."
+    return text
+
+
+def _strip_terminal_controls(text: str) -> str:
     result: list[str] = []
     index = 0
     while index < len(text):
@@ -137,6 +160,10 @@ def _strip_ffmpeg_terminal_controls(text: str) -> str:
             result.append(char)
         index += 1
     return "".join(result)
+
+
+def _strip_ffmpeg_terminal_controls(text: str) -> str:
+    return _strip_terminal_controls(text)
 
 
 def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
@@ -1239,13 +1266,13 @@ def _run_pactl_command(command: list[str] | tuple[str, ...], *, required: bool) 
             if proc.returncode != 0:
                 if not required:
                     return ""
-                stderr = _ensure_file_head(stderr_file, 2048).strip()
-                stdout = _ensure_file_head(stdout_file, 2048).strip()
-                raise RecorderError(stderr or stdout or f"pactl failed: {command}")
+                stderr = _sanitize_pactl_error_detail(_ensure_file_head(stderr_file, 2048))
+                stdout = _sanitize_pactl_error_detail(_ensure_file_head(stdout_file, 2048))
+                raise RecorderError(stderr or stdout or "pactl failed")
 
             return _ensure_file_head(stdout_file, MAX_PACTL_OUTPUT_CHARS).strip()
     except subprocess.TimeoutExpired as exc:
-        raise RecorderError(f"pactl command timed out after {MAX_PACTL_TIMEOUT_SECONDS}s: {command}") from exc
+        raise RecorderError(f"pactl command timed out after {MAX_PACTL_TIMEOUT_SECONDS}s") from exc
     except OSError as exc:
         raise RecorderError(f"pactl command failed: {exc}") from exc
 
@@ -1412,18 +1439,23 @@ def stop_process(
     timeout_seconds: float = 5.0,
     *,
     expected_process_identity: str | None = None,
+    allow_unverified_process: bool = False,
 ) -> bool:
     _assert_positive_pid(pid)
     if expected_process_identity is not None and (
         not isinstance(expected_process_identity, str) or isinstance(expected_process_identity, bool)
     ):
         raise RecorderError("expected_process_identity must be text")
+    if not isinstance(allow_unverified_process, bool):
+        raise RecorderError("allow_unverified_process must be boolean")
     if not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool):
         raise RecorderError("timeout_seconds must be numeric")
     if not math.isfinite(timeout_seconds):
         raise RecorderError("timeout_seconds must be finite")
     if timeout_seconds <= 0:
         raise RecorderError("timeout_seconds must be positive")
+    if expected_process_identity is None and not allow_unverified_process:
+        raise RecorderError("expected_process_identity is required to stop recorder process")
     try:
         process_target = f"-{pid}" if os.getpgid(pid) == pid else str(pid)
     except ProcessLookupError:

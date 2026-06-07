@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import stat
 import subprocess
 import tempfile
@@ -307,22 +308,27 @@ class ArtifactCryptoTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp)
             runtime.chmod(0o700)
-            with mock.patch.dict(
-                os.environ,
-                {
-                    "XDG_RUNTIME_DIR": str(runtime),
-                    "DBUS_SESSION_BUS_ADDRESS": f"unix:path={runtime / 'bus'}",
-                    "DISPLAY": ":0",
-                },
-                clear=True,
-            ):
-                env = artifact_crypto._filtered_environment()
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as bus_socket:
+                bus_socket.bind(str(runtime / "bus"))
+                with (
+                    mock.patch("speed_of_cinnamon.artifact_crypto._canonical_xdg_runtime_dir", return_value=runtime),
+                    mock.patch.dict(
+                        os.environ,
+                        {
+                            "XDG_RUNTIME_DIR": str(runtime),
+                            "DBUS_SESSION_BUS_ADDRESS": f"unix:path={runtime / 'bus'}",
+                            "DISPLAY": ":0",
+                        },
+                        clear=True,
+                    ),
+                ):
+                    env = artifact_crypto._filtered_environment()
 
         self.assertEqual(env["XDG_RUNTIME_DIR"], str(runtime))
         self.assertEqual(env["DBUS_SESSION_BUS_ADDRESS"], f"unix:path={runtime / 'bus'}")
         self.assertNotIn("DISPLAY", env)
 
-    def test_secret_tool_environment_drops_unpinned_session_bus(self) -> None:
+    def test_secret_tool_environment_drops_noncanonical_runtime_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp)
             runtime.chmod(0o700)
@@ -330,9 +336,50 @@ class ArtifactCryptoTest(unittest.TestCase):
                 os.environ,
                 {
                     "XDG_RUNTIME_DIR": str(runtime),
-                    "DBUS_SESSION_BUS_ADDRESS": "unix:path=/tmp/attacker-bus",
+                    "DBUS_SESSION_BUS_ADDRESS": f"unix:path={runtime / 'bus'}",
                 },
                 clear=True,
+            ):
+                env = artifact_crypto._filtered_environment()
+
+        self.assertNotIn("XDG_RUNTIME_DIR", env)
+        self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", env)
+
+    def test_secret_tool_environment_drops_unpinned_session_bus(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            runtime.chmod(0o700)
+            with (
+                mock.patch("speed_of_cinnamon.artifact_crypto._canonical_xdg_runtime_dir", return_value=runtime),
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "XDG_RUNTIME_DIR": str(runtime),
+                        "DBUS_SESSION_BUS_ADDRESS": "unix:path=/tmp/attacker-bus",
+                    },
+                    clear=True,
+                ),
+            ):
+                    env = artifact_crypto._filtered_environment()
+
+        self.assertEqual(env["XDG_RUNTIME_DIR"], str(runtime))
+        self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", env)
+
+    def test_secret_tool_environment_drops_non_socket_session_bus(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            runtime.chmod(0o700)
+            (runtime / "bus").write_text("", encoding="utf-8")
+            with (
+                mock.patch("speed_of_cinnamon.artifact_crypto._canonical_xdg_runtime_dir", return_value=runtime),
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "XDG_RUNTIME_DIR": str(runtime),
+                        "DBUS_SESSION_BUS_ADDRESS": f"unix:path={runtime / 'bus'}",
+                    },
+                    clear=True,
+                ),
             ):
                 env = artifact_crypto._filtered_environment()
 

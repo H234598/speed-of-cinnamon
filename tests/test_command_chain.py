@@ -6,6 +6,7 @@ import unittest
 import tempfile
 from unittest import mock
 
+from speed_of_cinnamon import command_chain as command_chain_module
 from speed_of_cinnamon.command_chain import (
     CommandChainError,
     MAX_COMMAND_LENGTH_CHARS,
@@ -18,6 +19,7 @@ from speed_of_cinnamon.command_chain import (
     _filtered_environment,
     _filesize,
     _read_file_head,
+    run_process_bounded_output,
     run_command_chain,
     split_command_chain,
 )
@@ -321,6 +323,29 @@ class CommandChainTest(unittest.TestCase):
         self.assertNotIn("--api-key", message)
         self.assertNotIn("SECRET_TOKEN", message)
 
+    def test_run_process_bounded_output_starts_new_session(self) -> None:
+        with mock.patch("speed_of_cinnamon.command_chain.subprocess.Popen", side_effect=FileNotFoundError) as mocked_popen:
+            with self.assertRaises(FileNotFoundError):
+                run_process_bounded_output(
+                    ["/usr/bin/missing"],
+                    timeout_seconds=1,
+                    max_output_bytes=128,
+                    env={},
+                    label="post-process",
+                )
+
+        self.assertTrue(mocked_popen.call_args.kwargs["start_new_session"])
+
+    def test_terminate_bounded_process_kills_process_group(self) -> None:
+        proc = mock.Mock()
+        proc.pid = 1234
+
+        with mock.patch("speed_of_cinnamon.command_chain.os.killpg") as mocked_killpg:
+            command_chain_module._terminate_bounded_process(proc)
+
+        mocked_killpg.assert_called_once_with(1234, command_chain_module.signal.SIGKILL)
+        proc.kill.assert_not_called()
+
     def test_run_command_chain_rejects_invalid_command_input_utf8(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "input is not valid UTF-8"):
             run_command_chain([("cmd",)], "\udcff", label="post-process")
@@ -336,6 +361,20 @@ class CommandChainTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(CommandChainError, "not valid UTF-8"):
                 run_command_chain([("cmd",)], "seed", label="post-process")
+
+    def test_run_command_chain_rejects_control_characters_in_command_output(self) -> None:
+        def fake_run(argv: list[str], input_bytes: bytes, **kwargs: object) -> tuple[int, bytes, bytes]:
+            del argv, input_bytes, kwargs
+            return 0, b"ok\x1b[31mred\x1b[0m", b""
+
+        with (
+            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
+            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=fake_run),
+        ):
+            with self.assertRaisesRegex(CommandChainError, "invalid control character") as cm:
+                run_command_chain([("cmd",)], "seed", label="post-process")
+
+        self.assertNotIn("\x1b", str(cm.exception))
 
     def test_run_command_chain_rejects_too_many_segments(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "too many segments"):

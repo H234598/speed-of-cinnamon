@@ -569,11 +569,25 @@ def _filtered_environment() -> dict[str, str]:
     return env
 
 
+def _canonical_xdg_runtime_dir() -> Path | None:
+    if not hasattr(os, "getuid"):
+        return None
+    return Path("/run/user") / str(os.getuid())
+
+
 def _safe_xdg_runtime_dir(value: str) -> Path | None:
     if not value or _contains_forbidden_environment_chars(value):
         return None
     path = Path(value)
     if not path.is_absolute():
+        return None
+    canonical = _canonical_xdg_runtime_dir()
+    if canonical is None or path != canonical:
+        return None
+    try:
+        if path.is_symlink():
+            return None
+    except OSError:
         return None
     try:
         path_stat = path.stat()
@@ -596,11 +610,17 @@ def _safe_dbus_session_bus_address(value: str, runtime_dir: Path) -> bool:
     bus_path = Path(value[len(_SAFE_DBUS_SESSION_PREFIX):])
     if not bus_path.is_absolute():
         return False
-    try:
-        bus_path.relative_to(runtime_dir)
-    except ValueError:
+    if bus_path != runtime_dir / "bus":
         return False
-    return bus_path == runtime_dir / "bus"
+    try:
+        bus_stat = os.lstat(bus_path)
+    except OSError:
+        return False
+    if stat.S_ISLNK(bus_stat.st_mode) or not stat.S_ISSOCK(bus_stat.st_mode):
+        return False
+    if hasattr(os, "getuid") and bus_stat.st_uid != os.getuid():
+        return False
+    return True
 
 
 def _read_secret_tool_output(handle: Any, *, field_name: str) -> bytes:
