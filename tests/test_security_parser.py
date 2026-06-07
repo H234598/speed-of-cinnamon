@@ -521,3 +521,36 @@ class SecurityParserTest(unittest.TestCase):
             entries = load_blacklist_file(path)
 
         self.assertEqual(entries, ["geheim", "test_token", "Test Token"])
+
+    def test_apply_blacklist_mode_matches_nfd_bypasses(self) -> None:
+        sanitized, count = apply_blacklist_mode("scho\u0308n darf nicht bleiben", ["schön"])
+
+        self.assertEqual(count, 1)
+        self.assertEqual(sanitized, "[redacted blacklist item] darf nicht bleiben")
+
+    def test_apply_blacklist_mode_matches_zero_width_bypass(self) -> None:
+        sanitized, count = apply_blacklist_mode("Das ist fu\u200Bck im Text.", ["fuck"])
+
+        self.assertEqual(count, 1)
+        self.assertIn("[redacted blacklist item]", sanitized)
+        self.assertNotIn("\u200B", sanitized)
+
+    def test_apply_security_mode_matches_nfd_and_zero_width_in_one_scan(self) -> None:
+        sanitized, count = apply_security_mode("scho\u0308n ist erlaubt? Ich sage fu\u200dck.", ["schön", "fuck"])
+
+        self.assertEqual(count, 2)
+        self.assertIn("[redacted blacklist item]", sanitized)
+        self.assertNotIn("scho\u0308n", sanitized)
+        self.assertNotIn("\u200d", sanitized)
+
+    def test_apply_security_mode_masks_zero_width_card_number(self) -> None:
+        sanitized, count = apply_security_mode("Card 4111\u200b1111\u200b1111\u200b1111", [])
+
+        self.assertEqual(count, 1)
+        self.assertEqual(sanitized, "Card [redacted card]")
+
+    def test_apply_security_mode_masks_unicode_space_card_number(self) -> None:
+        sanitized, count = apply_security_mode("Card 4111\u00a01111\u20091111\u00a01111", [])
+
+        self.assertEqual(count, 1)
+        self.assertEqual(sanitized, "Card [redacted card]")

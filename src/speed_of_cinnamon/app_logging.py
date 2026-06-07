@@ -41,9 +41,16 @@ HOME_DIR = str(Path.home())
 _DAILY_LOG_RE = re.compile(r"^speed-of-cinnamon-(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.log$")
 _DAILY_GZ_RE = re.compile(r"^speed-of-cinnamon-(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.log\.gz$")
 _MONTHLY_GZ_RE = re.compile(r"^speed-of-cinnamon-(\d{4}-\d{2})\.log\.gz$")
-_TOKEN_RE = re.compile(r"(?i)\b(bearer|token|api[_ -]?key|apikey|secret|password|passwd|passphrase)\b\s*[:=]\s*[^,\s;]+")
+_CREDENTIAL_KEY_PATTERN = (
+    r"bearer|token|access[_ -]?token|refresh[_ -]?token|id[_ -]?token|api[_ -]?key|apikey|"
+    r"client[_ -]?secret|private[_ -]?key|secret[_ -]?key|secret|password|passwd|passphrase"
+)
+_TOKEN_RE = re.compile(rf"(?i)\b({_CREDENTIAL_KEY_PATTERN})\b\s*[:=]\s*[^,\s;]+")
 _BARE_CREDENTIAL_RE = re.compile(
-    r"(?i)\b(token|api[_ -]?key|apikey|password|passwd|passphrase)\b\s+(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required)\b)[^,\s;]+"
+    r"(?i)\b(token|access[_ -]?token|refresh[_ -]?token|id[_ -]?token|api[_ -]?key|apikey|"
+    r"client[_ -]?secret|private[_ -]?key|secret[_ -]?key|password|passwd|passphrase)\b\s+"
+    r"(?:(?:is|are|was|were)\s+)?"
+    r"(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required|not|empty)\b)[^,\s;]+"
 )
 _BEARER_RE = re.compile(r"(?i)\bbearer\s+[^,\s;]+")
 _OPENAI_KEY_RE = re.compile(r"\b(?:sk|sess)-[A-Za-z0-9_\-]{12,}\b")
@@ -54,8 +61,13 @@ _ERROR_DETAIL_RE = re.compile(
 )
 _ERROR_OUTPUT_LIKELY_RE = re.compile(r"(?i)\b(traceback|exception|at|exit\s+code|stderr|stdout|command\s+output|process\s+exited|python|failed\s+with|npm|node)\b")
 _ERROR_SECRET_WORD_RE = re.compile(r"(?i)\bsecret\b")
+_ERROR_OPAQUE_DETAIL_RE = re.compile(r"(?i)^(?=[A-Za-z0-9_.:/+=@-]{6,}$)(?=.*[a-z])(?=.*\d)[A-Za-z0-9_.:/+=@-]+$")
 _SANITIZE_HINT_RE = re.compile(
-    r"(?i)(?:\b(?:bearer|token|api[_ -]?key|apikey|secret|password|passwd|passphrase)\b\s*[:=]\s*[^,\s;]+|\b(?:token|api[_ -]?key|apikey|password|passwd|passphrase)\b\s+(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required)\b)[^,\s;]+|\bbearer\s+[^,\s;]+|\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b|[a-z][a-z0-9+.-]*://[^/@\s:]+:[^@\s]+@)"
+    rf"(?i)(?:\b(?:{_CREDENTIAL_KEY_PATTERN})\b\s*[:=]\s*[^,\s;]+|"
+    r"\b(?:token|access[_ -]?token|refresh[_ -]?token|id[_ -]?token|api[_ -]?key|apikey|"
+    r"client[_ -]?secret|private[_ -]?key|secret[_ -]?key|password|passwd|passphrase)\b\s+(?:(?:is|are|was|were)\s+)?"
+    r"(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required|not|empty)\b)[^,\s;]+|"
+    r"\bbearer\s+[^,\s;]+|\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b|[a-z][a-z0-9+.-]*://[^/@\s:]+:[^@\s]+@)"
 )
 _SANITIZE_ESCAPE_TABLE = {
     **{codepoint: f"\\x{codepoint:02x}" for codepoint in tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))},
@@ -120,6 +132,9 @@ class SizeCappedJsonFileHandler(logging.Handler):
         self.base_dir = base_dir
         self.stream: TextIO | None = None
         self._disabled = False
+        self._retry_until = 0.0
+        self._retry_count = 0
+        self._retry_base_delay = 1.0
         self._next_maintenance_at = time.monotonic() + LOG_MAINTENANCE_INTERVAL_SECONDS
 
     def close(self) -> None:
@@ -130,6 +145,9 @@ class SizeCappedJsonFileHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         if self._disabled:
+            return
+        now = time.monotonic()
+        if now < self._retry_until:
             return
         try:
             line = self.format(record) + "\n"
@@ -153,9 +171,47 @@ class SizeCappedJsonFileHandler(logging.Handler):
             self.stream.write(line)
             self.stream.flush()
             self._maintain_after_emit(force=rotated)
+            self._retry_count = 0
+            self._retry_until = 0.0
         except Exception:
-            self._disabled = True
             self.close()
+            if self._is_log_path_insecure():
+                self._disabled = True
+                return
+            self._retry_count += 1
+            delay = min(self._retry_base_delay * (2 ** (self._retry_count - 1)), 60.0)
+            self._retry_until = now + delay
+
+    def _is_log_path_insecure(self) -> bool:
+        parent_fd = None
+        try:
+            try:
+                file_stat = self.path.lstat()
+            except FileNotFoundError:
+                file_stat = None
+            except PermissionError:
+                return True
+            if file_stat is not None:
+                if stat_module.S_ISLNK(file_stat.st_mode) or not stat_module.S_ISREG(file_stat.st_mode):
+                    return True
+                if getattr(file_stat, "st_nlink", 1) != 1:
+                    return True
+            parent_fd = ensure_directory_without_following_symlinks(self.path.parent, field_name="log directory")
+            return False
+        except RuntimeError:
+            return True
+        except PermissionError:
+            return True
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return False
+        finally:
+            if parent_fd is not None:
+                try:
+                    os.close(parent_fd)
+                except OSError:
+                    pass
 
     def _open(self) -> None:
         if self.stream is None:
@@ -340,6 +396,7 @@ def sanitize_error_message(error: object, *, max_chars: int = MAX_LOG_MESSAGE_CH
             _ERROR_DETAIL_RE.search(details) is not None
             or _BARE_CREDENTIAL_RE.search(details) is not None
             or _ERROR_SECRET_WORD_RE.search(details) is not None
+            or _ERROR_OPAQUE_DETAIL_RE.fullmatch(details) is not None
         ):
             return "[redacted error details]"
         if (

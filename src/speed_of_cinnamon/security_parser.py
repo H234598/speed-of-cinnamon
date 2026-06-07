@@ -5,6 +5,8 @@ import fcntl
 import os
 import re
 import stat
+import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from .path_safety import (
@@ -21,6 +23,8 @@ _MAX_BLACKLIST_ENTRIES = 1_000
 _MAX_BLACKLIST_FILE_BYTES = 1_000_000
 _MAX_BLACKLIST_PATTERN_BYTES = _MAX_BLACKLIST_ENTRY_CHARS * _MAX_BLACKLIST_ENTRIES
 _MAX_SECURITY_TEXT_CHARS = 65_535
+_MATCH_IGNORE_CATEGORIES = frozenset({"Mn", "Mc", "Me", "Cf"})
+_NORMALIZED_CARD_CANDIDATE_RE = re.compile(r"(?<!\d)(?:\d[\d\s-]{11,40}\d)(?!\d)")
 
 
 _BLACKLIST_ADD_RE = re.compile(
@@ -176,6 +180,7 @@ def _compile_blacklist_pattern(entries: list[str]) -> re.Pattern[str] | None:
         if isinstance(raw_entry, bool) or not isinstance(raw_entry, str):
             continue
         entry = _normalize_blacklist_entry(raw_entry)
+        entry = _normalize_blacklist_entry_for_match(entry)
         entry_key = entry.casefold()
         if not entry or entry_key in seen:
             continue
@@ -231,6 +236,74 @@ def _assert_security_text(value: str) -> str:
     ) > _MAX_SECURITY_TEXT_CHARS:
         raise ValueError(f"transcript is too large (max {_MAX_SECURITY_TEXT_CHARS} bytes)")
     return value
+
+
+def _is_match_ignorable_char(value: str) -> bool:
+    return unicodedata.category(value) in _MATCH_IGNORE_CATEGORIES
+
+
+def _normalize_for_matching(value: str) -> tuple[str, list[int]]:
+    normalized: list[str] = []
+    index_map: list[int] = []
+    for source_index, char in enumerate(value):
+        normalized_block = unicodedata.normalize("NFKD", char)
+        for normalized_char in normalized_block.casefold():
+            if _is_match_ignorable_char(normalized_char):
+                continue
+            normalized.append(normalized_char)
+            index_map.append(source_index)
+    return "".join(normalized), index_map
+
+
+def _normalize_blacklist_entry_for_match(value: str) -> str:
+    normalized, _ = _normalize_for_matching(value)
+    return normalized
+
+
+def _sub_with_normalized_projection(
+    text: str,
+    pattern: re.Pattern[str],
+    replacement: str | Callable[[re.Match[str]], str | None],
+) -> tuple[str, int]:
+    normalized_text, index_map = _normalize_for_matching(text)
+    if not normalized_text:
+        return text, 0
+
+    redactions = 0
+    pieces: list[str] = []
+    cursor = 0
+
+    for match in pattern.finditer(normalized_text):
+        if match.start() >= match.end():
+            continue
+        if match.start() >= len(index_map) or match.end() - 1 >= len(index_map):
+            continue
+
+        original_start = index_map[match.start()]
+        original_end = index_map[match.end() - 1] + 1
+
+        if original_end <= cursor:
+            continue
+        if original_start < cursor:
+            original_start = cursor
+        while original_start > cursor and _is_match_ignorable_char(text[original_start - 1]):
+            original_start -= 1
+        while original_end < len(text) and _is_match_ignorable_char(text[original_end]):
+            original_end += 1
+
+        replacement_value = replacement(match) if callable(replacement) else replacement
+        if replacement_value is None:
+            continue
+        pieces.append(text[cursor:original_start])
+        pieces.append(replacement_value)
+        cursor = original_end
+        redactions += 1
+
+    if redactions == 0:
+        return text, 0
+
+    pieces.append(text[cursor:])
+    return "".join(pieces), redactions
 
 
 @dataclass(frozen=True)
@@ -408,14 +481,39 @@ def _placeholder_for_sensitive_label(label: str) -> str:
 
 
 def _apply_multiline_sensitive_redaction(text: str) -> tuple[str, int]:
-    redactions = 0
+    return _sub_with_normalized_projection(
+        text,
+        _MULTILINE_SENSITIVE_RE,
+        lambda match: _placeholder_for_sensitive_label(match.group("label")),
+    )
 
-    def _mask(match: re.Match[str]) -> str:
-        nonlocal redactions
-        redactions += 1
-        return _placeholder_for_sensitive_label(match.group("label"))
 
-    return _MULTILINE_SENSITIVE_RE.sub(_mask, text), redactions
+def _is_valid_card_digits(value: str) -> bool:
+    digits = [int(char) for char in value if char.isdigit()]
+    if len(digits) < 13 or len(digits) > 19:
+        return False
+    checksum = 0
+    parity = len(digits) % 2
+    for index, digit in enumerate(digits):
+        if index % 2 == parity:
+            digit *= 2
+            if digit > 9:
+                digit -= 9
+        checksum += digit
+    return checksum % 10 == 0
+
+
+def _apply_normalized_card_redaction(text: str) -> tuple[str, int]:
+    def _mask_if_valid_card(match: re.Match[str]) -> str | None:
+        if _is_valid_card_digits(match.group(0)):
+            return "[redacted card]"
+        return None
+
+    return _sub_with_normalized_projection(text, _NORMALIZED_CARD_CANDIDATE_RE, _mask_if_valid_card)
+
+
+def _apply_name_redaction(text: str) -> tuple[str, int]:
+    return _sub_with_normalized_projection(text, _NAME_RE, "[redacted name]")
 
 
 def parse_security_directives(text: str) -> SecurityParserResult:
@@ -440,17 +538,6 @@ def parse_security_directives(text: str) -> SecurityParserResult:
     return SecurityParserResult(text="\n".join(kept).strip(), added_blacklist=added, show_blacklist=show_blacklist)
 
 
-def _apply_name_redaction(text: str) -> tuple[str, int]:
-    count = 0
-
-    def _mask(match: re.Match[str]) -> str:
-        nonlocal count
-        count += 1
-        return "[redacted name]"
-
-    return _NAME_RE.sub(_mask, text), count
-
-
 def apply_security_mode(text: str, blacklist: list[str]) -> tuple[str, int]:
     text = _assert_security_text(text)
 
@@ -458,14 +545,16 @@ def apply_security_mode(text: str, blacklist: list[str]) -> tuple[str, int]:
     redactions = 0
     blacklist_pattern = _compile_blacklist_pattern(blacklist)
     if blacklist_pattern is not None:
-        clean, count = blacklist_pattern.subn("[redacted blacklist item]", clean)
+        clean, count = _sub_with_normalized_projection(clean, blacklist_pattern, "[redacted blacklist item]")
         redactions += count
     clean, count = _apply_multiline_sensitive_redaction(clean)
     redactions += count
     clean, count = _mask_cards(clean)
     redactions += count
+    clean, count = _apply_normalized_card_redaction(clean)
+    redactions += count
     for pattern, placeholder in _SENSITIVE_PATTERNS:
-        clean, count = pattern.subn(placeholder, clean)
+        clean, count = _sub_with_normalized_projection(clean, pattern, placeholder)
         if count:
             redactions += count
     clean, count = _apply_name_redaction(clean)
@@ -480,7 +569,7 @@ def apply_blacklist_mode(text: str, blacklist: list[str]) -> tuple[str, int]:
     pattern = _compile_blacklist_pattern(blacklist)
     if pattern is None:
         return clean.strip(), 0
-    clean, count = pattern.subn("[redacted blacklist item]", clean)
+    clean, count = _sub_with_normalized_projection(clean, pattern, "[redacted blacklist item]")
     return clean.strip(), count
 
 

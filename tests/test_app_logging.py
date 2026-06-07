@@ -56,7 +56,18 @@ class AppLoggingTest(unittest.TestCase):
         self.assertEqual(app_logging.sanitize_key("api_key\\x85"), "")
 
     def test_sanitize_error_message_redacts_bare_credentials(self) -> None:
-        for message in ("token abc123", "password hunter2", "api key abc123"):
+        for message in (
+            "token abc123",
+            "password hunter2",
+            "api key abc123",
+            "token is abc123",
+            "password was hunter2",
+            "api key was abc123",
+            "access token is abc123",
+            "refresh_token abc123",
+            "client_secret abc123",
+            "private_key abc123",
+        ):
             with self.subTest(message=message):
                 self.assertEqual(
                     app_logging.sanitize_error_message(message, max_chars=120),
@@ -105,6 +116,34 @@ class AppLoggingTest(unittest.TestCase):
         self.assertEqual(app_logging.sanitize_text("session sess-abc", max_chars=120), "session [redacted]")
         self.assertEqual(app_logging.sanitize_text("sk-standalone", max_chars=120), "[redacted]")
         self.assertEqual(app_logging.sanitize_text("sess-standalone", max_chars=120), "[redacted]")
+
+    def test_sanitize_text_redacts_common_structured_credentials(self) -> None:
+        for message in (
+            "access_token=abc123",
+            "refresh_token=abc123",
+            "client_secret=abc123",
+            "private_key=abc123",
+        ):
+            with self.subTest(message=message):
+                sanitized = app_logging.sanitize_text(message, max_chars=120)
+                self.assertNotIn("abc123", sanitized)
+                self.assertIn("[redacted]", sanitized)
+
+    def test_sanitize_error_message_redacts_opaque_failed_details(self) -> None:
+        self.assertEqual(
+            app_logging.sanitize_error_message("cmd failed: abc123", max_chars=120),
+            "[redacted error details]",
+        )
+        self.assertEqual(
+            app_logging.sanitize_error_message("cmd failed: file not found", max_chars=120),
+            "cmd failed: file not found",
+        )
+
+    def test_sanitize_error_message_preserves_api_key_policy_errors(self) -> None:
+        self.assertEqual(
+            app_logging.sanitize_error_message("openai-compatible API key is too large", max_chars=120),
+            "openai-compatible API key is too large",
+        )
 
     def test_sanitize_text_redacts_url_credentials_with_colon_in_password(self) -> None:
         sanitized = app_logging.sanitize_text("https://user:p:a:s@example.test/path", max_chars=120)
@@ -228,6 +267,77 @@ class AppLoggingTest(unittest.TestCase):
             handler.close()
 
         self.assertEqual(stderr.getvalue(), "")
+
+    def test_file_handler_transient_emit_failure_retries_after_temporary_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            handler = app_logging.SizeCappedJsonFileHandler(
+                log_dir / f"speed-of-cinnamon-{date.today().isoformat()}.log",
+                log_dir,
+            )
+            handler._retry_base_delay = 0.0
+            handler.setFormatter(app_logging.JsonLogFormatter())
+            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+            original_open = handler._open
+            open_calls = 0
+
+            def transient_open() -> None:
+                nonlocal open_calls
+                open_calls += 1
+                if open_calls == 1:
+                    raise OSError("read only")
+                original_open()
+
+            with mock.patch.object(handler, "_open") as mocked_open:
+                mocked_open.side_effect = transient_open
+                handler.emit(record)
+                handler.emit(record)
+                handler.close()
+
+            log_file = log_dir / f"speed-of-cinnamon-{date.today().isoformat()}.log"
+            self.assertEqual(mocked_open.call_count, 2)
+            self.assertTrue(log_file.exists())
+            payload = json.loads(log_file.read_text(encoding="utf-8").strip())
+            self.assertEqual(payload["event"], "event")
+
+    def test_file_handler_disables_permanently_on_insecure_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            active = log_dir / f"speed-of-cinnamon-{date.today().isoformat()}.log"
+            target = Path(tmp) / "outside.log"
+            active.symlink_to(target)
+            handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
+            handler.setFormatter(app_logging.JsonLogFormatter())
+            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+
+            with mock.patch.object(handler, "_open", side_effect=RuntimeError("must not be a symlink")) as mocked_open:
+                handler.emit(record)
+                handler.emit(record)
+
+            handler.close()
+
+            self.assertTrue(handler._disabled)
+            self.assertGreaterEqual(mocked_open.call_count, 1)
+
+    def test_file_handler_disables_permanently_on_log_path_permission_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            active = log_dir / f"speed-of-cinnamon-{date.today().isoformat()}.log"
+            handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
+            handler.setFormatter(app_logging.JsonLogFormatter())
+            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+
+            with (
+                mock.patch.object(handler, "_open", side_effect=OSError("read only")) as mocked_open,
+                mock.patch.object(type(active), "lstat", side_effect=PermissionError("denied")),
+            ):
+                handler.emit(record)
+                handler.emit(record)
+
+            handler.close()
+
+            self.assertTrue(handler._disabled)
+            self.assertEqual(mocked_open.call_count, 1)
 
     def test_file_handler_rejects_symlink_created_before_first_emit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

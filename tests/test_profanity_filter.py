@@ -20,6 +20,30 @@ class ProfanityFilterTest(unittest.TestCase):
         self.assertEqual(len(compiled), 1)
         self.assertEqual(compiled[0][1], "frog")
 
+    def test_compile_profanity_replacements_blocks_zero_width_by_default(self) -> None:
+        compiled = compile_profanity_replacements((("fuck", "frog"),))
+
+        self.assertEqual(compiled[0][0].sub(compiled[0][1], "Das ist fu\u200Bck im Test."), "Das ist frog im Test.")
+        self.assertEqual(compiled[0][0].sub(compiled[0][1], "\u200Bfu\u200Bck\u200D!"), "frog!")
+        self.assertEqual(compiled[0][0].sub(compiled[0][1], "f\u2066uck"), "frog")
+        self.assertEqual(compiled[0][0].sub(compiled[0][1], "f\u05B0uck"), "frog")
+        self.assertEqual(compiled[0][0].sub(compiled[0][1], "x\u200Bfu\u200Bck"), "x\u200Bfu\u200Bck")
+
+    def test_compile_profanity_replacements_blocks_nfd_variant(self) -> None:
+        compiled = compile_profanity_replacements((("schön", "blume"),))
+
+        self.assertEqual(compiled[0][0].sub(compiled[0][1], "scho\u0308n"), "blume")
+
+    def test_default_profanity_replacements_preserve_trusted_regex_patterns(self) -> None:
+        from speed_of_cinnamon.profanity_filter import PROFANITY_REPLACEMENTS
+
+        soften = "scheiße und scheisse"
+        for pattern, replacement in PROFANITY_REPLACEMENTS:
+            soften = pattern.sub(replacement, soften)
+
+        self.assertNotIn("scheiße", soften)
+        self.assertNotIn("scheisse", soften)
+
 
 if __name__ == "__main__":
     unittest.main()

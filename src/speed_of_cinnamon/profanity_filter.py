@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 MAX_PROFANITY_FILTER_BYTES = 200_000
 MAX_PROFANITY_FILTER_ENTRIES = 500
@@ -205,17 +206,74 @@ PROFANITY_REPLACEMENT_PAIRS: tuple[tuple[str, str], ...] = (
 )
 
 _TRUSTED_PROFANITY_PATTERNS = frozenset(pattern for pattern, _replacement in PROFANITY_REPLACEMENT_PAIRS)
+_MATCH_IGNORE_CATEGORIES = frozenset({"Mn", "Mc", "Me", "Cf"})
+_REGEX_META_CHARS = frozenset(r".^$*+?{}[]\|()")
+
+
+def _regex_escape_codepoint(codepoint: int) -> str:
+    if codepoint <= 0xFFFF:
+        return f"\\u{codepoint:04X}"
+    return f"\\U{codepoint:08X}"
+
+
+def _unicode_category_char_class_ranges(categories: frozenset[str]) -> str:
+    parts: list[str] = []
+    range_start: int | None = None
+    previous: int | None = None
+    for codepoint in range(0x110000):
+        if unicodedata.category(chr(codepoint)) in categories:
+            if range_start is None:
+                range_start = codepoint
+            previous = codepoint
+            continue
+        if range_start is not None and previous is not None:
+            if range_start == previous:
+                parts.append(_regex_escape_codepoint(range_start))
+            else:
+                parts.append(f"{_regex_escape_codepoint(range_start)}-{_regex_escape_codepoint(previous)}")
+            range_start = None
+            previous = None
+    if range_start is not None and previous is not None:
+        if range_start == previous:
+            parts.append(_regex_escape_codepoint(range_start))
+        else:
+            parts.append(f"{_regex_escape_codepoint(range_start)}-{_regex_escape_codepoint(previous)}")
+    return "".join(parts)
+
+
+_IGNORABLE_MATCH_RANGES = _unicode_category_char_class_ranges(_MATCH_IGNORE_CATEGORIES)
+_IGNORABLE_CHAR_CLASS = f"[{_IGNORABLE_MATCH_RANGES}]"
+_IGNORABLE_BOUNDARY_CLASS = f"[\\w{_IGNORABLE_MATCH_RANGES}]"
+_IGNORABLE_GAP_PATTERN = rf"{_IGNORABLE_CHAR_CLASS}*"
+
+
+def _normalize_profanity_pattern(pattern: str) -> str:
+    normalized: list[str] = []
+    for char in unicodedata.normalize("NFKD", pattern).casefold():
+        if unicodedata.category(char) in _MATCH_IGNORE_CATEGORIES:
+            continue
+        normalized.append(char)
+    return "".join(normalized)
+
+
+def _build_tolerant_profanity_pattern(pattern: str) -> str:
+    normalized = _normalize_profanity_pattern(pattern)
+    if not normalized:
+        return ""
+    source = _IGNORABLE_GAP_PATTERN.join(re.escape(char) for char in normalized)
+    return rf"(?<!{_IGNORABLE_BOUNDARY_CLASS}){_IGNORABLE_GAP_PATTERN}{source}{_IGNORABLE_GAP_PATTERN}(?!{_IGNORABLE_BOUNDARY_CLASS})"
 
 
 def _safe_profanity_pattern_source(pattern: str) -> str:
-    if pattern in _TRUSTED_PROFANITY_PATTERNS:
-        return pattern
-    return re.escape(pattern)
+    if pattern in _TRUSTED_PROFANITY_PATTERNS and any(char in _REGEX_META_CHARS for char in pattern):
+        return rf"(?<!{_IGNORABLE_BOUNDARY_CLASS}){_IGNORABLE_GAP_PATTERN}(?:{pattern}){_IGNORABLE_GAP_PATTERN}(?!{_IGNORABLE_BOUNDARY_CLASS})"
+    return _build_tolerant_profanity_pattern(pattern)
 
 
 PROFANITY_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
-    (re.compile(rf"(?<![\w]){_safe_profanity_pattern_source(pattern)}(?![\w])", re.IGNORECASE), replacement)
+    (re.compile(_safe_profanity_pattern_source(pattern), re.IGNORECASE), replacement)
     for pattern, replacement in PROFANITY_REPLACEMENT_PAIRS
+    if _safe_profanity_pattern_source(pattern)
 )
 
 
@@ -264,7 +322,7 @@ def parse_profanity_replacement_list(text: str) -> tuple[tuple[str, str], ...]:
             continue
         pattern_source = _safe_profanity_pattern_source(pattern)
         try:
-            re.compile(rf"(?<![\w]){pattern_source}(?![\w])", re.IGNORECASE)
+            re.compile(pattern_source, re.IGNORECASE)
         except re.error:
             continue
         pairs.append((pattern, replacement))
@@ -282,7 +340,7 @@ def compile_profanity_replacements(pairs: tuple[tuple[str, str], ...]) -> tuple[
             continue
         pattern_source = _safe_profanity_pattern_source(clean_pattern)
         try:
-            compiled.append((re.compile(rf"(?<![\w]){pattern_source}(?![\w])", re.IGNORECASE), clean_replacement))
+            compiled.append((re.compile(pattern_source, re.IGNORECASE), clean_replacement))
         except re.error:
             continue
     return tuple(compiled) or PROFANITY_REPLACEMENTS
