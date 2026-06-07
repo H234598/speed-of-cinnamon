@@ -78,6 +78,7 @@ _CLIPBOARD_FINGERPRINT_HEX_CHARS = frozenset("0123456789abcdef")
 _LAST_CLIPBOARD_TEXT: str = ""
 _LAST_CLIPBOARD_METHOD: str | None = None
 _LAST_CLIPBOARD_INSERTION: float = 0.0
+_LAST_CLIPBOARD_CONTEXT: str | None = None
 
 
 def _is_unsafe_env_var(name: str) -> bool:
@@ -209,6 +210,21 @@ def _read_file_head(file: io.BufferedRandom, max_chars: int) -> str:
 
 def _clipboard_text_fingerprint(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def _clipboard_insertion_fingerprint(text: str, dedupe_context: str | None = None) -> str:
+    if not dedupe_context:
+        return _clipboard_text_fingerprint(text)
+    payload = "\0".join(("clipboard-insertion-v2", dedupe_context, text))
+    return hashlib.sha256(payload.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def _clipboard_dedup_context_for_window_snapshot(snapshot: tuple[str, str, str] | None) -> str | None:
+    if snapshot is None:
+        return None
+    window_id, _window_title, window_class = snapshot
+    payload = "\0".join(("x-window-v1", window_id, window_class))
+    return hashlib.sha256(payload.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def _is_clipboard_text_fingerprint(value: object) -> bool:
@@ -491,13 +507,12 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                 owner_pid = _read_clipboard_dedup_lock_pid_at(parent_fd, path.name)
                 owner_identity = _read_clipboard_dedup_lock_identity_at(parent_fd, path.name)
                 if owner_pid is not None and _clipboard_lock_pid_is_running(owner_pid):
-                    if owner_identity is not None:
-                        owner_current_identity = _clipboard_lock_identity_for_pid(owner_pid)
-                        if owner_current_identity is not None and owner_identity == owner_current_identity:
-                            return None
-                        if owner_current_identity is None and now - existing.st_mtime <= MAX_DUPLICATE_LOCK_SECONDS:
-                            return None
-                    elif now - existing.st_mtime <= MAX_DUPLICATE_LOCK_SECONDS:
+                    if owner_identity is None:
+                        return None
+                    owner_current_identity = _clipboard_lock_identity_for_pid(owner_pid)
+                    if owner_current_identity is None:
+                        return None
+                    if owner_identity == owner_current_identity:
                         return None
                 if owner_pid is None and now - existing.st_mtime <= MAX_DUPLICATE_LOCK_SECONDS:
                     return None
@@ -575,25 +590,34 @@ def _normalize_clipboard_text(text: str) -> str:
     return text
 
 
-def _record_clipboard_insertion(text: str, method: str) -> bool:
-    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
+def _record_clipboard_insertion(text: str, method: str, *, dedupe_context: str | None = None) -> bool:
+    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION, _LAST_CLIPBOARD_CONTEXT
     cleaned = _normalize_clipboard_text(text)
     if not cleaned:
         _LAST_CLIPBOARD_TEXT = cleaned
         _LAST_CLIPBOARD_INSERTION = time.monotonic()
         _LAST_CLIPBOARD_METHOD = method
+        _LAST_CLIPBOARD_CONTEXT = dedupe_context
         return True
     now = time.time()
-    if not _write_clipboard_dedup_state(cleaned, now):
+    if dedupe_context:
+        written = _write_clipboard_dedup_fingerprint_state(
+            _clipboard_insertion_fingerprint(cleaned, dedupe_context),
+            now,
+        )
+    else:
+        written = _write_clipboard_dedup_state(cleaned, now)
+    if not written:
         return False
     _LAST_CLIPBOARD_TEXT = cleaned
     _LAST_CLIPBOARD_INSERTION = time.monotonic()
     _LAST_CLIPBOARD_METHOD = method
+    _LAST_CLIPBOARD_CONTEXT = dedupe_context
     return True
 
 
-def _commit_clipboard_insertion(text: str, method: str) -> bool:
-    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
+def _commit_clipboard_insertion(text: str, method: str, *, dedupe_context: str | None = None) -> bool:
+    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION, _LAST_CLIPBOARD_CONTEXT
     cleaned = _normalize_clipboard_text(text)
     if not cleaned:
         if text != "":
@@ -601,29 +625,45 @@ def _commit_clipboard_insertion(text: str, method: str) -> bool:
         _LAST_CLIPBOARD_TEXT = cleaned
         _LAST_CLIPBOARD_METHOD = method
         _LAST_CLIPBOARD_INSERTION = time.monotonic()
+        _LAST_CLIPBOARD_CONTEXT = dedupe_context
         return True
-    if not _write_clipboard_dedup_state(cleaned, time.time()):
+    now = time.time()
+    if dedupe_context:
+        written = _write_clipboard_dedup_fingerprint_state(
+            _clipboard_insertion_fingerprint(cleaned, dedupe_context),
+            now,
+        )
+    else:
+        written = _write_clipboard_dedup_state(cleaned, now)
+    if not written:
         return False
     _LAST_CLIPBOARD_TEXT = cleaned
     _LAST_CLIPBOARD_METHOD = method
     _LAST_CLIPBOARD_INSERTION = time.monotonic()
+    _LAST_CLIPBOARD_CONTEXT = dedupe_context
     return True
 
 
 def _clear_clipboard_insertion_memory() -> None:
-    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
+    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION, _LAST_CLIPBOARD_CONTEXT
     _LAST_CLIPBOARD_TEXT = ""
     _LAST_CLIPBOARD_METHOD = None
     _LAST_CLIPBOARD_INSERTION = 0.0
+    _LAST_CLIPBOARD_CONTEXT = None
 
 
-def _restore_clipboard_insertion_snapshot(snapshot: tuple[str, str, float]) -> None:
-    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
-    _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION = snapshot
+def _restore_clipboard_insertion_snapshot(snapshot: tuple[str, str | None, float, str | None]) -> None:
+    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION, _LAST_CLIPBOARD_CONTEXT
+    _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION, _LAST_CLIPBOARD_CONTEXT = snapshot
 
 
-def _reserve_clipboard_insertion_memory(text: str, method: str) -> tuple[str, str, float] | None:
-    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
+def _reserve_clipboard_insertion_memory(
+    text: str,
+    method: str,
+    *,
+    dedupe_context: str | None = None,
+) -> tuple[str, str | None, float, str | None] | None:
+    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION, _LAST_CLIPBOARD_CONTEXT
     cleaned = _normalize_clipboard_text(text)
     if not cleaned and text != "":
         return None
@@ -631,6 +671,7 @@ def _reserve_clipboard_insertion_memory(text: str, method: str) -> tuple[str, st
     _LAST_CLIPBOARD_TEXT = cleaned
     _LAST_CLIPBOARD_METHOD = method
     _LAST_CLIPBOARD_INSERTION = time.monotonic()
+    _LAST_CLIPBOARD_CONTEXT = dedupe_context
     return snapshot
 
 
@@ -680,8 +721,8 @@ def _restore_clipboard_dedup_state(snapshot: tuple[str, float], *, pending: bool
     _clear_clipboard_dedup_state()
 
 
-def _clipboard_insertion_snapshot() -> tuple[str, str, float]:
-    return _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
+def _clipboard_insertion_snapshot() -> tuple[str, str | None, float, str | None]:
+    return _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION, _LAST_CLIPBOARD_CONTEXT
 
 
 def _validate_text_input(text: str) -> bytes:
@@ -1152,8 +1193,9 @@ def _should_skip_clipboard_duplicate(
     persistent_snapshot: tuple[str, float] | None = None,
     persistent_state_trusted: bool | None = None,
     pending_state: bool | None = None,
+    dedupe_context: str | None = None,
 ) -> bool:
-    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION
+    global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION, _LAST_CLIPBOARD_CONTEXT
     if not isinstance(text, str) or isinstance(text, bool):
         raise OutputError("text must be text")
     if method not in {"clipboard", "clipboard-paste"}:
@@ -1167,32 +1209,43 @@ def _should_skip_clipboard_duplicate(
     if not persistent_state_trusted:
         return True
     cached_fingerprint, cached_at = persistent_snapshot
-    fingerprint = _clipboard_text_fingerprint(cleaned)
+    global_fingerprint = _clipboard_text_fingerprint(cleaned)
+    fingerprint = _clipboard_insertion_fingerprint(cleaned, dedupe_context)
+    fingerprint_matches = fingerprint == cached_fingerprint or (
+        bool(dedupe_context) and global_fingerprint == cached_fingerprint
+    )
     if pending_state:
-        return fingerprint == cached_fingerprint and 0 <= (now_wall - cached_at) <= MAX_DUPLICATE_TEXT_SECONDS
-    if fingerprint == cached_fingerprint and 0 <= (now_wall - cached_at) <= MAX_DUPLICATE_TEXT_SECONDS:
+        return fingerprint_matches and 0 <= (now_wall - cached_at) <= MAX_DUPLICATE_TEXT_SECONDS
+    if fingerprint_matches and 0 <= (now_wall - cached_at) <= MAX_DUPLICATE_TEXT_SECONDS:
         return True
     now = time.monotonic()
     if (
         cleaned == _LAST_CLIPBOARD_TEXT
         and method == _LAST_CLIPBOARD_METHOD
+        and (dedupe_context == _LAST_CLIPBOARD_CONTEXT or (dedupe_context is None and _LAST_CLIPBOARD_CONTEXT is None))
         and (now - _LAST_CLIPBOARD_INSERTION) <= MAX_DUPLICATE_TEXT_SECONDS
     ):
         return True
     return False
 
 
-def _should_skip_clipboard_memory_duplicate(text: str, method: str) -> bool:
+def _should_skip_clipboard_memory_duplicate(text: str, method: str, *, dedupe_context: str | None = None) -> bool:
     return _should_skip_clipboard_duplicate(
         text,
         method,
         persistent_snapshot=("", 0.0),
         persistent_state_trusted=True,
+        dedupe_context=dedupe_context,
     )
 
 
-def _begin_clipboard_insertion(text: str, method: str) -> tuple[Path, tuple[str, float], bool] | None:
-    if _should_skip_clipboard_memory_duplicate(text, method):
+def _begin_clipboard_insertion(
+    text: str,
+    method: str,
+    *,
+    dedupe_context: str | None = None,
+) -> tuple[Path, tuple[str, float], bool] | None:
+    if _should_skip_clipboard_memory_duplicate(text, method, dedupe_context=dedupe_context):
         return None
     lock_path = _acquire_clipboard_dedup_lock()
     if lock_path is None:
@@ -1211,6 +1264,7 @@ def _begin_clipboard_insertion(text: str, method: str) -> tuple[Path, tuple[str,
             persistent_snapshot=persistent_snapshot,
             persistent_state_trusted=persistent_state_trusted,
             pending_state=persistent_state_pending,
+            dedupe_context=dedupe_context,
         ):
             _release_clipboard_dedup_lock(lock_path)
             return None
@@ -1230,6 +1284,8 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
     method = (method or "clipboard-paste").strip().lower()
     if method == "none":
         return False
+    if method in {"clipboard", "clipboard-paste"} and text == "":
+        return False
     if method == "clipboard":
         insertion = _begin_clipboard_insertion(text, method)
         if insertion is None:
@@ -1243,7 +1299,7 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
         committed = False
         try:
             if not _write_clipboard_dedup_fingerprint_state(
-                _clipboard_text_fingerprint(_normalize_clipboard_text(text)),
+                _clipboard_insertion_fingerprint(_normalize_clipboard_text(text)),
                 time.time(),
                 pending=True,
             ):
@@ -1261,11 +1317,22 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
                     _restore_clipboard_dedup_state(persistent_snapshot, pending=persistent_snapshot_pending)
             _release_clipboard_dedup_lock(lock_path)
     if method == "clipboard-paste":
-        insertion = _begin_clipboard_insertion(text, method)
+        xdotool = _which("xdotool")
+        target_window_snapshot = _active_x_window_snapshot(xdotool_command=xdotool) if xdotool else None
+        if target_window_snapshot is None and _should_skip_clipboard_duplicate(text, method, dedupe_context=None):
+            return False
+        if not _clipboard_paste_helper_available():
+            raise OutputError("no keyboard helper found; install xdotool or wtype")
+        if not xdotool:
+            raise OutputError("refusing automatic paste without verifiable active window")
+        if target_window_snapshot is None:
+            raise OutputError("refusing automatic paste without verifiable active window")
+        dedupe_context = _clipboard_dedup_context_for_window_snapshot(target_window_snapshot)
+        insertion = _begin_clipboard_insertion(text, method, dedupe_context=dedupe_context)
         if insertion is None:
             return False
         lock_path, persistent_snapshot, persistent_snapshot_pending = insertion
-        snapshot = _reserve_clipboard_insertion_memory(text, method)
+        snapshot = _reserve_clipboard_insertion_memory(text, method, dedupe_context=dedupe_context)
         if snapshot is None:
             _release_clipboard_dedup_lock(lock_path)
             return False
@@ -1273,23 +1340,14 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
         committed = False
         clipboard_snapshot_available = False
         clipboard_snapshot = ""
-        target_window_snapshot: tuple[str, str, str] | None = None
         try:
-            if not _clipboard_paste_helper_available():
-                raise OutputError("no keyboard helper found; install xdotool or wtype")
-            xdotool = _which("xdotool")
-            if not xdotool:
-                raise OutputError("refusing automatic paste without verifiable active window")
-            target_window_snapshot = _active_x_window_snapshot(xdotool_command=xdotool)
-            if target_window_snapshot is None:
-                raise OutputError("refusing automatic paste without verifiable active window")
             if _clipboard_has_non_text_payload():
                 raise OutputError("refusing to overwrite non-text clipboard for automatic paste")
             clipboard_snapshot_available, clipboard_snapshot = _read_text_clipboard_snapshot()
             if not clipboard_snapshot_available:
                 raise OutputError("refusing automatic paste without readable text clipboard snapshot")
             if not _write_clipboard_dedup_fingerprint_state(
-                _clipboard_text_fingerprint(_normalize_clipboard_text(text)),
+                _clipboard_insertion_fingerprint(_normalize_clipboard_text(text), dedupe_context),
                 time.time(),
                 pending=True,
             ):
@@ -1298,7 +1356,7 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
             set_clipboard(text)
             paste_from_clipboard(expected_window_snapshot=target_window_snapshot)
             operation_performed = True
-            if not _commit_clipboard_insertion(text, method):
+            if not _commit_clipboard_insertion(text, method, dedupe_context=dedupe_context):
                 raise OutputError("failed to commit clipboard-paste insertion state")
             committed = True
             return True

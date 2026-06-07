@@ -132,6 +132,7 @@ DEFAULT_KEEP_RECORDINGS = 20
 DEFAULT_RECORDING_MAX_AGE_DAYS = 7
 MAX_TEMP_RECORDING_FILES = 20
 TRANSIENT_TRANSCRIPT_MAX_AGE_SECONDS = 3600
+TRANSIENT_TRANSCRIPT_OWNER_SUFFIX = ".owner"
 RECORDING_ARTIFACT_EXTENSIONS = (".wav", ".flac", ".log", ".socenc")
 ENCRYPTED_RECORDING_ARTIFACT_SUFFIXES = (".wav.socenc", ".flac.socenc")
 TRANSCRIPT_ARTIFACT_SUFFIXES = (".txt", ".socenc")
@@ -1136,6 +1137,67 @@ def _is_transient_transcript_artifact(path: Path) -> bool:
     return name.startswith(".") and name.endswith(".tmp.txt")
 
 
+def _transient_transcript_owner_path(path: Path) -> Path:
+    return path.with_name(f"{path.name}{TRANSIENT_TRANSCRIPT_OWNER_SUFFIX}")
+
+
+def _write_transient_transcript_owner(path: Path) -> None:
+    owner_path = _transient_transcript_owner_path(path)
+    identity = _finalization_lock_identity_for_pid(os.getpid()) or ""
+    content = f"{os.getpid()}\n{identity}\n"
+    try:
+        write_text_atomically_without_following_symlinks(
+            owner_path,
+            content,
+            field_name="transient transcript owner",
+        )
+    except (OSError, RuntimeError) as exc:
+        raise RuntimeError(f"failed to write transient transcript owner: {owner_path}") from exc
+
+
+def _remove_transient_transcript_owner(path: Path) -> None:
+    owner_path = _transient_transcript_owner_path(path)
+    try:
+        _unlink_regular_leaf_with_parent_fsync(owner_path, field_name="transient transcript owner")
+    except FileNotFoundError:
+        return
+    except RuntimeError:
+        return
+
+
+def _read_transient_transcript_owner(path: Path) -> tuple[int | None, str | None]:
+    try:
+        raw = read_text_without_following_symlinks(
+            _transient_transcript_owner_path(path),
+            field_name="transient transcript owner",
+            max_bytes=512,
+            require_private_mode=True,
+        )
+    except (OSError, RuntimeError, UnicodeDecodeError):
+        return None, None
+    lines = raw.splitlines()
+    if not lines:
+        return None, None
+    pid_text = lines[0].strip()
+    if not pid_text.isdigit():
+        return None, None
+    pid = int(pid_text)
+    identity = lines[1].strip() if len(lines) > 1 else ""
+    return (pid if pid > 0 else None), (identity or None)
+
+
+def _transient_transcript_owner_is_active(path: Path) -> bool:
+    owner_pid, owner_identity = _read_transient_transcript_owner(path)
+    if owner_pid is None:
+        return False
+    if not process_is_alive(owner_pid):
+        return False
+    if owner_identity is None:
+        return True
+    current_identity = _finalization_lock_identity_for_pid(owner_pid)
+    return current_identity is None or current_identity == owner_identity
+
+
 def _safe_stale_transient_transcript_files(max_age_seconds: int = TRANSIENT_TRANSCRIPT_MAX_AGE_SECONDS) -> list[Path]:
     if not isinstance(max_age_seconds, int) or isinstance(max_age_seconds, bool):
         raise RuntimeError("transient transcript max age must be an integer")
@@ -1149,6 +1211,8 @@ def _safe_stale_transient_transcript_files(max_age_seconds: int = TRANSIENT_TRAN
         if getattr(file_stat, "st_nlink", 1) != 1:
             continue
         if file_stat.st_mtime > cutoff:
+            continue
+        if _transient_transcript_owner_is_active(path):
             continue
         files.append(path)
     return files
@@ -1206,9 +1270,9 @@ def _transcript_work_path(storage_path: Path, encryption_mode: str) -> Path:
     return storage_path.with_name(f".{storage_path.stem}.{secrets.token_hex(8)}.tmp.txt")
 
 
-def _prepare_transient_transcript_path(path: Path, storage_path: Path) -> None:
+def _prepare_transient_transcript_path(path: Path, storage_path: Path) -> int | None:
     if path == storage_path:
-        return
+        return None
     try:
         path.relative_to(transcript_dir())
     except ValueError as exc:
@@ -1217,6 +1281,26 @@ def _prepare_transient_transcript_path(path: Path, storage_path: Path) -> None:
         raise RuntimeError(f"refusing to prepare unexpected transient transcript path: {path}")
     assert_no_symlink_ancestors(path, field_name="transient transcript file")
     _prepare_private_file(path, field_name="transient transcript file")
+    nofollow_flag = getattr(os, "O_NOFOLLOW", 0)
+    cloexec_flag = getattr(os, "O_CLOEXEC", 0)
+    fd: int | None = None
+    try:
+        fd = os.open(path, os.O_RDONLY | nofollow_flag | cloexec_flag)
+        file_stat = os.fstat(fd)
+        if not stat_module.S_ISREG(file_stat.st_mode):
+            raise RuntimeError(f"transient transcript file must be a regular file: {path}")
+        if getattr(file_stat, "st_nlink", 1) != 1:
+            raise RuntimeError(f"transient transcript file must not be hardlinked: {path}")
+        _write_transient_transcript_owner(path)
+        return fd
+    except OSError as exc:
+        if fd is not None:
+            os.close(fd)
+        raise RuntimeError(f"failed to open transient transcript file identity: {path}") from exc
+    except RuntimeError:
+        if fd is not None:
+            os.close(fd)
+        raise
 
 
 def _same_leaf_identity(current: os.stat_result, expected: os.stat_result) -> bool:
@@ -1255,7 +1339,12 @@ def _unlink_regular_leaf_with_parent_fsync(
         os.close(parent_fd)
 
 
-def _remove_transient_transcript_path(path: Path, storage_path: Path) -> bool:
+def _remove_transient_transcript_path(
+    path: Path,
+    storage_path: Path,
+    *,
+    expected_fd: int | None = None,
+) -> bool:
     if path == storage_path:
         return False
     try:
@@ -1266,12 +1355,21 @@ def _remove_transient_transcript_path(path: Path, storage_path: Path) -> bool:
         return False
     try:
         assert_no_symlink_ancestors(path, field_name="transient transcript file")
-        _unlink_regular_leaf_with_parent_fsync(path, field_name="transient transcript file")
+        expected_stat = os.fstat(expected_fd) if expected_fd is not None else None
+        _unlink_regular_leaf_with_parent_fsync(
+            path,
+            field_name="transient transcript file",
+            expected_stat=expected_stat,
+        )
+        _remove_transient_transcript_owner(path)
         return True
     except FileNotFoundError:
         return False
     except RuntimeError as exc:
         raise RuntimeError(f"failed to delete transient transcript file: {path}") from exc
+    finally:
+        if expected_fd is not None:
+            os.close(expected_fd)
 
 
 def _raise_recording_cleanup_failure(store: StateStore, failures: list[tuple[str, str, str]]) -> None:
@@ -1310,7 +1408,14 @@ def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) ->
         )
     except ArtifactCryptoError as exc:
         raise RuntimeError(str(exc)) from exc
-    _remove_plaintext_transcript_sibling_after_encryption(path, encrypted_path)
+    try:
+        _remove_plaintext_transcript_sibling_after_encryption(path, encrypted_path)
+    except RuntimeError as exc:
+        try:
+            _rollback_encrypted_artifact_after_plaintext_cleanup_failure(encrypted_path, field_name="encrypted transcript file")
+        except RuntimeError as rollback_exc:
+            raise RuntimeError(f"{exc}; {rollback_exc}") from exc
+        raise
     return encrypted_path, effective_mode
 
 
@@ -1373,6 +1478,17 @@ def _remove_plaintext_recording_sibling_after_encryption(original_path: Path, en
             raise RuntimeError(f"failed to remove plaintext recording artifact after encryption: {candidate}")
 
 
+def _rollback_encrypted_artifact_after_plaintext_cleanup_failure(encrypted_path: Path, *, field_name: str) -> None:
+    if not is_encrypted_path(encrypted_path):
+        return
+    if not encrypted_path.exists() and not encrypted_path.is_symlink():
+        return
+    try:
+        _unlink_regular_leaf_with_parent_fsync(encrypted_path, field_name=field_name)
+    except RuntimeError as exc:
+        raise RuntimeError(f"failed to roll back encrypted artifact after plaintext cleanup failure: {encrypted_path}") from exc
+
+
 def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tuple[Path, str]:
     mode = _artifact_encryption_mode(args)
     if mode == ARTIFACT_ENCRYPTION_OFF:
@@ -1398,7 +1514,14 @@ def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tu
         )
     except ArtifactCryptoError as exc:
         raise RuntimeError(str(exc)) from exc
-    _remove_plaintext_recording_sibling_after_encryption(path, encrypted_path)
+    try:
+        _remove_plaintext_recording_sibling_after_encryption(path, encrypted_path)
+    except RuntimeError as exc:
+        try:
+            _rollback_encrypted_artifact_after_plaintext_cleanup_failure(encrypted_path, field_name="encrypted recording artifact")
+        except RuntimeError as rollback_exc:
+            raise RuntimeError(f"{exc}; {rollback_exc}") from exc
+        raise
     return encrypted_path, effective_mode
 
 
@@ -1551,7 +1674,14 @@ def write_transcripts_export(
         kind="transcript",
         field_name="transcript export",
     )
-    _remove_plaintext_export_sibling_after_encryption(output_path, encrypted_path)
+    try:
+        _remove_plaintext_export_sibling_after_encryption(output_path, encrypted_path)
+    except RuntimeError as exc:
+        try:
+            _rollback_encrypted_artifact_after_plaintext_cleanup_failure(encrypted_path, field_name="encrypted transcript export")
+        except RuntimeError as rollback_exc:
+            raise RuntimeError(f"{exc}; {rollback_exc}") from exc
+        raise
     return encrypted_path, count, used_mode
 
 
@@ -2633,7 +2763,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         text_path = transcript_dir() / f"{audio_path.stem}.txt"
         artifact_encryption = _artifact_encryption_mode(args)
         transcriber_text_path = _transcript_work_path(text_path, artifact_encryption)
-        _prepare_transient_transcript_path(transcriber_text_path, text_path)
+        transient_text_stat = _prepare_transient_transcript_path(transcriber_text_path, text_path)
         transcript_audio_path = audio_path
         try:
             trimmed_audio_path = trim_recording_silence(audio_path)
@@ -2658,7 +2788,11 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             raise
         finally:
             try:
-                _remove_transient_transcript_path(transcriber_text_path, text_path)
+                _remove_transient_transcript_path(
+                    transcriber_text_path,
+                    text_path,
+                    expected_fd=transient_text_stat,
+                )
                 if trimmed_audio_path is not None and trimmed_audio_path != audio_path and not keep_recording_artifacts:
                     if not remove_file(str(trimmed_audio_path), suffix=".flac"):
                         raise RuntimeError(f"failed to delete transient trimmed recording artifact: {trimmed_audio_path}")
@@ -3663,7 +3797,7 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
     text_path = transcript_dir() / f"{audio_path.stem}.txt"
     artifact_encryption = _artifact_encryption_mode(args)
     transcriber_text_path = _transcript_work_path(text_path, artifact_encryption)
-    _prepare_transient_transcript_path(transcriber_text_path, text_path)
+    transient_text_stat = _prepare_transient_transcript_path(transcriber_text_path, text_path)
     try:
         text = transcribe(
             audio_path=audio_path,
@@ -3677,7 +3811,11 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
             **_openai_compatible_transcribe_kwargs(args, normalized_transcriber),
         )
     finally:
-        _remove_transient_transcript_path(transcriber_text_path, text_path)
+        _remove_transient_transcript_path(
+            transcriber_text_path,
+            text_path,
+            expected_fd=transient_text_stat,
+        )
     if _is_empty_transcript_text(text):
         text = ""
         security_post_processing = _empty_security_post_processing()
