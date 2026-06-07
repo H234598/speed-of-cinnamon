@@ -1729,13 +1729,17 @@ MyApplet.prototype = {
     return this._autoPasteTitleValues(value).join(", ");
   },
 
+  _normalizedAutoPasteWindowTitle: function(value) {
+    return String(value || "").replace(NUL_RE, "").trim().toLowerCase();
+  },
+
   _autoPastePromptArgs: function() {
     let current = this._normalizeAutoPasteTitle(this.autoPasteWindowTitle) || DEFAULT_AUTO_PASTE_TITLE;
     return [
       "zenity",
       "--entry",
       "--title=Auto-Submitt",
-      "--text=Window title/class marker for trailing Enter. Empty disables Auto-Submitt.",
+      "--text=Built-in marker names match known window classes/app IDs. Custom strings match the full window title case-insensitively. Empty disables Auto-Submitt.",
       "--entry-text=" + current
     ];
   },
@@ -1836,16 +1840,15 @@ MyApplet.prototype = {
     if (!this._isUsableTargetWindow(this.targetWindow) && !this.targetWindowXTitle && !this.targetWindowXClass) {
       return false;
     }
-    let title = String(this._windowProbeValue(this.targetWindow, "get_title") || this.targetWindowXTitle || "").toLowerCase();
+    let title = this._normalizedAutoPasteWindowTitle(this._windowProbeValue(this.targetWindow, "get_title") || this.targetWindowXTitle || "");
     for (let marker of markers) {
       let key = String(marker || "").trim().toLowerCase();
       if (!key) {
         continue;
       }
-      let hasTitleMatch = title.indexOf(key) >= 0;
       if (AUTO_PASTE_IDENTITY_MARKERS[key]) {
         if (key === "codex") {
-          if (hasTitleMatch) {
+          if (title.indexOf(key) >= 0) {
             return true;
           }
           continue;
@@ -1855,7 +1858,7 @@ MyApplet.prototype = {
         }
         continue;
       }
-      if (hasTitleMatch) {
+      if (title === key) {
         return true;
       }
     }
@@ -4962,7 +4965,7 @@ MyApplet.prototype = {
 
   _targetXWindowMatchesSnapshot: function(snapshot) {
     if (!snapshot || !snapshot.xid) {
-      return true;
+      return false;
     }
     let xid = String(snapshot.xid || "").trim();
     if (!/^[0-9]+$/.test(xid)) {
@@ -5235,16 +5238,12 @@ MyApplet.prototype = {
   },
 
   _clipboardPayloadFingerprintFromText: function(payload, targetLabel) {
-    let data = ByteArray.fromString(String(payload || ""));
-    if (data.length === 0) {
-      return String(targetLabel || "") + ":0";
+    let data = String(payload || "");
+    try {
+      return String(targetLabel || "") + ":sha256:" + String(GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, data, -1));
+    } catch (err) {
+      return String(targetLabel || "") + ":unavailable";
     }
-    let step = Math.max(1, Math.floor(data.length / 16));
-    let rollingHash = 0;
-    for (let i = 0; i < data.length; i += step) {
-      rollingHash = ((rollingHash * 31) + data[i]) >>> 0;
-    }
-    return String(targetLabel || "") + ":" + String(data.length) + ":" + String(rollingHash);
   },
 
   _clipboardPayloadSignaturesMatch: function(snapshotA, snapshotB) {
@@ -5340,7 +5339,8 @@ MyApplet.prototype = {
     }
     let restored = this._restoreTargetWindowForPaste();
     if (!restored) {
-      this._setStatus("error", _("Target window could not be restored for automatic paste"), transcript);
+      this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
+      this._setStatus("done", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);
       return false;
     }
     this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
@@ -5545,7 +5545,7 @@ MyApplet.prototype = {
       }
       return;
     }
-    if (!this._targetXWindowMatchesSnapshot(expectedTargetWindow)) {
+    if (expectedTargetWindow && !this._targetXWindowMatchesSnapshot(expectedTargetWindow)) {
       this._setStatus("error", _("Target window changed before automatic paste"), this.lastTranscript);
       return;
     }
@@ -5557,7 +5557,7 @@ MyApplet.prototype = {
           if (this.appletRemoved) {
             return false;
           }
-          if (!this._targetXWindowMatchesSnapshot(expectedTargetWindow)) {
+          if (!expectedTargetWindow || !this._targetXWindowMatchesSnapshot(expectedTargetWindow)) {
             this._setStatus("error", _("Target window changed before automatic submit"), this.lastTranscript);
             return false;
           }

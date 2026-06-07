@@ -1207,6 +1207,29 @@ class RecorderTest(unittest.TestCase):
         self.assertEqual([source.id for source in sources], ["10", "11"])
         self.assertTrue(sources[0].monitor)
 
+    def test_parse_pactl_sources_rejects_control_char_sources(self) -> None:
+        poisoned_sources = """Source #12
+\tState: RUNNING
+\tName: alsa_input.poisoned
+\tDescription: Poisoned \x1b[31mMicrophone
+\tDriver: PipeWire
+\tMonitor of Sink: n/a
+
+Source #13
+\tState: SUSPENDED
+\tName: alsa_input.clean
+\tDescription: Clean Microphone
+\tDriver: PipeWire
+\tMonitor of Sink: n/a
+"""
+
+        sources = parse_pactl_sources(poisoned_sources, include_monitors=True)
+
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0].id, "13")
+        self.assertEqual(sources[0].name, "alsa_input.clean")
+        self.assertEqual(sources[0].description, "Clean Microphone")
+
     def test_list_input_sources_rejects_too_large_pactl_output(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             stdout_file = kwargs["stdout"]
@@ -1304,6 +1327,9 @@ class RecorderTest(unittest.TestCase):
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
             mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", side_effect=["owner-identity", "foreign-identity"]) as mocked_identity,
+            mock.patch("speed_of_cinnamon.recorder.os.kill", return_value=None),
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2]),
+            mock.patch("speed_of_cinnamon.recorder.time.sleep"),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
             result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
@@ -1330,43 +1356,65 @@ class RecorderTest(unittest.TestCase):
                 "speed_of_cinnamon.recorder._recording_process_identity_for_pid",
                 return_value="owner-identity",
             ) as mocked_identity,
+            mock.patch("speed_of_cinnamon.recorder.os.kill", side_effect=ProcessLookupError) as mocked_os_kill,
             mock.patch(
                 "speed_of_cinnamon.recorder._run_kill",
-                side_effect=[None, subprocess.CalledProcessError(1, ["kill"])],
             ) as mocked_kill,
         ):
             result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
 
         self.assertTrue(result)
         self.assertEqual(mocked_identity.call_count, 2)
+        mocked_os_kill.assert_called_once_with(-1234, 0)
         self.assertEqual(mocked_kill.call_args_list[0].args[0], ["kill", "-INT", "--", "-1234"])
-        self.assertEqual(mocked_kill.call_args_list[1].args[0], ["kill", "-0", "--", "-1234"])
 
     def test_stop_process_signals_recorder_process_group(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
-            mock.patch(
-                "speed_of_cinnamon.recorder._run_kill",
-                side_effect=[None, subprocess.CalledProcessError(1, ["kill"])],
-            ) as mocked_kill,
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
+            mock.patch("speed_of_cinnamon.recorder.os.kill", return_value=None),
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2]),
+            mock.patch("speed_of_cinnamon.recorder.time.sleep"),
+            mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            stop_process(1234, timeout_seconds=0.1)
+            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
 
+        self.assertFalse(result)
         self.assertEqual(mocked_kill.call_args_list[0].args[0], ["kill", "-INT", "--", "-1234"])
-        self.assertEqual(mocked_kill.call_args_list[1].args[0], ["kill", "-0", "--", "-1234"])
+        self.assertEqual(mocked_kill.call_args_list[1].args[0], ["kill", "-TERM", "--", "-1234"])
+        self.assertEqual(mocked_kill.call_args_list[2].args[0], ["kill", "-KILL", "--", "-1234"])
 
     def test_stop_process_signals_pid_when_process_is_not_group_leader(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=999),
-            mock.patch(
-                "speed_of_cinnamon.recorder._run_kill",
-                side_effect=[None, subprocess.CalledProcessError(1, ["kill"])],
-            ) as mocked_kill,
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
+            mock.patch("speed_of_cinnamon.recorder.os.kill", return_value=None),
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2]),
+            mock.patch("speed_of_cinnamon.recorder.time.sleep"),
+            mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            stop_process(1234, timeout_seconds=0.1)
+            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
 
+        self.assertFalse(result)
         self.assertEqual(mocked_kill.call_args_list[0].args[0], ["kill", "-INT", "--", "1234"])
-        self.assertEqual(mocked_kill.call_args_list[1].args[0], ["kill", "-0", "--", "1234"])
+        self.assertEqual(mocked_kill.call_args_list[1].args[0], ["kill", "-TERM", "--", "1234"])
+        self.assertEqual(mocked_kill.call_args_list[2].args[0], ["kill", "-KILL", "--", "1234"])
+
+    def test_stop_process_does_not_treat_permission_denied_kill_zero_as_success(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
+            mock.patch("speed_of_cinnamon.recorder.os.kill", side_effect=PermissionError("Operation not permitted")),
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2]),
+            mock.patch("speed_of_cinnamon.recorder.time.sleep"),
+            mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
+        ):
+            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+
+        self.assertFalse(result)
+        self.assertEqual(mocked_kill.call_args_list[0].args[0], ["kill", "-INT", "--", "-1234"])
+        self.assertEqual(mocked_kill.call_args_list[1].args[0], ["kill", "-TERM", "--", "-1234"])
+        self.assertEqual(mocked_kill.call_args_list[2].args[0], ["kill", "-KILL", "--", "-1234"])
 
     def test_stop_process_returns_when_process_is_already_gone(self) -> None:
         with (

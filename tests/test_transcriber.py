@@ -1257,6 +1257,31 @@ class TranscriberTest(unittest.TestCase):
                     side_effect=AssertionError("backend executed"),
                 ),
             ):
+                with self.assertRaisesRegex(TranscriptionError, "failed to snapshot audio file for backend"):
+                    transcribe_with_openai_whisper(audio, "en", text)
+
+    def test_openai_whisper_fails_closed_if_audio_is_overwritten_with_same_size_after_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text = Path(tmp) / "sample.txt"
+            real_snapshot = transcriber_module._snapshot_private_file
+
+            def snapshot_and_overwrite(path: Path, *, field_name: str, include_hash: bool = False) -> tuple[int, int, int, int, int, int] | tuple[int, int, int, int, int, int, str]:
+                snapshot = real_snapshot(path, field_name=field_name, include_hash=include_hash)
+                with path.open("r+b") as handle:
+                    handle.seek(0)
+                    handle.write(b"muted")
+                return snapshot
+
+            with (
+                mock.patch("speed_of_cinnamon.transcriber._snapshot_private_file", side_effect=snapshot_and_overwrite),
+                mock.patch("speed_of_cinnamon.transcriber._command_path", return_value="/usr/bin/whisper"),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._run_limited_process",
+                    side_effect=AssertionError("backend executed"),
+                ),
+            ):
                 with self.assertRaisesRegex(TranscriptionError, "failed to stage audio file for backend access"):
                     transcribe_with_openai_whisper(audio, "en", text)
 
@@ -1490,7 +1515,7 @@ class TranscriberTest(unittest.TestCase):
                     side_effect=AssertionError("backend executed"),
                 ),
             ):
-                with self.assertRaisesRegex(TranscriptionError, "failed to stage audio file for backend access"):
+                with self.assertRaisesRegex(TranscriptionError, "failed to snapshot audio file for backend"):
                     transcribe_with_whisper_cpp(audio, "de", text, str(model))
 
     def test_command_stdout_is_saved_as_transcript(self) -> None:
@@ -1923,9 +1948,11 @@ class TranscriberTest(unittest.TestCase):
             snapshot_calls: list[tuple[Path, str]] = []
             real_snapshot = transcriber_module._snapshot_private_file
 
-            def snapshot_and_swap(path: Path, *, field_name: str) -> tuple[int, int, int, int, int]:
+            def snapshot_and_swap(path: Path, *, field_name: str, include_hash: bool = False) -> tuple[int, int, int, int, int, int] | tuple[
+                int, int, int, int, int, int, str
+            ]:
                 snapshot_calls.append((path, field_name))
-                snapshot = real_snapshot(path, field_name=field_name)
+                snapshot = real_snapshot(path, field_name=field_name, include_hash=include_hash)
                 replacement.replace(path)
                 return snapshot
 
@@ -1940,6 +1967,43 @@ class TranscriberTest(unittest.TestCase):
                 mock.patch(
                     "speed_of_cinnamon.transcriber._open_http_request",
                     side_effect=blocked_request,
+                ),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "changed between validation and read"):
+                    transcribe_with_openai_compatible_api(
+                        audio,
+                        "de",
+                        Path(tmp) / "sample.txt",
+                        "gpt-4o-transcribe",
+                        "https://api.openai.com/v1",
+                    )
+        self.assertEqual(snapshot_calls, [(audio, "audio file for API upload")])
+
+    def test_openai_compatible_api_rejects_same_size_in_place_audio_mutation_between_validation_and_upload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            snapshot_calls: list[tuple[Path, str]] = []
+            real_snapshot = transcriber_module._snapshot_private_file
+
+            def snapshot_and_mutate(path: Path, *, field_name: str, include_hash: bool = False) -> tuple[int, int, int, int, int, int] | tuple[
+                int, int, int, int, int, int, str
+            ]:
+                snapshot_calls.append((path, field_name))
+                snapshot = real_snapshot(path, field_name=field_name, include_hash=include_hash)
+                with path.open("r+b") as handle:
+                    handle.seek(0)
+                    handle.write(b"muted")
+                return snapshot
+
+            with (
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._snapshot_private_file",
+                    side_effect=snapshot_and_mutate,
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._open_http_request",
+                    side_effect=AssertionError("request should not be made after audio mutation"),
                 ),
             ):
                 with self.assertRaisesRegex(TranscriptionError, "changed between validation and read"):
@@ -2475,7 +2539,7 @@ class TranscriberTest(unittest.TestCase):
                 ),
                 mock.patch("speed_of_cinnamon.transcriber.validate_audio_file", side_effect=validate_and_swap),
             ):
-                with self.assertRaisesRegex(TranscriptionError, "failed to stage audio file for backend access"):
+                with self.assertRaisesRegex(TranscriptionError, "failed to snapshot audio file for backend"):
                     transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model))
 
     def test_auto_prefers_custom_command(self) -> None:
@@ -2577,6 +2641,38 @@ class TranscriberTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.transcriber.resolve_whisper_cpp_command", return_value="/usr/bin/whisper-cli"),
             ):
                 self.assertEqual(resolve_transcriber(TranscriberConfig(whisper_model=str(model))), "faster-whisper")
+
+    def test_auto_rejects_symlinked_whisper_model_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            real_model = Path(tmp) / "custom-ct2-model"
+            real_model.mkdir()
+            model = Path(tmp) / "symlinked-ct2-model"
+            model.symlink_to(real_model, target_is_directory=True)
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.faster_whisper_available", return_value=True),
+                mock.patch("speed_of_cinnamon.transcriber.model_backend_for_path", return_value=""),
+                mock.patch("speed_of_cinnamon.transcriber.resolve_whisper_cpp_command", return_value="/usr/bin/whisper-cli"),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "must not pass through a symlink"):
+                    resolve_transcriber(TranscriberConfig(whisper_model=str(model)))
+
+    def test_explicit_faster_whisper_rejects_symlinked_whisper_model_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            real_model = Path(tmp) / "custom-ct2-model"
+            real_model.mkdir()
+            model = Path(tmp) / "symlinked-ct2-model"
+            model.symlink_to(real_model, target_is_directory=True)
+            with self.assertRaisesRegex(TranscriptionError, "must not pass through a symlink"):
+                resolve_transcriber(TranscriberConfig(backend="faster-whisper", whisper_model=str(model)))
+
+    def test_auto_rejects_symlinked_whisper_model_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            real_model = Path(tmp) / "custom.model"
+            real_model.write_bytes(b"dummy")
+            model = Path(tmp) / "symlinked.model"
+            model.symlink_to(real_model)
+            with self.assertRaisesRegex(TranscriptionError, "must not pass through a symlink"):
+                resolve_transcriber(TranscriberConfig(whisper_model=str(model)))
 
     def test_configured_directory_model_requires_faster_whisper_module(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

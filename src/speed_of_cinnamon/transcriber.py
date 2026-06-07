@@ -5,6 +5,7 @@ import shlex
 import subprocess  # nosec B404
 import tempfile
 import io
+import hashlib
 import json
 import os
 import stat as stat_module
@@ -569,7 +570,7 @@ def _read_private_file_bytes(
     *,
     field_name: str,
     max_bytes: int | None = None,
-    expected_snapshot: tuple[int, int, int, int, int] | None = None,
+    expected_snapshot: tuple[int, int, int, int, int, int, str] | tuple[int, int, int, int, int, int] | None = None,
 ) -> bytes:
     if not isinstance(path, Path):
         raise TranscriptionError("path must be a Path")
@@ -577,12 +578,20 @@ def _read_private_file_bytes(
         raise TranscriptionError("max_bytes must be a non-negative integer")
     if isinstance(field_name, bool) or not isinstance(field_name, str):
         raise TranscriptionError("field_name must be text")
-    if expected_snapshot is not None and (
-        not isinstance(expected_snapshot, tuple)
-        or len(expected_snapshot) != 5
-        or any(isinstance(part, bool) or not isinstance(part, int) for part in expected_snapshot)
-    ):
-        raise TranscriptionError(f"failed to read {field_name}: {path}")
+    expected_snapshot_metadata: tuple[int, int, int, int, int, int] | None = None
+    expected_snapshot_digest: str | None = None
+    if expected_snapshot is not None:
+        if (
+            not isinstance(expected_snapshot, tuple)
+            or len(expected_snapshot) not in (6, 7)
+            or any(isinstance(part, bool) or not isinstance(part, int) for part in expected_snapshot[:6])
+        ):
+            raise TranscriptionError(f"failed to read {field_name}: {path}")
+        expected_snapshot_metadata = expected_snapshot[:6]
+        if len(expected_snapshot) == 7:
+            if not isinstance(expected_snapshot[6], str) or isinstance(expected_snapshot[6], bool):
+                raise TranscriptionError(f"failed to read {field_name}: {path}")
+            expected_snapshot_digest = expected_snapshot[6]
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
         raise TranscriptionError(f"secure {field_name} open is not supported on this platform")
@@ -590,7 +599,7 @@ def _read_private_file_bytes(
     fd: int | None = None
     parent_fd: int | None = None
 
-    def _snapshot_fd(fd: int) -> tuple[int, int, int, int, int]:
+    def _snapshot_fd(fd: int) -> tuple[int, int, int, int, int, int]:
         file_stat = os.fstat(fd)
         return (
             file_stat.st_dev,
@@ -598,6 +607,7 @@ def _read_private_file_bytes(
             file_stat.st_mode,
             getattr(file_stat, "st_nlink", 1),
             file_stat.st_size,
+            getattr(file_stat, "st_mtime_ns", 0),
         )
 
     try:
@@ -605,7 +615,7 @@ def _read_private_file_bytes(
         fd = os.open(path.name, os.O_RDONLY | nofollow_flag | nonblock_flag, dir_fd=parent_fd)
         assert_fd_is_regular_private_file(fd, field_name=field_name)
         observed_snapshot = _snapshot_fd(fd)
-        if expected_snapshot is not None and observed_snapshot != expected_snapshot:
+        if expected_snapshot_metadata is not None and observed_snapshot != expected_snapshot_metadata:
             raise TranscriptionError(f"{field_name} changed between validation and read")
     except OSError as exc:
         if parent_fd is not None:
@@ -647,11 +657,17 @@ def _read_private_file_bytes(
             parent_fd = None
         raise TranscriptionError(f"failed to read {field_name}: {path}") from exc
     try:
+        hasher = hashlib.sha256() if expected_snapshot_digest is not None else None
         if max_bytes is None:
-            return handle.read()
-        data = handle.read(max_bytes + 1)
-        if len(data) > max_bytes:
-            raise TranscriptionError(f"{field_name} is too large")
+            data = handle.read()
+        else:
+            data = handle.read(max_bytes + 1)
+            if len(data) > max_bytes:
+                raise TranscriptionError(f"{field_name} is too large")
+        if hasher is not None:
+            hasher.update(data)
+            if hasher.hexdigest() != expected_snapshot_digest:
+                raise TranscriptionError(f"{field_name} changed between validation and read")
         return data
     except OSError as exc:
         raise TranscriptionError(f"failed to read {field_name}: {path}") from exc
@@ -662,7 +678,12 @@ def _read_private_file_bytes(
                 os.close(parent_fd)
 
 
-def _snapshot_private_file(path: Path, *, field_name: str) -> tuple[int, int, int, int, int]:
+def _snapshot_private_file(
+    path: Path,
+    *,
+    field_name: str,
+    include_hash: bool = False,
+) -> tuple[int, int, int, int, int, int] | tuple[int, int, int, int, int, int, str]:
     if not isinstance(path, Path):
         raise TranscriptionError("path must be a Path")
     if isinstance(field_name, bool) or not isinstance(field_name, str):
@@ -686,25 +707,73 @@ def _snapshot_private_file(path: Path, *, field_name: str) -> tuple[int, int, in
         if fd is not None:
             with suppress(OSError):
                 os.close(fd)
-    return (
+    snapshot = (
         file_stat.st_dev,
         file_stat.st_ino,
         file_stat.st_mode,
         getattr(file_stat, "st_nlink", 1),
         file_stat.st_size,
+        getattr(file_stat, "st_mtime_ns", 0),
     )
+    if not include_hash:
+        return snapshot
+    hash_state = hashlib.sha256()
+    fd = None
+    try:
+        fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name=field_name)
+        assert_fd_is_regular_private_file(fd, field_name=field_name)
+        handle = os.fdopen(fd, "rb")
+        with handle:
+            fd = None
+            while True:
+                chunk = handle.read(65536)
+                if not chunk:
+                    break
+                hash_state.update(chunk)
+    except OSError as exc:
+        raise TranscriptionError(f"failed to snapshot {field_name}: {path}") from exc
+    except RuntimeError as exc:
+        raise TranscriptionError(f"failed to snapshot {field_name}: {path}") from exc
+    finally:
+        if fd is not None:
+            with suppress(OSError):
+                os.close(fd)
+    return (*snapshot, hash_state.hexdigest())
 
 
 @contextmanager
-def _staged_audio_file_for_local_backend(audio_path: Path):
+def _staged_audio_file_for_local_backend(
+    audio_path: Path,
+    *,
+    expected_snapshot: tuple[int, int, int, int, int, int] | tuple[int, int, int, int, int, int, str] | None = None,
+):
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
         raise TranscriptionError("failed to stage audio file for backend access")
+    if expected_snapshot is None:
+        expected_snapshot = _snapshot_private_file(
+            audio_path,
+            field_name="audio file for backend",
+            include_hash=True,
+        )
+    if (
+        not isinstance(expected_snapshot, tuple)
+        or len(expected_snapshot) not in (6, 7)
+        or any(isinstance(part, bool) or not isinstance(part, int) for part in expected_snapshot[:6])
+    ):
+        raise TranscriptionError("failed to stage audio file for backend access")
+    expected_snapshot_metadata = expected_snapshot[:6]
+    expected_snapshot_digest = None
+    if len(expected_snapshot) == 7:
+        if not isinstance(expected_snapshot[6], str) or isinstance(expected_snapshot[6], bool):
+            raise TranscriptionError("failed to stage audio file for backend access")
+        expected_snapshot_digest = expected_snapshot[6]
     source_fd: int | None = None
     parent_fd: int | None = None
     staging_dir: Path | None = None
     staging_path: Path | None = None
+    staging_hasher = hashlib.sha256() if expected_snapshot_digest is not None else None
     try:
         staging_dir = Path(tempfile.mkdtemp(prefix=".sc-audio-"))
         staging_path = staging_dir / audio_path.name
@@ -712,10 +781,29 @@ def _staged_audio_file_for_local_backend(audio_path: Path):
             parent_fd = open_directory_without_following_symlinks(audio_path.parent, field_name="audio file directory")
             source_fd = os.open(audio_path.name, os.O_RDONLY | nofollow_flag | nonblock_flag, dir_fd=parent_fd)
             assert_fd_is_regular_private_file(source_fd, field_name="audio file for backend")
+            source_stat = os.fstat(source_fd)
+            source_snapshot = (
+                source_stat.st_dev,
+                source_stat.st_ino,
+                source_stat.st_mode,
+                getattr(source_stat, "st_nlink", 1),
+                source_stat.st_size,
+                getattr(source_stat, "st_mtime_ns", 0),
+            )
+            if source_snapshot != expected_snapshot_metadata:
+                raise TranscriptionError("audio file changed between validation and copy")
             with os.fdopen(source_fd, "rb") as source:
                 source_fd = None
                 with open(staging_path, "wb") as target:
-                    shutil.copyfileobj(source, target)
+                    while True:
+                        chunk = source.read(65536)
+                        if not chunk:
+                            break
+                        if staging_hasher is not None:
+                            staging_hasher.update(chunk)
+                        target.write(chunk)
+            if staging_hasher is not None and staging_hasher.hexdigest() != expected_snapshot_digest:
+                raise TranscriptionError("audio file changed between validation and copy")
             if staging_path.stat().st_size == 0:
                 raise TranscriptionError("audio file is missing or empty")
         except Exception as exc:
@@ -744,9 +832,13 @@ def _staged_audio_file_for_local_backend(audio_path: Path):
                 staging_dir.rmdir()
 
 
-def _validate_audio_file_for_upload(path: Path) -> tuple[Path, tuple[int, int, int, int, int]]:
+def _validate_audio_file_for_upload(path: Path) -> tuple[Path, tuple[int, int, int, int, int, int, str]]:
     normalized = _validate_audio_path_shape(path)
-    snapshot = _snapshot_private_file(normalized, field_name="audio file for API upload")
+    snapshot = _snapshot_private_file(
+        normalized,
+        field_name="audio file for API upload",
+        include_hash=True,
+    )
     if not stat_module.S_ISREG(snapshot[2]):
         raise TranscriptionError(f"audio path is not a regular file: {path}")
     _validate_audio_extension(normalized)
@@ -878,13 +970,18 @@ def transcribe_with_openai_whisper(
     write_transcript: bool = True,
 ) -> str:
     audio_path = validate_audio_file(audio_path)
+    audio_snapshot = _snapshot_private_file(
+        audio_path,
+        field_name="audio file for backend",
+        include_hash=True,
+    )
     try:
         _command_path("whisper")
     except TranscriptionError as exc:
         raise TranscriptionError("OpenAI whisper command is not installed") from exc
     output_dir = text_path.parent
     existing_snapshot = _snapshot_existing_file(output_dir / f"{audio_path.stem}.txt")
-    with _staged_audio_file_for_local_backend(audio_path) as staged_audio_path:
+    with _staged_audio_file_for_local_backend(audio_path, expected_snapshot=audio_snapshot) as staged_audio_path:
         generated = output_dir / f"{audio_path.stem}.txt"
         try:
             _run_limited_process(
@@ -1011,7 +1108,12 @@ def transcribe_with_whisper_cpp(
     if not command:
         raise TranscriptionError("whisper.cpp command is not installed")
     normalized_command = Path(command).name
-    with _staged_audio_file_for_local_backend(audio_path) as staged_audio_path:
+    audio_snapshot = _snapshot_private_file(
+        audio_path,
+        field_name="audio file for backend",
+        include_hash=True,
+    )
+    with _staged_audio_file_for_local_backend(audio_path, expected_snapshot=audio_snapshot) as staged_audio_path:
         invocation, generated_path = _whisper_cpp_invocation(
             command,
             staged_audio_path,
@@ -1104,7 +1206,12 @@ def transcribe_with_faster_whisper(
     except ImportError as exc:
         raise TranscriptionError("faster-whisper is not installed") from exc
 
-    with _staged_audio_file_for_local_backend(audio_path) as staged_audio_path:
+    audio_snapshot = _snapshot_private_file(
+        audio_path,
+        field_name="audio file for backend",
+        include_hash=True,
+    )
+    with _staged_audio_file_for_local_backend(audio_path, expected_snapshot=audio_snapshot) as staged_audio_path:
         try:
             model = WhisperModel(model_path, device="cpu", compute_type="int8")
             segments, _info = model.transcribe(
@@ -1262,7 +1369,9 @@ def _multipart_form_data(
     fields: dict[str, str],
     file_field: str,
     file_path: Path,
-    expected_file_snapshot: tuple[int, int, int, int, int] | None = None,
+    expected_file_snapshot: tuple[int, int, int, int, int, int]
+    | tuple[int, int, int, int, int, int, str]
+    | None = None,
 ) -> tuple[bytearray, str]:
     boundary = "speed-of-cinnamon-" + uuid.uuid4().hex
     body = bytearray()
@@ -1472,12 +1581,16 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
     has_configured_model = bool(configured_model)
     configured_model_backend = model_backend_for_path(configured_model) if configured_model else ""
     configured_model_is_dir = False
+    configured_model_path = None
     if configured_model:
         try:
             configured_model_path = Path(configured_model).expanduser()
+            assert_no_symlink_ancestors(configured_model_path, field_name="configured whisper model path")
             configured_model_is_dir = configured_model_path.exists() and configured_model_path.is_dir()
         except (OSError, ValueError):
             configured_model_is_dir = False
+        except RuntimeError as exc:
+            raise TranscriptionError(str(exc)) from exc
     local_model = configured_model or default_ctranslate2_model_path(config.language) or default_whisper_cpp_model_path(config.language)
     if backend == "auto":
         if config.command_template.strip():

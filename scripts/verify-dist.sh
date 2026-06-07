@@ -230,6 +230,53 @@ if find "${package_dir}" -type l -print -quit | grep -q .; then
   printf 'archive expansion contains unsupported symlink entries.\n' >&2
   exit 1
 fi
+
+python3 - "${package_dir}" <<'PY'
+from pathlib import Path
+import stat
+import sys
+
+
+def validate_mode(path: Path) -> None:
+    mode = path.lstat().st_mode
+    permissions = stat.S_IMODE(mode)
+    if stat.S_ISLNK(mode):
+        raise SystemExit(f"archive expansion contains unsupported symlink entry: {path}")
+    if stat.S_ISDIR(mode):
+        if permissions & 0o7000:
+            raise SystemExit(f"archive directory has disallowed setuid/setgid/sticky bits: {path}")
+        if permissions & 0o022:
+            raise SystemExit(f"archive directory is group/world writable: {path}")
+        if permissions & 0o777 > 0o755:
+            raise SystemExit(f"archive directory has disallowed permissions: {path} ({oct(permissions & 0o777)})")
+        return
+    if not stat.S_ISREG(mode):
+        raise SystemExit(f"archive contains unsupported entry type: {path}")
+
+    if permissions & 0o7000:
+        raise SystemExit(f"archive file has disallowed setuid/setgid/sticky bits: {path}")
+    if permissions & 0o022:
+        raise SystemExit(f"archive file is group/world writable: {path}")
+
+    file_permissions = permissions & 0o777
+    if file_permissions & 0o111:
+        if file_permissions != 0o755:
+            raise SystemExit(
+                "archive executable file has disallowed permissions "
+                f"({oct(file_permissions)}): {path}"
+            )
+    elif file_permissions > 0o644:
+        raise SystemExit(
+            f"archive non-executable file has disallowed permissions ({oct(file_permissions)}): {path}"
+        )
+
+
+package_root = Path(sys.argv[1])
+validate_mode(package_root)
+for child in package_root.rglob("*"):
+  validate_mode(child)
+PY
+
 if grep -Fq 'command -v -- python3' "${package_dir}/scripts/safe-local-fs.py"; then
   printf 'archive backend wrapper helper must not resolve python3 through PATH at runtime.\n' >&2
   exit 1

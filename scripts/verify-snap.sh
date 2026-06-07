@@ -179,7 +179,85 @@ REQUIRED_ENTRIES = {
 REQUIRED_REGULAR_ENTRIES = {
     "squashfs-root/meta/snap.yaml",
     "squashfs-root/bin/speed-of-cinnamon",
+    "squashfs-root/src/speed_of_cinnamon/cli.py",
 }
+
+
+def symbolic_mode_to_octal(mode_text: str) -> int:
+    if len(mode_text) != 10:
+        raise SystemExit(f"snap package contains malformed mode: {mode_text!r}")
+    if mode_text[0] not in {"d", "-", "l"}:
+        raise SystemExit(f"snap package contains unsupported entry type marker: {mode_text!r}")
+
+    mode = 0
+
+    perms = mode_text[1:]
+    read_write_execute = (
+        (perms[0:3], (0o400, 0o200, 0o100), (0o4000, 0o0, 0o4000)),
+        (perms[3:6], (0o40, 0o20, 0o10), (0o2000, 0o0, 0o2000)),
+        (perms[6:9], (0o4, 0o2, 0o1), (0o0, 0o0, 0o1000)),
+    )
+    for chunk, permissions, specials in read_write_execute:
+        read_char, write_char, exec_char = chunk
+        if read_char not in {"r", "-"}:
+            raise SystemExit(f"snap package contains malformed mode: {mode_text!r}")
+        if write_char not in {"w", "-"}:
+            raise SystemExit(f"snap package contains malformed mode: {mode_text!r}")
+        mode |= permissions[0] if read_char == "r" else 0
+        mode |= permissions[1] if write_char == "w" else 0
+
+        if exec_char == "x":
+            mode |= permissions[2]
+        elif exec_char == "s":
+            mode |= permissions[2]
+            mode |= specials[0]
+        elif exec_char == "S":
+            mode |= specials[0]
+        elif exec_char == "-":
+            pass
+        elif exec_char == "t":
+            mode |= permissions[2]
+            mode |= specials[2]
+        elif exec_char == "T":
+            mode |= specials[2]
+        else:
+            raise SystemExit(f"snap package contains malformed mode: {mode_text!r}")
+
+    return mode
+
+
+def enforce_mode_policy(path: PurePosixPath, mode_text: str, is_link: bool) -> None:
+    # Fail-closed policy: reject setuid/setgid/sticky and all group/world writable bits.
+    # Non-executable files may be at most 0644, executable regular files must be 0755.
+    # Directories are limited to at most 0755.
+    if is_link:
+        return
+
+    mode = symbolic_mode_to_octal(mode_text)
+    permissions = mode & 0o777
+
+    if mode & 0o7000:
+        raise SystemExit(f"snap package contains entry with setuid/setgid/sticky bits: {path}")
+    if mode & 0o022:
+        raise SystemExit(f"snap package contains group/world-writable entry: {path}")
+
+    if mode_text[0] == "d":
+        if permissions > 0o755:
+            raise SystemExit(
+                f"snap package directory has disallowed permissions ({oct(permissions)}): {path}"
+            )
+        return
+
+    if permissions & 0o111:
+        if permissions != 0o755:
+            raise SystemExit(
+                f"snap package executable file has disallowed permissions ({oct(permissions)}): {path}"
+            )
+    else:
+        if permissions > 0o644:
+            raise SystemExit(
+                f"snap package non-executable file has disallowed permissions ({oct(permissions)}): {path}"
+            )
 
 
 def contains_unsafe_text(value: str) -> bool:
@@ -229,9 +307,10 @@ for raw in Path(sys.argv[1]).read_text(encoding="utf-8").split("\n"):
         raise SystemExit(f"snap package contains malformed link entry: {path_text}")
     if link_target is None and (not mode or mode[0] not in {"-", "d"}):
         raise SystemExit(f"snap package contains unsupported entry type: {path_text}")
-    path = validate_snap_path(path_text)
+    validated_path = validate_snap_path(path_text)
+    enforce_mode_policy(validated_path, mode, link_target is not None)
     if link_target is not None:
-        validate_symlink_target(path, link_target)
+        validate_symlink_target(validated_path, link_target)
     if path_text in seen:
         raise SystemExit(f"snap package contains duplicate entry: {path_text}")
     seen[path_text] = mode

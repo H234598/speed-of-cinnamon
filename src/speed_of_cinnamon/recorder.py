@@ -1051,8 +1051,18 @@ def parse_pactl_sources(text: str, default_source: str = "", include_monitors: b
     sources: list[InputSource] = []
     current: dict[str, str] | None = None
 
+    def _current_source_is_safe() -> bool:
+        if current is None:
+            return False
+        return not any(
+            _contains_escaped_null(value) or _contains_http_header_control_chars(value)
+            for value in current.values()
+        )
+
     def finish() -> None:
         if not current or not current.get("name"):
+            return
+        if not _current_source_is_safe():
             return
         name = current["name"]
         monitor = current.get("monitor_of_sink", "n/a") != "n/a" or name.endswith(".monitor")
@@ -1174,6 +1184,16 @@ def _run_kill(command: list[str] | tuple[str, ...], *, check_exit: bool) -> None
 
 def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
     return (left.st_dev, left.st_ino, left.st_mode) == (right.st_dev, right.st_ino, right.st_mode)
+
+
+def _process_is_gone(process_target: str) -> bool:
+    try:
+        os.kill(int(process_target), 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return False
 
 
 def _open_recorder_log_file(log_path: Path) -> tuple[io.BufferedWriter, bool]:
@@ -1325,12 +1345,8 @@ def stop_process(
     while time.monotonic() < deadline:
         if not _recording_process_identity_matches(pid, expected_process_identity):
             return False
-        try:
-            _run_kill(["kill", "-0", "--", process_target], check_exit=True)
-        except subprocess.CalledProcessError:
+        if _process_is_gone(process_target):
             return True
-        except RecorderError:
-            raise
         time.sleep(0.1)
 
     if not _recording_process_identity_matches(pid, expected_process_identity):
@@ -1340,15 +1356,14 @@ def stop_process(
     time.sleep(0.5)
     if not _recording_process_identity_matches(pid, expected_process_identity):
         return False
-    try:
-        _run_kill(["kill", "-0", "--", process_target], check_exit=True)
-    except subprocess.CalledProcessError:
+    if _process_is_gone(process_target):
         return True
-    if not _recording_process_identity_matches(pid, expected_process_identity):
-        return False
 
     try:
         _run_kill(["kill", "-KILL", "--", process_target], check_exit=False)
     except RecorderError as exc:
         raise RecorderError(f"failed to stop recorder process {pid}: {exc}") from exc
-    return True
+    time.sleep(0.1)
+    if not _recording_process_identity_matches(pid, expected_process_identity):
+        return False
+    return _process_is_gone(process_target)

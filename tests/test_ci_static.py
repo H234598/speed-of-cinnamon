@@ -1075,6 +1075,12 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("squashfs-root/bin/speed-of-cinnamon", verify_snap)
         self.assertIn("squashfs-root/src/speed_of_cinnamon/cli.py", verify_snap)
         self.assertIn("REQUIRED_REGULAR_ENTRIES = {", verify_snap)
+        required_regular_entries_start = verify_snap.index("REQUIRED_REGULAR_ENTRIES = {")
+        required_regular_entries_end = verify_snap.index("def symbolic_mode_to_octal", required_regular_entries_start)
+        self.assertIn(
+            '    "squashfs-root/src/speed_of_cinnamon/cli.py",',
+            verify_snap[required_regular_entries_start:required_regular_entries_end],
+        )
         self.assertIn("for required_entry in REQUIRED_REGULAR_ENTRIES:", verify_snap)
         self.assertIn('required entry is not regular file', verify_snap)
         self.assertLess(
@@ -1588,3 +1594,25 @@ class CiStaticTest(unittest.TestCase):
         self.assertTrue(tarball.stat().st_size > 0)
         with tarfile.open(tarball, "r:gz") as archive:
             self.assertTrue(any(member.isdir() for member in archive.getmembers()))
+
+    def test_verify_dist_script_enforces_file_mode_policy(self) -> None:
+        verify_dist = (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(encoding="utf-8")
+
+        self.assertIn("def validate_mode(path: Path)", verify_dist)
+        self.assertIn("permissions & 0o7000", verify_dist)
+        self.assertIn("permissions & 0o022", verify_dist)
+        self.assertIn("file_permissions & 0o111", verify_dist)
+        self.assertIn("archive executable file has disallowed permissions", verify_dist)
+        self.assertIn("file_permissions > 0o644", verify_dist)
+        self.assertIn("permissions & 0o777 > 0o755", verify_dist)
+
+    def test_verify_snap_script_enforces_file_mode_policy(self) -> None:
+        verify_snap = (REPO_ROOT / "scripts" / "verify-snap.sh").read_text(encoding="utf-8")
+
+        self.assertIn("symbolic_mode_to_octal", verify_snap)
+        self.assertIn("def enforce_mode_policy(path: PurePosixPath, mode_text: str, is_link: bool)", verify_snap)
+        self.assertIn("mode & 0o7000", verify_snap)
+        self.assertIn("mode & 0o022", verify_snap)
+        self.assertIn("permissions > 0o644", verify_snap)
+        self.assertIn("permissions != 0o755", verify_snap)
+        self.assertIn("directory has disallowed permissions", verify_snap)
