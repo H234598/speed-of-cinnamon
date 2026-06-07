@@ -9,6 +9,7 @@
       "type": "page",
       "title": "Speed of Cinnamon",
       "sections": [
+        "settings-logo-header-section",
         "main-menu-map-section",
         "activation-section",
         "recording-section",
@@ -16,7 +17,8 @@
         "notification-section",
         "output-section",
         "text-polishing-section",
-        "backend-section"
+        "backend-section",
+        "settings-logo-footer-section"
       ]
     },
     "about-page": {
@@ -31,6 +33,20 @@
       "title": "Main menu settings",
       "keys": [
         "main-menu-settings-map"
+      ]
+    },
+    "settings-logo-header-section": {
+      "type": "section",
+      "title": "",
+      "keys": [
+        "settings-logo-header"
+      ]
+    },
+    "settings-logo-footer-section": {
+      "type": "section",
+      "title": "",
+      "keys": [
+        "settings-logo-footer"
       ]
     },
     "activation-section": {
@@ -89,7 +105,9 @@
         "typing-delay-ms",
         "max-transcript-files",
         "artifact-encryption",
-        "artifact-encryption-help",
+        "artifact-encryption-help-keyring",
+        "artifact-encryption-help-passphrase",
+        "artifact-encryption-help-off",
         "auto-paste-window-title"
       ]
     },
@@ -146,6 +164,20 @@
   "main-menu-settings-map": {
     "type": "label",
     "description": "All persistent settings from the applet menu are available here. Recording options are in Recording, output and Auto-Submitt are in Text output, personal context and vocabulary are in Personalization, text polishing prompts are in Text polishing, and voice/backend values are in Voice model and external API. Dynamic actions such as downloading models, opening transcript folders, diagnostics, cleanup, and alarm commands remain in the applet panel menu."
+  },
+  "settings-logo-header": {
+    "type": "custom",
+    "file": "SettingsLogo.py",
+    "widget": "HeaderLogo",
+    "description": "Speed of Cinnamon header logo",
+    "default": ""
+  },
+  "settings-logo-footer": {
+    "type": "custom",
+    "file": "SettingsLogo.py",
+    "widget": "FooterLogo",
+    "description": "Speed of Cinnamon footer logo",
+    "default": ""
   },
   "toggle-keybinding": {
     "type": "keybinding",
@@ -554,7 +586,7 @@
   "artifact-encryption": {
     "type": "combobox",
     "description": "Stored transcript and recording encryption",
-    "tooltip": "Controls encryption for stored transcript files and retained recording files. Secret Service keyring is the recommended desktop mode. Passphrase mode uses SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE or SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE and is also the passphrase fallback for CLI/keyring failures. Off stores files as plaintext.",
+    "tooltip": "Controls encryption for stored transcript files and retained recording files. Secret Service keyring is the recommended desktop mode. Passphrase mode uses SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE, an existing ~/.config/speed-of-cinnamon/artifact.key, SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE, or generates ~/.config/speed-of-cinnamon/artifact.key at runtime when no passphrase source exists. This is also the passphrase fallback for keyring failures. Off stores files as plaintext.",
     "options": {
       "Secret Service keyring": "keyring",
       "Passphrase": "passphrase",
@@ -562,9 +594,22 @@
     },
     "default": "keyring"
   },
-  "artifact-encryption-help": {
+  "artifact-encryption-help-keyring": {
     "type": "label",
-    "description": "Keyring: Uses the desktop Secret Service and is recommended for normal desktop use.\nPassphrase: CLI-friendly mode. The key is derived from SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE, or SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE if no file is configured.\nFallback and fail closed: If Keyring fails, Speed of Cinnamon falls back to Passphrase only when a passphrase is configured. If encryption is selected but no usable key source exists, stored transcript and recording writes fail closed instead of silently keeping plaintext.\nWarning popup: If the backend ever reports that a stored artifact was written without encryption while encryption is expected, the applet shows a critical warning popup for that transcription.",
-    "tooltip": "Use Keyring for normal desktop use. Use Passphrase for CLI-friendly or portable setups. Use Off only when plaintext transcript and recording files are acceptable."
+    "description": "Keyring: Uses the desktop Secret Service and is recommended for normal desktop use.\nFallback and fail closed: If Keyring fails, Speed of Cinnamon falls back to Passphrase and can generate the default key file at runtime. If encryption is selected but no usable key source can be read or generated, stored transcript and recording writes fail closed instead of silently keeping plaintext.\nWarning popup: If the backend ever reports that a stored artifact was written without encryption while encryption is expected, the applet shows a critical warning popup.",
+    "tooltip": "Recommended for normal desktop use. Stores the encryption key in the desktop Secret Service and only uses the passphrase fallback when the keyring path fails.",
+    "dependency": "artifact-encryption=keyring"
+  },
+  "artifact-encryption-help-passphrase": {
+    "type": "label",
+    "description": "Passphrase: CLI-friendly mode. The key is derived from SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE, an existing ~/.config/speed-of-cinnamon/artifact.key, SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE, or a newly generated ~/.config/speed-of-cinnamon/artifact.key when no passphrase source exists.\nWeak key handling: A weak default artifact.key is replaced with a newly generated random key at runtime. Weak explicit environment passphrases or explicitly configured passphrase files are rejected instead of being silently overwritten.\nKey file requirements: The key file must belong to your user, must not be a symlink, must not be hardlinked, and must use mode 0600 inside a private 0700 directory.\nWarning popup: If the backend rejects the passphrase/key file, the applet shows a critical warning popup.",
+    "tooltip": "Use this for CLI-friendly or portable setups. The default key file is created automatically when no explicit passphrase source is configured.",
+    "dependency": "artifact-encryption=passphrase"
+  },
+  "artifact-encryption-help-off": {
+    "type": "label",
+    "description": "Off: Stored transcript files and retained recording files are kept as plaintext.\nSecurity impact: Use this only when plaintext transcript and recording files are acceptable. No encryption key, passphrase fallback, or key file is used.",
+    "tooltip": "Disables encryption for stored transcript and retained recording artifacts.",
+    "dependency": "artifact-encryption=off"
   }
 }

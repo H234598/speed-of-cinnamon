@@ -443,6 +443,7 @@ MyApplet.prototype = {
     this.notificationSessionActive = false;
     this.lastNotificationKey = "";
     this.lastArtifactEncryptionWarningKey = "";
+    this.lastRejectedArtifactPassphraseWarningKey = "";
     this.selfProtectionNoticeKey = "";
     this.selfProtectionNoticeAtMs = 0;
     this.autoTranscribeRecordingKey = "";
@@ -784,6 +785,10 @@ MyApplet.prototype = {
     let listTranscripts = new PopupMenu.PopupIconMenuItem(_("List all Transcripts"), "view-list-symbolic", St.IconType.SYMBOLIC);
     listTranscripts.connect("activate", () => this._listAllTranscripts());
     this.maintenanceMenuItem.menu.addMenuItem(listTranscripts);
+
+    let exportTranscripts = new PopupMenu.PopupIconMenuItem(_("Export all Transcripts"), "document-save-symbolic", St.IconType.SYMBOLIC);
+    exportTranscripts.connect("activate", () => this._exportAllTranscripts());
+    this.maintenanceMenuItem.menu.addMenuItem(exportTranscripts);
 
     let cleanupPreview = new PopupMenu.PopupIconMenuItem(_("Preview cleanup"), "edit-find-symbolic", St.IconType.SYMBOLIC);
     cleanupPreview.connect("activate", () => this._previewCleanup());
@@ -1169,6 +1174,14 @@ MyApplet.prototype = {
 
   _allHistoryArgs: function() {
     return [this._cliCommand(), "transcripts-document", "--limit", "1000", "--json"];
+  },
+
+  _transcriptsExportArgs: function() {
+    let mode = this._normalizeArtifactEncryption(this.artifactEncryption);
+    if (mode === "off") {
+      mode = "keyring";
+    }
+    return [this._cliCommand(), "transcripts-export", "--limit", "1000", "--artifact-encryption", mode, "--json"];
   },
 
   _cleanupArgs: function() {
@@ -3674,19 +3687,79 @@ MyApplet.prototype = {
       return;
     }
     this.isCommandRunning = true;
-    this._setStatus("processing", _("Preparing transcript document..."), this.lastTranscript);
+    this._setStatus("processing", _("Preparing transcript list..."), this.lastTranscript);
     this._spawnJson(this._allHistoryArgs(), (payload) => {
       this.isCommandRunning = false;
       if (payload.error) {
         this._setStatus("error", payload.error, this.lastTranscript);
         return;
       }
-      let path = String(payload.path || "");
-      if (path === "") {
-        this._setStatus("error", _("Transcript document path is empty"), this.lastTranscript);
+      let content = String(payload.content || "");
+      if (content === "") {
+        this._setStatus("error", _("Transcript list is empty"), this.lastTranscript);
         return;
       }
-      this._openFile(path, _("Opened transcript document: ") + String(payload.transcripts || 0));
+      this._showTranscriptsWindow(content, Number(payload.transcripts || 0));
+    });
+  },
+
+  _showTranscriptsWindow: function(content, count) {
+    let zenity = GLib.find_program_in_path("zenity");
+    if (!zenity) {
+      let message = _("Install zenity to show the transcript list without writing a plaintext file.");
+      this._setStatus("error", message, this.lastTranscript);
+      this._notify(_("Speed of Cinnamon"), message, true);
+      return;
+    }
+    let args = [
+      zenity,
+      "--text-info",
+      "--title=Speed of Cinnamon transcripts",
+      "--width=900",
+      "--height=700",
+    ];
+    try {
+      let process = Gio.Subprocess.new(
+        args,
+        Gio.SubprocessFlags.STDIN_PIPE | Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE
+      );
+      process.communicate_utf8_async(String(content || ""), null, (proc, result) => {
+        try {
+          proc.communicate_utf8_finish(result);
+        } catch (err) {
+          global.logError(err);
+        }
+      });
+      this._setStatus("done", _("Opened transcript list: ") + String(count), this.lastTranscript);
+    } catch (err) {
+      let safeError = this._sanitizeErrorMessage(String(err && err.message ? err.message : err));
+      this._setStatus("error", _("Could not open transcript list: ") + safeError, this.lastTranscript);
+      this._notify(_("Could not open transcript list"), safeError, true);
+    }
+  },
+
+  _exportAllTranscripts: function() {
+    if (this.isCommandRunning) {
+      return;
+    }
+    this.isCommandRunning = true;
+    this._setStatus("processing", _("Exporting transcripts..."), this.lastTranscript);
+    this._spawnJson(this._transcriptsExportArgs(), (payload) => {
+      this.isCommandRunning = false;
+      if (payload.error) {
+        this._setStatus("error", payload.error, this.lastTranscript);
+        this._maybeWarnRejectedArtifactPassphrase(payload.error);
+        return;
+      }
+      let path = String(payload.path || "");
+      if (path === "") {
+        this._setStatus("error", _("Transcript export path is empty"), this.lastTranscript);
+        return;
+      }
+      let message = _("Exported encrypted transcript bundle: ") + path;
+      this._setStatus("done", message, this.lastTranscript);
+      this._notify(_("Speed of Cinnamon transcript export"), message, false);
+      this._openFolder(GLib.path_get_dirname(path), _("Opened transcript export folder"));
     });
   },
 
@@ -4253,6 +4326,7 @@ MyApplet.prototype = {
       this.autoRelistenPendingToken = "";
       this.autoRelistenManualStopRequested = false;
       this._setStatus("error", payload.error, this.lastTranscript);
+      this._maybeWarnRejectedArtifactPassphrase(payload.error);
       return;
     }
     let hasTranscript = typeof payload.transcript === "string" && !this._isEmptyTranscriptText(payload.transcript);
@@ -4300,6 +4374,39 @@ MyApplet.prototype = {
       marker = String(payload.status || "done");
     }
     return marker;
+  },
+
+  _isRejectedArtifactPassphraseError: function(message) {
+    let normalized = String(message || "").toLowerCase();
+    if (normalized.indexOf("artifact encryption passphrase") < 0) {
+      return false;
+    }
+    return (
+      normalized.indexOf("not strong enough") >= 0 ||
+      normalized.indexOf("could not be read") >= 0 ||
+      normalized.indexOf("could not be generated") >= 0 ||
+      normalized.indexOf("must be private") >= 0 ||
+      normalized.indexOf("must be owned by the current user") >= 0 ||
+      normalized.indexOf("must not be a symlink") >= 0 ||
+      normalized.indexOf("must not be hardlinked") >= 0
+    );
+  },
+
+  _maybeWarnRejectedArtifactPassphrase: function(message) {
+    if (!this._isRejectedArtifactPassphraseError(message)) {
+      return;
+    }
+    let safeMessage = this._sanitizeErrorMessage(message);
+    let warningKey = String(safeMessage || "");
+    if (warningKey !== "" && warningKey === this.lastRejectedArtifactPassphraseWarningKey) {
+      return;
+    }
+    this.lastRejectedArtifactPassphraseWarningKey = warningKey;
+    this._notify(
+      _("Speed of Cinnamon encryption warning"),
+      _("Artifact encryption passphrase was rejected: ") + safeMessage,
+      true
+    );
   },
 
   _maybeWarnUnencryptedArtifactStorage: function(payload) {

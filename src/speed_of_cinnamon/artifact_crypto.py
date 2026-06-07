@@ -5,17 +5,18 @@ import json
 import os
 import secrets
 import shutil
+import stat
 import subprocess  # nosec B404
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .paths import APP_ID, APP_NAME
+from .paths import APP_ID, APP_NAME, config_dir
 from .path_safety import (
     assert_fd_is_regular_private_file,
     assert_no_symlink_ancestors,
+    ensure_directory_without_following_symlinks,
     open_file_without_following_symlinks,
-    read_text_without_following_symlinks,
     write_bytes_atomically_without_following_symlinks,
 )
 
@@ -39,9 +40,13 @@ SCRYPT_R = 8
 SCRYPT_P = 1
 MAX_PASSPHRASE_CHARS = 4096
 MAX_PASSPHRASE_FILE_BYTES = 16384
+MIN_PASSPHRASE_CHARS = 32
+MIN_PASSPHRASE_DISTINCT_CHARS = 8
+MIN_GENERATED_PASSPHRASE_BYTES = KEY_SIZE_BYTES
 MAX_ENCRYPTED_ARTIFACT_BYTES = 340 * 1024 * 1024
 PASSPHRASE_ENV = "SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE"  # nosec B105
 PASSPHRASE_FILE_ENV = "SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE"  # nosec B105
+DEFAULT_PASSPHRASE_FILE_NAME = "artifact.key"  # nosec B105
 _SECRET_TOOL_TIMEOUT_SECONDS = 10
 _SECRET_TOOL_ATTRIBUTES = ["application", APP_ID, "purpose", "artifact-encryption"]
 _TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin:/var/lib/snapd/snap/bin"
@@ -134,7 +139,19 @@ def is_encrypted_path(path: Path) -> bool:
 def is_encrypted_payload(payload: bytes) -> bool:
     if isinstance(payload, bool) or not isinstance(payload, bytes):
         return False
-    return payload.lstrip().startswith(b'{') and b'"magic"' in payload[:256] and ENVELOPE_MAGIC.encode("ascii") in payload[:256]
+    stripped = payload.lstrip()
+    if not stripped.startswith(b"{"):
+        return False
+    try:
+        envelope = json.loads(stripped.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(envelope, dict)
+        and envelope.get("magic") == ENVELOPE_MAGIC
+        and envelope.get("version") == ENVELOPE_VERSION
+        and isinstance(envelope.get("ciphertext"), str)
+    )
 
 
 def _aad(kind: str) -> bytes:
@@ -166,32 +183,183 @@ def _contains_forbidden_secret_chars(value: str) -> bool:
     return any(ord(char) < 0x20 and char not in {"\n", "\r", "\t"} for char in value)
 
 
-def _passphrase_from_env() -> str | None:
+def _new_generated_passphrase() -> str:
+    return _b64encode(secrets.token_bytes(KEY_SIZE_BYTES))
+
+
+def _decoded_generated_passphrase_bytes(value: str) -> bytes | None:
+    try:
+        decoded = base64.urlsafe_b64decode(value.encode("ascii"))
+    except Exception:
+        return None
+    if len(decoded) < MIN_GENERATED_PASSPHRASE_BYTES:
+        return None
+    if len(set(decoded)) < MIN_PASSPHRASE_DISTINCT_CHARS:
+        return None
+    return decoded
+
+
+def _passphrase_is_strong(passphrase: str) -> bool:
+    value = passphrase.strip()
+    if not value:
+        return False
+    if _decoded_generated_passphrase_bytes(value) is not None:
+        return True
+    return len(value) >= MIN_PASSPHRASE_CHARS and len(set(value)) >= MIN_PASSPHRASE_DISTINCT_CHARS
+
+
+def default_passphrase_file() -> Path:
+    return config_dir() / DEFAULT_PASSPHRASE_FILE_NAME
+
+
+def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> str:
+    if path != default_passphrase_file():
+        raise ArtifactCryptoError("only the default artifact encryption passphrase file can be generated automatically")
+    passphrase = _new_generated_passphrase()
+    payload = passphrase.encode("ascii") + b"\n"
+    parent_fd = -1
+    fd = -1
+    try:
+        parent_fd = ensure_directory_without_following_symlinks(
+            path.parent,
+            field_name="artifact encryption passphrase file directory",
+        )
+        os.fchmod(parent_fd, 0o700)
+        flags = os.O_WRONLY | (0 if replace else os.O_CREAT | os.O_EXCL)
+        fd = open_file_without_following_symlinks(
+            path,
+            flags,
+            0o600,
+            field_name="artifact encryption passphrase file",
+        )
+        assert_fd_is_regular_private_file(fd, field_name="artifact encryption passphrase file")
+        file_stat = os.fstat(fd)
+        if hasattr(os, "getuid") and file_stat.st_uid != os.getuid():
+            raise ArtifactCryptoError("artifact encryption passphrase file must be owned by the current user")
+        if file_stat.st_mode & 0o077:
+            raise ArtifactCryptoError("artifact encryption passphrase file must be private")
+        if replace:
+            os.ftruncate(fd, 0)
+        os.write(fd, payload)
+        os.fchmod(fd, 0o600)
+    except FileExistsError:
+        return _read_private_passphrase_file(path, allow_default_generation=False, rotate_weak_default=False)
+    except (OSError, RuntimeError) as exc:
+        raise ArtifactCryptoError("artifact encryption passphrase file could not be generated") from exc
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if parent_fd >= 0:
+            os.close(parent_fd)
+    return passphrase
+
+
+def _stat_private_passphrase_parent(path: Path) -> None:
+    try:
+        parent_stat = path.parent.stat()
+    except OSError as exc:
+        raise ArtifactCryptoError("artifact encryption passphrase file directory could not be inspected") from exc
+    if not stat.S_ISDIR(parent_stat.st_mode):
+        raise ArtifactCryptoError("artifact encryption passphrase file directory must be a directory")
+    if hasattr(os, "getuid") and parent_stat.st_uid != os.getuid():
+        raise ArtifactCryptoError("artifact encryption passphrase file directory must be owned by the current user")
+    if parent_stat.st_mode & 0o077:
+        raise ArtifactCryptoError("artifact encryption passphrase file directory must be private")
+
+
+def _read_private_passphrase_file(
+    path: Path,
+    *,
+    allow_default_generation: bool = False,
+    rotate_weak_default: bool = False,
+) -> str:
+    path = path.expanduser()
+    default_path = default_passphrase_file()
+    is_default_path = path == default_path
+    if is_default_path and allow_default_generation and not path.exists() and not path.is_symlink():
+        return _generate_default_passphrase_file(path)
+    try:
+        assert_no_symlink_ancestors(path, field_name="artifact encryption passphrase file")
+        _stat_private_passphrase_parent(path)
+        fd = open_file_without_following_symlinks(path, os.O_RDONLY, field_name="artifact encryption passphrase file")
+    except (OSError, RuntimeError) as exc:
+        raise ArtifactCryptoError("artifact encryption passphrase file could not be read") from exc
+    try:
+        try:
+            assert_fd_is_regular_private_file(fd, field_name="artifact encryption passphrase file")
+            file_stat = os.fstat(fd)
+        except (OSError, RuntimeError) as exc:
+            raise ArtifactCryptoError("artifact encryption passphrase file is not private") from exc
+        if hasattr(os, "getuid") and file_stat.st_uid != os.getuid():
+            raise ArtifactCryptoError("artifact encryption passphrase file must be owned by the current user")
+        if file_stat.st_mode & 0o077:
+            raise ArtifactCryptoError("artifact encryption passphrase file must be private")
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1
+            payload = handle.read(MAX_PASSPHRASE_FILE_BYTES + 1)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    if len(payload) > MAX_PASSPHRASE_FILE_BYTES:
+        raise ArtifactCryptoError("artifact encryption passphrase file is too large")
+    try:
+        passphrase = payload.decode("utf-8").rstrip("\r\n")
+    except UnicodeDecodeError as exc:
+        raise ArtifactCryptoError("artifact encryption passphrase file must be valid UTF-8") from exc
+    if not passphrase or _contains_forbidden_secret_chars(passphrase) or not _passphrase_is_strong(passphrase):
+        if is_default_path and rotate_weak_default:
+            return _generate_default_passphrase_file(path, replace=True)
+        raise ArtifactCryptoError("artifact encryption passphrase file is not strong enough")
+    return passphrase
+
+
+def _configured_passphrase_file() -> Path | None:
     file_path = os.environ.get(PASSPHRASE_FILE_ENV, "")
     if file_path:
-        path = Path(file_path).expanduser()
-        try:
-            text = read_text_without_following_symlinks(
-                path,
-                field_name="artifact encryption passphrase file",
-                max_bytes=MAX_PASSPHRASE_FILE_BYTES,
-            )
-        except (OSError, RuntimeError, UnicodeDecodeError) as exc:
-            raise ArtifactCryptoError("artifact encryption passphrase file could not be read") from exc
-        passphrase = text.rstrip("\r\n")
+        return Path(file_path).expanduser()
+    path = default_passphrase_file()
+    try:
+        if path.exists() or path.is_symlink():
+            return path
+    except OSError:
+        return path
+    return None
+
+
+def _passphrase_from_sources(*, allow_default_generation: bool, rotate_weak_default: bool) -> str | None:
+    passphrase_file = _configured_passphrase_file()
+    if passphrase_file is not None:
+        passphrase = _read_private_passphrase_file(
+            passphrase_file,
+            allow_default_generation=allow_default_generation,
+            rotate_weak_default=rotate_weak_default and passphrase_file == default_passphrase_file(),
+        )
     else:
         passphrase = os.environ.get(PASSPHRASE_ENV, "")
+        if not passphrase:
+            if allow_default_generation:
+                passphrase = _read_private_passphrase_file(
+                    default_passphrase_file(),
+                    allow_default_generation=True,
+                    rotate_weak_default=rotate_weak_default,
+                )
+            else:
+                return None
     if not passphrase:
         return None
     if len(passphrase) > MAX_PASSPHRASE_CHARS or len(passphrase.encode("utf-8")) > MAX_PASSPHRASE_FILE_BYTES:
         raise ArtifactCryptoError("artifact encryption passphrase is too large")
     if _contains_forbidden_secret_chars(passphrase):
         raise ArtifactCryptoError("artifact encryption passphrase contains invalid control characters")
+    if not _passphrase_is_strong(passphrase):
+        raise ArtifactCryptoError("artifact encryption passphrase is not strong enough")
     return passphrase
 
 
 def passphrase_fallback_available() -> bool:
-    return bool(os.environ.get(PASSPHRASE_ENV) or os.environ.get(PASSPHRASE_FILE_ENV))
+    if os.environ.get(PASSPHRASE_ENV) or os.environ.get(PASSPHRASE_FILE_ENV):
+        return True
+    return True
 
 
 def _derive_passphrase_key(passphrase: str, salt: bytes) -> bytes:
@@ -280,20 +448,22 @@ def _load_keyring_key() -> bytes:
 
 
 def _passphrase_key_for_encryption() -> tuple[bytes, bytes]:
-    passphrase = _passphrase_from_env()
+    passphrase = _passphrase_from_sources(allow_default_generation=True, rotate_weak_default=True)
     if not passphrase:
         raise ArtifactCryptoError(
-            f"artifact encryption passphrase is not configured; set {PASSPHRASE_FILE_ENV} or {PASSPHRASE_ENV}"
+            f"artifact encryption passphrase is not configured; create {default_passphrase_file()} with mode 0600, "
+            f"or set {PASSPHRASE_FILE_ENV} or {PASSPHRASE_ENV}"
         )
     salt = secrets.token_bytes(SALT_SIZE_BYTES)
     return _derive_passphrase_key(passphrase, salt), salt
 
 
 def _passphrase_key_for_decryption(salt: bytes) -> bytes:
-    passphrase = _passphrase_from_env()
+    passphrase = _passphrase_from_sources(allow_default_generation=False, rotate_weak_default=False)
     if not passphrase:
         raise ArtifactCryptoError(
-            f"artifact decryption passphrase is not configured; set {PASSPHRASE_FILE_ENV} or {PASSPHRASE_ENV}"
+            f"artifact decryption passphrase is not configured; create {default_passphrase_file()} with mode 0600, "
+            f"or set {PASSPHRASE_FILE_ENV} or {PASSPHRASE_ENV}"
         )
     return _derive_passphrase_key(passphrase, salt)
 
@@ -317,7 +487,7 @@ def _key_for_encryption(requested_mode: str) -> tuple[KeyMaterial, dict[str, obj
         if not passphrase_fallback_available():
             raise ArtifactCryptoError(
                 "Secret Service keyring is unavailable and passphrase fallback is not configured; "
-                f"set {PASSPHRASE_FILE_ENV} or {PASSPHRASE_ENV}"
+                f"create {default_passphrase_file()} with mode 0600, or set {PASSPHRASE_FILE_ENV} or {PASSPHRASE_ENV}"
             ) from keyring_error
         key, salt = _passphrase_key_for_encryption()
         return KeyMaterial(mode=ARTIFACT_ENCRYPTION_PASSPHRASE, key=key), {

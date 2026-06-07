@@ -1176,7 +1176,7 @@ def read_transcript_history(limit: int = 10) -> list[dict[str, object]]:
     return entries
 
 
-def write_transcripts_document(limit: int = MAX_HISTORY_LIMIT) -> tuple[Path, int]:
+def build_transcripts_document(limit: int = MAX_HISTORY_LIMIT) -> tuple[str, int]:
     if limit <= 0:
         limit = MAX_HISTORY_LIMIT
     limit = min(limit, MAX_HISTORY_LIMIT)
@@ -1209,9 +1209,49 @@ def write_transcripts_document(limit: int = MAX_HISTORY_LIMIT) -> tuple[Path, in
         count += 1
         if count >= limit:
             break
-    output_path = state_dir() / "all-transcripts.txt"
-    _write_text_atomic(output_path, "\n".join(lines).rstrip() + "\n")
-    return output_path, count
+    return "\n".join(lines).rstrip() + "\n", count
+
+
+def _transcript_export_path(plaintext: bool) -> Path:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    suffix = secrets.token_hex(4)
+    return state_dir() / "exports" / f"all-transcripts-{timestamp}-{suffix}.txt"
+
+
+def _ensure_transcript_export_dir(path: Path) -> None:
+    fd = ensure_directory_without_following_symlinks(path.parent, field_name="transcript export directory")
+    try:
+        os.fchmod(fd, 0o700)
+    finally:
+        os.close(fd)
+
+
+def write_transcripts_export(
+    limit: int = MAX_HISTORY_LIMIT,
+    *,
+    encryption_mode: object = "keyring",
+    plaintext: bool = False,
+    confirm_plaintext: bool = False,
+) -> tuple[Path, int, str]:
+    content, count = build_transcripts_document(limit)
+    output_path = _transcript_export_path(plaintext)
+    _ensure_transcript_export_dir(output_path)
+    if plaintext:
+        if not confirm_plaintext:
+            raise RuntimeError("plaintext transcript export requires --confirm-plaintext")
+        _write_text_atomic(output_path, content)
+        return output_path, count, ARTIFACT_ENCRYPTION_OFF
+    mode = normalize_artifact_encryption(encryption_mode)
+    if mode == ARTIFACT_ENCRYPTION_OFF:
+        raise RuntimeError("encrypted transcript export requires keyring or passphrase; use --plaintext --confirm-plaintext for plaintext export")
+    encrypted_path, used_mode = write_encrypted_bytes_atomically(
+        output_path,
+        content.encode("utf-8"),
+        mode,
+        kind="transcript",
+        field_name="transcript export",
+    )
+    return encrypted_path, count, used_mode
 
 
 def normalized_path(path_value: str | None) -> Path | None:
@@ -2868,8 +2908,26 @@ def command_history(args: argparse.Namespace) -> dict[str, object]:
 def command_transcripts_document(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     limit = _coerce_int(args.limit, field_name="history limit", max_value=MAX_HISTORY_LIMIT)
-    output_path, count = write_transcripts_document(limit)
-    return {"status": "done", "path": str(output_path), "transcripts": count}
+    content, count = build_transcripts_document(limit)
+    return {"status": "done", "content": content, "transcripts": count}
+
+
+def command_transcripts_export(args: argparse.Namespace) -> dict[str, object]:
+    ensure_runtime_dirs()
+    limit = _coerce_int(args.limit, field_name="history limit", max_value=MAX_HISTORY_LIMIT)
+    output_path, count, encryption = write_transcripts_export(
+        limit,
+        encryption_mode=args.artifact_encryption,
+        plaintext=args.plaintext,
+        confirm_plaintext=args.confirm_plaintext,
+    )
+    return {
+        "status": "done",
+        "path": str(output_path),
+        "transcripts": count,
+        "encryption": encryption,
+        "plaintext": args.plaintext,
+    }
 
 
 def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
@@ -3220,7 +3278,10 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
         choices=ARTIFACT_ENCRYPTION_CHOICES,
         help=(
             "encrypt stored transcripts and retained recordings: off, passphrase, or keyring; "
-            "keyring falls back to passphrase when the Secret Service CLI path is unavailable"
+            "keyring falls back to passphrase when the Secret Service CLI path is unavailable; "
+            "passphrase uses SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE, an existing "
+            "~/.config/speed-of-cinnamon/artifact.key, SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE, "
+            "or generates ~/.config/speed-of-cinnamon/artifact.key at runtime; weak default key files are regenerated"
         ),
     )
     parser.add_argument("--sanitize-special-chars", action="store_true")
@@ -3338,6 +3399,27 @@ def build_parser() -> argparse.ArgumentParser:
     transcripts_document.add_argument("--limit", type=int, default=MAX_HISTORY_LIMIT)
     transcripts_document.set_defaults(handler=command_transcripts_document)
 
+    transcripts_export = subparsers.add_parser("transcripts-export")
+    add_common_options(transcripts_export)
+    transcripts_export.add_argument("--limit", type=int, default=MAX_HISTORY_LIMIT)
+    transcripts_export.add_argument(
+        "--artifact-encryption",
+        default="keyring",
+        choices=ARTIFACT_ENCRYPTION_CHOICES,
+        help="encrypt exported transcript bundle; default is keyring",
+    )
+    transcripts_export.add_argument(
+        "--plaintext",
+        action="store_true",
+        help="write plaintext transcript export; also requires --confirm-plaintext",
+    )
+    transcripts_export.add_argument(
+        "--confirm-plaintext",
+        action="store_true",
+        help="confirm that plaintext transcript export is intentional",
+    )
+    transcripts_export.set_defaults(handler=command_transcripts_export)
+
     cleanup = subparsers.add_parser("cleanup")
     add_common_options(cleanup)
     cleanup.add_argument("--keep-transcripts", type=int, default=DEFAULT_KEEP_TRANSCRIPTS)
@@ -3447,7 +3529,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--artifact-encryption",
         default=ARTIFACT_ENCRYPTION_OFF,
         choices=ARTIFACT_ENCRYPTION_CHOICES,
-        help="encrypt the stored transcript: off, passphrase, or keyring",
+        help=(
+            "encrypt the stored transcript: off, passphrase, or keyring; passphrase uses "
+            "SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE, an existing "
+            "~/.config/speed-of-cinnamon/artifact.key, SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE, "
+            "or generates ~/.config/speed-of-cinnamon/artifact.key at runtime; weak default key files are regenerated"
+        ),
     )
     transcribe_file.add_argument("--soften-profanity", action="store_true")
     transcribe_file.set_defaults(handler=command_transcribe_file)

@@ -691,7 +691,7 @@ class CliTest(unittest.TestCase):
 
     @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="must not be stored as plaintext")
     @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
-    def test_transcribe_file_keyring_failure_without_passphrase_fails_closed(
+    def test_transcribe_file_keyring_failure_generates_default_passphrase_fallback(
         self,
         mocked_validate: mock.Mock,
         mocked_transcribe: mock.Mock,
@@ -703,7 +703,16 @@ class CliTest(unittest.TestCase):
             mocked_validate.return_value = audio
             transcript_root = Path(tmp) / "speed-of-cinnamon" / "transcripts"
             with (
-                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: ""}, clear=False),
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "XDG_CONFIG_HOME": tmp,
+                        "XDG_STATE_HOME": tmp,
+                        artifact_crypto.PASSPHRASE_ENV: "",
+                        artifact_crypto.PASSPHRASE_FILE_ENV: "",
+                    },
+                    clear=False,
+                ),
                 mock.patch("speed_of_cinnamon.artifact_crypto._load_keyring_key", side_effect=artifact_crypto.ArtifactCryptoError("no dbus")),
                 redirect_stdout(stdout),
             ):
@@ -721,10 +730,13 @@ class CliTest(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
             plaintext_exists = (transcript_root / "input.txt").exists()
             encrypted_exists = (transcript_root / "input.txt.socenc").exists()
-        self.assertEqual(code, 1)
-        self.assertEqual(payload["error"], "[redacted error details]")
+            key_file_exists = (Path(tmp) / "speed-of-cinnamon" / "artifact.key").exists()
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "done")
+        self.assertEqual(payload["transcript_encryption"], "passphrase")
         self.assertFalse(plaintext_exists)
-        self.assertFalse(encrypted_exists)
+        self.assertTrue(encrypted_exists)
+        self.assertTrue(key_file_exists)
         mocked_transcribe.assert_called_once()
 
     @mock.patch("speed_of_cinnamon.cli.insert_text")
@@ -2237,16 +2249,60 @@ class CliTest(unittest.TestCase):
             with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
                 code = cli.run(["transcripts-document", "--limit", "1000", "--json"])
             payload = json.loads(stdout.getvalue())
-            document_path = Path(payload["path"])
-            document = document_path.read_text(encoding="utf-8")
+            document = payload["content"]
+            legacy_document_path = Path(tmp) / "speed-of-cinnamon" / "all-transcripts.txt"
         self.assertEqual(code, 0)
         self.assertEqual(payload["transcripts"], 2)
-        self.assertEqual(document_path.name, "all-transcripts.txt")
+        self.assertNotIn("path", payload)
+        self.assertFalse(legacy_document_path.exists())
         self.assertIn("===== newer.txt =====", document)
         self.assertIn("===== older.txt =====", document)
         self.assertIn(newer_text.strip(), document)
         self.assertIn(older_text.strip(), document)
         self.assertLess(document.index("===== newer.txt ====="), document.index("===== older.txt ====="))
+
+    def test_transcripts_export_writes_encrypted_bundle_explicitly(self) -> None:
+        strong_passphrase = artifact_crypto._b64encode(bytes(range(32)))
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            transcript = transcript_dir / "newer.txt"
+            transcript_text = "private transcript export line\n"
+            transcript.write_text(transcript_text, encoding="utf-8")
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "XDG_STATE_HOME": tmp,
+                        artifact_crypto.PASSPHRASE_ENV: strong_passphrase,
+                        artifact_crypto.PASSPHRASE_FILE_ENV: "",
+                    },
+                ),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["transcripts-export", "--limit", "1000", "--artifact-encryption", "passphrase", "--json"])
+            payload = json.loads(stdout.getvalue())
+            export_path = Path(payload["path"])
+            encrypted_payload = export_path.read_bytes()
+            decrypted = artifact_crypto.read_decrypted_bytes_from_file(export_path, kind="transcript", field_name="test export").decode("utf-8")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["transcripts"], 1)
+        self.assertEqual(payload["encryption"], "passphrase")
+        self.assertFalse(payload["plaintext"])
+        self.assertTrue(export_path.name.startswith("all-transcripts-"))
+        self.assertTrue(export_path.name.endswith(".txt.socenc"))
+        self.assertNotIn(transcript_text.encode("utf-8"), encrypted_payload)
+        self.assertIn(transcript_text.strip(), decrypted)
+
+    def test_plaintext_transcripts_export_requires_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["transcripts-export", "--plaintext", "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertNotEqual(code, 0)
+        self.assertIn("confirm-plaintext", payload["error"])
 
     def test_history_skips_empty_transcripts_when_filling_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -228,6 +228,16 @@ class PostProcessorTest(unittest.TestCase):
             with self.assertRaisesRegex(PostProcessError, "invalid null byte"):
                 post_process_text("hello", "en", backend="ollama", ollama_model="llama3.2:3b")
 
+    def test_post_process_with_ollama_strips_returned_transcript_label(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.postprocessor._open_http_request",
+            return_value=FakeResponse({"response": "Transcript:\nHallo Welt"}),
+        ):
+            self.assertEqual(
+                post_process_text("Hallo Welt", "de", backend="ollama", ollama_model="llama3.2:3b"),
+                "Hallo Welt",
+            )
+
     def test_ollama_url_rejects_escaped_null(self) -> None:
         with self.assertRaisesRegex(PostProcessError, "ollama url contains invalid null byte"):
             post_process_text(
@@ -568,6 +578,22 @@ class PostProcessorTest(unittest.TestCase):
         self.assertEqual(body["temperature"], 0)
         self.assertNotIn("service_tier", body)
         self.assertIn("hello cinnamon", body["messages"][1]["content"])
+
+    def test_openai_compatible_backend_strips_returned_transcript_label(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.postprocessor._open_http_request",
+            return_value=FakeResponse({"choices": [{"message": {"content": "Transcript:\nHallo Welt"}}]}),
+        ):
+            self.assertEqual(
+                post_process_text(
+                    "Hallo Welt",
+                    "de",
+                    backend="openai-compatible",
+                    openai_compatible_model="local-model",
+                    openai_compatible_url="http://127.0.0.1:8000/v1/",
+                ),
+                "Hallo Welt",
+            )
 
     def test_openai_compatible_backend_enables_flex_for_openai_api_by_default(self) -> None:
         requests = []

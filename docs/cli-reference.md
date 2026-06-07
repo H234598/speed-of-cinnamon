@@ -266,12 +266,14 @@ settings button opens the same file for editing.
 ```bash
 speed-of-cinnamon history --limit 5 --json
 speed-of-cinnamon transcripts-document --limit 1000 --json
+speed-of-cinnamon transcripts-export --limit 1000 --json
 speed-of-cinnamon cleanup --keep-transcripts 0 --keep-recordings 0 --dry-run --json
 speed-of-cinnamon cleanup --keep-transcripts 0 --keep-recordings 0 --json
 ```
 
-`transcripts-document` writes a plain text document with complete transcript contents for scrolling, selecting, and
-copying outside the applet menu.
+`transcripts-document` returns complete transcript contents for display and does not write a plaintext bundle to disk.
+`transcripts-export` is the explicit export path and writes an encrypted transcript bundle by default. Plaintext export
+requires both `--plaintext` and `--confirm-plaintext`.
 
 Cleanup skips the currently referenced state paths. Use the dry run before deleting.
 

@@ -622,7 +622,7 @@ def post_process_with_ollama(
         raise PostProcessError("Ollama response must be a JSON object")
     if data.get("error"):
         raise PostProcessError(f"Ollama failed: {_sanitize_remote_error_detail(data['error'])}")
-    processed = str(data.get("response") or "").strip()
+    processed = _strip_transcript_prompt_label(str(data.get("response") or ""))
     processed = _assert_text_length(processed, field_name="post-process output")
     if not processed:
         raise PostProcessError("Ollama completed without output")
@@ -688,6 +688,20 @@ def _choice_text(choice: object) -> str:
                     parts.append(str(item))
             return "".join(parts)
     return str(choice.get("text") or "")
+
+
+def _strip_transcript_prompt_label(text: str) -> str:
+    value = text.strip()
+    for _ in range(3):
+        folded = value.casefold()
+        if folded.startswith("transcript:"):
+            value = value[len("Transcript:"):].lstrip()
+            continue
+        if folded.startswith("transkript:"):
+            value = value[len("Transkript:"):].lstrip()
+            continue
+        break
+    return value
 
 
 def post_process_with_openai_compatible(
@@ -787,7 +801,7 @@ def post_process_with_openai_compatible(
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices:
         raise PostProcessError("OpenAI-compatible server completed without choices")
-    processed = _choice_text(choices[0]).strip()
+    processed = _strip_transcript_prompt_label(_choice_text(choices[0]))
     processed = _assert_text_length(processed, field_name="post-process output")
     if not processed:
         raise PostProcessError("OpenAI-compatible server completed without output")

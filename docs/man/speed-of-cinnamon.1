@@ -70,7 +70,10 @@ Install an Ollama text model.
 List recent transcript files.
 .TP
 .B transcripts-document
-Write complete transcript history to a plain text document.
+Return complete transcript history for display without writing a plaintext bundle.
+.TP
+.B transcripts-export
+Explicitly export complete transcript history. The export is encrypted by default.
 .TP
 .B profanity-filter-document
 Create if needed and return the editable profanity replacement file.
@@ -229,10 +232,16 @@ Open the editable profanity replacement file:
 speed-of-cinnamon profanity-filter-document --json
 .EE
 .PP
-Write complete transcript history to a plain text document:
+Return complete transcript history for display:
 .PP
 .EX
 speed-of-cinnamon transcripts-document --limit 1000 --json
+.EE
+.PP
+Explicitly write an encrypted transcript export:
+.PP
+.EX
+speed-of-cinnamon transcripts-export --limit 1000 --json
 .EE
 .PP
 Preview cleanup:

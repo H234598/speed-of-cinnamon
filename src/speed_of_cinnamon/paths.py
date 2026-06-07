@@ -123,6 +123,10 @@ def xdg_cache_home() -> Path:
     return _xdg_path("XDG_CACHE_HOME", _safe_home_path(".cache"))
 
 
+def xdg_config_home() -> Path:
+    return _xdg_path("XDG_CONFIG_HOME", _safe_home_path(".config"))
+
+
 def state_dir() -> Path:
     return xdg_state_home() / APP_ID
 
@@ -133,6 +137,10 @@ def data_dir() -> Path:
 
 def cache_dir() -> Path:
     return xdg_cache_home() / APP_ID
+
+
+def config_dir() -> Path:
+    return xdg_config_home() / APP_ID
 
 
 def recordings_dir() -> Path:
@@ -181,6 +189,7 @@ def alarms_file() -> Path:
 
 def ensure_runtime_dirs() -> None:
     for directory in (
+        config_dir(),
         data_dir(),
         state_dir(),
         cache_dir(),

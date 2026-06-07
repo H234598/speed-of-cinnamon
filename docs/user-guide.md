@@ -245,9 +245,9 @@ alarms that became due while the applet was not running.
 
 ## Cleanup
 
-Use `Open transcripts` in `Files and settings` to open the transcript directory. Use `List all Transcripts` to generate
-and open a text document containing the full transcript texts, one transcript after another. The document is opened in
-your default text editor, so it is scrollable and selectable/copyable.
+Use `Open transcripts` in `Files and settings` to open the transcript directory. Use `List all Transcripts` to show the
+full transcript texts in a scrollable, selectable window without writing a plaintext bundle to the state directory. Use
+`Export all Transcripts` only when you intentionally want a transcript bundle file; exports are encrypted by default.
 
 Use `Store transcripts` in `Files and settings` to choose how many transcript files should be kept. The default is 500.
 After each successful transcription, older transcript files are deleted automatically so at most that many transcript
