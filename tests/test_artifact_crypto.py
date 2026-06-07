@@ -129,6 +129,22 @@ class ArtifactCryptoTest(unittest.TestCase):
             self.assertFalse(path.exists())
             self.assertTrue(any(stat.S_ISDIR(mode) for mode in fsync_modes))
 
+    def test_default_passphrase_generation_cleanup_failure_is_visible(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.key"
+
+            with (
+                mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: ""}, clear=False),
+                mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
+                mock.patch("speed_of_cinnamon.artifact_crypto.os.write", side_effect=OSError("disk full")),
+                mock.patch("speed_of_cinnamon.artifact_crypto.os.unlink", side_effect=OSError("cleanup denied")),
+            ):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "temporary file could not be removed"):
+                    artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
+
+            self.assertFalse(path.exists())
+            self.assertTrue(any(child.name.startswith(".artifact.key.") and child.name.endswith(".tmp") for child in Path(tmp).iterdir()))
+
     def test_default_passphrase_rotation_failure_keeps_existing_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "artifact.key"

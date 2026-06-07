@@ -493,11 +493,13 @@ def _log_temp_name_matches_fd(parent_fd: int, temp_name: str, fd: int) -> bool:
 
 
 def _unlink_log_temp(parent_fd: int, temp_name: str) -> None:
+    if not temp_name:
+        return
     try:
         os.unlink(temp_name, dir_fd=parent_fd)
         os.fsync(parent_fd)
-    except OSError:
-        pass
+    except OSError as exc:
+        raise RuntimeError("failed to remove log temporary file") from exc
 
 
 def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
@@ -568,6 +570,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
                 if not _log_temp_name_matches_fd(parent_fd, temp_name, raw_output.fileno()):
                     raise RuntimeError("monthly log temporary archive was replaced")
             os.replace(temp_name, archive.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            temp_name = ""
             os.fsync(parent_fd)
             for path in paths:
                 original_stat = source_stats.get(path)
@@ -658,6 +661,7 @@ def _gzip_file(source: Path, target: Path) -> None:
             if not _log_temp_name_matches_fd(parent_fd, temp_name, raw_output.fileno()):
                 raise RuntimeError("log temporary archive was replaced")
         os.replace(temp_name, target.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        temp_name = ""
         os.fsync(parent_fd)
         _assert_same_log_file_identity(source, source_stat, field_name="log source file")
         _unlink_log_file_with_parent_fsync(source, source_stat, field_name="log source file")

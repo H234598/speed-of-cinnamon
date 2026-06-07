@@ -572,6 +572,25 @@ class AppLoggingTest(unittest.TestCase):
             self.assertFalse(target.exists())
             self.assertEqual(list(log_dir.glob("*.tmp")), [])
 
+    def test_gzip_file_reports_temp_cleanup_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "source.log"
+            target = log_dir / "target.log.gz"
+            source.write_text("content\n", encoding="utf-8")
+            source.chmod(0o600)
+
+            with (
+                mock.patch("speed_of_cinnamon.app_logging.os.replace", side_effect=PermissionError("replace failed")),
+                mock.patch("speed_of_cinnamon.app_logging.os.unlink", side_effect=PermissionError("cleanup denied")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "failed to remove log temporary file"):
+                    app_logging._gzip_file(source, target)
+
+            self.assertTrue(source.exists())
+            self.assertFalse(target.exists())
+            self.assertTrue(list(log_dir.glob("*.tmp")))
+
     def test_gzip_file_rejects_source_swap_before_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

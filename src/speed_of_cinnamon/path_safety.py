@@ -248,14 +248,18 @@ def _write_atomically_without_following_symlinks(
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        temp_name = ""
         os.fsync(parent_fd)
     except OSError:
+        cleanup_error: OSError | None = None
         if temp_name:
             try:
                 os.unlink(temp_name, dir_fd=parent_fd)
                 os.fsync(parent_fd)
-            except OSError:
-                pass
+            except OSError as exc:
+                cleanup_error = exc
+        if cleanup_error is not None:
+            raise OSError(f"failed to remove temporary file for {field_name}") from cleanup_error
         raise
     finally:
         os.close(parent_fd)

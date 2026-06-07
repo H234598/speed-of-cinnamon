@@ -839,14 +839,30 @@ def _staged_audio_file_for_local_backend(
             raise TranscriptionError("failed to stage audio file for backend access")
         if stat_module.S_IMODE(staging_stat.st_mode) != 0o600:
             raise TranscriptionError("failed to stage audio file for backend access")
-        yield staging_path
+        body_failed = False
+        try:
+            yield staging_path
+        except BaseException:
+            body_failed = True
+            raise
     finally:
+        cleanup_errors: list[str] = []
         if staging_path is not None:
-            with suppress(OSError):
+            try:
                 staging_path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                cleanup_errors.append("staged audio file")
         if staging_dir is not None:
-            with suppress(OSError):
+            try:
                 staging_dir.rmdir()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                cleanup_errors.append("staged audio directory")
+        if cleanup_errors and not locals().get("body_failed", True):
+            raise TranscriptionError("failed to clean up " + ", ".join(cleanup_errors))
 
 
 def _validate_audio_file_for_upload(path: Path) -> tuple[Path, tuple[int, int, int, int, int, int, str]]:

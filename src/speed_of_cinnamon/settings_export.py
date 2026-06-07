@@ -427,14 +427,18 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        temp_name = ""
         os.fsync(parent_fd)
     except OSError as exc:
+        cleanup_error: OSError | None = None
         if temp_name:
             try:
                 os.unlink(temp_name, dir_fd=parent_fd)
                 os.fsync(parent_fd)
-            except OSError:
-                pass
+            except OSError as cleanup_exc:
+                cleanup_error = cleanup_exc
+        if cleanup_error is not None:
+            raise SettingsExportError(f"failed to remove settings export temporary file: {path}") from cleanup_error
         raise SettingsExportError(f"failed to write settings export: {path}") from exc
     finally:
         os.close(parent_fd)

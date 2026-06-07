@@ -1306,6 +1306,35 @@ class TranscriberTest(unittest.TestCase):
         self.assertEqual(mode, 0o600)
         self.assertFalse(staged_exists_after_context)
 
+    def test_staged_audio_cleanup_failure_is_visible_after_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            snapshot = transcriber_module._snapshot_private_file(
+                audio,
+                field_name="audio file for backend",
+                include_hash=True,
+            )
+
+            with self.assertRaisesRegex(TranscriptionError, "failed to clean up staged audio directory"):
+                with transcriber_module._staged_audio_file_for_local_backend(audio, expected_snapshot=snapshot) as staged:
+                    (staged.parent / "leftover").write_bytes(b"leftover")
+
+    def test_staged_audio_cleanup_does_not_mask_backend_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            snapshot = transcriber_module._snapshot_private_file(
+                audio,
+                field_name="audio file for backend",
+                include_hash=True,
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "backend failed"):
+                with transcriber_module._staged_audio_file_for_local_backend(audio, expected_snapshot=snapshot) as staged:
+                    (staged.parent / "leftover").write_bytes(b"leftover")
+                    raise RuntimeError("backend failed")
+
     def test_resolve_whisper_cpp_accepts_fedora_pwcpp(self) -> None:
         def which(command: str, path: str | None = None) -> str | None:
             return "/usr/bin/pwcpp" if command == "pwcpp" else None

@@ -522,6 +522,19 @@ class SettingsExportTest(unittest.TestCase):
         with self.assertRaisesRegex(SettingsExportError, "settings export alarms must be an object"):
             build_export({"language": "en"}, alarm_store=[])  # type: ignore[arg-type]
 
+    def test_write_export_reports_temp_cleanup_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            with (
+                mock.patch("speed_of_cinnamon.settings_export.os.replace", side_effect=OSError("disk full")),
+                mock.patch("speed_of_cinnamon.settings_export.os.unlink", side_effect=OSError("cleanup denied")),
+            ):
+                with self.assertRaisesRegex(SettingsExportError, "failed to remove settings export temporary file"):
+                    write_export(path, {"language": "en"})
+
+            self.assertFalse(path.exists())
+            self.assertTrue(any(child.name.startswith(".settings-export.json.") and child.name.endswith(".tmp") for child in Path(tmp).iterdir()))
+
     @mock.patch("speed_of_cinnamon.settings_export.os.replace", side_effect=OSError("disk full"))
     def test_write_export_raises_when_atomic_replace_fails(self, mocked_replace: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:
