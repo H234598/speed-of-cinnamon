@@ -117,6 +117,50 @@ class RecorderTest(unittest.TestCase):
         self.assertEqual(mocked_run.call_args.kwargs["pass_fds"], (int(str(input_path).rsplit("/", 1)[-1]),))
         self.assertNotIsInstance(argv, str)
 
+    def test_detect_silent_recording_uses_file_backed_ffmpeg_output(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0]
+            stdout = kwargs["stdout"]
+            stderr = kwargs["stderr"]
+            self.assertNotEqual(stdout, subprocess.PIPE)
+            self.assertNotEqual(stderr, subprocess.PIPE)
+            stderr.write(
+                b"Duration: 00:00:02.00, bitrate: 256 kb/s\n"
+                b"[silencedetect @ 0x1] silence_start: 0\n"
+            )
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "silent.wav"
+            audio.write_bytes(b"RIFF" + b"\x00" * 44)
+            with (
+                mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=fake_run),
+            ):
+                result = detect_silent_recording(audio)
+
+        self.assertEqual(result, SilenceDetectionResult(True, True, 2.0, 2.0, 0.0, 2.0, "silent recording"))
+
+    def test_detect_silent_recording_rejects_oversized_ffmpeg_output(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0]
+            stderr = kwargs["stderr"]
+            stderr.write(b"x" * (recorder_module.MAX_FFMPEG_OUTPUT_BYTES + 1))
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "silent.wav"
+            audio.write_bytes(b"RIFF" + b"\x00" * 44)
+            with (
+                mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=fake_run),
+            ):
+                result = detect_silent_recording(audio)
+
+        self.assertFalse(result.analyzed)
+        self.assertFalse(result.silent)
+        self.assertIn("exceeded safe output limit", result.detail)
+
     def test_detect_silent_recording_reports_leading_silence_seconds(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "speech.wav"
@@ -348,6 +392,23 @@ class RecorderTest(unittest.TestCase):
                         trim_recording_silence(audio)
             self.assertNotIn(str(audio), str(raised.exception))
             self.assertNotIn("secret", str(raised.exception))
+
+    def test_trim_recording_silence_rejects_oversized_ffmpeg_output(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            command = args[0]
+            stderr = kwargs["stderr"]
+            stderr.write(b"x" * (recorder_module.MAX_FFMPEG_OUTPUT_BYTES + 1))
+            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with (
+                mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=fake_run),
+            ):
+                with self.assertRaisesRegex(RecorderError, "exceeded safe output limit"):
+                    trim_recording_silence(audio)
 
     def test_reencode_recording_to_flac_reports_ffmpeg_error_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

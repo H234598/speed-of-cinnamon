@@ -160,6 +160,15 @@ class PathSafetyTest(unittest.TestCase):
 
         self.assertEqual(text, "abcd")
 
+    def test_read_text_default_is_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.txt"
+            path.write_text("abcde", encoding="utf-8")
+
+            with mock.patch("speed_of_cinnamon.path_safety.DEFAULT_MAX_TEXT_READ_BYTES", 4):
+                with self.assertRaisesRegex(OSError, "state file path is too large"):
+                    path_safety.read_text_without_following_symlinks(path, field_name="state file path")
+
     def test_read_text_rejects_hardlinked_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.txt"

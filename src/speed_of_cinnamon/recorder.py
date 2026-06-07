@@ -167,6 +167,7 @@ MAX_RECORDING_SECONDS = 3_600
 MAX_RECORDING_INPUT_DEVICE_CHARS = 256
 MAX_PACTL_OUTPUT_CHARS = 1_000_000
 MAX_PACTL_TIMEOUT_SECONDS = 10
+MAX_FFMPEG_OUTPUT_BYTES = 256 * 1024
 MAX_RECORDING_LEVEL_BYTES = 128_000
 WAV_HEADER_SCAN_BYTES = 512
 DEFAULT_WAV_DATA_OFFSET = 44
@@ -239,6 +240,67 @@ def _file_size(file: io.BufferedRandom) -> int:
         raise RecorderError("pactl output must be a binary file handle")
     file.seek(0, 2)
     return file.tell()
+
+
+def _completed_output_bytes(value: object, *, field_name: str) -> bytes:
+    if value is None:
+        return b""
+    if isinstance(value, bytes):
+        payload = value
+    elif isinstance(value, str):
+        payload = value.encode("utf-8")
+    else:
+        return b""
+    if len(payload) > MAX_FFMPEG_OUTPUT_BYTES:
+        raise RecorderError(f"ffmpeg command {field_name} exceeded safe output limit")
+    return payload
+
+
+def _read_ffmpeg_output(handle: io.BufferedRandom, *, completed_output: object, field_name: str) -> bytes:
+    if not hasattr(handle, "seek") or not hasattr(handle, "tell") or not hasattr(handle, "read"):
+        raise RecorderError("ffmpeg output must be a binary file handle")
+    handle.seek(0, os.SEEK_END)
+    size = handle.tell()
+    if size > MAX_FFMPEG_OUTPUT_BYTES:
+        raise RecorderError(f"ffmpeg command {field_name} exceeded safe output limit")
+    handle.seek(0)
+    payload = handle.read(MAX_FFMPEG_OUTPUT_BYTES + 1)
+    if not isinstance(payload, bytes):
+        raise RecorderError("ffmpeg output must be bytes")
+    if payload:
+        if len(payload) > MAX_FFMPEG_OUTPUT_BYTES:
+            raise RecorderError(f"ffmpeg command {field_name} exceeded safe output limit")
+        return payload
+    return _completed_output_bytes(completed_output, field_name=field_name)
+
+
+def _decode_ffmpeg_output(payload: object) -> str:
+    if isinstance(payload, bytes):
+        return payload.decode("utf-8", errors="ignore").strip()
+    if isinstance(payload, str):
+        return payload.strip()
+    return ""
+
+
+def _run_ffmpeg_bounded(
+    command: list[str],
+    *,
+    timeout: int,
+    pass_fds: tuple[int, ...],
+) -> subprocess.CompletedProcess[bytes]:
+    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+        proc = subprocess.run(  # nosec B603
+            command,
+            check=False,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            timeout=timeout,
+            env=_filtered_environment(),
+            pass_fds=pass_fds,
+        )
+        stdout = _read_ffmpeg_output(stdout_file, completed_output=getattr(proc, "stdout", None), field_name="stdout")
+        stderr = _read_ffmpeg_output(stderr_file, completed_output=getattr(proc, "stderr", None), field_name="stderr")
+        return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
 
 
 def _command_path(command: str) -> str:
@@ -460,7 +522,7 @@ def detect_silent_recording(audio_path: Path) -> SilenceDetectionResult:
     try:
         input_path = _ffmpeg_output_path_for_fd(audio_fd)
         # argv-only ffmpeg invocation with trusted binary resolution.
-        proc = subprocess.run(  # nosec B603
+        proc = _run_ffmpeg_bounded(
             [
                 ffmpeg,
                 "-hide_banner",
@@ -474,15 +536,10 @@ def detect_silent_recording(audio_path: Path) -> SilenceDetectionResult:
                 "null",
                 "-",
             ],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
             timeout=SILENCE_DETECT_TIMEOUT_SECONDS,
-            env=_filtered_environment(),
             pass_fds=(audio_fd,),
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except (OSError, subprocess.TimeoutExpired, RecorderError) as exc:
         detail = _sanitize_ffmpeg_error_detail(exc)
         if detail and not _contains_escaped_null(detail):
             return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, f"ffmpeg silence detection failed: {detail}")
@@ -491,19 +548,16 @@ def detect_silent_recording(audio_path: Path) -> SilenceDetectionResult:
         if audio_fd is not None:
             os.close(audio_fd)
     if proc.returncode != 0:
-        stderr = proc.stderr or ""
-        if isinstance(stderr, bytes):
-            detail = stderr.decode("utf-8", errors="ignore").strip()
-        else:
-            detail = str(stderr).strip()
+        detail = _decode_ffmpeg_output(proc.stderr)
         detail = _sanitize_ffmpeg_error_detail(detail)
         if detail and not _contains_escaped_null(detail):
             return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, f"ffmpeg silence detection failed: {detail}")
         return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, "ffmpeg silence detection failed")
-    duration_seconds = _parse_ffmpeg_duration(proc.stderr)
+    stderr_text = _decode_ffmpeg_output(proc.stderr)
+    duration_seconds = _parse_ffmpeg_duration(stderr_text)
     if duration_seconds <= 0:
         return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, "ffmpeg duration was unavailable")
-    silence_seconds, leading_silence_seconds = _parse_silence_seconds(proc.stderr, duration_seconds)
+    silence_seconds, leading_silence_seconds = _parse_silence_seconds(stderr_text, duration_seconds)
     speech_seconds = max(0.0, duration_seconds - silence_seconds)
     silence_ratio = silence_seconds / duration_seconds if duration_seconds else 0.0
     silent = silence_ratio >= SILENCE_SKIP_RATIO and speech_seconds <= SILENCE_SKIP_MAX_SPEECH_SECONDS
@@ -634,16 +688,12 @@ def trim_recording_silence(
         output_path,
     ]
     try:
-        proc = subprocess.run(  # nosec B603
+        proc = _run_ffmpeg_bounded(
             command,
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
             timeout=SILENCE_DETECT_TIMEOUT_SECONDS,
-            env=_filtered_environment(),
             pass_fds=(audio_fd, fd),
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except (OSError, subprocess.TimeoutExpired, RecorderError) as exc:
         if audio_fd is not None:
             os.close(audio_fd)
             audio_fd = None
@@ -655,11 +705,9 @@ def trim_recording_silence(
             os.close(audio_fd)
             audio_fd = None
     if proc.returncode != 0:
-        detail = ""
-        if proc.stderr:
-            detail = proc.stderr.decode("utf-8", errors="ignore").strip()
-            if _contains_escaped_null(detail):
-                detail = ""
+        detail = _decode_ffmpeg_output(proc.stderr)
+        if detail and _contains_escaped_null(detail):
+            detail = ""
         detail = _sanitize_ffmpeg_error_detail(detail)
         _cleanup_recording_temp_file(trimmed_path, fd)
         raise RecorderError(detail or "ffmpeg silence trimming failed")
@@ -728,16 +776,12 @@ def reencode_recording_to_flac(audio_path: Path) -> Path:
         output_path,
     ]
     try:
-        proc = subprocess.run(  # nosec B603
+        proc = _run_ffmpeg_bounded(
             command,
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
             timeout=SILENCE_DETECT_TIMEOUT_SECONDS,
-            env=_filtered_environment(),
             pass_fds=(audio_fd, fd),
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except (OSError, subprocess.TimeoutExpired, RecorderError) as exc:
         if audio_fd is not None:
             os.close(audio_fd)
             audio_fd = None
@@ -749,11 +793,9 @@ def reencode_recording_to_flac(audio_path: Path) -> Path:
             os.close(audio_fd)
             audio_fd = None
     if proc.returncode != 0:
-        detail = ""
-        if proc.stderr:
-            detail = proc.stderr.decode("utf-8", errors="ignore").strip()
-            if _contains_escaped_null(detail):
-                detail = ""
+        detail = _decode_ffmpeg_output(proc.stderr)
+        if detail and _contains_escaped_null(detail):
+            detail = ""
         detail = _sanitize_ffmpeg_error_detail(detail)
         _cleanup_recording_temp_file(encoded_path, fd)
         raise RecorderError(detail or "ffmpeg FLAC conversion failed")

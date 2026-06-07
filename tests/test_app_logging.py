@@ -607,6 +607,22 @@ class AppLoggingTest(unittest.TestCase):
             self.assertFalse(target.exists())
             self.assertTrue(list(log_dir.glob("*.tmp")))
 
+    def test_gzip_file_rejects_oversized_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "source.log"
+            target = log_dir / "target.log.gz"
+            source.write_bytes(b"x" * 32)
+            source.chmod(0o600)
+
+            with mock.patch("speed_of_cinnamon.app_logging.MAX_TOTAL_LOG_BYTES", 16):
+                with self.assertRaisesRegex(RuntimeError, "log source content is too large"):
+                    app_logging._gzip_file(source, target)
+
+            self.assertTrue(source.exists())
+            self.assertFalse(target.exists())
+            self.assertEqual(list(log_dir.glob("*.tmp")), [])
+
     def test_gzip_file_rejects_source_swap_before_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
@@ -687,6 +703,21 @@ class AppLoggingTest(unittest.TestCase):
 
             with gzip.open(target, "wb") as output:
                 with self.assertRaisesRegex(RuntimeError, "regular file"):
+                    app_logging._copy_log_content(path, output)
+
+    def test_copy_log_content_rejects_oversized_decompressed_gzip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "source.log.gz"
+            target = Path(tmp) / "target.log.gz"
+            with gzip.open(path, "wb") as handle:
+                handle.write(b"x" * 32)
+            path.chmod(0o600)
+
+            with (
+                mock.patch("speed_of_cinnamon.app_logging.MAX_TOTAL_LOG_BYTES", 16),
+                gzip.open(target, "wb") as output,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "log source content is too large"):
                     app_logging._copy_log_content(path, output)
 
     def test_maintain_logs_deletes_oldest_files_over_total_limit(self) -> None:

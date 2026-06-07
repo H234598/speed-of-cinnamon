@@ -7,6 +7,7 @@ import secrets
 import shutil
 import stat
 import subprocess  # nosec B404
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,7 @@ PASSPHRASE_ENV = "SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE"  # nosec B105
 PASSPHRASE_FILE_ENV = "SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE"  # nosec B105
 DEFAULT_PASSPHRASE_FILE_NAME = "artifact.key"  # nosec B105
 _SECRET_TOOL_TIMEOUT_SECONDS = 10
+MAX_SECRET_TOOL_OUTPUT_BYTES = 64 * 1024
 _SECRET_TOOL_ATTRIBUTES = ["application", APP_ID, "purpose", "artifact-encryption"]
 _TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin:/var/lib/snapd/snap/bin"
 _ALLOWED_SECRET_TOOL_ENV = {
@@ -476,20 +478,36 @@ def _filtered_environment() -> dict[str, str]:
     return env
 
 
+def _read_secret_tool_output(handle: Any, *, field_name: str) -> bytes:
+    handle.seek(0, os.SEEK_END)
+    size = handle.tell()
+    if size > MAX_SECRET_TOOL_OUTPUT_BYTES:
+        raise ArtifactCryptoError(f"Secret Service keyring {field_name} exceeded safe output limit")
+    handle.seek(0)
+    payload = handle.read(MAX_SECRET_TOOL_OUTPUT_BYTES + 1)
+    if not isinstance(payload, bytes) or len(payload) > MAX_SECRET_TOOL_OUTPUT_BYTES:
+        raise ArtifactCryptoError(f"Secret Service keyring {field_name} exceeded safe output limit")
+    return payload
+
+
 def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subprocess.CompletedProcess[bytes]:
     command = [_secret_tool_path(), *args]
     env = _filtered_environment()
     try:
-        return subprocess.run(  # nosec B603
-            command,
-            input=None if input_text is None else input_text.encode("utf-8"),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=_SECRET_TOOL_TIMEOUT_SECONDS,
-            shell=False,
-            env=env,
-            check=False,
-        )
+        with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+            proc = subprocess.run(  # nosec B603
+                command,
+                input=None if input_text is None else input_text.encode("utf-8"),
+                stdout=stdout_file,
+                stderr=stderr_file,
+                timeout=_SECRET_TOOL_TIMEOUT_SECONDS,
+                shell=False,
+                env=env,
+                check=False,
+            )
+            stdout = _read_secret_tool_output(stdout_file, field_name="stdout")
+            stderr = _read_secret_tool_output(stderr_file, field_name="stderr")
+            return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
     except subprocess.TimeoutExpired as exc:
         raise ArtifactCryptoError("Secret Service keyring request timed out") from exc
     except OSError as exc:
@@ -663,6 +681,7 @@ def read_private_bytes(path: Path, *, field_name: str, max_bytes: int | None = N
         raise ArtifactCryptoError(f"{field_name} must be a path")
     if max_bytes is not None and (isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0):
         raise ArtifactCryptoError("max_bytes must be a non-negative integer")
+    effective_max_bytes = MAX_ENCRYPTED_ARTIFACT_BYTES if max_bytes is None else max_bytes
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
         raise ArtifactCryptoError(f"secure {field_name} open is not supported")
@@ -683,9 +702,7 @@ def read_private_bytes(path: Path, *, field_name: str, max_bytes: int | None = N
         except OSError:
             raise
         with handle:
-            if max_bytes is None:
-                return handle.read()
-            data = handle.read(max_bytes + 1)
+            data = handle.read(effective_max_bytes + 1)
     except OSError as exc:
         raise ArtifactCryptoError(f"failed to read {field_name}: {path}") from exc
     finally:
@@ -694,7 +711,7 @@ def read_private_bytes(path: Path, *, field_name: str, max_bytes: int | None = N
                 os.close(fd)
             except OSError:
                 pass
-    if max_bytes is not None and len(data) > max_bytes:
+    if len(data) > effective_max_bytes:
         raise ArtifactCryptoError(f"{field_name} is too large")
     return data
 
@@ -721,6 +738,6 @@ def read_decrypted_bytes_from_file(
     data = read_private_bytes(
         path,
         field_name=field_name,
-        max_bytes=(MAX_ENCRYPTED_ARTIFACT_BYTES if max_bytes is None else max_bytes),
+        max_bytes=max_bytes,
     )
     return decrypt_bytes(data, kind=kind, require_encrypted=require_encrypted)

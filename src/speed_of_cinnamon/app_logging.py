@@ -6,7 +6,6 @@ import logging
 import os
 import re
 import secrets
-import shutil
 import stat as stat_module
 import string
 import time
@@ -587,14 +586,26 @@ def _merge_old_months(directory: Path, today: date) -> None:
             os.close(parent_fd)
 
 
+def _copy_stream_capped(source: Any, output: Any, *, source_path: Path) -> None:
+    copied = 0
+    while True:
+        chunk = source.read(min(65536, MAX_TOTAL_LOG_BYTES - copied + 1))
+        if not chunk:
+            return
+        copied += len(chunk)
+        if copied > MAX_TOTAL_LOG_BYTES:
+            raise RuntimeError(f"log source content is too large: {source_path}")
+        output.write(chunk)
+
+
 def _copy_log_content(path: Path, output: gzip.GzipFile) -> None:
     fd = _open_log_source_file(path, field_name="log source file")
     with os.fdopen(fd, "rb") as source_file:
         if path.suffix == ".gz":
             with gzip.GzipFile(fileobj=source_file, mode="rb") as source:
-                shutil.copyfileobj(source, output)
+                _copy_stream_capped(source, output, source_path=path)
         else:
-            shutil.copyfileobj(source_file, output)
+            _copy_stream_capped(source_file, output, source_path=path)
         output.write(b"\n")
 
 
@@ -656,7 +667,7 @@ def _gzip_file(source: Path, target: Path) -> None:
             raise
         with input_file, raw_output:
             with gzip.GzipFile(fileobj=raw_output, mode="wb") as output_file:
-                shutil.copyfileobj(input_file, output_file)
+                _copy_stream_capped(input_file, output_file, source_path=source)
             raw_output.flush()
             os.fsync(raw_output.fileno())
             if not _log_temp_name_matches_fd(parent_fd, temp_name, raw_output.fileno()):

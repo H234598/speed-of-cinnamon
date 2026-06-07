@@ -376,12 +376,18 @@ def _restore_or_remove_generated_transcript(path: Path, snapshot: bytes | None) 
 def _read_response_text(response: object, max_bytes: int = MAX_TRANSCRIBER_JSON_BYTES) -> str:
     if not hasattr(response, "read"):
         raise TranscriptionError("response must be readable")
+    if not isinstance(max_bytes, int) or isinstance(max_bytes, bool):
+        raise TranscriptionError("max response bytes must be an integer")
+    if max_bytes < 0:
+        raise TranscriptionError("max response bytes must be non-negative")
     chunks: list[bytes] = []
     total = 0
     while True:
         chunk = response.read(65536)
         if not chunk:
             break
+        if not isinstance(chunk, bytes):
+            raise TranscriptionError("API response chunk must be bytes")
         total += len(chunk)
         if total > max_bytes:
             raise TranscriptionError(f"API response exceeded {max_bytes} bytes")
@@ -576,6 +582,7 @@ def _read_private_file_bytes(
         raise TranscriptionError("path must be a Path")
     if max_bytes is not None and (isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0):
         raise TranscriptionError("max_bytes must be a non-negative integer")
+    effective_max_bytes = MAX_AUDIO_FILE_BYTES if max_bytes is None else max_bytes
     if isinstance(field_name, bool) or not isinstance(field_name, str):
         raise TranscriptionError("field_name must be text")
     expected_snapshot_metadata: tuple[int, int, int, int, int, int] | None = None
@@ -658,12 +665,9 @@ def _read_private_file_bytes(
         raise TranscriptionError(f"failed to read {field_name}: {path}") from exc
     try:
         hasher = hashlib.sha256() if expected_snapshot_digest is not None else None
-        if max_bytes is None:
-            data = handle.read()
-        else:
-            data = handle.read(max_bytes + 1)
-            if len(data) > max_bytes:
-                raise TranscriptionError(f"{field_name} is too large")
+        data = handle.read(effective_max_bytes + 1)
+        if len(data) > effective_max_bytes:
+            raise TranscriptionError(f"{field_name} is too large")
         if hasher is not None:
             hasher.update(data)
             if hasher.hexdigest() != expected_snapshot_digest:
@@ -717,6 +721,10 @@ def _snapshot_private_file(
     )
     if not include_hash:
         return snapshot
+    if file_stat.st_size > MAX_AUDIO_FILE_BYTES:
+        raise TranscriptionError(
+            f"audio file is too large: {file_stat.st_size} bytes (max {MAX_AUDIO_FILE_BYTES})"
+        )
     hash_state = hashlib.sha256()
     fd = None
     try:
@@ -769,6 +777,10 @@ def _staged_audio_file_for_local_backend(
         if not isinstance(expected_snapshot[6], str) or isinstance(expected_snapshot[6], bool):
             raise TranscriptionError("failed to stage audio file for backend access")
         expected_snapshot_digest = expected_snapshot[6]
+    if expected_snapshot_metadata[4] > MAX_AUDIO_FILE_BYTES:
+        raise TranscriptionError(
+            f"audio file is too large: {expected_snapshot_metadata[4]} bytes (max {MAX_AUDIO_FILE_BYTES})"
+        )
     source_fd: int | None = None
     parent_fd: int | None = None
     staging_dir: Path | None = None

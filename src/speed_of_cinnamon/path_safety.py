@@ -6,6 +6,8 @@ import stat
 from pathlib import Path
 from typing import Any
 
+DEFAULT_MAX_TEXT_READ_BYTES = 1_000_000
+
 
 def _safe_path_parts(path: Path, *, field_name: str) -> tuple[str, ...]:
     parts = path.parts
@@ -169,6 +171,7 @@ def read_text_without_following_symlinks(
         raise RuntimeError(f"{field_name} must be a path")
     if max_bytes is not None and (isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0):
         raise RuntimeError("max_bytes must be a non-negative integer")
+    effective_max_bytes = DEFAULT_MAX_TEXT_READ_BYTES if max_bytes is None else max_bytes
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     try:
         fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name=field_name)
@@ -183,18 +186,13 @@ def read_text_without_following_symlinks(
             )
         except RuntimeError as exc:
             raise OSError(str(exc)) from exc
-        if max_bytes is None:
-            handle = os.fdopen(fd, "r", encoding=encoding)
-        else:
-            handle = os.fdopen(fd, "rb")
+        handle = os.fdopen(fd, "rb")
     except OSError:
         os.close(fd)
         raise
     with handle:
-        if max_bytes is None:
-            return handle.read()
-        payload = handle.read(max_bytes + 1)
-    if len(payload) > max_bytes:
+        payload = handle.read(effective_max_bytes + 1)
+    if len(payload) > effective_max_bytes:
         raise OSError(f"{field_name} is too large")
     return payload.decode(encoding)
 

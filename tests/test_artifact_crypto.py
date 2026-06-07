@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import stat
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -230,6 +231,39 @@ class ArtifactCryptoTest(unittest.TestCase):
         with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "invalid length"):
             artifact_crypto._parse_keyring_secret(bad_secret)
 
+    def test_secret_tool_uses_file_backed_output_capture(self) -> None:
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            stdout = kwargs["stdout"]
+            stderr = kwargs["stderr"]
+            self.assertNotEqual(stdout, subprocess.PIPE)
+            self.assertNotEqual(stderr, subprocess.PIPE)
+            stdout.write(b"stored-secret\n")
+            stderr.write(b"warning\n")
+            return subprocess.CompletedProcess(command, 0)
+
+        with (
+            mock.patch("speed_of_cinnamon.artifact_crypto._secret_tool_path", return_value="/usr/bin/secret-tool"),
+            mock.patch("speed_of_cinnamon.artifact_crypto.subprocess.run", side_effect=fake_run),
+        ):
+            proc = artifact_crypto._run_secret_tool(["lookup", "application", "test"])
+
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(proc.stdout, b"stored-secret\n")
+        self.assertEqual(proc.stderr, b"warning\n")
+
+    def test_secret_tool_rejects_oversized_output(self) -> None:
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            stdout = kwargs["stdout"]
+            stdout.write(b"x" * (artifact_crypto.MAX_SECRET_TOOL_OUTPUT_BYTES + 1))
+            return subprocess.CompletedProcess(command, 0)
+
+        with (
+            mock.patch("speed_of_cinnamon.artifact_crypto._secret_tool_path", return_value="/usr/bin/secret-tool"),
+            mock.patch("speed_of_cinnamon.artifact_crypto.subprocess.run", side_effect=fake_run),
+        ):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "exceeded safe output limit"):
+                artifact_crypto._run_secret_tool(["lookup", "application", "test"])
+
     def test_keyring_decryption_does_not_create_missing_keyring_key(self) -> None:
         key = bytes(range(32))
         with mock.patch("speed_of_cinnamon.artifact_crypto._load_keyring_key", return_value=key):
@@ -265,6 +299,15 @@ class ArtifactCryptoTest(unittest.TestCase):
                 path.write_bytes(encrypted)
                 with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "is too large"):
                     artifact_crypto.read_decrypted_bytes_from_file(path, kind="transcript", field_name="artifact", max_bytes=0)
+
+    def test_read_private_bytes_default_is_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.bin"
+            path.write_bytes(b"12345")
+            path.chmod(0o600)
+            with mock.patch("speed_of_cinnamon.artifact_crypto.MAX_ENCRYPTED_ARTIFACT_BYTES", 4):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "is too large"):
+                    artifact_crypto.read_private_bytes(path, field_name="artifact")
 
 if __name__ == "__main__":
     unittest.main()

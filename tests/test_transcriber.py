@@ -24,6 +24,7 @@ from speed_of_cinnamon.transcriber import (
     MAX_TRANSCRIBER_TEXT_CHARS,
     _multipart_form_data,
     _read_file_head,
+    _read_response_text,
     _read_text_file,
     _assert_text_length,
     _contains_escaped_null,
@@ -611,6 +612,15 @@ class TranscriberTest(unittest.TestCase):
             )
         )
 
+    def test_read_private_file_bytes_default_is_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.wav"
+            path.write_bytes(b"12345")
+            path.chmod(0o600)
+            with mock.patch("speed_of_cinnamon.transcriber.MAX_AUDIO_FILE_BYTES", 4):
+                with self.assertRaisesRegex(TranscriptionError, "audio file for API upload is too large"):
+                    transcriber_module._read_private_file_bytes(path, field_name="audio file for API upload")
+
     def test_validate_audio_file_rejects_oversized_path_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ("😀" * ((MAX_AUDIO_PATH_CHARS // 4) + 1))
@@ -627,6 +637,24 @@ class TranscriberTest(unittest.TestCase):
         with mock.patch("speed_of_cinnamon.transcriber.MAX_TRANSCRIPT_TEXT_CHARS", 4):
             with self.assertRaisesRegex(TranscriptionError, "is too large"):
                 _assert_text_length("😀😀", field_name="transcript")
+
+    def test_read_response_text_rejects_invalid_max_bytes(self) -> None:
+        response = mock.Mock()
+        response.read.return_value = b""
+        with self.assertRaisesRegex(TranscriptionError, "max response bytes must be an integer"):
+            _read_response_text(response, True)  # type: ignore[arg-type]
+
+    def test_read_response_text_rejects_negative_max_bytes(self) -> None:
+        response = mock.Mock()
+        response.read.return_value = b""
+        with self.assertRaisesRegex(TranscriptionError, "max response bytes must be non-negative"):
+            _read_response_text(response, -1)
+
+    def test_read_response_text_rejects_non_bytes_chunks(self) -> None:
+        response = mock.Mock()
+        response.read.side_effect = ["not-bytes", b""]
+        with self.assertRaisesRegex(TranscriptionError, "API response chunk must be bytes"):
+            _read_response_text(response)
 
     def test_contains_escaped_null_rejects_non_text(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "value must be text"):
@@ -1305,6 +1333,36 @@ class TranscriberTest(unittest.TestCase):
         self.assertEqual(data, b"audio")
         self.assertEqual(mode, 0o600)
         self.assertFalse(staged_exists_after_context)
+
+    def test_snapshot_private_file_rejects_oversized_audio_before_hash_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"12345")
+            audio.chmod(0o600)
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.MAX_AUDIO_FILE_BYTES", 4),
+                mock.patch("speed_of_cinnamon.transcriber.os.fdopen", side_effect=AssertionError("hash read attempted")),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "audio file is too large"):
+                    transcriber_module._snapshot_private_file(
+                        audio,
+                        field_name="audio file for backend",
+                        include_hash=True,
+                    )
+
+    def test_staged_audio_rejects_oversized_expected_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            audio.chmod(0o600)
+            oversized_snapshot = (1, 1, 0o100600, 1, 5, 0, "digest")
+            with mock.patch("speed_of_cinnamon.transcriber.MAX_AUDIO_FILE_BYTES", 4):
+                with self.assertRaisesRegex(TranscriptionError, "audio file is too large"):
+                    with transcriber_module._staged_audio_file_for_local_backend(
+                        audio,
+                        expected_snapshot=oversized_snapshot,
+                    ):
+                        pass
 
     def test_staged_audio_cleanup_failure_is_visible_after_success(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
