@@ -4,6 +4,12 @@ umask 077
 IFS=$'\n\t'
 readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export PATH="${TRUSTED_COMMAND_PATH}"
+readonly MAX_SNAP_ARCHIVE_BYTES=$((512 * 1024 * 1024))
+readonly MAX_SNAP_ENTRIES=10000
+readonly MAX_SNAP_PATH_CHARS=320
+readonly MAX_SNAP_PATH_DEPTH=40
+readonly MAX_SNAP_FILE_BYTES=$((128 * 1024 * 1024))
+readonly MAX_SNAP_TOTAL_FILE_BYTES=$((1024 * 1024 * 1024))
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "${repo_dir}"
@@ -110,6 +116,10 @@ if [[ "${size}" -le 0 ]]; then
   printf 'snap file is empty: %s\n' "${snap_path}" >&2
   exit 1
 fi
+if [[ "${size}" -gt "${MAX_SNAP_ARCHIVE_BYTES}" ]]; then
+  printf 'snap file is too large: %s bytes\n' "${size}" >&2
+  exit 1
+fi
 
 tmp_root="${TMPDIR:-/tmp}"
 if contains_control_chars "${tmp_root}"; then
@@ -169,12 +179,17 @@ fi
 
 snap_listing="${tmp_dir}/snap-listing.txt"
 unsquashfs -lln -no-progress "${snap_snapshot}" > "${snap_listing}"
-python3 - <<'PY' "${snap_listing}"
+python3 - <<'PY' "${snap_listing}" "${MAX_SNAP_ENTRIES}" "${MAX_SNAP_PATH_CHARS}" "${MAX_SNAP_PATH_DEPTH}" "${MAX_SNAP_FILE_BYTES}" "${MAX_SNAP_TOTAL_FILE_BYTES}"
 from pathlib import PurePosixPath
 from pathlib import Path
 import posixpath
 import sys
 
+MAX_SNAP_ENTRIES = int(sys.argv[2])
+MAX_SNAP_PATH_CHARS = int(sys.argv[3])
+MAX_SNAP_PATH_DEPTH = int(sys.argv[4])
+MAX_SNAP_FILE_BYTES = int(sys.argv[5])
+MAX_SNAP_TOTAL_FILE_BYTES = int(sys.argv[6])
 REQUIRED_ENTRIES = {
     "squashfs-root/meta/snap.yaml",
     "squashfs-root/bin/speed-of-cinnamon",
@@ -295,9 +310,14 @@ def validate_symlink_target(path: PurePosixPath, target_text: str) -> None:
 
 
 seen: dict[str, str] = {}
+entry_count = 0
+total_file_bytes = 0
 for raw in Path(sys.argv[1]).read_text(encoding="utf-8").split("\n"):
     if not raw:
         continue
+    entry_count += 1
+    if entry_count > MAX_SNAP_ENTRIES:
+        raise SystemExit("snap package contains too many entries")
     parts = raw.split(maxsplit=5)
     if len(parts) != 6:
         raise SystemExit(f"snap package contains malformed listing entry: {raw!r}")
@@ -317,6 +337,10 @@ for raw in Path(sys.argv[1]).read_text(encoding="utf-8").split("\n"):
         validate_symlink_target(validated_path, link_target)
     if path_text in seen:
         raise SystemExit(f"snap package contains duplicate entry: {path_text}")
+    if len(path_text) > MAX_SNAP_PATH_CHARS:
+        raise SystemExit(f"snap package contains path that is too long: {path_text}")
+    if len([part for part in validated_path.parts if part]) > MAX_SNAP_PATH_DEPTH:
+        raise SystemExit(f"snap package contains path that is too deep: {path_text}")
     seen[path_text] = mode
     try:
         size = int(size_text)
@@ -324,6 +348,12 @@ for raw in Path(sys.argv[1]).read_text(encoding="utf-8").split("\n"):
         raise SystemExit(f"snap package contains malformed entry size for {path_text}: {size_text}") from None
     if size < 0:
         raise SystemExit(f"snap package contains negative entry size for {path_text}: {size_text}")
+    if mode[0] == "-":
+        if size > MAX_SNAP_FILE_BYTES:
+            raise SystemExit(f"snap package contains oversized file: {path_text}")
+        total_file_bytes += size
+        if total_file_bytes > MAX_SNAP_TOTAL_FILE_BYTES:
+            raise SystemExit("snap package file size budget exceeded")
 
 missing = REQUIRED_ENTRIES - seen.keys()
 if missing:

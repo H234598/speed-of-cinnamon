@@ -44,6 +44,7 @@ const MAX_CLI_ARG_COUNT = 128;
 const MAX_CLI_COMMAND_BYTES = 32768;
 const MAX_TEXT_INSERT_CHARS = 120000;
 const MAX_SETTING_TEXT_CHARS = 4096;
+const TRUSTED_SPAWN_DIRS = ["/usr/bin", "/usr/local/bin", "/bin"];
 const NUL_RE = /\u0000/g;
 const NON_ASCII_RE = /[^\u0000-\u007E]/g;
 const COMBINING_MARKS_RE = /[\u0300-\u036f]/g;
@@ -1400,7 +1401,7 @@ MyApplet.prototype = {
   },
 
   _promptCustomRecordingLimit: function() {
-    if (!GLib.find_program_in_path("zenity")) {
+    if (!this._findTrustedProgramInPath("zenity")) {
       this.lastMessage = _("Install zenity to enter a custom duration.");
       this._setStatus("ready", this.lastMessage, this.lastTranscript);
       return;
@@ -1488,7 +1489,7 @@ MyApplet.prototype = {
   },
 
   _promptCustomTranscriptLimit: function() {
-    if (!GLib.find_program_in_path("zenity")) {
+    if (!this._findTrustedProgramInPath("zenity")) {
       this.lastMessage = _("Install zenity to enter a custom transcript limit.");
       this._setStatus("ready", this.lastMessage, this.lastTranscript);
       return;
@@ -1762,7 +1763,7 @@ MyApplet.prototype = {
   },
 
   _configureAutoPaste: function() {
-    if (!GLib.find_program_in_path("zenity")) {
+    if (!this._findTrustedProgramInPath("zenity")) {
       this._setTextOptionStatus(_("Install zenity to enter a custom Auto-Submitt string"));
       return;
     }
@@ -2251,7 +2252,7 @@ MyApplet.prototype = {
 
   _openAppletSettings: function() {
     let openedMessage = arguments.length > 0 ? String(arguments[0] || "") : _("Opened Cinnamon applet settings");
-    if (!GLib.find_program_in_path("xlet-settings")) {
+    if (!this._findTrustedProgramInPath("xlet-settings")) {
       this._setStatus("error", _("xlet-settings command not found"), this.lastTranscript);
       return;
     }
@@ -2414,13 +2415,13 @@ MyApplet.prototype = {
 
   _terminalCommandArgs: function(title, command) {
     let terminalTitle = String(title || "Speed of Cinnamon");
-    if (GLib.find_program_in_path("gnome-terminal")) {
+    if (this._findTrustedProgramInPath("gnome-terminal")) {
       return ["gnome-terminal", "--title=" + terminalTitle, "--", "bash", "-lc", command];
     }
-    if (GLib.find_program_in_path("x-terminal-emulator")) {
+    if (this._findTrustedProgramInPath("x-terminal-emulator")) {
       return ["x-terminal-emulator", "-e", "bash", "-lc", command];
     }
-    if (GLib.find_program_in_path("xterm")) {
+    if (this._findTrustedProgramInPath("xterm")) {
       return ["xterm", "-T", terminalTitle, "-e", "bash", "-lc", command];
     }
     return [];
@@ -2533,7 +2534,7 @@ MyApplet.prototype = {
   },
 
   _selectBenchmarkAudioFile: function() {
-    if (!GLib.find_program_in_path("zenity")) {
+    if (!this._findTrustedProgramInPath("zenity")) {
       this._setStatus("error", _("Install zenity to choose a benchmark audio file"), this.lastTranscript);
       return;
     }
@@ -3541,7 +3542,7 @@ MyApplet.prototype = {
   },
 
   _activateOllamaTextModelFlow: function() {
-    if (!GLib.find_program_in_path("zenity")) {
+    if (!this._findTrustedProgramInPath("zenity")) {
       this._setStatus("error", _("Install zenity to choose an Ollama model"), this.lastTranscript);
       return;
     }
@@ -3604,7 +3605,7 @@ MyApplet.prototype = {
   },
 
   _chooseOllamaTextModel: function() {
-    if (!GLib.find_program_in_path("zenity")) {
+    if (!this._findTrustedProgramInPath("zenity")) {
       this._setStatus("error", _("Install zenity to choose an Ollama model"), this.lastTranscript);
       return;
     }
@@ -3651,7 +3652,7 @@ MyApplet.prototype = {
   },
 
   _promptInstallOllamaTextModel: function() {
-    if (!GLib.find_program_in_path("zenity")) {
+    if (!this._findTrustedProgramInPath("zenity")) {
       this._setStatus("error", _("Install zenity to enter an Ollama model name"), this.lastTranscript);
       return;
     }
@@ -3702,7 +3703,7 @@ MyApplet.prototype = {
     if (this.isCommandRunning) {
       return;
     }
-    if (!GLib.find_program_in_path("zenity")) {
+    if (!this._findTrustedProgramInPath("zenity")) {
       let message = _("Install zenity to show the transcript list without writing a plaintext file.");
       this._setStatus("error", message, this.lastTranscript);
       this._notify(_("Speed of Cinnamon"), message, true);
@@ -3776,7 +3777,7 @@ MyApplet.prototype = {
   },
 
   _showTranscriptsWindow: function(content, count, truncated) {
-    let zenity = GLib.find_program_in_path("zenity");
+    let zenity = this._findTrustedProgramInPath("zenity");
     if (!zenity) {
       let message = _("Install zenity to show the transcript list without writing a plaintext file.");
       this._setStatus("error", message, this.lastTranscript);
@@ -4203,6 +4204,20 @@ MyApplet.prototype = {
     return this._resolveAllowedCliCommand(command) !== null;
   },
 
+  _findTrustedProgramInPath: function(command) {
+    let name = String(command || "").trim();
+    if (name === "" || name.indexOf("/") >= 0 || name.indexOf("\u0000") >= 0 || this._containsCliControlChars(name)) {
+      return null;
+    }
+    for (let directory of TRUSTED_SPAWN_DIRS) {
+      let candidate = GLib.build_filenamev([directory, name]);
+      if (GLib.file_test(candidate, GLib.FileTest.IS_EXECUTABLE)) {
+        return candidate;
+      }
+    }
+    return null;
+  },
+
   _resolveAllowedCliCommand: function(command) {
     let value = String(command || "").trim();
     if (value === "") {
@@ -4214,7 +4229,7 @@ MyApplet.prototype = {
       }
       return GLib.file_test(value, GLib.FileTest.IS_EXECUTABLE) ? value : null;
     }
-    return GLib.find_program_in_path(value);
+    return this._findTrustedProgramInPath(value);
   },
 
   _parseSpawnOutput: function(stdout) {
@@ -4273,7 +4288,7 @@ MyApplet.prototype = {
   _spawnJsonWithBackendEnvironment: function(args, env, callback, inputText) {
     env = env || {};
     let hasInput = inputText !== null && inputText !== undefined;
-    let flags = Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE | Gio.SubprocessFlags.SEARCH_PATH;
+    let flags = Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE;
     if (hasInput) {
       flags |= Gio.SubprocessFlags.STDIN_PIPE;
     }
@@ -4932,8 +4947,8 @@ MyApplet.prototype = {
   },
 
   _xdotoolOutput: function(args, maxBytes) {
-    let timeout = GLib.find_program_in_path("timeout");
-    let xdotool = GLib.find_program_in_path("xdotool");
+    let timeout = this._findTrustedProgramInPath("timeout");
+    let xdotool = this._findTrustedProgramInPath("xdotool");
     if (!timeout || !xdotool) {
       return null;
     }
@@ -4947,7 +4962,7 @@ MyApplet.prototype = {
         null,
         this._coerceSpawnArgs(command),
         null,
-        GLib.SpawnFlags.SEARCH_PATH | GLib.SpawnFlags.STDOUT_PIPE | GLib.SpawnFlags.STDERR_PIPE,
+        GLib.SpawnFlags.STDOUT_PIPE | GLib.SpawnFlags.STDERR_PIPE,
         null
       );
       if (!Array.isArray(result) || result.length < 4 || !result[0] || result[3] !== 0) {
@@ -5011,6 +5026,7 @@ MyApplet.prototype = {
     return {
       xid: xid,
       windowClass: String(this.targetWindowXClass || "").trim().toLowerCase(),
+      windowTitle: String(this.targetWindowXTitle || "").trim().toLowerCase(),
     };
   },
 
@@ -5030,6 +5046,14 @@ MyApplet.prototype = {
     if (expectedClass !== "") {
       let activeClass = String(this._xdotoolOutput(["getwindowclassname", xid], MAX_XDOTOOL_TARGET_OUTPUT_BYTES) || "").trim().toLowerCase();
       if (activeClass !== expectedClass) {
+        return false;
+      }
+    }
+    let expectedTitle = String(snapshot.windowTitle || "").trim().toLowerCase();
+    if (expectedTitle !== "") {
+      let activeTitle = String(this._xdotoolOutput(["getwindowname", xid], MAX_XDOTOOL_TARGET_OUTPUT_BYTES) || "").trim();
+      activeTitle = this._shortMenuText(activeTitle, 160).toLowerCase();
+      if (activeTitle !== expectedTitle) {
         return false;
       }
     }
@@ -5183,8 +5207,8 @@ MyApplet.prototype = {
 
   _clipboardTargetList: function(program, args) {
     args = args || [];
-    let timeout = GLib.find_program_in_path("timeout");
-    let helper = GLib.find_program_in_path(program);
+    let timeout = this._findTrustedProgramInPath("timeout");
+    let helper = this._findTrustedProgramInPath(program);
     if (!timeout || !helper) {
       return null;
     }
@@ -5199,7 +5223,7 @@ MyApplet.prototype = {
         null,
         normalizedArgs,
         null,
-        GLib.SpawnFlags.SEARCH_PATH | GLib.SpawnFlags.STDOUT_PIPE | GLib.SpawnFlags.STDERR_PIPE,
+        GLib.SpawnFlags.STDOUT_PIPE | GLib.SpawnFlags.STDERR_PIPE,
         null
       );
       if (!Array.isArray(result) || result.length < 4 || !result[0] || result[3] !== 0) {
@@ -5258,15 +5282,15 @@ MyApplet.prototype = {
   },
 
   _clipboardHasNonTextPayload: function() {
-    if (GLib.find_program_in_path("xclip")) {
+    if (this._findTrustedProgramInPath("xclip")) {
       let targets = this._clipboardTargetList("xclip", ["-selection", "clipboard", "-t", "TARGETS", "-out"]);
       return this._clipboardTargetsContainNonTextPayload(targets);
     }
-    if (GLib.find_program_in_path("xsel")) {
+    if (this._findTrustedProgramInPath("xsel")) {
       let targets = this._clipboardTargetList("xsel", ["--clipboard", "--output", "--target", "TARGETS"]);
       return this._clipboardTargetsContainNonTextPayload(targets);
     }
-    if (GLib.find_program_in_path("wl-paste")) {
+    if (this._findTrustedProgramInPath("wl-paste")) {
       let targets = this._clipboardTargetList("wl-paste", ["--list-types"]);
       return this._clipboardTargetsContainNonTextPayload(targets);
     }
@@ -5275,11 +5299,11 @@ MyApplet.prototype = {
 
   _clipboardPayloadSnapshot: function() {
     let targets = null;
-    if (GLib.find_program_in_path("xclip")) {
+    if (this._findTrustedProgramInPath("xclip")) {
       targets = this._clipboardTargetList("xclip", ["-selection", "clipboard", "-t", "TARGETS", "-out"]);
-    } else if (GLib.find_program_in_path("xsel")) {
+    } else if (this._findTrustedProgramInPath("xsel")) {
       targets = this._clipboardTargetList("xsel", ["--clipboard", "--output", "--target", "TARGETS"]);
-    } else if (GLib.find_program_in_path("wl-paste")) {
+    } else if (this._findTrustedProgramInPath("wl-paste")) {
       targets = this._clipboardTargetList("wl-paste", ["--list-types"]);
     }
     if (targets === null || targets === undefined) {
@@ -5304,19 +5328,23 @@ MyApplet.prototype = {
     if (!Array.isArray(nonTextTargets) || nonTextTargets.length === 0) {
       return "no-nontext";
     }
-    let sampleTarget = String(nonTextTargets[0]);
-    let payload = null;
-    if (GLib.find_program_in_path("xclip")) {
-      payload = this._clipboardTargetList("xclip", ["-selection", "clipboard", "-t", sampleTarget, "-out"]);
-    } else if (GLib.find_program_in_path("xsel")) {
-      payload = this._clipboardTargetList("xsel", ["--clipboard", "--output", "--target", sampleTarget]);
-    } else if (GLib.find_program_in_path("wl-paste")) {
-      payload = this._clipboardTargetList("wl-paste", ["--type", sampleTarget]);
+    let fingerprints = [];
+    for (let target of nonTextTargets.slice().sort()) {
+      let targetName = String(target);
+      let payload = null;
+      if (this._findTrustedProgramInPath("xclip")) {
+        payload = this._clipboardTargetList("xclip", ["-selection", "clipboard", "-t", targetName, "-out"]);
+      } else if (this._findTrustedProgramInPath("xsel")) {
+        payload = this._clipboardTargetList("xsel", ["--clipboard", "--output", "--target", targetName]);
+      } else if (this._findTrustedProgramInPath("wl-paste")) {
+        payload = this._clipboardTargetList("wl-paste", ["--type", targetName]);
+      }
+      if (payload === null || payload === undefined) {
+        return "unknown";
+      }
+      fingerprints.push(this._clipboardPayloadFingerprintFromText(String(payload), targetName));
     }
-    if (payload === null || payload === undefined) {
-      return "unknown";
-    }
-    return this._clipboardPayloadFingerprintFromText(String(payload), sampleTarget);
+    return fingerprints.join("|");
   },
 
   _clipboardPayloadFingerprintFromText: function(payload, targetLabel) {
@@ -5377,15 +5405,15 @@ MyApplet.prototype = {
   },
 
   _describeNonTextClipboardPayload: function() {
-    if (GLib.find_program_in_path("xclip")) {
+    if (this._findTrustedProgramInPath("xclip")) {
       let targets = this._clipboardTargetList("xclip", ["-selection", "clipboard", "-t", "TARGETS", "-out"]);
       return this._clipboardPayloadDescriptionFromTargets(targets);
     }
-    if (GLib.find_program_in_path("xsel")) {
+    if (this._findTrustedProgramInPath("xsel")) {
       let targets = this._clipboardTargetList("xsel", ["--clipboard", "--output", "--target", "TARGETS"]);
       return this._clipboardPayloadDescriptionFromTargets(targets);
     }
-    if (GLib.find_program_in_path("wl-paste")) {
+    if (this._findTrustedProgramInPath("wl-paste")) {
       let targets = this._clipboardTargetList("wl-paste", ["--list-types"]);
       return this._clipboardPayloadDescriptionFromTargets(targets);
     }
@@ -5502,22 +5530,26 @@ MyApplet.prototype = {
   _pasteClipboardAfterFocus: function(sendEnter, expectedClipboardText, completionCallback) {
     let terminalPaste = this._isTerminalTargetWindow();
     let expectedTargetWindow = this._targetXWindowSnapshot();
-    let hasXdotool = GLib.find_program_in_path("xdotool");
-    let hasWtype = GLib.find_program_in_path("wtype");
+    if (!expectedTargetWindow) {
+      this._setStatus("error", _("Target window unavailable for automatic paste"), this.lastTranscript);
+      return false;
+    }
+    let hasXdotool = this._findTrustedProgramInPath("xdotool");
+    let hasWtype = this._findTrustedProgramInPath("wtype");
     let args = null;
     let followUpArgs = null;
     if (hasXdotool) {
       let pasteKey = terminalPaste ? "ctrl+shift+v" : "ctrl+v";
-      args = ["xdotool", "key", "--clearmodifiers", pasteKey];
+      args = [hasXdotool, "key", "--clearmodifiers", pasteKey];
       if (sendEnter) {
-        followUpArgs = ["xdotool", "key", "--clearmodifiers", "Return"];
+        followUpArgs = [hasXdotool, "key", "--clearmodifiers", "Return"];
       }
     } else if (hasWtype) {
       args = terminalPaste
-        ? ["wtype", "-M", "ctrl", "-M", "shift", "v", "-m", "shift", "-m", "ctrl"]
-        : ["wtype", "-M", "ctrl", "v", "-m", "ctrl"];
+        ? [hasWtype, "-M", "ctrl", "-M", "shift", "v", "-m", "shift", "-m", "ctrl"]
+        : [hasWtype, "-M", "ctrl", "v", "-m", "ctrl"];
       if (sendEnter) {
-        followUpArgs = ["wtype", "-k", "Return"];
+        followUpArgs = [hasWtype, "-k", "Return"];
       }
     }
     if (!args) {
@@ -5532,7 +5564,16 @@ MyApplet.prototype = {
     if (typedText === null) {
       return false;
     }
-    return this._spawnKeyboardAfterFocus(["xdotool", "type", "--clearmodifiers", "--delay", String(delay), "--", typedText], null, null, null, completionCallback);
+    let xdotool = this._findTrustedProgramInPath("xdotool");
+    if (!xdotool) {
+      return false;
+    }
+    let expectedTargetWindow = this._targetXWindowSnapshot();
+    if (!expectedTargetWindow) {
+      this._setStatus("error", _("Target window unavailable for direct typing"), this.lastTranscript);
+      return false;
+    }
+    return this._spawnKeyboardAfterFocus([xdotool, "type", "--clearmodifiers", "--delay", String(delay), "--", typedText], null, null, expectedTargetWindow, completionCallback);
   },
 
   _coerceTypeText: function(text) {
@@ -5679,7 +5720,14 @@ MyApplet.prototype = {
       }
       return;
     }
-    if (expectedTargetWindow && !this._targetXWindowMatchesSnapshot(expectedTargetWindow)) {
+    if (!expectedTargetWindow) {
+      this._setStatus("error", _("Target window unavailable for automatic paste"), this.lastTranscript);
+      if (typeof completionCallback === "function") {
+        completionCallback(false);
+      }
+      return;
+    }
+    if (!this._targetXWindowMatchesSnapshot(expectedTargetWindow)) {
       this._setStatus("error", _("Target window changed before automatic paste"), this.lastTranscript);
       if (typeof completionCallback === "function") {
         completionCallback(false);
@@ -5922,7 +5970,7 @@ MyApplet.prototype = {
   _insertTranscriptText: function(transcript, completionCallback) {
     let method = this._normalizeOutputMethod(this.insertMethod);
     let autoPasteTarget = this._windowTitleMatchesAutoPaste();
-    let canPasteWithKeyboard = GLib.find_program_in_path("xdotool") || GLib.find_program_in_path("wtype");
+    let canPasteWithKeyboard = this._findTrustedProgramInPath("xdotool") || this._findTrustedProgramInPath("wtype");
     let submitWithReturn = autoPasteTarget && method === "clipboard-paste" && canPasteWithKeyboard;
     let suppressAutoPasteEnter = method !== "clipboard-paste" || submitWithReturn;
     let text = this._preparedTranscriptText(transcript, suppressAutoPasteEnter);
@@ -5935,7 +5983,7 @@ MyApplet.prototype = {
       return true;
     }
     if (method === "type") {
-      if (GLib.find_program_in_path("xdotool")) {
+      if (this._findTrustedProgramInPath("xdotool")) {
         if (!this._closeMenuForKeyboardInsert()) {
           this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);
           return false;

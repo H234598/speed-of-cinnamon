@@ -1067,6 +1067,7 @@ def model_status(model: ModelSpec, verify: bool = False) -> dict[str, object]:
         "url": model.url,
         "urls": dict(model_download_urls(model)),
         "path": str(path),
+        "downloadable": _model_is_downloadable(model),
         "downloaded": downloaded,
         "verified": _model_is_verified(model, path, checksum) if verify else False,
         "checksum": checksum,
@@ -1130,6 +1131,18 @@ def _model_is_verified(model: ModelSpec, path: Path, checksum: str = "") -> bool
         return True
     current_checksum = checksum or _sha1_file_without_cache(path)
     return bool(model.sha1 and current_checksum == model.sha1)
+
+
+def _model_is_downloadable(model: ModelSpec) -> bool:
+    if model.files:
+        if not model.repo_id:
+            return False
+        try:
+            _model_file_sha1s(model)
+        except ModelError:
+            return False
+        return True
+    return bool(model.sha1)
 
 
 def _model_file_sha1s(model: ModelSpec) -> dict[str, str]:
@@ -1424,6 +1437,8 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
     if not isinstance(force, bool):
         raise ModelError("force must be a boolean")
     model = resolve_model(name)
+    if not model.files and not _model_is_downloadable(model):
+        raise ModelError(f"model catalog entry {model.name} is not downloadable without pinned checksums")
     path = model_path(model)
     root = _model_root(model)
     if model.files:

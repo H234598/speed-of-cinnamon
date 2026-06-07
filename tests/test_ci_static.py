@@ -974,6 +974,8 @@ class CiStaticTest(unittest.TestCase):
 
     def test_verify_dist_uses_private_snapshot_for_tar_tooling(self) -> None:
         verify_dist = (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(encoding="utf-8")
+        verify_rpm = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(encoding="utf-8")
+        verify_snap = (REPO_ROOT / "scripts" / "verify-snap.sh").read_text(encoding="utf-8")
         snapshot_copy = verify_dist.index('"${safe_fs_cmd[@]}" copy-file verify-dist "${tarball}" "${tarball_snapshot}" 0644')
         tar_listing = verify_dist.index('tar -tzf "${tarball_snapshot}"')
         tarfile_open = verify_dist.index('tarfile.open(tarball_snapshot, "r:gz")')
@@ -990,6 +992,15 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('realpath "${tarball_input}" 2>/dev/null', verify_dist)
         self.assertNotIn('tar -tzf "${tarball}"', verify_dist)
         self.assertNotIn('tarfile.open(tarball, "r:gz")', verify_dist)
+        self.assertIn('readonly MAX_DIST_ARCHIVE_BYTES=$((128 * 1024 * 1024))', verify_dist)
+        self.assertIn('readonly MAX_RPM_ARCHIVE_BYTES=$((256 * 1024 * 1024))', verify_rpm)
+        self.assertIn('readonly MAX_SNAP_ARCHIVE_BYTES=$((512 * 1024 * 1024))', verify_snap)
+        self.assertIn('MAX_DIST_MEMBERS = int(sys.argv[3])', verify_dist)
+        self.assertIn('MAX_RPM_FILES = int(sys.argv[2])', verify_rpm)
+        self.assertIn('MAX_SNAP_ENTRIES = int(sys.argv[2])', verify_snap)
+        self.assertIn('MAX_DIST_TOTAL_EXTRACTED_BYTES = int(sys.argv[7])', verify_dist)
+        self.assertIn('MAX_RPM_TOTAL_FILE_BYTES = int(sys.argv[4])', verify_rpm)
+        self.assertIn('MAX_SNAP_TOTAL_FILE_BYTES = int(sys.argv[6])', verify_snap)
 
     def test_dev_backend_path_does_not_append_env_pythonpath(self) -> None:
         dev_backend = (REPO_ROOT / "scripts" / "dev-backend.sh").read_text(encoding="utf-8")
@@ -1143,6 +1154,9 @@ class CiStaticTest(unittest.TestCase):
         self.assertLess(snapshot_copy, file_metadata_check)
         self.assertLess(file_metadata_check, extraction_check)
         self.assertLess(snapshot_copy, extraction_check)
+        self.assertIn('%{FILESIZES}', verify_rpm)
+        self.assertIn('if file_size > MAX_RPM_FILE_BYTES:', verify_rpm)
+        self.assertIn('if total_file_bytes > MAX_RPM_TOTAL_FILE_BYTES:', verify_rpm)
         self.assertNotIn('rpm -qp --qf \'name=%{NAME}\\nversion=%{VERSION}\\narch=%{ARCH}\\npackager=%{PACKAGER}\\nvendor=%{VENDOR}\\nurl=%{URL}\\n\' "${rpm_path}"', verify_rpm)
         self.assertNotIn('rpm -qpl "${rpm_path}"', verify_rpm)
         self.assertNotIn('rpm2cpio "${rpm_path}"', verify_rpm)

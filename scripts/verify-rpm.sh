@@ -4,6 +4,12 @@ umask 077
 IFS=$'\n\t'
 readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export PATH="${TRUSTED_COMMAND_PATH}"
+readonly MAX_RPM_ARCHIVE_BYTES=$((256 * 1024 * 1024))
+readonly MAX_RPM_FILES=5000
+readonly MAX_RPM_PATH_CHARS=260
+readonly MAX_RPM_PATH_DEPTH=32
+readonly MAX_RPM_FILE_BYTES=$((64 * 1024 * 1024))
+readonly MAX_RPM_TOTAL_FILE_BYTES=$((512 * 1024 * 1024))
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "${repo_dir}"
@@ -109,6 +115,11 @@ if [[ "${rpm_link_count}" -ne 1 ]]; then
   printf 'RPM package must not be hardlinked: %s\n' "${rpm_path}" >&2
   exit 1
 fi
+rpm_bytes="$(stat -c '%s' "${rpm_path}")"
+if [[ "${rpm_bytes}" -le 0 || "${rpm_bytes}" -gt "${MAX_RPM_ARCHIVE_BYTES}" ]]; then
+  printf 'RPM package size is outside allowed bounds: %s bytes\n' "${rpm_bytes}" >&2
+  exit 1
+fi
 
 tmp_root="${TMPDIR:-/tmp}"
 if contains_control_chars "${tmp_root}"; then
@@ -207,10 +218,13 @@ file_list="${tmp_dir}/rpm-files.txt"
 file_metadata="${tmp_dir}/rpm-file-metadata.txt"
 
 rpm -qpl "${rpm_snapshot}" > "${file_list}"
-python3 - <<'PY' "${file_list}"
+python3 - <<'PY' "${file_list}" "${MAX_RPM_FILES}" "${MAX_RPM_PATH_CHARS}" "${MAX_RPM_PATH_DEPTH}"
 from pathlib import Path
 import sys
 
+MAX_RPM_FILES = int(sys.argv[2])
+MAX_RPM_PATH_CHARS = int(sys.argv[3])
+MAX_RPM_PATH_DEPTH = int(sys.argv[4])
 ALLOWED_PREFIXES = (
     "/usr/bin/",
     "/usr/lib/",
@@ -219,9 +233,13 @@ ALLOWED_PREFIXES = (
 )
 
 file_list = Path(sys.argv[1])
+entry_count = 0
 for entry in file_list.read_text(encoding="utf-8").split("\n"):
     if not entry:
         continue
+    entry_count += 1
+    if entry_count > MAX_RPM_FILES:
+        raise SystemExit("RPM package contains too many file entries")
     if (
         "\x00" in entry
         or any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in entry)
@@ -230,15 +248,19 @@ for entry in file_list.read_text(encoding="utf-8").split("\n"):
         raise SystemExit(f"RPM package contains unsafe path entry: {entry!r}")
     if not entry.startswith("/"):
         raise SystemExit(f"RPM package contains unsafe relative path entry: {entry}")
+    if len(entry) > MAX_RPM_PATH_CHARS:
+        raise SystemExit(f"RPM package contains path that is too long: {entry}")
     path = Path(entry)
+    if len([part for part in path.parts if part not in {path.anchor, ''}]) > MAX_RPM_PATH_DEPTH:
+        raise SystemExit(f"RPM package contains path that is too deep: {entry}")
     if any(part == ".." for part in path.parts):
         raise SystemExit(f"RPM package contains unsafe path entry: {entry}")
     if not entry.startswith(ALLOWED_PREFIXES):
         raise SystemExit(f"RPM package contains unexpected path entry: {entry}")
 PY
 
-rpm -qp --qf '[%{FILENAMES}\t%{FILEMODES:octal}\t%{FILECAPS}\t%{FILELINKTOS}\n]' "${rpm_snapshot}" > "${file_metadata}"
-python3 - <<'PY' "${file_list}" "${file_metadata}"
+rpm -qp --qf '[%{FILENAMES}\t%{FILEMODES:octal}\t%{FILECAPS}\t%{FILELINKTOS}\t%{FILESIZES}\n]' "${rpm_snapshot}" > "${file_metadata}"
+python3 - <<'PY' "${file_list}" "${file_metadata}" "${MAX_RPM_FILE_BYTES}" "${MAX_RPM_TOTAL_FILE_BYTES}"
 from pathlib import Path
 import stat
 import sys
@@ -246,13 +268,16 @@ import sys
 file_entries = [entry for entry in Path(sys.argv[1]).read_text(encoding="utf-8").split("\n") if entry]
 metadata_entries: list[str] = []
 seen: set[str] = set()
+MAX_RPM_FILE_BYTES = int(sys.argv[3])
+MAX_RPM_TOTAL_FILE_BYTES = int(sys.argv[4])
+total_file_bytes = 0
 for raw in Path(sys.argv[2]).read_text(encoding="utf-8").split("\n"):
     if not raw:
         continue
-    parts = raw.split("\t", 3)
-    if len(parts) != 4:
+    parts = raw.split("\t", 4)
+    if len(parts) != 5:
         raise SystemExit(f"RPM package contains malformed file metadata: {raw!r}")
-    entry, mode_text, file_caps, link_target = parts
+    entry, mode_text, file_caps, link_target, size_text = parts
     if entry in seen:
         raise SystemExit(f"RPM package contains duplicate file entry: {entry}")
     seen.add(entry)
@@ -269,6 +294,18 @@ for raw in Path(sys.argv[2]).read_text(encoding="utf-8").split("\n"):
         raise SystemExit(f"RPM package contains unsupported file type: {entry}")
     if link_target:
         raise SystemExit(f"RPM package contains unsupported link target: {entry} -> {link_target}")
+    try:
+        file_size = int(size_text)
+    except ValueError:
+        raise SystemExit(f"RPM package contains malformed file size for {entry}: {size_text!r}") from None
+    if file_size < 0:
+        raise SystemExit(f"RPM package contains negative file size for {entry}: {size_text!r}")
+    if file_type == stat.S_IFREG:
+        if file_size > MAX_RPM_FILE_BYTES:
+            raise SystemExit(f"RPM package contains oversized file: {entry}")
+        total_file_bytes += file_size
+        if total_file_bytes > MAX_RPM_TOTAL_FILE_BYTES:
+            raise SystemExit("RPM package file size budget exceeded")
     metadata_entries.append(entry)
 if metadata_entries != file_entries:
     raise SystemExit("RPM package file metadata does not match file listing")

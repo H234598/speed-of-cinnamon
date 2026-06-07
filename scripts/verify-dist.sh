@@ -4,6 +4,12 @@ umask 077
 IFS=$'\n\t'
 readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export PATH="${TRUSTED_COMMAND_PATH}"
+readonly MAX_DIST_ARCHIVE_BYTES=$((128 * 1024 * 1024))
+readonly MAX_DIST_MEMBERS=2000
+readonly MAX_DIST_PATH_CHARS=240
+readonly MAX_DIST_PATH_DEPTH=20
+readonly MAX_DIST_FILE_BYTES=$((32 * 1024 * 1024))
+readonly MAX_DIST_TOTAL_EXTRACTED_BYTES=$((256 * 1024 * 1024))
 
 if [[ $# -ne 1 ]]; then
   printf 'usage: %s dist/speed-of-cinnamon-VERSION.tar.gz\n' "$0" >&2
@@ -80,6 +86,11 @@ if [[ "$(stat -c '%h' "${tarball}")" -ne 1 ]]; then
   printf 'archive must not be hardlinked: %s\n' "${tarball}" >&2
   exit 1
 fi
+tarball_bytes="$(stat -c '%s' "${tarball}")"
+if [[ "${tarball_bytes}" -le 0 || "${tarball_bytes}" -gt "${MAX_DIST_ARCHIVE_BYTES}" ]]; then
+  printf 'archive size is outside allowed bounds: %s bytes\n' "${tarball_bytes}" >&2
+  exit 1
+fi
 
 tmp_root="${TMPDIR:-/tmp}"
 if contains_control_chars "${tmp_root}"; then
@@ -149,7 +160,7 @@ if ! tar -tzf "${tarball_snapshot}" | awk -F'/' '
   exit 1
 fi
 
-python3 - "$tarball_snapshot" "$tmp_dir" <<'PY'
+python3 - "$tarball_snapshot" "$tmp_dir" "${MAX_DIST_MEMBERS}" "${MAX_DIST_PATH_CHARS}" "${MAX_DIST_PATH_DEPTH}" "${MAX_DIST_FILE_BYTES}" "${MAX_DIST_TOTAL_EXTRACTED_BYTES}" <<'PY'
 import os
 import pathlib
 import tarfile
@@ -157,6 +168,11 @@ import sys
 
 tarball_snapshot = sys.argv[1]
 target = pathlib.Path(sys.argv[2])
+MAX_DIST_MEMBERS = int(sys.argv[3])
+MAX_DIST_PATH_CHARS = int(sys.argv[4])
+MAX_DIST_PATH_DEPTH = int(sys.argv[5])
+MAX_DIST_FILE_BYTES = int(sys.argv[6])
+MAX_DIST_TOTAL_EXTRACTED_BYTES = int(sys.argv[7])
 target.mkdir(parents=True, exist_ok=True)
 target_root = target.resolve(strict=True)
 
@@ -169,13 +185,22 @@ def member_target(member_name):
 
 with tarfile.open(tarball_snapshot, "r:gz") as archive:
     package_root = None
+    member_count = 0
+    total_file_size = 0
     for member in archive.getmembers():
+        member_count += 1
+        if member_count > MAX_DIST_MEMBERS:
+            raise SystemExit("dist archive contains too many entries")
         if (
             "\x00" in member.name
             or any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in member.name)
             or any(0xDC80 <= ord(char) <= 0xDCFF for char in member.name)
         ):
             raise SystemExit(f"dist archive contains unsafe path entry: {member.name!r}")
+        if len(member.name) > MAX_DIST_PATH_CHARS:
+            raise SystemExit(f"dist archive path is too long: {member.name}")
+        if len([part for part in member.name.split("/") if part]) > MAX_DIST_PATH_DEPTH:
+            raise SystemExit(f"dist archive path is too deep: {member.name}")
         if not (member.isfile() or member.isdir()):
             raise SystemExit(f"dist archive contains unsupported entry type: {member.name}")
         if member.name.startswith("/"):
@@ -197,6 +222,13 @@ with tarfile.open(tarball_snapshot, "r:gz") as archive:
             continue
         if not member.isfile():
             raise SystemExit(f"dist archive contains unsupported entry type: {member.name}")
+        if member.size < 0:
+            raise SystemExit(f"dist archive file has invalid size: {member.name}")
+        if member.size > MAX_DIST_FILE_BYTES:
+            raise SystemExit(f"dist archive file is too large: {member.name}")
+        total_file_size += member.size
+        if total_file_size > MAX_DIST_TOTAL_EXTRACTED_BYTES:
+            raise SystemExit("dist archive extracted size budget exceeded")
         output_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         source = archive.extractfile(member)
         if source is None:

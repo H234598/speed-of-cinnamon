@@ -1121,8 +1121,30 @@ class ModelsTest(unittest.TestCase):
 
             self.assertEqual(models.default_ctranslate2_model_path(), "")
             self.assertFalse(models.model_status(spec, verify=True)["verified"])
+            self.assertFalse(models.model_status(spec)["downloadable"])
             with self.assertRaisesRegex(models.ModelError, "missing per-file checksums"):
                 models.download_model("ct2-unhashed")
+
+    def test_catalog_multifile_models_without_hashes_are_marked_not_downloadable(self) -> None:
+        unhashed_models = [model for model in models.CATALOG if model.files and not model.file_sha1s]
+        self.assertGreater(len(unhashed_models), 0)
+
+        for model in unhashed_models:
+            with self.subTest(model=model.name):
+                status = models.model_status(model)
+                self.assertFalse(status["downloadable"])
+                with self.assertRaisesRegex(models.ModelError, "missing per-file checksums"):
+                    models.download_model(model.name)
+
+    def test_downloadable_catalog_directory_models_have_complete_file_hashes(self) -> None:
+        for model in models.CATALOG:
+            with self.subTest(model=model.name):
+                status = models.model_status(model)
+                if not model.files:
+                    self.assertEqual(status["downloadable"], bool(model.sha1))
+                    continue
+                if status["downloadable"]:
+                    self.assertEqual(set(dict(model.file_sha1s)), set(model.files))
 
     def test_download_model_rejects_multifile_checksum_mismatch(self) -> None:
         spec = models.ModelSpec(
