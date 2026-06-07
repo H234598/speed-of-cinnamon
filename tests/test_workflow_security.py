@@ -109,15 +109,46 @@ class WorkflowSecurityTest(unittest.TestCase):
                         install_index = parts.index("install")
                     except ValueError:
                         continue
-                    packages = [
-                        part
-                        for part in parts[install_index + 1 :]
-                        if part and not part.startswith("-")
-                    ]
+                    install_args = parts[install_index + 1 :]
+                    packages = []
+                    requirement_files = []
+                    skip_next = False
+                    for arg_index, part in enumerate(install_args):
+                        if skip_next:
+                            skip_next = False
+                            continue
+                        if part in {"-r", "--requirement"}:
+                            self.assertLess(arg_index + 1, len(install_args))
+                            requirement_files.append(install_args[arg_index + 1])
+                            skip_next = True
+                            continue
+                        if part.startswith("--requirement="):
+                            requirement_files.append(part.split("=", 1)[1])
+                            continue
+                        if part and not part.startswith("-"):
+                            packages.append(part)
                     with self.subTest(workflow=path.name, run_block=block_index, line=line_number):
-                        self.assertGreater(len(packages), 0)
-                        for package in packages:
-                            self.assertIn("==", package)
+                        if requirement_files:
+                            self.assertIn("--require-hashes", install_args)
+                            self.assertEqual(packages, [])
+                            for requirement_file in requirement_files:
+                                self.assertTrue(requirement_file.startswith(".github/requirements/"))
+                                requirement_path = REPO_ROOT / requirement_file
+                                requirement_text = requirement_path.read_text(encoding="utf-8")
+                                self.assertIn("--require-hashes", requirement_text)
+                                requirement_lines = [
+                                    req_line.strip()
+                                    for req_line in requirement_text.splitlines()
+                                    if req_line.strip() and not req_line.strip().startswith(("#", "--"))
+                                ]
+                                self.assertGreater(len(requirement_lines), 0)
+                                for requirement_line in requirement_lines:
+                                    self.assertIn("==", requirement_line)
+                                    self.assertIn("--hash=sha256:", requirement_line)
+                        else:
+                            self.assertGreater(len(packages), 0)
+                            for package in packages:
+                                self.assertIn("==", package)
 
 
 if __name__ == "__main__":

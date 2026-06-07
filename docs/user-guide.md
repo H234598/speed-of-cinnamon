@@ -286,7 +286,8 @@ Use `Export settings` and `Import settings` in the applet menu to write or resto
 
 The export includes hotkeys, languages, recorder/backend choices, personalization, output mode,
 recording retention, notification settings, and the local alarm store. It intentionally excludes machine-local
-`cli-path`, `openai-compatible-api-key`, and custom command templates.
+`cli-path`, `openai-compatible-api-key`, and custom command templates. Backend URLs with embedded credentials, query
+strings, or fragments are rejected instead of being written to the export.
 
 Treat the export as private. Personal context, vocabulary, and alarm names may contain private data.
 

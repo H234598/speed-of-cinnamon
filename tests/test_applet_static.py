@@ -121,6 +121,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn('args.push("--openai-compatible-api-key"', source)
         self.assertIn('"SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY"', source)
         self.assertIn("_shouldExposeOpenAiCompatibleApiKeyToBackend: function(args)", source)
+        self.assertIn('["toggle", "start", "stop", "transcribe-file"]', source)
         self.assertIn('command === "text-models"', source)
         self.assertIn('this._argValue(args, "--backend") === "openai-compatible"', source)
         self.assertIn("_runWithBackendEnvironment(this._shouldExposeOpenAiCompatibleApiKeyToBackend(normalizedArgs), (backendEnv) => {", source)
@@ -508,7 +509,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('relistenToken = String(this.autoRelistenSequence) + ":" + recordingKey;', source)
         self.assertIn('this.autoRelistenPending = Boolean(relistenToken);', source)
         self.assertIn('this.autoRelistenPendingToken = relistenToken;', source)
-        self.assertIn('if (relistenToken && this.autoRelistenPendingToken !== relistenToken) {', source)
+        self.assertIn('if (relistenToken && this.autoRelistenPendingToken !== relistenToken) {\n        this.isCommandRunning = false;\n        return;\n      }', source)
         self.assertIn('if (nextPayload && nextPayload.error) {\n        this.autoTranscribeRecordingKey = "";\n      }', source)
         self.assertIn('const EMPTY_TRANSCRIPT_MARKERS = [', source)
         self.assertIn('"leere aufnahme"', source)
@@ -1434,12 +1435,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn("skippig", source)
         self.assertNotIn("speef", source.lower())
         self.assertIn('this._clipboardTargetList("xclip", ["-selection", "clipboard", "-t", "TARGETS", "-out"])', source)
-        self.assertNotIn('this._clipboardTargetList("xsel", ["--clipboard", "--output", "--target", "TARGETS"])', source)
+        self.assertIn('this._clipboardTargetList("xsel", ["--clipboard", "--output", "--target", "TARGETS"])', source)
         self.assertIn('this._clipboardTargetList("wl-paste", ["--list-types"])', source)
-        self.assertIn(
-            'this._clipboardTargetList("wl-paste", ["--list-types"]);\n      return this._clipboardTargetsContainNonTextPayload(targets);\n    }\n    return false;',
-            source,
-        )
         self.assertIn('Copied to clipboard; automatic paste command could not be started', source)
 
     def test_applet_allows_auto_paste_when_clipboard_targets_unknown_but_blocks_empty_targets(self) -> None:

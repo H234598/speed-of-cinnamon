@@ -4230,7 +4230,7 @@ MyApplet.prototype = {
     if (command === "text-models") {
       return this._argValue(args, "--backend") === "openai-compatible";
     }
-    if (["toggle", "stop", "transcribe-file"].indexOf(command) < 0) {
+    if (["toggle", "start", "stop", "transcribe-file"].indexOf(command) < 0) {
       return false;
     }
     return this._argValue(args, "--transcriber") === "openai-compatible" ||
@@ -4608,6 +4608,7 @@ MyApplet.prototype = {
     this._setStatus("processing", _("Transcribing timed-out recording..."), this.lastTranscript);
     this._spawnJson(this._baseArgs("stop"), (nextPayload) => {
       if (relistenToken && this.autoRelistenPendingToken !== relistenToken) {
+        this.isCommandRunning = false;
         return;
       }
       if (nextPayload && nextPayload.error) {
@@ -5144,6 +5145,10 @@ MyApplet.prototype = {
       let targets = this._clipboardTargetList("xclip", ["-selection", "clipboard", "-t", "TARGETS", "-out"]);
       return this._clipboardTargetsContainNonTextPayload(targets);
     }
+    if (GLib.find_program_in_path("xsel")) {
+      let targets = this._clipboardTargetList("xsel", ["--clipboard", "--output", "--target", "TARGETS"]);
+      return this._clipboardTargetsContainNonTextPayload(targets);
+    }
     if (GLib.find_program_in_path("wl-paste")) {
       let targets = this._clipboardTargetList("wl-paste", ["--list-types"]);
       return this._clipboardTargetsContainNonTextPayload(targets);
@@ -5155,6 +5160,8 @@ MyApplet.prototype = {
     let targets = null;
     if (GLib.find_program_in_path("xclip")) {
       targets = this._clipboardTargetList("xclip", ["-selection", "clipboard", "-t", "TARGETS", "-out"]);
+    } else if (GLib.find_program_in_path("xsel")) {
+      targets = this._clipboardTargetList("xsel", ["--clipboard", "--output", "--target", "TARGETS"]);
     } else if (GLib.find_program_in_path("wl-paste")) {
       targets = this._clipboardTargetList("wl-paste", ["--list-types"]);
     }
@@ -5176,6 +5183,10 @@ MyApplet.prototype = {
   _describeNonTextClipboardPayload: function() {
     if (GLib.find_program_in_path("xclip")) {
       let targets = this._clipboardTargetList("xclip", ["-selection", "clipboard", "-t", "TARGETS", "-out"]);
+      return this._clipboardPayloadDescriptionFromTargets(targets);
+    }
+    if (GLib.find_program_in_path("xsel")) {
+      let targets = this._clipboardTargetList("xsel", ["--clipboard", "--output", "--target", "TARGETS"]);
       return this._clipboardPayloadDescriptionFromTargets(targets);
     }
     if (GLib.find_program_in_path("wl-paste")) {

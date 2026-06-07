@@ -121,7 +121,6 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      QLTY_COVERAGE_TOKEN: ${{ secrets.QLTY_COVERAGE_TOKEN }}
       BUILD_SNAP: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_snap && '1' || '0') }}
       BUILD_GENERIC_RPM: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_generic_rpm && '1' || '0') }}
     steps:
@@ -133,7 +132,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install Bandit
-        run: python -m pip install --disable-pip-version-check --no-cache-dir bandit==1.9.4
+        run: python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-bandit.txt
       - name: Install shell tooling
         run: |
           sudo apt-get update
@@ -200,16 +199,16 @@ jobs:
             printf 'Skipping snap toolchain bootstrap (build_snap=false).\n'
           fi
       - name: Install Python coverage tooling
-        run: python -m pip install coverage==7.14.1
+        run: python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-coverage.txt
       - name: Run checks
         run: make check
       - name: Generate coverage report
         run: make coverage
       - name: Upload coverage to QLTY
-        if: ${{ env.QLTY_COVERAGE_TOKEN != '' }}
+        if: ${{ github.event_name == 'push' && secrets.QLTY_COVERAGE_TOKEN != '' }}
         uses: qltysh/qlty-action/coverage@fd52dc852530a708d68c3b7342f8d33d1df4cd55 # v2.2.1
         with:
-          token: ${{ env.QLTY_COVERAGE_TOKEN }}
+          token: ${{ secrets.QLTY_COVERAGE_TOKEN }}
           files: reports/lcov.info
           format: lcov
           cli-version: 0.630.0

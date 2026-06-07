@@ -320,7 +320,8 @@ The default export/import path is:
 Use `--settings-json-stdin` when the settings object contains private values such as personal context, vocabulary, or
 command templates. The Cinnamon applet uses stdin for settings export so the snapshot is not exposed in process
 arguments. The export includes the local alarm store and intentionally excludes machine-local `cli-path`,
-`openai-compatible-api-key`, and custom command templates.
+`openai-compatible-api-key`, and custom command templates. Backend URLs with embedded credentials, query strings, or
+fragments are rejected instead of being written to the export.
 
 ## Alarms
 

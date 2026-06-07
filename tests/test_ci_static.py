@@ -191,6 +191,17 @@ class CiStaticTest(unittest.TestCase):
 
         project_version = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8").split('version = "')[1].split('"')[0]
         self.assertIn(f"speed-of-cinnamon {project_version}", docs["docs/man/speed-of-cinnamon.1"])
+        parser = cli.build_parser()
+        subparser_action = next(action for action in parser._actions if action.__class__.__name__ == "_SubParsersAction")
+        toggle_help = subparser_action.choices["toggle"].format_help()
+        transcribe_file_help = subparser_action.choices["transcribe-file"].format_help()
+        for help_text in (toggle_help, transcribe_file_help):
+            self.assertIn("keyring falls back to", help_text)
+            self.assertIn("passphrase only when", help_text)
+            self.assertIn("explicit passphrase source is", help_text)
+            self.assertIn("configured", help_text)
+        self.assertIn("falls back to passphrase mode only when an explicit passphrase source is", docs["docs/man/speed-of-cinnamon.1"])
+        self.assertNotIn("falls back to passphrase mode when\nkeyring access fails", docs["docs/man/speed-of-cinnamon.1"])
 
     def test_command_chain_security_tests_are_present(self) -> None:
         command_chain_test = REPO_ROOT / "tests" / "test_command_chain.py"
@@ -341,6 +352,8 @@ class CiStaticTest(unittest.TestCase):
 
     def test_ci_uploads_release_and_rpm_artifacts(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        bandit_requirements = (REPO_ROOT / ".github" / "requirements" / "ci-bandit.txt").read_text(encoding="utf-8")
+        coverage_requirements = (REPO_ROOT / ".github" / "requirements" / "ci-coverage.txt").read_text(encoding="utf-8")
         security_workflow = (REPO_ROOT / ".github" / "workflows" / "security-scan.yml").read_text(encoding="utf-8")
 
         self.assertIn("workflow-lint:", workflow)
@@ -363,10 +376,16 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('ACTIONLINT_STRICT: "true"', workflow)
         self.assertIn("build_generic_rpm:", workflow)
         self.assertIn("fetch-depth: 0", workflow)
-        self.assertIn("QLTY_COVERAGE_TOKEN: ${{ secrets.QLTY_COVERAGE_TOKEN }}", workflow)
-        self.assertIn("run: python -m pip install coverage", workflow)
+        self.assertIn(
+            "run: python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-coverage.txt",
+            workflow,
+        )
+        self.assertIn("--require-hashes", bandit_requirements)
+        self.assertIn("bandit==1.9.4", bandit_requirements)
+        self.assertIn("coverage==7.14.1", coverage_requirements)
         self.assertIn("run: make check", workflow)
         self.assertIn("run: make coverage", workflow)
+        self.assertNotIn("QLTY_COVERAGE_TOKEN: ${{ secrets.QLTY_COVERAGE_TOKEN }}", workflow)
         self.assertNotIn("curl -fsSL https://qlty.sh | sh", workflow)
         self.assertNotIn("https://qlty.sh", workflow)
         self.assertNotIn("sh \"${qlty_installer}\"", workflow)
@@ -374,11 +393,11 @@ class CiStaticTest(unittest.TestCase):
             "uses: qltysh/qlty-action/coverage@fd52dc852530a708d68c3b7342f8d33d1df4cd55 # v2.2.1",
             workflow,
         )
-        self.assertIn("token: ${{ env.QLTY_COVERAGE_TOKEN }}", workflow)
+        self.assertIn("if: ${{ github.event_name == 'push' && secrets.QLTY_COVERAGE_TOKEN != '' }}", workflow)
+        self.assertIn("token: ${{ secrets.QLTY_COVERAGE_TOKEN }}", workflow)
         self.assertIn("files: reports/lcov.info", workflow)
         self.assertIn("format: lcov", workflow)
         self.assertIn("cli-version: 0.630.0", workflow)
-        self.assertIn("if: ${{ env.QLTY_COVERAGE_TOKEN != '' }}", workflow)
         self.assertIn("sudo apt-get update", workflow)
         self.assertIn("sudo apt-get install -y cpio rpm shellcheck squashfs-tools", workflow)
         self.assertIn("if ! command -v -- snapcraft", workflow)
@@ -416,7 +435,10 @@ class CiStaticTest(unittest.TestCase):
 
         codacy_workflow = (REPO_ROOT / ".github" / "workflows" / "codacy.yml").read_text(encoding="utf-8")
         self.assertIn("runs-on: ubuntu-24.04", codacy_workflow)
-        self.assertIn("python -m pip install --disable-pip-version-check --no-cache-dir 'bandit[sarif]==1.9.4'", codacy_workflow)
+        self.assertIn(
+            "python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-bandit.txt",
+            codacy_workflow,
+        )
         self.assertIn("python -m bandit -q -r src/speed_of_cinnamon -x tests -f sarif -o results.sarif --exit-zero", codacy_workflow)
         self.assertIn("uses: github/codeql-action/upload-sarif@a6fd1787519fd23e68309fad43738e41a6ff2a9d # v4", codacy_workflow)
         self.assertNotIn("codacy/codacy-analysis-cli-action", codacy_workflow)
@@ -440,7 +462,10 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("timeout-minutes: 10", security_workflow)
         self.assertIn("python-security:", security_workflow)
         self.assertIn("shell-security:", security_workflow)
-        self.assertIn("run: python -m pip install --disable-pip-version-check --no-cache-dir bandit==1.9.4", security_workflow)
+        self.assertIn(
+            "run: python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-bandit.txt",
+            security_workflow,
+        )
         self.assertIn("run: make python-security-scan", security_workflow)
         self.assertIn("run: make shell-security-scan", security_workflow)
         self.assertIn("run: |\n          sudo apt-get update\n          sudo apt-get install -y --no-install-recommends shellcheck", security_workflow)
@@ -650,6 +675,45 @@ class CiStaticTest(unittest.TestCase):
             workflow = (REPO_ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
             self.assertIn("uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6", workflow)
             self.assertIn("persist-credentials: false", workflow)
+            self.assertIn("JF_GIT_TOKEN: ${{ github.token }}", workflow)
+            self.assertNotIn("secrets.GITHUB_TOKEN", workflow)
+
+    def test_frogbot_scan_and_fix_limits_top_level_permissions(self) -> None:
+        workflow = (REPO_ROOT / ".github" / "workflows" / "frogbot-scan-and-fix.yml").read_text(encoding="utf-8")
+        top_level_permissions = _workflow_block_lines(workflow, "permissions:")
+
+        self.assertEqual(top_level_permissions, ["  contents: read"])
+        self.assertIn(
+            "  create-fix-pull-requests:\n"
+            "    needs: check-frogbot-secrets\n"
+            "    runs-on: ubuntu-24.04\n"
+            "    if: needs.check-frogbot-secrets.outputs.configured == 'true'\n"
+            "    permissions:\n"
+            "      contents: write\n"
+            "      pull-requests: write\n"
+            "      security-events: write",
+            workflow,
+        )
+
+    def test_frogbot_pr_scan_limits_top_level_permissions(self) -> None:
+        workflow = (REPO_ROOT / ".github" / "workflows" / "frogbot-scan-pr.yml").read_text(encoding="utf-8")
+        top_level_permissions = _workflow_block_lines(workflow, "permissions:")
+
+        self.assertEqual(top_level_permissions, ["  contents: read"])
+        self.assertIn(
+            "  scan-pull-request:\n"
+            "    needs: check-frogbot-secrets\n"
+            "    runs-on: ubuntu-24.04\n"
+            "    if: needs.check-frogbot-secrets.outputs.configured == 'true'\n"
+            "    # A pull request needs to be approved, before Frogbot scans it.",
+            workflow,
+        )
+        self.assertIn(
+            "    permissions:\n"
+            "      contents: read\n"
+            "      pull-requests: write",
+            workflow,
+        )
 
     def test_frogbot_pr_scan_does_not_use_pull_request_target(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "frogbot-scan-pr.yml").read_text(encoding="utf-8")
@@ -1137,7 +1201,10 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("- name: Install release tooling", workflow)
         self.assertIn("run: make lint-workflows", workflow)
         self.assertIn("sudo apt-get update", workflow)
-        self.assertIn("python -m pip install --disable-pip-version-check --no-cache-dir bandit==1.9.4", workflow)
+        self.assertIn(
+            "python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-bandit.txt",
+            workflow,
+        )
         self.assertIn("sudo apt-get install -y cpio rpm shellcheck squashfs-tools", workflow)
         self.assertIn("snap install snapcraft --classic", workflow)
         self.assertIn("run: make check", workflow)
@@ -1261,7 +1328,8 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn("ubuntu-latest", workflow)
         self.assertIn("persist-credentials: false", workflow)
         self.assertIn("actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6", workflow)
-        self.assertIn("bandit==1.9.4", workflow)
+        self.assertIn(".github/requirements/ci-bandit.txt", workflow)
+        self.assertIn("--require-hashes", workflow)
         self.assertIn("run: make python-security-scan", workflow)
         self.assertNotIn("security-events: write", workflow)
         self.assertNotIn("exit_zero: true", workflow)

@@ -3608,7 +3608,7 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
         choices=ARTIFACT_ENCRYPTION_CHOICES,
         help=(
             "encrypt stored transcripts and retained recordings: off, passphrase, or keyring; "
-            "keyring falls back to passphrase when the Secret Service CLI path is unavailable; "
+            "keyring falls back to passphrase only when an explicit passphrase source is configured; "
             "passphrase uses SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE, an existing "
             "~/.config/speed-of-cinnamon/artifact.key, SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE, "
             "or generates ~/.config/speed-of-cinnamon/artifact.key at runtime; weak default key files are regenerated"
@@ -3888,7 +3888,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=ARTIFACT_ENCRYPTION_OFF,
         choices=ARTIFACT_ENCRYPTION_CHOICES,
         help=(
-            "encrypt the stored transcript: off, passphrase, or keyring; passphrase uses "
+            "encrypt the stored transcript: off, passphrase, or keyring; keyring falls back to "
+            "passphrase only when an explicit passphrase source is configured; passphrase uses "
             "SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE, an existing "
             "~/.config/speed-of-cinnamon/artifact.key, SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE, "
             "or generates ~/.config/speed-of-cinnamon/artifact.key at runtime; weak default key files are regenerated"

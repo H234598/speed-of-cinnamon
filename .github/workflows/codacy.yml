@@ -35,7 +35,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install Bandit SARIF support
-        run: python -m pip install --disable-pip-version-check --no-cache-dir 'bandit[sarif]==1.9.4'
+        run: python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-bandit.txt
 
       - name: Run Bandit SARIF scan
         run: python -m bandit -q -r src/speed_of_cinnamon -x tests -f sarif -o results.sarif --exit-zero

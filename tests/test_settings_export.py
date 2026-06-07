@@ -284,6 +284,22 @@ class SettingsExportTest(unittest.TestCase):
         self.assertNotIn("sk-secret-token", rendered)
         self.assertNotIn("ghp_secret", rendered)
 
+    def test_build_export_rejects_secret_bearing_backend_urls(self) -> None:
+        docs = [
+            Path("docs/user-guide.md").read_text(encoding="utf-8"),
+            Path("docs/cli-reference.md").read_text(encoding="utf-8"),
+            Path("docs/fedora-cinnamon-runbook.md").read_text(encoding="utf-8"),
+        ]
+        for text in docs:
+            self.assertIn("Backend URLs with embedded credentials", text)
+            self.assertIn("fragments are rejected", text)
+        with self.assertRaisesRegex(SettingsExportError, "openai-compatible-url must not contain URL credentials"):
+            build_export({"openai-compatible-url": "https://user:secret-token@api.example.test/v1"})
+        with self.assertRaisesRegex(SettingsExportError, "openai-compatible-url must not contain URL query or fragment"):
+            build_export({"openai-compatible-url": "https://api.example.test/v1?api_key=secret-token"})
+        with self.assertRaisesRegex(SettingsExportError, "ollama-url must not contain URL query or fragment"):
+            build_export({"ollama-url": "http://127.0.0.1:11434#secret-token"})
+
     def test_build_export_rejects_unknown_mode_values(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "setting insert-method has unsupported value"):
             build_export({"insert-method": "clipboard-paste\x20--unsafe"})

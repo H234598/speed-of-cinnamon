@@ -29,6 +29,6 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install Bandit
-        run: python -m pip install --disable-pip-version-check --no-cache-dir bandit==1.9.4
+        run: python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-bandit.txt
       - name: Run Bandit
         run: make python-security-scan

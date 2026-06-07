@@ -7,6 +7,7 @@ import stat as stat_module
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from . import __version__
 from .alarms import MAX_ALARM_COUNT, STORE_VERSION as ALARM_STORE_VERSION
@@ -277,6 +278,19 @@ def _sanitize_text_field(value: object, *, field_name: str) -> str:
     return text
 
 
+def _reject_secret_bearing_url_setting(key: str, text: str) -> None:
+    if key not in {"ollama-url", "openai-compatible-url"}:
+        return
+    try:
+        parsed = urlsplit(text)
+    except ValueError as exc:
+        raise SettingsExportError(f"setting {key} is not a valid URL") from exc
+    if parsed.username or parsed.password:
+        raise SettingsExportError(f"setting {key} must not contain URL credentials")
+    if parsed.query or parsed.fragment:
+        raise SettingsExportError(f"setting {key} must not contain URL query or fragment")
+
+
 def normalize_setting(key: str, value: Any) -> Any:
     expected, default = EXPORTABLE_SETTINGS[key]
     if expected is bool:
@@ -314,6 +328,7 @@ def normalize_setting(key: str, value: Any) -> Any:
             return parsed
         return parsed
     text = _sanitize_text_field(value if value is not None else default, field_name=f"setting {key}")
+    _reject_secret_bearing_url_setting(key, text)
     allowed_values = _ALLOWED_SETTING_TEXT_VALUES.get(key)
     if allowed_values is not None and text not in allowed_values:
         raise SettingsExportError(f"setting {key} has unsupported value")

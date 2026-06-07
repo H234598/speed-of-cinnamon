@@ -252,8 +252,9 @@ speed-of-cinnamon settings-import --json
 Use `--settings-json-stdin` when the settings object contains private values, so they are not exposed in process
 arguments. The export includes the hotkey, languages, recorder/backend choices, personalization, output mode,
 recording retention, notification settings, and the local alarm store. It intentionally excludes the machine-local
-`cli-path`, `openai-compatible-api-key`, and custom command templates. Because personal context, vocabulary, and alarm
-names may contain private data, keep the export file private.
+`cli-path`, `openai-compatible-api-key`, and custom command templates. Backend URLs with embedded credentials, query
+strings, or fragments are rejected instead of being written to the export. Because personal context, vocabulary, and
+alarm names may contain private data, keep the export file private.
 
 ## Language Switching
 

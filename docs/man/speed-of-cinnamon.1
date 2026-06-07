@@ -127,8 +127,8 @@ or
 for stored transcript files and retained recording files. Keyring mode uses the
 desktop Secret Service through
 .BR secret-tool (1)
-and falls back to passphrase mode when
-keyring access fails. Passphrase mode uses an explicit passphrase file, the
+and falls back to passphrase mode only when an explicit passphrase source is
+configured. Passphrase mode uses an explicit passphrase file, the
 default
 .IR ~/.config/speed-of-cinnamon/artifact.key ,
 or an environment passphrase. The default key file can be generated

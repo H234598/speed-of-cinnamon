@@ -1,0 +1,6 @@
+# This lock file is used for CI installation of coverage.
+# Generated from pip download/pip hash for Python 3.12 Linux x86_64.
+
+--require-hashes
+
+coverage==7.14.1 --hash=sha256:6b6b0853b895fe0e98cbfc580d1ec3393d9302b4b1e96a77b3f5c91fdab899e6
