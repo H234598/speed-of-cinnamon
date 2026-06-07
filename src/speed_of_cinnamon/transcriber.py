@@ -773,6 +773,7 @@ def _staged_audio_file_for_local_backend(
     parent_fd: int | None = None
     staging_dir: Path | None = None
     staging_path: Path | None = None
+    target_fd: int | None = None
     staging_hasher = hashlib.sha256() if expected_snapshot_digest is not None else None
     try:
         staging_dir = Path(tempfile.mkdtemp(prefix=".sc-audio-"))
@@ -794,7 +795,13 @@ def _staged_audio_file_for_local_backend(
                 raise TranscriptionError("audio file changed between validation and copy")
             with os.fdopen(source_fd, "rb") as source:
                 source_fd = None
-                with open(staging_path, "wb") as target:
+                target_fd = os.open(
+                    staging_path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag | getattr(os, "O_CLOEXEC", 0),
+                    0o600,
+                )
+                with os.fdopen(target_fd, "wb") as target:
+                    target_fd = None
                     while True:
                         chunk = source.read(65536)
                         if not chunk:
@@ -811,6 +818,10 @@ def _staged_audio_file_for_local_backend(
                 with suppress(OSError):
                     os.close(source_fd)
                 source_fd = None
+            if target_fd is not None:
+                with suppress(OSError):
+                    os.close(target_fd)
+                target_fd = None
             raise TranscriptionError("failed to stage audio file for backend access") from exc
         finally:
             if source_fd is not None:
@@ -821,7 +832,13 @@ def _staged_audio_file_for_local_backend(
                     os.close(parent_fd)
         if staging_path is None or staging_dir is None:
             raise TranscriptionError("failed to stage audio file for backend access")
-        os.chmod(staging_path, 0o600)
+        staging_stat = staging_path.lstat()
+        if not stat_module.S_ISREG(staging_stat.st_mode):
+            raise TranscriptionError("failed to stage audio file for backend access")
+        if getattr(staging_stat, "st_nlink", 1) != 1:
+            raise TranscriptionError("failed to stage audio file for backend access")
+        if stat_module.S_IMODE(staging_stat.st_mode) != 0o600:
+            raise TranscriptionError("failed to stage audio file for backend access")
         yield staging_path
     finally:
         if staging_path is not None:

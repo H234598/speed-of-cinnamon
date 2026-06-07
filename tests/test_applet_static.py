@@ -1106,7 +1106,7 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         self.assertIn("const PASTE_FOCUS_DELAY_MS = 120;", source)
-        self.assertIn("const PASTE_SUBMIT_DELAY_MS = 120;", source)
+        self.assertIn("const PASTE_SUBMIT_DELAY_MS = 300;", source)
         self.assertIn("const SELF_PROTECTION_NOTICE_COOLDOWN_MS = 3000;", source)
         self.assertIn("const CLIPBOARD_TARGET_TIMEOUT_SECONDS = 1;", source)
         self.assertIn("const MAX_XDOTOOL_TARGET_OUTPUT_BYTES = 4096;", source)
@@ -1166,7 +1166,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._restoreTargetWindowForPaste()", source)
         self.assertIn('this._pasteClipboardAfterFocus(submitWithReturn, text, (completed) => {', source)
         self.assertIn(
-            'this._setStatus("done", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);',
+            'this._setStatus("error", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);',
             source,
         )
         self.assertIn('this._setStatus("error", _("Target window unavailable for direct typing"), transcript);', source)
@@ -1561,7 +1561,7 @@ class AppletStaticTest(unittest.TestCase):
         guarded_clipboard_index = copy_body.index("this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);", restore_index)
         self.assertIn('this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);', copy_body)
         self.assertIn(
-            'this._setStatus("done", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);',
+            'this._setStatus("error", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);',
             copy_body,
         )
         self.assertLess(restore_index, guarded_clipboard_index)
@@ -1689,11 +1689,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn("this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);", fn_body[close_menu_index:restore_index])
         self.assertIn("this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);", fn_body[restore_index:paste_command_index])
         self.assertIn(
-            'if (!restored) {\n      this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);\n      this._setStatus("done", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);\n      return false;\n    }',
+            'if (!restored) {\n      this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);\n      this._setStatus("error", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);\n      return false;\n    }',
             fn_body,
         )
         self.assertIn(
-            'this._setStatus("done", _("Copied to clipboard; automatic paste command could not be started"), transcript);\n    return false;',
+            'this._setStatus("error", _("Copied to clipboard; automatic paste command could not be started"), transcript);\n    return false;',
             fn_body,
         )
 

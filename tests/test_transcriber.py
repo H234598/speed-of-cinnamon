@@ -1285,6 +1285,27 @@ class TranscriberTest(unittest.TestCase):
                 with self.assertRaisesRegex(TranscriptionError, "failed to stage audio file for backend access"):
                     transcribe_with_openai_whisper(audio, "en", text)
 
+    def test_staged_audio_file_for_local_backend_is_private(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            snapshot = transcriber_module._snapshot_private_file(
+                audio,
+                field_name="audio file for backend",
+                include_hash=True,
+            )
+
+            with transcriber_module._staged_audio_file_for_local_backend(audio, expected_snapshot=snapshot) as staged:
+                staged_path = staged
+                mode = staged.stat().st_mode & 0o777
+                data = staged.read_bytes()
+
+            staged_exists_after_context = staged_path.exists()
+
+        self.assertEqual(data, b"audio")
+        self.assertEqual(mode, 0o600)
+        self.assertFalse(staged_exists_after_context)
+
     def test_resolve_whisper_cpp_accepts_fedora_pwcpp(self) -> None:
         def which(command: str, path: str | None = None) -> str | None:
             return "/usr/bin/pwcpp" if command == "pwcpp" else None

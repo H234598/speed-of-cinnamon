@@ -390,6 +390,46 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["transcript"], "TEST")
         self.assertEqual(saved, "TEST")
 
+    def test_transcribe_file_reports_stale_transient_cleanup_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            audio = tmp_path / "input.wav"
+            audio.write_bytes(b"audio")
+            transcripts = tmp_path / "speed-of-cinnamon" / "transcripts"
+            transcripts.mkdir(parents=True)
+            stale = transcripts / ".stale.abcd.tmp.txt"
+            stale.write_text("stale plaintext\n", encoding="utf-8")
+            owner = cli._transient_transcript_owner_path(stale)
+            owner_target = tmp_path / "foreign-owner"
+            owner_target.write_text("foreign owner\n", encoding="utf-8")
+            owner.symlink_to(owner_target)
+            old_mtime = time.time() - cli.TRANSIENT_TRANSCRIPT_MAX_AGE_SECONDS - 60
+            os.utime(stale, (old_mtime, old_mtime))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf test",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+            stale_exists = stale.exists()
+            owner_is_symlink = owner.is_symlink()
+            target_exists = owner_target.exists()
+
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("failed to delete 1 cleanup artifact", payload["error"])
+        self.assertEqual(payload["transcript"], "test")
+        self.assertIn(str(owner), payload["cleanup_failed_paths"])
+        self.assertFalse(stale_exists)
+        self.assertTrue(owner_is_symlink)
+        self.assertTrue(target_exists)
+
     @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="ok")
     @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
     def test_transcribe_file_accepts_transcriber_aliases(self, mocked_validate: mock.Mock, mocked_transcribe: mock.Mock) -> None:
@@ -2996,8 +3036,10 @@ class CliTest(unittest.TestCase):
             transcript_dir.mkdir(parents=True)
             stale = transcript_dir / ".old.abcd.tmp.txt"
             fresh = transcript_dir / ".fresh.abcd.tmp.txt"
+            stale_owner = cli._transient_transcript_owner_path(stale)
             stale.write_text("old plaintext\n", encoding="utf-8")
             fresh.write_text("fresh plaintext\n", encoding="utf-8")
+            stale_owner.write_text("999999999\n", encoding="utf-8")
             old_mtime = time.time() - cli.TRANSIENT_TRANSCRIPT_MAX_AGE_SECONDS - 60
             os.utime(stale, (old_mtime, old_mtime))
             stdout = io.StringIO()
@@ -3005,13 +3047,53 @@ class CliTest(unittest.TestCase):
                 code = cli.run(["cleanup", "--keep-transcripts", "0", "--keep-recordings", "0", "--json"])
             payload = json.loads(stdout.getvalue())
             stale_exists = stale.exists()
+            stale_owner_exists = stale_owner.exists()
             fresh_exists = fresh.exists()
 
         self.assertEqual(code, 0)
         self.assertEqual(payload["deleted_transient_transcripts"], 1)
         self.assertIn(str(stale), payload["deleted_paths"])
         self.assertFalse(stale_exists)
+        self.assertFalse(stale_owner_exists)
         self.assertTrue(fresh_exists)
+
+    def test_cleanup_reports_unsafe_transient_transcript_owner_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            transcript_dir = tmp_path / "speed-of-cinnamon" / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            stale = transcript_dir / ".old.abcd.tmp.txt"
+            stale.write_text("old plaintext\n", encoding="utf-8")
+            owner = cli._transient_transcript_owner_path(stale)
+            target = tmp_path / "owner-target"
+            target.write_text("foreign owner\n", encoding="utf-8")
+            owner.symlink_to(target)
+            old_mtime = time.time() - cli.TRANSIENT_TRANSCRIPT_MAX_AGE_SECONDS - 60
+            os.utime(stale, (old_mtime, old_mtime))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cleanup", "--keep-transcripts", "0", "--keep-recordings", "0", "--json"])
+            payload = json.loads(stdout.getvalue())
+            stale_exists = stale.exists()
+            owner_is_symlink = owner.is_symlink()
+            target_exists = target.exists()
+
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("failed to delete 1 file", payload["error"])
+        self.assertEqual(payload["deleted_transient_transcripts"], 1)
+        self.assertFalse(stale_exists)
+        self.assertIn(str(owner), payload["failed_paths"])
+        self.assertTrue(owner_is_symlink)
+        self.assertTrue(target_exists)
+
+    def test_cleanup_failed_paths_rejects_malformed_cleanup_results(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "missing failed_paths"):
+            cli._cleanup_failed_paths({})
+        with self.assertRaisesRegex(RuntimeError, "failed_paths must be a list"):
+            cli._cleanup_failed_paths({"failed_paths": "bad"})
+        with self.assertRaisesRegex(RuntimeError, "entries must be non-empty strings"):
+            cli._cleanup_failed_paths({"failed_paths": ["ok", ""]})
 
     def test_cleanup_skips_stale_transient_transcript_with_live_owner(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7487,6 +7569,54 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(final_state.status, "error")
         self.assertIn("failed to delete transient transcript file", final_state.error)
+
+    def test_finalize_reports_stale_transient_cleanup_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            transcripts = tmp_path / "speed-of-cinnamon" / "transcripts"
+            recordings.mkdir(parents=True)
+            transcripts.mkdir(parents=True)
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            audio = recordings / "recording.wav"
+            log = recordings / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            stale = transcripts / ".stale.abcd.tmp.txt"
+            stale.write_text("stale plaintext\n", encoding="utf-8")
+            owner = cli._transient_transcript_owner_path(stale)
+            owner_target = tmp_path / "foreign-owner"
+            owner_target.write_text("foreign owner\n", encoding="utf-8")
+            owner.symlink_to(owner_target)
+            old_mtime = time.time() - cli.TRANSIENT_TRANSCRIPT_MAX_AGE_SECONDS - 60
+            os.utime(stale, (old_mtime, old_mtime))
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=True)
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch(
+                    "speed_of_cinnamon.cli.detect_silent_recording",
+                    return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent"),
+                ),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("trim failed")),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True),
+            ):
+                result = cli.finalize_recording(args, store, store.read())
+            final_state = store.read()
+            stale_exists = stale.exists()
+            owner_is_symlink = owner.is_symlink()
+            target_exists = owner_target.exists()
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("failed to delete 1 cleanup artifact", result["error"])
+        self.assertIn(str(owner), result["cleanup_failed_paths"])
+        self.assertEqual(final_state.status, "done")
+        self.assertFalse(stale_exists)
+        self.assertTrue(owner_is_symlink)
+        self.assertTrue(target_exists)
 
     def test_finalize_transcript_cleanup_runs_even_when_error_state_update_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1154,14 +1154,14 @@ def _write_transient_transcript_owner(path: Path) -> None:
         raise RuntimeError(f"failed to write transient transcript owner: {owner_path}") from exc
 
 
-def _remove_transient_transcript_owner(path: Path) -> None:
+def _remove_transient_transcript_owner(path: Path) -> bool:
     owner_path = _transient_transcript_owner_path(path)
     try:
-        _unlink_regular_leaf_with_parent_fsync(owner_path, field_name="transient transcript owner")
+        return _unlink_regular_leaf_with_parent_fsync(owner_path, field_name="transient transcript owner")
     except FileNotFoundError:
-        return
+        return False
     except RuntimeError:
-        return
+        return False
 
 
 def _read_transient_transcript_owner(path: Path) -> tuple[int | None, str | None]:
@@ -1218,12 +1218,40 @@ def _safe_stale_transient_transcript_files(max_age_seconds: int = TRANSIENT_TRAN
 
 
 def prune_stale_transient_transcripts(dry_run: bool = False) -> dict[str, object]:
-    return prune_files_by_mtime(
+    result = prune_files_by_mtime(
         _safe_stale_transient_transcript_files(),
         0,
         active_paths=set(),
         dry_run=dry_run,
     )
+    if dry_run:
+        return result
+    for deleted_path in list(result["deleted_paths"]):
+        path = Path(deleted_path)
+        owner_path = _transient_transcript_owner_path(path)
+        _remove_transient_transcript_owner(path)
+        if owner_path.exists() or owner_path.is_symlink():
+            result["failed_paths"].append(str(owner_path))
+    return result
+
+
+def _cleanup_failed_paths(*cleanup_results: dict[str, object]) -> list[str]:
+    failed_paths: list[str] = []
+    for cleanup_result in cleanup_results:
+        if "failed_paths" not in cleanup_result:
+            raise RuntimeError("cleanup result missing failed_paths")
+        paths = cleanup_result["failed_paths"]
+        if not isinstance(paths, list):
+            raise RuntimeError("cleanup result failed_paths must be a list")
+        for path in paths:
+            if not isinstance(path, str) or not path:
+                raise RuntimeError("cleanup result failed_paths entries must be non-empty strings")
+            failed_paths.append(path)
+    return failed_paths
+
+
+def _cleanup_failure_error(failed_paths: list[str]) -> str:
+    return f"failed to delete {len(failed_paths)} cleanup artifact(s)"
 
 
 def _read_stored_transcript_text(path: Path) -> str:
@@ -1361,6 +1389,9 @@ def _remove_transient_transcript_path(
             expected_stat=expected_stat,
         )
         _remove_transient_transcript_owner(path)
+        owner_path = _transient_transcript_owner_path(path)
+        if owner_path.exists() or owner_path.is_symlink():
+            raise RuntimeError(f"failed to delete transient transcript owner: {owner_path}")
         return True
     except FileNotFoundError:
         return False
@@ -2942,9 +2973,20 @@ def finalize_recording(
             False,
         )
         transient_transcript_cleanup = prune_stale_transient_transcripts(False)
+        cleanup_failed_paths = _cleanup_failed_paths(
+            artifact_cleanup,
+            transcript_cleanup,
+            transient_transcript_cleanup,
+        )
+        status = done.status
+        message = "recording finished without transcript" if not text.strip() else "transcription completed"
+        if cleanup_failed_paths:
+            status = "error"
+            message = f"{message}; {_cleanup_failure_error(cleanup_failed_paths)}"
         return {
-            "status": done.status,
-            "message": "recording finished without transcript" if not text.strip() else "transcription completed",
+            "status": status,
+            "message": message,
+            **({"error": message, "cleanup_failed_paths": cleanup_failed_paths} if cleanup_failed_paths else {}),
             "transcript": _transcript_payload_text(text, transcript_encryption, args),
             "transcript_output_redacted": bool(text) and transcript_encryption != ARTIFACT_ENCRYPTION_OFF and not _confirm_plaintext_transcript_output(args),
             "transcript_path": str(stored_text_path),
@@ -3625,9 +3667,15 @@ def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
         else deleted_transcripts + deleted_transient_transcripts + deleted_recordings + deleted_logs
     )
     verb = "would clean" if dry_run else "cleaned"
+    failed_paths = transcript_result["failed_paths"] + transient_transcript_result["failed_paths"] + recording_result["failed_paths"]
+    status = "error" if failed_paths and not dry_run else "done"
+    message = f"{verb} {total} old file(s)"
+    if status == "error":
+        message = f"{message}; failed to delete {len(failed_paths)} file(s)"
     return {
-        "status": "done",
-        "message": f"{verb} {total} old file(s)",
+        "status": status,
+        "message": message,
+        **({"error": message} if status == "error" else {}),
         "dry_run": dry_run,
         "keep_transcripts": keep_transcripts,
         "keep_recordings": keep_recordings,
@@ -3642,7 +3690,7 @@ def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
         "would_delete_logs": would_delete_logs,
         "deleted_paths": transcript_result["deleted_paths"] + transient_transcript_result["deleted_paths"] + recording_result["deleted_paths"],
         "would_delete_paths": transcript_result["planned_paths"] + transient_transcript_result["planned_paths"] + recording_result["planned_paths"],
-        "failed_paths": transcript_result["failed_paths"] + transient_transcript_result["failed_paths"] + recording_result["failed_paths"],
+        "failed_paths": failed_paths,
         "skipped_active_paths": transcript_result["skipped_active_paths"] + transient_transcript_result["skipped_active_paths"] + recording_result["skipped_active_paths"],
     }
 
@@ -3896,8 +3944,16 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         False,
     )
     transient_transcript_cleanup = prune_stale_transient_transcripts(False)
+    cleanup_failed_paths = _cleanup_failed_paths(transcript_cleanup, transient_transcript_cleanup)
+    status = "done"
+    message = "transcription completed"
+    if cleanup_failed_paths:
+        status = "error"
+        message = f"{message}; {_cleanup_failure_error(cleanup_failed_paths)}"
     return {
-        "status": "done",
+        "status": status,
+        "message": message,
+        **({"error": message, "cleanup_failed_paths": cleanup_failed_paths} if cleanup_failed_paths else {}),
         "transcript": _transcript_payload_text(text, transcript_encryption, args),
         "transcript_output_redacted": bool(text) and transcript_encryption != ARTIFACT_ENCRYPTION_OFF and not _confirm_plaintext_transcript_output(args),
         "transcript_path": str(stored_text_path),

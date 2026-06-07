@@ -26,7 +26,7 @@ const DEFAULT_OPENAI_COMPATIBLE_MODEL = "gpt-4o-transcribe";
 const DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL = "gpt-4o-mini";
 const LEGACY_OPENAI_COMPATIBLE_URL = "http://127.0.0.1:8000/v1";
 const PASTE_FOCUS_DELAY_MS = 120;
-const PASTE_SUBMIT_DELAY_MS = 120;
+const PASTE_SUBMIT_DELAY_MS = 300;
 const CLIPBOARD_READY_RETRY_MS = 40;
 const CLIPBOARD_READY_TIMEOUT_MS = 1000;
 const SELF_PROTECTION_NOTICE_COOLDOWN_MS = 3000;
@@ -5370,7 +5370,7 @@ MyApplet.prototype = {
     let restored = this._restoreTargetWindowForPaste();
     if (!restored) {
       this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
-      this._setStatus("done", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);
+      this._setStatus("error", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);
       return false;
     }
     this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
@@ -5384,7 +5384,7 @@ MyApplet.prototype = {
     })) {
       return null;
     }
-    this._setStatus("done", _("Copied to clipboard; automatic paste command could not be started"), transcript);
+    this._setStatus("error", _("Copied to clipboard; automatic paste command could not be started"), transcript);
     return false;
   },
 
