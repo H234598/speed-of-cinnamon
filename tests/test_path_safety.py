@@ -68,6 +68,25 @@ class PathSafetyTest(unittest.TestCase):
             self.assertEqual(target.read_bytes(), b"old transcript")
             self.assertEqual(target.stat().st_mode & 0o777, 0o600)
 
+    def test_atomic_write_fsyncs_temp_file_and_parent_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            with mock.patch.object(path_safety.os, "fsync", wraps=os.fsync) as mocked_fsync:
+                path_safety.write_text_atomically_without_following_symlinks(target, "{}")
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "{}")
+            self.assertGreaterEqual(mocked_fsync.call_count, 2)
+
+    def test_atomic_write_removes_temp_file_when_file_fsync_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            with mock.patch.object(path_safety.os, "fsync", side_effect=OSError("sync failed")):
+                with self.assertRaisesRegex(OSError, "sync failed"):
+                    path_safety.write_text_atomically_without_following_symlinks(target, "{}")
+
+            self.assertFalse(target.exists())
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
     def test_read_text_without_following_symlinks_does_not_double_close_fd_on_read_error(self) -> None:
         class _FailingHandle:
             def __enter__(self):

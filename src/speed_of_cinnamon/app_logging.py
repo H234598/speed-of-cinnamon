@@ -42,20 +42,20 @@ HOME_DIR = str(Path.home())
 _DAILY_LOG_RE = re.compile(r"^speed-of-cinnamon-(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.log$")
 _DAILY_GZ_RE = re.compile(r"^speed-of-cinnamon-(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.log\.gz$")
 _MONTHLY_GZ_RE = re.compile(r"^speed-of-cinnamon-(\d{4}-\d{2})\.log\.gz$")
-_TOKEN_RE = re.compile(r"(?i)\b(bearer|token|api[_-]?key|secret|password)\b\s*[:=]\s*[^,\s;]+")
+_TOKEN_RE = re.compile(r"(?i)\b(bearer|token|api[_ -]?key|apikey|secret|password|passwd|passphrase)\b\s*[:=]\s*[^,\s;]+")
 _BARE_CREDENTIAL_RE = re.compile(
     r"(?i)\b(token|api[_ -]?key|apikey|password|passwd|passphrase)\b\s+(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required)\b)[^,\s;]+"
 )
 _BEARER_RE = re.compile(r"(?i)\bbearer\s+[^,\s;]+")
 _OPENAI_KEY_RE = re.compile(r"\b(?:sk|sess)-[A-Za-z0-9_\-]{12,}\b")
 _SHORT_API_KEY_RE = re.compile(r"\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b")
-_URL_CREDENTIAL_RE = re.compile(r"([a-z][a-z0-9+.-]*://)([^/@\s:]+):([^/@\s]+)@")
+_URL_CREDENTIAL_RE = re.compile(r"([a-z][a-z0-9+.-]*://)([^/@\s:]+):([^@\s]+)@")
 _ERROR_DETAIL_RE = re.compile(
     r"(?i)(?:\b(?:stdout|stderr)\s*:|\b(?:raw\s+)?transcript\s*(?::|\b(?:text|words|payload|for)\b)|\bprompt\s*:|command\s+output\s*:|backend\s+output\s*:)"
 )
 _ERROR_SECRET_WORD_RE = re.compile(r"(?i)\bsecret\b")
 _SANITIZE_HINT_RE = re.compile(
-    r"(?i)(?:\b(?:bearer|token|api[_-]?key|secret|password)\b\s*[:=]\s*[^,\s;]+|\b(?:token|api[_ -]?key|apikey|password|passwd|passphrase)\b\s+(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required)\b)[^,\s;]+|\bbearer\s+[^,\s;]+|\b(?:sk|sess)-[A-Za-z0-9_\-]{12,}\b|[a-z][a-z0-9+.-]*://[^/@\s:]+:[^/@\s]+@)"
+    r"(?i)(?:\b(?:bearer|token|api[_ -]?key|apikey|secret|password|passwd|passphrase)\b\s*[:=]\s*[^,\s;]+|\b(?:token|api[_ -]?key|apikey|password|passwd|passphrase)\b\s+(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required)\b)[^,\s;]+|\bbearer\s+[^,\s;]+|\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b|[a-z][a-z0-9+.-]*://[^/@\s:]+:[^@\s]+@)"
 )
 _SANITIZE_ESCAPE_TABLE = {
     **{codepoint: f"\\x{codepoint:02x}" for codepoint in tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))},
@@ -64,7 +64,32 @@ _SANITIZE_ESCAPE_TABLE = {
     ord("\x00"): "\\x00",
 }
 _SANITIZE_KEY_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
-_SENSITIVE_KEY_RE = re.compile(r"(?:api_key|apikey|authorization|bearer|command|context|key|password|prompt|secret|text|token|transcript|vocabulary)")
+_SENSITIVE_KEY_SPLIT_RE = re.compile(r"[._-]+")
+_SENSITIVE_KEY_TOKENS = frozenset({
+    "apikey",
+    "authorization",
+    "bearer",
+    "password",
+    "passwd",
+    "passphrase",
+    "prompt",
+    "secret",
+    "token",
+    "transcript",
+    "vocabulary",
+})
+_SENSITIVE_KEY_EXACT = frozenset({"command", "context", "key", "text"})
+_SENSITIVE_KEY_PHRASES = (
+    ("api", "key"),
+    ("backend", "output"),
+    ("command", "args"),
+    ("command", "line"),
+    ("command", "output"),
+    ("command", "template"),
+    ("personal", "context"),
+    ("raw", "transcript"),
+    ("transcript", "text"),
+)
 _SANITIZE_KEY_SAFE_CHARS = frozenset(string.ascii_lowercase + string.digits + "_.-")
 _FORBIDDEN_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 _ESCAPED_FORBIDDEN_CONTROL_RE = re.compile(
@@ -287,6 +312,7 @@ def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
     text = _BARE_CREDENTIAL_RE.sub(lambda match: f"{match.group(1)}=[redacted]", text)
     text = _BEARER_RE.sub("Bearer [redacted]", text)
     text = _OPENAI_KEY_RE.sub("[redacted]", text)
+    text = _SHORT_API_KEY_RE.sub("[redacted]", text)
     text = _URL_CREDENTIAL_RE.sub(r"\1[redacted]@", text)
     if HOME_DIR and HOME_DIR != "/":
         text = text.replace(HOME_DIR, "~")
@@ -317,7 +343,20 @@ def sanitize_error_message(error: object, *, max_chars: int = MAX_LOG_MESSAGE_CH
 
 def _is_sensitive_key(key: str) -> bool:
     lowered = key.lower()
-    return _SENSITIVE_KEY_RE.search(lowered) is not None
+    tokens = tuple(token for token in _SENSITIVE_KEY_SPLIT_RE.split(lowered) if token)
+    if not tokens:
+        return False
+    if len(tokens) == 1 and tokens[0] in _SENSITIVE_KEY_EXACT:
+        return True
+    if "".join(tokens) in _SENSITIVE_KEY_TOKENS:
+        return True
+    if any(token in _SENSITIVE_KEY_TOKENS for token in tokens):
+        return True
+    return any(
+        tokens[index:index + len(phrase)] == phrase
+        for phrase in _SENSITIVE_KEY_PHRASES
+        for index in range(0, len(tokens) - len(phrase) + 1)
+    )
 
 
 def _safe_path(path: Path) -> str:
@@ -444,6 +483,7 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
             try:
                 _assert_regular_unlinked_file(path, field_name="active log file")
                 os.replace(path.name, candidate.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                os.fsync(parent_fd)
             finally:
                 os.close(parent_fd)
             return
@@ -489,9 +529,11 @@ def _merge_old_months(directory: Path, today: date) -> None:
                         _assert_regular_unlinked_file(path, field_name="monthly log source")
                         _copy_log_content(path, output)
                 raw_output.flush()
+                os.fsync(raw_output.fileno())
                 if not _log_temp_name_matches_fd(parent_fd, temp_name, raw_output.fileno()):
                     raise RuntimeError("monthly log temporary archive was replaced")
             os.replace(temp_name, archive.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            os.fsync(parent_fd)
         except Exception:
             _unlink_log_temp(parent_fd, temp_name)
             raise
@@ -513,6 +555,16 @@ def _copy_log_content(path: Path, output: gzip.GzipFile) -> None:
         output.write(b"\n")
 
 
+def _assert_same_log_file_identity(path: Path, expected_stat: os.stat_result, *, field_name: str) -> None:
+    current_stat = _assert_regular_unlinked_file(path, field_name=field_name)
+    if (
+        current_stat.st_dev != expected_stat.st_dev
+        or current_stat.st_ino != expected_stat.st_ino
+        or getattr(current_stat, "st_nlink", 1) != getattr(expected_stat, "st_nlink", 1)
+    ):
+        raise RuntimeError(f"{field_name} changed before deletion: {path}")
+
+
 def _gzip_file(source: Path, target: Path) -> None:
     if target.exists():
         _assert_regular_unlinked_file(target, field_name="log target file")
@@ -520,6 +572,7 @@ def _gzip_file(source: Path, target: Path) -> None:
     try:
         try:
             source_fd = _open_log_source_file(source, field_name="log source file")
+            source_stat = os.fstat(source_fd)
         except Exception:
             os.close(temp_fd)
             raise
@@ -539,10 +592,14 @@ def _gzip_file(source: Path, target: Path) -> None:
             with gzip.GzipFile(fileobj=raw_output, mode="wb") as output_file:
                 shutil.copyfileobj(input_file, output_file)
             raw_output.flush()
+            os.fsync(raw_output.fileno())
             if not _log_temp_name_matches_fd(parent_fd, temp_name, raw_output.fileno()):
                 raise RuntimeError("log temporary archive was replaced")
         os.replace(temp_name, target.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        os.fsync(parent_fd)
+        _assert_same_log_file_identity(source, source_stat, field_name="log source file")
         source.unlink()
+        os.fsync(parent_fd)
     except Exception:
         _unlink_log_temp(parent_fd, temp_name)
         raise
@@ -573,8 +630,8 @@ def _enforce_total_size_limit(directory: Path) -> None:
             continue
         if getattr(st, "st_nlink", 1) != 1:
             raise RuntimeError(f"log file must not be hardlinked: {path}")
-        file_info.append((st.st_mtime, path.name, st.st_size, path))
-    total = sum(size for _, _, size, _ in file_info)
+        file_info.append((st.st_mtime, path.name, st.st_size, path, st))
+    total = sum(size for _, _, size, _, _ in file_info)
     if total <= MAX_TOTAL_LOG_BYTES:
         return
     active = _active_log_path(directory)
@@ -582,9 +639,10 @@ def _enforce_total_size_limit(directory: Path) -> None:
         (item for item in file_info if item[3] != active),
         key=lambda item: (item[0], item[1]),
     )
-    for _, _, size, path in candidates:
+    for _, _, size, path, original_stat in candidates:
         if total <= MAX_TOTAL_LOG_BYTES:
             break
+        _assert_same_log_file_identity(path, original_stat, field_name="log file")
         path.unlink()
         total -= size
 

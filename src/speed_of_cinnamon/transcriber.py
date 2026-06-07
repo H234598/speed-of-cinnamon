@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .models import default_ctranslate2_model_path, default_whisper_cpp_model_path, model_backend_for_path, model_supports_language
-from .command_chain import CommandChainError, MAX_COMMAND_OUTPUT_CHARS, run_command_chain, split_command_chain
+from .command_chain import CommandChainError, MAX_COMMAND_OUTPUT_CHARS, run_command_chain, run_process_bounded_output, split_command_chain
 from .personalization import build_personalization_prompt, normalize_context, normalize_vocabulary
 from .postprocessor import (
     DEFAULT_OPENAI_COMPATIBLE_MODEL,
@@ -304,6 +304,72 @@ def _restore_existing_file_snapshot(path: Path, snapshot: bytes) -> None:
         raise TranscriptionError(f"failed to restore existing transcript file: {path}") from exc
 
 
+def _remove_generated_transcript_file(path: Path, *, field_name: str = "generated transcript") -> None:
+    if not isinstance(path, Path):
+        raise TranscriptionError("path must be a Path")
+    if isinstance(field_name, bool) or not isinstance(field_name, str):
+        raise TranscriptionError("field_name must be text")
+
+    parent_fd: int | None = None
+    file_fd: int | None = None
+    try:
+        parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name=f"{field_name} directory")
+        try:
+            try:
+                file_fd = open_file_without_following_symlinks(path, os.O_RDONLY, field_name=field_name)
+            except FileNotFoundError:
+                return
+            except OSError as exc:
+                raise TranscriptionError(f"failed to open {field_name} for safe removal") from exc
+
+            try:
+                assert_fd_is_regular_private_file(file_fd, field_name=field_name)
+            except RuntimeError as exc:
+                raise TranscriptionError(f"{field_name} is unsafe to remove: {exc}") from exc
+            expected_stat = os.fstat(file_fd)
+            try:
+                current_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                return
+            if (
+                current_stat.st_dev != expected_stat.st_dev
+                or current_stat.st_ino != expected_stat.st_ino
+                or current_stat.st_mode != expected_stat.st_mode
+                or getattr(current_stat, "st_nlink", 1) != getattr(expected_stat, "st_nlink", 1)
+            ):
+                raise TranscriptionError(f"{field_name} changed before removal")
+
+            try:
+                os.unlink(path.name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                return
+            os.fsync(parent_fd)
+        finally:
+            if file_fd is not None:
+                with suppress(OSError):
+                    os.close(file_fd)
+    except OSError as exc:
+        raise TranscriptionError(f"failed to remove {field_name}") from exc
+    finally:
+        if parent_fd is not None:
+            with suppress(OSError):
+                os.close(parent_fd)
+
+
+def _restore_or_remove_generated_transcript(path: Path, snapshot: bytes | None) -> None:
+    if snapshot is not None:
+        _restore_existing_file_snapshot(path, snapshot)
+        return
+    try:
+        _remove_generated_transcript_file(path)
+    except FileNotFoundError:
+        return
+    except TranscriptionError as exc:
+        raise TranscriptionError("failed to remove generated transcript") from exc
+    except OSError as exc:
+        raise TranscriptionError("failed to remove generated transcript") from exc
+
+
 def _read_response_text(response: object, max_bytes: int = MAX_TRANSCRIBER_JSON_BYTES) -> str:
     if not hasattr(response, "read"):
         raise TranscriptionError("response must be readable")
@@ -378,6 +444,18 @@ def _file_size(file: io.BufferedRandom) -> int:
     return file.tell()
 
 
+def _run_transcriber_process(command: list[str], *, timeout: int, env: dict[str, str]) -> subprocess.CompletedProcess[bytes]:
+    returncode, stdout_data, stderr_data = run_process_bounded_output(
+        command,
+        b"",
+        timeout_seconds=timeout,
+        max_output_bytes=MAX_COMMAND_OUTPUT_CHARS,
+        env=env,
+        label="transcriber",
+    )
+    return subprocess.CompletedProcess(command, returncode, stdout=stdout_data, stderr=stderr_data)
+
+
 def _run_limited_process(command: list[str] | tuple[str, ...], *, timeout: int = TRANSCRIBE_COMMAND_TIMEOUT_SECONDS) -> None:
     if not isinstance(command, (list, tuple)):
         raise TranscriptionError("transcriber command must be a list or tuple")
@@ -402,30 +480,18 @@ def _run_limited_process(command: list[str] | tuple[str, ...], *, timeout: int =
         raise TranscriptionError("command argument contains invalid control character")
     runtime_executable = _command_path(executable)
     try:
-        with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
-            try:
-                proc = subprocess.run(  # nosec B603
-                    [runtime_executable, *command[1:]],
-                    stdout=stdout_file,
-                    stderr=stderr_file,
-                    timeout=timeout,
-                    shell=False,
-                    env=_filtered_environment(),
-                )
-            except FileNotFoundError as exc:
-                raise TranscriptionError(f"{executable} is not available") from exc
-
-            if _file_size(stdout_file) > MAX_COMMAND_OUTPUT_CHARS:
-                raise TranscriptionError(
-                    f"command output exceeded {MAX_COMMAND_OUTPUT_CHARS} bytes"
-                )
-            if _file_size(stderr_file) > MAX_COMMAND_OUTPUT_CHARS:
-                raise TranscriptionError(
-                    f"command error output exceeded {MAX_COMMAND_OUTPUT_CHARS} bytes"
-                )
-
-            if proc.returncode != 0:
-                raise TranscriptionError(f"transcriber command failed: exit code {proc.returncode}")
+        try:
+            proc = _run_transcriber_process(
+                [runtime_executable, *command[1:]],
+                timeout=timeout,
+                env=_filtered_environment(),
+            )
+        except FileNotFoundError as exc:
+            raise TranscriptionError(f"{executable} is not available") from exc
+        except CommandChainError as exc:
+            raise TranscriptionError(str(exc)) from exc
+        if proc.returncode != 0:
+            raise TranscriptionError(f"transcriber command failed: exit code {proc.returncode}")
     except subprocess.TimeoutExpired as exc:
         raise TranscriptionError(f"transcription backend timed out after {timeout}s") from exc
     except OSError as exc:
@@ -615,10 +681,10 @@ def transcribe_with_template(
             _restore_existing_file_snapshot(text_path, existing_snapshot)
             return
         try:
-            text_path.unlink()
+            _remove_generated_transcript_file(text_path, field_name="transcript path")
         except FileNotFoundError:
             pass
-        except OSError:
+        except TranscriptionError:
             pass
 
     try:
@@ -659,19 +725,24 @@ def transcribe_with_openai_whisper(
         raise TranscriptionError("OpenAI whisper command is not installed") from exc
     output_dir = text_path.parent
     generated = output_dir / f"{audio_path.stem}.txt"
-    existing_snapshot = _snapshot_existing_file(generated) if generated == text_path else None
-    _run_limited_process(
-        [
-            "whisper",
-            str(audio_path),
-            "--language",
-            language,
-            "--output_format",
-            "txt",
-            "--output_dir",
-            str(output_dir),
-        ],
-    )
+    existing_snapshot = _snapshot_existing_file(generated)
+    try:
+        _run_limited_process(
+            [
+                "whisper",
+                str(audio_path),
+                "--language",
+                language,
+                "--output_format",
+                "txt",
+                "--output_dir",
+                str(output_dir),
+            ],
+        )
+    except Exception:
+        if generated.exists():
+            _restore_or_remove_generated_transcript(generated, existing_snapshot)
+        raise
     if generated.exists():
         if generated == text_path:
             try:
@@ -682,8 +753,8 @@ def transcribe_with_openai_whisper(
                     _restore_existing_file_snapshot(generated, existing_snapshot)
                 else:
                     try:
-                        generated.unlink()
-                    except OSError:
+                        _remove_generated_transcript_file(generated, field_name="generated transcript")
+                    except (OSError, TranscriptionError):
                         pass
                 raise
             if not write_transcript:
@@ -691,8 +762,8 @@ def transcribe_with_openai_whisper(
                     _restore_existing_file_snapshot(generated, existing_snapshot)
                 else:
                     try:
-                        generated.unlink()
-                    except OSError:
+                        _remove_generated_transcript_file(generated, field_name="generated transcript")
+                    except (OSError, TranscriptionError):
                         pass
             return text
         primary_error: BaseException | None = None
@@ -706,10 +777,10 @@ def transcribe_with_openai_whisper(
             raise
         finally:
             try:
-                generated.unlink()
-            except OSError as exc:
+                _restore_or_remove_generated_transcript(generated, existing_snapshot)
+            except TranscriptionError as exc:
                 if primary_error is None:
-                    raise TranscriptionError("failed to remove generated transcript") from exc
+                    raise
         return text
     raise TranscriptionError("whisper completed but did not produce a transcript")
 
@@ -787,8 +858,13 @@ def transcribe_with_whisper_cpp(
         raise TranscriptionError("whisper.cpp command is not installed")
 
     invocation, generated_path = _whisper_cpp_invocation(command, audio_path, language, text_path, model_path)
-    existing_snapshot = _snapshot_existing_file(text_path) if generated_path == text_path else None
-    _run_limited_process(invocation)
+    existing_snapshot = _snapshot_existing_file(generated_path)
+    try:
+        _run_limited_process(invocation)
+    except Exception:
+        if generated_path.exists():
+            _restore_or_remove_generated_transcript(generated_path, existing_snapshot)
+        raise
     if generated_path.exists():
         if generated_path == text_path:
             try:
@@ -799,8 +875,8 @@ def transcribe_with_whisper_cpp(
                     _restore_existing_file_snapshot(generated_path, existing_snapshot)
                 else:
                     try:
-                        generated_path.unlink()
-                    except OSError:
+                        _remove_generated_transcript_file(generated_path, field_name="generated sidecar")
+                    except (OSError, TranscriptionError):
                         pass
                 raise
             if not write_transcript:
@@ -808,8 +884,8 @@ def transcribe_with_whisper_cpp(
                     _restore_existing_file_snapshot(generated_path, existing_snapshot)
                 else:
                     try:
-                        generated_path.unlink()
-                    except OSError:
+                        _remove_generated_transcript_file(generated_path, field_name="generated sidecar")
+                    except (OSError, TranscriptionError):
                         pass
             return text
         primary_error: BaseException | None = None
@@ -823,10 +899,10 @@ def transcribe_with_whisper_cpp(
             raise
         finally:
             try:
-                generated_path.unlink()
-            except OSError as exc:
+                _restore_or_remove_generated_transcript(generated_path, existing_snapshot)
+            except TranscriptionError as exc:
                 if primary_error is None:
-                    raise TranscriptionError("failed to remove generated transcript") from exc
+                    raise
         return text
     raise TranscriptionError("whisper.cpp completed but did not produce a transcript")
 

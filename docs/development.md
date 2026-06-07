@@ -85,9 +85,9 @@ The coverage target writes:
 reports/lcov.info
 ```
 
-GitHub Actions installs Coverage.py, runs `make coverage`, installs the QLTY CLI, and uploads `reports/lcov.info` with
-`qlty coverage publish` when `QLTY_COVERAGE_TOKEN` is available as an Actions secret. Pull requests without that secret
-still generate coverage locally in CI, but skip the upload step.
+GitHub Actions installs Coverage.py, runs `make coverage`, and uploads `reports/lcov.info` through
+`qltysh/qlty-action/coverage` when `QLTY_COVERAGE_TOKEN` is available as an Actions secret. Pull requests without that
+secret still generate coverage locally in CI, but skip the upload step.
 
 ## Source Archive
 
@@ -208,9 +208,10 @@ with the source archive, checksum, Fedora noarch RPM, generic noarch RPM, and th
 build Snap packages by default and require a usable Snap build environment.
 It also has manual inputs:
 
+- `tag` to choose the release tag to package and publish.
+- `dry_run=true` to build and verify release artifacts without publishing them.
 - Snap packages are mandatory for release CI.
 - `build_generic_rpm=false` to skip generic RPM generation.
-- `run_workflow_lint=false` to skip workflow validation step.
 
 Publishing uses repository secret `RELEASE_GITHUB_TOKEN` (PAT or token with `contents: write`) for `gh release create` and
 `gh release upload`. For local dry-runs this secret is not required because `make release-dry-run` does not publish.

@@ -118,7 +118,8 @@ Accent replacement is a compatibility fallback for direct typing. Saved transcri
 Enable `Replace profanity with harmless words` when dictated profanity should be softened locally before transcripts are
 saved, copied, pasted, or auto-submitted. It is disabled by default because exact quotes, commands, and code should not
 be rewritten unexpectedly. Use `Show profanity replacement list` in the applet settings to open and edit the current
-local pattern/replacement file. The format is `pattern -> replacement`; lines without that separator are ignored.
+local replacement file. The format is `text -> replacement`; lines without that separator are ignored.
+Bundled entries may use trusted regex syntax, but custom entries are treated as literal text for safety.
 
 ### Security and blacklist
 
@@ -246,8 +247,9 @@ alarms that became due while the applet was not running.
 ## Cleanup
 
 Use `Open transcripts` in `Files and settings` to open the transcript directory. Use `List all Transcripts` to show the
-full transcript texts in a scrollable, selectable window without writing a plaintext bundle to the state directory. Use
-`Export all Transcripts` only when you intentionally want a transcript bundle file; exports are encrypted by default.
+full transcript texts in a scrollable, selectable window without writing a plaintext bundle to the state directory. The
+applet asks for confirmation first because the window contains complete plaintext transcript contents. Use `Export all
+Transcripts` only when you intentionally want a transcript bundle file; exports are encrypted by default.
 
 Use `Store transcripts` in `Files and settings` to choose how many transcript files should be kept. The default is 500.
 After each successful transcription, older transcript files are deleted automatically so at most that many transcript
@@ -255,9 +257,13 @@ files remain.
 
 Use `Stored transcript and recording encryption` in the applet settings to choose how persistent transcript files and
 retained recording files are protected. The default is `Secret Service keyring`, which keeps a random master key in the
-desktop keyring. `Passphrase` mode uses `SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE` or
-`SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE`; prefer the file variable. If keyring mode cannot use the desktop keyring from
-CLI context, it tries the passphrase fallback. Without a usable key source, encrypted writes fail closed.
+desktop keyring. `Passphrase` mode uses `SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE`, an existing
+`~/.config/speed-of-cinnamon/artifact.key`, `SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE`, or a newly generated default key
+file when no explicit source exists. Prefer the file variable for explicit deployments. If keyring mode cannot use the
+desktop keyring from CLI context, it tries the same passphrase fallback. Weak explicit sources are rejected; a weak
+generated default key file is replaced. Without a usable key source, encrypted writes fail closed.
+Files ending in `.socenc` must be valid Speed of Cinnamon encrypted envelopes. Plaintext or malformed `.socenc` files are
+rejected or skipped instead of being treated as transcript or recording content.
 
 Use `Preview cleanup` before `Clean all old files`. Manual cleanup removes all old transcript files and cached
 recordings while skipping the currently referenced state paths. Recordings and their companion logs are handled as one
@@ -277,11 +283,11 @@ Use `Export settings` and `Import settings` in the applet menu to write or resto
 ~/.local/share/speed-of-cinnamon/settings-export.json
 ```
 
-The export includes hotkeys, languages, recorder/backend choices, command templates, personalization, output mode,
+The export includes hotkeys, languages, recorder/backend choices, personalization, output mode,
 recording retention, notification settings, and the local alarm store. It intentionally excludes machine-local
-`cli-path` and `openai-compatible-api-key`.
+`cli-path`, `openai-compatible-api-key`, and custom command templates.
 
-Treat the export as private. Command templates, personal context, vocabulary, and alarm names may contain private data.
+Treat the export as private. Personal context, vocabulary, and alarm names may contain private data.
 
 ## Diagnostics
 

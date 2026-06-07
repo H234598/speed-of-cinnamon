@@ -614,6 +614,33 @@ class ModelsTest(unittest.TestCase):
                 max_bytes=models.MAX_MODEL_CHECKSUM_JSON_BYTES,
             )
 
+    def test_invalid_model_checksum_cache_delete_uses_dir_fd_and_fsync(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text("{not-json", encoding="utf-8")
+
+            with (
+                mock.patch("speed_of_cinnamon.models.os.unlink", wraps=os.unlink) as mocked_unlink,
+                mock.patch("speed_of_cinnamon.models.os.fsync", wraps=os.fsync) as mocked_fsync,
+            ):
+                models._load_model_checksum_cache()
+
+            self.assertFalse(cache_path.exists())
+            self.assertTrue(
+                any(
+                    args == (cache_path.name,)
+                    and isinstance(kwargs.get("dir_fd"), int)
+                    for args, kwargs in mocked_unlink.call_args_list
+                )
+            )
+            mocked_fsync.assert_called()
+
     def test_model_checksum_cache_rejects_invalid_utf8(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -815,6 +842,41 @@ class ModelsTest(unittest.TestCase):
         self.assertTrue(payload["verified"])
         self.assertEqual(payload["checksum"], spec.sha1)
         self.assertIn("already downloaded", second_payload["message"])
+
+    def test_download_model_fsyncs_download_file_before_atomic_replace(self) -> None:
+        data = b"tiny model"
+        spec = models.ModelSpec(
+            name="test-fsync-download",
+            filename="ggml-test-fsync-download.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(data).hexdigest(),
+            description="test fsync download model",
+        )
+        fsync_modes: list[int] = []
+        real_fsync = os.fsync
+
+        def record_fsync(fd: int) -> None:
+            fsync_modes.append(os.fstat(fd).st_mode)
+            real_fsync(fd)
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
+            mock.patch("speed_of_cinnamon.models.os.fsync", side_effect=record_fsync),
+        ):
+            payload = models.download_model("test-fsync-download")
+
+        self.assertEqual(payload["status"], "done")
+        self.assertTrue(
+            any(models.stat_module.S_ISREG(mode) for mode in fsync_modes),
+            "downloaded model bytes should be fsynced before the final rename",
+        )
+        self.assertTrue(
+            any(models.stat_module.S_ISDIR(mode) for mode in fsync_modes),
+            "model parent directory should be fsynced after the final rename",
+        )
 
     def test_download_model_rejects_target_symlink_before_final_replace(self) -> None:
         data = b"tiny model"
@@ -1810,6 +1872,42 @@ class ModelsTest(unittest.TestCase):
         self.assertFalse(tmp_exists)
         self.assertFalse(missing_payload["removed"])
 
+    def test_remove_model_fsyncs_parent_after_file_deletes(self) -> None:
+        spec = models.ModelSpec(
+            name="test-delete-fsync",
+            filename="ggml-test-delete-fsync.bin",
+            size="1 KiB",
+            sha1="not-used",
+            description="test fsync model delete",
+        )
+        fsync_modes: list[int] = []
+        real_fsync = os.fsync
+
+        def record_fsync(fd: int) -> None:
+            fsync_modes.append(os.fstat(fd).st_mode)
+            real_fsync(fd)
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models.os.fsync", side_effect=record_fsync),
+        ):
+            path = models.model_path(spec)
+            tmp_path = path.with_suffix(path.suffix + ".tmp")
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"model")
+            tmp_path.write_bytes(b"partial")
+            payload = models.remove_model("test-delete-fsync")
+
+        self.assertTrue(payload["removed"])
+        self.assertTrue(payload["removed_tmp"])
+        self.assertGreaterEqual(
+            sum(1 for mode in fsync_modes if models.stat_module.S_ISDIR(mode)),
+            2,
+            "both model and temporary model deletes should fsync their parent directory",
+        )
+
     def test_remove_model_directory_uses_secure_parent_fd_rmtree(self) -> None:
         spec = models.ModelSpec(
             name="test-directory-remove",
@@ -1846,6 +1944,42 @@ class ModelsTest(unittest.TestCase):
         target, kwargs = calls[0]
         self.assertEqual(target, path.name)
         self.assertIsInstance(kwargs.get("dir_fd"), int)
+
+    def test_remove_model_directory_fsyncs_parent_after_delete(self) -> None:
+        spec = models.ModelSpec(
+            name="test-directory-remove-fsync",
+            filename="ct2-test-directory-remove-fsync",
+            size="1 KiB",
+            sha1="not-used",
+            description="test directory model fsync delete",
+            model_format="ctranslate2",
+        )
+        fsync_modes: list[int] = []
+        real_fsync = os.fsync
+        real_rmtree = models.shutil.rmtree
+
+        def record_fsync(fd: int) -> None:
+            fsync_modes.append(os.fstat(fd).st_mode)
+            real_fsync(fd)
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models.os.fsync", side_effect=record_fsync),
+        ):
+            path = models.model_path(spec)
+            path.mkdir(parents=True)
+            (path / "config.json").write_text("{}", encoding="utf-8")
+            with mock.patch("speed_of_cinnamon.models.shutil.rmtree", side_effect=real_rmtree) as mocked_rmtree:
+                mocked_rmtree.avoids_symlink_attacks = True
+                payload = models.remove_model("test-directory-remove-fsync")
+
+        self.assertTrue(payload["removed"])
+        self.assertTrue(
+            any(models.stat_module.S_ISDIR(mode) for mode in fsync_modes),
+            "directory model delete should fsync its parent directory",
+        )
 
     def test_remove_model_directory_rejects_unsafe_rmtree_platform(self) -> None:
         spec = models.ModelSpec(
@@ -2460,6 +2594,28 @@ class ModelsTest(unittest.TestCase):
                 models._replace_model_sibling_path(source, target, root, field_name="model path")
 
             self.assertFalse((real / "target.bin").exists())
+
+    def test_replace_model_sibling_path_fsyncs_parent_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.bin"
+            target = root / "target.bin"
+            source.write_bytes(b"model")
+            fsync_modes: list[int] = []
+            real_fsync = os.fsync
+
+            def record_fsync(fd: int) -> None:
+                fsync_modes.append(os.fstat(fd).st_mode)
+                real_fsync(fd)
+
+            with mock.patch("speed_of_cinnamon.models.os.fsync", side_effect=record_fsync) as mocked_fsync:
+                models._replace_model_sibling_path(source, target, root, field_name="model path")
+
+            self.assertEqual(target.read_bytes(), b"model")
+            self.assertFalse(source.exists())
+            mocked_fsync.assert_called()
+            self.assertTrue(any(models.stat_module.S_ISREG(mode) for mode in fsync_modes))
+            self.assertTrue(any(models.stat_module.S_ISDIR(mode) for mode in fsync_modes))
 
     def test_model_status_rejects_non_boolean_verify(self) -> None:
         with self.assertRaisesRegex(models.ModelError, "verify must be a boolean"):

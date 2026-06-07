@@ -259,19 +259,22 @@ character sanitizing without recording or transcribing audio.
 unchanged.
 
 `profanity-filter-document` creates the editable profanity replacement file if needed and returns its path. The applet
+opens that file for editing. Custom left-hand entries are treated as literal text for safety; bundled entries may use
+trusted regex syntax.
 settings button opens the same file for editing.
 
 ## History And Cleanup
 
 ```bash
 speed-of-cinnamon history --limit 5 --json
-speed-of-cinnamon transcripts-document --limit 1000 --json
+speed-of-cinnamon transcripts-document --limit 1000 --confirm-plaintext --json
 speed-of-cinnamon transcripts-export --limit 1000 --json
 speed-of-cinnamon cleanup --keep-transcripts 0 --keep-recordings 0 --dry-run --json
 speed-of-cinnamon cleanup --keep-transcripts 0 --keep-recordings 0 --json
 ```
 
-`transcripts-document` returns complete transcript contents for display and does not write a plaintext bundle to disk.
+`transcripts-document` returns complete transcript contents for display and does not write a plaintext bundle to disk. It
+requires `--confirm-plaintext` because the plaintext is returned through stdout.
 `transcripts-export` is the explicit export path and writes an encrypted transcript bundle by default. Plaintext export
 requires both `--plaintext` and `--confirm-plaintext`.
 
@@ -281,19 +284,28 @@ Cleanup skips the currently referenced state paths. Use the dry run before delet
 
 ```bash
 speed-of-cinnamon transcribe-file ~/sample.flac --artifact-encryption passphrase --json
+speed-of-cinnamon transcribe-file ~/sample.flac --artifact-encryption passphrase --confirm-plaintext-output --json
 speed-of-cinnamon toggle --artifact-encryption keyring --keep-recording-artifacts
 ```
 
 `--artifact-encryption` accepts `off`, `passphrase`, or `keyring`. Passphrase mode derives per-file keys from
-`SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE` or `SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE`; prefer the file variable
-to avoid shell history exposure. Keyring mode stores one random master key in the desktop Secret Service through
-`secret-tool`. If keyring access fails in CLI mode, the backend tries the passphrase fallback. If no usable key source is
-available, encrypted writes fail closed instead of writing a plaintext archive file.
+`SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE`, an existing `~/.config/speed-of-cinnamon/artifact.key`,
+`SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE`, or a newly generated default key file when no explicit source exists. Prefer
+the file variable for explicit deployments to avoid shell history exposure. Keyring mode stores one random master key in
+the desktop Secret Service through `secret-tool`. If keyring access fails in CLI mode, the backend tries the same
+passphrase fallback. Weak explicit sources are rejected; a weak generated default key file is replaced. If no usable key
+source is available, encrypted writes fail closed instead of writing a plaintext archive file.
+Files ending in `.socenc` must be valid Speed of Cinnamon encrypted envelopes. Plaintext or malformed `.socenc` files are
+rejected or skipped instead of being treated as transcript or recording content.
+When stored transcript encryption is enabled, transcript text is redacted from command JSON output unless
+`--confirm-plaintext-output` is set. The Cinnamon applet sets this flag for its active UI flow so it can display and copy
+the just-created transcript.
 
 ## Settings Backup
 
 ```bash
 speed-of-cinnamon settings-export --settings-json '{"language":"de","append-space":true}' --json
+printf '%s' '{"language":"de","append-space":true}' | speed-of-cinnamon settings-export --settings-json-stdin --json
 speed-of-cinnamon settings-import --json
 ```
 
@@ -303,8 +315,10 @@ The default export/import path is:
 ~/.local/share/speed-of-cinnamon/settings-export.json
 ```
 
-The export includes the local alarm store and intentionally excludes machine-local `cli-path` and
-`openai-compatible-api-key`.
+Use `--settings-json-stdin` when the settings object contains private values such as personal context, vocabulary, or
+command templates. The Cinnamon applet uses stdin for settings export so the snapshot is not exposed in process
+arguments. The export includes the local alarm store and intentionally excludes machine-local `cli-path`,
+`openai-compatible-api-key`, and custom command templates.
 
 ## Alarms
 

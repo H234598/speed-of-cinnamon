@@ -70,7 +70,9 @@ Install an Ollama text model.
 List recent transcript files.
 .TP
 .B transcripts-document
-Return complete transcript history for display without writing a plaintext bundle.
+Return complete transcript history for display without writing a plaintext bundle. Requires
+.BR --confirm-plaintext
+because plaintext is returned through stdout.
 .TP
 .B transcripts-export
 Explicitly export complete transcript history. The export is encrypted by default.
@@ -126,6 +128,21 @@ for stored transcript files and retained recording files. Keyring mode uses the
 desktop Secret Service through
 .BR secret-tool (1)
 and falls back to passphrase mode when
+keyring access fails. Passphrase mode uses an explicit passphrase file, the
+default
+.IR ~/.config/speed-of-cinnamon/artifact.key ,
+or an environment passphrase. The default key file can be generated
+automatically; weak explicit sources are rejected.
+Files ending in
+.I .socenc
+must be valid encrypted envelopes; plaintext or malformed payloads are
+rejected or skipped instead of being treated as transcript or recording
+content.
+.TP
+.B --confirm-plaintext-output
+Allow full transcript text in command output even when the stored transcript is
+encrypted. Without this flag, encrypted transcript storage redacts transcript
+text from JSON command output.
 .B SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE
 or
 .B SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE
@@ -235,7 +252,7 @@ speed-of-cinnamon profanity-filter-document --json
 Return complete transcript history for display:
 .PP
 .EX
-speed-of-cinnamon transcripts-document --limit 1000 --json
+speed-of-cinnamon transcripts-document --limit 1000 --confirm-plaintext --json
 .EE
 .PP
 Explicitly write an encrypted transcript export:

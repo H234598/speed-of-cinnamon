@@ -324,6 +324,7 @@ def _unlink_recording_path_if_same(path: Path, expected_stat: os.stat_result) ->
             and current.st_mode == expected_stat.st_mode
         ):
             os.unlink(path.name, dir_fd=parent_fd)
+            os.fsync(parent_fd)
     except OSError:
         return
     finally:
@@ -987,6 +988,12 @@ def choose_recorder(preference: str, audio_path: Path, max_seconds: int, input_d
             argv = ["parecord", "--file-format=wav", "--rate=16000", "--channels=1", str(audio_path)]
             if target:
                 argv.insert(-1, f"--device={target}")
+            if max_seconds > 0:
+                if not _which("timeout"):
+                    if preference == "parecord":
+                        raise RecorderError("timeout is required to enforce max-seconds with parecord")
+                    continue
+                argv = ["timeout", "--kill-after=1", str(max_seconds), *argv]
             return RecorderCommand(candidate, argv)
         if candidate == "arecord" and _which("arecord"):
             argv = ["arecord", "-f", "S16_LE", "-r", "16000", "-c", "1"]
@@ -1194,6 +1201,7 @@ def _unlink_recorder_log_if_same(log_path: Path, expected_stat: os.stat_result) 
             return
         if _same_file_identity(current, expected_stat):
             os.unlink(log_path.name, dir_fd=parent_fd)
+            os.fsync(parent_fd)
     except OSError:
         return
     finally:

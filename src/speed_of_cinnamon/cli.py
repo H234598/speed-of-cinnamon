@@ -137,6 +137,10 @@ ENCRYPTED_TRANSCRIPT_SUFFIX = ".txt.socenc"
 MAX_LOG_EXCERPT_CHARS = 2000
 MAX_STORED_TRANSCRIPT_BYTES = 1_000_000
 MAX_TRANSCRIPT_HISTORY_TEXT_CHARS = 4_000
+MAX_TRANSCRIPTS_DOCUMENT_CHARS = 180_000
+MAX_TRANSCRIPTS_DOCUMENT_JSON_BYTES = 240_000
+MAX_TRANSCRIPTS_EXPORT_CHARS = 64_000_000
+HISTORY_PREVIEW_REDACTED_TEXT = "[transcript preview redacted]"
 EMPTY_TRANSCRIPT_MARKERS = frozenset(
     {
         "leere aufnahme",
@@ -1031,6 +1035,13 @@ def transcript_preview(text: str, max_chars: int = 80) -> str:
     return clean[: max_chars - 3] + "..."
 
 
+def _redact_history_previews(transcripts: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {**entry, "preview": HISTORY_PREVIEW_REDACTED_TEXT}
+        for entry in transcripts
+    ]
+
+
 def _transcript_history_candidates(directory: Path):
     for path, file_stat in _safe_directory_entries(directory, field_name="transcript directory"):
         if not _is_transcript_artifact(path):
@@ -1046,6 +1057,8 @@ def _is_transcript_artifact(path: Path) -> bool:
     if not isinstance(path, Path):
         return False
     name = path.name.lower()
+    if name.startswith("."):
+        return False
     return name.endswith(".txt") or name.endswith(ENCRYPTED_TRANSCRIPT_SUFFIX)
 
 
@@ -1064,6 +1077,7 @@ def _read_stored_transcript_text(path: Path) -> str:
             kind="transcript",
             field_name="transcript file",
             max_bytes=MAX_STORED_TRANSCRIPT_BYTES * 2,
+            require_encrypted=True,
         )
         try:
             return payload.decode("utf-8")
@@ -1080,10 +1094,59 @@ def _artifact_encryption_mode(args: argparse.Namespace) -> str:
     return normalize_artifact_encryption(getattr(args, "artifact_encryption", ARTIFACT_ENCRYPTION_OFF))
 
 
+def _confirm_plaintext_transcript_output(args: argparse.Namespace) -> bool:
+    return _coerce_bool(
+        getattr(args, "confirm_plaintext_output", False),
+        field_name="confirm-plaintext-output",
+    )
+
+
+def _transcript_payload_text(text: str, transcript_encryption: str, args: argparse.Namespace) -> str:
+    if transcript_encryption == ARTIFACT_ENCRYPTION_OFF or _confirm_plaintext_transcript_output(args):
+        return text
+    return ""
+
+
 def _transcript_work_path(storage_path: Path, encryption_mode: str) -> Path:
     if encryption_mode == ARTIFACT_ENCRYPTION_OFF:
         return storage_path
     return storage_path.with_name(f".{storage_path.stem}.{secrets.token_hex(8)}.tmp.txt")
+
+
+def _same_leaf_identity(current: os.stat_result, expected: os.stat_result) -> bool:
+    return (
+        current.st_dev == expected.st_dev
+        and current.st_ino == expected.st_ino
+        and current.st_mode == expected.st_mode
+        and getattr(current, "st_nlink", 1) == getattr(expected, "st_nlink", 1)
+    )
+
+
+def _unlink_regular_leaf_with_parent_fsync(
+    path: Path,
+    *,
+    field_name: str,
+    expected_stat: os.stat_result | None = None,
+) -> bool:
+    parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name=f"{field_name} directory")
+    try:
+        try:
+            current = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        if not stat_module.S_ISREG(current.st_mode):
+            raise RuntimeError(f"{field_name} must be a regular file: {path}")
+        if getattr(current, "st_nlink", 1) != 1:
+            raise RuntimeError(f"{field_name} must not be hardlinked: {path}")
+        if expected_stat is not None and not _same_leaf_identity(current, expected_stat):
+            raise RuntimeError(f"{field_name} changed before deletion: {path}")
+        os.unlink(path.name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
+        return True
+    except OSError as exc:
+        raise RuntimeError(f"failed to delete {field_name}: {path}") from exc
+    finally:
+        os.close(parent_fd)
 
 
 def _remove_transient_transcript_path(path: Path, storage_path: Path) -> None:
@@ -1097,10 +1160,8 @@ def _remove_transient_transcript_path(path: Path, storage_path: Path) -> None:
         return
     try:
         assert_no_symlink_ancestors(path, field_name="transient transcript file")
-        path.unlink()
-    except FileNotFoundError:
-        return
-    except OSError:
+        _unlink_regular_leaf_with_parent_fsync(path, field_name="transient transcript file")
+    except (FileNotFoundError, RuntimeError):
         return
 
 
@@ -1111,9 +1172,85 @@ def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) ->
         _write_text_atomic(path, text)
         return path, ARTIFACT_ENCRYPTION_OFF
     try:
-        return write_encrypted_bytes_atomically(path, payload, mode, kind="transcript", field_name="transcript file")
+        encrypted_path, effective_mode = write_encrypted_bytes_atomically(
+            path,
+            payload,
+            mode,
+            kind="transcript",
+            field_name="transcript file",
+        )
     except ArtifactCryptoError as exc:
         raise RuntimeError(str(exc)) from exc
+    _remove_plaintext_transcript_sibling_after_encryption(path, encrypted_path)
+    return encrypted_path, effective_mode
+
+
+def _remove_plaintext_transcript_sibling_after_encryption(storage_path: Path, encrypted_path: Path) -> None:
+    if encrypted_path == storage_path or not is_encrypted_path(encrypted_path):
+        return
+    plaintext_path = encrypted_path.with_name(encrypted_path.name.removesuffix(".socenc"))
+    if plaintext_path != storage_path:
+        raise RuntimeError(f"unexpected encrypted transcript sibling path: {encrypted_path}")
+    if not plaintext_path.exists() and not plaintext_path.is_symlink():
+        return
+    if not _remove_transcript_file(plaintext_path):
+        raise RuntimeError(f"failed to remove plaintext transcript artifact after encryption: {plaintext_path}")
+
+
+def _remove_plaintext_export_sibling_after_encryption(storage_path: Path, encrypted_path: Path) -> None:
+    if encrypted_path == storage_path or not is_encrypted_path(encrypted_path):
+        return
+    plaintext_path = encrypted_path.with_name(encrypted_path.name.removesuffix(".socenc"))
+    if plaintext_path != storage_path:
+        raise RuntimeError(f"unexpected encrypted transcript export sibling path: {encrypted_path}")
+    if not plaintext_path.exists() and not plaintext_path.is_symlink():
+        return
+    assert_safe_path_components(plaintext_path, field_name="transcript export")
+    parent_fd = ensure_directory_without_following_symlinks(
+        plaintext_path.parent,
+        field_name="transcript export directory",
+    )
+    try:
+        assert_no_symlink_ancestors(plaintext_path, field_name="transcript export")
+        os.unlink(plaintext_path.name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise RuntimeError(f"failed to remove plaintext transcript export after encryption: {plaintext_path}") from exc
+    finally:
+        os.close(parent_fd)
+
+
+def _plaintext_recording_sibling_for_encrypted_path(path: Path) -> Path | None:
+    if not is_encrypted_path(path) or not path.name.lower().endswith(".socenc"):
+        return None
+    plaintext_path = path.with_name(path.name[:-len(".socenc")])
+    if plaintext_path.suffix.lower() not in {".flac", ".wav"}:
+        return None
+    return plaintext_path
+
+
+def _remove_plaintext_recording_sibling_after_encryption(original_path: Path, encrypted_path: Path) -> None:
+    candidates: list[Path] = []
+    if encrypted_path != original_path:
+        candidates.append(original_path)
+    plaintext_sibling = _plaintext_recording_sibling_for_encrypted_path(encrypted_path)
+    if plaintext_sibling is not None:
+        candidates.append(plaintext_sibling)
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate in seen or candidate == encrypted_path:
+            continue
+        seen.add(candidate)
+        if not candidate.exists() and not candidate.is_symlink():
+            continue
+        suffix = candidate.suffix.lower()
+        if suffix not in {".flac", ".wav"}:
+            raise RuntimeError(f"refusing to remove unexpected plaintext recording artifact: {candidate}")
+        if not remove_file(str(candidate), suffix=suffix):
+            raise RuntimeError(f"failed to remove plaintext recording artifact after encryption: {candidate}")
 
 
 def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tuple[Path, str]:
@@ -1125,6 +1262,7 @@ def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tu
             path,
             kind="recording",
             field_name="recording audio file",
+            require_encrypted=True,
         ) if is_encrypted_path(path) else read_decrypted_bytes_from_file(
             path,
             kind="recording",
@@ -1140,10 +1278,7 @@ def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tu
         )
     except ArtifactCryptoError as exc:
         raise RuntimeError(str(exc)) from exc
-    if encrypted_path != path:
-        suffix = path.suffix.lower()
-        if not remove_file(str(path), suffix=suffix):
-            raise RuntimeError(f"failed to remove plaintext recording artifact after encryption: {path}")
+    _remove_plaintext_recording_sibling_after_encryption(path, encrypted_path)
     return encrypted_path, effective_mode
 
 
@@ -1176,10 +1311,17 @@ def read_transcript_history(limit: int = 10) -> list[dict[str, object]]:
     return entries
 
 
-def build_transcripts_document(limit: int = MAX_HISTORY_LIMIT) -> tuple[str, int]:
+def build_transcripts_document(
+    limit: int = MAX_HISTORY_LIMIT,
+    *,
+    max_chars: int | None = None,
+    allow_truncate: bool = False,
+) -> tuple[str, int, bool]:
     if limit <= 0:
         limit = MAX_HISTORY_LIMIT
     limit = min(limit, MAX_HISTORY_LIMIT)
+    if max_chars is not None and (isinstance(max_chars, bool) or max_chars < 1):
+        raise RuntimeError("transcript document size limit must be positive")
     directory = transcript_dir()
     candidates = heapq.nlargest(max(limit * 4, limit + 16), _transcript_history_candidates(directory))
     lines = [
@@ -1188,6 +1330,11 @@ def build_transcripts_document(limit: int = MAX_HISTORY_LIMIT) -> tuple[str, int
         "",
     ]
     count = 0
+    truncated = False
+
+    def _current_text() -> str:
+        return "\n".join(lines).rstrip() + "\n"
+
     for mtime, path in candidates:
         try:
             text = _read_stored_transcript_text(path).strip()
@@ -1196,20 +1343,33 @@ def build_transcripts_document(limit: int = MAX_HISTORY_LIMIT) -> tuple[str, int
         if not text:
             continue
         modified_at = datetime.fromtimestamp(mtime, timezone.utc).isoformat()
-        lines.extend(
-            [
-                f"===== {path.name} =====",
-                f"Modified: {modified_at}",
-                f"Path: {path}",
-                "",
-                text,
-                "",
-            ]
-        )
+        entry = [
+            f"===== {path.name} =====",
+            f"Modified: {modified_at}",
+            f"Path: {path}",
+            "",
+            text,
+            "",
+        ]
+        if max_chars is not None:
+            candidate_text = "\n".join([*lines, *entry]).rstrip() + "\n"
+            if len(candidate_text) > max_chars:
+                truncated = True
+                if allow_truncate:
+                    lines.extend(
+                        [
+                            "===== transcript list truncated =====",
+                            f"Stopped before {path.name} because the display limit was reached.",
+                            "",
+                        ]
+                    )
+                    break
+                raise RuntimeError("transcript export is too large; reduce transcript retention or export fewer files")
+        lines.extend(entry)
         count += 1
         if count >= limit:
             break
-    return "\n".join(lines).rstrip() + "\n", count
+    return _current_text(), count, truncated
 
 
 def _transcript_export_path(plaintext: bool) -> Path:
@@ -1233,17 +1393,23 @@ def write_transcripts_export(
     plaintext: bool = False,
     confirm_plaintext: bool = False,
 ) -> tuple[Path, int, str]:
-    content, count = build_transcripts_document(limit)
-    output_path = _transcript_export_path(plaintext)
-    _ensure_transcript_export_dir(output_path)
     if plaintext:
         if not confirm_plaintext:
             raise RuntimeError("plaintext transcript export requires --confirm-plaintext")
+    else:
+        mode = normalize_artifact_encryption(encryption_mode)
+        if mode == ARTIFACT_ENCRYPTION_OFF:
+            raise RuntimeError("encrypted transcript export requires keyring or passphrase; use --plaintext --confirm-plaintext for plaintext export")
+    content, count, _truncated = build_transcripts_document(
+        limit,
+        max_chars=MAX_TRANSCRIPTS_EXPORT_CHARS,
+        allow_truncate=False,
+    )
+    output_path = _transcript_export_path(plaintext)
+    _ensure_transcript_export_dir(output_path)
+    if plaintext:
         _write_text_atomic(output_path, content)
         return output_path, count, ARTIFACT_ENCRYPTION_OFF
-    mode = normalize_artifact_encryption(encryption_mode)
-    if mode == ARTIFACT_ENCRYPTION_OFF:
-        raise RuntimeError("encrypted transcript export requires keyring or passphrase; use --plaintext --confirm-plaintext for plaintext export")
     encrypted_path, used_mode = write_encrypted_bytes_atomically(
         output_path,
         content.encode("utf-8"),
@@ -1251,6 +1417,7 @@ def write_transcripts_export(
         kind="transcript",
         field_name="transcript export",
     )
+    _remove_plaintext_export_sibling_after_encryption(output_path, encrypted_path)
     return encrypted_path, count, used_mode
 
 
@@ -1369,17 +1536,31 @@ def _remove_transcript_file(path: Path) -> bool:
     if not isinstance(path, Path) or not _is_transcript_artifact(path):
         raise RuntimeError("transcript path must be a .txt or .txt.socenc path")
     try:
-        path.relative_to(transcript_dir())
-    except ValueError:
+        assert_safe_path_components(path, field_name="transcript file")
+        assert_no_symlink_ancestors(path, field_name="transcript file")
+        path.resolve(strict=False).relative_to(transcript_dir().resolve(strict=False))
+    except (OSError, RuntimeError, ValueError):
         raise RuntimeError(f"refusing to delete transcript outside transcript directory: {path}") from None
     try:
-        assert_no_symlink_ancestors(path, field_name="transcript file")
-        path.unlink()
+        file_stat = path.lstat()
     except FileNotFoundError:
         return False
     except OSError as exc:
         raise RuntimeError(f"failed to delete transcript file: {path}") from exc
-    return True
+    if not stat_module.S_ISREG(file_stat.st_mode):
+        raise RuntimeError(f"transcript file must be a regular file: {path}")
+    if getattr(file_stat, "st_nlink", 1) != 1:
+        raise RuntimeError(f"transcript file must not be hardlinked: {path}")
+    try:
+        return _unlink_regular_leaf_with_parent_fsync(
+            path,
+            field_name="transcript file",
+            expected_stat=file_stat,
+        )
+    except FileNotFoundError:
+        return False
+    except RuntimeError as exc:
+        raise RuntimeError(f"failed to delete transcript file: {path}") from exc
 
 
 def _require_json_path(path_value: str, *, field_name: str, default: Path | None = None) -> Path:
@@ -1402,6 +1583,15 @@ def _parse_cli_settings_json(raw: str) -> dict[str, object]:
         return parse_settings_json(raw)
     except json.JSONDecodeError as exc:
         raise ValueError(f"settings JSON could not be parsed: {exc}") from exc
+
+
+def _settings_json_from_args(args: argparse.Namespace) -> dict[str, object]:
+    if _coerce_bool(getattr(args, "settings_json_stdin", False), field_name="settings_json_stdin"):
+        if str(getattr(args, "settings_json", "{}") or "{}") != "{}":
+            raise RuntimeError("settings JSON must be provided by either --settings-json or stdin, not both")
+        raw = sys.stdin.read(MAX_SETTINGS_JSON_CHARS + 1)
+        return _parse_cli_settings_json(raw or "{}")
+    return _parse_cli_settings_json(getattr(args, "settings_json", "{}"))
 
 
 def _coerce_path(
@@ -1629,6 +1819,25 @@ def _is_recording_process_alive(pid: object) -> bool:
     return process_is_alive(pid)
 
 
+def _recording_process_identity_for_pid(pid: int) -> str | None:
+    return _finalization_lock_identity_for_pid(pid)
+
+
+def _recording_process_verified_alive(state: RecordingState) -> bool:
+    pid = state.pid
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return False
+    if not process_is_alive(pid):
+        return False
+    expected_identity = str(state.process_identity or "").strip()
+    if not expected_identity:
+        raise RuntimeError("recording process identity is missing; refusing to signal pid")
+    current_identity = _recording_process_identity_for_pid(pid)
+    if current_identity is None:
+        raise RuntimeError("recording process identity could not be verified; refusing to signal pid")
+    return current_identity == expected_identity
+
+
 def _raise_if_state_unreadable(state: RecordingState) -> None:
     if state.error.startswith("state file "):
         raise RuntimeError(state.error)
@@ -1656,6 +1865,15 @@ def _recording_level_payload(state: RecordingState) -> dict[str, object] | None:
             "samples": 0,
             "detail": "microphone level is unavailable for FLAC artifacts",
         }
+    if _is_encrypted_recording_artifact(audio_path):
+        return {
+            "ok": False,
+            "percent": 0,
+            "peak": 0.0,
+            "rms": 0.0,
+            "samples": 0,
+            "detail": "microphone level is unavailable for encrypted recording artifacts",
+        }
     try:
         return asdict(read_recording_level(audio_path))
     except RecorderError as exc:
@@ -1665,6 +1883,8 @@ def _recording_level_payload(state: RecordingState) -> dict[str, object] | None:
 def _remove_recording_artifact(path_value: str | None) -> bool:
     if not path_value:
         return False
+    if Path(str(path_value)).name.lower().endswith(ENCRYPTED_RECORDING_ARTIFACT_SUFFIXES):
+        return remove_file(path_value, suffix=".socenc")
     return remove_file(path_value, suffix=".wav") or remove_file(path_value, suffix=".flac")
 
 
@@ -1705,6 +1925,7 @@ def _stabilize_recording_artifact_path(artifact_path: Path) -> Path:
                 src_dir_fd=parent_fd,
                 dst_dir_fd=parent_fd,
             )
+            os.fsync(parent_fd)
         except OSError as exc:
             if stable_path.exists() and stable_path.is_symlink():
                 raise RuntimeError(f"stable recording artifact is not a safe regular file: {stable_path}") from exc
@@ -1810,7 +2031,9 @@ def _finalizing_inflight_artifact_paths(state_path: Path, state: RecordingState)
     if audio_path is None:
         return set()
     if audio_path.suffix.lower() in {".wav", ".flac"}:
-        in_flight_paths.add(transcript_dir() / f"{audio_path.stem}.txt")
+        transcript_path = transcript_dir() / f"{audio_path.stem}.txt"
+        in_flight_paths.add(transcript_path)
+        in_flight_paths.add(encrypted_path_for(transcript_path))
     in_flight_paths.update(_inflight_recording_artifact_paths(audio_path))
     return in_flight_paths
 
@@ -1861,15 +2084,17 @@ def sorted_files(paths: list[Path]) -> list[Path]:
 
 
 def delete_artifact(path: Path) -> bool:
-    if _recording_artifact_stat(path) is None:
+    file_stat = _recording_artifact_stat(path)
+    if file_stat is None:
         return False
     try:
-        path.unlink()
-    except FileNotFoundError:
+        return _unlink_regular_leaf_with_parent_fsync(
+            path,
+            field_name="recording artifact",
+            expected_stat=file_stat,
+        )
+    except RuntimeError:
         return False
-    except OSError:
-        return False
-    return True
 
 
 def prune_files_by_mtime(paths: list[Path], keep: int, active_paths: set[Path], dry_run: bool) -> dict[str, object]:
@@ -2050,7 +2275,7 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
         current_audio_path = _safe_recording_artifact_path(
             current.audio_path, suffix=(".wav", ".flac", ".socenc"), require_recordings_dir=False
         )
-        if _is_recording_process_alive(current.pid):
+        if _recording_process_verified_alive(current):
             return {
                 "status": "recording",
                 "message": "already recording",
@@ -2124,10 +2349,17 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
         remove_file(str(log_path), suffix=".log")
         detail = "; ".join(startup_errors) if startup_errors else "no supported recorder found"
         raise RuntimeError(f"no recorder backend started successfully: {detail}")
+    process_identity = _recording_process_identity_for_pid(proc.pid)
+    if process_identity is None:
+        stop_process(proc.pid)
+        remove_file(str(audio_path), suffix=".wav")
+        remove_file(str(log_path), suffix=".log")
+        raise RuntimeError("recording process identity could not be verified")
     language = args.language or "en"
     state = RecordingState(
         status="recording",
         pid=proc.pid,
+        process_identity=process_identity,
         audio_path=str(audio_path),
         log_path=str(log_path),
         started_at=now_iso(),
@@ -2136,12 +2368,19 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
         max_seconds=max_seconds,
         input_device=normalized_input_device,
     )
-    store.write(state)
+    try:
+        store.write(state)
+    except Exception:
+        stop_process(proc.pid)
+        remove_file(str(audio_path), suffix=".wav")
+        remove_file(str(log_path), suffix=".log")
+        raise
     _enforce_recording_artifact_cap(state)
     return {
         "status": "recording",
         "message": "recording started",
         "pid": proc.pid,
+        "process_identity": process_identity,
         "audio_path": str(audio_path),
         "recorder": command.name,
         "input_device": normalized_input_device,
@@ -2371,7 +2610,8 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         return {
             "status": done.status,
             "message": "recording finished without transcript" if not text.strip() else "transcription completed",
-            "transcript": text,
+            "transcript": _transcript_payload_text(text, transcript_encryption, args),
+            "transcript_output_redacted": bool(text) and transcript_encryption != ARTIFACT_ENCRYPTION_OFF and not _confirm_plaintext_transcript_output(args),
             "transcript_path": str(stored_text_path),
             "artifact_encryption": artifact_encryption,
             "transcript_encryption": transcript_encryption,
@@ -2475,15 +2715,17 @@ def remove_file(path_value: str | None, *, suffix: str | None = None, recordings
             return False
     else:
         path = Path(path_value)
-    if _recording_artifact_stat(path) is None:
+    file_stat = _recording_artifact_stat(path)
+    if file_stat is None:
         return False
     try:
-        path.unlink()
-    except FileNotFoundError:
+        return _unlink_regular_leaf_with_parent_fsync(
+            path,
+            field_name="recording artifact",
+            expected_stat=file_stat,
+        )
+    except RuntimeError:
         return False
-    except OSError:
-        return False
-    return True
 
 
 def command_stop(args: argparse.Namespace) -> dict[str, object]:
@@ -2500,7 +2742,7 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
             return finalize_recording(args, store, state)
         return {"status": state.status, "message": "not recording"}
 
-    if _is_recording_process_alive(state.pid):
+    if _recording_process_verified_alive(state):
         stop_process(_coerce_int(state.pid, field_name="state pid"))
     state = store.update(
         status="recorded",
@@ -2528,7 +2770,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 "status": "finalizing",
                 "message": "finalization in progress; use cancel after completion",
             }
-        if state.status == "recording" and _is_recording_process_alive(state.pid):
+        if state.status == "recording" and _recording_process_verified_alive(state):
             stop_process(_coerce_int(state.pid, field_name="state pid"))
 
         discarded_audio_path = state.audio_path
@@ -2621,7 +2863,7 @@ def command_toggle(args: argparse.Namespace) -> dict[str, object]:
             return finalize_recording(args, store, state)
         return {"status": "finalizing", "message": "finalization in progress"}
     if state.status == "recording":
-        if _is_recording_process_alive(state.pid):
+        if _recording_process_verified_alive(state):
             return command_stop(args)
         if state.audio_path:
             store.update(status="processing", stopped_at=state.stopped_at or now_iso())
@@ -2635,9 +2877,16 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
     if state.error.startswith("state file "):
         payload["status"] = "error"
         return payload
-    if state.status == "recording" and not _is_recording_process_alive(state.pid):
-        payload["status"] = "recorded"
-        payload["message"] = "recording process has exited; run stop to transcribe"
+    if state.status == "recording":
+        try:
+            verified_alive = _recording_process_verified_alive(state)
+        except RuntimeError as exc:
+            payload["status"] = "error"
+            payload["message"] = str(exc)
+            return payload
+        if not verified_alive:
+            payload["status"] = "recorded"
+            payload["message"] = "recording process has exited; run stop to transcribe"
     if payload.get("status") in {"recording", "recorded"}:
         microphone_level = _recording_level_payload(state)
         if microphone_level is not None:
@@ -2902,14 +3151,36 @@ def command_benchmark_models(args: argparse.Namespace) -> dict[str, object]:
 def command_history(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     limit = _coerce_int(args.limit, field_name="history limit", max_value=MAX_HISTORY_LIMIT)
-    return {"status": "done", "transcripts": read_transcript_history(limit)}
+    transcripts = read_transcript_history(limit)
+    if not bool(getattr(args, "confirm_plaintext", False)):
+        transcripts = _redact_history_previews(transcripts)
+    return {"status": "done", "transcripts": transcripts}
 
 
 def command_transcripts_document(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     limit = _coerce_int(args.limit, field_name="history limit", max_value=MAX_HISTORY_LIMIT)
-    content, count = build_transcripts_document(limit)
-    return {"status": "done", "content": content, "transcripts": count}
+    if not bool(getattr(args, "confirm_plaintext", False)):
+        raise RuntimeError("plaintext transcript document requires --confirm-plaintext")
+    max_chars = MAX_TRANSCRIPTS_DOCUMENT_CHARS
+    for _attempt in range(8):
+        content, count, truncated = build_transcripts_document(
+            limit,
+            max_chars=max_chars,
+            allow_truncate=True,
+        )
+        payload = {
+            "status": "done",
+            "content": content,
+            "transcripts": count,
+            "truncated": truncated or max_chars < MAX_TRANSCRIPTS_DOCUMENT_CHARS,
+        }
+        try:
+            _assert_json_payload_size(payload, max_bytes=MAX_TRANSCRIPTS_DOCUMENT_JSON_BYTES)
+            return payload
+        except RuntimeError:
+            max_chars = max(256, max_chars // 2)
+    raise RuntimeError("transcript document JSON is too large for applet display") from None
 
 
 def command_transcripts_export(args: argparse.Namespace) -> dict[str, object]:
@@ -2927,6 +3198,7 @@ def command_transcripts_export(args: argparse.Namespace) -> dict[str, object]:
         "transcripts": count,
         "encryption": encryption,
         "plaintext": args.plaintext,
+        "encrypted": encryption != ARTIFACT_ENCRYPTION_OFF and not args.plaintext,
     }
 
 
@@ -3120,7 +3392,7 @@ def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
 
 def command_settings_export(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
-    settings = _parse_cli_settings_json(args.settings_json)
+    settings = _settings_json_from_args(args)
     path = _require_json_path(args.output, field_name="settings export output", default=default_settings_export_file())
     payload = write_export(path, settings, load_alarm_store())
     return {
@@ -3137,15 +3409,23 @@ def command_settings_import(args: argparse.Namespace) -> dict[str, object]:
     path = _require_json_path(args.input, field_name="settings import input", default=default_settings_export_file())
     payload = read_export(path)
     save_alarm_store(payload["alarms"])
-    return {
+    include_settings = _coerce_bool(
+        getattr(args, "confirm_plaintext_settings_output", False),
+        field_name="confirm_plaintext_settings_output",
+    )
+    result: dict[str, object] = {
         "status": "done",
         "message": f"settings imported from {path}",
         "path": str(path),
-        "settings": payload["settings"],
         "settings_count": len(payload["settings"]),
         "alarms_count": len(payload["alarms"]["alarms"]),
         "export_version": payload["version"],
     }
+    if include_settings:
+        result["settings"] = payload["settings"]
+    else:
+        result["settings_redacted"] = True
+    return result
 
 
 def write_profanity_filter_document() -> tuple[Path, int]:
@@ -3219,7 +3499,8 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
     )
     return {
         "status": "done",
-        "transcript": text,
+        "transcript": _transcript_payload_text(text, transcript_encryption, args),
+        "transcript_output_redacted": bool(text) and transcript_encryption != ARTIFACT_ENCRYPTION_OFF and not _confirm_plaintext_transcript_output(args),
         "transcript_path": str(stored_text_path),
         "security": security_post_processing,
         "transcript_file_cap": transcript_cleanup,
@@ -3288,6 +3569,11 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--soften-profanity", action="store_true")
     parser.add_argument("--append-space", action="store_true")
     parser.add_argument(
+        "--confirm-plaintext-output",
+        action="store_true",
+        help="allow full transcript text in command output even when the stored transcript is encrypted",
+    )
+    parser.add_argument(
         "--keep-recording-artifacts",
         action="store_true",
         help="keep temporary FLAC/log files after successful transcription",
@@ -3295,7 +3581,10 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--skip-silent-auto-relisten",
         action="store_true",
-        help="skip transcription when Auto Relisten records only silence",
+        help=(
+            "compatibility flag; silent recordings are always skipped before transcription "
+            "so empty recordings never reach clipboard or paste"
+        ),
     )
 
 
@@ -3392,11 +3681,21 @@ def build_parser() -> argparse.ArgumentParser:
     history = subparsers.add_parser("history")
     add_common_options(history)
     history.add_argument("--limit", type=int, default=10)
+    history.add_argument(
+        "--confirm-plaintext",
+        action="store_true",
+        help="confirm that recent transcript previews are intentional",
+    )
     history.set_defaults(handler=command_history)
 
     transcripts_document = subparsers.add_parser("transcripts-document")
     add_common_options(transcripts_document)
     transcripts_document.add_argument("--limit", type=int, default=MAX_HISTORY_LIMIT)
+    transcripts_document.add_argument(
+        "--confirm-plaintext",
+        action="store_true",
+        help="confirm that plaintext transcript display is intentional",
+    )
     transcripts_document.set_defaults(handler=command_transcripts_document)
 
     transcripts_export = subparsers.add_parser("transcripts-export")
@@ -3480,12 +3779,22 @@ def build_parser() -> argparse.ArgumentParser:
     settings_export = subparsers.add_parser("settings-export")
     add_common_options(settings_export)
     settings_export.add_argument("--settings-json", default="{}")
+    settings_export.add_argument(
+        "--settings-json-stdin",
+        action="store_true",
+        help="read settings JSON from stdin instead of exposing it in process arguments",
+    )
     settings_export.add_argument("--output", default="")
     settings_export.set_defaults(handler=command_settings_export)
 
     settings_import = subparsers.add_parser("settings-import")
     add_common_options(settings_import)
     settings_import.add_argument("--input", default="")
+    settings_import.add_argument(
+        "--confirm-plaintext-settings-output",
+        action="store_true",
+        help="include imported settings in JSON output; may expose personal context or vocabulary",
+    )
     settings_import.set_defaults(handler=command_settings_import)
 
     profanity_filter_document = subparsers.add_parser("profanity-filter-document")
@@ -3537,6 +3846,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     transcribe_file.add_argument("--soften-profanity", action="store_true")
+    transcribe_file.add_argument(
+        "--confirm-plaintext-output",
+        action="store_true",
+        help="allow full transcript text in command output even when the stored transcript is encrypted",
+    )
     transcribe_file.set_defaults(handler=command_transcribe_file)
     return parser
 

@@ -212,43 +212,96 @@ def default_passphrase_file() -> Path:
     return config_dir() / DEFAULT_PASSPHRASE_FILE_NAME
 
 
+def _write_all(fd: int, payload: bytes) -> None:
+    view = memoryview(payload)
+    offset = 0
+    while offset < len(payload):
+        written = os.write(fd, view[offset:])
+        if written <= 0:
+            raise OSError("short write")
+        offset += written
+
+
+def _create_private_temp_passphrase_file(parent_fd: int, final_name: str) -> tuple[int, str]:
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise ArtifactCryptoError("secure artifact encryption passphrase temporary file creation is not supported")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag
+    safe_name = final_name.replace("/", "_") or DEFAULT_PASSPHRASE_FILE_NAME
+    for _ in range(100):
+        temp_name = f".{safe_name}.{secrets.token_hex(8)}.tmp"
+        try:
+            return os.open(temp_name, flags, 0o600, dir_fd=parent_fd), temp_name
+        except FileExistsError:
+            continue
+    raise ArtifactCryptoError("artifact encryption passphrase temporary file could not be created")
+
+
+def _fsync_fd(fd: int) -> None:
+    try:
+        os.fsync(fd)
+    except OSError as exc:
+        raise ArtifactCryptoError("artifact encryption passphrase file could not be synchronized") from exc
+
+
 def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> str:
     if path != default_passphrase_file():
         raise ArtifactCryptoError("only the default artifact encryption passphrase file can be generated automatically")
     passphrase = _new_generated_passphrase()
     payload = passphrase.encode("ascii") + b"\n"
     parent_fd = -1
-    fd = -1
+    temp_fd = -1
+    temp_name = ""
     try:
         parent_fd = ensure_directory_without_following_symlinks(
             path.parent,
             field_name="artifact encryption passphrase file directory",
         )
         os.fchmod(parent_fd, 0o700)
-        flags = os.O_WRONLY | (0 if replace else os.O_CREAT | os.O_EXCL)
-        fd = open_file_without_following_symlinks(
-            path,
-            flags,
-            0o600,
-            field_name="artifact encryption passphrase file",
-        )
-        assert_fd_is_regular_private_file(fd, field_name="artifact encryption passphrase file")
-        file_stat = os.fstat(fd)
+        parent_stat = os.fstat(parent_fd)
+        if not stat.S_ISDIR(parent_stat.st_mode):
+            raise ArtifactCryptoError("artifact encryption passphrase file directory must be a directory")
+        if hasattr(os, "getuid") and parent_stat.st_uid != os.getuid():
+            raise ArtifactCryptoError("artifact encryption passphrase file directory must be owned by the current user")
+        if parent_stat.st_mode & 0o077:
+            raise ArtifactCryptoError("artifact encryption passphrase file directory must be private")
+        temp_fd, temp_name = _create_private_temp_passphrase_file(parent_fd, path.name)
+        assert_fd_is_regular_private_file(temp_fd, field_name="artifact encryption passphrase temporary file")
+        file_stat = os.fstat(temp_fd)
         if hasattr(os, "getuid") and file_stat.st_uid != os.getuid():
             raise ArtifactCryptoError("artifact encryption passphrase file must be owned by the current user")
         if file_stat.st_mode & 0o077:
             raise ArtifactCryptoError("artifact encryption passphrase file must be private")
+        os.fchmod(temp_fd, 0o600)
+        _write_all(temp_fd, payload)
+        _fsync_fd(temp_fd)
+        os.close(temp_fd)
+        temp_fd = -1
         if replace:
-            os.ftruncate(fd, 0)
-        os.write(fd, payload)
-        os.fchmod(fd, 0o600)
+            os.replace(temp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        else:
+            try:
+                os.link(temp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd, follow_symlinks=False)
+            except FileExistsError:
+                os.unlink(temp_name, dir_fd=parent_fd)
+                temp_name = ""
+                _fsync_fd(parent_fd)
+                return _read_private_passphrase_file(path, allow_default_generation=False, rotate_weak_default=False)
+            os.unlink(temp_name, dir_fd=parent_fd)
+            temp_name = ""
+        _fsync_fd(parent_fd)
     except FileExistsError:
         return _read_private_passphrase_file(path, allow_default_generation=False, rotate_weak_default=False)
     except (OSError, RuntimeError) as exc:
         raise ArtifactCryptoError("artifact encryption passphrase file could not be generated") from exc
     finally:
-        if fd >= 0:
-            os.close(fd)
+        if temp_fd >= 0:
+            os.close(temp_fd)
+        if temp_name and parent_fd >= 0:
+            try:
+                os.unlink(temp_name, dir_fd=parent_fd)
+            except OSError:
+                pass
         if parent_fd >= 0:
             os.close(parent_fd)
     return passphrase
@@ -313,10 +366,19 @@ def _read_private_passphrase_file(
     return passphrase
 
 
-def _configured_passphrase_file() -> Path | None:
+def _explicit_passphrase_file() -> Path | None:
     file_path = os.environ.get(PASSPHRASE_FILE_ENV, "")
     if file_path:
         return Path(file_path).expanduser()
+    return None
+
+
+def _configured_passphrase_file(*, include_default: bool = True) -> Path | None:
+    explicit_path = _explicit_passphrase_file()
+    if explicit_path is not None:
+        return explicit_path
+    if not include_default:
+        return None
     path = default_passphrase_file()
     try:
         if path.exists() or path.is_symlink():
@@ -326,18 +388,30 @@ def _configured_passphrase_file() -> Path | None:
     return None
 
 
-def _passphrase_from_sources(*, allow_default_generation: bool, rotate_weak_default: bool) -> str | None:
-    passphrase_file = _configured_passphrase_file()
+def _passphrase_from_sources(
+    *,
+    allow_default_generation: bool,
+    rotate_weak_default: bool,
+    allow_implicit_default: bool = True,
+) -> str | None:
+    passphrase_file = _explicit_passphrase_file()
     if passphrase_file is not None:
         passphrase = _read_private_passphrase_file(
             passphrase_file,
             allow_default_generation=allow_default_generation,
-            rotate_weak_default=rotate_weak_default and passphrase_file == default_passphrase_file(),
+            rotate_weak_default=False,
         )
     else:
         passphrase = os.environ.get(PASSPHRASE_ENV, "")
         if not passphrase:
-            if allow_default_generation:
+            passphrase_file = _configured_passphrase_file(include_default=allow_implicit_default)
+            if passphrase_file is not None:
+                passphrase = _read_private_passphrase_file(
+                    passphrase_file,
+                    allow_default_generation=allow_default_generation,
+                    rotate_weak_default=rotate_weak_default and passphrase_file == default_passphrase_file(),
+                )
+            elif allow_default_generation and allow_implicit_default:
                 passphrase = _read_private_passphrase_file(
                     default_passphrase_file(),
                     allow_default_generation=True,
@@ -354,12 +428,6 @@ def _passphrase_from_sources(*, allow_default_generation: bool, rotate_weak_defa
     if not _passphrase_is_strong(passphrase):
         raise ArtifactCryptoError("artifact encryption passphrase is not strong enough")
     return passphrase
-
-
-def passphrase_fallback_available() -> bool:
-    if os.environ.get(PASSPHRASE_ENV) or os.environ.get(PASSPHRASE_FILE_ENV):
-        return True
-    return True
 
 
 def _derive_passphrase_key(passphrase: str, salt: bytes) -> bytes:
@@ -447,8 +515,12 @@ def _load_keyring_key() -> bytes:
     return confirmed
 
 
-def _passphrase_key_for_encryption() -> tuple[bytes, bytes]:
-    passphrase = _passphrase_from_sources(allow_default_generation=True, rotate_weak_default=True)
+def _passphrase_key_for_encryption(*, allow_implicit_default: bool = True) -> tuple[bytes, bytes]:
+    passphrase = _passphrase_from_sources(
+        allow_default_generation=allow_implicit_default,
+        rotate_weak_default=allow_implicit_default,
+        allow_implicit_default=allow_implicit_default,
+    )
     if not passphrase:
         raise ArtifactCryptoError(
             f"artifact encryption passphrase is not configured; create {default_passphrase_file()} with mode 0600, "
@@ -459,7 +531,11 @@ def _passphrase_key_for_encryption() -> tuple[bytes, bytes]:
 
 
 def _passphrase_key_for_decryption(salt: bytes) -> bytes:
-    passphrase = _passphrase_from_sources(allow_default_generation=False, rotate_weak_default=False)
+    passphrase = _passphrase_from_sources(
+        allow_default_generation=False,
+        rotate_weak_default=False,
+        allow_implicit_default=True,
+    )
     if not passphrase:
         raise ArtifactCryptoError(
             f"artifact decryption passphrase is not configured; create {default_passphrase_file()} with mode 0600, "
@@ -484,12 +560,13 @@ def _key_for_encryption(requested_mode: str) -> tuple[KeyMaterial, dict[str, obj
     try:
         return KeyMaterial(mode=ARTIFACT_ENCRYPTION_KEYRING, key=_load_keyring_key()), {"kdf": "none"}
     except ArtifactCryptoError as keyring_error:
-        if not passphrase_fallback_available():
+        try:
+            key, salt = _passphrase_key_for_encryption(allow_implicit_default=False)
+        except ArtifactCryptoError as passphrase_error:
             raise ArtifactCryptoError(
-                "Secret Service keyring is unavailable and passphrase fallback is not configured; "
-                f"create {default_passphrase_file()} with mode 0600, or set {PASSPHRASE_FILE_ENV} or {PASSPHRASE_ENV}"
-            ) from keyring_error
-        key, salt = _passphrase_key_for_encryption()
+                "Secret Service keyring is unavailable and passphrase fallback failed; "
+                f"set {PASSPHRASE_FILE_ENV} or {PASSPHRASE_ENV} explicitly"
+            ) from passphrase_error
         return KeyMaterial(mode=ARTIFACT_ENCRYPTION_PASSPHRASE, key=key), {
             "kdf": "scrypt",
             "salt": _b64encode(salt),
@@ -506,7 +583,10 @@ def _key_for_decryption(envelope: dict[str, object]) -> KeyMaterial:
         salt = _b64decode(envelope.get("salt", ""), field_name="salt")
         return KeyMaterial(mode=mode, key=_passphrase_key_for_decryption(salt))
     if mode == ARTIFACT_ENCRYPTION_KEYRING:
-        return KeyMaterial(mode=mode, key=_load_keyring_key())
+        existing_key = _lookup_keyring_key()
+        if existing_key is None:
+            raise ArtifactCryptoError("Secret Service keyring does not contain the artifact encryption key")
+        return KeyMaterial(mode=mode, key=existing_key)
     raise ArtifactCryptoError("encrypted artifact mode is invalid")
 
 
@@ -534,10 +614,12 @@ def encrypt_bytes(payload: bytes, requested_mode: object, *, kind: str) -> tuple
     return rendered, key_material.mode
 
 
-def decrypt_bytes(payload: bytes, *, kind: str) -> bytes:
+def decrypt_bytes(payload: bytes, *, kind: str, require_encrypted: bool = False) -> bytes:
     if isinstance(payload, bool) or not isinstance(payload, bytes):
         raise ArtifactCryptoError("artifact payload must be bytes")
     if not is_encrypted_payload(payload):
+        if require_encrypted:
+            raise ArtifactCryptoError("encrypted artifact envelope is missing")
         return payload
     try:
         envelope = json.loads(payload.decode("utf-8"))
@@ -615,6 +697,13 @@ def write_encrypted_bytes_atomically(path: Path, payload: bytes, requested_mode:
     return target_path, effective_mode
 
 
-def read_decrypted_bytes_from_file(path: Path, *, kind: str, field_name: str, max_bytes: int | None = None) -> bytes:
+def read_decrypted_bytes_from_file(
+    path: Path,
+    *,
+    kind: str,
+    field_name: str,
+    max_bytes: int | None = None,
+    require_encrypted: bool = False,
+) -> bytes:
     data = read_private_bytes(path, field_name=field_name, max_bytes=max_bytes or MAX_ENCRYPTED_ARTIFACT_BYTES)
-    return decrypt_bytes(data, kind=kind)
+    return decrypt_bytes(data, kind=kind, require_encrypted=require_encrypted)

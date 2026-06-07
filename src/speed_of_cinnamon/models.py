@@ -112,6 +112,27 @@ def _model_checksum_cache_path() -> Path:
     return path
 
 
+def _remove_model_checksum_cache_file(cache_path: Path) -> bool:
+    parent_fd: int | None = None
+    try:
+        assert_no_symlink_ancestors(cache_path, field_name="model checksum cache path")
+        parent_fd = ensure_directory_without_following_symlinks(
+            cache_path.parent,
+            field_name="model checksum cache directory",
+        )
+        os.unlink(cache_path.name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
+        return True
+    except FileNotFoundError:
+        return False
+    except (OSError, RuntimeError):
+        return False
+    finally:
+        if parent_fd is not None:
+            with suppress(OSError):
+                os.close(parent_fd)
+
+
 def _load_model_checksum_cache() -> None:
     global _model_checksum_cache_loaded
     if _model_checksum_cache_loaded:
@@ -124,10 +145,7 @@ def _load_model_checksum_cache() -> None:
 
     try:
         if cache_path.stat().st_size > MAX_MODEL_CHECKSUM_JSON_BYTES:
-            try:
-                cache_path.unlink()
-            except OSError:
-                pass
+            _remove_model_checksum_cache_file(cache_path)
             return
         text = read_text_without_following_symlinks(
             cache_path,
@@ -135,31 +153,19 @@ def _load_model_checksum_cache() -> None:
             max_bytes=MAX_MODEL_CHECKSUM_JSON_BYTES,
         )
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        try:
-            cache_path.unlink()
-        except OSError:
-            pass
+        _remove_model_checksum_cache_file(cache_path)
         return
     if _contains_escaped_null(text):
-        try:
-            cache_path.unlink()
-        except OSError:
-            pass
+        _remove_model_checksum_cache_file(cache_path)
         return
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
-        try:
-            cache_path.unlink()
-        except OSError:
-            pass
+        _remove_model_checksum_cache_file(cache_path)
         return
 
     if not isinstance(payload, dict):
-        try:
-            cache_path.unlink()
-        except OSError:
-            pass
+        _remove_model_checksum_cache_file(cache_path)
         return
 
     for key, raw_entry in payload.items():
@@ -217,10 +223,7 @@ def _write_model_checksum_cache() -> None:
         rendered = json.dumps(_model_checksum_cache, indent=2, sort_keys=True) + "\n"
         if len(rendered.encode("utf-8")) > MAX_MODEL_CHECKSUM_JSON_BYTES:
             _model_checksum_cache.clear()
-            try:
-                cache_path.unlink()
-            except OSError:
-                pass
+            _remove_model_checksum_cache_file(cache_path)
             return
         write_text_atomically_without_following_symlinks(
             cache_path,
@@ -834,7 +837,20 @@ def _replace_model_sibling_path(source: Path, target: Path, root: Path, *, field
     try:
         _assert_model_path_for_atomic_replace(source, root, field_name=f"{field_name} source")
         _assert_model_path_for_atomic_replace(target, root, field_name=field_name)
+        source_fd = os.open(
+            source.name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=parent_fd,
+        )
+        try:
+            source_stat = os.fstat(source_fd)
+            if not (stat_module.S_ISREG(source_stat.st_mode) or stat_module.S_ISDIR(source_stat.st_mode)):
+                raise ModelError(f"{field_name} source must be a regular file or directory: {source}")
+            os.fsync(source_fd)
+        finally:
+            os.close(source_fd)
         os.replace(source.name, target.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        os.fsync(parent_fd)
     finally:
         os.close(parent_fd)
 
@@ -863,6 +879,7 @@ def _unlink_model_file_leaf(path: Path, root: Path, *, field_name: str = "model 
         if not stat_module.S_ISREG(file_stat.st_mode):
             raise ModelError(f"{field_name} must be a regular file: {path}")
         os.unlink(path.name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
         return True
     finally:
         os.close(parent_fd)
@@ -894,6 +911,7 @@ def _remove_model_directory_leaf(path: Path, root: Path, *, field_name: str = "m
         if not stat_module.S_ISDIR(file_stat.st_mode):
             raise ModelError(f"{field_name} must be a directory: {path}")
         shutil.rmtree(path.name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
         return True
     except OSError as exc:
         raise ModelError(f"failed to remove {field_name}: {path}") from exc
@@ -1202,6 +1220,8 @@ def _download_url_to_file_with_fd(
                     output.write(chunk)
                 if content_length is not None and downloaded != content_length:
                     raise ModelError(f"downloaded model size mismatch for {model_name}: {downloaded} != {content_length}")
+                output.flush()
+                os.fsync(output.fileno())
         return tmp_path, downloaded
     except Exception:
         if tmp_dir_fd is not None and temporary_name is not None:

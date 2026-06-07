@@ -245,13 +245,15 @@ The same file can be imported from the CLI, and scripts can export an explicit s
 
 ```bash
 speed-of-cinnamon settings-export --settings-json '{"language":"de","append-space":true}' --json
+printf '%s' '{"language":"de","append-space":true}' | speed-of-cinnamon settings-export --settings-json-stdin --json
 speed-of-cinnamon settings-import --json
 ```
 
-The export includes the hotkey, languages, recorder/backend choices, command templates, personalization, output mode,
+Use `--settings-json-stdin` when the settings object contains private values, so they are not exposed in process
+arguments. The export includes the hotkey, languages, recorder/backend choices, personalization, output mode,
 recording retention, notification settings, and the local alarm store. It intentionally excludes the machine-local
-`cli-path` and `openai-compatible-api-key`. Because command templates, personal context, vocabulary, and alarm names may
-contain private data, keep the export file private.
+`cli-path`, `openai-compatible-api-key`, and custom command templates. Because personal context, vocabulary, and alarm
+names may contain private data, keep the export file private.
 
 ## Language Switching
 

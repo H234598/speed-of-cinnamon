@@ -231,7 +231,10 @@ def _write_atomically_without_following_symlinks(
             except OSError:
                 pass
             handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        os.fsync(parent_fd)
     except OSError:
         if temp_name:
             try:

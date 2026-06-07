@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import stat as stat_module
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,63 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "post-process-prompt": (str, ""),
 }
 
+_ALLOWED_SETTING_TEXT_VALUES: dict[str, frozenset[str]] = {
+    "artifact-encryption": frozenset({"keyring", "passphrase", "off"}),
+    "insert-method": frozenset({"clipboard-paste", "clipboard", "type", "none"}),
+    "language": frozenset({
+        "ar",
+        "zh",
+        "cs",
+        "da",
+        "en",
+        "fi",
+        "de",
+        "el",
+        "fr",
+        "hi",
+        "it",
+        "ja",
+        "ko",
+        "nl",
+        "no",
+        "pl",
+        "pt",
+        "ru",
+        "es",
+        "sv",
+        "tr",
+        "uk",
+    }),
+    "post-process-backend": frozenset({"none", "command", "ollama", "openai-compatible"}),
+    "post-process-preset": frozenset({"minimal", "clean", "code", "chat", "email", "safety", "custom"}),
+    "recorder": frozenset({"auto", "pw-record", "parecord", "arecord"}),
+    "secondary-language": frozenset({
+        "ar",
+        "zh",
+        "cs",
+        "da",
+        "en",
+        "fi",
+        "de",
+        "el",
+        "fr",
+        "hi",
+        "it",
+        "ja",
+        "ko",
+        "nl",
+        "no",
+        "pl",
+        "pt",
+        "ru",
+        "es",
+        "sv",
+        "tr",
+        "uk",
+    }),
+    "transcriber": frozenset({"auto", "whisper", "faster-whisper", "whisper-cpp", "openai-compatible", "command"}),
+}
+
 
 class SettingsExportError(RuntimeError):
     pass
@@ -93,7 +151,10 @@ def _assert_clean_path(path: Path, *, field_name: str) -> None:
         raise SettingsExportError(f"{field_name} contains invalid null byte")
     if _contains_http_header_control_chars(text):
         raise SettingsExportError(f"{field_name} contains invalid control character")
-    assert_no_symlink_ancestors(path, field_name=field_name)
+    try:
+        assert_no_symlink_ancestors(path, field_name=field_name)
+    except RuntimeError as exc:
+        raise SettingsExportError(str(exc)) from exc
 
 
 def _contains_escaped_null(text: str) -> bool:
@@ -252,7 +313,11 @@ def normalize_setting(key: str, value: Any) -> Any:
                 )
             return parsed
         return parsed
-    return _sanitize_text_field(value if value is not None else default, field_name=f"setting {key}")
+    text = _sanitize_text_field(value if value is not None else default, field_name=f"setting {key}")
+    allowed_values = _ALLOWED_SETTING_TEXT_VALUES.get(key)
+    if allowed_values is not None and text not in allowed_values:
+        raise SettingsExportError(f"setting {key} has unsupported value")
+    return text
 
 
 def normalize_settings(values: dict[str, Any]) -> dict[str, Any]:
@@ -307,6 +372,12 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
     parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name="settings export directory")
     temp_name = ""
     try:
+        try:
+            existing_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            existing_stat = None
+        if existing_stat is not None and stat_module.S_ISLNK(existing_stat.st_mode):
+            raise SettingsExportError(f"settings export path must not be a symlink: {path}")
         temp_fd, temp_name = _create_private_temp_file(parent_fd, path.name)
         with os.fdopen(temp_fd, "w", encoding="utf-8") as handle:
             try:
@@ -314,7 +385,10 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
             except OSError:
                 pass
             handle.write(rendered)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        os.fsync(parent_fd)
     except OSError as exc:
         if temp_name:
             try:

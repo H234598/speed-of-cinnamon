@@ -204,8 +204,17 @@ PROFANITY_REPLACEMENT_PAIRS: tuple[tuple[str, str], ...] = (
     (r"zumkotzen", "zum Konfettiwerfen"),
 )
 
+_TRUSTED_PROFANITY_PATTERNS = frozenset(pattern for pattern, _replacement in PROFANITY_REPLACEMENT_PAIRS)
+
+
+def _safe_profanity_pattern_source(pattern: str) -> str:
+    if pattern in _TRUSTED_PROFANITY_PATTERNS:
+        return pattern
+    return re.escape(pattern)
+
+
 PROFANITY_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
-    (re.compile(rf"(?<![\w]){pattern}(?![\w])", re.IGNORECASE), replacement)
+    (re.compile(rf"(?<![\w]){_safe_profanity_pattern_source(pattern)}(?![\w])", re.IGNORECASE), replacement)
     for pattern, replacement in PROFANITY_REPLACEMENT_PAIRS
 )
 
@@ -215,7 +224,9 @@ def render_profanity_replacement_list() -> str:
         "Speed of Cinnamon profanity replacement list",
         "",
         "This local list is used only when 'Replace profanity with harmless words' is enabled.",
-        "Patterns are regular expressions with word boundaries; replacements try to stay silly and harmless.",
+        "# Format: text -> replacement.",
+        "# Bundled patterns may use trusted regex syntax; custom patterns are treated as literal text for safety.",
+        "# Replacements try to stay silly and harmless.",
         "",
     ]
     for index, (pattern, replacement) in enumerate(PROFANITY_REPLACEMENT_PAIRS, start=1):
@@ -247,8 +258,9 @@ def parse_profanity_replacement_list(text: str) -> tuple[tuple[str, str], ...]:
         replacement = _clean_editable_value(replacement_text, max_chars=MAX_PROFANITY_REPLACEMENT_CHARS)
         if not pattern or not replacement:
             continue
+        pattern_source = _safe_profanity_pattern_source(pattern)
         try:
-            re.compile(pattern)
+            re.compile(rf"(?<![\w]){pattern_source}(?![\w])", re.IGNORECASE)
         except re.error:
             continue
         pairs.append((pattern, replacement))
@@ -264,8 +276,9 @@ def compile_profanity_replacements(pairs: tuple[tuple[str, str], ...]) -> tuple[
         clean_replacement = _clean_editable_value(replacement, max_chars=MAX_PROFANITY_REPLACEMENT_CHARS)
         if not clean_pattern or not clean_replacement:
             continue
+        pattern_source = _safe_profanity_pattern_source(clean_pattern)
         try:
-            compiled.append((re.compile(rf"(?<![\w]){clean_pattern}(?![\w])", re.IGNORECASE), clean_replacement))
+            compiled.append((re.compile(rf"(?<![\w]){pattern_source}(?![\w])", re.IGNORECASE), clean_replacement))
         except re.error:
             continue
     return tuple(compiled) or PROFANITY_REPLACEMENTS

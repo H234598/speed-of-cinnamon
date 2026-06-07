@@ -283,6 +283,14 @@ class SettingsExportTest(unittest.TestCase):
         self.assertNotIn("sk-secret-token", rendered)
         self.assertNotIn("ghp_secret", rendered)
 
+    def test_build_export_rejects_unknown_mode_values(self) -> None:
+        with self.assertRaisesRegex(SettingsExportError, "setting insert-method has unsupported value"):
+            build_export({"insert-method": "clipboard-paste\x20--unsafe"})
+        with self.assertRaisesRegex(SettingsExportError, "setting artifact-encryption has unsupported value"):
+            build_export({"artifact-encryption": "plaintext"})
+        with self.assertRaisesRegex(SettingsExportError, "setting post-process-backend has unsupported value"):
+            build_export({"post-process-backend": "remote-shell"})
+
     def test_write_and_read_export_round_trips_normalized_settings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
@@ -400,6 +408,17 @@ class SettingsExportTest(unittest.TestCase):
             with self.assertRaisesRegex(SettingsExportError, "must be a boolean"):
                 read_export(path)
 
+    def test_read_export_rejects_unknown_mode_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text(
+                '{"app":"speed-of-cinnamon","version":2,"settings":{"transcriber":"shell"},'
+                '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(SettingsExportError, "setting transcriber has unsupported value"):
+                read_export(path)
+
     def test_read_legacy_export_without_alarms_uses_empty_alarm_store(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
@@ -484,6 +503,38 @@ class SettingsExportTest(unittest.TestCase):
             with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
                 write_export(path, {"language": "en"})
         mocked_replace.assert_called_once()
+
+    def test_write_export_rejects_leaf_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target.json"
+            target.write_text("keep\n", encoding="utf-8")
+            path = Path(tmp) / "settings-export.json"
+            path.symlink_to(target)
+
+            with self.assertRaisesRegex(SettingsExportError, "must not pass through a symlink"):
+                write_export(path, {"language": "en"})
+
+            self.assertTrue(path.is_symlink())
+            self.assertEqual(target.read_text(encoding="utf-8"), "keep\n")
+
+    def test_write_export_fsyncs_temp_file_and_parent_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            with mock.patch("speed_of_cinnamon.settings_export.os.fsync", wraps=os.fsync) as mocked_fsync:
+                write_export(path, {"language": "en"})
+
+            self.assertTrue(path.exists())
+            self.assertGreaterEqual(mocked_fsync.call_count, 2)
+
+    def test_write_export_removes_temp_file_when_file_fsync_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            with mock.patch("speed_of_cinnamon.settings_export.os.fsync", side_effect=OSError("sync failed")):
+                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+                    write_export(path, {"language": "en"})
+
+            self.assertFalse(path.exists())
+            self.assertEqual(list(Path(tmp).iterdir()), [])
 
     @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
     def test_write_export_uses_secure_parent_directory_open(self, mocked_open: mock.Mock) -> None:

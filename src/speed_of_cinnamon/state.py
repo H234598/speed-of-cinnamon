@@ -56,6 +56,7 @@ def _contains_http_header_control_chars(value: str) -> bool:
 class RecordingState:
     status: str = "idle"
     pid: int | None = None
+    process_identity: str = ""
     audio_path: str | None = None
     log_path: str | None = None
     started_at: str | None = None
@@ -179,7 +180,7 @@ class StateStore:
             if field_name not in raw:
                 continue
             value = raw[field_name]
-            if field_name in {"status", "audio_path", "log_path", "started_at", "stopped_at", "language", "recorder", "input_device", "transcript", "transcript_path", "error", "updated_at"}:
+            if field_name in {"status", "process_identity", "audio_path", "log_path", "started_at", "stopped_at", "language", "recorder", "input_device", "transcript", "transcript_path", "error", "updated_at"}:
                 normalized[field_name] = StateStore._sanitize_text_field(value, field_name=field_name)
             elif field_name == "pid":
                 normalized[field_name] = StateStore._coerce_state_int(

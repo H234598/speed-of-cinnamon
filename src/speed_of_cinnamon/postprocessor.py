@@ -730,6 +730,8 @@ def post_process_with_openai_compatible(
     ).strip()
     if not model_name:
         raise PostProcessError("OpenAI-compatible model is required")
+    if not _openai_compatible_model_supports_text_polishing(model_name):
+        raise PostProcessError("OpenAI-compatible model is not allowed for text polishing")
     _assert_text_length(text, field_name="input text")
     endpoint = _openai_compatible_endpoint(url, "/chat/completions")
     payload = {

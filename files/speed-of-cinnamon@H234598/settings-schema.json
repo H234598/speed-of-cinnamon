@@ -163,7 +163,7 @@
   },
   "main-menu-settings-map": {
     "type": "label",
-    "description": "All persistent settings from the applet menu are available here. Recording options are in Recording, output and Auto-Submitt are in Text output, personal context and vocabulary are in Personalization, text polishing prompts are in Text polishing, and voice/backend values are in Voice model and external API. Dynamic actions such as downloading models, opening transcript folders, diagnostics, cleanup, and alarm commands remain in the applet panel menu."
+    "description": "All persistent settings from the applet menu are available here. Recording options are in Recording, output and Auto-Submitt are in Text output, personal context and vocabulary are in Personalization, text polishing prompts are in Text polishing, and voice/backend values are in Voice model and external API. Dynamic actions such as downloading models, opening transcript folders, listing or exporting transcript documents, diagnostics, cleanup, and alarm commands remain in the applet panel menu."
   },
   "settings-logo-header": {
     "type": "custom",
@@ -377,7 +377,7 @@
   "show-profanity-filter-list": {
     "type": "button",
     "description": "Edit profanity replacement list",
-    "tooltip": "Create if needed and open the editable local profanity replacement file. Format: pattern -> replacement.",
+    "tooltip": "Create if needed and open the editable local profanity replacement file. Format: text -> replacement. Bundled entries may use trusted regex syntax; custom entries are treated as literal text for safety.",
     "callback": "_openProfanityFilterList"
   },
   "typing-delay-ms": {
@@ -586,7 +586,7 @@
   "artifact-encryption": {
     "type": "combobox",
     "description": "Stored transcript and recording encryption",
-    "tooltip": "Controls encryption for stored transcript files and retained recording files. Secret Service keyring is the recommended desktop mode. Passphrase mode uses SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE, an existing ~/.config/speed-of-cinnamon/artifact.key, SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE, or generates ~/.config/speed-of-cinnamon/artifact.key at runtime when no passphrase source exists. This is also the passphrase fallback for keyring failures. Off stores files as plaintext.",
+    "tooltip": "Controls encryption for stored transcript files and retained recording files. Secret Service keyring is the recommended desktop mode. Passphrase mode uses SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE, an existing ~/.config/speed-of-cinnamon/artifact.key, SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE, or generates ~/.config/speed-of-cinnamon/artifact.key at runtime when no passphrase source exists. This is also the passphrase fallback for keyring failures. Off stores files as plaintext. Applet transcript export bundles remain encrypted even when stored-artifact encryption is Off.",
     "options": {
       "Secret Service keyring": "keyring",
       "Passphrase": "passphrase",
@@ -608,7 +608,7 @@
   },
   "artifact-encryption-help-off": {
     "type": "label",
-    "description": "Off: Stored transcript files and retained recording files are kept as plaintext.\nSecurity impact: Use this only when plaintext transcript and recording files are acceptable. No encryption key, passphrase fallback, or key file is used.",
+    "description": "Off: Stored transcript files and retained recording files are kept as plaintext.\nSecurity impact: Use this only when plaintext transcript and recording files are acceptable. No encryption key, passphrase fallback, or key file is used for stored artifacts. Applet transcript export bundles still use encryption; plaintext export is only available through the CLI with explicit confirmation.",
     "tooltip": "Disables encryption for stored transcript and retained recording artifacts.",
     "dependency": "artifact-encryption=off"
   }

@@ -110,19 +110,13 @@ class CommandChainTest(unittest.TestCase):
     def test_run_command_chain_executes_segments_with_stdin(self) -> None:
         calls: list[tuple[list[str], str | None]] = []
 
-        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            command = args[0] if args else kwargs.get("args")
-            cmd_bytes = kwargs.get("input")
-            stdout_file = kwargs["stdout"]
-            cmd_text = cmd_bytes.decode("utf-8") if isinstance(cmd_bytes, bytes) else None
-            assert isinstance(stdout_file, object)
-            assert isinstance(command, list)
-            calls.append((command, cmd_text))
+        def fake_run(argv: list[str], input_bytes: bytes, **kwargs: object) -> tuple[int, bytes, bytes]:
+            del kwargs
+            cmd_text = input_bytes.decode("utf-8")
+            calls.append((argv, cmd_text))
             if len(calls) == 1:
-                stdout_file.write("segment-1\n".encode("utf-8"))
-            else:
-                stdout_file.write(f"{cmd_text}\n".encode("utf-8"))
-            return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+                return 0, b"segment-1\n", b""
+            return 0, f"{cmd_text}\n".encode("utf-8"), b""
 
         def which(command: str, path: str | None = None) -> str | None:
             return {"first": "first", "second": "second"}.get(command)
@@ -130,7 +124,7 @@ class CommandChainTest(unittest.TestCase):
         with (
             mock.patch("speed_of_cinnamon.command_chain.command_environment", return_value={"SPEED_OF_CINNAMON_CONTEXT": "test"}),
             mock.patch("speed_of_cinnamon.command_chain.shutil.which", side_effect=which),
-            mock.patch("speed_of_cinnamon.command_chain.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=fake_run),
         ):
             output = run_command_chain([
                 ("first",),
@@ -146,11 +140,12 @@ class CommandChainTest(unittest.TestCase):
     def test_run_command_chain_strips_dangerous_environment_variables(self) -> None:
         captured_env: dict[str, str] = {}
 
-        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        def fake_run(argv: list[str], input_bytes: bytes, **kwargs: object) -> tuple[int, bytes, bytes]:
+            del argv, input_bytes
             env = kwargs.get("env")
             if isinstance(env, dict):
                 captured_env.update(env)
-            return subprocess.CompletedProcess(args[0] if isinstance(args[0], list) else [], 0, stdout=b"", stderr=b"")
+            return 0, b"", b""
 
         with (
             mock.patch(
@@ -162,13 +157,15 @@ class CommandChainTest(unittest.TestCase):
                     "PYTHONPATH": "/tmp/evil",
                 },
             ),
+            mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": "/run/user/1000"}, clear=False),
             mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="command"),
-            mock.patch("speed_of_cinnamon.command_chain.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=fake_run),
         ):
             run_command_chain([("command",)], "", label="command-chain")
 
         self.assertNotIn("LD_PRELOAD", captured_env)
         self.assertNotIn("PYTHONPATH", captured_env)
+        self.assertNotIn("SPEED_OF_CINNAMON_CONTEXT", captured_env)
         self.assertEqual(captured_env["XDG_RUNTIME_DIR"], "/run/user/1000")
         self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
@@ -258,46 +255,48 @@ class CommandChainTest(unittest.TestCase):
         self.assertEqual(captured_path["path"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
     def test_run_command_chain_rejects_large_output(self) -> None:
-        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            stdout_file = kwargs["stdout"]
-            stdout_file.write(b"x" * 10)
-            return subprocess.CompletedProcess(["cmd"], 0, stdout=b"", stderr=b"")
-
         with (
             mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
-            mock.patch("speed_of_cinnamon.command_chain.subprocess.run", side_effect=fake_run),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.run_process_bounded_output",
+                side_effect=CommandChainError("post-process command output exceeded 5 bytes"),
+            ),
         ):
             with self.assertRaisesRegex(CommandChainError, "output exceeded"):
                 run_command_chain([("cmd",)], "", label="post-process", max_output_chars=5)
+
+    def test_run_command_chain_bounded_runner_rejects_large_live_output(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "output exceeded"):
+            run_command_chain(
+                [("python3", "-c", "import sys; sys.stdout.write('x' * 10000)")],
+                "",
+                label="post-process",
+                max_output_chars=128,
+            )
 
     def test_split_command_chain_rejects_invalid_utf8_command(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "not valid UTF-8"):
             split_command_chain("printf hello\udcff")
 
     def test_run_command_chain_rejects_large_stderr_output(self) -> None:
-        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            stderr_file = kwargs["stderr"]
-            stderr_file.write(b"x" * 10)
-            return subprocess.CompletedProcess(["cmd"], 0, stdout=b"", stderr=b"")
-
         with (
             mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
-            mock.patch("speed_of_cinnamon.command_chain.subprocess.run", side_effect=fake_run),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.run_process_bounded_output",
+                side_effect=CommandChainError("post-process command output exceeded 5 bytes"),
+            ),
         ):
             with self.assertRaisesRegex(CommandChainError, "output exceeded"):
                 run_command_chain([("cmd",)], "", label="post-process", max_output_chars=5)
 
     def test_run_command_chain_redacts_failed_command_output(self) -> None:
-        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            stdout_file = kwargs["stdout"]
-            stderr_file = kwargs["stderr"]
-            stdout_file.write(b"transcript with sk-secret-token\n")
-            stderr_file.write(b"Bearer private-token\n")
-            return subprocess.CompletedProcess(["cmd"], 2, stdout=b"", stderr=b"")
+        def fake_run(argv: list[str], input_bytes: bytes, **kwargs: object) -> tuple[int, bytes, bytes]:
+            del argv, input_bytes, kwargs
+            return 2, b"transcript with sk-secret-token\n", b"Bearer private-token\n"
 
         with (
             mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
-            mock.patch("speed_of_cinnamon.command_chain.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=fake_run),
         ):
             with self.assertRaises(CommandChainError) as cm:
                 run_command_chain([("cmd",)], "", label="post-process")
@@ -312,14 +311,13 @@ class CommandChainTest(unittest.TestCase):
             run_command_chain([("cmd",)], "\udcff", label="post-process")
 
     def test_run_command_chain_rejects_invalid_command_output_utf8(self) -> None:
-        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            stdout_file = kwargs["stdout"]
-            stdout_file.write(b"\xff")
-            return subprocess.CompletedProcess(["cmd"], 0, stdout=b"", stderr=b"")
+        def fake_run(argv: list[str], input_bytes: bytes, **kwargs: object) -> tuple[int, bytes, bytes]:
+            del argv, input_bytes, kwargs
+            return 0, b"\xff", b""
 
         with (
             mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
-            mock.patch("speed_of_cinnamon.command_chain.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=fake_run),
         ):
             with self.assertRaisesRegex(CommandChainError, "not valid UTF-8"):
                 run_command_chain([("cmd",)], "seed", label="post-process")
@@ -397,8 +395,8 @@ class CommandChainTest(unittest.TestCase):
         segment: list[str] = ["cmd"] + ["a"] * (MAX_COMMAND_SEGMENT_TOKENS - 1)
         with mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"):
             with mock.patch(
-                "speed_of_cinnamon.command_chain.subprocess.run",
-                return_value=subprocess.CompletedProcess(["cmd"], 0, stdout=b"", stderr=b""),
+                "speed_of_cinnamon.command_chain.run_process_bounded_output",
+                return_value=(0, b"", b""),
             ):
                 output = run_command_chain([tuple(segment)], "", label="post-process")
         self.assertEqual(output, "")
@@ -411,7 +409,7 @@ class CommandChainTest(unittest.TestCase):
 
     def test_run_command_chain_reports_command_not_found(self) -> None:
         with mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="missing"):
-            with mock.patch("speed_of_cinnamon.command_chain.subprocess.run", side_effect=FileNotFoundError("missing")):
+            with mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=FileNotFoundError("missing")):
                 with self.assertRaisesRegex(CommandChainError, "command not found"):
                     run_command_chain([("missing",)], "", label="transcriber")
 
@@ -425,7 +423,7 @@ class CommandChainTest(unittest.TestCase):
             "speed_of_cinnamon.command_chain.shutil.which",
             return_value="slow",
         ), mock.patch(
-            "speed_of_cinnamon.command_chain.subprocess.run",
+            "speed_of_cinnamon.command_chain.run_process_bounded_output",
             side_effect=subprocess.TimeoutExpired(cmd="cmd", timeout=0.01),
         ):
             with self.assertRaisesRegex(CommandChainError, "timed out"):

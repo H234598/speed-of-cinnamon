@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import suppress
 import os
 import re
+import selectors
 import shlex
 import subprocess  # nosec B404
 import tempfile
+import time
 import io
 import shutil
 from pathlib import Path
@@ -111,6 +114,113 @@ def _command_failure_detail(returncode: int, stdout_size: int, stderr_size: int)
     if stdout_size or stderr_size:
         return _REDACTED_COMMAND_OUTPUT.format(returncode=returncode)
     return f"exit code {returncode}"
+
+
+def _terminate_bounded_process(proc: subprocess.Popen[bytes]) -> None:
+    try:
+        proc.kill()
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=1)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def run_process_bounded_output(
+    argv: Sequence[str],
+    input_bytes: bytes = b"",
+    *,
+    timeout_seconds: int,
+    max_output_bytes: int,
+    env: dict[str, str],
+    label: str,
+) -> tuple[int, bytes, bytes]:
+    if not isinstance(argv, (list, tuple)) or not argv:
+        raise CommandChainError("argv must be a non-empty sequence")
+    if not all(isinstance(item, str) for item in argv):
+        raise CommandChainError("argv must contain text")
+    if not isinstance(input_bytes, bytes):
+        raise CommandChainError("input bytes must be bytes")
+    if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
+        raise CommandChainError("timeout_seconds must be positive")
+    if not isinstance(max_output_bytes, int) or isinstance(max_output_bytes, bool) or max_output_bytes <= 0:
+        raise CommandChainError("max_output_bytes must be positive")
+    if not isinstance(env, dict):
+        raise CommandChainError("environment must be a mapping")
+
+    runtime_argv = [*argv]
+    with tempfile.TemporaryFile() as stdin_file:
+        stdin_file.write(input_bytes)
+        stdin_file.seek(0)
+        try:
+            proc = subprocess.Popen(  # nosec B603
+                runtime_argv,
+                stdin=stdin_file,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                shell=False,
+            )
+        except FileNotFoundError:
+            raise
+        except OSError:
+            raise
+
+        selector = selectors.DefaultSelector()
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+        stdout_size = 0
+        stderr_size = 0
+        try:
+            if proc.stdout is not None:
+                selector.register(proc.stdout, selectors.EVENT_READ, "stdout")
+            if proc.stderr is not None:
+                selector.register(proc.stderr, selectors.EVENT_READ, "stderr")
+            deadline = time.monotonic() + timeout_seconds
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    _terminate_bounded_process(proc)
+                    raise subprocess.TimeoutExpired(argv, timeout_seconds)
+                events = selector.select(remaining)
+                if not events:
+                    continue
+                for key, _event_mask in events:
+                    stream = key.fileobj
+                    data = os.read(stream.fileno(), 65_536)
+                    if not data:
+                        selector.unregister(stream)
+                        try:
+                            stream.close()
+                        except OSError:
+                            pass
+                        continue
+                    if key.data == "stdout":
+                        stdout_chunks.append(data)
+                        stdout_size += len(data)
+                    else:
+                        stderr_chunks.append(data)
+                        stderr_size += len(data)
+                    if stdout_size + stderr_size > max_output_bytes:
+                        _terminate_bounded_process(proc)
+                        raise CommandChainError(f"{label} command output exceeded {max_output_bytes} bytes")
+            try:
+                returncode = proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                _terminate_bounded_process(proc)
+                raise
+            return returncode, b"".join(stdout_chunks), b"".join(stderr_chunks)
+        finally:
+            for key in list(selector.get_map().values()):
+                stream = key.fileobj
+                with suppress(KeyError, ValueError):
+                    selector.unregister(stream)
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+            selector.close()
 
 
 FORBIDDEN_COMMAND_OPERATORS = {
@@ -243,6 +353,7 @@ def run_command_chain(
     max_input_chars: int = MAX_COMMAND_INPUT_CHARS,
     personal_context: str = "",
     vocabulary: str = "",
+    include_personalization_env: bool = False,
 ) -> str:
     if not isinstance(segments, (list, tuple)):
         raise CommandChainError("segments must be a sequence")
@@ -276,6 +387,8 @@ def run_command_chain(
         raise CommandChainError("personal context must be text")
     if not isinstance(vocabulary, str) or isinstance(vocabulary, bool):
         raise CommandChainError("vocabulary must be text")
+    if not isinstance(include_personalization_env, bool):
+        raise CommandChainError("include_personalization_env must be a boolean")
     if _contains_escaped_null(input_text):
         raise CommandChainError("command input contains invalid null byte")
     try:
@@ -284,8 +397,12 @@ def run_command_chain(
         raise CommandChainError("command input is not valid UTF-8") from exc
 
     try:
-        env = command_environment(personal_context, vocabulary)
-        env = {key: value for key, value in env.items() if isinstance(key, str) and not _is_unsafe_env_var(key)}
+        personalization_env = command_environment(personal_context, vocabulary)
+        env = (
+            {key: value for key, value in personalization_env.items() if isinstance(key, str) and not _is_unsafe_env_var(key)}
+            if include_personalization_env
+            else {}
+        )
         env = _filtered_environment(env)
     except ValueError as exc:
         raise CommandChainError(str(exc)) from exc
@@ -318,35 +435,28 @@ def run_command_chain(
             raise CommandChainError(f"{label} command contains invalid control character")
         runtime_command = _command_path(executable)
         try:
-            with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
-                proc = subprocess.run(  # nosec B603
-                    [runtime_command, *cmd[1:]],
-                    input=input_bytes,
-                    text=False,
-                    stdout=stdout_file,
-                    stderr=stderr_file,
-                    timeout=timeout_seconds,
-                    env=env,
-                    shell=False,
-                )
-                stdout_file.seek(0)
-                stderr_file.seek(0)
-                stdout_size = _filesize(stdout_file)
-                stderr_size = _filesize(stderr_file)
-
-                if stdout_size + stderr_size > max_output_chars:
-                    raise CommandChainError(f"{label} command output exceeded {max_output_chars} bytes")
-
-                if proc.returncode != 0:
-                    detail = _command_failure_detail(proc.returncode, stdout_size, stderr_size)
-                    raise CommandChainError(f"{label} command failed: {detail}")
-
-                segment_output = _read_file_head(stdout_file, max_output_chars).strip()
-                output = segment_output
-                try:
-                    input_bytes = output.encode("utf-8")
-                except UnicodeEncodeError as exc:
-                    raise CommandChainError("command output is not valid UTF-8") from exc
+            returncode, stdout_data, stderr_data = run_process_bounded_output(
+                [runtime_command, *cmd[1:]],
+                input_bytes,
+                timeout_seconds=timeout_seconds,
+                max_output_bytes=max_output_chars,
+                env=env,
+                label=label,
+            )
+            if returncode != 0:
+                detail = _command_failure_detail(returncode, len(stdout_data), len(stderr_data))
+                raise CommandChainError(f"{label} command failed: {detail}")
+            try:
+                segment_output = stdout_data[:max_output_chars].decode("utf-8").strip()
+            except UnicodeDecodeError as exc:
+                raise CommandChainError(f"command output is not valid UTF-8: {exc}") from exc
+            if _contains_escaped_null(segment_output):
+                raise CommandChainError("command output contains invalid null byte")
+            output = segment_output
+            try:
+                input_bytes = output.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise CommandChainError("command output is not valid UTF-8") from exc
         except FileNotFoundError as exc:
             raise CommandChainError(f"{label} command not found: {executable}") from exc
         except subprocess.TimeoutExpired as exc:

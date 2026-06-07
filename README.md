@@ -102,6 +102,7 @@ speed-of-cinnamon text-models --json
 speed-of-cinnamon history --limit 5 --json
 speed-of-cinnamon cleanup --keep-transcripts 100 --keep-recordings 20 --dry-run --json
 speed-of-cinnamon settings-export --settings-json '{"language":"de","append-space":true}' --json
+printf '%s' '{"language":"de","append-space":true}' | speed-of-cinnamon settings-export --settings-json-stdin --json
 speed-of-cinnamon alarms add --time 09:00 --name "Standup" --days weekdays --json
 ```
 

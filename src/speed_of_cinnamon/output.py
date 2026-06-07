@@ -389,6 +389,53 @@ def _read_clipboard_dedup_lock_identity(path: Path) -> str | None:
     return identity or None
 
 
+def _read_clipboard_dedup_lock_lines_at(parent_fd: int, name: str) -> list[str] | None:
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        return None
+    nonblock_flag = getattr(os, "O_NONBLOCK", 0)
+    fd: int | None = None
+    try:
+        fd = os.open(name, os.O_RDONLY | nofollow_flag | nonblock_flag, dir_fd=parent_fd)
+        file_stat = os.fstat(fd)
+        if not stat.S_ISREG(file_stat.st_mode) or getattr(file_stat, "st_nlink", 1) != 1:
+            return None
+        raw = os.read(fd, MAX_CLIPBOARD_DEDUP_LOCK_BYTES + 1)
+    except OSError:
+        return None
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+    if len(raw) > MAX_CLIPBOARD_DEDUP_LOCK_BYTES:
+        return None
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return text.splitlines()
+
+
+def _read_clipboard_dedup_lock_pid_at(parent_fd: int, name: str) -> int | None:
+    lines = _read_clipboard_dedup_lock_lines_at(parent_fd, name)
+    first_line = lines[0].strip() if lines else ""
+    try:
+        pid = int(first_line)
+    except ValueError:
+        return None
+    return pid if pid > 0 else None
+
+
+def _read_clipboard_dedup_lock_identity_at(parent_fd: int, name: str) -> str | None:
+    lines = _read_clipboard_dedup_lock_lines_at(parent_fd, name)
+    if not lines or len(lines) < 2:
+        return None
+    identity = lines[1].strip()
+    return identity or None
+
+
 def _same_clipboard_lock_snapshot(first: os.stat_result, second: os.stat_result) -> bool:
     return (
         first.st_dev,
@@ -431,18 +478,18 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                     os.O_CREAT | os.O_EXCL | os.O_WRONLY | nofollow_flag,
                     0o600,
                     dir_fd=parent_fd,
-                )
+            )
             except FileExistsError:
                 try:
-                    existing = path.lstat()
+                    existing = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
                 except OSError:
                     return None
                 if not stat.S_ISREG(existing.st_mode):
                     return None
                 if getattr(existing, "st_nlink", 1) != 1:
                     return None
-                owner_pid = _read_clipboard_dedup_lock_pid(path)
-                owner_identity = _read_clipboard_dedup_lock_identity(path)
+                owner_pid = _read_clipboard_dedup_lock_pid_at(parent_fd, path.name)
+                owner_identity = _read_clipboard_dedup_lock_identity_at(parent_fd, path.name)
                 if owner_pid is not None and _clipboard_lock_pid_is_running(owner_pid):
                     if owner_identity is not None:
                         owner_current_identity = _clipboard_lock_identity_for_pid(owner_pid)
@@ -455,7 +502,7 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                 if owner_pid is None and now - existing.st_mtime <= MAX_DUPLICATE_LOCK_SECONDS:
                     return None
                 try:
-                    current = path.lstat()
+                    current = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
                 except OSError:
                     return None
                 if getattr(current, "st_nlink", 1) != 1:
@@ -463,7 +510,7 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                 if not _same_clipboard_lock_snapshot(existing, current):
                     return None
                 try:
-                    path.unlink()
+                    os.unlink(path.name, dir_fd=parent_fd)
                 except OSError:
                     return None
                 continue
@@ -482,7 +529,7 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                 except OSError:
                     pass
                 try:
-                    path.unlink()
+                    os.unlink(path.name, dir_fd=parent_fd)
                 except OSError:
                     pass
                 return None
@@ -503,9 +550,22 @@ def _release_clipboard_dedup_lock(path: Path | None) -> None:
     if path is None:
         return
     try:
-        path.unlink()
+        parent_fd = ensure_directory_without_following_symlinks(
+            path.parent,
+            field_name="clipboard dedupe lock directory",
+        )
     except OSError:
-        pass
+        return
+    try:
+        try:
+            os.unlink(path.name, dir_fd=parent_fd)
+        except OSError:
+            pass
+    finally:
+        try:
+            os.close(parent_fd)
+        except OSError:
+            pass
 
 
 def _normalize_clipboard_text(text: str) -> str:
@@ -807,6 +867,56 @@ def _run_stdout_raw(
     return text
 
 
+def _active_x_window_snapshot(*, xdotool_command: str | None = None) -> tuple[str, str, str] | None:
+    runtime_command = xdotool_command or _which("xdotool")
+    if not runtime_command:
+        return None
+    window_id = _run_stdout(
+        ["xdotool", "getactivewindow"],
+        timeout=MAX_PASTE_TIMEOUT_SECONDS,
+        resolved_command=runtime_command,
+    )
+    if not window_id or not window_id.isdigit() or len(window_id) > 64:
+        return None
+    window_title = _run_stdout(
+        ["xdotool", "getwindowname", window_id],
+        timeout=MAX_PASTE_TIMEOUT_SECONDS,
+        resolved_command=runtime_command,
+    )
+    window_class = _run_stdout(
+        ["xdotool", "getwindowclassname", window_id],
+        timeout=MAX_PASTE_TIMEOUT_SECONDS,
+        resolved_command=runtime_command,
+    )
+    return window_id, window_title, window_class
+
+
+def _active_x_window_matches_snapshot(
+    snapshot: tuple[str, str, str] | None,
+    *,
+    xdotool_command: str | None = None,
+) -> bool:
+    if snapshot is None:
+        return True
+    current = _active_x_window_snapshot(xdotool_command=xdotool_command)
+    if current is None:
+        return False
+    expected_id, _expected_title, expected_class = snapshot
+    current_id, _current_title, current_class = current
+    if current_id != expected_id:
+        return False
+    if expected_class and current_class != expected_class:
+        return False
+    return True
+
+
+def _paste_key_for_window_snapshot(snapshot: tuple[str, str, str] | None) -> str:
+    if snapshot is None:
+        return "ctrl+v"
+    _window_id, window_title, window_class = snapshot
+    return "ctrl+shift+v" if _looks_like_terminal(window_class) or _looks_like_terminal(window_title) else "ctrl+v"
+
+
 def _looks_like_terminal(value: str) -> bool:
     normalized = str(value or "").lower()
     return any(marker in normalized for marker in TERMINAL_WINDOW_MARKERS)
@@ -820,19 +930,7 @@ def _active_window_paste_key(*, xdotool_available: bool | None = None, xdotool_c
     if not xdotool_available:
         return "ctrl+v"
     runtime_command = xdotool_command or _command_path("xdotool")
-    window_id = _run_stdout(
-        ["xdotool", "getactivewindow"],
-        timeout=MAX_PASTE_TIMEOUT_SECONDS,
-        resolved_command=runtime_command,
-    )
-    if not window_id:
-        return "ctrl+v"
-    window_class = _run_stdout(
-        ["xdotool", "getwindowclassname", window_id],
-        timeout=MAX_PASTE_TIMEOUT_SECONDS,
-        resolved_command=runtime_command,
-    )
-    return "ctrl+shift+v" if _looks_like_terminal(window_class) else "ctrl+v"
+    return _paste_key_for_window_snapshot(_active_x_window_snapshot(xdotool_command=runtime_command))
 
 
 def set_clipboard(text: str) -> str:
@@ -923,15 +1021,48 @@ def _clipboard_has_non_text_payload() -> bool:
     return True
 
 
-def paste_from_clipboard() -> None:
+def _assert_clipboard_text_snapshot_unchanged(snapshot_available: bool, snapshot_text: str) -> None:
+    if _clipboard_has_non_text_payload():
+        raise OutputError("refusing to overwrite non-text clipboard for automatic paste")
+    current_available, current_text = _read_text_clipboard_snapshot()
+    if not current_available:
+        raise OutputError("refusing automatic paste without readable text clipboard snapshot")
+    if current_available != snapshot_available or current_text != snapshot_text:
+        raise OutputError("clipboard changed before automatic paste")
+
+
+def _restore_clipboard_snapshot_after_failed_paste(inserted_text: str, snapshot_available: bool, snapshot_text: str) -> None:
+    if not snapshot_available:
+        return
+    if not _clipboard_still_contains_inserted_text(inserted_text):
+        return
+    try:
+        set_clipboard(snapshot_text)
+    except OutputError as exc:
+        log_event("warning", "clipboard_restore_after_failed_automatic_paste_failed", error=str(exc))
+
+
+def paste_from_clipboard(expected_window_snapshot: tuple[str, str, str] | None = None) -> None:
     xdotool_error: OutputError | None = None
     xdotool = _which("xdotool")
     if xdotool:
+        if expected_window_snapshot is not None and not _active_x_window_matches_snapshot(
+            expected_window_snapshot,
+            xdotool_command=xdotool,
+        ):
+            raise OutputError("active window changed before automatic paste")
         try:
-            paste_key = _active_window_paste_key(xdotool_available=True, xdotool_command=xdotool)
+            paste_key = _paste_key_for_window_snapshot(
+                expected_window_snapshot or _active_x_window_snapshot(xdotool_command=xdotool)
+            )
         except OutputError as exc:
             xdotool_error = exc
         else:
+            if expected_window_snapshot is not None and not _active_x_window_matches_snapshot(
+                expected_window_snapshot,
+                xdotool_command=xdotool,
+            ):
+                raise OutputError("active window changed before automatic paste")
             _run_with_input(
                 ["xdotool", "key", "--clearmodifiers", paste_key],
                 "",
@@ -1101,9 +1232,16 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
         committed = False
         clipboard_snapshot_available = False
         clipboard_snapshot = ""
+        target_window_snapshot: tuple[str, str, str] | None = None
         try:
             if not _clipboard_paste_helper_available():
                 raise OutputError("no keyboard helper found; install xdotool or wtype")
+            xdotool = _which("xdotool")
+            if not xdotool:
+                raise OutputError("refusing automatic paste without verifiable active window")
+            target_window_snapshot = _active_x_window_snapshot(xdotool_command=xdotool)
+            if target_window_snapshot is None:
+                raise OutputError("refusing automatic paste without verifiable active window")
             if _clipboard_has_non_text_payload():
                 raise OutputError("refusing to overwrite non-text clipboard for automatic paste")
             clipboard_snapshot_available, clipboard_snapshot = _read_text_clipboard_snapshot()
@@ -1115,8 +1253,9 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
                 pending=True,
             ):
                 raise OutputError("failed to reserve clipboard-paste insertion state")
+            _assert_clipboard_text_snapshot_unchanged(clipboard_snapshot_available, clipboard_snapshot)
             set_clipboard(text)
-            paste_from_clipboard()
+            paste_from_clipboard(expected_window_snapshot=target_window_snapshot)
             operation_performed = True
             if not _commit_clipboard_insertion(text, method):
                 raise OutputError("failed to commit clipboard-paste insertion state")
@@ -1127,6 +1266,7 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
                 if not operation_performed:
                     _restore_clipboard_insertion_snapshot(snapshot)
                     _restore_clipboard_dedup_state(persistent_snapshot, pending=persistent_snapshot_pending)
+                    _restore_clipboard_snapshot_after_failed_paste(text, clipboard_snapshot_available, clipboard_snapshot)
             _release_clipboard_dedup_lock(lock_path)
     if method == "type":
         type_text(text, delay_ms)

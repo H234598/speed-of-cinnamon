@@ -55,6 +55,11 @@ def which_only(command: str) -> mock.Mock:
     return mock.Mock(side_effect=lambda name, path=None: f"/usr/bin/{command}" if name == command else None)
 
 
+def which_any(*commands: str) -> mock.Mock:
+    allowed = set(commands)
+    return mock.Mock(side_effect=lambda name, path=None: f"/usr/bin/{name}" if name in allowed else None)
+
+
 class RecorderTest(unittest.TestCase):
     def _write_wav(self, path: Path, samples: list[int]) -> None:
         with wave.open(str(path), "wb") as handle:
@@ -473,11 +478,27 @@ class RecorderTest(unittest.TestCase):
     def test_choose_parecord_adds_device_before_output_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio_path = Path(tmp) / "sample.wav"
-            with mock.patch("speed_of_cinnamon.recorder.shutil.which", which_only("parecord")):
+            with mock.patch("speed_of_cinnamon.recorder.shutil.which", which_any("parecord", "timeout")):
                 command = choose_recorder("parecord", audio_path, 3, "alsa_input.usb-mic")
         self.assertEqual(command.name, "parecord")
+        self.assertEqual(command.argv[:4], ["timeout", "--kill-after=1", "3", "parecord"])
         self.assertIn("--device=alsa_input.usb-mic", command.argv)
         self.assertEqual(command.argv[-1], str(audio_path))
+
+    def test_choose_parecord_requires_timeout_for_finite_recordings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio_path = Path(tmp) / "sample.wav"
+            with mock.patch("speed_of_cinnamon.recorder.shutil.which", which_only("parecord")):
+                with self.assertRaisesRegex(RecorderError, "timeout is required"):
+                    choose_recorder("parecord", audio_path, 3)
+
+    def test_choose_parecord_allows_unlimited_recordings_without_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio_path = Path(tmp) / "sample.wav"
+            with mock.patch("speed_of_cinnamon.recorder.shutil.which", which_only("parecord")):
+                command = choose_recorder("parecord", audio_path, 0)
+        self.assertEqual(command.name, "parecord")
+        self.assertEqual(command.argv[0], "parecord")
 
     def test_choose_recorder_rejects_excessive_max_seconds(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -837,6 +858,57 @@ class RecorderTest(unittest.TestCase):
                     start_recorder(command, log_path)
             self.assertFalse(log_path.exists())
         mocked_popen.assert_called_once()
+
+    @mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=OSError("boom"))
+    def test_start_recorder_fsyncs_parent_when_start_failure_removes_log(self, mocked_popen: mock.Mock) -> None:
+        from speed_of_cinnamon import recorder as recorder_module
+
+        command = RecorderCommand(name="noop", argv=["true"])
+        fsync_modes: list[int] = []
+        real_fsync = os.fsync
+
+        def record_fsync(fd: int) -> None:
+            fsync_modes.append(os.fstat(fd).st_mode)
+            real_fsync(fd)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "session.log"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.os.fsync", side_effect=record_fsync),
+            ):
+                with self.assertRaisesRegex(RecorderError, "failed to start noop"):
+                    start_recorder(command, log_path)
+            self.assertFalse(log_path.exists())
+
+        self.assertTrue(
+            any(recorder_module.stat.S_ISDIR(mode) for mode in fsync_modes),
+            "recorder log cleanup should fsync the parent directory after unlink",
+        )
+        mocked_popen.assert_called_once()
+
+    def test_unlink_recording_path_if_same_fsyncs_parent_after_delete(self) -> None:
+        from speed_of_cinnamon import recorder as recorder_module
+
+        fsync_modes: list[int] = []
+        real_fsync = os.fsync
+
+        def record_fsync(fd: int) -> None:
+            fsync_modes.append(os.fstat(fd).st_mode)
+            real_fsync(fd)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "recording.flac"
+            path.write_bytes(b"audio")
+            expected_stat = path.stat()
+            with mock.patch("speed_of_cinnamon.recorder.os.fsync", side_effect=record_fsync):
+                recorder_module._unlink_recording_path_if_same(path, expected_stat)
+            self.assertFalse(path.exists())
+
+        self.assertTrue(
+            any(recorder_module.stat.S_ISDIR(mode) for mode in fsync_modes),
+            "recording temp cleanup should fsync the parent directory after unlink",
+        )
 
     def test_start_recorder_rejects_hardlinked_existing_log_file(self) -> None:
         command = RecorderCommand(name="noop", argv=["true"])

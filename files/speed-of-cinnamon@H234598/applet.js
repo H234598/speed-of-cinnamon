@@ -43,7 +43,7 @@ const NUL_RE = /\u0000/g;
 const NON_ASCII_RE = /[^\u0000-\u007E]/g;
 const COMBINING_MARKS_RE = /[\u0300-\u036f]/g;
 const ASCII_ONLY_RE = /^[\u0000-\u007E]*$/;
-const SENSITIVE_ERROR_RE = /(?:\b(?:bearer|token|api[_ -]?key|apikey|password|passwd|passphrase|secret)\b\s*[:=]\s*[^,\s;]+|\b(?:bearer|token|api[_ -]?key|apikey|password|passwd|passphrase|secret)\b\s+(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required|not|empty)\b)[^,\s;]+|\b(?:sk|sess)-[A-Za-z0-9_\-]{6,}\b|[a-z][a-z0-9+.-]*:\/\/[^/@\s:]+:[^/@\s]+@)/i;
+const SENSITIVE_ERROR_RE = /(?:\b(?:bearer|token|api[_ -]?key|apikey|password|passwd|passphrase|secret)\b\s*[:=]\s*[^,\s;]+|\b(?:bearer|token|api[_ -]?key|apikey|password|passwd|passphrase|secret)\b\s+(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required|not|empty)\b)[^,\s;]+|\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b|[a-z][a-z0-9+.-]*:\/\/[^/@\s:]+:[^@\s]+@)/i;
 const EMPTY_TRANSCRIPT_MARKERS = [
   "leere aufnahme",
   "leerer text",
@@ -103,6 +103,11 @@ const ARTIFACT_ENCRYPTION_MODES = [
   "passphrase",
   "off"
 ];
+
+function utf8ByteLength(value) {
+  return ByteArray.fromString(String(value || "")).length;
+}
+
 const MIN_TRANSCRIPT_FILES = 1;
 const MAX_TRANSCRIPT_FILES = 1000;
 const TRANSCRIPT_STORAGE_LIMITS = [20, 50, 100, 200, 500, 1000];
@@ -401,7 +406,7 @@ MyApplet.prototype = {
     this.keepRecordingArtifacts = false;
     this.recorder = "auto";
     this.inputDevice = "";
-    this.insertMethod = "clipboard-paste";
+    this.insertMethod = "none";
     this.appendSpace = true;
     this.typingDelayMs = DEFAULT_TYPING_DELAY_MS;
     this.sanitizeSpecialChars = false;
@@ -1053,6 +1058,7 @@ MyApplet.prototype = {
     ];
     args.push("--keep-transcripts", String(this._normalizeTranscriptLimit(this.maxTranscriptFiles)));
     args.push("--artifact-encryption", this._normalizeArtifactEncryption(this.artifactEncryption));
+    args.push("--confirm-plaintext-output");
     if (this.appendSpace) {
       args.push("--append-space");
     }
@@ -1173,7 +1179,7 @@ MyApplet.prototype = {
   },
 
   _allHistoryArgs: function() {
-    return [this._cliCommand(), "transcripts-document", "--limit", "1000", "--json"];
+    return [this._cliCommand(), "transcripts-document", "--limit", "1000", "--confirm-plaintext", "--json"];
   },
 
   _transcriptsExportArgs: function() {
@@ -1229,11 +1235,11 @@ MyApplet.prototype = {
   },
 
   _settingsExportArgs: function() {
-    return [this._cliCommand(), "settings-export", "--settings-json", JSON.stringify(this._settingsSnapshotForCli()), "--json"];
+    return [this._cliCommand(), "settings-export", "--settings-json-stdin", "--json"];
   },
 
   _settingsImportArgs: function() {
-    return [this._cliCommand(), "settings-import", "--json"];
+    return [this._cliCommand(), "settings-import", "--confirm-plaintext-settings-output", "--json"];
   },
 
   _cliCommand: function() {
@@ -1264,7 +1270,7 @@ MyApplet.prototype = {
 
   _normalizeOutputMethod: function(method) {
     let value = String(method || "").trim();
-    return OUTPUT_METHODS.indexOf(value) >= 0 ? value : "clipboard-paste";
+    return OUTPUT_METHODS.indexOf(value) >= 0 ? value : "none";
   },
 
   _normalizeArtifactEncryption: function(method) {
@@ -3686,6 +3692,62 @@ MyApplet.prototype = {
     if (this.isCommandRunning) {
       return;
     }
+    if (!GLib.find_program_in_path("zenity")) {
+      let message = _("Install zenity to show the transcript list without writing a plaintext file.");
+      this._setStatus("error", message, this.lastTranscript);
+      this._notify(_("Speed of Cinnamon"), message, true);
+      return;
+    }
+    this._confirmPlaintextTranscriptList(function(confirmed) {
+      if (confirmed) {
+        this._loadAllTranscriptsDocument();
+      }
+    }.bind(this));
+  },
+
+  _confirmPlaintextTranscriptList: function(completionCallback) {
+    let dialog = new ModalDialog.ModalDialog();
+    let completed = false;
+    let complete = (result) => {
+      if (completed) {
+        return;
+      }
+      completed = true;
+      if (typeof completionCallback === "function") {
+        completionCallback(result === true);
+      }
+    };
+    dialog.contentLayout.add_child(new St.Label({ text: _("List all transcripts?"), x_expand: true }));
+    dialog.contentLayout.add_child(new St.Label({
+      text: _("This shows complete transcript contents in a plaintext window. Continue only if your screen and session are trusted."),
+      x_expand: true
+    }));
+    dialog.setButtons([
+      {
+        label: _("Cancel"),
+        key: Clutter.KEY_Escape,
+        action: function() {
+          dialog.close();
+          this._setStatus("ready", _("Transcript list cancelled"), this.lastTranscript);
+          complete(false);
+        }.bind(this),
+      },
+      {
+        label: _("Show transcripts"),
+        action: function() {
+          dialog.close();
+          complete(true);
+        }.bind(this),
+      }
+    ]);
+    if (!dialog.open()) {
+      this._setStatus("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);
+      this._notify(_("Speed of Cinnamon"), _("Transcript list confirmation could not be opened"), true);
+      complete(false);
+    }
+  },
+
+  _loadAllTranscriptsDocument: function() {
     this.isCommandRunning = true;
     this._setStatus("processing", _("Preparing transcript list..."), this.lastTranscript);
     this._spawnJson(this._allHistoryArgs(), (payload) => {
@@ -3699,11 +3761,11 @@ MyApplet.prototype = {
         this._setStatus("error", _("Transcript list is empty"), this.lastTranscript);
         return;
       }
-      this._showTranscriptsWindow(content, Number(payload.transcripts || 0));
+      this._showTranscriptsWindow(content, Number(payload.transcripts || 0), Boolean(payload.truncated));
     });
   },
 
-  _showTranscriptsWindow: function(content, count) {
+  _showTranscriptsWindow: function(content, count, truncated) {
     let zenity = GLib.find_program_in_path("zenity");
     if (!zenity) {
       let message = _("Install zenity to show the transcript list without writing a plaintext file.");
@@ -3730,7 +3792,16 @@ MyApplet.prototype = {
           global.logError(err);
         }
       });
-      this._setStatus("done", _("Opened transcript list: ") + String(count), this.lastTranscript);
+      let message = _("Opened transcript list: ") + String(count);
+      if (truncated) {
+        message += _(" (truncated)");
+        this._notify(
+          _("Transcript list truncated"),
+          _("Only the newest transcripts that fit the secure display limit were shown."),
+          false
+        );
+      }
+      this._setStatus("done", message, this.lastTranscript);
     } catch (err) {
       let safeError = this._sanitizeErrorMessage(String(err && err.message ? err.message : err));
       this._setStatus("error", _("Could not open transcript list: ") + safeError, this.lastTranscript);
@@ -3754,6 +3825,12 @@ MyApplet.prototype = {
       let path = String(payload.path || "");
       if (path === "") {
         this._setStatus("error", _("Transcript export path is empty"), this.lastTranscript);
+        return;
+      }
+      if (payload.encrypted !== true || Boolean(payload.plaintext) || String(payload.encryption || "") === "off") {
+        let message = _("Transcript export was not encrypted");
+        this._setStatus("error", message, this.lastTranscript);
+        this._notify(_("Speed of Cinnamon transcript export"), message, true);
         return;
       }
       let message = _("Exported encrypted transcript bundle: ") + path;
@@ -3935,7 +4012,7 @@ MyApplet.prototype = {
         return;
       }
       this._setStatus("done", _("Exported settings: ") + payload.path, this.lastTranscript);
-    });
+    }, { inputText: JSON.stringify(this._settingsSnapshotForCli()) });
   },
 
   _importSettings: function() {
@@ -4126,7 +4203,7 @@ MyApplet.prototype = {
 
   _parseSpawnOutput: function(stdout) {
     let output = String(stdout || "");
-    if (output.length > MAX_SPAWN_JSON_BYTES) {
+    if (utf8ByteLength(output) > MAX_SPAWN_JSON_BYTES) {
       return { status: "error", error: "Backend response is too large" };
     }
     try {
@@ -4177,10 +4254,15 @@ MyApplet.prototype = {
     });
   },
 
-  _spawnJsonWithBackendEnvironment: function(args, env, callback) {
+  _spawnJsonWithBackendEnvironment: function(args, env, callback, inputText) {
     env = env || {};
+    let hasInput = inputText !== null && inputText !== undefined;
+    let flags = Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE | Gio.SubprocessFlags.SEARCH_PATH;
+    if (hasInput) {
+      flags |= Gio.SubprocessFlags.STDIN_PIPE;
+    }
     let launcher = new Gio.SubprocessLauncher({
-      flags: Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE | Gio.SubprocessFlags.SEARCH_PATH,
+      flags: flags,
     });
     for (let key in env) {
       if (Object.prototype.hasOwnProperty.call(env, key)) {
@@ -4193,7 +4275,7 @@ MyApplet.prototype = {
     } catch (err) {
       throw err;
     }
-    process.communicate_utf8_async(null, null, (subprocess, result) => {
+    process.communicate_utf8_async(hasInput ? String(inputText || "") : null, null, (subprocess, result) => {
       try {
         let [, stdout] = subprocess.communicate_utf8_finish(result);
         callback(String(stdout || ""));
@@ -4250,8 +4332,11 @@ MyApplet.prototype = {
           }
           finalize(this._parseSpawnOutput(stdout));
         };
-        if (backendEnv) {
-          this._spawnJsonWithBackendEnvironment(normalizedArgs, backendEnv, handleOutput);
+        let inputText = Object.prototype.hasOwnProperty.call(options, "inputText")
+          ? String(options.inputText || "")
+          : null;
+        if (backendEnv || inputText !== null) {
+          this._spawnJsonWithBackendEnvironment(normalizedArgs, backendEnv || {}, handleOutput, inputText);
         } else {
           Util.spawn_async(normalizedArgs, handleOutput);
         }
@@ -4304,7 +4389,7 @@ MyApplet.prototype = {
           return;
         }
         let output = String(stdout || "");
-        if (output.length > MAX_SPAWN_TEXT_BYTES) {
+        if (utf8ByteLength(output) > MAX_SPAWN_TEXT_BYTES) {
           finalize("");
           return;
         }
@@ -4831,6 +4916,39 @@ MyApplet.prototype = {
     return output !== null;
   },
 
+  _targetXWindowSnapshot: function() {
+    let xid = String(this.targetWindowXid || "").trim();
+    if (!/^[0-9]+$/.test(xid)) {
+      return null;
+    }
+    return {
+      xid: xid,
+      windowClass: String(this.targetWindowXClass || "").trim().toLowerCase(),
+    };
+  },
+
+  _targetXWindowMatchesSnapshot: function(snapshot) {
+    if (!snapshot || !snapshot.xid) {
+      return true;
+    }
+    let xid = String(snapshot.xid || "").trim();
+    if (!/^[0-9]+$/.test(xid)) {
+      return false;
+    }
+    let active = String(this._xdotoolOutput(["getactivewindow"], MAX_XDOTOOL_TARGET_OUTPUT_BYTES) || "").trim();
+    if (active !== xid) {
+      return false;
+    }
+    let expectedClass = String(snapshot.windowClass || "").trim().toLowerCase();
+    if (expectedClass !== "") {
+      let activeClass = String(this._xdotoolOutput(["getwindowclassname", xid], MAX_XDOTOOL_TARGET_OUTPUT_BYTES) || "").trim().toLowerCase();
+      if (activeClass !== expectedClass) {
+        return false;
+      }
+    }
+    return true;
+  },
+
   _windowProbeValue: function(window, methodName) {
     if (!window || !window[methodName]) {
       return "";
@@ -5162,6 +5280,7 @@ MyApplet.prototype = {
 
   _pasteClipboardAfterFocus: function(sendEnter, expectedClipboardText) {
     let terminalPaste = this._isTerminalTargetWindow();
+    let expectedTargetWindow = this._targetXWindowSnapshot();
     let hasXdotool = GLib.find_program_in_path("xdotool");
     let hasWtype = GLib.find_program_in_path("wtype");
     let args = null;
@@ -5183,7 +5302,7 @@ MyApplet.prototype = {
     if (!args) {
       return false;
     }
-    return this._spawnKeyboardAfterFocus(args, followUpArgs, expectedClipboardText);
+    return this._spawnKeyboardAfterFocus(args, followUpArgs, expectedClipboardText, expectedTargetWindow);
   },
 
   _typeTextAfterFocus: function(text) {
@@ -5207,7 +5326,7 @@ MyApplet.prototype = {
     return value;
   },
 
-  _spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText) {
+  _spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText, expectedTargetWindow) {
     this._clearPasteTimer();
     if (this.appletRemoved) {
       return false;
@@ -5218,7 +5337,7 @@ MyApplet.prototype = {
         if (this.appletRemoved) {
           return false;
         }
-        this._spawnKeyboardWhenClipboardReady(args, followUpArgs, expectedClipboardText, Date.now() + CLIPBOARD_READY_TIMEOUT_MS);
+        this._spawnKeyboardWhenClipboardReady(args, followUpArgs, expectedClipboardText, Date.now() + CLIPBOARD_READY_TIMEOUT_MS, expectedTargetWindow);
         return false;
       });
     } catch (err) {
@@ -5229,9 +5348,9 @@ MyApplet.prototype = {
     return true;
   },
 
-  _spawnKeyboardWhenClipboardReady: function(args, followUpArgs, expectedClipboardText, deadlineMs) {
+  _spawnKeyboardWhenClipboardReady: function(args, followUpArgs, expectedClipboardText, deadlineMs, expectedTargetWindow) {
     if (expectedClipboardText === undefined || expectedClipboardText === null) {
-      this._spawnKeyboardArgs(args, followUpArgs);
+      this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow);
       return;
     }
     let expected = String(expectedClipboardText);
@@ -5241,7 +5360,7 @@ MyApplet.prototype = {
           return;
         }
         if (String(clipboardText || "") === expected) {
-          this._spawnKeyboardArgs(args, followUpArgs);
+          this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow);
           return;
         }
         if (Date.now() >= deadlineMs) {
@@ -5251,7 +5370,7 @@ MyApplet.prototype = {
         try {
           this.pasteTimer = Mainloop.timeout_add(CLIPBOARD_READY_RETRY_MS, () => {
             this.pasteTimer = 0;
-            this._spawnKeyboardWhenClipboardReady(args, followUpArgs, expected, deadlineMs);
+            this._spawnKeyboardWhenClipboardReady(args, followUpArgs, expected, deadlineMs, expectedTargetWindow);
             return false;
           });
         } catch (err) {
@@ -5265,13 +5384,21 @@ MyApplet.prototype = {
     }
   },
 
-  _spawnKeyboardArgs: function(args, followUpArgs) {
+  _spawnKeyboardArgs: function(args, followUpArgs, expectedTargetWindow) {
+    if (!this._targetXWindowMatchesSnapshot(expectedTargetWindow)) {
+      this._setStatus("error", _("Target window changed before automatic paste"), this.lastTranscript);
+      return;
+    }
     try {
       Util.spawn(this._coerceSpawnArgs(args));
       if (followUpArgs && !this.appletRemoved) {
         this.pasteTimer = Mainloop.timeout_add(PASTE_SUBMIT_DELAY_MS, () => {
           this.pasteTimer = 0;
           if (this.appletRemoved) {
+            return false;
+          }
+          if (!this._targetXWindowMatchesSnapshot(expectedTargetWindow)) {
+            this._setStatus("error", _("Target window changed before automatic submit"), this.lastTranscript);
             return false;
           }
           try {
@@ -5606,7 +5733,7 @@ MyApplet.prototype = {
       return;
     }
     for (let transcript of transcripts) {
-      let label = transcript.preview || transcript.name || _("Transcript");
+      let label = this._shortMenuText(String(transcript.preview || transcript.name || _("Transcript")), 80);
       let entry = new PopupMenu.PopupSubMenuMenuItem(label);
       this.historyItem.menu.addMenuItem(entry);
 

@@ -62,6 +62,26 @@ class AppLoggingTest(unittest.TestCase):
                     "[redacted error details]",
                 )
 
+    def test_sanitize_value_redacts_hyphenated_and_passphrase_keys(self) -> None:
+        self.assertEqual(app_logging.sanitize_value("api-key", "sk-short"), "[redacted]")
+        self.assertEqual(app_logging.sanitize_value("passphrase", "correct horse battery staple"), "[redacted]")
+        self.assertEqual(app_logging.sanitize_value("openai-compatible-api-key", "sk-short"), "[redacted]")
+
+    def test_sanitize_value_does_not_redact_innocent_key_substrings(self) -> None:
+        for key in ("monkey", "turkey", "keyboard", "context_id"):
+            with self.subTest(key=key):
+                self.assertEqual(app_logging.sanitize_value(key, "visible"), "visible")
+
+    def test_sanitize_text_redacts_short_token_like_values(self) -> None:
+        self.assertEqual(app_logging.sanitize_text("session sk-abc", max_chars=120), "session [redacted]")
+        self.assertEqual(app_logging.sanitize_text("session sess-abc", max_chars=120), "session [redacted]")
+
+    def test_sanitize_text_redacts_url_credentials_with_colon_in_password(self) -> None:
+        sanitized = app_logging.sanitize_text("https://user:p:a:s@example.test/path", max_chars=120)
+        self.assertEqual(sanitized, "https://[redacted]@example.test/path")
+        self.assertNotIn("user", sanitized)
+        self.assertNotIn("p:a:s", sanitized)
+
     def test_log_event_redacts_sensitive_fields_and_tokens(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
@@ -449,6 +469,42 @@ class AppLoggingTest(unittest.TestCase):
             self.assertFalse(target.exists())
             self.assertEqual(list(log_dir.glob("*.tmp")), [])
 
+    def test_gzip_file_rejects_source_swap_before_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "source.log"
+            target = log_dir / "target.log.gz"
+            source.write_text("content\n", encoding="utf-8")
+            real_replace = os.replace
+
+            def replace_and_swap(src: object, dst: object, *args: object, **kwargs: object) -> None:
+                real_replace(src, dst, *args, **kwargs)
+                source.unlink()
+                source.write_text("attacker\n", encoding="utf-8")
+
+            with mock.patch("speed_of_cinnamon.app_logging.os.replace", side_effect=replace_and_swap):
+                with self.assertRaisesRegex(RuntimeError, "log source file changed before deletion"):
+                    app_logging._gzip_file(source, target)
+
+            self.assertTrue(target.exists())
+            self.assertTrue(source.exists())
+            self.assertEqual(source.read_text(encoding="utf-8"), "attacker\n")
+            self.assertEqual(list(log_dir.glob("*.tmp")), [])
+
+    def test_gzip_file_fsyncs_temp_file_and_parent_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "source.log"
+            target = log_dir / "target.log.gz"
+            source.write_text("content\n", encoding="utf-8")
+
+            with mock.patch("speed_of_cinnamon.app_logging.os.fsync", wraps=os.fsync) as mocked_fsync:
+                app_logging._gzip_file(source, target)
+
+            self.assertTrue(target.exists())
+            self.assertFalse(source.exists())
+            self.assertGreaterEqual(mocked_fsync.call_count, 3)
+
     def test_gzip_file_rejects_fifo_source_without_blocking(self) -> None:
         if not hasattr(os, "mkfifo"):
             self.skipTest("fifo creation unavailable")
@@ -497,6 +553,40 @@ class AppLoggingTest(unittest.TestCase):
                 app_logging.maintain_logs(log_dir, today=date.today())
 
             self.assertFalse(oldest.exists())
+            self.assertTrue(active.exists())
+
+    def test_enforce_total_size_limit_rejects_path_swap_before_delete(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            oldest = log_dir / "speed-of-cinnamon-2026-06-01.log.gz"
+            newest = log_dir / "speed-of-cinnamon-2026-06-02.log.gz"
+            active = log_dir / f"speed-of-cinnamon-{date.today().isoformat()}.log"
+            oldest.write_bytes(b"o" * 40)
+            newest.write_bytes(b"n" * 40)
+            active.write_bytes(b"a" * 10)
+            original_assert = app_logging._assert_regular_unlinked_file
+            swapped = False
+
+            def assert_with_swap(path: Path, *, field_name: str) -> os.stat_result:
+                nonlocal swapped
+                if path == oldest and field_name == "log file" and not swapped:
+                    oldest.unlink()
+                    oldest.write_bytes(b"attacker")
+                    swapped = True
+                return original_assert(path, field_name=field_name)
+
+            with (
+                mock.patch("speed_of_cinnamon.app_logging.MAX_TOTAL_LOG_BYTES", 55),
+                mock.patch(
+                    "speed_of_cinnamon.app_logging._assert_regular_unlinked_file",
+                    side_effect=assert_with_swap,
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "log file changed before deletion"):
+                    app_logging._enforce_total_size_limit(log_dir)
+
+            self.assertTrue(oldest.exists())
+            self.assertEqual(oldest.read_bytes(), b"attacker")
             self.assertTrue(active.exists())
 
 
