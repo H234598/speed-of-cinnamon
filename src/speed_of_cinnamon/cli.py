@@ -1632,6 +1632,7 @@ def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tu
             kind="recording",
             field_name="recording audio file",
             max_bytes=None,
+            require_encrypted=False,
         )
         encrypted_path, effective_mode = write_encrypted_bytes_atomically(
             path,

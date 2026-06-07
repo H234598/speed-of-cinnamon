@@ -58,14 +58,15 @@ class AlarmTest(unittest.TestCase):
             self.assertFalse(path.exists())
 
     def test_load_alarm_store_rejects_parent_traversal_path(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "unsafe path component"):
-            load_alarm_store(Path("../outside/alarms.json"))
-        with self.assertRaisesRegex(RuntimeError, "unsafe path component"):
-            load_alarm_store(Path("alarms/../alarms.json"))
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(RuntimeError, "unsafe path component"):
+                load_alarm_store(Path(tmp) / ".." / "outside" / "alarms.json")
+            with self.assertRaisesRegex(RuntimeError, "unsafe path component"):
+                load_alarm_store(Path(tmp) / "alarms" / ".." / "alarms.json")
 
-    def test_load_alarm_store_allows_current_directory_relative_path(self) -> None:
-        payload = load_alarm_store(Path("./missing-alarms.json"))
-        self.assertEqual(payload["alarms"], [])
+    def test_load_alarm_store_rejects_current_directory_relative_path(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "must be absolute"):
+            load_alarm_store(Path("./missing-alarms.json"))
 
     def test_load_alarm_store_rejects_oversized_path(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "path is invalid"):
@@ -85,20 +86,15 @@ class AlarmTest(unittest.TestCase):
             save_alarm_store({}, Path("alarms\x00.json"))
 
     def test_save_alarm_store_rejects_parent_traversal_path(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "unsafe path component"):
-            save_alarm_store({}, Path("../outside/alarms.json"))
-        with self.assertRaisesRegex(RuntimeError, "unsafe path component"):
-            save_alarm_store({}, Path("alarms/../alarms.json"))
-
-    def test_save_alarm_store_allows_current_directory_relative_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            cwd = Path.cwd()
-            try:
-                os.chdir(tmp)
-                save_alarm_store({}, Path("./alarms.json"))
-                self.assertTrue(Path("alarms.json").exists())
-            finally:
-                os.chdir(cwd)
+            with self.assertRaisesRegex(RuntimeError, "unsafe path component"):
+                save_alarm_store({}, Path(tmp) / ".." / "outside" / "alarms.json")
+            with self.assertRaisesRegex(RuntimeError, "unsafe path component"):
+                save_alarm_store({}, Path(tmp) / "alarms" / ".." / "alarms.json")
+
+    def test_save_alarm_store_rejects_current_directory_relative_path(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "must be absolute"):
+            save_alarm_store({}, Path("./alarms.json"))
 
     def test_save_alarm_store_rejects_oversized_path(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "path is invalid"):

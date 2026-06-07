@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import errno
 import json
 import os
 import secrets
@@ -57,19 +58,17 @@ _SECRET_TOOL_ATTRIBUTES = ["application", APP_ID, "purpose", "artifact-encryptio
 _SECRET_TOOL_COMMANDS = frozenset({"lookup", "store"})
 _TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin:/var/lib/snapd/snap/bin"
 _ALLOWED_SECRET_TOOL_ENV = {
-    "DBUS_SESSION_BUS_ADDRESS",
-    "DISPLAY",
     "HOME",
     "LANG",
     "LC_ALL",
     "LC_CTYPE",
-    "WAYLAND_DISPLAY",
-    "XAUTHORITY",
     "XDG_CURRENT_DESKTOP",
     "XDG_RUNTIME_DIR",
     "XDG_SESSION_DESKTOP",
     "XDG_SESSION_TYPE",
 }
+_SAFE_DBUS_SESSION_PREFIX = "unix:path="
+_ACL_XATTR = "system.posix_acl_access"
 
 
 def _safe_utf8_length(value: str, *, field_name: str) -> int:
@@ -285,6 +284,28 @@ def _fsync_fd(fd: int) -> None:
         raise ArtifactCryptoError("artifact encryption passphrase file could not be synchronized") from exc
 
 
+def _has_posix_acl(path: Path) -> bool:
+    try:
+        os.getxattr(path, _ACL_XATTR, follow_symlinks=False)
+    except AttributeError:
+        return False
+    except OSError as exc:
+        if exc.errno in {
+            getattr(errno, "ENODATA", 61),
+            getattr(errno, "ENOATTR", 93),
+            errno.EOPNOTSUPP,
+            errno.ENOTSUP,
+        }:
+            return False
+        raise ArtifactCryptoError("artifact encryption passphrase file ACL could not be inspected") from exc
+    return True
+
+
+def _assert_no_posix_acl(path: Path, *, field_name: str) -> None:
+    if _has_posix_acl(path):
+        raise ArtifactCryptoError(f"{field_name} must not have extended ACL permissions")
+
+
 def _temp_passphrase_cleanup_error() -> ArtifactCryptoError:
     return ArtifactCryptoError("artifact encryption passphrase temporary file could not be removed")
 
@@ -311,6 +332,7 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
             raise ArtifactCryptoError("artifact encryption passphrase file directory must be owned by the current user")
         if parent_stat.st_mode & 0o077:
             raise ArtifactCryptoError("artifact encryption passphrase file directory must be private")
+        _assert_no_posix_acl(path.parent, field_name="artifact encryption passphrase file directory")
         temp_fd, temp_name = _create_private_temp_passphrase_file(parent_fd, path.name)
         assert_fd_is_regular_private_file(
             temp_fd,
@@ -372,6 +394,7 @@ def _stat_private_passphrase_parent(path: Path) -> None:
         raise ArtifactCryptoError("artifact encryption passphrase file directory must be owned by the current user")
     if parent_stat.st_mode & 0o077:
         raise ArtifactCryptoError("artifact encryption passphrase file directory must be private")
+    _assert_no_posix_acl(path.parent, field_name="artifact encryption passphrase file directory")
 
 
 def _read_private_passphrase_file(
@@ -407,6 +430,7 @@ def _read_private_passphrase_file(
             raise ArtifactCryptoError("artifact encryption passphrase file must be owned by the current user")
         if file_stat.st_mode & 0o077:
             raise ArtifactCryptoError("artifact encryption passphrase file must be private")
+        _assert_no_posix_acl(path, field_name="artifact encryption passphrase file")
         with os.fdopen(fd, "rb") as handle:
             fd = -1
             payload = handle.read(MAX_PASSPHRASE_FILE_BYTES + 1)
@@ -535,8 +559,48 @@ def _filtered_environment() -> dict[str, str]:
         for key, value in os.environ.items()
         if key in _ALLOWED_SECRET_TOOL_ENV and isinstance(value, str) and not _contains_forbidden_environment_chars(value)
     }
+    runtime_dir = _safe_xdg_runtime_dir(env.get("XDG_RUNTIME_DIR", ""))
+    if runtime_dir is None:
+        env.pop("XDG_RUNTIME_DIR", None)
+    dbus_address = os.environ.get("DBUS_SESSION_BUS_ADDRESS", "")
+    if runtime_dir is not None and _safe_dbus_session_bus_address(dbus_address, runtime_dir):
+        env["DBUS_SESSION_BUS_ADDRESS"] = dbus_address
     env["PATH"] = _TRUSTED_COMMAND_PATH
     return env
+
+
+def _safe_xdg_runtime_dir(value: str) -> Path | None:
+    if not value or _contains_forbidden_environment_chars(value):
+        return None
+    path = Path(value)
+    if not path.is_absolute():
+        return None
+    try:
+        path_stat = path.stat()
+    except OSError:
+        return None
+    if not stat.S_ISDIR(path_stat.st_mode):
+        return None
+    if hasattr(os, "getuid") and path_stat.st_uid != os.getuid():
+        return None
+    if path_stat.st_mode & 0o077:
+        return None
+    return path
+
+
+def _safe_dbus_session_bus_address(value: str, runtime_dir: Path) -> bool:
+    if not value or _contains_forbidden_environment_chars(value):
+        return False
+    if not value.startswith(_SAFE_DBUS_SESSION_PREFIX):
+        return False
+    bus_path = Path(value[len(_SAFE_DBUS_SESSION_PREFIX):])
+    if not bus_path.is_absolute():
+        return False
+    try:
+        bus_path.relative_to(runtime_dir)
+    except ValueError:
+        return False
+    return bus_path == runtime_dir / "bus"
 
 
 def _read_secret_tool_output(handle: Any, *, field_name: str) -> bytes:
@@ -736,7 +800,7 @@ def encrypt_bytes(payload: bytes, requested_mode: object, *, kind: str) -> tuple
     return rendered, key_material.mode
 
 
-def decrypt_bytes(payload: bytes, *, kind: str, require_encrypted: bool = False) -> bytes:
+def decrypt_bytes(payload: bytes, *, kind: str, require_encrypted: bool = True) -> bytes:
     if isinstance(payload, bool) or not isinstance(payload, bytes):
         raise ArtifactCryptoError("artifact payload must be bytes")
     if len(payload) > MAX_ENCRYPTED_ARTIFACT_BYTES and require_encrypted:
@@ -831,7 +895,7 @@ def read_decrypted_bytes_from_file(
     kind: str,
     field_name: str,
     max_bytes: int | None = None,
-    require_encrypted: bool = False,
+    require_encrypted: bool = True,
 ) -> bytes:
     data = read_private_bytes(
         path,

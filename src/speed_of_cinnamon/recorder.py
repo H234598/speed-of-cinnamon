@@ -92,7 +92,9 @@ def _sanitize_ffmpeg_error_detail(value: object) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
-    text = text.replace("\r", "\\r").replace("\n", "\\n").replace("\x00", "\\x00")
+    text = _strip_ffmpeg_terminal_controls(text).strip()
+    if not text:
+        return ""
     lowered = text.lower()
     if (
         "/" in text
@@ -107,6 +109,34 @@ def _sanitize_ffmpeg_error_detail(value: object) -> str:
     if len(text) > 160:
         return text[:157] + "..."
     return text
+
+
+def _strip_ffmpeg_terminal_controls(text: str) -> str:
+    result: list[str] = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "\x1b":
+            next_index = index + 1
+            if next_index < len(text) and text[next_index] == "[":
+                index = next_index + 1
+                while index < len(text):
+                    codepoint = ord(text[index])
+                    index += 1
+                    if 0x40 <= codepoint <= 0x7E:
+                        break
+                continue
+            index += 1
+            continue
+        codepoint = ord(char)
+        if codepoint in (0x09, 0x0A, 0x0D):
+            result.append(" ")
+        elif codepoint < 0x20 or 0x7F <= codepoint <= 0x9F:
+            pass
+        else:
+            result.append(char)
+        index += 1
+    return "".join(result)
 
 
 def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:

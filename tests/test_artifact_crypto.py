@@ -293,15 +293,51 @@ class ArtifactCryptoTest(unittest.TestCase):
     def test_secret_tool_environment_skips_control_character_values(self) -> None:
         with mock.patch.dict(
             os.environ,
-            {"DISPLAY": ":0", "HOME": "bad\nhome", "XDG_RUNTIME_DIR": "/run/user/1000"},
+            {"DISPLAY": ":0", "HOME": "bad\nhome", "XDG_RUNTIME_DIR": "relative-runtime"},
             clear=True,
         ):
             env = artifact_crypto._filtered_environment()
 
-        self.assertEqual(env["DISPLAY"], ":0")
-        self.assertEqual(env["XDG_RUNTIME_DIR"], "/run/user/1000")
+        self.assertNotIn("DISPLAY", env)
+        self.assertNotIn("XDG_RUNTIME_DIR", env)
         self.assertNotIn("HOME", env)
         self.assertEqual(env["PATH"], artifact_crypto._TRUSTED_COMMAND_PATH)
+
+    def test_secret_tool_environment_keeps_only_pinned_session_bus(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            runtime.chmod(0o700)
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "XDG_RUNTIME_DIR": str(runtime),
+                    "DBUS_SESSION_BUS_ADDRESS": f"unix:path={runtime / 'bus'}",
+                    "DISPLAY": ":0",
+                },
+                clear=True,
+            ):
+                env = artifact_crypto._filtered_environment()
+
+        self.assertEqual(env["XDG_RUNTIME_DIR"], str(runtime))
+        self.assertEqual(env["DBUS_SESSION_BUS_ADDRESS"], f"unix:path={runtime / 'bus'}")
+        self.assertNotIn("DISPLAY", env)
+
+    def test_secret_tool_environment_drops_unpinned_session_bus(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            runtime.chmod(0o700)
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "XDG_RUNTIME_DIR": str(runtime),
+                    "DBUS_SESSION_BUS_ADDRESS": "unix:path=/tmp/attacker-bus",
+                },
+                clear=True,
+            ):
+                env = artifact_crypto._filtered_environment()
+
+        self.assertEqual(env["XDG_RUNTIME_DIR"], str(runtime))
+        self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", env)
 
     def test_secret_tool_rejects_unsafe_arguments_before_start(self) -> None:
         unsafe_invocations = [
@@ -394,18 +430,41 @@ class ArtifactCryptoTest(unittest.TestCase):
 
     def test_decrypt_bytes_rejects_oversized_encrypted_payload_without_requirements(self) -> None:
         with mock.patch("speed_of_cinnamon.artifact_crypto.MAX_ENCRYPTED_ARTIFACT_BYTES", 4):
-            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "encrypted artifact payload is too large"):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "artifact payload is too large"):
                 artifact_crypto.decrypt_bytes(b'{"magic":"SOCENC1","version":1,"ciphertext":"x"}', kind="transcript")
 
     def test_decrypt_bytes_rejects_oversized_json_like_payload_without_requirements(self) -> None:
         with mock.patch("speed_of_cinnamon.artifact_crypto.MAX_ENCRYPTED_ARTIFACT_BYTES", 4):
-            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "encrypted artifact payload is too large"):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "artifact payload is too large"):
                 artifact_crypto.decrypt_bytes(b'{"magic":"SOCENC1","version":1}', kind="transcript")
 
-    def test_decrypt_bytes_allows_oversized_non_json_payload_when_not_required(self) -> None:
+    def test_decrypt_bytes_rejects_plaintext_by_default(self) -> None:
+        with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "envelope is missing"):
+            artifact_crypto.decrypt_bytes(b"plaintext", kind="transcript")
+
+    def test_read_decrypted_bytes_from_file_rejects_plaintext_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.txt"
+            path.write_bytes(b"plaintext")
+            path.chmod(0o600)
+
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "envelope is missing"):
+                artifact_crypto.read_decrypted_bytes_from_file(path, kind="transcript", field_name="artifact")
+
+            self.assertEqual(
+                artifact_crypto.read_decrypted_bytes_from_file(
+                    path,
+                    kind="transcript",
+                    field_name="artifact",
+                    require_encrypted=False,
+                ),
+                b"plaintext",
+            )
+
+    def test_decrypt_bytes_allows_oversized_non_json_payload_when_explicitly_not_required(self) -> None:
         with mock.patch("speed_of_cinnamon.artifact_crypto.MAX_ENCRYPTED_ARTIFACT_BYTES", 4):
             payload = b"-----BEGIN PRIVATE KEY-----"
-            self.assertEqual(artifact_crypto.decrypt_bytes(payload, kind="transcript"), payload)
+            self.assertEqual(artifact_crypto.decrypt_bytes(payload, kind="transcript", require_encrypted=False), payload)
 
     def test_decrypt_bytes_still_enforces_size_for_required_encrypted_payloads(self) -> None:
         with mock.patch("speed_of_cinnamon.artifact_crypto.MAX_ENCRYPTED_ARTIFACT_BYTES", 4):

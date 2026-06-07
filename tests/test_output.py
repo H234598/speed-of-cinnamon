@@ -209,8 +209,23 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"),
             mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
         ):
-            with self.assertRaisesRegex(OutputError, "failed: boom"):
+            with self.assertRaisesRegex(OutputError, "failed with exit code 1"):
                 _run_with_input(["cmd"], "input")
+
+    def test_run_with_input_redacts_command_error_output(self) -> None:
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            stderr = cast(BinaryIO, kwargs["stderr"])
+            stderr.write(b"Authorization: Bearer secret-token")
+            return subprocess.CompletedProcess(["cmd"], 1, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"),
+            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+        ):
+            with self.assertRaisesRegex(OutputError, "failed with exit code 1") as raised:
+                _run_with_input(["cmd"], "input")
+
+        self.assertNotIn("secret-token", str(raised.exception))
 
     def test_run_with_input_rejects_oversized_text(self) -> None:
         with self.assertRaisesRegex(OutputError, "command input is too large"):
@@ -534,7 +549,7 @@ class OutputTest(unittest.TestCase):
         self.assertEqual(which_calls.count("xdotool"), 1)
         self.assertEqual(which_calls.count("wtype"), 0)
 
-    def test_paste_from_clipboard_uses_generic_paste_for_wtype(self) -> None:
+    def test_paste_from_clipboard_rejects_wtype_without_verifiable_window(self) -> None:
         def fake_which(command: str, path: str | None = None) -> str | None:
             del path
             return "/usr/bin/wtype" if command == "wtype" else None
@@ -543,14 +558,10 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output.shutil.which", side_effect=fake_which),
             mock.patch("speed_of_cinnamon.output._run_with_input") as mocked_run,
         ):
-            paste_from_clipboard()
+            with self.assertRaisesRegex(OutputError, "without verifiable active window"):
+                paste_from_clipboard()
 
-        mocked_run.assert_called_once_with(
-            ["wtype", "-M", "ctrl", "v", "-m", "ctrl"],
-            "",
-            timeout=10,
-            resolved_command="/usr/bin/wtype",
-        )
+        mocked_run.assert_not_called()
 
     def test_paste_from_clipboard_does_not_fallback_after_xdotool_key_error(self) -> None:
         def fake_which(command: str, path: str | None = None) -> str | None:

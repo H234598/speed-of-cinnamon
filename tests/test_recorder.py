@@ -384,6 +384,13 @@ class RecorderTest(unittest.TestCase):
                     with self.assertRaisesRegex(RecorderError, "bad audio"):
                         trim_recording_silence(audio)
 
+    def test_sanitize_ffmpeg_error_strips_ansi_control_chars(self) -> None:
+        detail = recorder_module._sanitize_ffmpeg_error_detail("\x1b[31mboom\x1b[0m\x07")
+
+        self.assertEqual(detail, "boom")
+        self.assertNotIn("\x1b", detail)
+        self.assertNotIn("\x07", detail)
+
     def test_trim_recording_silence_redacts_ffmpeg_path_error_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "secret-sample.wav"

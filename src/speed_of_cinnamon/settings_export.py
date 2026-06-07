@@ -426,6 +426,8 @@ def build_export(settings: dict[str, Any], alarm_store: dict[str, Any] | None = 
 
 def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, Any] | None = None) -> dict[str, Any]:
     _assert_clean_path(path, field_name="settings export path")
+    if not path.is_absolute():
+        raise SettingsExportError("settings export path must be absolute")
     payload = build_export(settings, alarm_store)
     rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     if _utf8_byte_count(rendered, field_name="settings export payload") > MAX_SETTINGS_EXPORT_BYTES:
@@ -469,6 +471,8 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
 
 def read_export(path: Path) -> dict[str, Any]:
     _assert_clean_path(path, field_name="settings export path")
+    if not path.is_absolute():
+        raise SettingsExportError("settings export path must be absolute")
     try:
         text = _read_text_capped_without_following_symlinks(path)
         if _utf8_byte_count(text, field_name="settings export content") > MAX_SETTINGS_EXPORT_BYTES:

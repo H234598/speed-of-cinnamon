@@ -307,6 +307,20 @@ class CommandChainTest(unittest.TestCase):
         self.assertNotIn("sk-secret-token", message)
         self.assertNotIn("private-token", message)
 
+    def test_run_command_chain_redacts_timed_out_command_argv(self) -> None:
+        with self.assertRaises(CommandChainError) as cm:
+            run_command_chain(
+                [("python3", "-c", "import time; time.sleep(5)", "--api-key", "SECRET_TOKEN")],
+                "seed",
+                label="post-process",
+                timeout_seconds=1,
+            )
+
+        message = str(cm.exception)
+        self.assertIn("post-process command timed out", message)
+        self.assertNotIn("--api-key", message)
+        self.assertNotIn("SECRET_TOKEN", message)
+
     def test_run_command_chain_rejects_invalid_command_input_utf8(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "input is not valid UTF-8"):
             run_command_chain([("cmd",)], "\udcff", label="post-process")

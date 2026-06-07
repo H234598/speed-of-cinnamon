@@ -12,6 +12,14 @@ from speed_of_cinnamon import path_safety
 
 
 class PathSafetyTest(unittest.TestCase):
+    def test_open_file_without_following_symlinks_rejects_relative_paths(self) -> None:
+        with self.assertRaisesRegex(OSError, "must be absolute"):
+            path_safety.open_file_without_following_symlinks(Path("settings.json"), os.O_RDONLY)
+
+    def test_atomic_write_rejects_relative_paths(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "must be absolute"):
+            path_safety.write_text_atomically_without_following_symlinks(Path("settings.json"), "{}")
+
     def test_atomic_write_creates_parent_without_pathlib_mkdir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "nested" / "settings.json"

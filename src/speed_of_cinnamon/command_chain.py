@@ -122,6 +122,10 @@ def _command_failure_detail(returncode: int, stdout_size: int, stderr_size: int)
     return f"exit code {returncode}"
 
 
+def _command_timeout_detail(label: str, timeout_seconds: int) -> str:
+    return f"{label} command timed out after {timeout_seconds} seconds"
+
+
 def _terminate_bounded_process(proc: subprocess.Popen[bytes]) -> None:
     try:
         proc.kill()
@@ -188,7 +192,7 @@ def run_process_bounded_output(
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     _terminate_bounded_process(proc)
-                    raise subprocess.TimeoutExpired(argv, timeout_seconds)
+                    raise CommandChainError(_command_timeout_detail(label, timeout_seconds))
                 events = selector.select(remaining)
                 if not events:
                     continue
@@ -215,7 +219,7 @@ def run_process_bounded_output(
                 returncode = proc.wait(timeout=max(0.0, deadline - time.monotonic()))
             except subprocess.TimeoutExpired:
                 _terminate_bounded_process(proc)
-                raise
+                raise CommandChainError(_command_timeout_detail(label, timeout_seconds)) from None
             return returncode, b"".join(stdout_chunks), b"".join(stderr_chunks)
         finally:
             for key in list(selector.get_map().values()):

@@ -10,9 +10,10 @@ DEFAULT_MAX_TEXT_READ_BYTES = 1_000_000
 
 
 def _safe_path_parts(path: Path, *, field_name: str) -> tuple[str, ...]:
+    if not path.is_absolute():
+        raise OSError(f"{field_name} must be absolute")
     parts = path.parts
-    if path.is_absolute():
-        parts = parts[1:]
+    parts = parts[1:]
     if not parts:
         raise OSError(f"{field_name} is invalid")
     if any(part in {"", ".."} for part in parts):

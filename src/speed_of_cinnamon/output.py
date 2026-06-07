@@ -849,9 +849,7 @@ def _run_with_input(
             raise OutputError(f"{command} produced too much error output")
 
         if proc.returncode != 0:
-            detail = _read_file_head(stderr_file, MAX_ERROR_CHARS).strip() or _read_file_head(stdout_file, MAX_ERROR_CHARS).strip()
-            detail = detail or f"exit code {proc.returncode}"
-            raise OutputError(f"{command} failed: {detail}")
+            raise OutputError(f"{command} failed with exit code {proc.returncode}")
 
 
 def _command_path(command: str) -> str:
@@ -1221,13 +1219,7 @@ def paste_from_clipboard(expected_window_snapshot: tuple[str, str, str] | None =
             return
     wtype = _which("wtype")
     if wtype and xdotool_error is None:
-        _run_with_input(
-            ["wtype", "-M", "ctrl", "v", "-m", "ctrl"],
-            "",
-            timeout=MAX_PASTE_TIMEOUT_SECONDS,
-            resolved_command=wtype,
-        )
-        return
+        raise OutputError("refusing automatic paste without verifiable active window")
     if xdotool_error is not None:
         raise xdotool_error
     raise OutputError("no keyboard helper found; install xdotool or wtype")

@@ -111,6 +111,10 @@ class SettingsExportTest(unittest.TestCase):
         with self.assertRaisesRegex(SettingsExportError, "must be a path"):
             read_export(True)  # type: ignore[arg-type]
 
+    def test_read_export_rejects_relative_path(self) -> None:
+        with self.assertRaisesRegex(SettingsExportError, "must be absolute"):
+            read_export(Path("settings-export.json"))
+
     def test_write_export_rejects_non_path(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "must be a path"):
             write_export("settings-export.json", {"language": "en"})  # type: ignore[arg-type]
@@ -118,6 +122,10 @@ class SettingsExportTest(unittest.TestCase):
     def test_write_export_rejects_boolean_path(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "must be a path"):
             write_export(False, {"language": "en"})  # type: ignore[arg-type]
+
+    def test_write_export_rejects_relative_path(self) -> None:
+        with self.assertRaisesRegex(SettingsExportError, "must be absolute"):
+            write_export(Path("settings-export.json"), {"language": "en"})
 
     def test_sanitize_text_field_rejects_non_text(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "must be text"):

@@ -37,10 +37,11 @@ class StateStoreTest(unittest.TestCase):
             StateStore(Path("state\\\\x00.json"))
 
     def test_state_store_rejects_parent_traversal_path(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "unsafe path component"):
-            StateStore(Path("../outside/state.json"))
-        with self.assertRaisesRegex(RuntimeError, "unsafe path component"):
-            StateStore(Path("state/../state.json"))
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(RuntimeError, "unsafe path component"):
+                StateStore(Path(tmp) / ".." / "outside" / "state.json")
+            with self.assertRaisesRegex(RuntimeError, "unsafe path component"):
+                StateStore(Path(tmp) / "state" / ".." / "state.json")
 
     def test_state_store_rejects_relative_path(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "state file path must be absolute"):
