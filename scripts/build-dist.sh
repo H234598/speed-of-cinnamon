@@ -82,6 +82,7 @@ fi
 work_dir="${work_dir_abs}"
 staging_tarball=""
 staging_checksum=""
+dist_staging_dir=""
 dist_finalize_lock="${dist_dir}/.build-dist.finalize.lock"
 cleanup() {
   if [[ -n "${staging_tarball}" ]]; then
@@ -89,6 +90,9 @@ cleanup() {
   fi
   if [[ -n "${staging_checksum}" ]]; then
     "${safe_fs_cmd[@]}" remove-leaf build-dist "${staging_checksum}" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${dist_staging_dir}" ]]; then
+    "${safe_fs_cmd[@]}" remove build-dist "${dist_staging_dir}" --kind dir >/dev/null 2>&1 || true
   fi
   if [[ -n "${work_dir}" ]]; then
     "${safe_fs_cmd[@]}" remove build-dist "${work_dir}" --kind dir >/dev/null 2>&1 || true
@@ -267,13 +271,27 @@ EOF
 
 final_tarball="${dist_dir}/${package}.tar.gz"
 final_checksum="${final_tarball}.sha256"
-staging_tarball="$(mktemp "${dist_dir}/.${package}.tar.gz.XXXXXX")"
+dist_staging_dir="$(mktemp -d "${repo_dir}/.build-dist-staging-XXXXXX")"
+if [[ -L "${dist_staging_dir}" ]]; then
+  printf 'dist staging directory must not be a symlink: %s\n' "${dist_staging_dir}" >&2
+  exit 1
+fi
+if ! dist_staging_dir_abs="$(realpath "${dist_staging_dir}")"; then
+  printf 'failed to resolve dist staging directory: %s\n' "${dist_staging_dir}" >&2
+  exit 1
+fi
+if [[ "${dist_staging_dir_abs}" != "${repo_dir}/.build-dist-staging-"* ]]; then
+  printf 'dist staging directory escaped repository root: %s\n' "${dist_staging_dir}" >&2
+  exit 1
+fi
+dist_staging_dir="${dist_staging_dir_abs}"
+staging_tarball="$(mktemp "${dist_staging_dir}/.${package}.tar.gz.XXXXXX")"
 
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@0" -C "${work_dir}" -czf "${staging_tarball}" "${package}"
 fsync_regular_file "${staging_tarball}" "staged dist tarball"
 checksum_value="$(sha256sum "${staging_tarball}")"
 checksum_value="${checksum_value%% *}"
-staging_checksum="$(mktemp "${dist_dir}/.${package}.tar.gz.sha256.XXXXXX")"
+staging_checksum="$(mktemp "${dist_staging_dir}/.${package}.tar.gz.sha256.XXXXXX")"
 printf '%s  %s\n' "${checksum_value}" "${package}.tar.gz" \
   | write_regular_file_from_stdin "${staging_checksum}" "staged dist checksum"
 replace_with_finalize_lock \

@@ -298,6 +298,10 @@ def sanitize_value(key: str, value: object) -> object:
 def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         return "[invalid]"
+    redacted_value = _OPENAI_KEY_RE.sub("[redacted]", value)
+    redacted_value = _SHORT_API_KEY_RE.sub("[redacted]", redacted_value)
+    if redacted_value != value:
+        value = redacted_value
     if (
         not _contains_control_chars(value)
         and ":" not in value

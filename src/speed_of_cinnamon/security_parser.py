@@ -253,26 +253,18 @@ def _read_blacklist(path: Path, *, strict: bool = False) -> list[str]:
     try:
         path = _safe_blacklist_path(path)
     except RuntimeError as exc:
-        if strict:
-            raise ValueError("blacklist file path is not safe") from exc
-        return []
+        raise ValueError("blacklist file path is not safe") from exc
     try:
         file_stat = path.lstat()
     except FileNotFoundError:
         return []
     except OSError as exc:
-        if strict:
-            raise ValueError("failed to inspect blacklist file") from exc
-        return []
+        raise ValueError("failed to inspect blacklist file") from exc
     if not stat.S_ISREG(file_stat.st_mode):
-        if strict:
-            raise ValueError("blacklist file is not a regular file")
-        return []
+        raise ValueError("blacklist file is not a regular file")
     try:
         if file_stat.st_size > _MAX_BLACKLIST_FILE_BYTES:
-            if strict:
-                raise ValueError("blacklist file is too large")
-            return []
+            raise ValueError("blacklist file is too large")
         text = read_text_without_following_symlinks(
             path,
             field_name="blacklist file",
@@ -280,12 +272,8 @@ def _read_blacklist(path: Path, *, strict: bool = False) -> list[str]:
         )
     except (OSError, UnicodeDecodeError) as exc:
         if "too large" in str(exc):
-            if strict:
-                raise ValueError("blacklist file is too large") from exc
-            return []
-        if strict:
-            raise ValueError("failed to read blacklist file") from exc
-        return []
+            raise ValueError("blacklist file is too large") from exc
+        raise ValueError("failed to read blacklist file") from exc
     values: list[str] = []
     value_keys: set[str] = set()
     for line in text.splitlines():

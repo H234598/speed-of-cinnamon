@@ -318,13 +318,32 @@ require_regular_source_file "${safe_fs}" "safe local filesystem helper"
 
 staging_dir=""
 upload_refs=()
+staging_root="${TMPDIR:-/tmp}"
 declare -A staged_names_seen=()
 source_archive_ref=""
 checksum_ref=""
 rpm_ref=""
 srpm_ref=""
 snap_ref=""
-staging_dir="$(mktemp -d "${repo_dir}/dist/release-upload-XXXXXX")"
+if [[ ! "${staging_root}" == /* ]]; then
+  printf 'temporary root must be an absolute path: %s\n' "${staging_root}" >&2
+  exit 1
+fi
+if [[ -L "${staging_root}" ]]; then
+  printf 'temporary root must not be a symlink: %s\n' "${staging_root}" >&2
+  exit 1
+fi
+if [[ ! -d "${staging_root}" || ! -w "${staging_root}" ]]; then
+  printf 'temporary root is not a writable directory: %s\n' "${staging_root}" >&2
+  exit 1
+fi
+if ! staging_root="$(realpath "${staging_root}")"; then
+  printf 'failed to resolve temporary root: %s\n' "${staging_root}" >&2
+  exit 1
+fi
+mkdir -p "${staging_root}"
+
+staging_dir="$(mktemp -d "${staging_root}/speed-of-cinnamon-release-upload-XXXXXX")"
 if [[ -z "${staging_dir}" ]]; then
   printf 'failed to create staging directory for upload assets.\n' >&2
   exit 1
@@ -337,8 +356,8 @@ if ! staging_dir_abs="$(realpath "${staging_dir}")"; then
   printf 'failed to resolve release staging directory: %s\n' "${staging_dir}" >&2
   exit 1
 fi
-if [[ "${staging_dir_abs}" != "${repo_dir}/dist/release-upload-"* ]]; then
-  printf 'release staging directory escaped dist directory: %s\n' "${staging_dir}" >&2
+if [[ "${staging_dir_abs}" != "${staging_root}/speed-of-cinnamon-release-upload-"* ]]; then
+  printf 'release staging directory escaped temporary root: %s\n' "${staging_dir}" >&2
   exit 1
 fi
 staging_dir="${staging_dir_abs}"

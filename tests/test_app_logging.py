@@ -103,6 +103,8 @@ class AppLoggingTest(unittest.TestCase):
     def test_sanitize_text_redacts_short_token_like_values(self) -> None:
         self.assertEqual(app_logging.sanitize_text("session sk-abc", max_chars=120), "session [redacted]")
         self.assertEqual(app_logging.sanitize_text("session sess-abc", max_chars=120), "session [redacted]")
+        self.assertEqual(app_logging.sanitize_text("sk-standalone", max_chars=120), "[redacted]")
+        self.assertEqual(app_logging.sanitize_text("sess-standalone", max_chars=120), "[redacted]")
 
     def test_sanitize_text_redacts_url_credentials_with_colon_in_password(self) -> None:
         sanitized = app_logging.sanitize_text("https://user:p:a:s@example.test/path", max_chars=120)

@@ -420,30 +420,28 @@ class SecurityParserTest(unittest.TestCase):
             target.write_text("geheim\n")
             path = Path(tmp) / "link.txt"
             os.symlink(target, path)
-            entries = load_blacklist_file(path)
-        self.assertEqual(entries, [])
+            with self.assertRaisesRegex(ValueError, "blacklist file path is not safe"):
+                load_blacklist_file(path)
 
     def test_load_blacklist_file_strict_rejects_non_regular_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "blacklist.txt"
             path.mkdir()
 
-            tolerant_entries = load_blacklist_file(path)
+            with self.assertRaisesRegex(ValueError, "blacklist file is not a regular file"):
+                load_blacklist_file(path)
             with self.assertRaisesRegex(ValueError, "blacklist file is not a regular file"):
                 load_blacklist_file(path, strict=True)
-
-        self.assertEqual(tolerant_entries, [])
 
     def test_load_blacklist_file_strict_rejects_unreadable_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "blacklist.txt"
             path.write_bytes(b"\xff")
 
-            tolerant_entries = load_blacklist_file(path)
+            with self.assertRaises(ValueError):
+                load_blacklist_file(path)
             with self.assertRaises(ValueError):
                 load_blacklist_file(path, strict=True)
-
-        self.assertEqual(tolerant_entries, [])
 
     def test_load_blacklist_file_rejects_file_that_grows_after_size_check(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -454,11 +452,11 @@ class SecurityParserTest(unittest.TestCase):
                 "speed_of_cinnamon.security_parser.read_text_without_following_symlinks",
                 side_effect=OSError("blacklist file is too large"),
             ) as mocked_read:
-                tolerant_entries = load_blacklist_file(path)
+                with self.assertRaisesRegex(ValueError, "blacklist file is too large"):
+                    load_blacklist_file(path)
                 with self.assertRaisesRegex(ValueError, "blacklist file is too large"):
                     load_blacklist_file(path, strict=True)
 
-        self.assertEqual(tolerant_entries, [])
         self.assertEqual(mocked_read.call_count, 2)
         mocked_read.assert_called_with(path, field_name="blacklist file", max_bytes=_MAX_BLACKLIST_FILE_BYTES)
 
