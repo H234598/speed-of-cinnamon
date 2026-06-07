@@ -35,6 +35,13 @@ DEFAULT_MAX_TRANSCRIPT_FILES = 500
 MIN_RECORDING_SECONDS = 0
 MIN_TYPING_DELAY_MS = 0
 
+NON_EXPORTABLE_PRIVATE_SETTINGS: tuple[str, ...] = (
+    "cli-path",
+    "openai-compatible-api-key",
+    "post-process-command",
+    "transcriber-command",
+)
+
 EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "toggle-keybinding": (str, "<Super>z::"),
     "primary-language-keybinding": (str, ""),
@@ -366,12 +373,29 @@ def normalize_alarm_store(value: Any) -> dict[str, Any]:
     }
 
 
+def normalize_excluded_private_settings(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise SettingsExportError("settings export excluded private settings must be a list")
+    allowed = set(NON_EXPORTABLE_PRIVATE_SETTINGS)
+    normalized: list[str] = []
+    for raw_item in value:
+        if not isinstance(raw_item, str):
+            continue
+        item = _sanitize_text_field(raw_item, field_name="settings export excluded private setting")
+        if item in allowed and item not in normalized:
+            normalized.append(item)
+    return normalized
+
+
 def build_export(settings: dict[str, Any], alarm_store: dict[str, Any] | None = None) -> dict[str, Any]:
     normalized_alarm_store = normalize_alarm_store(alarm_store if alarm_store is not None else {})
     return {
         "app": APP_ID,
         "version": EXPORT_VERSION,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "excluded_private_settings": list(NON_EXPORTABLE_PRIVATE_SETTINGS),
         "speed_of_cinnamon_version": __version__,
         "settings": normalize_settings(settings),
         "alarms": normalized_alarm_store,
@@ -453,6 +477,9 @@ def read_export(path: Path) -> dict[str, Any]:
         "speed_of_cinnamon_version": _sanitize_text_field(
             payload.get("speed_of_cinnamon_version", ""),
             field_name="settings export speed_of_cinnamon_version",
+        ),
+        "excluded_private_settings": normalize_excluded_private_settings(
+            payload.get("excluded_private_settings", list(NON_EXPORTABLE_PRIVATE_SETTINGS))
         ),
         "settings": normalize_settings(raw_settings),
         "alarms": normalize_alarm_store(raw_alarms),

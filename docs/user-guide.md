@@ -260,9 +260,9 @@ retained recording files are protected. The default is `Secret Service keyring`,
 desktop keyring. `Passphrase` mode uses `SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE`, an existing
 `~/.config/speed-of-cinnamon/artifact.key`, `SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE`, or a newly generated default key
 file when no explicit source exists. Prefer the file variable for explicit deployments. If keyring mode cannot use the
-desktop keyring, passphrase fallback is allowed only when `SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE` or
-`SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE` is set explicitly; otherwise encrypted writes fail closed. Weak explicit
-sources are rejected; a weak generated default key file is replaced.
+desktop keyring, encrypted writes fail closed instead of silently downgrading to passphrase mode. Choose `Passphrase`
+explicitly if Secret Service is not usable. Weak explicit sources are rejected; a weak generated default key file is
+replaced.
 Files ending in `.socenc` must be valid Speed of Cinnamon encrypted envelopes. Plaintext or malformed `.socenc` files are
 rejected or skipped instead of being treated as transcript or recording content.
 
@@ -287,7 +287,8 @@ Use `Export settings` and `Import settings` in the applet menu to write or resto
 The export includes hotkeys, languages, recorder/backend choices, personalization, output mode,
 recording retention, notification settings, and the local alarm store. It intentionally excludes machine-local
 `cli-path`, `openai-compatible-api-key`, and custom command templates. Backend URLs with embedded credentials, query
-strings, or fragments are rejected instead of being written to the export.
+strings, or fragments are rejected instead of being written to the export. Export files list these intentionally
+excluded private setting names in `excluded_private_settings`, but never include their values.
 
 Treat the export as private. Personal context, vocabulary, and alarm names may contain private data.
 

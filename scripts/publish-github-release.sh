@@ -67,7 +67,7 @@ if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 1
 fi
 
-required_tools=(git python3 realpath awk sha256sum grep stat mktemp chmod)
+required_tools=(git python3 realpath awk sha256sum grep stat mktemp chmod basename dirname)
 if [[ "${dry_run}" == "false" ]]; then
   required_tools+=(gh)
 fi

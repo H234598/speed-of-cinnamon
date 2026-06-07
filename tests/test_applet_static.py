@@ -1292,14 +1292,14 @@ class AppletStaticTest(unittest.TestCase):
             set(schema["artifact-encryption"]["options"].values()),
             {"keyring", "passphrase", "off"},
         )
-        self.assertIn("passphrase only when", schema["artifact-encryption"]["tooltip"])
-        self.assertIn("is set explicitly", schema["artifact-encryption"]["tooltip"])
+        self.assertIn("Keyring failure fails closed", schema["artifact-encryption"]["tooltip"])
+        self.assertIn("instead of silently downgrading to passphrase mode", schema["artifact-encryption"]["tooltip"])
         self.assertIn("fails visibly", schema["openai-compatible-flex-processing"]["tooltip"])
         self.assertIn("instead of silently retrying without Flex", schema["openai-compatible-flex-processing"]["tooltip"])
         self.assertEqual(schema["artifact-encryption-help-keyring"]["type"], "label")
         self.assertEqual(schema["artifact-encryption-help-keyring"]["dependency"], "artifact-encryption=keyring")
         self.assertIn("fail closed", schema["artifact-encryption-help-keyring"]["description"])
-        self.assertIn("is set explicitly", schema["artifact-encryption-help-keyring"]["description"])
+        self.assertIn("Choose Passphrase explicitly", schema["artifact-encryption-help-keyring"]["description"])
         self.assertNotIn("generate the default key file", schema["artifact-encryption-help-keyring"]["description"])
         self.assertIn("critical warning popup", schema["artifact-encryption-help-keyring"]["description"])
         self.assertEqual(schema["artifact-encryption-help-passphrase"]["type"], "label")
@@ -1439,13 +1439,15 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._clipboardTargetList("wl-paste", ["--list-types"])', source)
         self.assertIn('Copied to clipboard; automatic paste command could not be started', source)
 
-    def test_applet_allows_auto_paste_when_clipboard_targets_unknown_but_blocks_empty_targets(self) -> None:
+    def test_applet_blocks_auto_paste_when_clipboard_targets_unknown_or_empty(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         self.assertIn(
-            'if (targets === null || targets === undefined) {\n      return {\n        signature: "unknown",\n        hasNonTextPayload: false,',
+            'if (targets === null || targets === undefined) {\n      return {\n        signature: "unknown",\n        hasNonTextPayload: true,',
             source,
         )
+        self.assertIn('if (originalClipboardSignature === "unknown") {', source)
+        self.assertIn('this._setStatus("ready", _("Clipboard state unavailable; overwrite cancelled"), transcript);', source)
         self.assertIn('return ["clipboard"];', source)
 
     def test_applet_prompts_before_overwriting_non_text_clipboard_payload(self) -> None:

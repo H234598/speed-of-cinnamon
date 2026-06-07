@@ -273,14 +273,21 @@ class SettingsExportTest(unittest.TestCase):
 
     def test_build_export_does_not_leak_command_settings(self) -> None:
         payload = build_export({
+            "openai-compatible-api-key": "sk-live-secret",
             "transcriber-command": "custom-asr --token sk-secret-token",
             "post-process-command": "polish --api-key ghp_secret",
             "language": "de",
         })
         rendered = json.dumps(payload, sort_keys=True)
 
+        self.assertNotIn("openai-compatible-api-key", payload["settings"])
         self.assertNotIn("transcriber-command", payload["settings"])
         self.assertNotIn("post-process-command", payload["settings"])
+        self.assertIn("openai-compatible-api-key", payload["excluded_private_settings"])
+        self.assertIn("transcriber-command", payload["excluded_private_settings"])
+        self.assertIn("post-process-command", payload["excluded_private_settings"])
+        self.assertIn("cli-path", payload["excluded_private_settings"])
+        self.assertNotIn("sk-live-secret", rendered)
         self.assertNotIn("sk-secret-token", rendered)
         self.assertNotIn("ghp_secret", rendered)
 
@@ -346,6 +353,8 @@ class SettingsExportTest(unittest.TestCase):
         self.assertEqual(payload["settings"]["artifact-encryption"], "keyring")
         self.assertFalse(payload["settings"]["notify-complete"])
         self.assertEqual(payload["settings"]["personal-context"], "Project words")
+        self.assertIn("openai-compatible-api-key", payload["excluded_private_settings"])
+        self.assertIn("transcriber-command", payload["excluded_private_settings"])
         self.assertEqual(payload["alarms"]["last_checked_at"], "2026-06-01T09:10")
         self.assertEqual(payload["alarms"]["alarms"][0]["name"], "Standup")
         self.assertEqual(payload["alarms"]["alarms"][0]["days"], ["mon", "wed", "fri"])

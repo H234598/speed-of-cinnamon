@@ -53,6 +53,7 @@ _URL_CREDENTIAL_RE = re.compile(r"([a-z][a-z0-9+.-]*://)([^/@\s:]+):([^@\s]+)@")
 _ERROR_DETAIL_RE = re.compile(
     r"(?i)(?:\b(?:stdout|stderr)\s*:|\b(?:raw\s+)?transcript\s*(?::|\b(?:text|words|payload|for)\b)|\bprompt\s*:|command\s+output\s*:|backend\s+output\s*:)"
 )
+_ERROR_OUTPUT_LIKELY_RE = re.compile(r"(?i)\b(traceback|exception|at|exit\s+code|stderr|stdout|command\s+output|process\s+exited|python|failed\s+with|npm|node)\b")
 _ERROR_SECRET_WORD_RE = re.compile(r"(?i)\bsecret\b")
 _SANITIZE_HINT_RE = re.compile(
     r"(?i)(?:\b(?:bearer|token|api[_ -]?key|apikey|secret|password|passwd|passphrase)\b\s*[:=]\s*[^,\s;]+|\b(?:token|api[_ -]?key|apikey|password|passwd|passphrase)\b\s+(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required)\b)[^,\s;]+|\bbearer\s+[^,\s;]+|\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b|[a-z][a-z0-9+.-]*://[^/@\s:]+:[^@\s]+@)"
@@ -328,6 +329,34 @@ def _contains_control_chars(value: str) -> bool:
 def sanitize_error_message(error: object, *, max_chars: int = MAX_LOG_MESSAGE_CHARS) -> str:
     if isinstance(error, bool) or not isinstance(error, str):
         return "[invalid]"
+    failed_match = re.match(r"(?is)^(?P<command>.+?)\s+(?P<marker>failed|error)\s*:\s*(?P<details>.+)$", error)
+    if failed_match:
+        details = failed_match.group("details").strip()
+        if (
+            _ERROR_DETAIL_RE.search(details) is not None
+            or _BARE_CREDENTIAL_RE.search(details) is not None
+            or _ERROR_SECRET_WORD_RE.search(details) is not None
+        ):
+            return "[redacted error details]"
+        if (
+            "\n" in details
+            or "\r" in details
+            or _ERROR_OUTPUT_LIKELY_RE.search(details) is not None
+            or len(details) > 120
+        ):
+            return "[redacted error details]"
+        command = sanitize_text(failed_match.group("command").strip(), max_chars=80)
+        prefix = f"{command} {failed_match.group('marker')}: "
+        details_max_chars = max(8, max_chars - len(prefix))
+        details = sanitize_text(details, max_chars=details_max_chars)
+        if _ERROR_SECRET_WORD_RE.search(details):
+            return "[redacted error details]"
+        if len(details) <= 0:
+            return "[redacted error details]"
+        candidate = f"{prefix}{details}"
+        if len(candidate) > max_chars:
+            return candidate[:max_chars] + "...[truncated]"
+        return candidate
     if _ERROR_DETAIL_RE.search(error):
         return "[redacted error details]"
     if _BARE_CREDENTIAL_RE.search(error):

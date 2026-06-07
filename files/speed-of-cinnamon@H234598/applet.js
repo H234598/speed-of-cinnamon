@@ -5168,7 +5168,7 @@ MyApplet.prototype = {
     if (targets === null || targets === undefined) {
       return {
         signature: "unknown",
-        hasNonTextPayload: false,
+        hasNonTextPayload: true,
         description: _("clipboard contents"),
       };
     }

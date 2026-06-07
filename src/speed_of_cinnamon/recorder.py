@@ -256,6 +256,43 @@ def _command_path(command: str) -> str:
     return str(command_path)
 
 
+def _recording_process_identity_for_pid(pid: int) -> str | None:
+    if pid <= 0:
+        return None
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    try:
+        close = raw.rindex(")")
+        rest = raw[close + 2 :].split()
+    except ValueError:
+        return None
+    if len(rest) < 20:
+        return None
+    try:
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    start_time = rest[19]
+    if not boot_id or not start_time:
+        return None
+    return f"{boot_id}:{start_time}"
+
+
+def _recording_process_identity_matches(pid: int, expected_process_identity: str | None) -> bool:
+    if expected_process_identity is None:
+        return True
+    if not isinstance(expected_process_identity, str) or isinstance(expected_process_identity, bool):
+        raise RecorderError("expected_process_identity must be text")
+    if not expected_process_identity:
+        return False
+    current_identity = _recording_process_identity_for_pid(pid)
+    if current_identity is None:
+        return False
+    return current_identity == expected_process_identity
+
+
 def _create_recording_temp_file(audio_path: Path, *, marker: str, suffix: str) -> tuple[int, Path]:
     if not isinstance(audio_path, Path):
         raise RecorderError("recording audio path must be a path")
@@ -1255,8 +1292,17 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
         log_file.close()
 
 
-def stop_process(pid: int, timeout_seconds: float = 5.0) -> None:
+def stop_process(
+    pid: int,
+    timeout_seconds: float = 5.0,
+    *,
+    expected_process_identity: str | None = None,
+) -> bool:
     _assert_positive_pid(pid)
+    if expected_process_identity is not None and (
+        not isinstance(expected_process_identity, str) or isinstance(expected_process_identity, bool)
+    ):
+        raise RecorderError("expected_process_identity must be text")
     if not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool):
         raise RecorderError("timeout_seconds must be numeric")
     if not math.isfinite(timeout_seconds):
@@ -1266,31 +1312,43 @@ def stop_process(pid: int, timeout_seconds: float = 5.0) -> None:
     try:
         process_target = f"-{pid}" if os.getpgid(pid) == pid else str(pid)
     except ProcessLookupError:
-        return
+        return False
     except OSError as exc:
         raise RecorderError(f"failed to inspect recorder process {pid}: {exc}") from exc
+
+    if not _recording_process_identity_matches(pid, expected_process_identity):
+        return False
 
     _run_kill(["kill", "-INT", "--", process_target], check_exit=False)
 
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
+        if not _recording_process_identity_matches(pid, expected_process_identity):
+            return False
         try:
             _run_kill(["kill", "-0", "--", process_target], check_exit=True)
         except subprocess.CalledProcessError:
-            return
+            return True
         except RecorderError:
             raise
         time.sleep(0.1)
 
+    if not _recording_process_identity_matches(pid, expected_process_identity):
+        return False
     _run_kill(["kill", "-TERM", "--", process_target], check_exit=False)
 
     time.sleep(0.5)
+    if not _recording_process_identity_matches(pid, expected_process_identity):
+        return False
     try:
         _run_kill(["kill", "-0", "--", process_target], check_exit=True)
     except subprocess.CalledProcessError:
-        return
+        return True
+    if not _recording_process_identity_matches(pid, expected_process_identity):
+        return False
 
     try:
         _run_kill(["kill", "-KILL", "--", process_target], check_exit=False)
     except RecorderError as exc:
         raise RecorderError(f"failed to stop recorder process {pid}: {exc}") from exc
+    return True

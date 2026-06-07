@@ -575,26 +575,9 @@ def _key_for_encryption(requested_mode: str) -> tuple[KeyMaterial, dict[str, obj
     try:
         return KeyMaterial(mode=ARTIFACT_ENCRYPTION_KEYRING, key=_load_keyring_key()), {"kdf": "none"}
     except ArtifactCryptoError as keyring_error:
-        if not _explicit_passphrase_source_configured():
-            raise ArtifactCryptoError(
-                "Secret Service keyring is unavailable and passphrase fallback failed; "
-                f"set {PASSPHRASE_FILE_ENV} or {PASSPHRASE_ENV} explicitly"
-            ) from keyring_error
-        try:
-            key, salt = _passphrase_key_for_encryption(allow_implicit_default=False)
-        except ArtifactCryptoError as passphrase_error:
-            raise ArtifactCryptoError(
-                "Secret Service keyring is unavailable and passphrase fallback failed; "
-                f"set {PASSPHRASE_FILE_ENV} or {PASSPHRASE_ENV} explicitly"
-            ) from passphrase_error
-        return KeyMaterial(mode=ARTIFACT_ENCRYPTION_PASSPHRASE, key=key), {
-            "kdf": "scrypt",
-            "salt": _b64encode(salt),
-            "scrypt_n": SCRYPT_N,
-            "scrypt_r": SCRYPT_R,
-            "scrypt_p": SCRYPT_P,
-            "fallback_from": ARTIFACT_ENCRYPTION_KEYRING,
-        }
+        raise ArtifactCryptoError(
+            "Secret Service keyring is unavailable; choose passphrase mode explicitly if keyring storage is not usable"
+        ) from keyring_error
 
 
 def _key_for_decryption(envelope: dict[str, object]) -> KeyMaterial:

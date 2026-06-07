@@ -63,6 +63,33 @@ class AppLoggingTest(unittest.TestCase):
                     "[redacted error details]",
                 )
 
+    def test_sanitize_error_message_preserves_short_failed_error_details(self) -> None:
+        self.assertEqual(
+            app_logging.sanitize_error_message("ls failed: missing permission", max_chars=120),
+            "ls failed: missing permission",
+        )
+
+    def test_sanitize_error_message_redacts_failed_error_output_excerpt_with_newline(self) -> None:
+        self.assertEqual(
+            app_logging.sanitize_error_message("ffmpeg failed: Traceback (most recent call last):\n  File \"stdin\", line 1"),
+            "[redacted error details]",
+        )
+
+    def test_sanitize_error_message_redacts_long_failed_error_output_excerpt(self) -> None:
+        self.assertEqual(
+            app_logging.sanitize_error_message(
+                "cmd failed: " + ("A" * 200),
+                max_chars=120,
+            ),
+            "[redacted error details]",
+        )
+
+    def test_sanitize_error_message_redacts_short_failed_secret_details(self) -> None:
+        self.assertEqual(
+            app_logging.sanitize_error_message("cmd failed: secret customer phrase", max_chars=120),
+            "[redacted error details]",
+        )
+
     def test_sanitize_value_redacts_hyphenated_and_passphrase_keys(self) -> None:
         self.assertEqual(app_logging.sanitize_value("api-key", "sk-short"), "[redacted]")
         self.assertEqual(app_logging.sanitize_value("passphrase", "correct horse battery staple"), "[redacted]")

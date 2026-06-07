@@ -253,8 +253,9 @@ Use `--settings-json-stdin` when the settings object contains private values, so
 arguments. The export includes the hotkey, languages, recorder/backend choices, personalization, output mode,
 recording retention, notification settings, and the local alarm store. It intentionally excludes the machine-local
 `cli-path`, `openai-compatible-api-key`, and custom command templates. Backend URLs with embedded credentials, query
-strings, or fragments are rejected instead of being written to the export. Because personal context, vocabulary, and
-alarm names may contain private data, keep the export file private.
+strings, or fragments are rejected instead of being written to the export. Export files list these intentionally
+excluded private setting names in `excluded_private_settings`, but never include their values. Because personal context,
+vocabulary, and alarm names may contain private data, keep the export file private.
 
 ## Language Switching
 

@@ -146,17 +146,15 @@ class ArtifactCryptoTest(unittest.TestCase):
                 with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file must be private"):
                     artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
 
-    def test_keyring_mode_falls_back_to_passphrase_when_explicit_env_is_set(self) -> None:
+    def test_keyring_mode_fails_closed_instead_of_falling_back_to_explicit_env(self) -> None:
         with (
             mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: SECOND_STRONG_PASSPHRASE}, clear=False),
             mock.patch("speed_of_cinnamon.artifact_crypto._load_keyring_key", side_effect=artifact_crypto.ArtifactCryptoError("no dbus")),
         ):
-            encrypted, mode = artifact_crypto.encrypt_bytes(b"payload", "keyring", kind="transcript")
-            self.assertEqual(mode, "passphrase")
-            self.assertIn(b'"fallback_from":"keyring"', encrypted)
-            self.assertEqual(artifact_crypto.decrypt_bytes(encrypted, kind="transcript"), b"payload")
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "Secret Service keyring is unavailable"):
+                artifact_crypto.encrypt_bytes(b"payload", "keyring", kind="transcript")
 
-    def test_keyring_mode_falls_back_to_passphrase_when_explicit_file_is_set(self) -> None:
+    def test_keyring_mode_fails_closed_instead_of_falling_back_to_explicit_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "passphrase.txt"
             path.write_text(STRONG_PASSPHRASE + "\n", encoding="utf-8")
@@ -165,10 +163,8 @@ class ArtifactCryptoTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_FILE_ENV: str(path)}, clear=False),
                 mock.patch("speed_of_cinnamon.artifact_crypto._load_keyring_key", side_effect=artifact_crypto.ArtifactCryptoError("no dbus")),
             ):
-                encrypted, mode = artifact_crypto.encrypt_bytes(b"payload", "keyring", kind="transcript")
-                self.assertEqual(mode, "passphrase")
-                self.assertIn(b'"fallback_from":"keyring"', encrypted)
-                self.assertEqual(artifact_crypto.decrypt_bytes(encrypted, kind="transcript"), b"payload")
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "Secret Service keyring is unavailable"):
+                    artifact_crypto.encrypt_bytes(b"payload", "keyring", kind="transcript")
 
     def test_keyring_mode_does_not_generate_default_passphrase_fallback_when_cli_keyring_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -178,7 +174,7 @@ class ArtifactCryptoTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
                 mock.patch("speed_of_cinnamon.artifact_crypto._load_keyring_key", side_effect=artifact_crypto.ArtifactCryptoError("no dbus")),
             ):
-                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase fallback failed"):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "Secret Service keyring is unavailable"):
                     artifact_crypto.encrypt_bytes(b"payload", "keyring", kind="transcript")
 
             self.assertFalse(path.exists())
@@ -193,17 +189,17 @@ class ArtifactCryptoTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
                 mock.patch("speed_of_cinnamon.artifact_crypto._load_keyring_key", side_effect=artifact_crypto.ArtifactCryptoError("no dbus")),
             ):
-                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase fallback failed"):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "Secret Service keyring is unavailable"):
                     artifact_crypto.encrypt_bytes(b"payload", "keyring", kind="transcript")
 
-    def test_keyring_mode_fails_closed_when_passphrase_fallback_is_weak(self) -> None:
+    def test_keyring_mode_fails_closed_without_evaluating_weak_passphrase_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with (
                 mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: "weak", artifact_crypto.PASSPHRASE_FILE_ENV: ""}, clear=False),
                 mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=Path(tmp) / "missing.key"),
                 mock.patch("speed_of_cinnamon.artifact_crypto._load_keyring_key", side_effect=artifact_crypto.ArtifactCryptoError("no dbus")),
             ):
-                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase fallback failed"):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "Secret Service keyring is unavailable"):
                     artifact_crypto.encrypt_bytes(b"payload", "keyring", kind="transcript")
 
     def test_keyring_secret_must_decode_to_32_bytes(self) -> None:

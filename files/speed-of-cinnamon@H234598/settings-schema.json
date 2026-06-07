@@ -392,7 +392,7 @@
   "max-transcript-files": {
     "type": "spinbutton",
     "description": "Keep a maximum of transcript files",
-    "tooltip": "After each successful transcription, delete older transcript files so at most this many transcript files are kept. Preview cleanup and Clean old files use the same limit.",
+    "tooltip": "After each successful transcription, delete older transcript files so at most this many transcript files are kept. Preview cleanup and Clean all old files use the same limit.",
     "min": 1,
     "max": 1000,
     "step": 1,
@@ -586,7 +586,7 @@
   "artifact-encryption": {
     "type": "combobox",
     "description": "Stored transcript and recording encryption",
-    "tooltip": "Controls encryption for stored transcript files and retained recording files. Secret Service keyring is the recommended desktop mode. Passphrase mode uses SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE, an existing ~/.config/speed-of-cinnamon/artifact.key, SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE, or generates ~/.config/speed-of-cinnamon/artifact.key at runtime when no passphrase source exists. Keyring failure falls back to passphrase only when SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE or SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE is set explicitly. Off stores files as plaintext. Applet transcript export bundles remain encrypted even when stored-artifact encryption is Off.",
+    "tooltip": "Controls encryption for stored transcript files and retained recording files. Secret Service keyring is the recommended desktop mode. Passphrase mode uses SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE, an existing ~/.config/speed-of-cinnamon/artifact.key, SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE, or generates ~/.config/speed-of-cinnamon/artifact.key at runtime when no passphrase source exists. Keyring failure fails closed instead of silently downgrading to passphrase mode. Off stores files as plaintext. Applet transcript export bundles remain encrypted even when stored-artifact encryption is Off.",
     "options": {
       "Secret Service keyring": "keyring",
       "Passphrase": "passphrase",
@@ -596,8 +596,8 @@
   },
   "artifact-encryption-help-keyring": {
     "type": "label",
-    "description": "Keyring: Uses the desktop Secret Service and is recommended for normal desktop use.\nFallback and fail closed: If Keyring fails, Speed of Cinnamon falls back to Passphrase only when SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE or SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE is set explicitly. Otherwise stored transcript and recording writes fail closed instead of silently keeping plaintext.\nWarning popup: If the backend ever reports that a stored artifact was written without encryption while encryption is expected, the applet shows a critical warning popup.",
-    "tooltip": "Recommended for normal desktop use. Stores the encryption key in the desktop Secret Service. Passphrase fallback after keyring failure requires an explicit passphrase file or environment passphrase.",
+    "description": "Keyring: Uses the desktop Secret Service and is recommended for normal desktop use.\nFail closed: If Keyring fails, stored transcript and recording writes fail closed instead of silently downgrading to Passphrase mode. Choose Passphrase explicitly if Secret Service is not usable.\nWarning popup: If the backend reports that encrypted storage failed or plaintext was written while encryption is expected, the applet shows a critical warning popup.",
+    "tooltip": "Recommended for normal desktop use. Stores the encryption key in the desktop Secret Service. Keyring failure fails closed; choose Passphrase explicitly if needed.",
     "dependency": "artifact-encryption=keyring"
   },
   "artifact-encryption-help-passphrase": {

@@ -6487,7 +6487,34 @@ class CliTest(unittest.TestCase):
                 code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
         self.assertEqual(code, 0)
         mocked_alive.assert_called_once_with(1234)
-        mocked_stop.assert_called_once_with(1234)
+        mocked_stop.assert_called_once_with(1234, expected_process_identity="owner-identity")
+
+    @mock.patch("speed_of_cinnamon.cli.finalize_recording", return_value={"status": "done"})
+    @mock.patch("speed_of_cinnamon.cli.stop_process")
+    @mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=True)
+    def test_stop_running_recording_stops_process_with_identity(
+        self,
+        mocked_alive: mock.Mock,
+        mocked_stop: mock.Mock,
+        _mocked_finalize: mock.Mock,
+    ) -> None:
+        state = RecordingState(
+            status="recording",
+            pid=1234,
+            process_identity="owner-identity",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            StateStore(state_file).write(state)
+            args = self._build_finalize_args(insert_method="none")
+            args.state_file = str(state_file)
+            with (
+                mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value="owner-identity"),
+            ):
+                result = cli.command_stop(args)
+        self.assertEqual(result["status"], "done")
+        mocked_alive.assert_called_once_with(1234)
+        mocked_stop.assert_called_once_with(1234, expected_process_identity="owner-identity")
 
     @mock.patch("speed_of_cinnamon.cli.stop_process")
     @mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=True)

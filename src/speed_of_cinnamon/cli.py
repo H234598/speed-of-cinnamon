@@ -2792,7 +2792,10 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
         return {"status": state.status, "message": "not recording"}
 
     if _recording_process_verified_alive(state):
-        stop_process(_coerce_int(state.pid, field_name="state pid"))
+        stop_process(
+            _coerce_int(state.pid, field_name="state pid"),
+            expected_process_identity=state.process_identity,
+        )
     state = store.update(
         status="recorded",
         stopped_at=now_iso(),
@@ -2820,7 +2823,10 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 "message": "finalization in progress; use cancel after completion",
             }
         if state.status == "recording" and _recording_process_verified_alive(state):
-            stop_process(_coerce_int(state.pid, field_name="state pid"))
+            stop_process(
+                _coerce_int(state.pid, field_name="state pid"),
+                expected_process_identity=state.process_identity,
+            )
 
         discarded_audio_path = state.audio_path
         has_artifacts = bool(discarded_audio_path or state.log_path or state.transcript_path)
@@ -3608,7 +3614,7 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
         choices=ARTIFACT_ENCRYPTION_CHOICES,
         help=(
             "encrypt stored transcripts and retained recordings: off, passphrase, or keyring; "
-            "keyring falls back to passphrase only when an explicit passphrase source is configured; "
+            "keyring fails closed if Secret Service is unavailable; choose passphrase explicitly when needed; "
             "passphrase uses SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE, an existing "
             "~/.config/speed-of-cinnamon/artifact.key, SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE, "
             "or generates ~/.config/speed-of-cinnamon/artifact.key at runtime; weak default key files are regenerated"
@@ -3888,8 +3894,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=ARTIFACT_ENCRYPTION_OFF,
         choices=ARTIFACT_ENCRYPTION_CHOICES,
         help=(
-            "encrypt the stored transcript: off, passphrase, or keyring; keyring falls back to "
-            "passphrase only when an explicit passphrase source is configured; passphrase uses "
+            "encrypt the stored transcript: off, passphrase, or keyring; "
+            "keyring fails closed if Secret Service is unavailable; choose passphrase explicitly when needed; "
+            "passphrase uses "
             "SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE, an existing "
             "~/.config/speed-of-cinnamon/artifact.key, SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE, "
             "or generates ~/.config/speed-of-cinnamon/artifact.key at runtime; weak default key files are regenerated"

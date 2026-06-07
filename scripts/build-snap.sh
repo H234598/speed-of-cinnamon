@@ -261,10 +261,33 @@ cleanup_existing_dist_snaps() {
 
 cleanup_existing_dist_snaps
 
-if find "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -print -quit | grep -q .; then
-  printf 'refusing to overwrite existing snap artifact for version %s\n' "${version}" >&2
-  exit 1
-fi
+cleanup_existing_root_snaps() {
+  local cleanup_list
+  local existing_root_snap
+  local existing_real
+  local -a existing_root_snaps=()
+
+  if find "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" ! -type f -print -quit | grep -q .; then
+    printf 'refusing to clean non-regular snap artifact from repository root: %s\n' "${repo_dir}" >&2
+    exit 1
+  fi
+
+  cleanup_list="$(mktemp "${repo_tmp_root}/speed-of-cinnamon-snap-root-cleanup-XXXXXX")"
+  find "${repo_dir}" -maxdepth 1 -type f -name "speed-of-cinnamon_${version}_*.snap" -print0 | sort -z > "${cleanup_list}"
+  mapfile -d '' -t existing_root_snaps < "${cleanup_list}"
+  "${safe_fs_cmd[@]}" remove build-snap "${cleanup_list}" --kind file
+
+  for existing_root_snap in "${existing_root_snaps[@]}"; do
+    existing_real="$(realpath "${existing_root_snap}")"
+    if [[ "${existing_real}" != "${repo_dir}/speed-of-cinnamon_${version}_"*".snap" ]]; then
+      printf 'refusing to clean snap artifact outside repository root: %s\n' "${existing_root_snap}" >&2
+      exit 1
+    fi
+    "${safe_fs_cmd[@]}" remove build-snap "${existing_root_snap}" --kind file
+  done
+}
+
+cleanup_existing_root_snaps
 
 tmp_output="$(mktemp "${repo_tmp_root}/speed-of-cinnamon-snap-output-XXXXXX")"
 

@@ -294,9 +294,9 @@ speed-of-cinnamon toggle --artifact-encryption keyring --keep-recording-artifact
 `SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE`, an existing `~/.config/speed-of-cinnamon/artifact.key`,
 `SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE`, or a newly generated default key file when no explicit source exists. Prefer
 the file variable for explicit deployments to avoid shell history exposure. Keyring mode stores one random master key in
-the desktop Secret Service through `secret-tool`. If keyring access fails, passphrase fallback is allowed only when
-`SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE` or `SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE` is set explicitly; otherwise
-encrypted writes fail closed. Weak explicit sources are rejected; a weak generated default key file is replaced.
+the desktop Secret Service through `secret-tool`. If keyring access fails, encrypted writes fail closed instead of
+silently downgrading to passphrase mode. Choose `passphrase` explicitly if Secret Service is not usable. Weak explicit
+sources are rejected; a weak generated default key file is replaced.
 Files ending in `.socenc` must be valid Speed of Cinnamon encrypted envelopes. Plaintext or malformed `.socenc` files are
 rejected or skipped instead of being treated as transcript or recording content.
 When stored transcript encryption is enabled, transcript text is redacted from command JSON output unless
@@ -321,7 +321,8 @@ Use `--settings-json-stdin` when the settings object contains private values suc
 command templates. The Cinnamon applet uses stdin for settings export so the snapshot is not exposed in process
 arguments. The export includes the local alarm store and intentionally excludes machine-local `cli-path`,
 `openai-compatible-api-key`, and custom command templates. Backend URLs with embedded credentials, query strings, or
-fragments are rejected instead of being written to the export.
+fragments are rejected instead of being written to the export. Export files list these intentionally excluded private
+setting names in `excluded_private_settings`, but never include their values.
 
 ## Alarms
 

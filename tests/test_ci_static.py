@@ -196,11 +196,14 @@ class CiStaticTest(unittest.TestCase):
         toggle_help = subparser_action.choices["toggle"].format_help()
         transcribe_file_help = subparser_action.choices["transcribe-file"].format_help()
         for help_text in (toggle_help, transcribe_file_help):
-            self.assertIn("keyring falls back to", help_text)
-            self.assertIn("passphrase only when", help_text)
-            self.assertIn("explicit passphrase source is", help_text)
-            self.assertIn("configured", help_text)
-        self.assertIn("falls back to passphrase mode only when an explicit passphrase source is", docs["docs/man/speed-of-cinnamon.1"])
+            self.assertIn("keyring fails closed", help_text)
+            self.assertIn("Secret Service", help_text)
+            self.assertIn("unavailable", help_text)
+            self.assertIn("choose passphrase", help_text)
+            self.assertIn("explicitly when needed", help_text)
+            self.assertNotIn("keyring falls back to", help_text)
+        self.assertIn("fails closed if the Secret Service is unavailable", docs["docs/man/speed-of-cinnamon.1"])
+        self.assertNotIn("falls back to passphrase mode only when an explicit passphrase source is", docs["docs/man/speed-of-cinnamon.1"])
         self.assertNotIn("falls back to passphrase mode when\nkeyring access fails", docs["docs/man/speed-of-cinnamon.1"])
 
     def test_command_chain_security_tests_are_present(self) -> None:
@@ -209,6 +212,25 @@ class CiStaticTest(unittest.TestCase):
         text = command_chain_test.read_text(encoding="utf-8")
         self.assertIn("class CommandChainTest", text)
         self.assertIn("unsupported shell operator", text)
+
+    def test_recorder_stop_paths_require_process_identity_guard(self) -> None:
+        source = (REPO_ROOT / "src" / "speed_of_cinnamon" / "cli.py").read_text(encoding="utf-8")
+        stop_start = source.index("def command_stop(")
+        cancel_start = source.index("def command_cancel(")
+        next_command = source.index("def command_toggle(", cancel_start)
+        stop_block = source[stop_start:cancel_start]
+        cancel_block = source[cancel_start:next_command]
+
+        for block in (stop_block, cancel_block):
+            self.assertIn("_recording_process_verified_alive(state)", block)
+            self.assertIn("stop_process(", block)
+            self.assertIn("_coerce_int(state.pid, field_name=\"state pid\")", block)
+            self.assertIn("expected_process_identity=state.process_identity", block)
+            self.assertLess(
+                block.index("_recording_process_verified_alive(state)"),
+                block.index("stop_process("),
+            )
+            self.assertNotIn("stop_process(state.pid)", block)
 
     def test_runtime_and_release_code_do_not_execute_subprocess_with_shell_strings(self) -> None:
         code_roots = [REPO_ROOT / "src", REPO_ROOT / "scripts"]
@@ -979,14 +1001,23 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("cleanup_existing_dist_snaps() {", build_snap)
         self.assertIn('find "${dist_dir}" -maxdepth 1 -name "speed-of-cinnamon_*.snap" ! -type f -print -quit', build_snap)
         self.assertIn('"${safe_fs_cmd[@]}" remove build-snap "${existing_snap}" --kind file', build_snap)
+        self.assertIn("cleanup_existing_root_snaps() {", build_snap)
+        self.assertIn(
+            'find "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" ! -type f -print -quit',
+            build_snap,
+        )
+        self.assertIn('"${safe_fs_cmd[@]}" remove build-snap "${existing_root_snap}" --kind file', build_snap)
         self.assertIn('"${safe_fs_cmd[@]}" copy-file build-snap "${snap_files[0]}" "${output_path}" 0644 --dst-must-not-exist', build_snap)
         self.assertNotIn('rm -rf -- "${snap_workspace}"', build_snap)
         self.assertNotIn('snapcraft_backup', build_snap)
         self.assertNotIn('mv -f -- "${snapcraft_backup}" "${snapcraft_file}"', build_snap)
         self.assertNotIn("mv -T", build_snap)
         self.assertNotIn("NamedTemporaryFile", build_snap)
-        self.assertIn('refusing to overwrite existing snap artifact for version', build_snap)
-        self.assertIn('if find "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -print -quit | grep -q .; then', build_snap)
+        self.assertIn("cleanup_existing_root_snaps() {", build_snap)
+        self.assertIn("speed-of-cinnamon-snap-root-cleanup-XXXXXX", build_snap)
+        self.assertIn("refusing to clean non-regular snap artifact from repository root", build_snap)
+        self.assertNotIn('refusing to overwrite existing snap artifact for version', build_snap)
+        self.assertNotIn('if find "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -print -quit | grep -q .; then', build_snap)
         self.assertNotIn('rm -f -- "${dist_dir}/speed-of-cinnamon_${version}"_*.snap', build_snap)
         self.assertNotIn('path.with_name(path.name + ".tmp")', build_snap)
         self.assertIn('snap_dir="${repo_dir}/dist/snap"', verify_snap)
@@ -1237,7 +1268,7 @@ class CiStaticTest(unittest.TestCase):
             'snaps=(dist/snap/speed-of-cinnamon_"${version}"_*.snap)' in publisher
             or 'snaps=(dist/snap/speed-of-cinnamon_${version}_*.snap)' in publisher
         )
-        self.assertIn("required_tools=(git python3 realpath awk sha256sum grep stat mktemp chmod)", publisher)
+        self.assertIn("required_tools=(git python3 realpath awk sha256sum grep stat mktemp chmod basename dirname)", publisher)
         self.assertIn('safe_fs_cmd=(python3 "${safe_fs}")', publisher)
         self.assertIn('staging_dir_abs="$(realpath "${staging_dir}")', publisher)
         self.assertIn('release staging directory escaped dist directory', publisher)
