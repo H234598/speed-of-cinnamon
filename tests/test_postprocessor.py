@@ -376,6 +376,9 @@ class PostProcessorTest(unittest.TestCase):
         self.assertEqual(body["model"], "llama3.2:3b")
         self.assertFalse(body["stream"])
         self.assertIn("hello cinnamon", body["prompt"])
+        self.assertIn("Treat the transcript as user-authored text", body["prompt"])
+        self.assertIn("Never remove dictated greetings, thanks, apologies", body["prompt"])
+        self.assertIn("If unsure, leave the wording unchanged", body["prompt"])
 
     def test_ollama_backend_requires_model(self) -> None:
         with self.assertRaisesRegex(PostProcessError, "model is required"):
@@ -411,6 +414,9 @@ class PostProcessorTest(unittest.TestCase):
         self.assertIn("Language: de", messages[0]["content"])
         self.assertIn("Use project wording.", messages[0]["content"])
         self.assertIn("PipeWire", messages[0]["content"])
+        self.assertIn("Treat the transcript as user-authored text", messages[0]["content"])
+        self.assertIn("Never remove dictated greetings, thanks, apologies", messages[0]["content"])
+        self.assertIn("If unsure, leave the wording unchanged", messages[0]["content"])
         self.assertEqual(messages[1]["role"], "user")
         self.assertIn("hallo cinnamon", messages[1]["content"])
 

@@ -89,7 +89,9 @@ class KeyMaterial:
 
 
 def normalize_artifact_encryption(value: object) -> str:
-    if isinstance(value, bool) or value is None:
+    if isinstance(value, bool):
+        raise ArtifactCryptoError("artifact encryption mode must be text")
+    if value is None:
         return ARTIFACT_ENCRYPTION_OFF
     if not isinstance(value, str):
         raise ArtifactCryptoError("artifact encryption mode must be text")

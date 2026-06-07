@@ -1171,6 +1171,19 @@ def _transcript_work_path(storage_path: Path, encryption_mode: str) -> Path:
     return storage_path.with_name(f".{storage_path.stem}.{secrets.token_hex(8)}.tmp.txt")
 
 
+def _prepare_transient_transcript_path(path: Path, storage_path: Path) -> None:
+    if path == storage_path:
+        return
+    try:
+        path.relative_to(transcript_dir())
+    except ValueError as exc:
+        raise RuntimeError(f"refusing to prepare transient transcript outside transcript directory: {path}") from exc
+    if not path.name.startswith(".") or not path.name.endswith(".tmp.txt"):
+        raise RuntimeError(f"refusing to prepare unexpected transient transcript path: {path}")
+    assert_no_symlink_ancestors(path, field_name="transient transcript file")
+    _prepare_private_file(path, field_name="transient transcript file")
+
+
 def _same_leaf_identity(current: os.stat_result, expected: os.stat_result) -> bool:
     return (
         current.st_dev == expected.st_dev
@@ -1354,18 +1367,27 @@ def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tu
     return encrypted_path, effective_mode
 
 
-def read_transcript_history(limit: int = 10) -> list[dict[str, object]]:
+_TRANSCRIPT_READ_EXCEPTIONS = (OSError, RuntimeError, ValueError, UnicodeDecodeError, ArtifactCryptoError)
+
+
+def _transcript_read_failure(path: Path, exc: BaseException) -> RuntimeError:
+    return RuntimeError(f"failed to read transcript {path.name}: {_redact_error_for_user(str(exc))}")
+
+
+def _collect_transcript_history(limit: int = 10) -> tuple[list[dict[str, object]], int]:
     if limit <= 0:
-        return []
+        return [], 0
     directory = transcript_dir()
 
     candidates = heapq.nlargest(max(limit * 4, limit + 16), _transcript_history_candidates(directory))
 
     entries: list[dict[str, object]] = []
+    unreadable_count = 0
     for mtime, path in candidates:
         try:
             text = _read_stored_transcript_text(path).strip()
-        except (OSError, RuntimeError, ValueError, UnicodeDecodeError, ArtifactCryptoError):
+        except _TRANSCRIPT_READ_EXCEPTIONS:
+            unreadable_count += 1
             continue
         if not text:
             continue
@@ -1380,6 +1402,11 @@ def read_transcript_history(limit: int = 10) -> list[dict[str, object]]:
         )
         if len(entries) >= limit:
             break
+    return entries, unreadable_count
+
+
+def read_transcript_history(limit: int = 10) -> list[dict[str, object]]:
+    entries, _unreadable_count = _collect_transcript_history(limit)
     return entries
 
 
@@ -1410,8 +1437,8 @@ def build_transcripts_document(
     for mtime, path in candidates:
         try:
             text = _read_stored_transcript_text(path).strip()
-        except (OSError, RuntimeError, ValueError, UnicodeDecodeError, ArtifactCryptoError):
-            continue
+        except _TRANSCRIPT_READ_EXCEPTIONS as exc:
+            raise _transcript_read_failure(path, exc) from exc
         if not text:
             continue
         modified_at = datetime.fromtimestamp(mtime, timezone.utc).isoformat()
@@ -2467,6 +2494,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
 
     state_marked_finalizing = False
     written_text_path: Path | None = None
+    artifact_encryption = ARTIFACT_ENCRYPTION_OFF
     try:
         state = store.read()
         _raise_if_state_unreadable(state)
@@ -2569,6 +2597,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
         text_path = transcript_dir() / f"{audio_path.stem}.txt"
         artifact_encryption = _artifact_encryption_mode(args)
         transcriber_text_path = _transcript_work_path(text_path, artifact_encryption)
+        _prepare_transient_transcript_path(transcriber_text_path, text_path)
         transcript_audio_path = audio_path
         try:
             trimmed_audio_path = trim_recording_silence(audio_path)
@@ -2650,6 +2679,7 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
                 done_audio_path = str(audio_path)
 
         recording_encryption = ARTIFACT_ENCRYPTION_OFF
+        plaintext_done_audio_path: Path | None = None
         if keep_recording_artifacts and done_audio_path:
             plaintext_done_audio_path = Path(done_audio_path)
             encrypted_audio_path, recording_encryption = _encrypt_kept_recording_artifact(plaintext_done_audio_path, args)
@@ -2756,8 +2786,16 @@ def finalize_recording(args: argparse.Namespace, store: StateStore, state: Recor
             final_error_text = str(error_update.get("error", error_text))
             cleanup_targets: list[tuple[str, str, str]] = []
             cleanup_clear_update: dict[str, object] = {}
-            if not keep_recording_artifacts:
-                if audio_suffix and _recording_artifact_stat(audio_path) is not None:
+            cleanup_plaintext_recording_artifacts = (
+                keep_recording_artifacts
+                and artifact_encryption != ARTIFACT_ENCRYPTION_OFF
+            )
+            if not keep_recording_artifacts or cleanup_plaintext_recording_artifacts:
+                if (
+                    audio_suffix
+                    and _recording_artifact_stat(audio_path) is not None
+                    and (not cleanup_plaintext_recording_artifacts or audio_suffix in {".wav", ".flac"})
+                ):
                     cleanup_clear_update["audio_path"] = ""
                     cleanup_targets.append(("audio_path", str(audio_path), audio_suffix))
                 if state.log_path:
@@ -2838,10 +2876,18 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
         return {"status": state.status, "message": "not recording"}
 
     if _recording_process_verified_alive(state):
-        stop_process(
+        stopped = stop_process(
             _coerce_int(state.pid, field_name="state pid"),
             expected_process_identity=state.process_identity,
         )
+        if not stopped:
+            error_text = "recording process could not be stopped safely; recording state preserved"
+            store.update(
+                status="recording",
+                error=error_text,
+                inserted=False,
+            )
+            return {"status": "recording", "message": error_text, "error": error_text}
     state = store.update(
         status="recorded",
         stopped_at=now_iso(),
@@ -2869,10 +2915,18 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 "message": "finalization in progress; use cancel after completion",
             }
         if state.status == "recording" and _recording_process_verified_alive(state):
-            stop_process(
+            stopped = stop_process(
                 _coerce_int(state.pid, field_name="state pid"),
                 expected_process_identity=state.process_identity,
             )
+            if not stopped:
+                error_text = "recording process could not be stopped safely; recording state preserved"
+                store.update(
+                    status="recording",
+                    error=error_text,
+                    inserted=False,
+                )
+                return {"status": "recording", "message": error_text, "error": error_text}
 
         discarded_audio_path = state.audio_path
         has_artifacts = bool(discarded_audio_path or state.log_path or state.transcript_path)
@@ -3252,10 +3306,10 @@ def command_benchmark_models(args: argparse.Namespace) -> dict[str, object]:
 def command_history(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     limit = _coerce_int(args.limit, field_name="history limit", max_value=MAX_HISTORY_LIMIT)
-    transcripts = read_transcript_history(limit)
+    transcripts, unreadable_count = _collect_transcript_history(limit)
     if not bool(getattr(args, "confirm_plaintext", False)):
         transcripts = _redact_history_previews(transcripts)
-    return {"status": "done", "transcripts": transcripts}
+    return {"status": "done", "transcripts": transcripts, "unreadable_count": unreadable_count}
 
 
 def command_transcripts_document(args: argparse.Namespace) -> dict[str, object]:
@@ -3565,6 +3619,7 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
     text_path = transcript_dir() / f"{audio_path.stem}.txt"
     artifact_encryption = _artifact_encryption_mode(args)
     transcriber_text_path = _transcript_work_path(text_path, artifact_encryption)
+    _prepare_transient_transcript_path(transcriber_text_path, text_path)
     try:
         text = transcribe(
             audio_path=audio_path,

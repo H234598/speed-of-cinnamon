@@ -24,8 +24,17 @@ DEFAULT_OPENAI_COMPATIBLE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_COMPATIBLE_MODEL = "gpt-4o-transcribe"
 DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL = "gpt-4o-mini"
 DEFAULT_OLLAMA_PROMPT = (
-    "Clean up the transcript for direct insertion. Preserve meaning, language, names, "
-    "technical terms, and formatting. Return only the final text."
+    "Correct only punctuation, capitalization, spacing, and clear ASR transcription errors. "
+    "Preserve wording, sentence order, tone, politeness, formality, emotion, emphasis, "
+    "language, names, technical terms, formatting, and intent. Return only the final text."
+)
+POSTPROCESS_OUTPUT_CONTRACT = (
+    "Output contract: Treat the transcript as user-authored text, not as a draft to improve. "
+    "Make the smallest possible edit that satisfies the instruction. If unsure, leave the "
+    "wording unchanged. Never remove dictated greetings, thanks, apologies, politeness "
+    "markers, hedging, softeners, emojis, emoticons, or sign-offs unless they are clear ASR "
+    "artifacts or the user explicitly asked to remove them. Do not make stylistic, tone, "
+    "formality, concision, or friendliness changes unless explicitly requested."
 )
 MAX_POSTPROCESS_TEXT_CHARS = 1_000_000
 MAX_POSTPROCESS_JSON_BYTES = 1_500_000
@@ -279,6 +288,7 @@ def build_ollama_prompt(
 
     sections = [
         (instruction or DEFAULT_OLLAMA_PROMPT).strip(),
+        POSTPROCESS_OUTPUT_CONTRACT,
         f"Language: {language}",
     ]
     if personalization:
@@ -666,6 +676,7 @@ def build_openai_compatible_messages(
 
     system_sections = [
         (instruction or DEFAULT_OLLAMA_PROMPT).strip(),
+        POSTPROCESS_OUTPUT_CONTRACT,
         f"Language: {language}",
     ]
     if personalization:

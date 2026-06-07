@@ -15,6 +15,13 @@ SECOND_STRONG_PASSPHRASE = artifact_crypto._b64encode(bytes(range(32, 64)))
 
 
 class ArtifactCryptoTest(unittest.TestCase):
+    def test_artifact_encryption_mode_rejects_booleans(self) -> None:
+        with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "must be text"):
+            artifact_crypto.normalize_artifact_encryption(True)
+        with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "must be text"):
+            artifact_crypto.normalize_artifact_encryption(False)
+        self.assertEqual(artifact_crypto.normalize_artifact_encryption(None), "off")
+
     def test_passphrase_encrypts_and_decrypts_payload(self) -> None:
         with mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: STRONG_PASSPHRASE}, clear=False):
             encrypted, mode = artifact_crypto.encrypt_bytes(b"private transcript", "passphrase", kind="transcript")

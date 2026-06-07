@@ -483,8 +483,8 @@
   },
   "post-process-preset-help-minimal": {
     "type": "label",
-    "description": "Safe default fixes only punctuation, capitalization, spacing, and clear ASR errors while preserving wording, tone, politeness, and intent.",
-    "tooltip": "Use this for normal dictation when you want the text cleaned up but not rewritten. The backend should correct punctuation, capitalization, spacing, and clear ASR mistakes only. It must preserve wording, sentence order, tone, politeness, formality, emotion, emphasis, technical terms, and factual content. It must not remove friendliness, greetings, thanks, apologies, hedging, or softeners unless they are clear ASR artifacts.",
+    "description": "Safe default fixes only punctuation, capitalization, spacing, and clear ASR errors while preserving wording, tone, politeness, friendliness, and intent.",
+    "tooltip": "Use this for normal dictation when you want the text cleaned up but not rewritten. The backend should correct punctuation, capitalization, spacing, and clear ASR mistakes only. It must treat the transcript as user-authored text, preserve wording, sentence order, tone, politeness, formality, emotion, emphasis, friendliness, technical terms, and factual content, and prefer leaving wording unchanged when unsure. It must not remove greetings, thanks, apologies, politeness markers, hedging, softeners, emojis, emoticons, or sign-offs unless they are clear ASR artifacts.",
     "dependency": "post-process-preset=minimal"
   },
   "post-process-preset-help-clean": {
@@ -532,7 +532,7 @@
   "post-process-never-add-content": {
     "type": "switch",
     "description": "Never add content",
-    "tooltip": "Forbid extra facts, explanations, greetings, sign-offs, headings, or other content that was not dictated or explicitly requested.",
+    "tooltip": "Forbid extra facts, explanations, headings, or other content that was not dictated or explicitly requested. Dictated greetings, thanks, apologies, politeness markers, hedging, softeners, emojis, emoticons, and sign-offs must remain.",
     "default": true
   },
   "post-process-mask-sensitive-data": {

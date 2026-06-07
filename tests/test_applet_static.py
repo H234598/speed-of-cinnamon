@@ -902,8 +902,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("const TEXT_POLISHING_PRESET_INSTRUCTIONS = {", source)
         self.assertIn('"minimal": "Correct only punctuation', source)
         self.assertIn("Preserve the user's wording, sentence order, tone, politeness", source)
-        self.assertIn("Do not remove friendliness, greetings, thanks, apologies", source)
-        self.assertIn("Do not rewrite, summarize, rephrase, or add new information", source)
+        self.assertIn("Treat the transcript as user-authored text", source)
+        self.assertIn("Keep dictated greetings, thanks, apologies", source)
+        self.assertIn("If unsure, leave the wording unchanged", source)
+        self.assertIn("Do not rewrite, summarize, rephrase, shorten", source)
+        self.assertIn("make less friendly", source)
         self.assertIn('"code": "Preserve commands', source)
         self.assertIn('"safety": "Check for sensitive data', source)
         self.assertIn("_normalizeTextPolishingPreset: function(value)", source)
@@ -913,7 +916,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('replace(/\\\\u000d|\\\\u000a|\\\\r|\\\\n/gi, " ")', source)
         self.assertIn('return this._singleLineCliTextValue(parts.join(" "));', source)
         self.assertIn("Preserve commands, code, paths, filenames, flags, variable names", source)
-        self.assertIn("Do not add facts, explanations, greetings, sign-offs, headings", source)
+        self.assertIn("Do not add facts, explanations, headings", source)
+        self.assertIn("If greetings, thanks, apologies, politeness markers", source)
         self.assertIn("Mask sensitive data such as tokens, passwords, account data", source)
         self.assertIn("_resetTextPolishingDefaults: function()", source)
         self.assertIn('this.settings.setValue("post-process-preset", this.postProcessPreset);', source)
@@ -932,8 +936,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertEqual(schema["post-process-preset-help-custom"]["dependency"], "post-process-preset=custom")
         self.assertIn("preserving wording, tone, politeness", schema["post-process-preset-help-minimal"]["description"])
         self.assertIn("normal dictation", schema["post-process-preset-help-minimal"]["tooltip"])
-        self.assertIn("must preserve wording, sentence order, tone, politeness", schema["post-process-preset-help-minimal"]["tooltip"])
-        self.assertIn("must not remove friendliness", schema["post-process-preset-help-minimal"]["tooltip"])
+        self.assertIn("preserve wording, sentence order, tone, politeness", schema["post-process-preset-help-minimal"]["tooltip"])
+        self.assertIn("prefer leaving wording unchanged when unsure", schema["post-process-preset-help-minimal"]["tooltip"])
+        self.assertIn("must not remove greetings, thanks, apologies", schema["post-process-preset-help-minimal"]["tooltip"])
         self.assertIn("terminals", schema["post-process-preset-help-code"]["tooltip"])
         self.assertIn("secrets or personal information", schema["post-process-preset-help-safety"]["tooltip"])
 
@@ -1197,7 +1202,7 @@ class AppletStaticTest(unittest.TestCase):
         duplicate_return_index = source.index("return;", duplicate_index)
         self.assertLess(duplicate_finish_index, duplicate_return_index)
         self.assertIn(
-            "if (!completed) {\n          this._forgetAutoInsertFingerprint(insertFingerprint);\n        }",
+            "if (!completed) {\n          this._forgetAutoInsertFingerprint(insertFingerprint);\n          this.autoRelistenPending = false;\n          this.autoRelistenPendingToken = \"\";\n          this.autoRelistenManualStopRequested = true;\n          return;\n        }",
             source,
         )
         self.assertIn("_hasAutoInsertFingerprint: function(fingerprint)", source)
@@ -1242,6 +1247,8 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         toggle_index = source.index("_toggleRecording: function()")
         toggle_end = source.index("_restartApplet: function()", toggle_index)
+        cancel_index = source.index("_cancelRecording: function()")
+        cancel_end = source.index("_runDoctor: function", cancel_index)
         ensure_index = source.index("_ensureAutoRelistenPendingForDonePayload: function(payload)")
         ensure_end = source.index("_finishPendingRelisten: function()", ensure_index)
 
@@ -1249,7 +1256,24 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.status === "recording" || this.status === "recorded" || this.autoRelistenPending', source[toggle_index:toggle_end])
         self.assertIn("this.autoRelistenManualStopRequested = manualRelistenStopRequested;", source[toggle_index:toggle_end])
         self.assertIn('this._setStatus("processing", _("Stopping Auto Relisten..."), this.lastTranscript);', source[toggle_index:toggle_end])
+        self.assertIn("if (this.isCommandRunning) {", source[cancel_index:cancel_end])
+        self.assertIn("this.autoRelistenManualStopRequested = true;", source[cancel_index:cancel_end])
+        self.assertIn('this._setStatus("processing", _("Stopping Auto Relisten..."), this.lastTranscript);', source[cancel_index:cancel_end])
         self.assertIn("if (this.autoRelistenManualStopRequested) {\n      return;\n    }", source[ensure_index:ensure_end])
+
+    def test_failed_insert_stops_auto_relisten_restart(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        finish_index = source.index("_finishAppletTextInsert: function(payload)")
+        finish_end = source.index("_ensureAutoRelistenPendingForDonePayload: function(payload)", finish_index)
+        finish_block = source[finish_index:finish_end]
+
+        self.assertIn("this.autoRelistenPending = false;", finish_block)
+        self.assertIn('this.autoRelistenPendingToken = "";', finish_block)
+        self.assertIn("this.autoRelistenManualStopRequested = true;", finish_block)
+        failed_insert_index = finish_block.index("if (!inserted) {")
+        failed_insert_return_index = finish_block.index("return;", failed_insert_index)
+        final_relisten_index = finish_block.rindex("this._finishPendingRelisten();")
+        self.assertLess(failed_insert_return_index, final_relisten_index)
 
     def test_manual_relisten_stop_finishes_recording_that_started_while_command_was_running(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

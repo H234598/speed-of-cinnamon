@@ -79,7 +79,7 @@ const CLI_TEXT_SETTINGS = {
 };
 const TEXT_POLISHING_SAFE_PRESET = "minimal";
 const TEXT_POLISHING_PRESET_INSTRUCTIONS = {
-  "minimal": "Correct only punctuation, capitalization, spacing, and clear ASR transcription errors. Preserve the user's wording, sentence order, tone, politeness, formality, emotion, emphasis, and intent. Do not remove friendliness, greetings, thanks, apologies, hedging, or softeners unless they are clear ASR artifacts. Do not rewrite, summarize, rephrase, or add new information.",
+  "minimal": "Correct only punctuation, capitalization, spacing, and clear ASR transcription errors. Treat the transcript as user-authored text, not as a draft to improve. Preserve the user's wording, sentence order, tone, politeness, formality, emotion, emphasis, friendliness, and intent. Keep dictated greetings, thanks, apologies, politeness markers, hedging, softeners, emojis, emoticons, and sign-offs unless they are clear ASR artifacts. If unsure, leave the wording unchanged. Do not rewrite, summarize, rephrase, shorten, make more formal, make less friendly, or add new information.",
   "clean": "Format the transcript as natural, correct text in the transcript language. Remove filler words only when they are clearly unintended. Preserve technical terms.",
   "code": "Preserve commands, paths, filenames, flags, variable names, code, and quoted text exactly. Do not use typographic quotes. Do not add explanations.",
   "chat": "Format the transcript as a concise, clear chat message. Do not add a subject, greeting, or sign-off unless it was dictated.",
@@ -2112,6 +2112,11 @@ MyApplet.prototype = {
 
   _cancelRecording: function() {
     if (this.isCommandRunning) {
+      this.autoTranscribeRecordingKey = "";
+      this.autoRelistenPending = false;
+      this.autoRelistenPendingToken = "";
+      this.autoRelistenManualStopRequested = true;
+      this._setStatus("processing", _("Stopping Auto Relisten..."), this.lastTranscript);
       return;
     }
     this.isCommandRunning = true;
@@ -3943,7 +3948,7 @@ MyApplet.prototype = {
       parts.push("Preserve commands, code, paths, filenames, flags, variable names, identifiers, and quoted text exactly unless the user explicitly asks for rewriting.");
     }
     if (Boolean(this.postProcessNeverAddContent)) {
-      parts.push("Do not add facts, explanations, greetings, sign-offs, headings, or extra content that was not dictated or explicitly requested.");
+      parts.push("Do not add facts, explanations, headings, or extra content that was not dictated or explicitly requested. If greetings, thanks, apologies, politeness markers, hedging, softeners, emojis, emoticons, or sign-offs were dictated, keep them.");
     }
     if (Boolean(this.postProcessMaskSensitiveData)) {
       parts.push("Mask sensitive data such as tokens, passwords, account data, phone numbers, addresses, and private names before returning the final text.");
@@ -5675,6 +5680,10 @@ MyApplet.prototype = {
       let result = this._insertTranscriptText(transcript, (completed) => {
         if (!completed) {
           this._forgetAutoInsertFingerprint(insertFingerprint);
+          this.autoRelistenPending = false;
+          this.autoRelistenPendingToken = "";
+          this.autoRelistenManualStopRequested = true;
+          return;
         }
         this._finishPendingRelisten();
       });
@@ -5687,6 +5696,10 @@ MyApplet.prototype = {
     }
     if (!inserted) {
       this._forgetAutoInsertFingerprint(insertFingerprint);
+      this.autoRelistenPending = false;
+      this.autoRelistenPendingToken = "";
+      this.autoRelistenManualStopRequested = true;
+      return;
     }
     this._finishPendingRelisten();
   },
