@@ -396,6 +396,27 @@ class CommandChainTest(unittest.TestCase):
                 self.assertNotIn("HOME", env)
                 self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", env)
 
+    def test_filtered_environment_skips_inherited_control_character_values(self) -> None:
+        from speed_of_cinnamon.cli import _filtered_environment as cli_filtered_environment
+        from speed_of_cinnamon.command_chain import _filtered_environment as chain_filtered_environment
+        from speed_of_cinnamon.output import _filtered_environment as output_filtered_environment
+        from speed_of_cinnamon.recorder import _filtered_environment as recorder_filtered_environment
+        from speed_of_cinnamon.transcriber import _filtered_environment as transcriber_filtered_environment
+
+        validators = [
+            cli_filtered_environment,
+            chain_filtered_environment,
+            output_filtered_environment,
+            recorder_filtered_environment,
+            transcriber_filtered_environment,
+        ]
+        for validate_env in validators:
+            with self.subTest(func=validate_env.__module__):
+                with mock.patch(f"{validate_env.__module__}.os.environ.__getitem__", return_value="bad\nhome"):
+                    env = validate_env()
+                self.assertNotIn("HOME", env)
+                self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", env)
+
     def test_run_command_chain_accepts_max_tokens_per_segment(self) -> None:
         segment: list[str] = ["cmd"] + ["a"] * (MAX_COMMAND_SEGMENT_TOKENS - 1)
         with mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"):

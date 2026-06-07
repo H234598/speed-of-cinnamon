@@ -55,6 +55,8 @@ def _coerce_environment_value(name: str) -> str | None:
         return None
     if isinstance(value, bool) or not isinstance(value, str):
         raise ValueError("environment value must be text")
+    if _contains_escaped_null(value) or _contains_environment_control_chars(value):
+        raise ValueError("environment value contains invalid control character")
     return value
 
 
@@ -162,3 +164,9 @@ def _contains_forbidden_control_chars(value: str) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise ValueError("value must be text")
     return any((ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F) and char != "\n" for char in value)
+
+
+def _contains_environment_control_chars(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise ValueError("value must be text")
+    return any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in value)

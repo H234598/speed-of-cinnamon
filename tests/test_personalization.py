@@ -118,6 +118,11 @@ class PersonalizationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "environment value must be text"):
                 command_environment("Use project terms.", "PipeWire")
 
+    def test_command_environment_rejects_control_characters_in_environment_values(self) -> None:
+        with mock.patch("speed_of_cinnamon.personalization.os.environ", {"HOME": "bad\nhome"}):
+            with self.assertRaisesRegex(ValueError, "environment value contains invalid control character"):
+                command_environment("Use project terms.", "PipeWire")
+
     def test_command_environment_rejects_oversized_payload_bytes(self) -> None:
         with mock.patch("speed_of_cinnamon.personalization.MAX_PERSONAL_CONTEXT_CHARS", 4):
             with self.assertRaisesRegex(ValueError, "personal context is too large"):

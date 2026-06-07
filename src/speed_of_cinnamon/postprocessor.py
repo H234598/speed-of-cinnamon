@@ -355,6 +355,8 @@ def _coerce_environment_text(name: str) -> str:
         return ""
     if value is None or isinstance(value, bool) or not isinstance(value, str):
         return ""
+    if _contains_escaped_null(value) or _contains_http_header_control_chars(value):
+        return ""
     return value
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import stat
 import subprocess
@@ -23,6 +24,10 @@ class ArtifactCryptoTest(unittest.TestCase):
             artifact_crypto.normalize_artifact_encryption(False)
         self.assertEqual(artifact_crypto.normalize_artifact_encryption(None), "off")
 
+    def test_encrypted_path_for_rejects_unsafe_path_components(self) -> None:
+        with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "path is not safe"):
+            artifact_crypto.encrypted_path_for(Path("artifact\nspoof.txt"))
+
     def test_passphrase_encrypts_and_decrypts_payload(self) -> None:
         with mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: STRONG_PASSPHRASE}, clear=False):
             encrypted, mode = artifact_crypto.encrypt_bytes(b"private transcript", "passphrase", kind="transcript")
@@ -39,6 +44,18 @@ class ArtifactCryptoTest(unittest.TestCase):
                 encrypted, mode = artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
                 self.assertEqual(mode, "passphrase")
                 self.assertEqual(artifact_crypto.decrypt_bytes(encrypted, kind="transcript"), b"payload")
+
+    def test_explicit_passphrase_file_path_rejects_unsafe_values(self) -> None:
+        unsafe_paths = [
+            ("/tmp/passphrase\nkey", "contains invalid control character"),
+            ("relative-passphrase.key", "must be absolute"),
+            ("/" + ("a" * (artifact_crypto.MAX_PASSPHRASE_FILE_PATH_CHARS + 1)), "path is too large"),
+        ]
+        for file_path, message in unsafe_paths:
+            with self.subTest(file_path=file_path):
+                with mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_FILE_ENV: file_path}, clear=False):
+                    with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, message):
+                        artifact_crypto._explicit_passphrase_file()
 
     def test_passphrase_can_come_from_default_private_key_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -76,6 +93,28 @@ class ArtifactCryptoTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=Path(tmp) / "missing.key"),
             ):
                 with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase is not strong enough"):
+                    artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
+
+    def test_environment_passphrase_rejects_control_characters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {artifact_crypto.PASSPHRASE_ENV: STRONG_PASSPHRASE + "\n", artifact_crypto.PASSPHRASE_FILE_ENV: ""},
+                    clear=False,
+                ),
+                mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=Path(tmp) / "missing.key"),
+            ):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase contains invalid control characters"):
+                    artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
+
+    def test_private_passphrase_file_rejects_internal_control_characters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "passphrase.txt"
+            path.write_text(STRONG_PASSPHRASE[:10] + "\n" + STRONG_PASSPHRASE[10:] + "\n", encoding="utf-8")
+            path.chmod(0o600)
+            with mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_FILE_ENV: str(path)}, clear=False):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file is not strong enough"):
                     artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
 
     def test_missing_default_passphrase_file_is_generated_securely(self) -> None:
@@ -251,6 +290,35 @@ class ArtifactCryptoTest(unittest.TestCase):
         self.assertEqual(proc.stdout, b"stored-secret\n")
         self.assertEqual(proc.stderr, b"warning\n")
 
+    def test_secret_tool_environment_skips_control_character_values(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"DISPLAY": ":0", "HOME": "bad\nhome", "XDG_RUNTIME_DIR": "/run/user/1000"},
+            clear=True,
+        ):
+            env = artifact_crypto._filtered_environment()
+
+        self.assertEqual(env["DISPLAY"], ":0")
+        self.assertEqual(env["XDG_RUNTIME_DIR"], "/run/user/1000")
+        self.assertNotIn("HOME", env)
+        self.assertEqual(env["PATH"], artifact_crypto._TRUSTED_COMMAND_PATH)
+
+    def test_secret_tool_rejects_unsafe_arguments_before_start(self) -> None:
+        unsafe_invocations = [
+            (["lookup", "bad\nargument"], None, "argument contains invalid control character"),
+            (["delete", "application", "test"], None, "command is not allowed"),
+            ([], None, "arguments must be a non-empty list"),
+            (["store", "application", "test"], "bad\nsecret", "input contains invalid control character"),
+        ]
+        for args, input_text, message in unsafe_invocations:
+            with self.subTest(args=args):
+                with (
+                    mock.patch("speed_of_cinnamon.artifact_crypto._secret_tool_path") as mocked_secret_tool_path,
+                    self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, message),
+                ):
+                    artifact_crypto._run_secret_tool(args, input_text=input_text)  # type: ignore[arg-type]
+                mocked_secret_tool_path.assert_not_called()
+
     def test_secret_tool_rejects_oversized_output(self) -> None:
         def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             stdout = kwargs["stdout"]
@@ -287,9 +355,62 @@ class ArtifactCryptoTest(unittest.TestCase):
             with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "kind does not match"):
                 artifact_crypto.decrypt_bytes(encrypted, kind="recording")
 
+    def test_encrypted_envelope_canonicalizes_artifact_kind(self) -> None:
+        with mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: STRONG_PASSPHRASE}, clear=False):
+            encrypted, _ = artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind=" Transcript ")
+
+        envelope = json.loads(encrypted.decode("utf-8"))
+        self.assertEqual(envelope["kind"], "transcript")
+        with mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: STRONG_PASSPHRASE}, clear=False):
+            self.assertEqual(artifact_crypto.decrypt_bytes(encrypted, kind="transcript"), b"payload")
+
     def test_decryption_can_require_encrypted_payload(self) -> None:
         with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "envelope is missing"):
             artifact_crypto.decrypt_bytes(b"plaintext", kind="transcript", require_encrypted=True)
+
+    def test_is_encrypted_payload_returns_false_for_oversized_payload(self) -> None:
+        with mock.patch("speed_of_cinnamon.artifact_crypto.MAX_ENCRYPTED_ARTIFACT_BYTES", 4):
+            self.assertFalse(artifact_crypto.is_encrypted_payload(b" " * 5))
+
+    def test_encrypt_bytes_allows_oversized_payload_in_off_mode(self) -> None:
+        with mock.patch("speed_of_cinnamon.artifact_crypto.MAX_ENCRYPTED_ARTIFACT_BYTES", 4):
+            data = b"12345"
+            payload, mode = artifact_crypto.encrypt_bytes(data, "off", kind="transcript")
+            self.assertEqual(mode, "off")
+            self.assertEqual(payload, data)
+
+    def test_encrypt_bytes_rejects_oversized_payload_with_encryption_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "passphrase.txt"
+            path.write_text(STRONG_PASSPHRASE + "\n", encoding="utf-8")
+            path.chmod(0o600)
+            with mock.patch.dict(
+                os.environ,
+                {artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: str(path)},
+                clear=False,
+            ), mock.patch("speed_of_cinnamon.artifact_crypto.MAX_ENCRYPTED_ARTIFACT_BYTES", 4):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "payload is too large"):
+                    artifact_crypto.encrypt_bytes(b"12345", "passphrase", kind="transcript")
+
+    def test_decrypt_bytes_rejects_oversized_encrypted_payload_without_requirements(self) -> None:
+        with mock.patch("speed_of_cinnamon.artifact_crypto.MAX_ENCRYPTED_ARTIFACT_BYTES", 4):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "encrypted artifact payload is too large"):
+                artifact_crypto.decrypt_bytes(b'{"magic":"SOCENC1","version":1,"ciphertext":"x"}', kind="transcript")
+
+    def test_decrypt_bytes_rejects_oversized_json_like_payload_without_requirements(self) -> None:
+        with mock.patch("speed_of_cinnamon.artifact_crypto.MAX_ENCRYPTED_ARTIFACT_BYTES", 4):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "encrypted artifact payload is too large"):
+                artifact_crypto.decrypt_bytes(b'{"magic":"SOCENC1","version":1}', kind="transcript")
+
+    def test_decrypt_bytes_allows_oversized_non_json_payload_when_not_required(self) -> None:
+        with mock.patch("speed_of_cinnamon.artifact_crypto.MAX_ENCRYPTED_ARTIFACT_BYTES", 4):
+            payload = b"-----BEGIN PRIVATE KEY-----"
+            self.assertEqual(artifact_crypto.decrypt_bytes(payload, kind="transcript"), payload)
+
+    def test_decrypt_bytes_still_enforces_size_for_required_encrypted_payloads(self) -> None:
+        with mock.patch("speed_of_cinnamon.artifact_crypto.MAX_ENCRYPTED_ARTIFACT_BYTES", 4):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "payload is too large"):
+                artifact_crypto.decrypt_bytes(b"12345", kind="transcript", require_encrypted=True)
 
     def test_read_decrypted_bytes_from_file_rejects_explicit_zero_max_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -299,6 +420,30 @@ class ArtifactCryptoTest(unittest.TestCase):
                 path.write_bytes(encrypted)
                 with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "is too large"):
                     artifact_crypto.read_decrypted_bytes_from_file(path, kind="transcript", field_name="artifact", max_bytes=0)
+
+    def test_encrypt_with_surrogate_passphrase_raises_controlled_error(self) -> None:
+        surrogate_passphrase = "".join(chr(0xD800 + (index % 128)) for index in range(40))
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch(
+                "speed_of_cinnamon.artifact_crypto.os.environ",
+                {
+                    artifact_crypto.PASSPHRASE_ENV: surrogate_passphrase,
+                    artifact_crypto.PASSPHRASE_FILE_ENV: "",
+                },
+            ):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "valid UTF-8"):
+                    artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
+
+    def test_explicit_passphrase_path_with_surrogate_raises_controlled_error(self) -> None:
+        bad_path = "".join(chr(0xD800 + (index % 128)) for index in range(2))
+        with mock.patch("speed_of_cinnamon.artifact_crypto.os.environ", {artifact_crypto.PASSPHRASE_FILE_ENV: bad_path}):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "valid UTF-8"):
+                artifact_crypto._explicit_passphrase_file()
+
+    def test_secret_tool_text_with_surrogate_raises_controlled_error(self) -> None:
+        bad_text = "".join(chr(0xD800 + (index % 128)) for index in range(2))
+        with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "valid UTF-8"):
+            artifact_crypto._validate_secret_tool_text(bad_text, field_name="argument")
 
     def test_read_private_bytes_default_is_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -849,6 +849,8 @@ class PostProcessorTest(unittest.TestCase):
             self.assertEqual(_coerce_environment_text("OPENAI_COMPATIBLE_TEST_ENV"), "secret")
         with mock.patch("speed_of_cinnamon.postprocessor.os.environ.__getitem__", return_value=123):
             self.assertEqual(_coerce_environment_text("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY"), "")
+        with mock.patch("speed_of_cinnamon.postprocessor.os.environ.__getitem__", return_value="bad\nsecret"):
+            self.assertEqual(_coerce_environment_text("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY"), "")
 
     def test_openai_compatible_backend_reports_http_error_detail(self) -> None:
         error = urllib.error.HTTPError(

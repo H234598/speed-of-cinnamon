@@ -16,6 +16,7 @@ from .paths import APP_ID, APP_NAME, config_dir
 from .path_safety import (
     assert_fd_is_regular_private_file,
     assert_no_symlink_ancestors,
+    assert_safe_path_components,
     ensure_directory_without_following_symlinks,
     open_file_without_following_symlinks,
     write_bytes_atomically_without_following_symlinks,
@@ -41,6 +42,7 @@ SCRYPT_R = 8
 SCRYPT_P = 1
 MAX_PASSPHRASE_CHARS = 4096
 MAX_PASSPHRASE_FILE_BYTES = 16384
+MAX_PASSPHRASE_FILE_PATH_CHARS = 4096
 MIN_PASSPHRASE_CHARS = 32
 MIN_PASSPHRASE_DISTINCT_CHARS = 8
 MIN_GENERATED_PASSPHRASE_BYTES = KEY_SIZE_BYTES
@@ -50,7 +52,9 @@ PASSPHRASE_FILE_ENV = "SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE"  # nosec B1
 DEFAULT_PASSPHRASE_FILE_NAME = "artifact.key"  # nosec B105
 _SECRET_TOOL_TIMEOUT_SECONDS = 10
 MAX_SECRET_TOOL_OUTPUT_BYTES = 64 * 1024
+MAX_SECRET_TOOL_ARG_CHARS = 4096
 _SECRET_TOOL_ATTRIBUTES = ["application", APP_ID, "purpose", "artifact-encryption"]
+_SECRET_TOOL_COMMANDS = frozenset({"lookup", "store"})
 _TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin:/var/lib/snapd/snap/bin"
 _ALLOWED_SECRET_TOOL_ENV = {
     "DBUS_SESSION_BUS_ADDRESS",
@@ -66,6 +70,13 @@ _ALLOWED_SECRET_TOOL_ENV = {
     "XDG_SESSION_DESKTOP",
     "XDG_SESSION_TYPE",
 }
+
+
+def _safe_utf8_length(value: str, *, field_name: str) -> int:
+    try:
+        return len(value.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise ArtifactCryptoError(f"{field_name} must be valid UTF-8") from exc
 
 
 class ArtifactCryptoError(RuntimeError):
@@ -131,6 +142,12 @@ def encryption_enabled(value: object) -> bool:
 def encrypted_path_for(path: Path) -> Path:
     if not isinstance(path, Path):
         raise ArtifactCryptoError("encrypted artifact path must be a Path")
+    if _contains_forbidden_environment_chars(str(path)):
+        raise ArtifactCryptoError("encrypted artifact path is not safe")
+    try:
+        assert_safe_path_components(path, field_name="encrypted artifact path")
+    except RuntimeError as exc:
+        raise ArtifactCryptoError("encrypted artifact path is not safe") from exc
     if path.name.endswith(ENCRYPTED_SUFFIX):
         return path
     return path.with_name(path.name + ENCRYPTED_SUFFIX)
@@ -142,6 +159,8 @@ def is_encrypted_path(path: Path) -> bool:
 
 def is_encrypted_payload(payload: bytes) -> bool:
     if isinstance(payload, bool) or not isinstance(payload, bytes):
+        return False
+    if len(payload) > MAX_ENCRYPTED_ARTIFACT_BYTES:
         return False
     stripped = payload.lstrip()
     if not stripped.startswith(b"{"):
@@ -158,12 +177,23 @@ def is_encrypted_payload(payload: bytes) -> bool:
     )
 
 
-def _aad(kind: str) -> bytes:
+def _is_json_like_payload(payload: bytes) -> bool:
+    if isinstance(payload, bool) or not isinstance(payload, bytes):
+        return False
+    return payload.lstrip().startswith(b"{")
+
+
+def _normalize_kind(kind: str) -> str:
     if not isinstance(kind, str) or isinstance(kind, bool) or not kind.strip():
         raise ArtifactCryptoError("artifact encryption kind must be text")
     safe_kind = kind.strip().casefold()
     if any(char not in "abcdefghijklmnopqrstuvwxyz0123456789-_." for char in safe_kind):
         raise ArtifactCryptoError("artifact encryption kind contains unsupported characters")
+    return safe_kind
+
+
+def _aad(kind: str) -> bytes:
+    safe_kind = _normalize_kind(kind)
     return f"{APP_ID}:{safe_kind}:v{ENVELOPE_VERSION}".encode("utf-8")
 
 
@@ -184,7 +214,14 @@ def _contains_forbidden_secret_chars(value: str) -> bool:
     lowered = value.lower()
     if "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered:
         return True
-    return any(ord(char) < 0x20 and char not in {"\n", "\r", "\t"} for char in value)
+    return any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in value)
+
+
+def _contains_forbidden_environment_chars(value: str) -> bool:
+    lowered = value.lower()
+    if "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered:
+        return True
+    return any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in value)
 
 
 def _new_generated_passphrase() -> str:
@@ -391,9 +428,26 @@ def _read_private_passphrase_file(
 
 def _explicit_passphrase_file() -> Path | None:
     file_path = os.environ.get(PASSPHRASE_FILE_ENV, "")
-    if file_path:
-        return Path(file_path).expanduser()
-    return None
+    if file_path is None or isinstance(file_path, bool) or not isinstance(file_path, str):
+        return None
+    normalized = file_path.strip()
+    if not normalized:
+        return None
+    if _contains_forbidden_environment_chars(normalized):
+        raise ArtifactCryptoError("artifact encryption passphrase file path contains invalid control character")
+    if len(normalized) > MAX_PASSPHRASE_FILE_PATH_CHARS or _safe_utf8_length(
+        normalized,
+        field_name="artifact encryption passphrase file path",
+    ) > MAX_PASSPHRASE_FILE_PATH_CHARS:
+        raise ArtifactCryptoError("artifact encryption passphrase file path is too large")
+    path = Path(normalized).expanduser()
+    if not path.is_absolute():
+        raise ArtifactCryptoError("artifact encryption passphrase file path must be absolute")
+    try:
+        assert_safe_path_components(path, field_name="artifact encryption passphrase file path")
+    except RuntimeError as exc:
+        raise ArtifactCryptoError("artifact encryption passphrase file path is not safe") from exc
+    return path
 
 
 def _explicit_passphrase_source_configured() -> bool:
@@ -448,7 +502,10 @@ def _passphrase_from_sources(
                 return None
     if not passphrase:
         return None
-    if len(passphrase) > MAX_PASSPHRASE_CHARS or len(passphrase.encode("utf-8")) > MAX_PASSPHRASE_FILE_BYTES:
+    if len(passphrase) > MAX_PASSPHRASE_CHARS or _safe_utf8_length(
+        passphrase,
+        field_name="artifact encryption passphrase",
+    ) > MAX_PASSPHRASE_FILE_BYTES:
         raise ArtifactCryptoError("artifact encryption passphrase is too large")
     if _contains_forbidden_secret_chars(passphrase):
         raise ArtifactCryptoError("artifact encryption passphrase contains invalid control characters")
@@ -473,7 +530,11 @@ def _secret_tool_path() -> str:
 
 
 def _filtered_environment() -> dict[str, str]:
-    env = {key: value for key, value in os.environ.items() if key in _ALLOWED_SECRET_TOOL_ENV and isinstance(value, str)}
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key in _ALLOWED_SECRET_TOOL_ENV and isinstance(value, str) and not _contains_forbidden_environment_chars(value)
+    }
     env["PATH"] = _TRUSTED_COMMAND_PATH
     return env
 
@@ -490,7 +551,34 @@ def _read_secret_tool_output(handle: Any, *, field_name: str) -> bytes:
     return payload
 
 
+def _validate_secret_tool_text(value: object, *, field_name: str) -> str:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise ArtifactCryptoError(f"Secret Service keyring {field_name} must be text")
+    if not value:
+        raise ArtifactCryptoError(f"Secret Service keyring {field_name} must not be empty")
+    if len(value) > MAX_SECRET_TOOL_ARG_CHARS or _safe_utf8_length(
+        value,
+        field_name=f"Secret Service keyring {field_name}",
+    ) > MAX_SECRET_TOOL_ARG_CHARS:
+        raise ArtifactCryptoError(f"Secret Service keyring {field_name} is too large")
+    if _contains_forbidden_environment_chars(value):
+        raise ArtifactCryptoError(f"Secret Service keyring {field_name} contains invalid control character")
+    return value
+
+
+def _validate_secret_tool_args(args: object) -> list[str]:
+    if isinstance(args, bool) or not isinstance(args, list) or not args:
+        raise ArtifactCryptoError("Secret Service keyring arguments must be a non-empty list")
+    validated = [_validate_secret_tool_text(arg, field_name="argument") for arg in args]
+    if validated[0] not in _SECRET_TOOL_COMMANDS:
+        raise ArtifactCryptoError("Secret Service keyring command is not allowed")
+    return validated
+
+
 def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subprocess.CompletedProcess[bytes]:
+    args = _validate_secret_tool_args(args)
+    if input_text is not None:
+        input_text = _validate_secret_tool_text(input_text, field_name="input")
     command = [_secret_tool_path(), *args]
     env = _filtered_environment()
     try:
@@ -627,16 +715,19 @@ def encrypt_bytes(payload: bytes, requested_mode: object, *, kind: str) -> tuple
     mode = normalize_artifact_encryption(requested_mode)
     if mode == ARTIFACT_ENCRYPTION_OFF:
         return payload, ARTIFACT_ENCRYPTION_OFF
+    if len(payload) > MAX_ENCRYPTED_ARTIFACT_BYTES:
+        raise ArtifactCryptoError("artifact payload is too large")
+    safe_kind = _normalize_kind(kind)
     key_material, metadata = _key_for_encryption(mode)
     _invalid_tag, aesgcm, _scrypt = _crypto_backend()
     nonce = secrets.token_bytes(NONCE_SIZE_BYTES)
-    ciphertext = aesgcm(key_material.key).encrypt(nonce, payload, _aad(kind))
+    ciphertext = aesgcm(key_material.key).encrypt(nonce, payload, _aad(safe_kind))
     envelope: dict[str, object] = {
         "magic": ENVELOPE_MAGIC,
         "version": ENVELOPE_VERSION,
         "algorithm": ENVELOPE_ALGORITHM,
         "mode": key_material.mode,
-        "kind": kind,
+        "kind": safe_kind,
         "nonce": _b64encode(nonce),
         "ciphertext": _b64encode(ciphertext),
         **metadata,
@@ -648,6 +739,12 @@ def encrypt_bytes(payload: bytes, requested_mode: object, *, kind: str) -> tuple
 def decrypt_bytes(payload: bytes, *, kind: str, require_encrypted: bool = False) -> bytes:
     if isinstance(payload, bool) or not isinstance(payload, bytes):
         raise ArtifactCryptoError("artifact payload must be bytes")
+    if len(payload) > MAX_ENCRYPTED_ARTIFACT_BYTES and require_encrypted:
+        raise ArtifactCryptoError("artifact payload is too large")
+    if len(payload) > MAX_ENCRYPTED_ARTIFACT_BYTES and _is_json_like_payload(payload):
+        raise ArtifactCryptoError("encrypted artifact payload is too large")
+    if len(payload) > MAX_ENCRYPTED_ARTIFACT_BYTES and not require_encrypted:
+        return payload
     if not is_encrypted_payload(payload):
         if require_encrypted:
             raise ArtifactCryptoError("encrypted artifact envelope is missing")
@@ -662,7 +759,8 @@ def decrypt_bytes(payload: bytes, *, kind: str, require_encrypted: bool = False)
         raise ArtifactCryptoError("encrypted artifact envelope version is unsupported")
     if envelope.get("algorithm") != ENVELOPE_ALGORITHM:
         raise ArtifactCryptoError("encrypted artifact algorithm is unsupported")
-    if envelope.get("kind") != kind:
+    safe_kind = _normalize_kind(kind)
+    if envelope.get("kind") != safe_kind:
         raise ArtifactCryptoError("encrypted artifact kind does not match the requested use")
     nonce = _b64decode(envelope.get("nonce", ""), field_name="nonce")
     if len(nonce) != NONCE_SIZE_BYTES:
@@ -671,7 +769,7 @@ def decrypt_bytes(payload: bytes, *, kind: str, require_encrypted: bool = False)
     key_material = _key_for_decryption(envelope)
     invalid_tag, aesgcm, _scrypt = _crypto_backend()
     try:
-        return aesgcm(key_material.key).decrypt(nonce, ciphertext, _aad(kind))
+        return aesgcm(key_material.key).decrypt(nonce, ciphertext, _aad(safe_kind))
     except invalid_tag as exc:
         raise ArtifactCryptoError("encrypted artifact authentication failed") from exc
 
