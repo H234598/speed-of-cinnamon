@@ -717,7 +717,7 @@ class CliTest(unittest.TestCase):
                     "--json",
                 ])
             payload = json.loads(stdout.getvalue())
-            encrypted_path = Path(payload["transcript_path"])
+            encrypted_path = next((Path(tmp) / "speed-of-cinnamon" / "transcripts").glob("input.txt.socenc"))
             plaintext_path = encrypted_path.with_name(encrypted_path.name.removesuffix(".socenc"))
             with mock.patch.dict(os.environ, env, clear=False):
                 decrypted = artifact_crypto.read_decrypted_bytes_from_file(
@@ -733,6 +733,9 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["transcript"], "")
         self.assertTrue(payload["transcript_output_redacted"])
+        self.assertTrue(payload["transcript_path_present"])
+        self.assertNotIn("transcript_path", payload)
+        self.assertNotIn(str(encrypted_path), json.dumps(payload))
         self.assertTrue(payload["transcript_encrypted"])
         self.assertEqual(payload["transcript_encryption"], "passphrase")
         self.assertTrue(encrypted_path.name.endswith(".txt.socenc"))
@@ -930,16 +933,19 @@ class CliTest(unittest.TestCase):
                     "--json",
                 ])
             payload = json.loads(stdout.getvalue())
-            transcript_path = Path(payload["transcript_path"])
+            transcript_path = Path(tmp) / "speed-of-cinnamon" / "transcripts" / "input.txt"
             transcript_file = transcript_path.read_text(encoding="utf-8").strip()
             transcript_exists = transcript_path.exists()
         self.assertEqual(code, 0)
         self.assertEqual(payload["transcript"], "")
         self.assertTrue(payload["transcript_output_redacted"])
+        self.assertTrue(payload["transcript_path_present"])
+        self.assertNotIn("transcript_path", payload)
+        self.assertNotIn(str(transcript_path), json.dumps(payload))
+        self.assertNotIn("input.txt", json.dumps(payload))
         self.assertFalse(payload["transcript_encrypted"])
         self.assertTrue(transcript_exists)
         self.assertEqual(transcript_file, "plaintext ok")
-        self.assertFalse(payload["transcript_path"].endswith(".socenc"))
 
     @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="plaintext ok")
     @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
@@ -1628,6 +1634,9 @@ class CliTest(unittest.TestCase):
         self.assertGreater(len(payload["models"]), 0)
         self.assertEqual(payload["models"][0]["name"], "tiny.en")
         self.assertFalse(payload["models"][0]["downloaded"])
+        self.assertTrue(payload["models"][0]["path_present"])
+        self.assertNotIn("path", payload["models"][0])
+        self.assertNotIn(str(tmp), json.dumps(payload))
 
     @mock.patch("speed_of_cinnamon.cli.list_models", return_value="invalid")
     def test_models_rejects_non_list_models_payload(self, mocked_models: mock.Mock) -> None:
@@ -1678,9 +1687,18 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("audio_path", payload)
         self.assertNotIn(str(audio), json.dumps(payload))
         self.assertEqual(payload["results"][0]["model"], "tiny")
-        self.assertEqual(payload["results"][0]["transcript"], "hallo welt")
+        self.assertTrue(payload["results"][0]["path_present"])
+        self.assertNotIn("path", payload["results"][0])
+        self.assertEqual(payload["results"][0]["transcript"], "")
+        self.assertTrue(payload["results"][0]["transcript_output_redacted"])
+        self.assertEqual(payload["results"][0]["characters"], len("hallo welt"))
+        self.assertEqual(payload["results"][0]["words"], 2)
+        self.assertNotIn("hallo welt", json.dumps(payload))
         self.assertTrue(payload["results"][0]["ok"])
         mocked_transcribe.assert_called_once()
+        benchmark_text_path = Path(mocked_transcribe.call_args.kwargs["text_path"])
+        self.assertIn(".benchmark-", benchmark_text_path.name)
+        self.assertFalse(benchmark_text_path.exists())
         self.assertEqual(mocked_transcribe.call_args.kwargs["backend"], "whisper-cpp")
         self.assertEqual(mocked_transcribe.call_args.kwargs["whisper_model"], str(model_path))
 
@@ -1714,6 +1732,43 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("abc123", payload["results"][0]["error"])
         self.assertIn("redacted", payload["results"][0]["error"].lower())
         mocked_transcribe.assert_called_once()
+
+    @mock.patch("speed_of_cinnamon.cli._unlink_regular_leaf_with_parent_fsync", side_effect=RuntimeError("cleanup token abc123 leaked"))
+    @mock.patch("speed_of_cinnamon.cli.transcribe", side_effect=RuntimeError("transcribe token hidden"))
+    def test_benchmark_models_reports_cleanup_failure_before_transcribe_error(
+        self,
+        mocked_transcribe: mock.Mock,
+        mocked_unlink: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            model_path = Path(tmp) / "ggml-tiny.bin"
+            self._write_wav(audio, [0, 100, -100])
+            model_path.write_bytes(b"model")
+            stdout = io.StringIO()
+            with (
+                mock.patch("speed_of_cinnamon.cli.model_path", return_value=model_path),
+                mock.patch("speed_of_cinnamon.cli.model_status", return_value={"downloaded": True}),
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "benchmark-models",
+                    str(audio),
+                    "--language",
+                    "de",
+                    "--models",
+                    "tiny",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertFalse(payload["results"][0]["ok"])
+        self.assertIn("redacted", payload["results"][0]["error"].lower())
+        self.assertNotIn("abc123", payload["results"][0]["error"])
+        self.assertNotIn("hidden", payload["results"][0]["error"])
+        mocked_transcribe.assert_called_once()
+        mocked_unlink.assert_called_once()
 
     def test_benchmark_models_reports_missing_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2584,14 +2639,31 @@ class CliTest(unittest.TestCase):
 
     @mock.patch("speed_of_cinnamon.cli.remove_model")
     def test_remove_model_command(self, mocked_remove: mock.Mock) -> None:
-        mocked_remove.return_value = {"status": "done", "removed": True, "name": "tiny.en"}
+        mocked_remove.return_value = {"status": "done", "removed": True, "name": "tiny.en", "path": "/tmp/private-model"}
         stdout = io.StringIO()
         with redirect_stdout(stdout):
             code = cli.run(["remove-model", "tiny.en", "--json"])
         payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 0)
         self.assertTrue(payload["removed"])
+        self.assertTrue(payload["path_present"])
+        self.assertNotIn("path", payload)
+        self.assertNotIn("/tmp/private-model", json.dumps(payload))
         mocked_remove.assert_called_once_with("tiny.en")
+
+    @mock.patch("speed_of_cinnamon.cli.download_model")
+    def test_download_model_command_redacts_model_path(self, mocked_download: mock.Mock) -> None:
+        mocked_download.return_value = {"status": "done", "downloaded": True, "name": "tiny.en", "path": "/tmp/private-model"}
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["download-model", "tiny.en", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["downloaded"])
+        self.assertTrue(payload["path_present"])
+        self.assertNotIn("path", payload)
+        self.assertNotIn("/tmp/private-model", json.dumps(payload))
+        mocked_download.assert_called_once_with("tiny.en", False)
 
     @mock.patch("speed_of_cinnamon.cli.download_model")
     def test_download_model_command_rejects_non_boolean_force(self, mocked_download: mock.Mock) -> None:
@@ -2660,18 +2732,21 @@ class CliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             export_path = Path(tmp) / "settings.json"
             stdout = io.StringIO()
-            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+            with (
+                mock.patch("sys.stdin", io.StringIO(json.dumps({
+                    "language": "de",
+                    "auto-transcribe-timeout": False,
+                    "notify-complete": False,
+                    "sanitize-special-chars": True,
+                    "cli-path": "/tmp/local",
+                }))),
+                mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+                redirect_stdout(stdout),
+            ):
                 add_alarm("09:00", name="Standup", days="weekdays")
                 code = cli.run([
                     "settings-export",
-                    "--settings-json",
-                    json.dumps({
-                        "language": "de",
-                        "auto-transcribe-timeout": False,
-                        "notify-complete": False,
-                        "sanitize-special-chars": True,
-                        "cli-path": "/tmp/local",
-                    }),
+                    "--settings-json-stdin",
                     "--output",
                     str(export_path),
                     "--json",
@@ -2693,11 +2768,16 @@ class CliTest(unittest.TestCase):
                 alarms = list_alarm_payload()
         self.assertEqual(code, 0)
         self.assertEqual(import_code, 0)
-        self.assertEqual(export_payload["path"], str(export_path))
+        self.assertTrue(export_payload["path_present"])
+        self.assertNotIn("path", export_payload)
+        self.assertNotIn(str(export_path), json.dumps(export_payload))
         self.assertEqual(export_payload["message"], "settings exported")
         self.assertNotIn(str(export_path), export_payload["message"])
         self.assertEqual(export_payload["alarms_count"], 1)
         self.assertEqual(import_payload["message"], "settings imported")
+        self.assertTrue(import_payload["path_present"])
+        self.assertNotIn("path", import_payload)
+        self.assertNotIn(str(export_path), json.dumps(import_payload))
         self.assertNotIn(str(export_path), import_payload["message"])
         self.assertEqual(import_payload["alarms_count"], 1)
         self.assertEqual(import_payload["settings"]["language"], "de")
@@ -4730,7 +4810,20 @@ class CliTest(unittest.TestCase):
             state_file = Path(tmp) / "state.json"
             StateStore(state_file).write(RecordingState(status="done", transcript="private words"))
             stdout = io.StringIO()
-            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+            with (
+                mock.patch("sys.stdin", io.StringIO(json.dumps({
+                    "transcriber": "command",
+                    "transcriber-command": "printf hidden-command-token",
+                    "insert-method": "clipboard-paste",
+                    "post-process-backend": "ollama",
+                    "ollama-model": "llama3.2:3b",
+                    "post-process-prompt": "hidden-polish-prompt",
+                    "personal-context": "hidden-context-token",
+                    "vocabulary": "hidden-vocabulary-token",
+                }))),
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+                redirect_stdout(stdout),
+            ):
                 code = cli.run([
                     "diagnostics",
                     "--state-file",
@@ -4738,23 +4831,15 @@ class CliTest(unittest.TestCase):
                     "--output",
                     str(output),
                     "--applet",
-                    "--settings-json",
-                    json.dumps({
-                        "transcriber": "command",
-                        "transcriber-command": "printf hidden-command-token",
-                        "insert-method": "clipboard-paste",
-                        "post-process-backend": "ollama",
-                        "ollama-model": "llama3.2:3b",
-                        "post-process-prompt": "hidden-polish-prompt",
-                        "personal-context": "hidden-context-token",
-                        "vocabulary": "hidden-vocabulary-token",
-                    }),
+                    "--settings-json-stdin",
                     "--json",
                 ])
             payload = json.loads(stdout.getvalue())
             saved = json.loads(output.read_text(encoding="utf-8"))
         self.assertEqual(code, 0)
-        self.assertEqual(payload["saved_path"], str(output))
+        self.assertTrue(payload["saved_path_present"])
+        self.assertNotIn("saved_path", payload)
+        self.assertNotIn(str(output), json.dumps(payload))
         self.assertNotIn("saved_path", saved)
         self.assertEqual(payload["message"], "diagnostics saved")
         self.assertEqual(saved["state"]["transcript_length"], len("private words"))
@@ -9190,7 +9275,9 @@ class CliTest(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
             rendered = output.read_text(encoding="utf-8")
             self.assertEqual(code, 0)
-            self.assertEqual(payload["path"], str(output))
+            self.assertTrue(payload["path_present"])
+            self.assertNotIn("path", payload)
+            self.assertNotIn(str(output), json.dumps(payload))
             self.assertNotIn("sk-secret", rendered)
             self.assertNotIn("openai-compatible-api-key", json.loads(rendered)["settings"])
 
@@ -9219,7 +9306,9 @@ class CliTest(unittest.TestCase):
 
             payload = json.loads(stdout.getvalue())
             self.assertEqual(code, 0)
-            self.assertEqual(payload["path"], str(output))
+            self.assertTrue(payload["path_present"])
+            self.assertNotIn("path", payload)
+            self.assertNotIn(str(output), json.dumps(payload))
             self.assertTrue(output.exists())
 
     def test_history_rejects_non_boolean_confirm_plaintext_direct_arg(self) -> None:

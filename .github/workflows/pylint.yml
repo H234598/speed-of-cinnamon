@@ -24,4 +24,9 @@ jobs:
           python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-pylint.txt
       - name: Analyse Python errors with pylint
         run: |
-          pylint --errors-only --disable=no-member $(git ls-files '*.py')
+          mapfile -d '' py_files < <(git ls-files -z -- '*.py')
+          if [[ "${#py_files[@]}" -eq 0 ]]; then
+            printf 'No Python files to lint.\n'
+            exit 0
+          fi
+          pylint --errors-only --disable=no-member -- "${py_files[@]}"

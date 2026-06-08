@@ -2227,11 +2227,15 @@ def _normalize_model_payloads(models: object) -> list[dict[str, object]]:
 def _redact_model_payload_paths(models: object) -> list[dict[str, object]]:
     redacted: list[dict[str, object]] = []
     for model in _normalize_model_payloads(models):
-        model_payload = dict(model)
-        path_value = model_payload.pop("path", "")
-        model_payload["path_present"] = bool(path_value)
-        redacted.append(model_payload)
+        redacted.append(_redact_model_payload_path(model))
     return redacted
+
+
+def _redact_model_payload_path(model: dict[str, object]) -> dict[str, object]:
+    model_payload = dict(model)
+    path_value = model_payload.pop("path", "")
+    model_payload["path_present"] = bool(path_value)
+    return model_payload
 
 
 def _normalize_text_models_payload(payload: object) -> dict[str, object]:
@@ -3725,7 +3729,7 @@ def command_list_inputs(args: argparse.Namespace) -> dict[str, object]:
 
 def command_models(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
-    return {"status": "done", "models": _normalize_model_payloads(list_models())}
+    return {"status": "done", "models": _redact_model_payload_paths(list_models())}
 
 
 def command_text_models(args: argparse.Namespace) -> dict[str, object]:
@@ -3837,12 +3841,12 @@ def command_install_text_model(args: argparse.Namespace) -> dict[str, object]:
 def command_download_model(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     force = _coerce_bool(args.force, field_name="force")
-    return download_model(args.model, force)
+    return _redact_model_payload_path(download_model(args.model, force))
 
 
 def command_remove_model(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
-    return remove_model(args.model)
+    return _redact_model_payload_path(remove_model(args.model))
 
 
 def _benchmark_targets(model_names: list[str] | None, language: str) -> list[ModelSpec]:
@@ -3860,18 +3864,28 @@ def _benchmark_targets(model_names: list[str] | None, language: str) -> list[Mod
     return [model for model in CATALOG if bool(model_status(model, verify=False).get("downloaded"))]
 
 
+def _temporary_benchmark_transcript_path() -> tuple[Path, os.stat_result]:
+    fd, path_text = tempfile.mkstemp(prefix=".benchmark-", suffix=".tmp.txt", dir=state_dir())
+    try:
+        file_stat = os.fstat(fd)
+    finally:
+        os.close(fd)
+    return Path(path_text), file_stat
+
+
 def _benchmark_model(audio_path: Path, language: str, model: ModelSpec) -> dict[str, object]:
     path = model_path(model)
     status = model_status(model, verify=True)
     downloaded = bool(status.get("downloaded"))
     result: dict[str, object] = {
         "model": model.name,
-        "path": str(path),
+        "path_present": bool(path),
         "downloaded": downloaded,
         "compatible": model_supports_language(path, language),
         "ok": False,
         "seconds": None,
         "transcript": "",
+        "transcript_output_redacted": False,
         "error": "",
     }
     if not downloaded:
@@ -3882,11 +3896,14 @@ def _benchmark_model(audio_path: Path, language: str, model: ModelSpec) -> dict[
         return result
 
     started = time.perf_counter()
+    text_path, text_path_stat = _temporary_benchmark_transcript_path()
+    cleanup_error = ""
+    transcribe_error = ""
     try:
         text = transcribe(
             audio_path=audio_path,
             language=language,
-            text_path=transcript_dir() / f"{audio_path.stem}-{model.name}.txt",
+            text_path=text_path,
             command_template="",
             backend=model.backend,
             whisper_model=str(path),
@@ -3897,15 +3914,33 @@ def _benchmark_model(audio_path: Path, language: str, model: ModelSpec) -> dict[
             openai_compatible_api_key="",
         )
     except Exception as exc:
+        text = ""
+        transcribe_error = str(exc)
+    finally:
+        try:
+            _unlink_regular_leaf_with_parent_fsync(
+                text_path,
+                field_name="benchmark transcript file",
+                expected_stat=text_path_stat,
+            )
+        except Exception as exc:
+            cleanup_error = str(exc)
+
+    if cleanup_error:
         result["seconds"] = round(time.perf_counter() - started, 3)
-        result["error"] = _redact_error_for_user(str(exc))
+        result["error"] = _redact_error_for_user(cleanup_error)
+        return result
+    if transcribe_error:
+        result["seconds"] = round(time.perf_counter() - started, 3)
+        result["error"] = _redact_error_for_user(transcribe_error)
         return result
 
+    clean_text = text.strip()
     result["ok"] = True
     result["seconds"] = round(time.perf_counter() - started, 3)
-    result["transcript"] = text.strip()
-    result["characters"] = len(text.strip())
-    result["words"] = len(text.strip().split())
+    result["transcript_output_redacted"] = bool(clean_text)
+    result["characters"] = len(clean_text)
+    result["words"] = len(clean_text.split())
     return result
 
 
@@ -4092,7 +4127,7 @@ def command_diagnostics(args: argparse.Namespace) -> dict[str, object]:
         )
         _assert_json_payload_size(payload, max_bytes=MAX_DIAGNOSTICS_JSON_BYTES)
         _write_json_atomic(path, payload, max_bytes=MAX_DIAGNOSTICS_JSON_BYTES)
-        payload["saved_path"] = str(path)
+        payload["saved_path_present"] = True
         payload["message"] = "diagnostics saved"
     return payload
 
@@ -4241,7 +4276,7 @@ def command_settings_export(args: argparse.Namespace) -> dict[str, object]:
     return {
         "status": "done",
         "message": "settings exported",
-        "path": str(path),
+        "path_present": bool(path),
         "settings_count": len(payload["settings"]),
         "alarms_count": len(payload["alarms"]["alarms"]),
     }
@@ -4266,7 +4301,7 @@ def command_settings_import(args: argparse.Namespace) -> dict[str, object]:
     result: dict[str, object] = {
         "status": "done",
         "message": "settings imported",
-        "path": str(path),
+        "path_present": bool(path),
         "settings_count": len(payload["settings"]),
         "alarms_count": len(payload["alarms"]["alarms"]),
         "export_version": payload["version"],
@@ -4366,7 +4401,7 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         **({"error": message, "cleanup_failed_path_count": len(cleanup_failed_paths)} if cleanup_failed_paths else {}),
         "transcript": text if reveal_transcript else "",
         "transcript_output_redacted": bool(text) and not reveal_transcript,
-        "transcript_path": str(stored_text_path),
+        **({"transcript_path": str(stored_text_path)} if reveal_transcript else {"transcript_path_present": bool(stored_text_path)}),
         "security": _public_security_post_processing(security_post_processing),
         "transcript_file_cap": _public_cleanup_result(transcript_cleanup),
         "transient_transcript_cleanup": _public_cleanup_result(transient_transcript_cleanup),

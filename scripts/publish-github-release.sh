@@ -560,13 +560,13 @@ if ! tag_commit="$(git rev-parse --verify "${tag}^{commit}")"; then
   printf 'failed to resolve release tag commit: %s\n' "${tag}" >&2
   exit 1
 fi
-commit="${GITHUB_SHA:-${tag_commit}}"
+commit="${RELEASE_EXPECTED_COMMIT:-${GITHUB_SHA:-${tag_commit}}}"
 if [[ ! "${commit}" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
   printf 'invalid commit value: %s\n' "${commit}" >&2
   exit 1
 fi
 if [[ "${commit}" != "${tag_commit}" ]]; then
-  printf 'GITHUB_SHA does not match release tag commit: %s\n' "${tag}" >&2
+  printf 'release expected commit does not match release tag commit: %s\n' "${tag}" >&2
   exit 1
 fi
 

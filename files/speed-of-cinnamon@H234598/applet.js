@@ -2307,16 +2307,22 @@ MyApplet.prototype = {
 
   _openAppletSettings: function() {
     let openedMessage = arguments.length > 0 ? String(arguments[0] || "") : _("Opened Cinnamon applet settings");
-    if (!this._findTrustedProgramInPath("xlet-settings")) {
+    let xletSettings = this._findTrustedProgramInPath("xlet-settings");
+    if (!xletSettings) {
       this._setStatus("error", _("xlet-settings command not found"), this.lastTranscript);
       return;
     }
-    let args = ["xlet-settings", "applet", UUID];
+    let args = [xletSettings, "applet", UUID];
     let instanceId = String(this.instanceId || "").trim();
     if (instanceId !== "") {
       args.push("--id", instanceId);
     }
-    Util.spawn(args);
+    try {
+      Util.spawn(this._coerceSpawnArgs(args));
+    } catch (err) {
+      this._setStatus("error", this._sanitizeErrorMessage(err), this.lastTranscript);
+      return;
+    }
     this._setStatus("ready", openedMessage, this.lastTranscript);
   },
 

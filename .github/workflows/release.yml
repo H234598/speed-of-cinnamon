@@ -233,6 +233,11 @@ jobs:
             printf 'release tag %s points to %s, but checkout is %s\n' "${tag}" "${tag_commit}" "${head_commit}" >&2
             exit 1
           fi
+          {
+            printf 'RELEASE_EXPECTED_COMMIT<<RELEASE_EXPECTED_COMMIT\n'
+            printf '%s\n' "${tag_commit}"
+            printf 'RELEASE_EXPECTED_COMMIT\n'
+          } >> "${GITHUB_ENV}"
       - name: Verify project
         run: make check
       - name: Build and verify source archive
@@ -301,6 +306,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}
           RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
+          RELEASE_EXPECTED_COMMIT: ${{ env.RELEASE_EXPECTED_COMMIT }}
           DRY_RUN: ${{ github.event_name != 'workflow_dispatch' && 'false' || (inputs.dry_run && 'true' || 'false') }}
         run: |
           args=()
