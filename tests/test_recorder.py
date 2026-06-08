@@ -1675,7 +1675,7 @@ Source #13
 
     def test_stop_process_aborts_if_expected_identity_changes(self) -> None:
         with (
-            mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
+            mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=999),
             mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", side_effect=["owner-identity", "foreign-identity"]) as mocked_identity,
             mock.patch("speed_of_cinnamon.recorder.os.kill", return_value=None),
             mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2]),
@@ -1686,7 +1686,30 @@ Source #13
 
         self.assertFalse(result)
         self.assertEqual(mocked_identity.call_count, 2)
+        self.assertEqual(mocked_kill.call_args_list[0].args[0], ["kill", "-INT", "--", "1234"])
+
+    def test_stop_process_continues_group_stop_when_leader_identity_changes_after_signal(self) -> None:
+        identity_calls = 0
+
+        def changing_identity(_pid: int) -> str:
+            nonlocal identity_calls
+            identity_calls += 1
+            return "owner-identity" if identity_calls == 1 else "foreign-identity"
+
+        with (
+            mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", side_effect=changing_identity),
+            mock.patch("speed_of_cinnamon.recorder.os.kill", return_value=None),
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2]),
+            mock.patch("speed_of_cinnamon.recorder.time.sleep"),
+            mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
+        ):
+            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+
+        self.assertFalse(result)
         self.assertEqual(mocked_kill.call_args_list[0].args[0], ["kill", "-INT", "--", "-1234"])
+        self.assertEqual(mocked_kill.call_args_list[1].args[0], ["kill", "-TERM", "--", "-1234"])
+        self.assertEqual(mocked_kill.call_args_list[2].args[0], ["kill", "-KILL", "--", "-1234"])
 
     def test_stop_process_does_not_signal_if_expected_identity_already_mismatches(self) -> None:
         with (

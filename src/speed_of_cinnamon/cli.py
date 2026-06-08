@@ -3537,13 +3537,13 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
 
 
 def command_doctor(args: argparse.Namespace) -> dict[str, object]:
-    settings = _parse_cli_settings_json(getattr(args, "settings_json", ""))
+    settings = _settings_json_from_args(args)
     applet = _coerce_bool(getattr(args, "applet", False), field_name="applet")
     return doctor_report(settings, applet=applet)
 
 
 def command_setup(args: argparse.Namespace) -> dict[str, object]:
-    settings = _parse_cli_settings_json(getattr(args, "settings_json", ""))
+    settings = _settings_json_from_args(args)
     applet = _coerce_bool(getattr(args, "applet", False), field_name="applet")
     doctor_payload = doctor_report(settings, applet=applet)
     return {
@@ -3888,6 +3888,13 @@ def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
     )
     verb = "would clean" if dry_run else "cleaned"
     failed_paths = transcript_result["failed_paths"] + transient_transcript_result["failed_paths"] + recording_result["failed_paths"]
+    deleted_paths = transcript_result["deleted_paths"] + transient_transcript_result["deleted_paths"] + recording_result["deleted_paths"]
+    would_delete_paths = transcript_result["planned_paths"] + transient_transcript_result["planned_paths"] + recording_result["planned_paths"]
+    skipped_active_paths = (
+        transcript_result["skipped_active_paths"]
+        + transient_transcript_result["skipped_active_paths"]
+        + recording_result["skipped_active_paths"]
+    )
     status = "error" if failed_paths else "done"
     message = f"{verb} {total} old file(s)"
     if status == "error":
@@ -3908,10 +3915,14 @@ def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
         "would_delete_transient_transcripts": would_delete_transient_transcripts,
         "would_delete_recordings": would_delete_recordings,
         "would_delete_logs": would_delete_logs,
-        "deleted_paths": transcript_result["deleted_paths"] + transient_transcript_result["deleted_paths"] + recording_result["deleted_paths"],
-        "would_delete_paths": transcript_result["planned_paths"] + transient_transcript_result["planned_paths"] + recording_result["planned_paths"],
-        "failed_paths": failed_paths,
-        "skipped_active_paths": transcript_result["skipped_active_paths"] + transient_transcript_result["skipped_active_paths"] + recording_result["skipped_active_paths"],
+        "deleted_path_count": len(deleted_paths),
+        "would_delete_path_count": len(would_delete_paths),
+        "failed_path_count": len(failed_paths),
+        "skipped_active_path_count": len(skipped_active_paths),
+        "deleted_paths": [] if not dry_run else deleted_paths,
+        "would_delete_paths": would_delete_paths if dry_run else [],
+        "failed_paths": failed_paths if dry_run else [],
+        "skipped_active_paths": skipped_active_paths if dry_run else [],
     }
 
 
@@ -3985,8 +3996,7 @@ def _diagnostics_state_payload(state: RecordingState) -> dict[str, object]:
 
 
 def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
-    settings_json = getattr(args, "settings_json", "")
-    settings = _parse_cli_settings_json(settings_json)
+    settings = _settings_json_from_args(args)
     ensure_runtime_dirs()
     applet = _coerce_bool(getattr(args, "applet", False), field_name="applet")
     alarm_payload = list_alarm_payload()
@@ -4302,6 +4312,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(doctor)
     doctor.add_argument("--settings-json", default="")
     doctor.add_argument(
+        "--settings-json-stdin",
+        action="store_true",
+        help="read settings JSON from stdin instead of exposing it in process arguments",
+    )
+    doctor.add_argument(
         "--applet",
         action="store_true",
         help="evaluate output readiness for the Cinnamon applet path",
@@ -4311,6 +4326,11 @@ def build_parser() -> argparse.ArgumentParser:
     setup = subparsers.add_parser("setup")
     add_common_options(setup)
     setup.add_argument("--settings-json", default="")
+    setup.add_argument(
+        "--settings-json-stdin",
+        action="store_true",
+        help="read settings JSON from stdin instead of exposing it in process arguments",
+    )
     setup.add_argument(
         "--applet",
         action="store_true",
@@ -4419,6 +4439,11 @@ def build_parser() -> argparse.ArgumentParser:
     diagnostics.add_argument("--save", action="store_true")
     diagnostics.add_argument("--output", default="")
     diagnostics.add_argument("--settings-json", default="")
+    diagnostics.add_argument(
+        "--settings-json-stdin",
+        action="store_true",
+        help="read settings JSON from stdin instead of exposing it in process arguments",
+    )
     diagnostics.add_argument(
         "--applet",
         action="store_true",

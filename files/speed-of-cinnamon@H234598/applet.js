@@ -1137,19 +1137,19 @@ MyApplet.prototype = {
   },
 
   _doctorArgs: function() {
-    return [this._cliCommand(), "doctor", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshotForCli()), "--json"];
+    return [this._cliCommand(), "doctor", "--applet", "--settings-json-stdin", "--json"];
   },
 
   _setupArgs: function() {
-    return [this._cliCommand(), "setup", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshotForCli()), "--json"];
+    return [this._cliCommand(), "setup", "--applet", "--settings-json-stdin", "--json"];
   },
 
   _diagnosticsArgs: function() {
-    return [this._cliCommand(), "diagnostics", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshotForCli()), "--json"];
+    return [this._cliCommand(), "diagnostics", "--applet", "--settings-json-stdin", "--json"];
   },
 
   _diagnosticsSaveArgs: function() {
-    return [this._cliCommand(), "diagnostics", "--applet", "--settings-json", JSON.stringify(this._settingsSnapshotForCli()), "--save", "--json"];
+    return [this._cliCommand(), "diagnostics", "--applet", "--settings-json-stdin", "--save", "--json"];
   },
 
   _profanityFilterDocumentArgs: function() {
@@ -2323,7 +2323,7 @@ MyApplet.prototype = {
         return;
       }
       this._openFile(path, _("Opened profanity replacement list: ") + String(payload.entries || 0));
-    });
+    }, this._settingsSnapshotInputOption());
   },
 
   _copySetupPlan: function() {
@@ -2334,7 +2334,7 @@ MyApplet.prototype = {
       }
       this.clipboard.set_text(St.ClipboardType.CLIPBOARD, String(payload.text || JSON.stringify(payload, null, 2)));
       this._setStatus("done", _("Copied setup plan"), this.lastTranscript);
-    });
+    }, this._settingsSnapshotInputOption());
   },
 
   _setupCommandsText: function(payload) {
@@ -2371,7 +2371,7 @@ MyApplet.prototype = {
 
       this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
       this._setStatus("done", _("Copied setup commands"), this.lastTranscript);
-    });
+    }, this._settingsSnapshotInputOption());
   },
 
   _copyDiagnostics: function() {
@@ -2382,7 +2382,7 @@ MyApplet.prototype = {
       }
       this.clipboard.set_text(St.ClipboardType.CLIPBOARD, JSON.stringify(payload, null, 2));
       this._setStatus("done", _("Copied diagnostics"), this.lastTranscript);
-    });
+    }, this._settingsSnapshotInputOption());
   },
 
   _saveDiagnostics: function() {
@@ -2392,7 +2392,7 @@ MyApplet.prototype = {
         return;
       }
       this._setStatus("done", _("Saved diagnostics"), this.lastTranscript);
-    });
+    }, this._settingsSnapshotInputOption());
   },
 
   _benchmarkAudioFileDialogArgs: function() {
@@ -4022,6 +4022,10 @@ MyApplet.prototype = {
     return snapshot;
   },
 
+  _settingsSnapshotInputOption: function() {
+    return { inputText: JSON.stringify(this._settingsSnapshotForCli()) };
+  },
+
   _exportSettings: function() {
     this._setStatus("processing", _("Exporting settings..."), this.lastTranscript);
     this._spawnJson(this._settingsExportArgs(), (payload) => {
@@ -4652,7 +4656,11 @@ MyApplet.prototype = {
       this.microphoneLevel = null;
       return;
     }
-    this.microphoneLevel = level;
+    let safeLevel = Object.assign({}, level);
+    if (safeLevel.detail !== undefined && safeLevel.detail !== null) {
+      safeLevel.detail = this._shortMenuText(this._sanitizeErrorMessage(safeLevel.detail), 160);
+    }
+    this.microphoneLevel = safeLevel;
   },
 
   _applyPayloadLanguage: function(payload) {
@@ -5115,15 +5123,14 @@ MyApplet.prototype = {
   },
 
   _notifySelfProtectionBlocked: function(title, windowClass) {
-    let detail = this._shortMenuText(String(title || windowClass || _("unknown target")), 160);
-    let key = detail + "\n" + String(windowClass || "");
+    let key = "self-protection\n" + String(windowClass || "");
     let now = Date.now();
     if (key === this.selfProtectionNoticeKey && now - this.selfProtectionNoticeAtMs < SELF_PROTECTION_NOTICE_COOLDOWN_MS) {
       return;
     }
     this.selfProtectionNoticeKey = key;
     this.selfProtectionNoticeAtMs = now;
-    let message = _("Auto-Submit self-protection blocked target: ") + detail;
+    let message = _("Auto-Submit self-protection blocked a protected target");
     this.lastMessage = message;
     this._updatePanel();
     this._notify(_("Speed of Cinnamon"), message, true);

@@ -1547,6 +1547,35 @@ class ModelsTest(unittest.TestCase):
             with self.assertRaisesRegex(models.ModelError, "must not pass through a symlink"):
                 models.model_status(spec, verify=True)
 
+    def test_model_status_rejects_symlinked_ctranslate2_inner_file_without_verify(self) -> None:
+        data = b"small model file"
+        spec = models.ModelSpec(
+            name="ct2-inner-symlink-status",
+            filename="ct2-inner-symlink-status",
+            size="2 KiB",
+            sha1="",
+            description="ct2 inner symlink status",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-inner-symlink-status",
+            files=("config.json",),
+            file_sha1s=file_sha1s_for(("config.json",), data),
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+        ):
+            path = models.model_path(spec)
+            path.mkdir(parents=True)
+            target = Path(tmp) / "outside-config.json"
+            target.write_bytes(data)
+            (path / "config.json").symlink_to(target)
+
+            status = models.model_status(spec, verify=False)
+
+        self.assertFalse(status["downloaded"])
+
     def test_download_model_rejects_multifile_catalog_without_repo_id(self) -> None:
         spec = models.ModelSpec(
             name="ct2-bad",

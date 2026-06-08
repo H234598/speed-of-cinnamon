@@ -521,7 +521,7 @@ class OutputTest(unittest.TestCase):
 
     def test_paste_without_helper_is_error(self) -> None:
         with mock.patch("speed_of_cinnamon.output.shutil.which", return_value=None):
-            with self.assertRaisesRegex(OutputError, "no keyboard helper"):
+            with self.assertRaisesRegex(OutputError, "automatic paste helper"):
                 paste_from_clipboard(expected_window_snapshot=("123", "Editor", "xed"))
 
     def test_paste_from_clipboard_avoids_duplicate_xdotool_lookup(self) -> None:
@@ -906,7 +906,7 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output.paste_from_clipboard") as mocked_paste,
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False) as mocked_non_text,
         ):
-            with self.assertRaisesRegex(OutputError, "no keyboard helper"):
+            with self.assertRaisesRegex(OutputError, "automatic paste helper"):
                 insert_text("wiederholung", "clipboard-paste")
 
         mocked_clipboard.assert_not_called()
@@ -1114,7 +1114,7 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
             mock.patch("speed_of_cinnamon.output.paste_from_clipboard") as mocked_paste,
         ):
-            with self.assertRaisesRegex(OutputError, "verifiable active window"):
+            with self.assertRaisesRegex(OutputError, "automatic paste helper"):
                 insert_text("new text", "clipboard-paste")
 
         mocked_clipboard.assert_not_called()
@@ -1385,9 +1385,9 @@ class OutputTest(unittest.TestCase):
     def test_clipboard_targets_treat_rich_text_as_non_text_payload(self) -> None:
         self.assertTrue(output_module._clipboard_targets_contain_non_text_payload(""))
         self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("TARGETS\nTIMESTAMP\n"))
-        self.assertFalse(output_module._clipboard_targets_contain_non_text_payload("text/html\ntext/plain\n"))
+        self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("text/html\ntext/plain\n"))
         self.assertFalse(output_module._clipboard_targets_contain_non_text_payload("text/plain;charset=UTF-16\n"))
-        self.assertFalse(output_module._clipboard_targets_contain_non_text_payload("text/rtf\n"))
+        self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("text/rtf\n"))
         self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("text/uri-list\ntext/plain\n"))
         self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("text/uri-list;charset=utf-8\ntext/plain;charset=UTF-16\n"))
         self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("text/x-moz-url\n"))
@@ -1895,6 +1895,7 @@ class OutputTest(unittest.TestCase):
 
     def test_type_text_with_invalid_delay_clamps_to_zero(self) -> None:
         calls: list[list[str]] = []
+        typed_payloads: list[str] = []
 
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             if args and isinstance(args[0], list):
@@ -1904,6 +1905,8 @@ class OutputTest(unittest.TestCase):
                 assert isinstance(raw_args, list)
                 called = list(raw_args)
             calls.append(called)
+            if "--file" in called:
+                typed_payloads.append(Path(called[called.index("--file") + 1]).read_text(encoding="utf-8"))
             return subprocess.CompletedProcess(["xdotool"], 0, stdout=b"", stderr=b"")
 
         with (
@@ -1914,7 +1917,12 @@ class OutputTest(unittest.TestCase):
         ):
             self.assertTrue(insert_text("hello", "type", delay_ms=-10))
 
-        self.assertIn(["xdotool", "type", "--clearmodifiers", "--delay", "0", "hello"], calls)
+        type_calls = [call for call in calls if call[:4] == ["xdotool", "type", "--clearmodifiers", "--delay"]]
+        self.assertEqual(len(type_calls), 1)
+        self.assertEqual(type_calls[0][4], "0")
+        self.assertIn("--file", type_calls[0])
+        self.assertNotIn("hello", type_calls[0])
+        self.assertEqual(typed_payloads, ["hello"])
 
     def test_type_text_rejects_overly_large_delay(self) -> None:
         with (

@@ -1131,7 +1131,7 @@ def _clipboard_targets_contain_non_text_payload(targets: str) -> bool:
         "string",
         "utf8_string",
     }
-    non_text_text_targets = {"text/uri-list", "text/x-moz-url"}
+    non_text_text_targets = {"text/html", "text/rtf", "text/uri-list", "text/x-moz-url"}
     saw_text_target = False
     for line in str(targets or "").splitlines():
         raw_target = line.strip().lower()
@@ -1224,11 +1224,11 @@ def paste_from_clipboard(expected_window_snapshot: tuple[str, str, str] | None =
         raise OutputError("refusing automatic paste without verifiable active window")
     if xdotool_error is not None:
         raise xdotool_error
-    raise OutputError("no keyboard helper found; install xdotool or wtype")
+    raise OutputError("no automatic paste helper found; install xdotool")
 
 
 def _clipboard_paste_helper_available() -> bool:
-    return bool(_which("xdotool") or _which("wtype"))
+    return bool(_which("xdotool"))
 
 
 def type_text(
@@ -1252,12 +1252,19 @@ def type_text(
         raise OutputError("refusing direct typing without verifiable active window")
     if not _active_x_window_matches_snapshot(expected_window_snapshot, xdotool_command=xdotool):
         raise OutputError("active window changed before direct typing")
-    _run_with_input(
-        ["xdotool", "type", "--clearmodifiers", "--delay", str(max(delay_ms, 0)), text],
-        "",
-        timeout=MAX_TYPE_TIMEOUT_SECONDS,
-        resolved_command=xdotool,
-    )
+    try:
+        with tempfile.NamedTemporaryFile(prefix=".soc-type-", suffix=".txt", mode="wb") as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(_validate_text_input(text))
+            handle.flush()
+            _run_with_input(
+                ["xdotool", "type", "--clearmodifiers", "--delay", str(max(delay_ms, 0)), "--file", handle.name],
+                "",
+                timeout=MAX_TYPE_TIMEOUT_SECONDS,
+                resolved_command=xdotool,
+            )
+    except OSError as exc:
+        raise OutputError("failed to prepare direct typing input") from exc
 
 
 def _clipboard_dedup_state_is_untrusted() -> bool:
@@ -1401,7 +1408,7 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
         if target_window_snapshot is None and _should_skip_clipboard_duplicate(text, method, dedupe_context=None):
             return False
         if not _clipboard_paste_helper_available():
-            raise OutputError("no keyboard helper found; install xdotool or wtype")
+            raise OutputError("no automatic paste helper found; install xdotool")
         if not xdotool:
             raise OutputError("refusing automatic paste without verifiable active window")
         if target_window_snapshot is None:

@@ -9,6 +9,7 @@ import io
 import hashlib
 import json
 import os
+import re
 import stat as stat_module
 import uuid
 import urllib.parse
@@ -57,6 +58,10 @@ OPENAI_TRANSCRIPTION_MODELS = {
     "gpt-4o-transcribe-diarize",
     "whisper-1",
 }
+
+_COMMAND_TEMPLATE_PLACEHOLDER_RE = re.compile(
+    r"\{(audio|language|text|output_base|output_dir|context|vocabulary|prompt)\}"
+)
 
 
 _TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -1061,10 +1066,7 @@ def render_command_template(
         }
     except ValueError as exc:
         raise TranscriptionError(str(exc)) from exc
-    rendered = template
-    for key, value in replacements.items():
-        rendered = rendered.replace("{" + key + "}", value)
-    return rendered
+    return _COMMAND_TEMPLATE_PLACEHOLDER_RE.sub(lambda match: replacements[match.group(1)], template)
 
 
 def transcribe_with_template(

@@ -1519,7 +1519,8 @@ def stop_process(
     if expected_process_identity is None and not allow_unverified_process:
         raise RecorderError("expected_process_identity is required to stop recorder process")
     try:
-        process_target = f"-{pid}" if os.getpgid(pid) == pid else str(pid)
+        process_group_target = os.getpgid(pid) == pid
+        process_target = f"-{pid}" if process_group_target else str(pid)
     except ProcessLookupError:
         return False
     except OSError as exc:
@@ -1528,26 +1529,31 @@ def stop_process(
     if not _recording_process_identity_matches(pid, expected_process_identity):
         return False
 
+    def target_identity_still_safe() -> bool:
+        if _recording_process_identity_matches(pid, expected_process_identity):
+            return True
+        return process_group_target and not _process_is_gone(process_target)
+
     _run_kill(["kill", "-INT", "--", process_target], check_exit=False)
 
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         if _process_is_gone(process_target):
             return True
-        if not _recording_process_identity_matches(pid, expected_process_identity):
+        if not target_identity_still_safe():
             return False
         time.sleep(0.1)
 
     if _process_is_gone(process_target):
         return True
-    if not _recording_process_identity_matches(pid, expected_process_identity):
+    if not target_identity_still_safe():
         return False
     _run_kill(["kill", "-TERM", "--", process_target], check_exit=False)
 
     time.sleep(0.5)
     if _process_is_gone(process_target):
         return True
-    if not _recording_process_identity_matches(pid, expected_process_identity):
+    if not target_identity_still_safe():
         return False
 
     try:
@@ -1557,6 +1563,6 @@ def stop_process(
     time.sleep(0.1)
     if _process_is_gone(process_target):
         return True
-    if not _recording_process_identity_matches(pid, expected_process_identity):
+    if not target_identity_still_safe():
         return False
     return _process_is_gone(process_target)

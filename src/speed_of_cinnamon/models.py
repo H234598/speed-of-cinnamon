@@ -1104,14 +1104,23 @@ def default_ctranslate2_model_path(language: str = "") -> str:
 
 
 def _model_is_downloaded(model: ModelSpec, path: Path) -> bool:
-    if path.is_symlink():
+    try:
+        path_stat = path.stat(follow_symlinks=False)
+    except OSError:
         return False
     if model.files:
-        return path.is_dir() and all(
-            (path / _validated_catalog_path_fragment(filename, field_name="model file path")).is_file()
-            for filename in model.files
-        )
-    return path.is_file()
+        if not stat_module.S_ISDIR(path_stat.st_mode):
+            return False
+        for filename in model.files:
+            file_path = path / _validated_catalog_path_fragment(filename, field_name="model file path")
+            try:
+                file_stat = file_path.stat(follow_symlinks=False)
+            except OSError:
+                return False
+            if not stat_module.S_ISREG(file_stat.st_mode):
+                return False
+        return True
+    return stat_module.S_ISREG(path_stat.st_mode)
 
 
 def _model_is_verified(model: ModelSpec, path: Path, checksum: str = "") -> bool:

@@ -2515,6 +2515,36 @@ class CliTest(unittest.TestCase):
         mocked_doctor.assert_called_once()
 
     @mock.patch("speed_of_cinnamon.cli.doctor_report")
+    def test_setup_command_accepts_settings_json_from_stdin(self, mocked_doctor: mock.Mock) -> None:
+        mocked_doctor.return_value = {
+            "ok": True,
+            "configured": {
+                "recorder": {"ok": True},
+                "transcriber": {"ok": True},
+                "output": {"ok": True},
+                "postprocessor": {"ok": True},
+                "warnings": [],
+            },
+            "desktop": {"cinnamon": True},
+        }
+        stdout = io.StringIO()
+        stdin = io.StringIO('{"transcriber":"auto"}')
+        with mock.patch("sys.stdin", stdin), redirect_stdout(stdout):
+            code = cli.run(["setup", "--applet", "--settings-json-stdin", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "done")
+        mocked_doctor.assert_called_once_with({"transcriber": "auto"}, applet=True)
+
+    def test_doctor_rejects_settings_json_from_argv_and_stdin(self) -> None:
+        stdout = io.StringIO()
+        with mock.patch("sys.stdin", io.StringIO('{"language":"de"}')), redirect_stdout(stdout):
+            code = cli.run(["doctor", "--settings-json", '{"language":"en"}', "--settings-json-stdin", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("either --settings-json or stdin", payload["error"])
+
+    @mock.patch("speed_of_cinnamon.cli.doctor_report")
     def test_doctor_command_rejects_non_boolean_applet(self, mocked_doctor: mock.Mock) -> None:
         with self.assertRaisesRegex(RuntimeError, "applet must be a boolean"):
             cli.command_doctor(argparse.Namespace(settings_json="{}", applet="yes"))
@@ -3279,7 +3309,9 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(payload["deleted_transient_transcripts"], 1)
-        self.assertIn(str(stale), payload["deleted_paths"])
+        self.assertEqual(payload["deleted_path_count"], 1)
+        self.assertEqual(payload["deleted_paths"], [])
+        self.assertNotIn(str(stale), json.dumps(payload))
         self.assertFalse(stale_exists)
         self.assertFalse(stale_owner_exists)
         self.assertTrue(fresh_exists)
@@ -3310,7 +3342,9 @@ class CliTest(unittest.TestCase):
         self.assertIn("failed to scan or delete 1 file", payload["error"])
         self.assertEqual(payload["deleted_transient_transcripts"], 1)
         self.assertFalse(stale_exists)
-        self.assertIn(str(owner), payload["failed_paths"])
+        self.assertEqual(payload["failed_path_count"], 1)
+        self.assertEqual(payload["failed_paths"], [])
+        self.assertNotIn(str(owner), json.dumps(payload))
         self.assertTrue(owner_is_symlink)
         self.assertTrue(target_exists)
 
@@ -3418,8 +3452,11 @@ class CliTest(unittest.TestCase):
         self.assertTrue(new_log_exists)
         self.assertTrue(active_audio_exists)
         self.assertTrue(active_log_exists)
-        self.assertIn(str(active_audio), payload["skipped_active_paths"])
-        self.assertIn(str(active_log), payload["skipped_active_paths"])
+        self.assertEqual(payload["skipped_active_path_count"], 2)
+        self.assertEqual(payload["skipped_active_paths"], [])
+        encoded = json.dumps(payload)
+        self.assertNotIn(str(active_audio), encoded)
+        self.assertNotIn(str(active_log), encoded)
 
     def test_cleanup_defaults_to_keeping_twenty_recording_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3901,11 +3938,15 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["deleted_transcripts"], 1)
         self.assertFalse(stale_audio_exists)
         self.assertFalse(stale_transcript_exists)
-        self.assertIn(str(active_trimmed), payload["skipped_active_paths"])
-        self.assertIn(str(active_encoded), payload["skipped_active_paths"])
-        self.assertIn(str(active_audio), payload["skipped_active_paths"])
-        self.assertIn(str(active_transcript), payload["skipped_active_paths"])
-        self.assertIn(str(active_encrypted_transcript), payload["skipped_active_paths"])
+        self.assertEqual(payload["skipped_active_path_count"], 6)
+        self.assertEqual(payload["skipped_active_paths"], [])
+        encoded = json.dumps(payload)
+        self.assertNotIn(str(active_trimmed), encoded)
+        self.assertNotIn(str(active_encoded), encoded)
+        self.assertNotIn(str(active_audio), encoded)
+        self.assertNotIn(str(active_log), encoded)
+        self.assertNotIn(str(active_transcript), encoded)
+        self.assertNotIn(str(active_encrypted_transcript), encoded)
         self.assertTrue(active_audio_exists)
         self.assertTrue(active_log_exists)
         self.assertTrue(active_trimmed_exists)
@@ -3977,9 +4018,12 @@ class CliTest(unittest.TestCase):
             active_encoded_exists = active_encoded.exists()
             active_transcript_exists = active_transcript.exists()
         self.assertEqual(code, 0)
-        self.assertIn(str(active_trimmed), payload["deleted_paths"])
-        self.assertIn(str(active_encoded), payload["deleted_paths"])
-        self.assertIn(str(active_transcript), payload["deleted_paths"])
+        self.assertEqual(payload["deleted_path_count"], 3)
+        self.assertEqual(payload["deleted_paths"], [])
+        encoded = json.dumps(payload)
+        self.assertNotIn(str(active_trimmed), encoded)
+        self.assertNotIn(str(active_encoded), encoded)
+        self.assertNotIn(str(active_transcript), encoded)
         self.assertTrue(active_audio_exists)
         self.assertTrue(active_log_exists)
         self.assertFalse(active_trimmed_exists)
@@ -6388,7 +6432,9 @@ class CliTest(unittest.TestCase):
                 payload = json.loads(stdout.getvalue())
                 self.assertEqual(code, 0)
                 self.assertEqual(payload["deleted_recordings"], 1)
-                self.assertIn(str(finalized), payload["deleted_paths"])
+                self.assertEqual(payload["deleted_path_count"], 3)
+                self.assertEqual(payload["deleted_paths"], [])
+                self.assertNotIn(str(finalized), json.dumps(payload))
                 self.assertFalse(finalized.exists())
 
     def test_finalize_encrypts_kept_recording_and_transcript_with_passphrase(self) -> None:

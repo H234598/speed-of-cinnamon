@@ -81,6 +81,19 @@ class TranscriberTest(unittest.TestCase):
         self.assertIn("Use Cinnamon terms.", rendered)
         self.assertIn("PipeWire", rendered)
 
+    def test_template_does_not_expand_placeholders_inside_inserted_values(self) -> None:
+        rendered = render_command_template(
+            "tool --audio {audio} --prompt {prompt}",
+            Path("/tmp/sample{prompt}.wav"),
+            "de",
+            Path("/tmp/out.txt"),
+            "private context",
+            "",
+        )
+
+        self.assertIn("sample{prompt}.wav", rendered)
+        self.assertEqual(rendered.count("private context"), 1)
+
     def test_template_rejects_oversized_personal_context(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "personal context is too large"):
             render_command_template(

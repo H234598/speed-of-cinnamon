@@ -272,7 +272,8 @@ rejected or skipped instead of being treated as transcript or recording content.
 
 Use `Preview cleanup` before `Clean all old files`. Manual cleanup removes all old transcript files and cached
 recordings while skipping the currently referenced state paths. Recordings and their companion logs are handled as one
-cache group.
+cache group. The preview JSON includes the paths it would delete; a real cleanup returns path counts without exposing
+absolute deleted or failed paths.
 
 The matching CLI dry run is:
 
