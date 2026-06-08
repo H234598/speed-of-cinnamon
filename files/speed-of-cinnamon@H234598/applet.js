@@ -2797,16 +2797,30 @@ MyApplet.prototype = {
     }
     this.inputSourceItem.menu.removeAll();
     let current = String(this.inputDevice || "");
+    let currentWasListed = current === "";
     let defaultLabel = (current === "" ? "[x] " : "[ ] ") + _("System default");
     let defaultItem = this._selectionMenuItem(defaultLabel);
     defaultItem.connect("activate", () => this._selectInputSource("", _("system default")));
     this.inputSourceItem.menu.addMenuItem(defaultItem);
 
+    let addCurrentCustomInput = () => {
+      if (current === "" || currentWasListed) {
+        return;
+      }
+      let label = _("Current custom input source: ") + this._shortMenuText(current, 96);
+      let item = this._selectionMenuItem("[x] " + label);
+      item.connect("activate", () => this._selectInputSource(current, label));
+      this.inputSourceItem.menu.addMenuItem(item);
+      currentWasListed = true;
+    };
+
     if (message) {
+      addCurrentCustomInput();
       this.inputSourceItem.menu.addMenuItem(this._selectionInfoItem(message));
       return;
     }
     if (!sources || sources.length === 0) {
+      addCurrentCustomInput();
       this.inputSourceItem.menu.addMenuItem(this._selectionInfoItem(_("No input sources found")));
       return;
     }
@@ -2819,11 +2833,15 @@ MyApplet.prototype = {
       if (source.default) {
         label += _(" (system default)");
       }
+      if (current === sourceName) {
+        currentWasListed = true;
+      }
       let itemLabel = (current === sourceName ? "[x] " : "[ ] ") + this._shortMenuText(label + " - " + sourceName, 96);
       let item = this._selectionMenuItem(itemLabel);
       item.connect("activate", () => this._selectInputSource(sourceName, label));
       this.inputSourceItem.menu.addMenuItem(item);
     }
+    addCurrentCustomInput();
   },
 
   _selectInputSource: function(name, label) {
@@ -2882,8 +2900,17 @@ MyApplet.prototype = {
     this.modelItem.menu.addMenuItem(whisperCommand);
 
     let customCommandActive = String(this.transcriber || "") === "command" && String(this.whisperModel || "") === "";
-    let customCommand = this._selectionMenuItem((customCommandActive ? "[x] " : "[ ] ") + _("Custom command"));
-    customCommand.connect("activate", () => this._selectStaticVoiceBackend("command", _("Voice model: custom command")));
+    let customCommandConfigured = String(this.transcriberCommand || "").trim() !== "";
+    let customCommandLabel = _("Custom command") + (customCommandConfigured ? "" : _(" - configure in settings"));
+    let customCommand = this._selectionMenuItem((customCommandActive ? "[x] " : "[ ] ") + customCommandLabel);
+    customCommand.connect("activate", () => {
+      if (customCommandConfigured) {
+        this._selectStaticVoiceBackend("command", _("Voice model: custom command"));
+        return;
+      }
+      this._openAppletSettings();
+      this._setStatus("ready", _("Configure custom voice command in applet settings"), this.lastTranscript);
+    });
     this.modelItem.menu.addMenuItem(customCommand);
 
     this.modelItem.menu.addMenuItem(this._selectionInfoItem(_("Active: ") + this._activeVoiceModelSummary()));
@@ -3536,8 +3563,17 @@ MyApplet.prototype = {
     disabled.connect("activate", () => this._selectTextModelBackend("none", "", _("Text polishing disabled")));
     this.textModelItem.menu.addMenuItem(disabled);
 
-    let custom = this._selectionMenuItem((backend === "command" || backend === "custom" ? "[x] " : "[ ] ") + _("Custom command"));
-    custom.connect("activate", () => this._selectTextModelBackend("command", "", _("Text polishing: custom command")));
+    let textCommandConfigured = String(this.postProcessCommand || "").trim() !== "";
+    let customLabel = _("Custom command") + (textCommandConfigured ? "" : _(" - configure in settings"));
+    let custom = this._selectionMenuItem((backend === "command" || backend === "custom" ? "[x] " : "[ ] ") + customLabel);
+    custom.connect("activate", () => {
+      if (textCommandConfigured) {
+        this._selectTextModelBackend("command", "", _("Text polishing: custom command"));
+        return;
+      }
+      this._openAppletSettings();
+      this._setStatus("ready", _("Configure custom text command in applet settings"), this.lastTranscript);
+    });
     this.textModelItem.menu.addMenuItem(custom);
 
     this.textModelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());

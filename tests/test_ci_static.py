@@ -834,6 +834,7 @@ class CiStaticTest(unittest.TestCase):
         dist_verifier = (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(encoding="utf-8")
         rpm_verifier = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(encoding="utf-8")
         install_local = (REPO_ROOT / "scripts" / "install-local.sh").read_text(encoding="utf-8")
+        fedora_deps = (REPO_ROOT / "scripts" / "install-fedora-deps.sh").read_text(encoding="utf-8")
         wiki_publisher = (REPO_ROOT / "scripts" / "publish-wiki.sh").read_text(encoding="utf-8")
 
         for path in [
@@ -892,6 +893,12 @@ class CiStaticTest(unittest.TestCase):
         )
         self.assertIn('readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"', install_local)
         self.assertIn('export PATH="${TRUSTED_COMMAND_PATH}"', install_local)
+        self.assertIn('readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"', fedora_deps)
+        self.assertIn('export PATH="${TRUSTED_COMMAND_PATH}"', fedora_deps)
+        self.assertIn('dnf_cmd="$(command -v -- dnf)"', fedora_deps)
+        self.assertIn('sudo_cmd="$(command -v -- sudo)"', fedora_deps)
+        self.assertIn('"${sudo_cmd}" "${dnf_cmd}" install -y', fedora_deps)
+        self.assertNotIn("sudo dnf install -y", fedora_deps)
         self.assertIn('readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"', wiki_publisher)
         self.assertIn('export PATH="${TRUSTED_COMMAND_PATH}"', wiki_publisher)
         self.assertIn('safe_fs="${repo_dir}/scripts/safe-local-fs.py"', wiki_publisher)
@@ -1493,6 +1500,10 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('SNAP_BUILD must be 0 or 1.\\n', makefile)
         self.assertIn('BUILD_GENERIC_RPM must be 0 or 1.\\n', makefile)
         self.assertIn("release-require-snap:", makefile)
+
+    def test_makefile_lint_checks_applet_js_syntax(self) -> None:
+        makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn("node --check files/speed-of-cinnamon@H234598/applet.js >/dev/null", makefile)
         self.assertIn("SNAP_BUILD=0 is not allowed for release or release-dry-run.", makefile)
         self.assertIn("release-dry-run-no-snap:", makefile)
 

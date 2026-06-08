@@ -3055,6 +3055,34 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("\x1b", export_text)
         self.assertIn("\\u001b[31mALERT\\u001b[0m", export_text)
 
+    def test_transcripts_export_redacts_unreadable_transcript_name_without_plaintext_confirmation(self) -> None:
+        strong_passphrase = artifact_crypto._b64encode(bytes(range(32)))
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            (transcript_dir / "customer-secret-name.txt.socenc").write_bytes(b"not a valid encrypted transcript")
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {
+                    "XDG_STATE_HOME": tmp,
+                    artifact_crypto.PASSPHRASE_ENV: strong_passphrase,
+                    artifact_crypto.PASSPHRASE_FILE_ENV: "",
+                }),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["transcripts-export", "--artifact-encryption", "passphrase", "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertNotEqual(code, 0)
+        self.assertIn(cli.HISTORY_METADATA_REDACTED_TEXT, payload["error"])
+        self.assertNotIn("customer-secret-name", payload["error"])
+
+    def test_read_stored_encrypted_transcript_rejects_decrypted_payload_over_plaintext_cap(self) -> None:
+        oversized = b"x" * (cli.MAX_STORED_TRANSCRIPT_BYTES + 1)
+        with mock.patch("speed_of_cinnamon.cli.read_decrypted_bytes_from_file", return_value=oversized):
+            with self.assertRaisesRegex(RuntimeError, "transcript file is too large"):
+                cli._read_stored_transcript_text(Path("/tmp/oversized.txt.socenc"))
+
     def test_transcripts_export_rolls_back_encrypted_bundle_when_plaintext_cleanup_fails(self) -> None:
         strong_passphrase = artifact_crypto._b64encode(bytes(range(32)))
         with tempfile.TemporaryDirectory() as tmp:

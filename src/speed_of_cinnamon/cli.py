@@ -1419,6 +1419,8 @@ def _read_stored_transcript_text(path: Path) -> str:
             max_bytes=MAX_STORED_TRANSCRIPT_BYTES * 2,
             require_encrypted=True,
         )
+        if len(payload) > MAX_STORED_TRANSCRIPT_BYTES:
+            raise RuntimeError("transcript file is too large")
         try:
             return payload.decode("utf-8")
         except UnicodeDecodeError as exc:
@@ -1721,8 +1723,9 @@ def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tu
 _TRANSCRIPT_READ_EXCEPTIONS = (OSError, RuntimeError, ValueError, UnicodeDecodeError, ArtifactCryptoError)
 
 
-def _transcript_read_failure(path: Path, exc: BaseException) -> RuntimeError:
-    return RuntimeError(f"failed to read transcript {_transcript_display_name(path)}: {_redact_error_for_user(str(exc))}")
+def _transcript_read_failure(path: Path, exc: BaseException, *, reveal_metadata: bool = True) -> RuntimeError:
+    name = _transcript_display_name(path) if reveal_metadata else HISTORY_METADATA_REDACTED_TEXT
+    return RuntimeError(f"failed to read transcript {name}: {_redact_error_for_user(str(exc))}")
 
 
 def _collect_transcript_history(limit: int = 10) -> tuple[list[dict[str, object]], int]:
@@ -1769,6 +1772,7 @@ def build_transcripts_document(
     *,
     max_chars: int | None = None,
     allow_truncate: bool = False,
+    reveal_metadata: bool = True,
 ) -> tuple[str, int, bool]:
     if limit <= 0:
         limit = 0
@@ -1793,7 +1797,7 @@ def build_transcripts_document(
         try:
             text = _read_stored_transcript_text(path).strip()
         except _TRANSCRIPT_READ_EXCEPTIONS as exc:
-            raise _transcript_read_failure(path, exc) from exc
+            raise _transcript_read_failure(path, exc, reveal_metadata=reveal_metadata) from exc
         if not text:
             continue
         display_text = _sanitize_transcript_display_text(text)
@@ -1861,6 +1865,7 @@ def write_transcripts_export(
         limit,
         max_chars=MAX_TRANSCRIPTS_EXPORT_CHARS,
         allow_truncate=False,
+        reveal_metadata=plaintext and confirm_plaintext,
     )
     output_path = _transcript_export_path(plaintext)
     _ensure_transcript_export_dir(output_path)

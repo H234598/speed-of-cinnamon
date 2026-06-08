@@ -26,6 +26,7 @@ lint:
 	find src tests -name '*.py' -print0 | xargs -0 $(PYTHON) -m py_compile
 	$(PYTHON) -m json.tool files/speed-of-cinnamon@H234598/metadata.json >/dev/null
 	$(PYTHON) -m json.tool files/speed-of-cinnamon@H234598/settings-schema.json >/dev/null
+	node --check files/speed-of-cinnamon@H234598/applet.js >/dev/null
 
 lint-workflows-check:
 	@if [ "$${GITHUB_ACTIONS:-false}" = "true" ]; then \

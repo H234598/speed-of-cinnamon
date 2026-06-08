@@ -26,7 +26,7 @@ def test_repo_falls_back_to_target_when_github_repository_empty_and_origin_is_al
         encoding="utf-8"
     )
     section = script[
-        script.index('repo="${GITHUB_REPOSITORY:-}"') : script.index('commit="${GITHUB_SHA:-$(git rev-parse HEAD)}"')
+        script.index('repo="${GITHUB_REPOSITORY:-}"') : script.index('if ! tag_commit="$(git rev-parse --verify "${tag}^{commit}")"')
     ]
     remote_target_check = 'if [[ -n "${remote_repo}" && "${remote_repo}" != "${RELEASE_TARGET_REPOSITORY}" ]]; then'
     checked_out_mismatch_check = (
@@ -38,3 +38,14 @@ def test_repo_falls_back_to_target_when_github_repository_empty_and_origin_is_al
     checked_out_mismatch_check = section.index(checked_out_mismatch_check)
 
     assert remote_target_check < fallback_assignment < checked_out_mismatch_check
+
+
+def test_release_notes_commit_must_match_verified_tag_commit():
+    script = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'if ! tag_commit="$(git rev-parse --verify "${tag}^{commit}")"; then' in script
+    assert 'commit="${GITHUB_SHA:-${tag_commit}}"' in script
+    assert 'if [[ "${commit}" != "${tag_commit}" ]]; then' in script
+    assert "GITHUB_SHA does not match release tag commit" in script
