@@ -215,13 +215,26 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         self.assertIn("const SENSITIVE_ERROR_RE =", source)
+        self.assertIn("const LOCAL_PATH_ERROR_RE =", source)
         self.assertIn(r"\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b", source)
         self.assertIn(r"[a-z][a-z0-9+.-]*:\/\/[^/@\s]+@", source)
+        self.assertIn(r"\/(?:home|root|run|tmp|var|etc|usr|opt|mnt|media|dev|proc|sys)\/", source)
         self.assertNotIn(r"[a-z][a-z0-9+.-]*:\/\/[^/@\s:]+:[^@\s]+@", source)
         self.assertNotIn(r"[a-z][a-z0-9+.-]*:\/\/[^/@\s:]+:[^/@\s]+@", source)
         self.assertIn("_sanitizeErrorMessage: function(value)", source)
         self.assertIn('return "[redacted error details]";', source)
         self.assertIn('this.lastMessage = status === "error" ? this._sanitizeErrorMessage(message) : message || "";', source)
+        self.assertIn("let safeBody = this._sanitizeErrorMessage(body);", source)
+        self.assertIn('let message = _("Doctor failed: ") + this._sanitizeErrorMessage(payload.error);', source)
+        self.assertNotIn('let message = _("Doctor failed: ") + payload.error;', source)
+        self.assertIn("let safeMessage = this._sanitizeErrorMessage(payload.message);", source)
+        self.assertNotIn('payload.message + "; " + _("opening installer...")', source)
+        self.assertIn('let message = _("Ollama model installed: ") + installedModel;', source)
+        self.assertNotIn('let message = payload.message || _("Ollama model installed");', source)
+        self.assertIn("Main.criticalNotify(title, safeBody);", source)
+        self.assertIn("Main.notify(title, safeBody);", source)
+        self.assertIn('this._setStatus("error", _("Could not open link"), this.lastTranscript);', source)
+        self.assertNotIn('_("Could not open link: ") + err.message', source)
         self.assertNotIn('this._notify(_("Could not open terminal"), String(err), true);', source)
         self.assertNotIn('this._notify(_("Could not start install terminal"), String(err), true);', source)
         self.assertNotIn('this._notify(_("Could not start uninstall terminal"), String(err), true);', source)
@@ -1398,6 +1411,14 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon", "models", "whisper.cpp"])', source)
         self.assertNotIn('Util.spawn(["xdg-open"', source)
 
+    def test_open_file_and_folder_errors_do_not_render_local_paths(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn('this._setStatus("error", _("Could not open folder"), this.lastTranscript);', source)
+        self.assertIn('this._setStatus("error", _("Could not open file"), this.lastTranscript);', source)
+        self.assertNotIn('_("Could not open folder: ") + err.message', source)
+        self.assertNotIn('_("Could not open file: ") + err.message', source)
+
     def test_applet_copies_setup_commands_without_installing_packages(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
@@ -1849,6 +1870,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.settings.setValue("whisper-model", this.whisperModel)', source)
         self.assertIn('this._setStatus("ready", _("Voice model: automatic"), this.lastTranscript)', source)
         self.assertIn("this._refreshModelMenu();", source)
+
+    def test_voice_model_remove_status_does_not_render_backend_path_message(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn('this._setStatus("done", _("Removed model: ") + name, this.lastTranscript);', source)
+        self.assertNotIn('payload.message || _("Removed model: ") + name', source)
 
     def test_auto_paste_matches_identity_markers_with_bounded_short_tokens(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

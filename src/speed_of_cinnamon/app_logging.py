@@ -58,6 +58,9 @@ _BEARER_RE = re.compile(r"(?i)\bbearer\s+[^,\s;]+")
 _OPENAI_KEY_RE = re.compile(r"\b(?:sk|sess)-[A-Za-z0-9_\-]{12,}\b")
 _SHORT_API_KEY_RE = re.compile(r"\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b")
 _URL_CREDENTIAL_RE = re.compile(r"([a-z][a-z0-9+.-]*://)([^/@\s]+)@")
+_LOCAL_ABSOLUTE_PATH_RE = re.compile(
+    r"(?i)(?:(?<=^)|(?<=[\s\"'`=:(]))/(?:home|root|run|tmp|var|etc|usr|opt|mnt|media|dev|proc|sys)/[^\s,;)]*"
+)
 _ERROR_DETAIL_RE = re.compile(
     r"(?i)(?:\b(?:stdout|stderr)\s*:|\b(?:raw\s+)?transcript\s*(?::|\b(?:text|words|payload|for)\b)|\bprompt\s*:|command\s+output\s*:|backend\s+output\s*:)"
 )
@@ -367,6 +370,7 @@ def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
         and ":" not in value
         and "@" not in value
         and _SANITIZE_HINT_RE.search(value) is None
+        and _LOCAL_ABSOLUTE_PATH_RE.search(value) is None
         and (not HOME_DIR or HOME_DIR == "/" or HOME_DIR not in value)
     ):
         if len(value) > max_chars:
@@ -379,6 +383,7 @@ def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
     text = _OPENAI_KEY_RE.sub("[redacted]", text)
     text = _SHORT_API_KEY_RE.sub("[redacted]", text)
     text = _URL_CREDENTIAL_RE.sub(r"\1[redacted]@", text)
+    text = _LOCAL_ABSOLUTE_PATH_RE.sub("[redacted path]", text)
     if HOME_DIR and HOME_DIR != "/":
         text = text.replace(HOME_DIR, "~")
     if len(text) > max_chars:
@@ -426,10 +431,18 @@ def sanitize_error_message(error: object, *, max_chars: int = MAX_LOG_MESSAGE_CH
         return "[redacted error details]"
     if _BARE_CREDENTIAL_RE.search(error):
         return "[redacted error details]"
+    if (
+        _ERROR_SECRET_WORD_RE.search(error)
+        and _TOKEN_RE.search(error) is None
+        and _BARE_CREDENTIAL_RE.search(error) is None
+        and _BEARER_RE.search(error) is None
+        and _OPENAI_KEY_RE.search(error) is None
+        and _SHORT_API_KEY_RE.search(error) is None
+        and _URL_CREDENTIAL_RE.search(error) is None
+    ):
+        return "[redacted error details]"
     sanitized = sanitize_text(error, max_chars=max(len(error), max_chars))
     sanitized = _SHORT_API_KEY_RE.sub("[redacted]", sanitized)
-    if _ERROR_SECRET_WORD_RE.search(sanitized):
-        return "[redacted error details]"
     if len(sanitized) > max_chars:
         return sanitized[:max_chars] + "...[truncated]"
     return sanitized

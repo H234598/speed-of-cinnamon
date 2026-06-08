@@ -2660,7 +2660,11 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(import_code, 0)
         self.assertEqual(export_payload["path"], str(export_path))
+        self.assertEqual(export_payload["message"], "settings exported")
+        self.assertNotIn(str(export_path), export_payload["message"])
         self.assertEqual(export_payload["alarms_count"], 1)
+        self.assertEqual(import_payload["message"], "settings imported")
+        self.assertNotIn(str(export_path), import_payload["message"])
         self.assertEqual(import_payload["alarms_count"], 1)
         self.assertEqual(import_payload["settings"]["language"], "de")
         self.assertFalse(import_payload["settings"]["auto-transcribe-timeout"])
@@ -4426,6 +4430,43 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("preview", encoded)
         self.assertNotIn('"text"', encoded)
 
+    def test_status_json_redacts_state_artifact_paths_and_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            audio_path = Path(tmp) / "recordings" / "secret.flac"
+            log_path = Path(tmp) / "recordings" / "secret.log"
+            transcript_path = Path(tmp) / "transcripts" / "secret.txt"
+            StateStore(state_file).write(
+                RecordingState(
+                    status="done",
+                    audio_path=str(audio_path),
+                    log_path=str(log_path),
+                    transcript_path=str(transcript_path),
+                    process_identity="private-process-identity",
+                    transcript="secret dictated words",
+                )
+            )
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = cli.run(["status", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+        encoded = json.dumps(payload, sort_keys=True)
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["transcript_length"], len("secret dictated words"))
+        self.assertTrue(payload["audio_path_present"])
+        self.assertTrue(payload["log_path_present"])
+        self.assertTrue(payload["transcript_path_present"])
+        self.assertTrue(payload["process_identity_present"])
+        self.assertNotIn("audio_path", payload)
+        self.assertNotIn("log_path", payload)
+        self.assertNotIn("transcript_path", payload)
+        self.assertNotIn("process_identity", payload)
+        self.assertNotIn(str(audio_path), encoded)
+        self.assertNotIn(str(log_path), encoded)
+        self.assertNotIn(str(transcript_path), encoded)
+        self.assertNotIn("private-process-identity", encoded)
+        self.assertNotIn("secret dictated words", encoded)
+
     @mock.patch("speed_of_cinnamon.cli.list_input_sources", side_effect=RuntimeError("token abc123"))
     def test_diagnostics_redacts_nested_source_errors(self, mocked_sources: mock.Mock) -> None:
         stdout = io.StringIO()
@@ -4598,9 +4639,11 @@ class CliTest(unittest.TestCase):
             saved = json.loads(output.read_text(encoding="utf-8"))
         self.assertEqual(code, 0)
         self.assertEqual(payload["saved_path"], str(output))
-        self.assertEqual(saved["saved_path"], str(output))
+        self.assertNotIn("saved_path", saved)
+        self.assertEqual(payload["message"], "diagnostics saved")
         self.assertEqual(saved["state"]["transcript_length"], len("private words"))
         encoded = json.dumps(saved)
+        self.assertNotIn(str(output), encoded)
         self.assertNotIn("private words", encoded)
         self.assertNotIn("hidden-command-token", encoded)
         self.assertNotIn("hidden-polish-prompt", encoded)

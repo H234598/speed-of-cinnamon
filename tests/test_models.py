@@ -895,6 +895,8 @@ class ModelsTest(unittest.TestCase):
         self.assertTrue(payload["verified"])
         self.assertEqual(payload["checksum"], spec.sha1)
         self.assertIn("already downloaded", second_payload["message"])
+        self.assertNotIn(str(payload["path"]), payload["message"])
+        self.assertNotIn(str(second_payload["path"]), second_payload["message"])
 
     def test_download_model_fsyncs_download_file_before_atomic_replace(self) -> None:
         data = b"tiny model"
@@ -1095,6 +1097,8 @@ class ModelsTest(unittest.TestCase):
         self.assertEqual(payload["status"], "done")
         self.assertEqual(payload["downloaded"], True)
         self.assertTrue(payload["verified"])
+        self.assertEqual(payload["message"], "model downloaded: ct2-test")
+        self.assertNotIn(str(path), str(payload["message"]))
         self.assertIn("already downloaded", second_payload["message"])
 
     def test_ctranslate2_directory_model_without_file_hashes_is_not_trusted_for_default(self) -> None:
@@ -2014,6 +2018,8 @@ class ModelsTest(unittest.TestCase):
         self.assertFalse(path_exists)
         self.assertFalse(tmp_exists)
         self.assertFalse(missing_payload["removed"])
+        self.assertNotIn(str(payload["path"]), payload["message"])
+        self.assertNotIn(str(missing_payload["path"]), missing_payload["message"])
 
     def test_remove_model_fsyncs_parent_after_file_deletes(self) -> None:
         spec = models.ModelSpec(

@@ -294,6 +294,26 @@ class RecorderTest(unittest.TestCase):
             ),
         )
 
+    def test_trim_recording_leading_silence_open_error_does_not_leak_audio_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "secret-sample.wav"
+            self._write_wav(audio, [0, 12000, 12000])
+            with mock.patch("speed_of_cinnamon.recorder.wave.open", side_effect=OSError(f"cannot open {audio}")):
+                with self.assertRaisesRegex(RecorderError, "failed to trim recording audio file") as raised:
+                    trim_recording_leading_silence(audio, 0.1)
+            self.assertNotIn(str(audio), str(raised.exception))
+
+    def test_trim_recording_silence_empty_output_does_not_leak_audio_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "secret-sample.wav"
+            audio.write_bytes(b"audio")
+            completed = subprocess.CompletedProcess(["ffmpeg"], 0, stdout=b"", stderr=b"")
+            with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
+                with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=completed):
+                    with self.assertRaisesRegex(RecorderError, "ffmpeg silence trimming produced empty output") as raised:
+                        trim_recording_silence(audio)
+            self.assertNotIn(str(audio), str(raised.exception))
+
     def test_trim_recording_silence_rejects_hardlinked_audio(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
@@ -349,6 +369,17 @@ class RecorderTest(unittest.TestCase):
 
             with self.assertRaisesRegex(RecorderError, "recording audio file must not be hardlinked"):
                 reencode_recording_to_flac(hardlink)
+
+    def test_reencode_recording_to_flac_empty_output_does_not_leak_audio_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "secret-sample.wav"
+            audio.write_bytes(b"audio")
+            completed = subprocess.CompletedProcess(["ffmpeg"], 0, stdout=b"", stderr=b"")
+            with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
+                with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=completed):
+                    with self.assertRaisesRegex(RecorderError, "ffmpeg FLAC conversion produced empty output") as raised:
+                        reencode_recording_to_flac(audio)
+            self.assertNotIn(str(audio), str(raised.exception))
 
     def test_recording_temp_artifacts_do_not_use_closed_mkstemp_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -529,6 +560,14 @@ class RecorderTest(unittest.TestCase):
 
             with self.assertRaisesRegex(RecorderError, "not readable"):
                 read_recording_level(fifo)
+
+    def test_read_recording_level_missing_file_does_not_leak_audio_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "secret-sample.wav"
+
+            with self.assertRaisesRegex(RecorderError, "recording audio file is not readable") as raised:
+                read_recording_level(audio)
+            self.assertNotIn(str(audio), str(raised.exception))
 
     def test_default_input_device_is_normalized_to_empty(self) -> None:
         self.assertEqual(normalize_input_device(""), "")
@@ -917,10 +956,11 @@ class RecorderTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.recorder.validate_recording_path", return_value=log_path),
                 mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
             ):
-                with self.assertRaisesRegex(RecorderError, "failed to open recorder log file"):
+                with self.assertRaisesRegex(RecorderError, "failed to open recorder log file") as raised:
                     start_recorder(command, log_path)
 
             self.assertFalse((real / "session.log").exists())
+            self.assertNotIn(str(log_path), str(raised.exception))
 
     def test_start_recorder_rejects_non_text_argument(self) -> None:
         command = RecorderCommand(name="noop", argv=["true", 1])  # type: ignore[list-item]
@@ -1046,7 +1086,7 @@ class RecorderTest(unittest.TestCase):
                 self.skipTest(f"hardlinks unavailable: {exc}")
 
             with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
-                with self.assertRaisesRegex(RecorderError, "failed to open recorder log file"):
+                with self.assertRaisesRegex(RecorderError, "recorder log file must not be hardlinked"):
                     start_recorder(command, log_path)
 
             self.assertTrue(log_path.exists())

@@ -1304,7 +1304,7 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
     if path.exists() and not force:
         status = model_status(model, verify=True)
         if status["verified"]:
-            return {**status, "status": "done", "message": f"model already downloaded: {path}"}
+            return {**status, "status": "done", "message": f"model already downloaded: {model.name}"}
     parent_fd = _open_model_parent_directory(path, root, field_name="model path")
     _assert_model_path_for_atomic_replace(path, root, field_name="model path")
     tmp_dir: Path | None = None
@@ -1418,7 +1418,7 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
         raise
     finally:
         os.close(parent_fd)
-    return {**model_status(model, verify=True), "status": "done", "message": f"model downloaded: {path}"}
+    return {**model_status(model, verify=True), "status": "done", "message": f"model downloaded: {model.name}"}
 
 
 def _restore_model_file_backup(path: Path, backup_path: Path) -> None:
@@ -1450,7 +1450,7 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
     if path.exists() and not force:
         status = model_status(model, verify=True)
         if status["verified"]:
-            return {**status, "status": "done", "message": f"model already downloaded: {path}"}
+            return {**status, "status": "done", "message": f"model already downloaded: {model.name}"}
 
     size_limit = _download_size_limit(model)
     tmp_path: Path | None = None
@@ -1551,7 +1551,7 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
             _remove_model_backup_path(backup_path)
         except (OSError, ModelError) as cleanup_exc:
             raise ModelError(f"failed to remove model backup after successful download: {backup_path}") from cleanup_exc
-    return {**model_status(model, verify=True), "status": "done", "message": f"model downloaded: {path}"}
+    return {**model_status(model, verify=True), "status": "done", "message": f"model downloaded: {model.name}"}
 
 
 def remove_model(name: str) -> dict[str, object]:
@@ -1583,7 +1583,7 @@ def remove_model(name: str) -> dict[str, object]:
     return {
         **asdict(model),
         "status": "done",
-        "message": f"model removed: {path}" if removed else f"model was not downloaded: {path}",
+        "message": f"model removed: {model.name}" if removed else f"model was not downloaded: {model.name}",
         "path": str(path),
         "removed": removed,
         "removed_tmp": removed_tmp,

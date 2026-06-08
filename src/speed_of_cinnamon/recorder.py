@@ -440,7 +440,7 @@ def _create_recording_temp_file(audio_path: Path, *, marker: str, suffix: str) -
             field_name="recording artifact directory",
         )
     except OSError as exc:
-        raise RecorderError(f"failed to prepare recording artifact directory: {audio_path.parent}") from exc
+        raise RecorderError("failed to prepare recording artifact directory") from exc
     temp_name = ""
     try:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag
@@ -673,7 +673,7 @@ def trim_recording_leading_silence(audio_path: Path, leading_silence_seconds: fl
                 source.setpos(start_frame)
                 frames = source.readframes(total_frames - start_frame)
     except (OSError, wave.Error) as exc:
-        raise RecorderError(f"failed to trim recording audio file {audio_path}: {exc}") from exc
+        raise RecorderError("failed to trim recording audio file") from exc
     finally:
         if audio_fd is not None:
             os.close(audio_fd)
@@ -689,7 +689,7 @@ def trim_recording_leading_silence(audio_path: Path, leading_silence_seconds: fl
                 raise RecorderError("trimmed recording temporary file was replaced")
     except Exception as exc:
         _unlink_recording_path_if_same(temp_path, temp_stat)
-        raise RecorderError(f"failed to write trimmed recording audio file {temp_path}: {exc}") from exc
+        raise RecorderError("failed to write trimmed recording audio file") from exc
     return temp_path
 
 
@@ -790,7 +790,7 @@ def trim_recording_silence(
         raise
     if output_size == 0:
         _unlink_recording_path_if_same(trimmed_path, output_stat)
-        raise RecorderError(f"ffmpeg silence trimming produced empty output for {audio_path}")
+        raise RecorderError("ffmpeg silence trimming produced empty output")
     if not output_matches_path:
         _unlink_recording_path_if_same(trimmed_path, output_stat)
         raise RecorderError("ffmpeg silence trimming temporary file was replaced")
@@ -878,7 +878,7 @@ def reencode_recording_to_flac(audio_path: Path) -> Path:
         raise
     if output_size == 0:
         _unlink_recording_path_if_same(encoded_path, output_stat)
-        raise RecorderError(f"ffmpeg FLAC conversion produced empty output for {audio_path}")
+        raise RecorderError("ffmpeg FLAC conversion produced empty output")
     if not output_matches_path:
         _unlink_recording_path_if_same(encoded_path, output_stat)
         raise RecorderError("ffmpeg FLAC conversion temporary file was replaced")
@@ -940,14 +940,14 @@ def read_recording_level(audio_path: Path) -> RecordingLevel:
                 os.close(fd)
             except OSError:
                 pass
-        raise RecorderError(f"recording audio file is not readable: {audio_path}") from exc
+        raise RecorderError("recording audio file is not readable") from exc
     except RuntimeError as exc:
         if fd is not None:
             try:
                 os.close(fd)
             except OSError:
                 pass
-        raise RecorderError(f"recording audio file is not readable: {audio_path}") from exc
+        raise RecorderError("recording audio file is not readable") from exc
     try:
         with os.fdopen(fd, "rb") as handle:
             fd = None
@@ -964,7 +964,7 @@ def read_recording_level(audio_path: Path) -> RecordingLevel:
             handle.seek(size - read_bytes)
             raw = handle.read(read_bytes)
     except OSError as exc:
-        raise RecorderError(f"recording audio file is not readable: {audio_path}") from exc
+        raise RecorderError("recording audio file is not readable") from exc
 
     raw = raw[: len(raw) - (len(raw) % 2)]
     if len(raw) < 2:
@@ -1341,7 +1341,7 @@ def _open_recorder_log_file(log_path: Path) -> tuple[io.BufferedWriter, bool]:
             field_name="recorder log directory",
         )
     except OSError as exc:
-        raise RecorderError(f"failed to open recorder log file {log_path}: {exc}") from exc
+        raise RecorderError("failed to open recorder log file") from exc
     created = False
     fd: int | None = None
     try:
@@ -1357,8 +1357,10 @@ def _open_recorder_log_file(log_path: Path) -> tuple[io.BufferedWriter, bool]:
         return handle, created
     except RecorderError:
         raise
-    except (OSError, RuntimeError) as exc:
-        raise RecorderError(f"failed to open recorder log file {log_path}: {exc}") from exc
+    except RuntimeError as exc:
+        raise RecorderError(str(exc)) from exc
+    except OSError as exc:
+        raise RecorderError("failed to open recorder log file") from exc
     finally:
         if fd is not None:
             os.close(fd)

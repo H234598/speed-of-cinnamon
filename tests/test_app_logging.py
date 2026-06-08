@@ -156,6 +156,16 @@ class AppLoggingTest(unittest.TestCase):
         self.assertEqual(sanitized, "https://[redacted]@example.test/path")
         self.assertNotIn("secret-token", sanitized)
 
+    def test_sanitize_text_redacts_local_absolute_paths(self) -> None:
+        sanitized = app_logging.sanitize_text("failed to read /tmp/private/transcript.txt", max_chars=120)
+        self.assertEqual(sanitized, "failed to read [redacted path]")
+        self.assertNotIn("/tmp/private", sanitized)
+
+    def test_sanitize_error_message_redacts_local_absolute_paths(self) -> None:
+        sanitized = app_logging.sanitize_error_message("settings export not found: /var/tmp/private/settings.json", max_chars=120)
+        self.assertEqual(sanitized, "settings export not found: [redacted path]")
+        self.assertNotIn("/var/tmp/private", sanitized)
+
     def test_sanitize_hint_detects_url_userinfo_without_password(self) -> None:
         self.assertIsNotNone(app_logging._SANITIZE_HINT_RE.search("https://secret-token@example.test/path"))
 

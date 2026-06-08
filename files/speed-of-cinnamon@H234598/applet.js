@@ -50,6 +50,7 @@ const NON_ASCII_RE = /[^\u0000-\u007E]/g;
 const COMBINING_MARKS_RE = /[\u0300-\u036f]/g;
 const ASCII_ONLY_RE = /^[\u0000-\u007E]*$/;
 const SENSITIVE_ERROR_RE = /(?:\b(?:bearer|token|api[_ -]?key|apikey|password|passwd|passphrase|secret)\b\s*[:=]\s*[^,\s;]+|\b(?:bearer|token|api[_ -]?key|apikey|password|passwd|passphrase|secret)\b\s+(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required|not|empty)\b)[^,\s;]+|\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b|[a-z][a-z0-9+.-]*:\/\/[^/@\s]+@)/i;
+const LOCAL_PATH_ERROR_RE = /(?:^|[\s"'`=:(])\/(?:home|root|run|tmp|var|etc|usr|opt|mnt|media|dev|proc|sys)\/[^\s,;)]*/i;
 const EMPTY_TRANSCRIPT_MARKERS = [
   "leere aufnahme",
   "leerer text",
@@ -897,7 +898,7 @@ MyApplet.prototype = {
 
   _sanitizeErrorMessage: function(value) {
     let text = String(value || "").replace(NUL_RE, "");
-    if (SENSITIVE_ERROR_RE.test(text)) {
+    if (SENSITIVE_ERROR_RE.test(text) || LOCAL_PATH_ERROR_RE.test(text)) {
       return "[redacted error details]";
     }
     if (text.length > MAX_SETTING_TEXT_CHARS) {
@@ -2153,7 +2154,7 @@ MyApplet.prototype = {
     this._spawnJson(this._doctorArgs(), (payload) => {
       try {
         if (payload.error) {
-          let message = _("Doctor failed: ") + payload.error;
+          let message = _("Doctor failed: ") + this._sanitizeErrorMessage(payload.error);
           this._setDoctorSummary(message);
           this._setStatus(startupCheck ? "setup" : "error", message, this.lastTranscript);
           this._presentDoctorResult(message, true, Boolean(startupCheck));
@@ -2273,7 +2274,7 @@ MyApplet.prototype = {
       this._setStatus("ready", successMessage, this.lastTranscript);
     } catch (err) {
       global.logError(err);
-      this._setStatus("error", _("Could not open link: ") + err.message, this.lastTranscript);
+      this._setStatus("error", _("Could not open link"), this.lastTranscript);
     }
   },
 
@@ -2286,7 +2287,7 @@ MyApplet.prototype = {
       this._openUri(GLib.filename_to_uri(path, null), successMessage);
     } catch (err) {
       global.logError(err);
-      this._setStatus("error", _("Could not open folder: ") + err.message, this.lastTranscript);
+      this._setStatus("error", _("Could not open folder"), this.lastTranscript);
     }
   },
 
@@ -2298,7 +2299,7 @@ MyApplet.prototype = {
       this._openUri(GLib.filename_to_uri(path, null), successMessage);
     } catch (err) {
       global.logError(err);
-      this._setStatus("error", _("Could not open file: ") + err.message, this.lastTranscript);
+      this._setStatus("error", _("Could not open file"), this.lastTranscript);
     }
   },
 
@@ -3081,7 +3082,7 @@ MyApplet.prototype = {
         this.settings.setValue("transcriber", this.transcriber);
         this.settings.setValue("whisper-model", this.whisperModel);
       }
-      this._setStatus("done", payload.message || _("Removed model: ") + name, this.lastTranscript);
+      this._setStatus("done", _("Removed model: ") + name, this.lastTranscript);
       this._refreshModelMenu();
     });
   },
@@ -3617,7 +3618,8 @@ MyApplet.prototype = {
       let models = Array.isArray(payload.models) ? payload.models : [];
       if (models.length === 0) {
         if (payload.available === false && payload.message) {
-          this._setStatus("processing", payload.message + "; " + _("opening installer..."), this.lastTranscript);
+          let safeMessage = this._sanitizeErrorMessage(payload.message);
+          this._setStatus("processing", safeMessage + "; " + _("opening installer..."), this.lastTranscript);
           this._installOllamaRuntime(true);
           return;
         }
@@ -3680,7 +3682,7 @@ MyApplet.prototype = {
         return;
       }
       let installedModel = String(payload.model || model);
-      let message = payload.message || _("Ollama model installed");
+      let message = _("Ollama model installed: ") + installedModel;
       this._selectTextModelBackend("ollama", installedModel, message);
       this._notify(_("Ollama model installed"), installedModel, false);
     }, { timeoutMs: BENCHMARK_COMMAND_TIMEOUT_MS });
@@ -6223,10 +6225,11 @@ MyApplet.prototype = {
 
   _notify: function(title, body, critical) {
     try {
+      let safeBody = this._sanitizeErrorMessage(body);
       if (critical && Main.criticalNotify) {
-        Main.criticalNotify(title, body);
+        Main.criticalNotify(title, safeBody);
       } else if (Main.notify) {
-        Main.notify(title, body);
+        Main.notify(title, safeBody);
       }
     } catch (err) {
       global.logError(err);

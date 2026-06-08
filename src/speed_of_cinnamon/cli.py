@@ -3515,7 +3515,7 @@ def command_toggle(args: argparse.Namespace) -> dict[str, object]:
 
 def command_status(args: argparse.Namespace) -> dict[str, object]:
     state = build_store(args).read()
-    payload = asdict(state)
+    payload = _diagnostics_state_payload(state)
     if state.error.startswith("state file "):
         payload["status"] = "error"
         return payload
@@ -3926,9 +3926,9 @@ def command_diagnostics(args: argparse.Namespace) -> dict[str, object]:
             else diagnostics_dir() / f"diagnostics-{timestamp()}.json"
         )
         _assert_json_payload_size(payload, max_bytes=MAX_DIAGNOSTICS_JSON_BYTES)
-        payload["saved_path"] = str(path)
         _write_json_atomic(path, payload, max_bytes=MAX_DIAGNOSTICS_JSON_BYTES)
-        payload["message"] = f"diagnostics saved to {path}"
+        payload["saved_path"] = str(path)
+        payload["message"] = "diagnostics saved"
     return payload
 
 
@@ -4068,7 +4068,7 @@ def command_settings_export(args: argparse.Namespace) -> dict[str, object]:
     payload = write_export(path, settings, load_alarm_store())
     return {
         "status": "done",
-        "message": f"settings exported to {path}",
+        "message": "settings exported",
         "path": str(path),
         "settings_count": len(payload["settings"]),
         "alarms_count": len(payload["alarms"]["alarms"]),
@@ -4086,7 +4086,7 @@ def command_settings_import(args: argparse.Namespace) -> dict[str, object]:
     )
     result: dict[str, object] = {
         "status": "done",
-        "message": f"settings imported from {path}",
+        "message": "settings imported",
         "path": str(path),
         "settings_count": len(payload["settings"]),
         "alarms_count": len(payload["alarms"]["alarms"]),
