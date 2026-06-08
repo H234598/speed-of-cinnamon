@@ -1269,6 +1269,21 @@ def _remove_transient_transcript_owner(path: Path) -> bool:
         return False
 
 
+def _transient_transcript_owner_cleanup_is_safe(path: Path) -> bool:
+    owner_path = _transient_transcript_owner_path(path)
+    try:
+        file_stat = owner_path.lstat()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    if stat_module.S_ISLNK(file_stat.st_mode):
+        return False
+    if not stat_module.S_ISREG(file_stat.st_mode):
+        return False
+    return getattr(file_stat, "st_nlink", 1) == 1
+
+
 def _read_transient_transcript_owner(path: Path) -> tuple[int | None, str | None]:
     try:
         raw = read_text_without_following_symlinks(
@@ -1334,6 +1349,10 @@ def prune_stale_transient_transcripts(dry_run: bool = False) -> dict[str, object
         }
     result = prune_files_by_mtime(files, 0, active_paths=set(), dry_run=dry_run)
     if dry_run:
+        for planned_path in list(result["planned_paths"]):
+            owner_path = _transient_transcript_owner_path(Path(planned_path))
+            if not _transient_transcript_owner_cleanup_is_safe(Path(planned_path)):
+                result["failed_paths"].append(str(owner_path))
         return result
     for deleted_path in list(result["deleted_paths"]):
         path = Path(deleted_path)
@@ -1361,6 +1380,23 @@ def _cleanup_failed_paths(*cleanup_results: dict[str, object]) -> list[str]:
 
 def _cleanup_failure_error(failed_paths: list[str]) -> str:
     return f"failed to scan or delete {len(failed_paths)} cleanup artifact(s)"
+
+
+def _public_cleanup_result(cleanup_result: dict[str, object]) -> dict[str, object]:
+    public = dict(cleanup_result)
+    count_fields = {
+        "planned_paths": "planned_path_count",
+        "deleted_paths": "deleted_path_count",
+        "failed_paths": "failed_path_count",
+        "skipped_active_paths": "skipped_active_path_count",
+    }
+    for path_field, count_field in count_fields.items():
+        paths = public.get(path_field, [])
+        if not isinstance(paths, list):
+            raise RuntimeError(f"cleanup result {path_field} must be a list")
+        public[count_field] = len(paths)
+        public[path_field] = []
+    return public
 
 
 def _persist_cleanup_failure_state(store: StateStore, failed_paths: list[str]) -> None:
@@ -2875,8 +2911,8 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
         "recorder": command.name,
         "input_device": normalized_input_device,
         "language": language,
-        "recording_artifact_cap": artifact_cleanup,
-        **({"cleanup_failed_paths": cleanup_failed_paths} if cleanup_failed_paths else {}),
+        "recording_artifact_cap": _public_cleanup_result(artifact_cleanup),
+        **({"cleanup_failed_path_count": len(cleanup_failed_paths)} if cleanup_failed_paths else {}),
     }
 
 
@@ -3035,7 +3071,7 @@ def finalize_recording(
                 "recording_encryption": recording_encryption,
                 "recording_encrypted": recording_encryption != ARTIFACT_ENCRYPTION_OFF,
                 "inserted": False,
-                "recording_artifact_cap": artifact_cleanup,
+                "recording_artifact_cap": _public_cleanup_result(artifact_cleanup),
                 "language": language,
                 "recording_artifacts_kept": keep_recording_artifacts,
                 "audio_deleted": audio_deleted,
@@ -3205,7 +3241,7 @@ def finalize_recording(
         return {
             "status": status,
             "message": message,
-            **({"error": message, "cleanup_failed_paths": cleanup_failed_paths} if cleanup_failed_paths else {}),
+            **({"error": message, "cleanup_failed_path_count": len(cleanup_failed_paths)} if cleanup_failed_paths else {}),
             "transcript": _transcript_payload_text(text, transcript_encryption, args),
             "transcript_output_redacted": bool(text) and transcript_encryption != ARTIFACT_ENCRYPTION_OFF and not _confirm_plaintext_transcript_output(args),
             "transcript_path": str(stored_text_path),
@@ -3216,9 +3252,9 @@ def finalize_recording(
             "recording_encrypted": recording_encryption != ARTIFACT_ENCRYPTION_OFF,
             "inserted": inserted,
             "security": _public_security_post_processing(security_post_processing),
-            "recording_artifact_cap": artifact_cleanup,
-            "transcript_file_cap": transcript_cleanup,
-            "transient_transcript_cleanup": transient_transcript_cleanup,
+            "recording_artifact_cap": _public_cleanup_result(artifact_cleanup),
+            "transcript_file_cap": _public_cleanup_result(transcript_cleanup),
+            "transient_transcript_cleanup": _public_cleanup_result(transient_transcript_cleanup),
             "language": language,
             "recording_artifacts_kept": keep_recording_artifacts,
             "audio_deleted": audio_deleted,
@@ -4196,13 +4232,13 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
     return {
         "status": status,
         "message": message,
-        **({"error": message, "cleanup_failed_paths": cleanup_failed_paths} if cleanup_failed_paths else {}),
+        **({"error": message, "cleanup_failed_path_count": len(cleanup_failed_paths)} if cleanup_failed_paths else {}),
         "transcript": text if reveal_transcript else "",
         "transcript_output_redacted": bool(text) and not reveal_transcript,
         "transcript_path": str(stored_text_path),
         "security": _public_security_post_processing(security_post_processing),
-        "transcript_file_cap": transcript_cleanup,
-        "transient_transcript_cleanup": transient_transcript_cleanup,
+        "transcript_file_cap": _public_cleanup_result(transcript_cleanup),
+        "transient_transcript_cleanup": _public_cleanup_result(transient_transcript_cleanup),
         "artifact_encryption": artifact_encryption,
         "transcript_encryption": transcript_encryption,
         "transcript_encrypted": transcript_encryption != ARTIFACT_ENCRYPTION_OFF,

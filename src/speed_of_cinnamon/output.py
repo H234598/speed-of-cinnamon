@@ -1216,12 +1216,18 @@ def paste_from_clipboard(expected_window_snapshot: tuple[str, str, str] | None =
                 xdotool_command=xdotool,
             ):
                 raise PasteNotAttemptedError("active window changed before automatic paste")
-            _run_with_input(
-                ["xdotool", "key", "--clearmodifiers", paste_key],
-                "",
-                timeout=MAX_PASTE_TIMEOUT_SECONDS,
-                resolved_command=xdotool,
-            )
+            try:
+                _run_with_input(
+                    ["xdotool", "key", "--clearmodifiers", paste_key],
+                    "",
+                    timeout=MAX_PASTE_TIMEOUT_SECONDS,
+                    resolved_command=xdotool,
+                )
+            except OutputError as exc:
+                detail = str(exc)
+                if "not available" in detail or "failed to execute" in detail:
+                    raise PasteNotAttemptedError(detail) from exc
+                raise
             return
     wtype = _which("wtype")
     if wtype and xdotool_error is None:
@@ -1370,7 +1376,7 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
     method = (method or "clipboard-paste").strip().lower()
     if method == "none":
         return False
-    if method in {"clipboard", "clipboard-paste"} and text == "":
+    if text == "":
         return False
     if method == "clipboard":
         insertion = _begin_clipboard_insertion(text, method)

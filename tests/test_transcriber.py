@@ -3002,6 +3002,27 @@ class TranscriberTest(unittest.TestCase):
             with self.assertRaisesRegex(TranscriptionError, "whisper\\.cpp model path must not pass through a symlink"):
                 transcribe_with_whisper_cpp(audio, "en", text, str(model))
 
+    def test_whisper_cpp_direct_helper_rejects_symlinked_transcript_parent_before_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            real_dir = Path(tmp) / "real-transcripts"
+            real_dir.mkdir()
+            link_dir = Path(tmp) / "link-transcripts"
+            link_dir.symlink_to(real_dir, target_is_directory=True)
+            model = Path(tmp) / "ggml-base.bin"
+            model.write_bytes(b"model")
+
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.resolve_whisper_cpp_command", return_value="whisper-cli"),
+                mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
+                mock.patch("speed_of_cinnamon.transcriber._run_limited_process") as mocked_run,
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "transcript path must not pass through a symlink"):
+                    transcribe_with_whisper_cpp(audio, "en", link_dir / "sample.txt", str(model))
+
+        self.assertFalse(mocked_run.called)
+
     def test_auto_reports_missing_transcriber(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.transcriber.default_ctranslate2_model_path", return_value=""),

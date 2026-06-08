@@ -1262,6 +1262,19 @@ def transcribe_with_whisper_cpp(
     write_transcript: bool = True,
 ) -> str:
     audio_path = validate_audio_file(audio_path)
+    if not isinstance(text_path, Path):
+        raise TranscriptionError("text path must be a Path")
+    text_path = text_path.expanduser()
+    try:
+        assert_no_symlink_ancestors(text_path, field_name="transcript path")
+    except RuntimeError as exc:
+        raise TranscriptionError(str(exc)) from exc
+    try:
+        parent_fd = ensure_directory_without_following_symlinks(text_path.parent, field_name="transcript directory")
+    except OSError as exc:
+        raise TranscriptionError("failed to prepare transcript directory") from exc
+    else:
+        os.close(parent_fd)
     model_path = _validate_local_model_path(model_path, field_name="whisper.cpp model path", directory=False)
     if not model_supports_language(model_path, language):
         raise TranscriptionError(

@@ -806,8 +806,9 @@ def post_process_with_openai_compatible(
         finally:
             with suppress(Exception):
                 exc.close()
-        detail = _sanitize_remote_error_detail(_openai_compatible_error_detail(raw_error) or exc.reason or str(exc))
-        if allow_service_tier_fallback and _is_flex_service_tier_rejected(detail):
+        raw_detail = _openai_compatible_error_detail(raw_error) or exc.reason or str(exc)
+        detail = _sanitize_remote_error_detail(raw_detail)
+        if allow_service_tier_fallback and _is_flex_service_tier_rejected(raw_detail):
             fallback_payload = dict(payload)
             fallback_payload.pop("service_tier", None)
             try:

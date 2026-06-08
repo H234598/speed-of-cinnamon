@@ -581,7 +581,9 @@ class SettingsExportTest(unittest.TestCase):
                     write_export(path, {"language": "en"})
 
             self.assertFalse(path.exists())
-            self.assertTrue(any(child.name.startswith(".settings-export.json.") and child.name.endswith(".tmp") for child in Path(tmp).iterdir()))
+            leftovers = [child for child in Path(tmp).iterdir() if child.name.startswith(".settings-export.json.") and child.name.endswith(".tmp")]
+            self.assertEqual(len(leftovers), 1)
+            self.assertEqual(leftovers[0].read_bytes(), b"")
 
     @mock.patch("speed_of_cinnamon.settings_export.os.replace", side_effect=OSError("disk full"))
     def test_write_export_raises_when_atomic_replace_fails(self, mocked_replace: mock.Mock) -> None:

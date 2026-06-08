@@ -262,6 +262,36 @@ def _create_private_temp_file(parent_fd: int, final_name: str) -> tuple[int, str
     raise SettingsExportError("failed to create settings export temp file")
 
 
+def _scrub_temp_settings_export_file(parent_fd: int, temp_name: str) -> None:
+    if not temp_name:
+        return
+    fd = os.open(temp_name, os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
+    try:
+        file_stat = os.fstat(fd)
+        if not stat_module.S_ISREG(file_stat.st_mode):
+            return
+        remaining = int(file_stat.st_size)
+        if remaining > 0:
+            os.lseek(fd, 0, os.SEEK_SET)
+            chunk = b"\x00" * min(remaining, 65536)
+            while remaining > 0:
+                written = os.write(fd, chunk[: min(remaining, len(chunk))])
+                if written <= 0:
+                    break
+                remaining -= written
+            try:
+                os.fsync(fd)
+            except OSError:
+                pass
+        os.ftruncate(fd, 0)
+        try:
+            os.fsync(fd)
+        except OSError:
+            pass
+    finally:
+        os.close(fd)
+
+
 def _read_text_capped_without_following_symlinks(path: Path) -> str:
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name="settings export path")
@@ -465,6 +495,10 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                 os.unlink(temp_name, dir_fd=parent_fd)
                 os.fsync(parent_fd)
             except OSError as cleanup_exc:
+                try:
+                    _scrub_temp_settings_export_file(parent_fd, temp_name)
+                except (OSError, RuntimeError):
+                    pass
                 cleanup_error = cleanup_exc
         if cleanup_error is not None:
             raise SettingsExportError(f"failed to remove settings export temporary file: {path}") from cleanup_error

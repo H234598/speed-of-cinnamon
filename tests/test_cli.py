@@ -427,7 +427,8 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["status"], "error")
         self.assertIn("failed to scan or delete 1 cleanup artifact", payload["error"])
         self.assertEqual(payload["transcript"], "test")
-        self.assertIn(str(owner), payload["cleanup_failed_paths"])
+        self.assertEqual(payload["cleanup_failed_path_count"], 1)
+        self.assertNotIn("cleanup_failed_paths", payload)
         self.assertFalse(stale_exists)
         self.assertTrue(owner_is_symlink)
         self.assertTrue(target_exists)
@@ -3347,6 +3348,34 @@ class CliTest(unittest.TestCase):
         self.assertNotIn(str(owner), json.dumps(payload))
         self.assertTrue(owner_is_symlink)
         self.assertTrue(target_exists)
+
+    def test_cleanup_dry_run_reports_unsafe_transient_transcript_owner_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            transcript_dir = tmp_path / "speed-of-cinnamon" / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            stale = transcript_dir / ".old.abcd.tmp.txt"
+            stale.write_text("old plaintext\n", encoding="utf-8")
+            owner = cli._transient_transcript_owner_path(stale)
+            target = tmp_path / "owner-target"
+            target.write_text("foreign owner\n", encoding="utf-8")
+            owner.symlink_to(target)
+            old_mtime = time.time() - cli.TRANSIENT_TRANSCRIPT_MAX_AGE_SECONDS - 60
+            os.utime(stale, (old_mtime, old_mtime))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cleanup", "--dry-run", "--keep-transcripts", "0", "--keep-recordings", "0", "--json"])
+            payload = json.loads(stdout.getvalue())
+            stale_exists = stale.exists()
+            owner_is_symlink = owner.is_symlink()
+
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["would_delete_transient_transcripts"], 1)
+        self.assertEqual(payload["failed_path_count"], 1)
+        self.assertIn(str(owner), payload["failed_paths"])
+        self.assertTrue(stale_exists)
+        self.assertTrue(owner_is_symlink)
 
     def test_cleanup_reports_transcript_directory_scan_failure_in_dry_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7368,8 +7397,10 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["status"], "recording")
         self.assertIn("failed to scan or delete 1 cleanup artifact", payload["message"])
-        self.assertEqual(payload["cleanup_failed_paths"], [str(recordings)])
-        self.assertEqual(payload["recording_artifact_cap"]["failed_paths"], [str(recordings)])
+        self.assertEqual(payload["cleanup_failed_path_count"], 1)
+        self.assertNotIn("cleanup_failed_paths", payload)
+        self.assertEqual(payload["recording_artifact_cap"]["failed_path_count"], 1)
+        self.assertEqual(payload["recording_artifact_cap"]["failed_paths"], [])
 
     def test_start_stops_recorder_and_removes_artifacts_when_state_write_fails(self) -> None:
         proc = mock.Mock()
@@ -8205,7 +8236,8 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(result["status"], "error")
         self.assertIn("failed to scan or delete 1 cleanup artifact", result["error"])
-        self.assertIn(str(owner), result["cleanup_failed_paths"])
+        self.assertEqual(result["cleanup_failed_path_count"], 1)
+        self.assertNotIn("cleanup_failed_paths", result)
         self.assertEqual(final_state.status, "error")
         self.assertIn("failed to scan or delete 1 cleanup artifact", final_state.error)
         self.assertFalse(stale_exists)

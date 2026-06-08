@@ -9,6 +9,7 @@ import shutil
 import stat
 import subprocess  # nosec B404
 import tempfile
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -310,6 +311,32 @@ def _temp_passphrase_cleanup_error() -> ArtifactCryptoError:
     return ArtifactCryptoError("artifact encryption passphrase temporary file could not be removed")
 
 
+def _scrub_temp_passphrase_file(parent_fd: int, temp_name: str) -> None:
+    if not temp_name:
+        return
+    fd = os.open(temp_name, os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
+    try:
+        file_stat = os.fstat(fd)
+        if not stat.S_ISREG(file_stat.st_mode):
+            return
+        remaining = int(file_stat.st_size)
+        if remaining > 0:
+            os.lseek(fd, 0, os.SEEK_SET)
+            chunk = b"\x00" * min(remaining, 65536)
+            while remaining > 0:
+                written = os.write(fd, chunk[: min(remaining, len(chunk))])
+                if written <= 0:
+                    break
+                remaining -= written
+            with suppress(OSError, RuntimeError):
+                _fsync_fd(fd)
+        os.ftruncate(fd, 0)
+        with suppress(OSError, RuntimeError):
+            _fsync_fd(fd)
+    finally:
+        os.close(fd)
+
+
 def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> str:
     if path != default_passphrase_file():
         raise ArtifactCryptoError("only the default artifact encryption passphrase file can be generated automatically")
@@ -375,6 +402,8 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
                 os.unlink(temp_name, dir_fd=parent_fd)
                 _fsync_fd(parent_fd)
             except OSError as exc:
+                with suppress(OSError, RuntimeError):
+                    _scrub_temp_passphrase_file(parent_fd, temp_name)
                 cleanup_error = exc
         if parent_fd >= 0:
             os.close(parent_fd)
@@ -635,6 +664,12 @@ def _read_secret_tool_output(handle: Any, *, field_name: str) -> bytes:
     return payload
 
 
+def _validate_secret_tool_output(payload: object, *, field_name: str) -> bytes:
+    if not isinstance(payload, bytes) or len(payload) > MAX_SECRET_TOOL_OUTPUT_BYTES:
+        raise ArtifactCryptoError(f"Secret Service keyring {field_name} exceeded safe output limit")
+    return payload
+
+
 def _validate_secret_tool_text(value: object, *, field_name: str) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         raise ArtifactCryptoError(f"Secret Service keyring {field_name} must be text")
@@ -666,20 +701,19 @@ def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subpr
     command = [_secret_tool_path(), *args]
     env = _filtered_environment()
     try:
-        with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
-            proc = subprocess.run(  # nosec B603
-                command,
-                input=None if input_text is None else input_text.encode("utf-8"),
-                stdout=stdout_file,
-                stderr=stderr_file,
-                timeout=_SECRET_TOOL_TIMEOUT_SECONDS,
-                shell=False,
-                env=env,
-                check=False,
-            )
-            stdout = _read_secret_tool_output(stdout_file, field_name="stdout")
-            stderr = _read_secret_tool_output(stderr_file, field_name="stderr")
-            return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
+        proc = subprocess.run(  # nosec B603
+            command,
+            input=None if input_text is None else input_text.encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=_SECRET_TOOL_TIMEOUT_SECONDS,
+            shell=False,
+            env=env,
+            check=False,
+        )
+        stdout = _validate_secret_tool_output(proc.stdout, field_name="stdout")
+        stderr = _validate_secret_tool_output(proc.stderr, field_name="stderr")
+        return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
     except subprocess.TimeoutExpired as exc:
         raise ArtifactCryptoError("Secret Service keyring request timed out") from exc
     except OSError as exc:

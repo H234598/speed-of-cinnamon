@@ -186,6 +186,23 @@ class ArtifactCryptoTest(unittest.TestCase):
             self.assertFalse(path.exists())
             self.assertTrue(any(child.name.startswith(".artifact.key.") and child.name.endswith(".tmp") for child in Path(tmp).iterdir()))
 
+    def test_default_passphrase_generation_cleanup_failure_truncates_temp_secret(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.key"
+
+            with (
+                mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: ""}, clear=False),
+                mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
+                mock.patch("speed_of_cinnamon.artifact_crypto._fsync_fd", side_effect=OSError("fsync failed")),
+                mock.patch("speed_of_cinnamon.artifact_crypto.os.unlink", side_effect=OSError("cleanup denied")),
+            ):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "temporary file could not be removed"):
+                    artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
+
+            leftovers = [child for child in Path(tmp).iterdir() if child.name.startswith(".artifact.key.") and child.name.endswith(".tmp")]
+            self.assertEqual(len(leftovers), 1)
+            self.assertEqual(leftovers[0].read_bytes(), b"")
+
     def test_default_passphrase_rotation_failure_keeps_existing_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "artifact.key"
@@ -271,15 +288,11 @@ class ArtifactCryptoTest(unittest.TestCase):
         with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "invalid length"):
             artifact_crypto._parse_keyring_secret(bad_secret)
 
-    def test_secret_tool_uses_file_backed_output_capture(self) -> None:
+    def test_secret_tool_uses_pipe_output_capture(self) -> None:
         def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            stdout = kwargs["stdout"]
-            stderr = kwargs["stderr"]
-            self.assertNotEqual(stdout, subprocess.PIPE)
-            self.assertNotEqual(stderr, subprocess.PIPE)
-            stdout.write(b"stored-secret\n")
-            stderr.write(b"warning\n")
-            return subprocess.CompletedProcess(command, 0)
+            self.assertEqual(kwargs["stdout"], subprocess.PIPE)
+            self.assertEqual(kwargs["stderr"], subprocess.PIPE)
+            return subprocess.CompletedProcess(command, 0, stdout=b"stored-secret\n", stderr=b"warning\n")
 
         with (
             mock.patch("speed_of_cinnamon.artifact_crypto._secret_tool_path", return_value="/usr/bin/secret-tool"),

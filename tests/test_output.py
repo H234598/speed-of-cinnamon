@@ -1950,6 +1950,37 @@ class OutputTest(unittest.TestCase):
         self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["wiederholung", "", "wiederholung"])
         self.assertEqual(mocked_paste.call_count, 2)
 
+    def test_insert_text_restores_dedupe_state_when_paste_helper_exec_fails_before_keypress(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output._which", return_value="xdotool"),
+            mock.patch("speed_of_cinnamon.output._active_x_window_snapshot", return_value=("123", "Editor", "xed")),
+            mock.patch("speed_of_cinnamon.output._active_x_window_matches_snapshot", return_value=True),
+            mock.patch("speed_of_cinnamon.output._paste_key_for_window_snapshot", return_value="ctrl+v"),
+            mock.patch(
+                "speed_of_cinnamon.output._run_with_input",
+                side_effect=[OutputError("xdotool failed to execute: denied"), None],
+            ) as mocked_run,
+            mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
+            mock.patch("speed_of_cinnamon.output._read_text_clipboard", return_value=None),
+            mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "")),
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=4.0),
+        ):
+            with self.assertRaisesRegex(OutputError, "failed to execute"):
+                insert_text("wiederholung", "clipboard-paste")
+            self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
+
+        self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["wiederholung", "", "wiederholung"])
+        self.assertEqual(mocked_run.call_count, 2)
+
+    def test_insert_text_type_empty_returns_false(self) -> None:
+        with mock.patch("speed_of_cinnamon.output.type_text") as mocked_type:
+            self.assertFalse(insert_text("", "type"))
+        self.assertFalse(mocked_type.called)
+
     def test_type_text_rejects_overly_large_delay(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which", return_value="xdotool"),
