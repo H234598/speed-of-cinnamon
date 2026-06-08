@@ -147,7 +147,6 @@
         "openai-compatible-url",
         "openai-compatible-model",
         "openai-compatible-flex-processing",
-        "openai-compatible-api-key",
         "cli-path"
       ]
     },
@@ -586,7 +585,7 @@
   "openai-compatible-api-key": {
     "type": "entry",
     "description": "OpenAI-compatible API key",
-    "tooltip": "Optional Bearer token for External API speech recognition and text polishing. Leave empty only for endpoints that do not require authentication. This value is not included in settings export. Max 4096 chars.",
+    "tooltip": "Legacy migration field. Configure API keys in ~/.config/speed-of-cinnamon/external-api.env instead; any legacy value stored here is migrated and then cleared on startup. This value is not included in settings export. Max 4096 chars.",
     "default": ""
   },
   "post-process-prompt": {

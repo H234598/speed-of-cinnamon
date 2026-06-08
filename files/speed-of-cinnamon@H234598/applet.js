@@ -431,6 +431,7 @@ MyApplet.prototype = {
     this.openaiCompatibleTextModel = DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL;
     this.openaiCompatibleFlexProcessing = true;
     this.openaiCompatibleApiKey = "";
+    this.externalApiEnvApiKey = "";
     this.postProcessPreset = TEXT_POLISHING_SAFE_PRESET;
     this.postProcessPreserveCode = true;
     this.postProcessNeverAddContent = true;
@@ -3137,7 +3138,7 @@ MyApplet.prototype = {
     let safeOpenAiCompatibleUrl = this._coerceCliTextArg(this._externalApiEnvValue(this.openaiCompatibleUrl, DEFAULT_OPENAI_COMPATIBLE_URL), "openai-compatible URL").trim();
     let safeOpenAiCompatibleModel = this._coerceCliTextArg(this._externalApiEnvValue(this.openaiCompatibleModel, DEFAULT_OPENAI_COMPATIBLE_MODEL), "openai-compatible model").trim();
     let safeOpenAiCompatibleTextModel = this._coerceCliTextArg(this._externalApiEnvValue(this.openaiCompatibleTextModel, DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL), "openai-compatible text model").trim();
-    let safeOpenAiCompatibleApiKey = this._coerceCliTextArg(this.openaiCompatibleApiKey || "", "openai-compatible API key").trim();
+    let safeOpenAiCompatibleApiKey = this._coerceCliTextArg(this.externalApiEnvApiKey || this.openaiCompatibleApiKey || "", "openai-compatible API key").trim();
     return [
       "OPENAI_COMPATIBLE_URL=" + safeOpenAiCompatibleUrl,
       "OPENAI_COMPATIBLE_STT_MODEL=" + safeOpenAiCompatibleModel,
@@ -3225,13 +3226,29 @@ MyApplet.prototype = {
       this.settings.setValue("openai-compatible-model", this.openaiCompatibleModel);
       changed = true;
     }
+    let hasLegacyApiKey = String(this.openaiCompatibleApiKey || "").trim() !== "";
     if (GLib.file_test(this._externalApiEnvPath(), GLib.FileTest.EXISTS)) {
       this._ensureExternalApiEnvFile();
       this._applyExternalApiEnvFile(false);
+      this._clearPersistedOpenAiCompatibleApiKey();
       return;
     }
-    if (changed) {
+    if (changed || hasLegacyApiKey) {
       this._ensureExternalApiEnvFile();
+      this._applyExternalApiEnvFile(false);
+      this._clearPersistedOpenAiCompatibleApiKey();
+    }
+  },
+
+  _clearPersistedOpenAiCompatibleApiKey: function() {
+    if (String(this.openaiCompatibleApiKey || "").trim() === "") {
+      return;
+    }
+    this.openaiCompatibleApiKey = "";
+    try {
+      this.settings.setValue("openai-compatible-api-key", "");
+    } catch (err) {
+      global.logError(err);
     }
   },
 
@@ -3335,8 +3352,8 @@ MyApplet.prototype = {
     }
     this.openaiCompatibleTextModel = textModel;
     this.settings.setValue("openai-compatible-text-model", this.openaiCompatibleTextModel);
-    this.openaiCompatibleApiKey = apiKey;
-    this.settings.setValue("openai-compatible-api-key", this.openaiCompatibleApiKey);
+    this.externalApiEnvApiKey = apiKey;
+    this._clearPersistedOpenAiCompatibleApiKey();
     if (showStatus) {
       this._setStatus("ready", _("External API config loaded: ") + (this.openaiCompatibleModel || _("not configured")), this.lastTranscript);
     }
@@ -4280,7 +4297,7 @@ MyApplet.prototype = {
   },
 
   _openAiCompatibleApiKeyForBackend: function() {
-    return this._coerceCliTextArg(this.openaiCompatibleApiKey || "", "openai-compatible API key").trim();
+    return this._coerceCliTextArg(this.externalApiEnvApiKey || this.openaiCompatibleApiKey || "", "openai-compatible API key").trim();
   },
 
   _runWithBackendEnvironment: function(includeOpenAiCompatibleApiKey, fn) {

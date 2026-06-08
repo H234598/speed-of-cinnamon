@@ -13,6 +13,7 @@ from unittest import mock
 from speed_of_cinnamon import output as output_module
 from speed_of_cinnamon.output import (
     OutputError,
+    PasteNotAttemptedError,
     MAX_OUTPUT_CHARS,
     MAX_TYPE_DELAY_MS,
     _contains_escaped_null,
@@ -1898,6 +1899,7 @@ class OutputTest(unittest.TestCase):
         typed_payloads: list[str] = []
 
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            input_payload = kwargs.get("input", b"")
             if args and isinstance(args[0], list):
                 called = list(args[0])
             else:
@@ -1906,7 +1908,9 @@ class OutputTest(unittest.TestCase):
                 called = list(raw_args)
             calls.append(called)
             if "--file" in called:
-                typed_payloads.append(Path(called[called.index("--file") + 1]).read_text(encoding="utf-8"))
+                self.assertEqual(called[called.index("--file") + 1], "/dev/stdin")
+                assert isinstance(input_payload, bytes)
+                typed_payloads.append(input_payload.decode("utf-8"))
             return subprocess.CompletedProcess(["xdotool"], 0, stdout=b"", stderr=b"")
 
         with (
@@ -1923,6 +1927,28 @@ class OutputTest(unittest.TestCase):
         self.assertIn("--file", type_calls[0])
         self.assertNotIn("hello", type_calls[0])
         self.assertEqual(typed_payloads, ["hello"])
+
+    def test_insert_text_restores_dedupe_state_when_paste_was_not_attempted(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
+            mock.patch(
+                "speed_of_cinnamon.output.paste_from_clipboard",
+                side_effect=[PasteNotAttemptedError("active window changed"), None],
+            ) as mocked_paste,
+            mock.patch("speed_of_cinnamon.output._read_text_clipboard", return_value=None),
+            mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "")),
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=4.0),
+        ):
+            with self.assertRaisesRegex(OutputError, "active window changed"):
+                insert_text("wiederholung", "clipboard-paste")
+            self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
+
+        self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["wiederholung", "", "wiederholung"])
+        self.assertEqual(mocked_paste.call_count, 2)
 
     def test_type_text_rejects_overly_large_delay(self) -> None:
         with (

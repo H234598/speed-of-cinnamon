@@ -26,6 +26,10 @@ class OutputError(RuntimeError):
     pass
 
 
+class PasteNotAttemptedError(OutputError):
+    pass
+
+
 _TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 _BASE_ENV_KEYS = {
     "HOME",
@@ -1191,7 +1195,7 @@ def _restore_clipboard_snapshot_after_failed_paste(inserted_text: str, snapshot_
 
 def paste_from_clipboard(expected_window_snapshot: tuple[str, str, str] | None = None) -> None:
     if expected_window_snapshot is None:
-        raise OutputError("refusing automatic paste without verifiable active window")
+        raise PasteNotAttemptedError("refusing automatic paste without verifiable active window")
     xdotool_error: OutputError | None = None
     xdotool = _which("xdotool")
     if xdotool:
@@ -1199,7 +1203,7 @@ def paste_from_clipboard(expected_window_snapshot: tuple[str, str, str] | None =
             expected_window_snapshot,
             xdotool_command=xdotool,
         ):
-            raise OutputError("active window changed before automatic paste")
+            raise PasteNotAttemptedError("active window changed before automatic paste")
         try:
             paste_key = _paste_key_for_window_snapshot(
                 expected_window_snapshot or _active_x_window_snapshot(xdotool_command=xdotool)
@@ -1211,7 +1215,7 @@ def paste_from_clipboard(expected_window_snapshot: tuple[str, str, str] | None =
                 expected_window_snapshot,
                 xdotool_command=xdotool,
             ):
-                raise OutputError("active window changed before automatic paste")
+                raise PasteNotAttemptedError("active window changed before automatic paste")
             _run_with_input(
                 ["xdotool", "key", "--clearmodifiers", paste_key],
                 "",
@@ -1221,10 +1225,10 @@ def paste_from_clipboard(expected_window_snapshot: tuple[str, str, str] | None =
             return
     wtype = _which("wtype")
     if wtype and xdotool_error is None:
-        raise OutputError("refusing automatic paste without verifiable active window")
+        raise PasteNotAttemptedError("refusing automatic paste without verifiable active window")
     if xdotool_error is not None:
-        raise xdotool_error
-    raise OutputError("no automatic paste helper found; install xdotool")
+        raise PasteNotAttemptedError(str(xdotool_error)) from xdotool_error
+    raise PasteNotAttemptedError("no automatic paste helper found; install xdotool")
 
 
 def _clipboard_paste_helper_available() -> bool:
@@ -1253,16 +1257,12 @@ def type_text(
     if not _active_x_window_matches_snapshot(expected_window_snapshot, xdotool_command=xdotool):
         raise OutputError("active window changed before direct typing")
     try:
-        with tempfile.NamedTemporaryFile(prefix=".soc-type-", suffix=".txt", mode="wb") as handle:
-            os.fchmod(handle.fileno(), 0o600)
-            handle.write(_validate_text_input(text))
-            handle.flush()
-            _run_with_input(
-                ["xdotool", "type", "--clearmodifiers", "--delay", str(max(delay_ms, 0)), "--file", handle.name],
-                "",
-                timeout=MAX_TYPE_TIMEOUT_SECONDS,
-                resolved_command=xdotool,
-            )
+        _run_with_input(
+            ["xdotool", "type", "--clearmodifiers", "--delay", str(max(delay_ms, 0)), "--file", "/dev/stdin"],
+            text,
+            timeout=MAX_TYPE_TIMEOUT_SECONDS,
+            resolved_command=xdotool,
+        )
     except OSError as exc:
         raise OutputError("failed to prepare direct typing input") from exc
 
@@ -1424,6 +1424,7 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
             return False
         operation_performed = False
         committed = False
+        paste_not_attempted = False
         clipboard_snapshot_available = False
         clipboard_snapshot = ""
         try:
@@ -1441,14 +1442,18 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
             _assert_clipboard_text_snapshot_unchanged(clipboard_snapshot_available, clipboard_snapshot)
             set_clipboard(text)
             operation_performed = True
-            paste_from_clipboard(expected_window_snapshot=target_window_snapshot)
+            try:
+                paste_from_clipboard(expected_window_snapshot=target_window_snapshot)
+            except PasteNotAttemptedError:
+                paste_not_attempted = True
+                raise
             if not _commit_clipboard_insertion(text, method, dedupe_context=dedupe_context):
                 raise OutputError("failed to commit clipboard-paste insertion state")
             committed = True
             return True
         finally:
             if not committed:
-                if not operation_performed:
+                if not operation_performed or paste_not_attempted:
                     _restore_clipboard_insertion_snapshot(snapshot)
                     _restore_clipboard_dedup_state(persistent_snapshot, pending=persistent_snapshot_pending)
                     _restore_clipboard_snapshot_after_failed_paste(text, clipboard_snapshot_available, clipboard_snapshot)

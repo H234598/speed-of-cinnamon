@@ -6,6 +6,7 @@ import os
 import secrets
 import shutil
 import stat as stat_module
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -43,6 +44,7 @@ _model_checksum_cache_loaded = False
 ENGLISH_LANGUAGE_CODES = {"", "en", "eng", "english"}
 MODEL_DOWNLOAD_REDIRECT_CODES = {301, 302, 303, 307, 308}
 MAX_MODEL_DOWNLOAD_REDIRECTS = 5
+MODEL_ORPHAN_CLEANUP_MIN_AGE_SECONDS = 60 * 60
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -1442,6 +1444,65 @@ def _remove_model_backup_path(backup_path: Path) -> None:
     _unlink_model_file_leaf(backup_path, backup_path.parent, field_name="model backup file")
 
 
+def _is_model_orphan_name(model_name: str, candidate_name: str, *, allow_suffixless: bool = False) -> bool:
+    prefix = f".{model_name}."
+    if not candidate_name.startswith(prefix):
+        return False
+    remainder = candidate_name[len(prefix):]
+    if allow_suffixless and len(remainder) == 16 and all(char in "0123456789abcdef" for char in remainder):
+        return True
+    if remainder.endswith(".tmp"):
+        token = remainder[:-4]
+        return len(token) == 16 and all(char in "0123456789abcdef" for char in token)
+    return False
+
+
+def _remove_model_orphan_paths(path: Path, root: Path, *, allow_suffixless: bool = False, preflight: bool = False) -> int:
+    _assert_path_within_model_root(path, root, field_name="model orphan path")
+    parent = path.parent
+    try:
+        assert_no_symlink_ancestors(parent, field_name="model orphan parent")
+    except RuntimeError as exc:
+        raise ModelError(str(exc)) from exc
+    if not parent.exists():
+        return 0
+    parent_fd = open_directory_without_following_symlinks(parent, field_name="model orphan parent")
+    removed = 0
+    scan_started_at = time.time()
+    try:
+        try:
+            names = os.listdir(parent_fd)
+        except OSError as exc:
+            raise ModelError(f"failed to scan model orphan parent: {parent}") from exc
+        for name in names:
+            if not _is_model_orphan_name(path.name, str(name), allow_suffixless=allow_suffixless):
+                continue
+            candidate = parent / str(name)
+            try:
+                candidate_stat = os.stat(str(name), dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if stat_module.S_ISLNK(candidate_stat.st_mode):
+                raise ModelError(f"model orphan path must not be a symlink: {candidate}")
+            if not stat_module.S_ISDIR(candidate_stat.st_mode) and not stat_module.S_ISREG(candidate_stat.st_mode):
+                raise ModelError(f"model orphan path must be a regular file or directory: {candidate}")
+            if preflight:
+                continue
+            if scan_started_at - candidate_stat.st_mtime < MODEL_ORPHAN_CLEANUP_MIN_AGE_SECONDS:
+                continue
+            if stat_module.S_ISDIR(candidate_stat.st_mode):
+                if _remove_model_directory_leaf(candidate, root, field_name="model orphan directory"):
+                    removed += 1
+                continue
+            if stat_module.S_ISREG(candidate_stat.st_mode):
+                if _unlink_model_file_leaf(candidate, root, field_name="model orphan file"):
+                    removed += 1
+                continue
+    finally:
+        os.close(parent_fd)
+    return removed
+
+
 def download_model(name: str, force: bool = False) -> dict[str, object]:
     if not isinstance(force, bool):
         raise ModelError("force must be a boolean")
@@ -1567,9 +1628,12 @@ def remove_model(name: str) -> dict[str, object]:
     model = resolve_model(name)
     path = model_path(model)
     root = _model_root(model)
+    allow_suffixless_orphans = bool(model.files)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     removed = False
     removed_tmp = False
+    removed_orphans = 0
+    _remove_model_orphan_paths(path, root, allow_suffixless=allow_suffixless_orphans, preflight=True)
     if path.is_symlink():
         raise ModelError(f"model path must not be a symlink: {path}")
     elif path.is_dir():
@@ -1589,6 +1653,7 @@ def remove_model(name: str) -> dict[str, object]:
         _clear_model_checksum_cache(path)
     if removed_tmp:
         _clear_model_checksum_cache(tmp_path)
+    removed_orphans = _remove_model_orphan_paths(path, root, allow_suffixless=allow_suffixless_orphans)
     return {
         **asdict(model),
         "status": "done",
@@ -1596,4 +1661,5 @@ def remove_model(name: str) -> dict[str, object]:
         "path": str(path),
         "removed": removed,
         "removed_tmp": removed_tmp,
+        "removed_orphans": removed_orphans,
     }

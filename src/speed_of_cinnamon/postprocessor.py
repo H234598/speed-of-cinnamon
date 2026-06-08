@@ -23,6 +23,7 @@ DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 DEFAULT_OPENAI_COMPATIBLE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_COMPATIBLE_MODEL = "gpt-4o-transcribe"
 DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL = "gpt-4o-mini"
+POSTPROCESS_TEMPLATE_PLACEHOLDER_RE = re.compile(r"\{(text|language|context|vocabulary|prompt)\}")
 DEFAULT_OLLAMA_PROMPT = (
     "Correct only punctuation, capitalization, spacing, and clear ASR transcription errors. "
     "Preserve wording, sentence order, tone, politeness, formality, emotion, emphasis, "
@@ -278,10 +279,7 @@ def render_postprocess_template(
         }
     except ValueError as exc:
         raise PostProcessError(str(exc)) from exc
-    rendered = template
-    for key, value in values.items():
-        rendered = rendered.replace("{" + key + "}", value)
-    return rendered
+    return POSTPROCESS_TEMPLATE_PLACEHOLDER_RE.sub(lambda match: values[match.group(1)], template)
 
 
 def build_ollama_prompt(

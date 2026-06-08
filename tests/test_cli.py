@@ -4868,6 +4868,25 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("must end with .json", payload["error"])
 
+    def test_settings_export_rejects_output_leaf_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target.json"
+            link = Path(tmp) / "link.json"
+            link.symlink_to(target)
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "settings-export",
+                    "--settings-json",
+                    '{"language":"en"}',
+                    "--output",
+                    str(link),
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("must not pass through a symlink", payload["error"])
+
     def test_settings_import_rejects_overlong_input_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             stdout = io.StringIO()
@@ -4885,6 +4904,19 @@ class CliTest(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 1)
         self.assertIn("must end with .json", payload["error"])
+
+    def test_settings_import_rejects_input_leaf_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target.json"
+            target.write_text('{"app":"speed-of-cinnamon","version":2,"settings":{},"alarms":{"version":1,"alarms":[],"last_checked_at":""}}\n', encoding="utf-8")
+            link = Path(tmp) / "link.json"
+            link.symlink_to(target)
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["settings-import", "--input", str(link), "--json"])
+            payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("must not pass through a symlink", payload["error"])
 
     def test_settings_import_rejects_null_byte_in_export_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

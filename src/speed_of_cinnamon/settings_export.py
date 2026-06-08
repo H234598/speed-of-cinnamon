@@ -495,7 +495,7 @@ def read_export(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise SettingsExportError("settings export must be a JSON object")
     if payload.get("app") != APP_ID:
-        raise SettingsExportError(f"settings export is for a different app: {payload.get('app')}")
+        raise SettingsExportError("settings export is for a different app")
     version = payload.get("version")
     if isinstance(version, bool) or not isinstance(version, int) or version < 1 or version > EXPORT_VERSION:
         raise SettingsExportError(f"unsupported settings export version: {version}")

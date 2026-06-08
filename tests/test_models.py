@@ -5,6 +5,7 @@ import hashlib
 import io
 import os
 import tempfile
+import time
 import unittest
 import urllib.error
 from unittest import mock
@@ -2158,6 +2159,102 @@ class ModelsTest(unittest.TestCase):
             any(models.stat_module.S_ISDIR(mode) for mode in fsync_modes),
             "directory model delete should fsync its parent directory",
         )
+
+    def test_remove_model_prunes_randomized_temp_and_backup_orphans(self) -> None:
+        spec = models.ModelSpec(
+            name="test-orphan-remove",
+            filename="ggml-test-orphan-remove.bin",
+            size="1 KiB",
+            sha1="not-used",
+            description="test orphan cleanup",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"installed")
+            orphan_tmp = path.with_name(f".{path.name}.0123456789abcdef.tmp")
+            orphan_dir = path.with_name(f".{path.name}.fedcba9876543210")
+            orphan_backup = path.with_name(f".{path.name}.0011223344556677.backup")
+            orphan_backup_orphan = path.with_name(f".{path.name}.0011223344556677.backup.8899aabbccddeeff.orphan")
+            lookalike = path.with_name(f".{path.name}.not-a-token.tmp")
+            orphan_tmp.write_bytes(b"partial")
+            orphan_dir.mkdir()
+            (orphan_dir / "config.json").write_text("{}", encoding="utf-8")
+            orphan_backup.write_bytes(b"backup")
+            orphan_backup_orphan.mkdir()
+            (orphan_backup_orphan / "old.txt").write_text("old", encoding="utf-8")
+            lookalike.write_bytes(b"keep")
+            old_mtime = time.time() - models.MODEL_ORPHAN_CLEANUP_MIN_AGE_SECONDS - 60
+            for orphan in (orphan_tmp, orphan_dir, orphan_backup, orphan_backup_orphan):
+                os.utime(orphan, (old_mtime, old_mtime), follow_symlinks=False)
+
+            payload = models.remove_model("test-orphan-remove")
+
+            orphan_exists = [item.exists() for item in (orphan_tmp, orphan_dir, orphan_backup, orphan_backup_orphan)]
+            lookalike_exists = lookalike.exists()
+
+        self.assertTrue(payload["removed"])
+        self.assertEqual(payload["removed_orphans"], 1)
+        self.assertEqual(orphan_exists, [False, True, True, True])
+        self.assertTrue(lookalike_exists)
+
+    def test_remove_model_preserves_fresh_randomized_orphan(self) -> None:
+        spec = models.ModelSpec(
+            name="test-fresh-orphan-remove",
+            filename="ggml-test-fresh-orphan-remove.bin",
+            size="1 KiB",
+            sha1="not-used",
+            description="test fresh orphan cleanup",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            orphan_tmp = path.with_name(f".{path.name}.0123456789abcdef.tmp")
+            orphan_tmp.write_bytes(b"partial")
+
+            payload = models.remove_model("test-fresh-orphan-remove")
+
+            orphan_exists = orphan_tmp.exists()
+
+        self.assertFalse(payload["removed"])
+        self.assertEqual(payload["removed_orphans"], 0)
+        self.assertTrue(orphan_exists)
+
+    def test_remove_model_rejects_symlink_randomized_orphan(self) -> None:
+        spec = models.ModelSpec(
+            name="test-orphan-symlink-remove",
+            filename="ggml-test-orphan-symlink-remove.bin",
+            size="1 KiB",
+            sha1="not-used",
+            description="test orphan symlink cleanup",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"installed")
+            target = Path(tmp) / "outside-orphan"
+            target.write_bytes(b"outside")
+            orphan = path.with_name(f".{path.name}.0123456789abcdef.tmp")
+            orphan.symlink_to(target)
+
+            with self.assertRaisesRegex(models.ModelError, "model orphan path must not be a symlink"):
+                models.remove_model("test-orphan-symlink-remove")
+
+            self.assertTrue(orphan.is_symlink())
+            self.assertTrue(target.exists())
+            self.assertTrue(path.exists())
 
     def test_remove_model_directory_rejects_unsafe_rmtree_platform(self) -> None:
         spec = models.ModelSpec(

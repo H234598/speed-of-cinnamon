@@ -500,6 +500,14 @@ class SettingsExportTest(unittest.TestCase):
             with self.assertRaisesRegex(SettingsExportError, "different app"):
                 read_export(path)
 
+    def test_read_export_rejects_control_char_app_without_echoing_value(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text('{"app":"evil\\u001b[31m","version":1,"settings":{}}\n', encoding="utf-8")
+            with self.assertRaisesRegex(SettingsExportError, "different app") as ctx:
+                read_export(path)
+        self.assertNotIn("evil", str(ctx.exception))
+
     def test_read_export_rejects_boolean_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"

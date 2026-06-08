@@ -1990,7 +1990,9 @@ def _remove_transcript_file(path: Path) -> bool:
 
 def _require_json_path(path_value: str, *, field_name: str, default: Path | None = None) -> Path:
     if path_value:
-        path = _coerce_path(path_value, field_name=field_name, resolve=True)
+        path = _coerce_path(path_value, field_name=field_name, resolve=False)
+        if not path.is_absolute():
+            path = Path.cwd() / path
     elif default is not None:
         path = default
     else:

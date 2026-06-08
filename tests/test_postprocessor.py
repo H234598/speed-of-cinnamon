@@ -152,6 +152,18 @@ class PostProcessorTest(unittest.TestCase):
         with self.assertRaisesRegex(PostProcessError, "unsupported shell operator"):
             post_process_text("hello", "en", "python3 -c 'print(1)' | python3 -c 'print(2)'")
 
+    def test_postprocess_template_does_not_expand_placeholders_inside_inserted_values(self) -> None:
+        rendered = render_postprocess_template(
+            "tool --text {text} --prompt {prompt}",
+            "hello {prompt}",
+            "en",
+            "private context",
+            "",
+        )
+
+        self.assertIn("hello {prompt}", rendered)
+        self.assertEqual(rendered.count("private context"), 1)
+
     def test_post_process_command_rejects_invalid_syntax(self) -> None:
         with self.assertRaisesRegex(PostProcessError, "invalid post-process command"):
             post_process_text("hello", "en", "python3 -c 'unterminated")
