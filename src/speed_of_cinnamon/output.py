@@ -1080,7 +1080,7 @@ def _active_window_paste_key(*, xdotool_available: bool | None = None, xdotool_c
     return _paste_key_for_window_snapshot(_active_x_window_snapshot(xdotool_command=runtime_command))
 
 
-def set_clipboard(text: str) -> str:
+def set_clipboard(text: str, *, allowed_helpers: tuple[str, ...] | None = None) -> str:
     if not isinstance(text, str) or isinstance(text, bool):
         raise OutputError("text must be text")
     _validate_text_input(text)
@@ -1091,6 +1091,8 @@ def set_clipboard(text: str) -> str:
         ("wl-copy", ["wl-copy"]),
     )
     for helper, command in candidates:
+        if allowed_helpers is not None and helper not in allowed_helpers:
+            continue
         resolved = _which(helper)
         if not resolved:
             continue
@@ -1100,7 +1102,11 @@ def set_clipboard(text: str) -> str:
         except OutputError as exc:
             last_error = exc
     if last_error is not None:
+        if allowed_helpers is not None:
+            raise OutputError("no compatible clipboard helper succeeded for automatic paste; install xclip or xsel") from last_error
         raise OutputError("no clipboard helper succeeded; install xclip, xsel, or wl-clipboard") from last_error
+    if allowed_helpers is not None:
+        raise OutputError("no X11 clipboard helper found for automatic paste; install xclip or xsel")
     raise OutputError("no clipboard helper found; install xclip, xsel, or wl-clipboard")
 
 
@@ -1191,7 +1197,13 @@ def _assert_clipboard_text_snapshot_unchanged(snapshot_available: bool, snapshot
         raise OutputError("clipboard changed before automatic paste")
 
 
-def _restore_clipboard_snapshot_after_failed_paste(inserted_text: str, snapshot_available: bool, snapshot_text: str) -> None:
+def _restore_clipboard_snapshot_after_failed_paste(
+    inserted_text: str,
+    snapshot_available: bool,
+    snapshot_text: str,
+    *,
+    allowed_helpers: tuple[str, ...] | None = None,
+) -> None:
     if not snapshot_available:
         return
     if not _clipboard_still_contains_inserted_text(inserted_text):
@@ -1199,7 +1211,7 @@ def _restore_clipboard_snapshot_after_failed_paste(inserted_text: str, snapshot_
     if _clipboard_has_non_text_payload():
         return
     try:
-        set_clipboard(snapshot_text)
+        set_clipboard(snapshot_text, allowed_helpers=allowed_helpers)
     except OutputError as exc:
         log_event("warning", "clipboard_restore_after_failed_automatic_paste_failed", error=str(exc))
 
@@ -1250,6 +1262,10 @@ def paste_from_clipboard(expected_window_snapshot: tuple[str, str, str] | None =
 
 def _clipboard_paste_helper_available() -> bool:
     return bool(_which("xdotool"))
+
+
+def _clipboard_paste_writer_available() -> bool:
+    return bool(_which("xclip") or _which("xsel"))
 
 
 def type_text(
@@ -1430,6 +1446,8 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
             raise OutputError("refusing automatic paste without verifiable active window")
         if target_window_snapshot is None:
             raise OutputError("refusing automatic paste without verifiable active window")
+        if not _clipboard_paste_writer_available():
+            raise OutputError("no X11 clipboard helper found for automatic paste; install xclip or xsel")
         dedupe_context = _clipboard_dedup_context_for_window_snapshot(target_window_snapshot)
         insertion = _begin_clipboard_insertion(text, method, dedupe_context=dedupe_context)
         if insertion is None:
@@ -1460,7 +1478,7 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
             ):
                 raise OutputError("failed to reserve clipboard-paste insertion state")
             _assert_clipboard_text_snapshot_unchanged(clipboard_snapshot_available, clipboard_snapshot)
-            set_clipboard(text)
+            set_clipboard(text, allowed_helpers=("xclip", "xsel"))
             operation_performed = True
             try:
                 paste_from_clipboard(expected_window_snapshot=target_window_snapshot)
@@ -1476,9 +1494,19 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
                 if not operation_performed or paste_not_attempted:
                     _restore_clipboard_insertion_snapshot(snapshot)
                     _restore_clipboard_dedup_state(persistent_snapshot, pending=persistent_snapshot_pending)
-                    _restore_clipboard_snapshot_after_failed_paste(text, clipboard_snapshot_available, clipboard_snapshot)
+                    _restore_clipboard_snapshot_after_failed_paste(
+                        text,
+                        clipboard_snapshot_available,
+                        clipboard_snapshot,
+                        allowed_helpers=("xclip", "xsel"),
+                    )
                 else:
-                    _restore_clipboard_snapshot_after_failed_paste(text, clipboard_snapshot_available, clipboard_snapshot)
+                    _restore_clipboard_snapshot_after_failed_paste(
+                        text,
+                        clipboard_snapshot_available,
+                        clipboard_snapshot,
+                        allowed_helpers=("xclip", "xsel"),
+                    )
             _release_clipboard_dedup_lock(lock_path)
     if method == "type":
         xdotool = _which("xdotool")

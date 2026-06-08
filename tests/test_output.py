@@ -927,6 +927,26 @@ class OutputTest(unittest.TestCase):
         mocked_paste.assert_not_called()
         mocked_non_text.assert_not_called()
 
+    def test_clipboard_paste_refuses_wl_copy_only_when_using_xdotool(self) -> None:
+        def fake_which(command: str) -> str | None:
+            return {
+                "xdotool": "/usr/bin/xdotool",
+                "wl-copy": "/usr/bin/wl-copy",
+                "wl-paste": "/usr/bin/wl-paste",
+            }.get(command)
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output._which", side_effect=fake_which),
+            mock.patch("speed_of_cinnamon.output._active_x_window_snapshot", return_value=("1", "Editor", "Xed")),
+            mock.patch("speed_of_cinnamon.output._run_with_input") as mocked_run,
+        ):
+            with self.assertRaisesRegex(OutputError, "X11 clipboard helper"):
+                insert_text("wiederholung", "clipboard-paste")
+
+        mocked_run.assert_not_called()
+
     def test_insert_text_commits_dedupe_state_when_paste_succeeds(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -2021,6 +2041,35 @@ class OutputTest(unittest.TestCase):
 
         self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["wiederholung", "", "wiederholung"])
         self.assertEqual(mocked_paste.call_count, 2)
+
+    def test_clipboard_paste_restore_after_failed_paste_does_not_fallback_to_wl_copy(self) -> None:
+        calls: list[str] = []
+
+        def fake_which(command: str) -> str | None:
+            return {
+                "xclip": "/usr/bin/xclip",
+                "wl-copy": "/usr/bin/wl-copy",
+            }.get(command)
+
+        def fake_run(command: list[str], *_args: object, **_kwargs: object) -> None:
+            calls.append(command[0])
+            if command[0] == "xclip":
+                raise OutputError("xclip failed")
+
+        with (
+            mock.patch("speed_of_cinnamon.output._which", side_effect=fake_which),
+            mock.patch("speed_of_cinnamon.output._run_with_input", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+        ):
+            output_module._restore_clipboard_snapshot_after_failed_paste(
+                "new text",
+                True,
+                "old text",
+                allowed_helpers=("xclip", "xsel"),
+            )
+
+        self.assertEqual(calls, ["xclip"])
 
     def test_insert_text_restores_dedupe_state_when_paste_helper_exec_fails_before_keypress(self) -> None:
         with (

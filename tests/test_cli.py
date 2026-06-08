@@ -5731,6 +5731,37 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         mocked_start.assert_called_once()
 
+    def test_toggle_does_not_overwrite_error_state_with_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "failed.wav"
+            log = recordings / "failed.log"
+            audio.write_bytes(b"audio")
+            log.write_text("log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="error", audio_path=str(audio), log_path=str(log), error="failed cleanup"))
+            stdout = io.StringIO()
+            with (
+                mock.patch("speed_of_cinnamon.cli.start_recorder", side_effect=AssertionError("recorder started")) as mocked_start,
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["toggle", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("cleanup is unresolved", payload["error"])
+        self.assertTrue(payload["audio_path_present"])
+        self.assertTrue(payload["log_path_present"])
+        self.assertEqual(final_state.status, "error")
+        self.assertEqual(final_state.audio_path, str(audio))
+        self.assertEqual(final_state.log_path, str(log))
+        mocked_start.assert_not_called()
+
     def test_toggle_finalizes_expired_recording(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -6047,6 +6078,46 @@ class CliTest(unittest.TestCase):
             self.assertEqual(final_state.log_path, str(log))
             self.assertFalse(final_state.transcript_path)
 
+    def test_finalize_silent_cleanup_failure_does_not_persist_done_if_error_state_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="finalizing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=False)
+            real_update = store.update
+            statuses: list[object] = []
+
+            def fake_update(**kwargs: object) -> RecordingState:
+                statuses.append(kwargs.get("status"))
+                if kwargs.get("status") == "done":
+                    raise AssertionError("done written before cleanup completed")
+                if kwargs.get("status") == "error":
+                    raise RuntimeError("error write failed")
+                return real_update(**kwargs)
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch.object(store, "update", side_effect=fake_update),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=cli.SilenceDetectionResult(True, True, 2.0, 2.0, 0.0, 2.0, "silent")),
+                mock.patch("speed_of_cinnamon.cli.remove_file", return_value=False),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "error write failed"):
+                    cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+            self.assertNotIn("done", statuses)
+            self.assertEqual(final_state.status, "finalizing")
+            self.assertEqual(final_state.audio_path, str(audio))
+            self.assertEqual(final_state.log_path, str(log))
+
     def test_finalize_non_silent_keeps_artifacts_if_done_and_error_state_updates_fail(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -6110,6 +6181,104 @@ class CliTest(unittest.TestCase):
             self.assertEqual(final_state.status, "error")
             self.assertEqual(final_state.audio_path, str(audio))
             self.assertEqual(final_state.log_path, str(log))
+
+    def test_finalize_non_silent_cleanup_failure_does_not_persist_done_if_error_state_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="finalizing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=False)
+            real_update = store.update
+            statuses: list[object] = []
+
+            def fake_update(**kwargs: object) -> RecordingState:
+                statuses.append(kwargs.get("status"))
+                if kwargs.get("status") == "done":
+                    raise AssertionError("done written before cleanup completed")
+                if kwargs.get("status") == "error":
+                    raise RuntimeError("error write failed")
+                return real_update(**kwargs)
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch.object(store, "update", side_effect=fake_update),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent")),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("skip trim")),
+                mock.patch("speed_of_cinnamon.cli.reencode_recording_to_flac", side_effect=cli.RecorderError("skip encode")),
+                mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.remove_file", return_value=False),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "error write failed"):
+                    cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+            self.assertNotIn("done", statuses)
+            self.assertEqual(final_state.status, "finalizing")
+            self.assertEqual(final_state.audio_path, str(audio))
+            self.assertEqual(final_state.log_path, str(log))
+
+    def test_finalize_clears_deleted_artifact_paths_when_done_write_fails_after_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="finalizing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=False)
+            real_update = store.update
+
+            def fake_update(**kwargs: object) -> RecordingState:
+                if kwargs.get("status") == "done":
+                    raise RuntimeError("done write failed")
+                return real_update(**kwargs)
+
+            def fake_remove(path_value: str | None, **_kwargs: object) -> bool:
+                if not path_value:
+                    return False
+                try:
+                    Path(path_value).unlink()
+                except FileNotFoundError:
+                    pass
+                return True
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch.object(store, "update", side_effect=fake_update),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent")),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("skip trim")),
+                mock.patch("speed_of_cinnamon.cli.reencode_recording_to_flac", side_effect=cli.RecorderError("skip encode")),
+                mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.remove_file", side_effect=fake_remove),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "done write failed"):
+                    cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+            self.assertEqual(final_state.status, "error")
+            self.assertEqual(final_state.audio_path, "")
+            self.assertEqual(final_state.log_path, "")
+            self.assertFalse(audio.exists())
+            self.assertFalse(log.exists())
 
     def test_finalize_removes_written_transcript_if_insert_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

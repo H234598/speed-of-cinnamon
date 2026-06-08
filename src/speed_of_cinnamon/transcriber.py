@@ -60,6 +60,16 @@ OPENAI_TRANSCRIPTION_MODELS = {
     "whisper-1",
 }
 
+
+def _validate_language_code(language: str) -> str:
+    if isinstance(language, bool) or not isinstance(language, str):
+        raise TranscriptionError("language must be text")
+    if _contains_escaped_null(language):
+        raise TranscriptionError("language contains invalid null byte")
+    if _contains_http_header_control_chars(language):
+        raise TranscriptionError("language contains invalid control character")
+    return _assert_text_length(language, field_name="language", max_chars=MAX_LANGUAGE_CODE_CHARS).strip()
+
 _COMMAND_TEMPLATE_PLACEHOLDER_RE = re.compile(
     r"\{(audio|language|text|output_base|output_dir|context|vocabulary|prompt)\}"
 )
@@ -1053,6 +1063,7 @@ def render_command_template(
     personal_context: str = "",
     vocabulary: str = "",
 ) -> str:
+    language = _validate_language_code(language)
     try:
         output_base = text_path.with_suffix("")
         replacements = {
@@ -1148,6 +1159,7 @@ def transcribe_with_openai_whisper(
     text_path: Path,
     write_transcript: bool = True,
 ) -> str:
+    language = _validate_language_code(language)
     audio_path = validate_audio_file(audio_path)
     audio_snapshot = _snapshot_private_file(
         audio_path,
@@ -1276,6 +1288,7 @@ def transcribe_with_whisper_cpp(
     model_path: str,
     write_transcript: bool = True,
 ) -> str:
+    language = _validate_language_code(language)
     audio_path = validate_audio_file(audio_path)
     if not isinstance(text_path, Path):
         raise TranscriptionError("text path must be a Path")
@@ -1385,6 +1398,7 @@ def transcribe_with_faster_whisper(
     model_path: str,
     write_transcript: bool = True,
 ) -> str:
+    language = _validate_language_code(language)
     audio_path = validate_audio_file(audio_path)
     model_path = _validate_local_model_path(model_path, field_name="CTranslate2 model path", directory=True)
     if not model_supports_language(model_path, language):
@@ -1664,13 +1678,7 @@ def transcribe_with_openai_compatible_api(
         raise TranscriptionError("OpenAI-compatible flex processing must be a boolean")
     if not isinstance(openai_compatible_service_tier_fallback, bool):
         raise TranscriptionError("OpenAI-compatible service tier fallback must be a boolean")
-    if isinstance(language, bool) or not isinstance(language, str):
-        raise TranscriptionError("language must be text")
-    if _contains_escaped_null(language):
-        raise TranscriptionError("language contains invalid null byte")
-    if _contains_http_header_control_chars(language):
-        raise TranscriptionError("multipart form field contains invalid control character")
-    language = _assert_text_length(language, field_name="language", max_chars=MAX_LANGUAGE_CODE_CHARS).strip()
+    language = _validate_language_code(language)
     endpoint = _openai_compatible_endpoint(url, "/audio/transcriptions")
     endpoint_display = _safe_url_display(endpoint, field_name="OpenAI-compatible API URL")
     is_openai_api = _is_openai_api_endpoint(endpoint)
@@ -1877,8 +1885,7 @@ def transcribe(
         raise TranscriptionError("audio path must be a Path")
     if not isinstance(text_path, Path):
         raise TranscriptionError("text path must be a Path")
-    if isinstance(language, bool) or not isinstance(language, str):
-        raise TranscriptionError("language must be text")
+    language = _validate_language_code(language)
     text_path = text_path.expanduser()
     try:
         assert_no_symlink_ancestors(text_path, field_name="transcript path")

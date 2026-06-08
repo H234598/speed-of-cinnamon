@@ -1868,6 +1868,51 @@ class TranscriberTest(unittest.TestCase):
             with self.assertRaisesRegex(TranscriptionError, "language must be text"):
                 transcribe(audio, True, Path(tmp) / "sample.txt", "printf ok")  # type: ignore[arg-type]
 
+    def test_transcribe_rejects_oversized_language_before_local_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with mock.patch("speed_of_cinnamon.transcriber._run_transcriber_process", side_effect=AssertionError("backend called")) as mocked_run:
+                with self.assertRaisesRegex(TranscriptionError, "language is too large"):
+                    transcribe(audio, "x" * (transcriber_module.MAX_LANGUAGE_CODE_CHARS + 1), Path(tmp) / "sample.txt", "printf ok")
+
+        mocked_run.assert_not_called()
+
+    def test_transcribe_rejects_language_control_character_before_local_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with mock.patch("speed_of_cinnamon.transcriber._run_transcriber_process", side_effect=AssertionError("backend called")) as mocked_run:
+                with self.assertRaisesRegex(TranscriptionError, "language contains invalid control character"):
+                    transcribe(audio, "de\r\nbad", Path(tmp) / "sample.txt", "printf ok")
+
+        mocked_run.assert_not_called()
+
+    def test_openai_whisper_direct_helper_rejects_oversized_language_before_command_lookup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            text = Path(tmp) / "sample.txt"
+            with mock.patch("speed_of_cinnamon.transcriber._command_path", side_effect=AssertionError("command lookup called")) as mocked_command:
+                with self.assertRaisesRegex(TranscriptionError, "language is too large"):
+                    transcribe_with_openai_whisper(
+                        audio,
+                        "x" * (transcriber_module.MAX_LANGUAGE_CODE_CHARS + 1),
+                        text,
+                    )
+
+        mocked_command.assert_not_called()
+
+    def test_whisper_cpp_direct_helper_rejects_language_control_before_model_lookup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            text = Path(tmp) / "sample.txt"
+            model = Path(tmp) / "missing.bin"
+            with mock.patch("speed_of_cinnamon.transcriber._validate_local_model_path", side_effect=AssertionError("model lookup called")) as mocked_model:
+                with self.assertRaisesRegex(TranscriptionError, "language contains invalid control character"):
+                    transcribe_with_whisper_cpp(audio, "de\r\nbad", text, str(model))
+
+        mocked_model.assert_not_called()
+
     def test_backend_aliases_are_normalized(self) -> None:
         self.assertEqual(normalize_backend("openai"), "whisper")
         self.assertEqual(normalize_backend("openai-whisper"), "whisper")

@@ -2793,6 +2793,14 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
             "status": "finalizing",
             "message": "finalization in progress; wait for completion",
         }
+    if current.status == "error" and (current.audio_path or current.log_path or current.transcript_path):
+        return {
+            "status": "error",
+            "message": "previous recording cleanup is unresolved; run cancel before starting a new recording",
+            "audio_path_present": bool(current.audio_path),
+            "log_path_present": bool(current.log_path),
+            "transcript_path_present": bool(current.transcript_path),
+        }
     if current.status == "recording":
         current_audio_path = _safe_recording_artifact_path(
             current.audio_path, suffix=(".wav", ".flac", ".socenc"), require_recordings_dir=False
@@ -3037,16 +3045,6 @@ def finalize_recording(
             state.log_path = done_log_path
             state.transcript_path = ""
             artifact_cleanup = _enforce_recording_artifact_cap(state)
-            done = store.update(
-                status="done",
-                stopped_at=state.stopped_at or now_iso(),
-                audio_path=done_audio_path,
-                log_path=done_log_path,
-                transcript="",
-                transcript_path="",
-                inserted=False,
-                error="",
-            )
             cleanup_failures: list[tuple[str, str, str]] = []
             if not keep_recording_artifacts:
                 audio_deleted = remove_file(str(audio_path), suffix=audio_suffix)
@@ -3060,6 +3058,16 @@ def finalize_recording(
                 if not log_deleted:
                     cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
             _raise_recording_cleanup_failure(store, cleanup_failures)
+            done = store.update(
+                status="done",
+                stopped_at=state.stopped_at or now_iso(),
+                audio_path=done_audio_path,
+                log_path=done_log_path,
+                transcript="",
+                transcript_path="",
+                inserted=False,
+                error="",
+            )
             return {
                 "status": done.status,
                 "message": "silent recording skipped",
@@ -3182,6 +3190,16 @@ def finalize_recording(
                 cleanup_log_path = done_log_path
                 done_log_path = None
 
+        cleanup_failures: list[tuple[str, str, str]] = []
+        if cleanup_audio_path is not None:
+            audio_deleted = remove_file(str(cleanup_audio_path), suffix=audio_suffix)
+            if not audio_deleted:
+                cleanup_failures.append(("audio_path", str(cleanup_audio_path), "recording audio artifact"))
+        if cleanup_log_path:
+            log_deleted = remove_file(cleanup_log_path, suffix=".log")
+            if not log_deleted:
+                cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
+        _raise_recording_cleanup_failure(store, cleanup_failures)
         done = store.update(
             status="done",
             stopped_at=state.stopped_at or now_iso(),
@@ -3193,19 +3211,11 @@ def finalize_recording(
             error="",
         )
         preserve_written_text_on_error = True
-        cleanup_failures: list[tuple[str, str, str]] = []
+        post_done_cleanup_failures: list[tuple[str, str, str]] = []
         if remove_original_after_state_update:
             if not remove_file(str(audio_path), suffix=audio_suffix):
-                cleanup_failures.append(("audio_path", str(audio_path), "original recording artifact"))
-        if cleanup_audio_path is not None:
-            audio_deleted = remove_file(str(cleanup_audio_path), suffix=audio_suffix)
-            if not audio_deleted:
-                cleanup_failures.append(("audio_path", str(cleanup_audio_path), "recording audio artifact"))
-        if cleanup_log_path:
-            log_deleted = remove_file(cleanup_log_path, suffix=".log")
-            if not log_deleted:
-                cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
-        _raise_recording_cleanup_failure(store, cleanup_failures)
+                post_done_cleanup_failures.append(("audio_path", str(audio_path), "original recording artifact"))
+        _raise_recording_cleanup_failure(store, post_done_cleanup_failures)
         state = done
         artifact_cleanup_active_paths: set[Path] = set()
         if stabilized_audio_path is not None:
@@ -3283,6 +3293,10 @@ def finalize_recording(
                 and (stabilized_audio_deleted or _recording_artifact_stat(stabilized_audio_path) is None)
             ):
                 error_update["audio_path"] = ""
+            if audio_deleted and state.audio_path:
+                error_update["audio_path"] = ""
+            if log_deleted and state.log_path:
+                error_update["log_path"] = ""
             if written_text_path is not None and not preserve_written_text_on_error:
                 try:
                     _remove_transcript_file(written_text_path)

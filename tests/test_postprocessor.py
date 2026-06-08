@@ -88,6 +88,20 @@ class PostProcessorTest(unittest.TestCase):
         command = "python3 -c 'import sys; print(sys.stdin.read().upper())'"
         self.assertEqual(post_process_text("hello cinnamon", "en", command), "HELLO CINNAMON")
 
+    def test_post_process_command_rejects_oversized_language_before_command_chain(self) -> None:
+        with mock.patch("speed_of_cinnamon.postprocessor.run_command_chain", side_effect=AssertionError("command chain called")) as mocked_run:
+            with self.assertRaisesRegex(PostProcessError, "language"):
+                post_process_text("hello", "x" * 65, "printf {language}")
+
+        mocked_run.assert_not_called()
+
+    def test_post_process_command_rejects_language_control_character_before_command_chain(self) -> None:
+        with mock.patch("speed_of_cinnamon.postprocessor.run_command_chain", side_effect=AssertionError("command chain called")) as mocked_run:
+            with self.assertRaisesRegex(PostProcessError, "language"):
+                post_process_text("hello", "de\r\nbad", "printf {language}")
+
+        mocked_run.assert_not_called()
+
     def test_post_process_chain_passes_output_between_segments(self) -> None:
         command = (
             "python3 -c 'import sys; print(sys.stdin.read().strip().upper())' && "
@@ -1117,6 +1131,31 @@ class PostProcessorTest(unittest.TestCase):
         self.assertEqual(request.full_url, "http://127.0.0.1:11434/api/tags")
         self.assertEqual(timeout, 5)
 
+    def test_list_ollama_models_filters_unsafe_model_names_and_metadata(self) -> None:
+        payload = {
+            "models": [
+                {"name": "bad\r\nmodel", "details": {"family": "ignored"}},
+                {"name": "x" * 241, "details": {"family": "ignored"}},
+                {
+                    "name": "safe-model",
+                    "model": "unsafe\nalias",
+                    "details": {
+                        "family": "llama\nbad",
+                        "parameter_size": "3B",
+                        "quantization_level": "Q4",
+                    },
+                },
+            ]
+        }
+
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", return_value=FakeResponse(payload)):
+            result = list_ollama_models("http://127.0.0.1:11434/")
+
+        self.assertTrue(result["available"])
+        self.assertEqual([model["name"] for model in result["models"]], ["safe-model"])
+        self.assertEqual(result["models"][0]["model"], "safe-model")
+        self.assertEqual(result["models"][0]["description"], "3B Q4")
+
     def test_list_ollama_models_reports_unavailable_server(self) -> None:
         with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=OSError("offline")):
             result = list_ollama_models("http://127.0.0.1:11434")
@@ -1151,6 +1190,23 @@ class PostProcessorTest(unittest.TestCase):
         self.assertEqual(request.full_url, "http://127.0.0.1:8000/v1/models")
         self.assertEqual(request.headers["Authorization"], "Bearer secret")
         self.assertEqual(timeout, 5)
+
+    def test_list_openai_compatible_models_filters_unsafe_model_names(self) -> None:
+        payload = {
+            "object": "list",
+            "data": [
+                {"id": "bad\r\nmodel", "object": "model", "owned_by": "ignored"},
+                {"id": "x" * (MAX_OPENAI_COMPATIBLE_MODEL_CHARS + 1), "object": "model", "owned_by": "ignored"},
+                {"id": "local-safe", "object": "model", "owned_by": "owner\nbad"},
+            ],
+        }
+
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", return_value=FakeResponse(payload)):
+            result = list_openai_compatible_models("http://127.0.0.1:8000/v1/", api_key="secret")
+
+        self.assertTrue(result["available"])
+        self.assertEqual([model["name"] for model in result["models"]], ["local-safe"])
+        self.assertEqual(result["models"][0]["description"], "")
 
     def test_list_openai_compatible_models_keeps_text_models_only(self) -> None:
         payload = {

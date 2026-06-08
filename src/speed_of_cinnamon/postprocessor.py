@@ -447,23 +447,41 @@ def _format_model_size(size: object) -> str:
     return f"{amount:.1f} {unit}" if amount < 10 and unit != "B" else f"{amount:.0f} {unit}"
 
 
+def _safe_model_listing_text(value: object, *, max_chars: int = MAX_OPENAI_COMPATIBLE_MODEL_CHARS) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if _contains_escaped_null(text) or _contains_http_header_control_chars(text):
+        return ""
+    try:
+        return _assert_text_length(text, field_name="model listing text", max_chars=max_chars).strip()
+    except PostProcessError:
+        return ""
+
+
 def _normalize_ollama_model(model: object) -> dict[str, object] | None:
     if not isinstance(model, dict):
         return None
     name = str(model.get("name") or model.get("model") or "").strip()
     if not name:
         return None
+    if _contains_escaped_null(name) or _contains_http_header_control_chars(name):
+        return None
+    try:
+        name = _assert_text_length(name, field_name="ollama model", max_chars=MAX_OLLAMA_MODEL_CHARS).strip()
+    except PostProcessError:
+        return None
     details = model.get("details") if isinstance(model.get("details"), dict) else {}
-    parameter_size = str(details.get("parameter_size") or "").strip()
-    quantization = str(details.get("quantization_level") or "").strip()
-    family = str(details.get("family") or "").strip()
+    parameter_size = _safe_model_listing_text(details.get("parameter_size"))
+    quantization = _safe_model_listing_text(details.get("quantization_level"))
+    family = _safe_model_listing_text(details.get("family"))
     return {
         "name": name,
-        "model": str(model.get("model") or name),
-        "modified_at": str(model.get("modified_at") or ""),
+        "model": name,
+        "modified_at": _safe_model_listing_text(model.get("modified_at")),
         "size": model.get("size") or 0,
         "size_label": _format_model_size(model.get("size")),
-        "digest": str(model.get("digest") or ""),
+        "digest": _safe_model_listing_text(model.get("digest")),
         "family": family,
         "parameter_size": parameter_size,
         "quantization": quantization,
@@ -522,9 +540,17 @@ def _normalize_openai_compatible_model(model: object) -> dict[str, object] | Non
     name = str(model.get("id") or model.get("name") or "").strip()
     if not name:
         return None
+    try:
+        name = _assert_openai_compatible_text(
+            name,
+            field_name="openai-compatible model",
+            max_chars=MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
+        ).strip()
+    except PostProcessError:
+        return None
     if not _openai_compatible_model_supports_text_polishing(name):
         return None
-    owned_by = str(model.get("owned_by") or "").strip()
+    owned_by = _safe_model_listing_text(model.get("owned_by"))
     return {
         "name": name,
         "model": name,
@@ -937,6 +963,8 @@ def post_process_text(
     if not template:
         return text
 
+    if "{language}" in template:
+        language = _safe_prompt_language(language)
     command = render_postprocess_template(template, text, language, personal_context, vocabulary)
     try:
         segments = split_command_chain(command, label="post-process")
