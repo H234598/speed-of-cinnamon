@@ -1445,7 +1445,7 @@ def _confirm_plaintext_transcript_output(args: argparse.Namespace) -> bool:
 
 
 def _transcript_payload_text(text: str, transcript_encryption: str, args: argparse.Namespace) -> str:
-    if transcript_encryption == ARTIFACT_ENCRYPTION_OFF or _confirm_plaintext_transcript_output(args):
+    if _confirm_plaintext_transcript_output(args):
         return text
     return ""
 
@@ -2801,7 +2801,7 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
             return {
                 "status": "recording",
                 "message": "already recording",
-                "pid": current.pid,
+                "pid_present": bool(current.pid),
                 "language": current.language,
             }
         if current_audio_path and current_audio_path.exists() and current_audio_path.stat().st_size > 0:
@@ -2809,7 +2809,7 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
             return {
                 "status": "recorded",
                 "message": "previous recording has exited; run stop or toggle to transcribe",
-                "audio_path": recorded.audio_path,
+                "audio_path_present": bool(recorded.audio_path),
                 "language": recorded.language,
             }
         if current.audio_path and not current_audio_path:
@@ -2905,9 +2905,9 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
     return {
         "status": "recording",
         "message": message,
-        "pid": proc.pid,
-        "process_identity": process_identity,
-        "audio_path": str(audio_path),
+        "pid_present": bool(proc.pid),
+        "process_identity_present": bool(process_identity),
+        "audio_path_present": True,
         "recorder": command.name,
         "input_device": normalized_input_device,
         "language": language,
@@ -3243,8 +3243,8 @@ def finalize_recording(
             "message": message,
             **({"error": message, "cleanup_failed_path_count": len(cleanup_failed_paths)} if cleanup_failed_paths else {}),
             "transcript": _transcript_payload_text(text, transcript_encryption, args),
-            "transcript_output_redacted": bool(text) and transcript_encryption != ARTIFACT_ENCRYPTION_OFF and not _confirm_plaintext_transcript_output(args),
-            "transcript_path": str(stored_text_path),
+            "transcript_output_redacted": bool(text) and not _confirm_plaintext_transcript_output(args),
+            "transcript_path_present": bool(stored_text_path),
             "artifact_encryption": artifact_encryption,
             "transcript_encryption": transcript_encryption,
             "transcript_encrypted": transcript_encryption != ARTIFACT_ENCRYPTION_OFF,
@@ -3508,7 +3508,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             return {
                 "status": "error",
                 "message": error_message,
-                "discarded_audio_path": discarded_audio_path,
+                "discarded_audio_path_present": bool(discarded_audio_path),
                 "audio_deleted": audio_deleted,
                 "log_deleted": log_deleted,
                 "transcript_deleted": transcript_deleted,
@@ -3526,7 +3526,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
         return {
             "status": "idle",
             "message": "recording discarded",
-            "discarded_audio_path": discarded_audio_path,
+            "discarded_audio_path_present": bool(discarded_audio_path),
             "audio_deleted": audio_deleted,
             "log_deleted": log_deleted,
             "transcript_deleted": transcript_deleted,

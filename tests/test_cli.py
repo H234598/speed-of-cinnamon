@@ -6622,6 +6622,7 @@ class CliTest(unittest.TestCase):
         append_space: bool = False,
         sanitize_special_chars: bool = False,
         insert_method: str = "none",
+        confirm_plaintext_output: bool = True,
     ) -> argparse.Namespace:
         return argparse.Namespace(
             language="en",
@@ -6643,6 +6644,7 @@ class CliTest(unittest.TestCase):
             insert_method=insert_method,
             keep_recording_artifacts=keep_recording_artifacts,
             skip_silent_auto_relisten=False,
+            confirm_plaintext_output=confirm_plaintext_output,
         )
 
     def test_finalize_persists_multiline_transcript_state(self) -> None:
@@ -6675,6 +6677,40 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["transcript"], transcript)
         self.assertEqual(final_state.transcript, transcript)
         mocked_insert.assert_called_once_with(transcript, "none", 0)
+
+    def test_finalize_redacts_plaintext_transcript_and_path_without_confirm(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "speech.wav"
+            log = recordings_root / "speech.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=False, confirm_plaintext_output=False)
+            silence = cli.SilenceDetectionResult(False, False, 3.0, 0.0, 2.5, 0.0, "speech detected")
+            transcript = "private transcript"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=silence),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value=transcript),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True),
+            ):
+                payload = cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+        self.assertEqual(payload["status"], "done")
+        self.assertEqual(payload["transcript"], "")
+        self.assertTrue(payload["transcript_output_redacted"])
+        self.assertTrue(payload["transcript_path_present"])
+        self.assertNotIn("transcript_path", payload)
+        self.assertEqual(final_state.transcript, transcript)
+        self.assertTrue(final_state.transcript_path)
 
     def test_finalize_skips_silent_auto_relisten_without_transcribing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -6959,6 +6995,8 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["status"], "error")
         self.assertEqual(payload["message"], "failed to discard recording artifacts")
+        self.assertTrue(payload["discarded_audio_path_present"])
+        self.assertNotIn("discarded_audio_path", payload)
         self.assertFalse(payload["audio_deleted"])
         self.assertFalse(payload["log_deleted"])
         self.assertTrue(payload["transcript_deleted"])
@@ -6997,6 +7035,8 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(payload["status"], "idle")
+        self.assertTrue(payload["discarded_audio_path_present"])
+        self.assertNotIn("discarded_audio_path", payload)
         self.assertEqual(observed_state["status"], "finalizing")
         self.assertEqual(observed_state["error"], "")
 
@@ -7239,7 +7279,8 @@ class CliTest(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 0)
         self.assertEqual(payload["status"], "recorded")
-        self.assertEqual(payload["audio_path"], str(audio))
+        self.assertTrue(payload["audio_path_present"])
+        self.assertNotIn("audio_path", payload)
 
     def test_status_includes_microphone_level_for_recording_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7318,6 +7359,12 @@ class CliTest(unittest.TestCase):
             state = StateStore(state_file).read()
         self.assertEqual(code, 0)
         self.assertEqual(payload["language"], "en")
+        self.assertTrue(payload["pid_present"])
+        self.assertTrue(payload["audio_path_present"])
+        self.assertTrue(payload["process_identity_present"])
+        self.assertNotIn("pid", payload)
+        self.assertNotIn("audio_path", payload)
+        self.assertNotIn("process_identity", payload)
         self.assertEqual(state.language, "en")
         self.assertEqual(state.process_identity, "proc-identity")
 
@@ -7337,9 +7384,15 @@ class CliTest(unittest.TestCase):
             ):
                 code = cli.run(["start", "--state-file", str(state_file), "--json"])
             payload = json.loads(stdout.getvalue())
-            audio_path = Path(payload["audio_path"])
+            audio_path = Path(StateStore(state_file).read().audio_path)
             mode = audio_path.stat().st_mode & 0o777
         self.assertEqual(code, 0)
+        self.assertTrue(payload["pid_present"])
+        self.assertTrue(payload["audio_path_present"])
+        self.assertTrue(payload["process_identity_present"])
+        self.assertNotIn("pid", payload)
+        self.assertNotIn("audio_path", payload)
+        self.assertNotIn("process_identity", payload)
         self.assertEqual(mode, 0o600)
 
     def test_start_enforces_recording_artifact_cap_after_successful_start(self) -> None:
@@ -7364,11 +7417,18 @@ class CliTest(unittest.TestCase):
             ):
                 code = cli.run(["start", "--state-file", str(state_file), "--json"])
             payload = json.loads(stdout.getvalue())
+            state = StateStore(state_file).read()
             remaining = list(recordings.glob("*.wav")) + list(recordings.glob("*.flac")) + list(recordings.glob("*.log"))
-            audio_exists = Path(payload["audio_path"]).exists()
+            audio_exists = Path(state.audio_path).exists()
 
         self.assertEqual(code, 0)
         self.assertEqual(payload["status"], "recording")
+        self.assertTrue(payload["pid_present"])
+        self.assertTrue(payload["audio_path_present"])
+        self.assertTrue(payload["process_identity_present"])
+        self.assertNotIn("pid", payload)
+        self.assertNotIn("audio_path", payload)
+        self.assertNotIn("process_identity", payload)
         self.assertLessEqual(len(remaining), cli.MAX_TEMP_RECORDING_FILES)
         self.assertTrue(audio_exists)
 

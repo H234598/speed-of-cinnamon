@@ -129,12 +129,13 @@ class OutputTest(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
 
         with (
-            mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xclip"),
+            mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xclip") as mocked_which,
             mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
         ):
             self.assertEqual(set_clipboard("hello"), "xclip")
 
         self.assertEqual(calls[0][0], "/usr/bin/xclip")
+        self.assertEqual(mocked_which.call_count, 1)
 
     def test_set_clipboard_falls_back_to_xsel(self) -> None:
         with (
@@ -1569,6 +1570,16 @@ class OutputTest(unittest.TestCase):
         mocked_clipboard.assert_not_called()
         mocked_paste.assert_not_called()
 
+    def test_clipboard_paste_untrusted_dedupe_does_not_mask_missing_window(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output._read_trusted_clipboard_dedup_state", return_value=(False, ("", 0.0))),
+            mock.patch("speed_of_cinnamon.output._which", return_value=None),
+        ):
+            with self.assertRaisesRegex(OutputError, "no automatic paste helper found"):
+                insert_text("secure text", "clipboard-paste")
+
     def test_insert_text_clipboard_fails_closed_when_dedupe_state_cannot_persist(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -1701,6 +1712,28 @@ class OutputTest(unittest.TestCase):
 
                 self.assertIsNone(acquired)
                 self.assertFalse(lock_path.exists())
+
+    def test_clipboard_dedupe_lock_acquire_fsyncs_lock_and_parent(self) -> None:
+        fsync_modes: list[int] = []
+        real_fsync = os.fsync
+
+        def record_fsync(fd: int) -> None:
+            fsync_modes.append(os.fstat(fd).st_mode)
+            real_fsync(fd)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.output.os.fsync", side_effect=record_fsync),
+            ):
+                lock_path = _acquire_clipboard_dedup_lock()
+                try:
+                    self.assertIsNotNone(lock_path)
+                finally:
+                    _release_clipboard_dedup_lock(lock_path)
+
+        self.assertTrue(any(stat.S_ISREG(mode) for mode in fsync_modes))
+        self.assertTrue(any(stat.S_ISDIR(mode) for mode in fsync_modes))
 
     def test_clipboard_dedupe_lock_release_fsyncs_parent_directory(self) -> None:
         fsync_modes: list[int] = []
@@ -1851,6 +1884,8 @@ class OutputTest(unittest.TestCase):
                 lock_path = output_module.state_dir() / output_module.CLIPBOARD_DEDUP_LOCK_FILE
                 lock_path.parent.mkdir(parents=True, exist_ok=True)
                 lock_path.write_text(f"{os.getpid()}\nnot-current-identity\n", encoding="utf-8")
+                old = output_module.time.time() - output_module.MAX_DUPLICATE_LOCK_SECONDS - 10
+                os.utime(lock_path, (old, old))
 
                 acquired = _acquire_clipboard_dedup_lock()
                 try:
@@ -1858,6 +1893,16 @@ class OutputTest(unittest.TestCase):
                     self.assertIn(str(os.getpid()), lock_path.read_text(encoding="utf-8").splitlines()[0])
                 finally:
                     _release_clipboard_dedup_lock(acquired)
+
+    def test_clipboard_dedupe_lock_does_not_reclaim_recent_live_pid_with_identity_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):
+                lock_path = output_module.state_dir() / output_module.CLIPBOARD_DEDUP_LOCK_FILE
+                lock_path.parent.mkdir(parents=True, exist_ok=True)
+                lock_path.write_text(f"{os.getpid()}\nnot-current-identity\n", encoding="utf-8")
+
+                self.assertIsNone(_acquire_clipboard_dedup_lock())
+                self.assertEqual(lock_path.read_text(encoding="utf-8"), f"{os.getpid()}\nnot-current-identity\n")
 
     def test_clipboard_dedupe_lock_does_not_delete_replaced_stale_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

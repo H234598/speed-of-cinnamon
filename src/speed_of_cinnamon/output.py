@@ -558,6 +558,8 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                         return None
                     if owner_identity == owner_current_identity:
                         return None
+                    if now - existing.st_mtime <= MAX_DUPLICATE_LOCK_SECONDS:
+                        return None
                 if owner_pid is None and now - existing.st_mtime <= MAX_DUPLICATE_LOCK_SECONDS:
                     return None
                 try:
@@ -583,6 +585,8 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                     _write_all(fd, f"{os.getpid()}\n".encode("ascii"), field_name="clipboard dedupe lock")
                 else:
                     _write_all(fd, f"{os.getpid()}\n{identity}\n".encode("ascii"), field_name="clipboard dedupe lock")
+                os.fsync(fd)
+                os.fsync(parent_fd)
             except OSError:
                 try:
                     os.close(fd)
@@ -1083,14 +1087,17 @@ def _active_window_paste_key(*, xdotool_available: bool | None = None, xdotool_c
 def set_clipboard(text: str) -> str:
     if not isinstance(text, str) or isinstance(text, bool):
         raise OutputError("text must be text")
-    if _which("xclip"):
-        _run_with_input(["xclip", "-selection", "clipboard"], text)
+    xclip = _which("xclip")
+    if xclip:
+        _run_with_input(["xclip", "-selection", "clipboard"], text, resolved_command=xclip)
         return "xclip"
-    if _which("xsel"):
-        _run_with_input(["xsel", "--clipboard", "--input"], text)
+    xsel = _which("xsel")
+    if xsel:
+        _run_with_input(["xsel", "--clipboard", "--input"], text, resolved_command=xsel)
         return "xsel"
-    if _which("wl-copy"):
-        _run_with_input(["wl-copy"], text)
+    wl_copy = _which("wl-copy")
+    if wl_copy:
+        _run_with_input(["wl-copy"], text, resolved_command=wl_copy)
         return "wl-copy"
     raise OutputError("no clipboard helper found; install xclip, xsel, or wl-clipboard")
 
@@ -1299,7 +1306,7 @@ def _should_skip_clipboard_duplicate(
     if persistent_snapshot is None or persistent_state_trusted is None:
         persistent_state_trusted, persistent_snapshot = _read_trusted_clipboard_dedup_state()
     if not persistent_state_trusted:
-        return True
+        return False
     cached_fingerprint, cached_at = persistent_snapshot
     global_fingerprint = _clipboard_text_fingerprint(cleaned)
     fingerprint = _clipboard_insertion_fingerprint(cleaned, dedupe_context)
