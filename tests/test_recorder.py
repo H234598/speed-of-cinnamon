@@ -201,6 +201,29 @@ class RecorderTest(unittest.TestCase):
         self.assertLess(frame_count, 3200)
         self.assertEqual(first_frame, 12000)
 
+    def test_trim_recording_leading_silence_streams_frames_in_chunks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            self._write_wav(audio, [0] * 1600 + [12000] * (recorder_module.WAV_TRIM_CHUNK_FRAMES + 5))
+            read_sizes: list[int] = []
+            real_readframes = wave.Wave_read.readframes
+
+            def record_readframes(handle: wave.Wave_read, frames: int) -> bytes:
+                read_sizes.append(frames)
+                return real_readframes(handle, frames)
+
+            with mock.patch("wave.Wave_read.readframes", record_readframes):
+                trimmed = trim_recording_leading_silence(audio, 0.1)
+            try:
+                with wave.open(str(trimmed), "rb") as handle:
+                    frame_count = handle.getnframes()
+            finally:
+                trimmed.unlink(missing_ok=True)
+
+        self.assertEqual(frame_count, recorder_module.WAV_TRIM_CHUNK_FRAMES + 5)
+        self.assertIn(recorder_module.WAV_TRIM_CHUNK_FRAMES, read_sizes)
+        self.assertTrue(all(size <= recorder_module.WAV_TRIM_CHUNK_FRAMES for size in read_sizes))
+
     def test_trim_recording_leading_silence_keeps_speech_on_fractional_start_frame(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
@@ -283,6 +306,8 @@ class RecorderTest(unittest.TestCase):
         )
         self.assertIn("-f", argv)
         self.assertIn("flac", argv)
+        self.assertIn("-fs", argv)
+        self.assertEqual(argv[argv.index("-fs") + 1], str(recorder_module.MAX_FFMPEG_ARTIFACT_BYTES))
         input_path = argv[argv.index("-i") + 1]
         self.assertTrue(str(input_path).startswith("/proc/self/fd/"))
         self.assertTrue(str(argv[-1]).startswith("/proc/self/fd/"))
@@ -292,6 +317,30 @@ class RecorderTest(unittest.TestCase):
                 int(str(input_path).rsplit("/", 1)[-1]),
                 int(str(argv[-1]).rsplit("/", 1)[-1]),
             ),
+        )
+
+    @mock.patch("speed_of_cinnamon.recorder.os.open", wraps=os.open)
+    def test_trim_recording_silence_opens_audio_leaf_relative_to_parent_fd(self, mocked_open: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+
+            with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
+                with mock.patch(
+                    "speed_of_cinnamon.recorder.subprocess.run",
+                    side_effect=lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0]),
+                ):
+                    trimmed = trim_recording_silence(audio)
+                    trimmed.unlink(missing_ok=True)
+
+        self.assertTrue(
+            any(
+                args[0] == audio.name
+                and isinstance(args[1], int)
+                and args[1] & os.O_NOFOLLOW
+                and "dir_fd" in kwargs
+                for args, kwargs in mocked_open.call_args_list
+            )
         )
 
     def test_trim_recording_leading_silence_open_error_does_not_leak_audio_path(self) -> None:
@@ -313,6 +362,24 @@ class RecorderTest(unittest.TestCase):
                     with self.assertRaisesRegex(RecorderError, "ffmpeg silence trimming produced empty output") as raised:
                         trim_recording_silence(audio)
             self.assertNotIn(str(audio), str(raised.exception))
+
+    def test_trim_recording_silence_rejects_oversized_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+
+            def oversized_output(command: list[str]) -> subprocess.CompletedProcess[bytes]:
+                Path(command[-1]).write_bytes(b"x" * 5)
+                return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+            with (
+                mock.patch("speed_of_cinnamon.recorder.MAX_FFMPEG_ARTIFACT_BYTES", 4),
+                mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=lambda *args, **kwargs: oversized_output(args[0])),
+            ):
+                with self.assertRaisesRegex(RecorderError, "exceeded safe artifact size limit"):
+                    trim_recording_silence(audio)
+            self.assertEqual([path.name for path in Path(tmp).glob("*.flac")], [])
 
     def test_trim_recording_silence_rejects_hardlinked_audio(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -346,6 +413,8 @@ class RecorderTest(unittest.TestCase):
         self.assertIn("-c:a", argv)
         self.assertIn("flac", argv)
         self.assertIn("-f", argv)
+        self.assertIn("-fs", argv)
+        self.assertEqual(argv[argv.index("-fs") + 1], str(recorder_module.MAX_FFMPEG_ARTIFACT_BYTES))
         input_path = argv[argv.index("-i") + 1]
         self.assertTrue(str(input_path).startswith("/proc/self/fd/"))
         self.assertTrue(str(argv[-1]).startswith("/proc/self/fd/"))
@@ -380,6 +449,24 @@ class RecorderTest(unittest.TestCase):
                     with self.assertRaisesRegex(RecorderError, "ffmpeg FLAC conversion produced empty output") as raised:
                         reencode_recording_to_flac(audio)
             self.assertNotIn(str(audio), str(raised.exception))
+
+    def test_reencode_recording_to_flac_rejects_oversized_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+
+            def oversized_output(command: list[str]) -> subprocess.CompletedProcess[bytes]:
+                Path(command[-1]).write_bytes(b"x" * 5)
+                return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+
+            with (
+                mock.patch("speed_of_cinnamon.recorder.MAX_FFMPEG_ARTIFACT_BYTES", 4),
+                mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=lambda *args, **kwargs: oversized_output(args[0])),
+            ):
+                with self.assertRaisesRegex(RecorderError, "exceeded safe artifact size limit"):
+                    reencode_recording_to_flac(audio)
+            self.assertEqual([path.name for path in Path(tmp).glob("*.flac")], [])
 
     def test_recording_temp_artifacts_do_not_use_closed_mkstemp_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -533,8 +620,11 @@ class RecorderTest(unittest.TestCase):
         self.assertTrue(level.ok)
         self.assertTrue(
             any(
-                Path(args[0]) == audio and isinstance(args[1], int) and args[1] & os.O_NOFOLLOW
-                for args, _ in mocked_open.call_args_list
+                args[0] == audio.name
+                and isinstance(args[1], int)
+                and args[1] & os.O_NOFOLLOW
+                and "dir_fd" in kwargs
+                for args, kwargs in mocked_open.call_args_list
             )
         )
 

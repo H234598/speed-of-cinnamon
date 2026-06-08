@@ -21,6 +21,7 @@ from .path_safety import (
     assert_fd_is_regular_private_file,
     assert_no_symlink_ancestors,
     ensure_directory_without_following_symlinks,
+    open_directory_without_following_symlinks,
 )
 
 
@@ -231,7 +232,9 @@ MAX_RECORDING_INPUT_DEVICE_CHARS = 256
 MAX_PACTL_OUTPUT_CHARS = 1_000_000
 MAX_PACTL_TIMEOUT_SECONDS = 10
 MAX_FFMPEG_OUTPUT_BYTES = 256 * 1024
+MAX_FFMPEG_ARTIFACT_BYTES = 256 * 1024 * 1024
 MAX_RECORDING_LEVEL_BYTES = 128_000
+WAV_TRIM_CHUNK_FRAMES = 16_000
 WAV_HEADER_SCAN_BYTES = 512
 DEFAULT_WAV_DATA_OFFSET = 44
 SILENCE_DETECT_NOISE = "-62dB"
@@ -653,6 +656,9 @@ def trim_recording_leading_silence(audio_path: Path, leading_silence_seconds: fl
         audio_path, audio_fd = _open_private_recording_audio_file(audio_path, suffix=".wav")
     except RuntimeError as exc:
         raise RecorderError(str(exc)) from exc
+    fd: int | None = None
+    temp_path: Path | None = None
+    temp_stat: os.stat_result | None = None
     try:
         with os.fdopen(audio_fd, "rb") as audio_file:
             audio_fd = None
@@ -671,25 +677,43 @@ def trim_recording_leading_silence(audio_path: Path, leading_silence_seconds: fl
                     raise RecorderError("recording contains no speech after leading silence")
                 params = source.getparams()
                 source.setpos(start_frame)
-                frames = source.readframes(total_frames - start_frame)
+                frame_width = params.nchannels * params.sampwidth
+                if frame_width <= 0:
+                    raise RecorderError("recording audio parameters are invalid")
+                fd, temp_path = _create_recording_temp_file(audio_path, marker="trimmed", suffix=audio_path.suffix)
+                temp_stat = os.fstat(fd)
+                with os.fdopen(fd, "wb") as output_file:
+                    fd = None
+                    with wave.open(output_file, "wb") as dest:
+                        dest.setparams(params)
+                        remaining = total_frames - start_frame
+                        while remaining > 0:
+                            chunk = source.readframes(min(WAV_TRIM_CHUNK_FRAMES, remaining))
+                            frames_read = len(chunk) // frame_width
+                            if frames_read <= 0:
+                                raise RecorderError("failed to trim recording audio file")
+                            dest.writeframesraw(chunk)
+                            remaining -= frames_read
+                    output_file.flush()
+                    if not _recording_temp_path_matches_fd(temp_path, output_file.fileno()):
+                        raise RecorderError("trimmed recording temporary file was replaced")
     except (OSError, wave.Error) as exc:
+        if temp_path is not None and temp_stat is not None:
+            _unlink_recording_path_if_same(temp_path, temp_stat)
         raise RecorderError("failed to trim recording audio file") from exc
+    except Exception as exc:
+        if temp_path is not None and temp_stat is not None:
+            _unlink_recording_path_if_same(temp_path, temp_stat)
+        if isinstance(exc, RecorderError):
+            raise
+        raise RecorderError("failed to write trimmed recording audio file") from exc
     finally:
         if audio_fd is not None:
             os.close(audio_fd)
-    fd, temp_path = _create_recording_temp_file(audio_path, marker="trimmed", suffix=audio_path.suffix)
-    temp_stat = os.fstat(fd)
-    try:
-        with os.fdopen(fd, "wb") as output_file:
-            with wave.open(output_file, "wb") as dest:
-                dest.setparams(params)
-                dest.writeframes(frames)
-            output_file.flush()
-            if not _recording_temp_path_matches_fd(temp_path, output_file.fileno()):
-                raise RecorderError("trimmed recording temporary file was replaced")
-    except Exception as exc:
-        _unlink_recording_path_if_same(temp_path, temp_stat)
-        raise RecorderError("failed to write trimmed recording audio file") from exc
+        if fd is not None:
+            os.close(fd)
+    if temp_path is None:
+        raise RecorderError("failed to write trimmed recording audio file")
     return temp_path
 
 
@@ -753,6 +777,8 @@ def trim_recording_silence(
         "flac",
         "-f",
         "flac",
+        "-fs",
+        str(MAX_FFMPEG_ARTIFACT_BYTES),
         "-y",
         output_path,
     ]
@@ -791,6 +817,9 @@ def trim_recording_silence(
     if output_size == 0:
         _unlink_recording_path_if_same(trimmed_path, output_stat)
         raise RecorderError("ffmpeg silence trimming produced empty output")
+    if output_size > MAX_FFMPEG_ARTIFACT_BYTES:
+        _unlink_recording_path_if_same(trimmed_path, output_stat)
+        raise RecorderError("ffmpeg silence trimming exceeded safe artifact size limit")
     if not output_matches_path:
         _unlink_recording_path_if_same(trimmed_path, output_stat)
         raise RecorderError("ffmpeg silence trimming temporary file was replaced")
@@ -841,6 +870,8 @@ def reencode_recording_to_flac(audio_path: Path) -> Path:
         "flac",
         "-f",
         "flac",
+        "-fs",
+        str(MAX_FFMPEG_ARTIFACT_BYTES),
         "-y",
         output_path,
     ]
@@ -879,6 +910,9 @@ def reencode_recording_to_flac(audio_path: Path) -> Path:
     if output_size == 0:
         _unlink_recording_path_if_same(encoded_path, output_stat)
         raise RecorderError("ffmpeg FLAC conversion produced empty output")
+    if output_size > MAX_FFMPEG_ARTIFACT_BYTES:
+        _unlink_recording_path_if_same(encoded_path, output_stat)
+        raise RecorderError("ffmpeg FLAC conversion exceeded safe artifact size limit")
     if not output_matches_path:
         _unlink_recording_path_if_same(encoded_path, output_stat)
         raise RecorderError("ffmpeg FLAC conversion temporary file was replaced")
@@ -932,7 +966,11 @@ def read_recording_level(audio_path: Path) -> RecordingLevel:
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     fd: int | None = None
     try:
-        fd = os.open(audio_path, os.O_RDONLY | nofollow_flag | nonblock_flag)
+        fd = _open_recording_artifact_leaf(
+            audio_path,
+            os.O_RDONLY | nofollow_flag | nonblock_flag,
+            field_name="recording audio file",
+        )
         assert_fd_is_regular_private_file(fd, field_name="recording audio file")
     except OSError as exc:
         if fd is not None:
@@ -1098,6 +1136,14 @@ def _validate_private_recording_audio_file(
     return normalized
 
 
+def _open_recording_artifact_leaf(path: Path, flags: int, *, field_name: str) -> int:
+    parent_fd = open_directory_without_following_symlinks(path.parent, field_name=f"{field_name} directory")
+    try:
+        return os.open(path.name, flags, dir_fd=parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
 def _open_private_recording_audio_file(
     path: Path,
     *,
@@ -1114,7 +1160,11 @@ def _open_private_recording_audio_file(
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
         raise RecorderError("secure recording audio file open is not supported on this platform")
-    fd = os.open(normalized, os.O_RDONLY | nofollow_flag | getattr(os, "O_NONBLOCK", 0))
+    fd = _open_recording_artifact_leaf(
+        normalized,
+        os.O_RDONLY | nofollow_flag | getattr(os, "O_NONBLOCK", 0),
+        field_name="recording audio file",
+    )
     try:
         assert_fd_is_regular_private_file(fd, field_name="recording audio file")
     except Exception:

@@ -216,6 +216,33 @@ def _model_path_exists(path: str) -> bool:
         return False
 
 
+def _validate_local_model_path(value: str, *, field_name: str, directory: bool) -> str:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise TranscriptionError(f"{field_name} must be text")
+    if _contains_escaped_null(value):
+        raise TranscriptionError(f"{field_name} contains invalid null byte")
+    if _contains_http_header_control_chars(value):
+        raise TranscriptionError(f"{field_name} contains invalid control character")
+    raw = value.strip()
+    if not raw:
+        raise TranscriptionError(f"{field_name} is required")
+    try:
+        path = Path(raw).expanduser()
+        assert_no_symlink_ancestors(path, field_name=field_name)
+    except RuntimeError as exc:
+        raise TranscriptionError(str(exc)) from exc
+    except (OSError, ValueError) as exc:
+        raise TranscriptionError(f"{field_name} is invalid") from exc
+    if not path.exists():
+        raise TranscriptionError(f"{field_name} is missing")
+    if directory:
+        if not path.is_dir():
+            raise TranscriptionError(f"{field_name} must be a directory")
+    elif not path.is_file():
+        raise TranscriptionError(f"{field_name} must be a file")
+    return str(path)
+
+
 def _write_text_atomic(path: Path, text: str) -> None:
     if not isinstance(path, Path):
         raise TranscriptionError("path must be a Path")
@@ -1192,8 +1219,7 @@ def transcribe_with_whisper_cpp(
     write_transcript: bool = True,
 ) -> str:
     audio_path = validate_audio_file(audio_path)
-    if not model_path.strip():
-        raise TranscriptionError("whisper.cpp model path is required")
+    model_path = _validate_local_model_path(model_path, field_name="whisper.cpp model path", directory=False)
     if not model_supports_language(model_path, language):
         raise TranscriptionError(
             f"English-only whisper.cpp model does not support language {language}; use a multilingual model"
@@ -1289,8 +1315,7 @@ def transcribe_with_faster_whisper(
     write_transcript: bool = True,
 ) -> str:
     audio_path = validate_audio_file(audio_path)
-    if not model_path.strip():
-        raise TranscriptionError("CTranslate2 model path is required")
+    model_path = _validate_local_model_path(model_path, field_name="CTranslate2 model path", directory=True)
     if not model_supports_language(model_path, language):
         raise TranscriptionError(
             f"CTranslate2 model does not support language {language}; use a multilingual model"

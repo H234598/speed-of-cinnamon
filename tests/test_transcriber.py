@@ -2761,15 +2761,41 @@ class TranscriberTest(unittest.TestCase):
             audio = Path(tmp) / "sample.wav"
             audio.write_bytes(b"audio")
             text_path = Path(tmp) / "sample.txt"
+            model_path = Path(tmp) / "secret-model"
+            model_path.mkdir()
             with mock.patch.dict("sys.modules", {"faster_whisper": fake_module}):
                 with self.assertRaises(TranscriptionError) as raised:
-                    transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, "/home/teladi/secret-model")
+                    transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
 
         message = str(raised.exception)
         self.assertEqual(message, "faster-whisper failed: error detail redacted")
         self.assertNotIn("secret-model", message)
         self.assertNotIn("private transcript", message)
         self.assertNotIn("token=secret", message)
+
+    def test_faster_whisper_direct_helper_rejects_symlinked_model_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            real_model = Path(tmp) / "ct2-model"
+            real_model.mkdir()
+            model_path = Path(tmp) / "ct2-link"
+            model_path.symlink_to(real_model, target_is_directory=True)
+
+            with self.assertRaisesRegex(TranscriptionError, "CTranslate2 model path must not pass through a symlink"):
+                transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
+
+    def test_faster_whisper_direct_helper_requires_model_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            model_path = Path(tmp) / "ct2-model.bin"
+            model_path.write_bytes(b"model")
+
+            with self.assertRaisesRegex(TranscriptionError, "CTranslate2 model path must be a directory"):
+                transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
 
     def test_faster_whisper_empty_segments_are_rejected(self) -> None:
         class Segment:
@@ -2811,7 +2837,7 @@ class TranscriberTest(unittest.TestCase):
             replacement.write_bytes(b"replacement")
             text_path = Path(tmp) / "sample.txt"
             model = Path(tmp) / "ct2-base-int8"
-            model.write_bytes(b"model")
+            model.mkdir()
             real_validate = transcriber_module.validate_audio_file
 
             def validate_and_swap(path: Path) -> Path:
@@ -2892,6 +2918,29 @@ class TranscriberTest(unittest.TestCase):
 
             with self.assertRaisesRegex(TranscriptionError, "English-only whisper.cpp model"):
                 transcribe_with_whisper_cpp(audio, "de", text, str(model))
+
+    def test_whisper_cpp_direct_helper_rejects_missing_model_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text = Path(tmp) / "sample.txt"
+            model = Path(tmp) / "missing.bin"
+
+            with self.assertRaisesRegex(TranscriptionError, "whisper\\.cpp model path is missing"):
+                transcribe_with_whisper_cpp(audio, "en", text, str(model))
+
+    def test_whisper_cpp_direct_helper_rejects_symlinked_model_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text = Path(tmp) / "sample.txt"
+            real_model = Path(tmp) / "ggml-base.bin"
+            real_model.write_bytes(b"model")
+            model = Path(tmp) / "ggml-link.bin"
+            model.symlink_to(real_model)
+
+            with self.assertRaisesRegex(TranscriptionError, "whisper\\.cpp model path must not pass through a symlink"):
+                transcribe_with_whisper_cpp(audio, "en", text, str(model))
 
     def test_auto_reports_missing_transcriber(self) -> None:
         with (
