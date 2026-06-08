@@ -508,6 +508,44 @@ class ArtifactCryptoTest(unittest.TestCase):
                 b"plaintext",
             )
 
+    def test_read_private_bytes_error_does_not_leak_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "secret-artifact.socenc"
+
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "failed to read artifact") as raised:
+                artifact_crypto.read_private_bytes(path, field_name="artifact")
+            self.assertNotIn(str(path), str(raised.exception))
+
+    def test_read_private_bytes_io_error_does_not_leak_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "secret-artifact.socenc"
+            path.write_bytes(b"payload")
+            path.chmod(0o600)
+            with mock.patch("speed_of_cinnamon.artifact_crypto.os.fdopen", side_effect=OSError(f"boom {path}")):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "failed to read artifact") as raised:
+                    artifact_crypto.read_private_bytes(path, field_name="artifact")
+            self.assertNotIn(str(path), str(raised.exception))
+
+    def test_write_encrypted_bytes_error_does_not_leak_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "secret-artifact.txt"
+            with (
+                mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: STRONG_PASSPHRASE}, clear=False),
+                mock.patch(
+                    "speed_of_cinnamon.artifact_crypto.write_bytes_atomically_without_following_symlinks",
+                    side_effect=OSError(f"boom {path}"),
+                ),
+            ):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "failed to write encrypted artifact") as raised:
+                    artifact_crypto.write_encrypted_bytes_atomically(
+                        path,
+                        b"payload",
+                        "passphrase",
+                        kind="transcript",
+                        field_name="artifact",
+                    )
+            self.assertNotIn(str(path), str(raised.exception))
+
     def test_decrypt_bytes_allows_oversized_non_json_payload_when_explicitly_not_required(self) -> None:
         with mock.patch("speed_of_cinnamon.artifact_crypto.MAX_ENCRYPTED_ARTIFACT_BYTES", 4):
             payload = b"-----BEGIN PRIVATE KEY-----"

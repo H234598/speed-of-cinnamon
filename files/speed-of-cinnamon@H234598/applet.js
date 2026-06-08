@@ -907,6 +907,13 @@ MyApplet.prototype = {
     return text;
   },
 
+  _payloadMessage: function(payload, fallback) {
+    if (payload && payload.message) {
+      return this._sanitizeErrorMessage(payload.message);
+    }
+    return this._sanitizeErrorMessage(fallback || "");
+  },
+
   _hotkeyName: function(id) {
     return id + "-" + this.instanceId;
   },
@@ -2558,7 +2565,7 @@ MyApplet.prototype = {
       let results = Array.isArray(payload.results) ? payload.results : [];
       this.clipboard.set_text(St.ClipboardType.CLIPBOARD, JSON.stringify(payload, null, 2));
       let fastest = String(payload.fastest_model || "").trim();
-      let message = String(payload.message || _("Benchmark complete"));
+      let message = this._payloadMessage(payload, _("Benchmark complete"));
       if (fastest !== "") {
         message += "; " + _("fastest: ") + fastest;
       }
@@ -3426,10 +3433,10 @@ MyApplet.prototype = {
         return;
       }
       if (payload.error) {
-        this._populateTextModelMenu([], payload.error, provider);
+        this._populateTextModelMenu([], this._sanitizeErrorMessage(payload.error), provider);
         return;
       }
-      this._populateTextModelMenu(payload.models || [], payload.available === false ? payload.message : "", payload.backend || provider);
+      this._populateTextModelMenu(payload.models || [], payload.available === false ? this._sanitizeErrorMessage(payload.message) : "", payload.backend || provider);
     });
   },
 
@@ -4535,7 +4542,7 @@ MyApplet.prototype = {
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
     }
-    let message = payload.message || status;
+    let message = this._payloadMessage(payload, status);
     let transcript = typeof payload.transcript === "string" && !this._isEmptyTranscriptText(payload.transcript)
       ? payload.transcript
       : this.lastTranscript || "";
@@ -5793,14 +5800,14 @@ MyApplet.prototype = {
     }
     let insertFingerprint = this._autoInsertFingerprint(payload, transcript);
     if (!this._reserveAutoInsertFingerprint(insertFingerprint)) {
-      this._setStatus("done", payload.message || _("Transcript already inserted"), transcript);
+      this._setStatus("done", this._payloadMessage(payload, _("Transcript already inserted")), transcript);
       this._finishPendingRelisten();
       return;
     }
     let inserted = false;
     if (payload.inserted === true) {
       inserted = true;
-      this._setStatus("done", payload.message || _("Transcript already inserted by backend"), transcript);
+      this._setStatus("done", this._payloadMessage(payload, _("Transcript already inserted by backend")), transcript);
     } else {
       let result = this._insertTranscriptText(transcript, (completed) => {
         if (!completed) {
@@ -5956,7 +5963,7 @@ MyApplet.prototype = {
     if (this._finishPendingRelisten()) {
       return;
     }
-    this._setStatus("done", payload.message || _("Silent recording skipped"), this.lastTranscript);
+    this._setStatus("done", this._payloadMessage(payload, _("Silent recording skipped")), this.lastTranscript);
   },
 
   _finishEmptyRelistenDone: function(payload) {
@@ -5964,7 +5971,7 @@ MyApplet.prototype = {
     if (this._finishPendingRelisten()) {
       return;
     }
-    this._setStatus("done", payload.message || _("Recording finished without transcript"), this.lastTranscript);
+    this._setStatus("done", this._payloadMessage(payload, _("Recording finished without transcript")), this.lastTranscript);
   },
 
   _insertTranscriptText: function(transcript, completionCallback) {

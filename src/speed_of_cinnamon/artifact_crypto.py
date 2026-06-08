@@ -875,7 +875,7 @@ def read_private_bytes(path: Path, *, field_name: str, max_bytes: int | None = N
             field_name=field_name,
         )
     except (OSError, RuntimeError) as exc:
-        raise ArtifactCryptoError(f"failed to read {field_name}: {path}") from exc
+        raise ArtifactCryptoError(f"failed to read {field_name}") from exc
     try:
         try:
             assert_fd_is_regular_private_file(fd, field_name=field_name)
@@ -886,7 +886,7 @@ def read_private_bytes(path: Path, *, field_name: str, max_bytes: int | None = N
         with handle:
             data = handle.read(effective_max_bytes + 1)
     except OSError as exc:
-        raise ArtifactCryptoError(f"failed to read {field_name}: {path}") from exc
+        raise ArtifactCryptoError(f"failed to read {field_name}") from exc
     finally:
         if fd >= 0:
             try:
@@ -905,7 +905,7 @@ def write_encrypted_bytes_atomically(path: Path, payload: bytes, requested_mode:
     try:
         write_bytes_atomically_without_following_symlinks(target_path, encrypted_payload, field_name=field_name)
     except (OSError, RuntimeError) as exc:
-        raise ArtifactCryptoError(f"failed to write encrypted {field_name}: {target_path}") from exc
+        raise ArtifactCryptoError(f"failed to write encrypted {field_name}") from exc
     return target_path, effective_mode
 
 
