@@ -233,8 +233,11 @@ def _local_model_path_kind(path: Path, *, field_name: str) -> str | None:
 
 
 def _validate_ctranslate2_model_tree(path: Path, *, field_name: str) -> None:
+    def raise_walk_error(exc: OSError) -> None:
+        raise exc
+
     try:
-        for root, dirnames, filenames in os.walk(path, followlinks=False):
+        for root, dirnames, filenames in os.walk(path, followlinks=False, onerror=raise_walk_error):
             root_path = Path(root)
             for name in dirnames:
                 entry = root_path / name

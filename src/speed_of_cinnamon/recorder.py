@@ -699,6 +699,8 @@ def trim_recording_leading_silence(audio_path: Path, leading_silence_seconds: fl
                             dest.writeframesraw(chunk)
                             remaining -= frames_read
                     output_file.flush()
+                    if os.fstat(output_file.fileno()).st_size >= MAX_FFMPEG_ARTIFACT_BYTES:
+                        raise RecorderError("recording leading silence trim exceeded safe artifact size limit")
                     if not _recording_temp_path_matches_fd(temp_path, output_file.fileno()):
                         raise RecorderError("trimmed recording temporary file was replaced")
     except (OSError, wave.Error) as exc:

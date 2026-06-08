@@ -234,6 +234,16 @@ class RecorderTest(unittest.TestCase):
 
             self.assertEqual([path.name for path in Path(tmp).glob("*trimmed*.wav")], [])
 
+    def test_trim_recording_leading_silence_rejects_streamed_artifact_when_header_exceeds_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            self._write_wav(audio, [0] * 1600 + [12000] * 1600)
+            with mock.patch("speed_of_cinnamon.recorder.MAX_FFMPEG_ARTIFACT_BYTES", 3201):
+                with self.assertRaisesRegex(RecorderError, "exceeded safe artifact size limit"):
+                    trim_recording_leading_silence(audio, 0.1)
+
+            self.assertEqual([path.name for path in Path(tmp).glob("*trimmed*.wav")], [])
+
     def test_trim_recording_leading_silence_keeps_speech_on_fractional_start_frame(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"

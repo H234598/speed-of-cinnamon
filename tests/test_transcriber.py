@@ -2816,6 +2816,23 @@ class TranscriberTest(unittest.TestCase):
             with self.assertRaisesRegex(TranscriptionError, "CTranslate2 model path contains unsafe file entries"):
                 transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
 
+    def test_faster_whisper_direct_helper_fails_closed_when_model_tree_scan_fails(self) -> None:
+        def walk_fails(*_args: object, **kwargs: object) -> list[tuple[str, list[str], list[str]]]:
+            onerror = kwargs.get("onerror")
+            if callable(onerror):
+                onerror(OSError("permission denied"))
+            return []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            model_path = Path(tmp) / "ct2-model"
+            model_path.mkdir()
+            with mock.patch("speed_of_cinnamon.transcriber.os.walk", side_effect=walk_fails):
+                with self.assertRaisesRegex(TranscriptionError, "CTranslate2 model path is invalid"):
+                    transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
+
     def test_faster_whisper_direct_helper_requires_model_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
