@@ -29,19 +29,15 @@ lint:
 	node --check files/speed-of-cinnamon@H234598/applet.js >/dev/null
 
 lint-workflows-check:
-	@if [ "$${GITHUB_ACTIONS:-false}" = "true" ]; then \
-	  export ACTIONLINT_STRICT=true; \
-	else \
-	  export ACTIONLINT_STRICT=false; \
-	fi; \
+	@export ACTIONLINT_STRICT=true; \
 	./scripts/lint-workflows.sh \
 	|| { \
 	  rc=$$?; \
-	  if [ "$${GITHUB_ACTIONS:-false}" = "true" ]; then \
-	    exit $$rc; \
+	  if [ "$${GITHUB_ACTIONS:-false}" != "true" ] && [ "$${ALLOW_WORKFLOW_LINT_FALLBACK:-0}" = "1" ]; then \
+	    printf 'workflow lint skipped locally by ALLOW_WORKFLOW_LINT_FALLBACK=1; install actionlint for strict checks.\n'; \
+	    exit 0; \
 	  fi; \
-	  printf 'workflow lint skipped locally; install actionlint for strict checks.\n'; \
-	  exit 0; \
+	  exit $$rc; \
 	}
 
 lint-workflows:

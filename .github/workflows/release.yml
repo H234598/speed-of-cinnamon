@@ -155,7 +155,7 @@ jobs:
           fi
           if ! command -v -- snapcraft >/dev/null 2>&1; then
             if command -v -- snap >/dev/null 2>&1; then
-              sudo snap install snapcraft --classic
+              sudo snap install snapcraft --classic --channel=8.x/stable
               if [[ -d /snap/bin ]]; then
                 printf '/snap/bin\n' >> "${GITHUB_PATH}"
                 export PATH="/snap/bin:${PATH}"
@@ -174,23 +174,20 @@ jobs:
             printf 'snapcraft is installed but no executable launcher was found.\n' >&2
             exit 1
           fi
-          snapcraft_base=""
-          for candidate in core24 core22; do
-            if snap list "${candidate}" >/dev/null 2>&1; then
-              snapcraft_base="${candidate}"
-              break
-            fi
-          done
-          if [[ -z "${snapcraft_base}" ]]; then
-            for candidate in core24 core22; do
-              if sudo snap install "${candidate}" --channel=latest/stable; then
-                snapcraft_base="${candidate}"
-                break
-              fi
-            done
+          snapcraft_version="$(snapcraft --version | awk '{print $NF}')"
+          case "${snapcraft_version}" in
+            8.*) ;;
+            *)
+              printf 'Unsupported snapcraft version for this project: %s; expected 8.x.\n' "${snapcraft_version}" >&2
+              exit 1
+              ;;
+          esac
+          snapcraft_base="core22"
+          if ! snap list "${snapcraft_base}" >/dev/null 2>&1; then
+            sudo snap install "${snapcraft_base}" --channel=latest/stable
           fi
-          if [[ -z "${snapcraft_base}" ]]; then
-            printf 'Could not install a compatible snap base (tried core24, core22).\n' >&2
+          if ! snap list "${snapcraft_base}" >/dev/null 2>&1; then
+            printf 'Could not install required snap base core22.\n' >&2
             exit 1
           fi
           {

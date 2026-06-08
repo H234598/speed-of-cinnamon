@@ -1200,8 +1200,6 @@ def _redact_history_previews(transcripts: list[dict[str, object]]) -> list[dict[
             "name": HISTORY_METADATA_REDACTED_TEXT,
             "path": HISTORY_METADATA_REDACTED_TEXT,
         }
-        if "modified_at" in entry:
-            redacted_entry["modified_at"] = entry["modified_at"]
         redacted.append(redacted_entry)
     return redacted
 
@@ -2224,6 +2222,16 @@ def _normalize_model_payloads(models: object) -> list[dict[str, object]]:
             raise RuntimeError("model name contains invalid control character")
         normalized.append(model)
     return normalized
+
+
+def _redact_model_payload_paths(models: object) -> list[dict[str, object]]:
+    redacted: list[dict[str, object]] = []
+    for model in _normalize_model_payloads(models):
+        model_payload = dict(model)
+        path_value = model_payload.pop("path", "")
+        model_payload["path_present"] = bool(path_value)
+        redacted.append(model_payload)
+    return redacted
 
 
 def _normalize_text_models_payload(payload: object) -> dict[str, object]:
@@ -3923,7 +3931,7 @@ def command_benchmark_models(args: argparse.Namespace) -> dict[str, object]:
         "status": "done" if successes else "error",
         "message": message,
         **({} if successes else {"error": message}),
-        "audio_path": str(audio_path),
+        "audio_path_present": bool(audio_path),
         "language": language,
         "fastest_model": fastest["model"] if fastest else "",
         "results": results,
@@ -4198,16 +4206,17 @@ def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
             "desktop_session": str(desktop["desktop_session"]),
         },
         "paths": {
-            "state_dir": str(state_dir()),
-            "state_file": str(state_file_path),
-            "transcript_dir": str(transcript_dir()),
-            "recordings_dir": str(recordings_dir()),
-            "diagnostics_dir": str(diagnostics_dir()),
+            "state_dir_present": bool(state_dir()),
+            "state_file_present": bool(state_file_path),
+            "transcript_dir_present": bool(transcript_dir()),
+            "recordings_dir_present": bool(recordings_dir()),
+            "diagnostics_dir_present": bool(diagnostics_dir()),
+            "redacted": True,
         },
         "state": state_payload,
         "doctor": doctor_report(settings, applet=applet),
         "inputs": source_payload,
-        "models": _normalize_model_payloads(list_models()),
+        "models": _redact_model_payload_paths(list_models()),
         "alarms": {
             "configured": len(alarm_entries),
             "active": sum(1 for alarm in alarm_entries if isinstance(alarm, dict) and alarm.get("enabled", True)),

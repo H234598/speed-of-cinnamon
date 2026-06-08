@@ -2,10 +2,21 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+readonly TRUSTED_PATH='/usr/bin:/usr/sbin:/bin:/sbin'
+PATH="${TRUSTED_PATH}"
+export PATH
+
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_dir}"
 
-python3 - <<'PY' "${repo_dir}"
+python_bin="$(command -v python3 || true)"
+git_bin="$(command -v git || true)"
+if [[ -z "${python_bin}" || -z "${git_bin}" ]]; then
+  printf 'python3 and git are required in trusted PATH\n' >&2
+  exit 1
+fi
+
+"${python_bin}" - <<'PY' "${repo_dir}" "${git_bin}"
 from __future__ import annotations
 
 import json
@@ -17,6 +28,7 @@ import tomllib
 from pathlib import Path
 
 repo_dir = Path(sys.argv[1])
+git_bin = sys.argv[2]
 expected_name = "H234598"
 expected_email = "54270221+H234598@users.noreply.github.com"
 expected_repo = "github.com/H234598/speed-of-cinnamon"
@@ -36,9 +48,13 @@ def fail(message: str) -> None:
     raise SystemExit(message)
 
 
+if not Path(git_bin).is_absolute():
+    fail("git executable must resolve to an absolute path")
+
+
 def run_git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["git", "-C", str(repo_dir), *args],
+        [git_bin, "-C", str(repo_dir), *args],
         check=check,
         text=True,
         stdout=subprocess.PIPE,
