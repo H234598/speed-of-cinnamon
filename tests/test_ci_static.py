@@ -440,11 +440,12 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("run: make rpm-generic", workflow)
         self.assertIn("build_generic_rpm=false", workflow)
         self.assertIn("run: make rpm-generic-check", workflow)
-        self.assertTrue("if: env.BUILD_GENERIC_RPM == 'true'" in workflow or "if: env.BUILD_GENERIC_RPM == '1'" in workflow)
+        self.assertIn("if: env.BUILD_GENERIC_RPM == '1' && github.event_name != 'pull_request'", workflow)
         self.assertIn("name: Build Snap package", workflow)
-        self.assertTrue("if: env.BUILD_SNAP == 'true'" in workflow or "if: env.BUILD_SNAP == '1'" in workflow)
+        self.assertIn("if: env.BUILD_SNAP == '1' && github.event_name != 'pull_request'", workflow)
         self.assertIn("uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7", workflow)
         self.assertIn("name: speed-of-cinnamon-source-${{ github.sha }}", workflow)
+        self.assertGreaterEqual(workflow.count("github.event_name != 'pull_request'"), 4)
         self.assertIn("dist/speed-of-cinnamon-*.tar.gz", workflow)
         self.assertIn("dist/speed-of-cinnamon-*.tar.gz.sha256", workflow)
         self.assertIn("name: speed-of-cinnamon-rpm-${{ github.sha }}", workflow)
@@ -476,6 +477,7 @@ class CiStaticTest(unittest.TestCase):
         )
         self.assertIn("python -m bandit -q -r src/speed_of_cinnamon -x tests -f sarif -o results.sarif --exit-zero", codacy_workflow)
         self.assertIn("uses: github/codeql-action/upload-sarif@a6fd1787519fd23e68309fad43738e41a6ff2a9d # v4", codacy_workflow)
+        self.assertNotIn("pull_request:", codacy_workflow)
         self.assertNotIn("codacy/codacy-analysis-cli-action", codacy_workflow)
         self.assertNotIn("ubuntu-latest", codacy_workflow)
 
@@ -741,7 +743,7 @@ class CiStaticTest(unittest.TestCase):
             "  scan-pull-request:\n"
             "    needs: check-frogbot-secrets\n"
             "    runs-on: ubuntu-24.04\n"
-            "    if: needs.check-frogbot-secrets.outputs.configured == 'true'\n"
+            "    if: needs.check-frogbot-secrets.outputs.configured == 'true' && github.event.pull_request.head.repo.full_name == github.repository\n"
             "    # A pull request needs to be approved, before Frogbot scans it.",
             workflow,
         )
@@ -756,6 +758,7 @@ class CiStaticTest(unittest.TestCase):
         workflow = (REPO_ROOT / ".github" / "workflows" / "frogbot-scan-pr.yml").read_text(encoding="utf-8")
         self.assertIn("pull_request:", workflow)
         self.assertNotIn("pull_request_target:", workflow)
+        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", workflow)
         self.assertIn("ref: ${{ github.event.pull_request.head.sha }}", workflow)
 
     def test_authorship_guard_is_part_of_check_target(self) -> None:
@@ -1302,6 +1305,11 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6", workflow)
         self.assertIn("persist-credentials: false", workflow)
         self.assertIn("uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7", workflow)
+        self.assertIn("name: speed-of-cinnamon-source-${{ steps.release_tag.outputs.tag }}", workflow)
+        self.assertIn("name: speed-of-cinnamon-rpm-${{ steps.release_tag.outputs.tag }}", workflow)
+        self.assertIn("name: speed-of-cinnamon-generic-rpm-${{ steps.release_tag.outputs.tag }}", workflow)
+        self.assertIn("name: speed-of-cinnamon-snap-${{ steps.release_tag.outputs.tag }}", workflow)
+        self.assertNotIn("name: speed-of-cinnamon-source-${{ github.sha }}", workflow)
         self.assertIn("runs-on: ubuntu-24.04", workflow)
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
         self.assertIn("- name: Install release tooling", workflow)
@@ -1415,6 +1423,7 @@ class CiStaticTest(unittest.TestCase):
 
     def test_pylint_workflow_is_read_only(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "pylint.yml").read_text(encoding="utf-8")
+        requirements = (REPO_ROOT / ".github" / "requirements" / "ci-pylint.txt").read_text(encoding="utf-8")
         top_level_permissions = _workflow_block_lines(workflow, "permissions:")
         checkout_block = _workflow_block_lines(workflow, "- uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6")
 
@@ -1423,6 +1432,11 @@ class CiStaticTest(unittest.TestCase):
             "        with:",
             "          persist-credentials: false",
         ])
+        self.assertIn("python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-pylint.txt", workflow)
+        self.assertNotIn("pylint==4.0.5", workflow)
+        self.assertIn("--require-hashes", requirements)
+        self.assertIn("pylint==4.0.5 --hash=sha256:", requirements)
+        self.assertIn("astroid==4.0.4 --hash=sha256:", requirements)
         self.assertNotIn("permissions:", "\n".join(checkout_block))
         self.assertNotIn("contents: write", workflow)
         self.assertNotIn("id-token: write", workflow)

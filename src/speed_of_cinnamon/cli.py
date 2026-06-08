@@ -1399,12 +1399,27 @@ def _public_cleanup_result(cleanup_result: dict[str, object]) -> dict[str, objec
     return public
 
 
-def _persist_cleanup_failure_state(store: StateStore, failed_paths: list[str]) -> None:
+def _persist_cleanup_failure_state(
+    store: StateStore,
+    failed_paths: list[str],
+    *,
+    artifact_state: RecordingState | None = None,
+) -> None:
     if not failed_paths:
         return
     error_text = _cleanup_failure_error(failed_paths)
     try:
-        store.update(status="error", stopped_at=now_iso(), error=error_text)
+        updates: dict[str, object] = {"status": "error", "stopped_at": now_iso(), "error": error_text}
+        if artifact_state is not None:
+            updates.update(
+                {
+                    "audio_path": artifact_state.audio_path,
+                    "log_path": artifact_state.log_path,
+                    "transcript_path": artifact_state.transcript_path,
+                    "inserted": artifact_state.inserted,
+                }
+            )
+        store.update(**updates)
     except Exception as exc:
         update_error = _redact_error_for_user(str(exc))
         raise RuntimeError(f"{error_text}; failed to persist cleanup error state: {update_error}") from exc
@@ -3283,7 +3298,7 @@ def finalize_recording(
         )
         message = "recording finished without transcript" if not text.strip() else "transcription completed"
         if cleanup_failed_paths:
-            _persist_cleanup_failure_state(store, cleanup_failed_paths)
+            _persist_cleanup_failure_state(store, cleanup_failed_paths, artifact_state=done_candidate)
             status = "error"
             message = f"{message}; {_cleanup_failure_error(cleanup_failed_paths)}"
             done = done_candidate

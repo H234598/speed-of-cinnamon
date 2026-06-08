@@ -241,6 +241,7 @@ jobs:
           export PATH="/snap/bin:${PATH}"
           make snap-check
       - name: Upload source release archive
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: speed-of-cinnamon-source-${{ github.sha }}
@@ -250,6 +251,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Upload Fedora RPM packages
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: speed-of-cinnamon-rpm-${{ github.sha }}
@@ -259,7 +261,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Upload generic RPM packages
-        if: env.BUILD_GENERIC_RPM == '1'
+        if: env.BUILD_GENERIC_RPM == '1' && github.event_name != 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: speed-of-cinnamon-generic-rpm-${{ github.sha }}
@@ -269,7 +271,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Upload Snap package
-        if: env.BUILD_SNAP == '1'
+        if: env.BUILD_SNAP == '1' && github.event_name != 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: speed-of-cinnamon-snap-${{ github.sha }}

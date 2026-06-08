@@ -913,6 +913,8 @@ def encrypt_bytes(payload: bytes, requested_mode: object, *, kind: str) -> tuple
         **metadata,
     }
     rendered = json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+    if len(rendered) > MAX_ENCRYPTED_ARTIFACT_BYTES:
+        raise ArtifactCryptoError("encrypted artifact payload is too large")
     return rendered, key_material.mode
 
 

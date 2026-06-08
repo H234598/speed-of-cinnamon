@@ -267,7 +267,7 @@ jobs:
       - name: Upload source release archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: speed-of-cinnamon-source-${{ github.sha }}
+          name: speed-of-cinnamon-source-${{ steps.release_tag.outputs.tag }}
           path: |
             dist/speed-of-cinnamon-*.tar.gz
             dist/speed-of-cinnamon-*.tar.gz.sha256
@@ -276,7 +276,7 @@ jobs:
       - name: Upload Fedora RPM packages
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: speed-of-cinnamon-rpm-${{ github.sha }}
+          name: speed-of-cinnamon-rpm-${{ steps.release_tag.outputs.tag }}
           path: |
             dist/rpmbuild/RPMS/**/*.rpm
             dist/rpmbuild/SRPMS/**/*.rpm
@@ -286,7 +286,7 @@ jobs:
         if: env.BUILD_GENERIC_RPM == '1'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: speed-of-cinnamon-generic-rpm-${{ github.sha }}
+          name: speed-of-cinnamon-generic-rpm-${{ steps.release_tag.outputs.tag }}
           path: |
             dist/rpmbuild-generic/RPMS/**/*.rpm
             dist/rpmbuild-generic/SRPMS/**/*.rpm
@@ -295,7 +295,7 @@ jobs:
       - name: Upload Snap package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: speed-of-cinnamon-snap-${{ github.sha }}
+          name: speed-of-cinnamon-snap-${{ steps.release_tag.outputs.tag }}
           path: |
             dist/snap/*.snap
           if-no-files-found: error

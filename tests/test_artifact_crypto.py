@@ -626,6 +626,14 @@ class ArtifactCryptoTest(unittest.TestCase):
             with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "payload is too large"):
                 artifact_crypto.decrypt_bytes(b"12345", kind="transcript", require_encrypted=True)
 
+    def test_encrypt_bytes_rejects_envelope_larger_than_artifact_limit(self) -> None:
+        with (
+            mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: STRONG_PASSPHRASE}, clear=False),
+            mock.patch("speed_of_cinnamon.artifact_crypto.MAX_ENCRYPTED_ARTIFACT_BYTES", 128),
+        ):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "encrypted artifact payload is too large"):
+                artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
+
     def test_read_decrypted_bytes_from_file_rejects_explicit_zero_max_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "artifact.bin"

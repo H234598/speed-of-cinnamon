@@ -146,9 +146,7 @@ class WorkflowSecurityTest(unittest.TestCase):
                                     self.assertIn("==", requirement_line)
                                     self.assertIn("--hash=sha256:", requirement_line)
                         else:
-                            self.assertGreater(len(packages), 0)
-                            for package in packages:
-                                self.assertIn("==", package)
+                            self.fail("direct pip package installs must use hash-locked requirement files")
 
 
 if __name__ == "__main__":

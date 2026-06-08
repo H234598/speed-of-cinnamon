@@ -37,7 +37,7 @@ jobs:
   scan-pull-request:
     needs: check-frogbot-secrets
     runs-on: ubuntu-24.04
-    if: needs.check-frogbot-secrets.outputs.configured == 'true'
+    if: needs.check-frogbot-secrets.outputs.configured == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     # A pull request needs to be approved, before Frogbot scans it. Any GitHub user who is associated with the
     # "frogbot" GitHub environment can approve the pull request to be scanned.
     # Read more here (Install Frogbot Using GitHub Actions): https://docs.jfrog-applications.jfrog.io/jfrog-applications/frogbot/setup-frogbot/setup-frogbot-using-github-actions

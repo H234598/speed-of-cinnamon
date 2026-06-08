@@ -534,7 +534,7 @@ MyApplet.prototype = {
     this.settings.bindProperty(Settings.BindingDirection.IN, "ollama-url", "ollamaUrl", this._onTextModelSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "ollama-model", "ollamaModel", this._onTextModelSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-url", "openaiCompatibleUrl", this._onTextModelSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-model", "openaiCompatibleModel", this._onTextModelSettingsChanged, null);
+    this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-model", "openaiCompatibleModel", this._onVoiceBackendSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-text-model", "openaiCompatibleTextModel", this._onTextModelSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-flex-processing", "openaiCompatibleFlexProcessing", this._onOpenAiFlexProcessingSettingsChanged, null);
     this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-api-key", "openaiCompatibleApiKey", this._onVoiceBackendSettingsChanged, null);
@@ -2149,7 +2149,7 @@ MyApplet.prototype = {
       Extension.reloadExtension(UUID, Extension.Type.APPLET);
     } catch (err) {
       global.logError(err);
-      this._setStatus("error", _("Could not restart applet: ") + String(err), this.lastTranscript);
+      this._setStatus("error", _("Could not restart applet"), this.lastTranscript);
     }
   },
 
@@ -2875,8 +2875,9 @@ MyApplet.prototype = {
         return;
       }
       if (payload.error) {
-        this._populateModelMenu([], payload.error);
-        this._setStatus("error", payload.error, this.lastTranscript);
+        let safeError = this._sanitizeErrorMessage(payload.error);
+        this._populateModelMenu([], safeError);
+        this._setStatus("error", safeError, this.lastTranscript);
         return;
       }
       this._populateModelMenu(payload.models || []);
