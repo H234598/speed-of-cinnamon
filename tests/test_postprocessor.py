@@ -27,6 +27,7 @@ from speed_of_cinnamon.postprocessor import (
     MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
     MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
     MAX_POSTPROCESS_JSON_BYTES,
+    MAX_POSTPROCESS_PROMPT_CHARS,
     MAX_POSTPROCESS_URL_CHARS,
     list_ollama_models,
     list_openai_compatible_models,
@@ -351,6 +352,26 @@ class PostProcessorTest(unittest.TestCase):
                 backend="openai-compatible",
                 openai_compatible_model="x" * (MAX_OPENAI_COMPATIBLE_MODEL_CHARS + 1),
             )
+
+    def test_ollama_backend_rejects_oversized_model_before_request(self) -> None:
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=AssertionError("http request attempted")):
+            with self.assertRaisesRegex(PostProcessError, "ollama model is too large"):
+                post_process_text(
+                    "hello",
+                    "en",
+                    backend="ollama",
+                    ollama_model="x" * 241,
+                )
+
+    def test_ollama_backend_rejects_model_control_character_before_request(self) -> None:
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=AssertionError("http request attempted")):
+            with self.assertRaisesRegex(PostProcessError, "invalid control character"):
+                post_process_text(
+                    "hello",
+                    "en",
+                    backend="ollama",
+                    ollama_model="llama3.2:3b\r\nbad",
+                )
 
     def test_openai_compatible_backend_rejects_oversized_api_key(self) -> None:
         with self.assertRaisesRegex(PostProcessError, "openai-compatible API key is too large"):
@@ -1035,6 +1056,27 @@ class PostProcessorTest(unittest.TestCase):
         with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", return_value=FakeResponse({"response": ""})):
             with self.assertRaisesRegex(PostProcessError, "without output"):
                 post_process_text("hello", "en", backend="ollama", ollama_model="llama3.2:3b")
+
+    def test_http_postprocess_rejects_oversized_prompt_before_request(self) -> None:
+        prompt = "x" * (MAX_POSTPROCESS_PROMPT_CHARS + 1)
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request") as mocked_http:
+            with self.assertRaisesRegex(PostProcessError, "prompt is too large"):
+                post_process_text(
+                    "hello",
+                    "en",
+                    backend="ollama",
+                    ollama_model="llama3.2:3b",
+                    ollama_prompt=prompt,
+                )
+            with self.assertRaisesRegex(PostProcessError, "prompt is too large"):
+                post_process_text(
+                    "hello",
+                    "en",
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-mini",
+                    ollama_prompt=prompt,
+                )
+        mocked_http.assert_not_called()
 
     def test_format_model_size_rejects_boolean(self) -> None:
         self.assertEqual(_format_model_size(True), "")

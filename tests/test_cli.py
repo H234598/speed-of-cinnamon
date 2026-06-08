@@ -7688,6 +7688,48 @@ class CliTest(unittest.TestCase):
         self.assertEqual(final_state.status, "idle")
         self.assertEqual(final_state.audio_path, "")
 
+    def test_cancel_persists_redacted_error_state_when_final_idle_write_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recorded.wav"
+            log = recordings_root / "recorded.log"
+            audio.write_bytes(b"audio")
+            log.write_text("log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="recorded", audio_path=str(audio), log_path=str(log)))
+            stdout = io.StringIO()
+            real_write = StateStore.write
+            write_calls = 0
+
+            def flaky_write(self: StateStore, state: RecordingState) -> None:
+                nonlocal write_calls
+                write_calls += 1
+                if write_calls == 2:
+                    raise OSError("idle write failed")
+                real_write(self, state)
+
+            with (
+                mock.patch("speed_of_cinnamon.cli.StateStore.write", new=flaky_write),
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(final_state.status, "error")
+        self.assertEqual(final_state.error, "failed to persist canceled recording state")
+        self.assertEqual(final_state.audio_path, "")
+        self.assertEqual(final_state.log_path, "")
+        self.assertFalse(audio.exists())
+        self.assertFalse(log.exists())
+        self.assertEqual(write_calls, 3)
+
     def test_cancel_recorded_discards_encrypted_flac_recording_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -8116,6 +8158,27 @@ class CliTest(unittest.TestCase):
             call
             for call in mocked_log_event.call_args_list
             if call.args and len(call.args) > 1 and call.args[1] == "command_exception"
+        ]
+        self.assertEqual(len(error_log_calls), 1)
+
+    @mock.patch("speed_of_cinnamon.cli.command_status", return_value={"status": "error", "message": "command failed: Bearer sk-secret token=abc123"})
+    @mock.patch("speed_of_cinnamon.cli.log_event")
+    def test_cli_run_redacts_status_error_message_without_error_key(self, mocked_log_event: mock.Mock, mocked_command_status: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tempfile.gettempdir()}), redirect_stdout(stdout):
+            code = cli.run(["status", "--json"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("error", payload)
+        self.assertNotIn("sk-secret", payload["error"])
+        self.assertNotIn("token=abc123", payload["error"])
+        self.assertNotIn("sk-secret", payload["message"])
+        self.assertNotIn("token=abc123", payload["message"])
+        error_log_calls = [
+            call
+            for call in mocked_log_event.call_args_list
+            if call.args and len(call.args) > 1 and call.args[1] == "command_error"
         ]
         self.assertEqual(len(error_log_calls), 1)
         logged_error = error_log_calls[0].kwargs["error_message"]

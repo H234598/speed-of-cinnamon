@@ -38,10 +38,12 @@ POSTPROCESS_OUTPUT_CONTRACT = (
     "formality, concision, or friendliness changes unless explicitly requested."
 )
 MAX_POSTPROCESS_TEXT_CHARS = 1_000_000
+MAX_POSTPROCESS_PROMPT_CHARS = 4_096
 MAX_POSTPROCESS_JSON_BYTES = 1_500_000
 MAX_POSTPROCESS_URL_CHARS = 2_048
 MAX_OPENAI_COMPATIBLE_API_KEY_CHARS = 4_096
 MAX_OPENAI_COMPATIBLE_MODEL_CHARS = 240
+MAX_OLLAMA_MODEL_CHARS = 240
 OPENAI_COMPATIBLE_TEXT_MODEL_EXCLUDED_PREFIXES = (
     "ada-",
     "babbage-",
@@ -630,7 +632,12 @@ def post_process_with_ollama(
         raise PostProcessError("ollama model must be text")
     if not isinstance(prompt, str) or isinstance(prompt, bool):
         raise PostProcessError("prompt must be text")
-    model_name = (model or "").strip()
+    prompt = _assert_text_length(prompt, field_name="prompt", max_chars=MAX_POSTPROCESS_PROMPT_CHARS)
+    if _contains_escaped_null(model):
+        raise PostProcessError("ollama model contains invalid null byte")
+    if _contains_http_header_control_chars(model):
+        raise PostProcessError("ollama model contains invalid control character")
+    model_name = _assert_text_length(model or "", field_name="ollama model", max_chars=MAX_OLLAMA_MODEL_CHARS).strip()
     if not model_name:
         raise PostProcessError("Ollama model is required")
     _assert_text_length(text, field_name="input text")
@@ -758,6 +765,7 @@ def post_process_with_openai_compatible(
         raise PostProcessError("openai-compatible model must be text")
     if not isinstance(prompt, str) or isinstance(prompt, bool):
         raise PostProcessError("prompt must be text")
+    prompt = _assert_text_length(prompt, field_name="prompt", max_chars=MAX_POSTPROCESS_PROMPT_CHARS)
     if not isinstance(api_key, str) or isinstance(api_key, bool):
         raise PostProcessError("api key must be text")
     if not isinstance(flex_processing, bool):

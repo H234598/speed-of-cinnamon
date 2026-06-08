@@ -3513,16 +3513,33 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 "log_deleted": log_deleted,
                 "transcript_deleted": transcript_deleted,
             }
-        store.write(
-            RecordingState(
-                status="idle",
-                stopped_at=now_iso(),
-                language=state.language,
-                recorder=state.recorder,
-                input_device=state.input_device,
-                max_seconds=state.max_seconds,
+        try:
+            store.write(
+                RecordingState(
+                    status="idle",
+                    stopped_at=now_iso(),
+                    language=state.language,
+                    recorder=state.recorder,
+                    input_device=state.input_device,
+                    max_seconds=state.max_seconds,
+                )
             )
-        )
+        except Exception:
+            try:
+                store.write(
+                    RecordingState(
+                        status="error",
+                        stopped_at=now_iso(),
+                        language=state.language,
+                        recorder=state.recorder,
+                        input_device=state.input_device,
+                        max_seconds=state.max_seconds,
+                        error="failed to persist canceled recording state",
+                    )
+                )
+            except Exception:
+                pass
+            raise
         return {
             "status": "idle",
             "message": "recording discarded",
@@ -4617,9 +4634,14 @@ def run(argv: list[str] | None = None) -> int:
         json_output = _coerce_bool(getattr(args, "json", False), field_name="json")
         log_event("info", "command_start", command=command_name)
         payload = _redact_error_payload(args.handler(args))
+        status = str(payload.get("status", "ok"))
+        if status == "error":
+            if payload.get("message"):
+                payload["message"] = _redact_error_for_user(payload["message"])
+            if not payload.get("error"):
+                payload["error"] = payload.get("message") or "command failed"
         if "error" in payload and payload["error"] is not None:
             payload["error"] = _redact_error_for_user(payload["error"])
-        status = str(payload.get("status", "ok"))
         if payload.get("error"):
             log_event(
                 "error",
@@ -4632,7 +4654,7 @@ def run(argv: list[str] | None = None) -> int:
         else:
             log_event("info", "command_done", command=command_name, status=status)
         print_result(payload, json_output)
-        return 0 if not payload.get("error") else 1
+        return 0 if status != "error" and not payload.get("error") else 1
     except Exception as exc:
         error_message = _redact_error_for_user(str(exc))
         log_event(

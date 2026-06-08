@@ -47,6 +47,7 @@ MAX_OPENAI_URL_CHARS = 2048
 MAX_AUDIO_FILE_BYTES = 200 * 1024 * 1024
 MAX_AUDIO_PATH_CHARS = 240
 MAX_AUDIO_STEM_CHARS = 120
+MAX_LANGUAGE_CODE_CHARS = 64
 MAX_TRANSCRIBER_TEXT_CHARS = 65_535
 ALLOWED_AUDIO_EXTENSIONS = {".wav", ".m4a", ".flac", ".ogg", ".mp3", ".aac", ".webm"}
 MAX_TRANSCRIPT_TEXT_CHARS = 1_000_000
@@ -1078,6 +1079,20 @@ def transcribe_with_template(
     vocabulary: str = "",
 ) -> str:
     should_read_text_file = "{text}" in template
+    if should_read_text_file:
+        if not isinstance(text_path, Path):
+            raise TranscriptionError("text path must be a Path")
+        text_path = text_path.expanduser()
+        try:
+            assert_no_symlink_ancestors(text_path, field_name="transcript path")
+        except RuntimeError as exc:
+            raise TranscriptionError(str(exc)) from exc
+        try:
+            parent_fd = ensure_directory_without_following_symlinks(text_path.parent, field_name="transcript directory")
+        except OSError as exc:
+            raise TranscriptionError("failed to prepare transcript directory") from exc
+        else:
+            os.close(parent_fd)
     existing_snapshot = (
         _snapshot_existing_file(text_path)
         if should_read_text_file and text_path.exists()
@@ -1649,6 +1664,13 @@ def transcribe_with_openai_compatible_api(
         raise TranscriptionError("OpenAI-compatible flex processing must be a boolean")
     if not isinstance(openai_compatible_service_tier_fallback, bool):
         raise TranscriptionError("OpenAI-compatible service tier fallback must be a boolean")
+    if isinstance(language, bool) or not isinstance(language, str):
+        raise TranscriptionError("language must be text")
+    if _contains_escaped_null(language):
+        raise TranscriptionError("language contains invalid null byte")
+    if _contains_http_header_control_chars(language):
+        raise TranscriptionError("multipart form field contains invalid control character")
+    language = _assert_text_length(language, field_name="language", max_chars=MAX_LANGUAGE_CODE_CHARS).strip()
     endpoint = _openai_compatible_endpoint(url, "/audio/transcriptions")
     endpoint_display = _safe_url_display(endpoint, field_name="OpenAI-compatible API URL")
     is_openai_api = _is_openai_api_endpoint(endpoint)

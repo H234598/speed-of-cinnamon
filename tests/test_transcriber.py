@@ -66,6 +66,38 @@ class TranscriberTest(unittest.TestCase):
         self.assertTrue(any(getattr(handler, "proxies", None) == {} for handler in handlers))
         opener.open.assert_called_once_with(request, timeout=7)
 
+    def test_openai_compatible_rejects_oversized_language_before_request(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text = Path(tmp) / "sample.txt"
+
+            with mock.patch("speed_of_cinnamon.transcriber._open_http_request", side_effect=AssertionError("http request attempted")):
+                with self.assertRaisesRegex(TranscriptionError, "language is too large"):
+                    transcribe_with_openai_compatible_api(
+                        audio,
+                        "x" * (transcriber_module.MAX_LANGUAGE_CODE_CHARS + 1),
+                        text,
+                        model="gpt-4o-transcribe",
+                        url="http://127.0.0.1:8000/v1",
+                    )
+
+    def test_openai_compatible_rejects_language_control_character_before_request(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text = Path(tmp) / "sample.txt"
+
+            with mock.patch("speed_of_cinnamon.transcriber._open_http_request", side_effect=AssertionError("http request attempted")):
+                with self.assertRaisesRegex(TranscriptionError, "invalid control character"):
+                    transcribe_with_openai_compatible_api(
+                        audio,
+                        "de\r\nbad",
+                        text,
+                        model="gpt-4o-transcribe",
+                        url="http://127.0.0.1:8000/v1",
+                    )
+
     def test_template_quotes_placeholders(self) -> None:
         rendered = render_command_template(
             "tool --audio {audio} --lang {language} --text {text} --prompt {prompt}",
@@ -336,6 +368,20 @@ class TranscriberTest(unittest.TestCase):
             with mock.patch("speed_of_cinnamon.transcriber.run_command_chain", return_value="generated transcript"):
                 with self.assertRaisesRegex(TranscriptionError, "failed to read generated transcript"):
                     transcribe_with_template("{text}", audio, "en", text)
+
+    def test_template_with_text_placeholder_rejects_symlinked_transcript_parent_before_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            real_dir = Path(tmp) / "real-transcripts"
+            real_dir.mkdir()
+            link_dir = Path(tmp) / "link-transcripts"
+            link_dir.symlink_to(real_dir, target_is_directory=True)
+            with mock.patch("speed_of_cinnamon.transcriber.run_command_chain") as mocked_run:
+                with self.assertRaisesRegex(TranscriptionError, "transcript path must not pass through a symlink"):
+                    transcribe_with_template("{text}", audio, "en", link_dir / "sample.txt")
+
+        self.assertFalse(mocked_run.called)
 
     def test_template_with_text_placeholder_preserves_existing_text_path_on_command_error(self) -> None:
         def command_fails(*_args: object, **_kwargs: object) -> str:
