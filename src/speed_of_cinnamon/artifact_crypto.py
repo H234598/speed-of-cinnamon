@@ -556,10 +556,11 @@ def _passphrase_from_sources(
                 return None
     if not passphrase:
         return None
-    if len(passphrase) > MAX_PASSPHRASE_CHARS or _safe_utf8_length(
+    passphrase_bytes = _safe_utf8_length(
         passphrase,
         field_name="artifact encryption passphrase",
-    ) > MAX_PASSPHRASE_FILE_BYTES:
+    )
+    if len(passphrase) > MAX_PASSPHRASE_CHARS or passphrase_bytes > MAX_PASSPHRASE_CHARS:
         raise ArtifactCryptoError("artifact encryption passphrase is too large")
     if _contains_forbidden_secret_chars(passphrase):
         raise ArtifactCryptoError("artifact encryption passphrase contains invalid control characters")

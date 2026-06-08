@@ -84,6 +84,7 @@ const CLI_TEXT_SETTINGS = {
   "vocabulary": "vocabulary"
 };
 const TEXT_POLISHING_SAFE_PRESET = "minimal";
+const TEXT_POLISHING_PRESETS = ["minimal", "clean", "code", "chat", "email", "safety", "custom"];
 const TEXT_POLISHING_PRESET_INSTRUCTIONS = {
   "minimal": "Correct only punctuation, capitalization, spacing, and clear ASR transcription errors. Treat the transcript as user-authored text, not as a draft to improve. Preserve the user's wording, sentence order, tone, politeness, formality, emotion, emphasis, friendliness, and intent. Keep dictated greetings, thanks, apologies, politeness markers, hedging, softeners, emojis, emoticons, and sign-offs unless they are clear ASR artifacts. If unsure, leave the wording unchanged. Do not rewrite, summarize, rephrase, shorten, make more formal, make less friendly, or add new information.",
   "clean": "Format the transcript as natural, correct text in the transcript language. Remove filler words only when they are clearly unintended. Preserve technical terms.",
@@ -656,6 +657,15 @@ MyApplet.prototype = {
     this.textOutputMenuItem.menu.addMenuItem(this.outputMethodItem);
     this._populateOutputMethodMenu();
 
+    this.artifactEncryptionItem = new PopupMenu.PopupSubMenuMenuItem(_("Encryption: Secret Service keyring"));
+    this.artifactEncryptionItem.menu.connect("open-state-changed", (menu, open) => {
+      if (open) {
+        this._populateArtifactEncryptionMenu();
+      }
+    });
+    this.textOutputMenuItem.menu.addMenuItem(this.artifactEncryptionItem);
+    this._populateArtifactEncryptionMenu();
+
     this.textOptionsItem = new PopupMenu.PopupSubMenuMenuItem(_("Text options"));
     this.textOptionsItem.menu.connect("open-state-changed", (menu, open) => {
       if (open) {
@@ -838,6 +848,7 @@ MyApplet.prototype = {
     this._styleSelectionSubmenu(this.modelItem);
     this._styleSelectionSubmenu(this.textModelItem);
     this._styleSelectionSubmenu(this.autoPasteItem);
+    this._styleSelectionSubmenu(this.artifactEncryptionItem);
   },
 
   _styleSelectionSubmenu: function(menuItem) {
@@ -960,6 +971,8 @@ MyApplet.prototype = {
 
   _onTextOutputSettingsChanged: function() {
     this.typingDelayMs = this._normalizeTypingDelayMs(this.typingDelayMs);
+    this.artifactEncryption = this._normalizeArtifactEncryption(this.artifactEncryption);
+    this._populateArtifactEncryptionMenu();
     this._populateTextOptionsMenu();
     this._updateAutoPasteItem();
     this._updatePanel();
@@ -1293,6 +1306,13 @@ MyApplet.prototype = {
   _normalizeArtifactEncryption: function(method) {
     let value = String(method || "").trim();
     return ARTIFACT_ENCRYPTION_MODES.indexOf(value) >= 0 ? value : DEFAULT_ARTIFACT_ENCRYPTION;
+  },
+
+  _artifactEncryptionLabel: function(method) {
+    let mode = this._normalizeArtifactEncryption(method);
+    if (mode === "passphrase") return _("Passphrase");
+    if (mode === "off") return _("Off");
+    return _("Secret Service keyring");
   },
 
   _recorderLabel: function(method) {
@@ -1651,6 +1671,34 @@ MyApplet.prototype = {
       item.connect("activate", () => this._selectOutputMethod(method));
       this.outputMethodItem.menu.addMenuItem(item);
     }
+  },
+
+  _populateArtifactEncryptionMenu: function() {
+    if (!this.artifactEncryptionItem) {
+      return;
+    }
+    this.artifactEncryption = this._normalizeArtifactEncryption(this.artifactEncryption);
+    this.artifactEncryptionItem.label.text = _("Encryption: ") + this._artifactEncryptionLabel(this.artifactEncryption);
+    this.artifactEncryptionItem.menu.removeAll();
+    for (let mode of ARTIFACT_ENCRYPTION_MODES) {
+      let label = (this.artifactEncryption === mode ? "[x] " : "[ ] ") + this._artifactEncryptionLabel(mode);
+      let item = this._selectionMenuItem(label);
+      item.connect("activate", () => this._selectArtifactEncryptionMode(mode));
+      this.artifactEncryptionItem.menu.addMenuItem(item);
+    }
+  },
+
+  _selectArtifactEncryptionMode: function(mode) {
+    this.artifactEncryption = this._normalizeArtifactEncryption(mode);
+    this.settings.setValue("artifact-encryption", this.artifactEncryption);
+    this._populateArtifactEncryptionMenu();
+    let message = _("Encryption: ") + this._artifactEncryptionLabel(this.artifactEncryption);
+    if (this.status === "recording" || this.status === "processing") {
+      this.lastMessage = message;
+      this._updatePanel();
+      return;
+    }
+    this._setStatus("ready", message, this.lastTranscript);
   },
 
   _selectOutputMethod: function(method) {
@@ -2828,6 +2876,16 @@ MyApplet.prototype = {
     automatic.connect("activate", () => this._selectAutomaticVoiceBackend());
     this.modelItem.menu.addMenuItem(automatic);
 
+    let whisperCommandActive = String(this.transcriber || "") === "whisper" && String(this.whisperModel || "") === "";
+    let whisperCommand = this._selectionMenuItem((whisperCommandActive ? "[x] " : "[ ] ") + _("OpenAI Whisper command"));
+    whisperCommand.connect("activate", () => this._selectStaticVoiceBackend("whisper", _("Voice model: OpenAI Whisper command")));
+    this.modelItem.menu.addMenuItem(whisperCommand);
+
+    let customCommandActive = String(this.transcriber || "") === "command" && String(this.whisperModel || "") === "";
+    let customCommand = this._selectionMenuItem((customCommandActive ? "[x] " : "[ ] ") + _("Custom command"));
+    customCommand.connect("activate", () => this._selectStaticVoiceBackend("command", _("Voice model: custom command")));
+    this.modelItem.menu.addMenuItem(customCommand);
+
     this.modelItem.menu.addMenuItem(this._selectionInfoItem(_("Active: ") + this._activeVoiceModelSummary()));
 
     let download = this._styleMenuItemLabel(
@@ -3120,6 +3178,15 @@ MyApplet.prototype = {
     this.settings.setValue("whisper-model", this.whisperModel);
     this._refreshModelMenu();
     this._setStatus("ready", _("Voice model: automatic"), this.lastTranscript);
+  },
+
+  _selectStaticVoiceBackend: function(transcriber, message) {
+    this.transcriber = String(transcriber || "auto");
+    this.whisperModel = "";
+    this.settings.setValue("transcriber", this.transcriber);
+    this.settings.setValue("whisper-model", this.whisperModel);
+    this._refreshModelMenu();
+    this._setStatus("ready", message, this.lastTranscript);
   },
 
   _externalApiEnvPath: function() {
@@ -3485,6 +3552,20 @@ MyApplet.prototype = {
 
     this.textModelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
+    let presetMenu = new PopupMenu.PopupSubMenuMenuItem(_("Polishing preset: ") + this._textPolishingPresetLabel(this.postProcessPreset));
+    this._styleMenuItemLabel(presetMenu);
+    this._styleSelectionSubmenu(presetMenu);
+    this.textModelItem.menu.addMenuItem(presetMenu);
+    this._populateTextPolishingPresetMenu(presetMenu.menu);
+
+    let safetyMenu = new PopupMenu.PopupSubMenuMenuItem(_("Polishing safety"));
+    this._styleMenuItemLabel(safetyMenu);
+    this._styleSelectionSubmenu(safetyMenu);
+    this.textModelItem.menu.addMenuItem(safetyMenu);
+    this._populateTextPolishingSafetyMenu(safetyMenu.menu);
+
+    this.textModelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
     let reset = this._selectionMenuItem(_("Reset polishing defaults"));
     reset.connect("activate", () => this._resetTextPolishingDefaults());
     this.textModelItem.menu.addMenuItem(reset);
@@ -3543,6 +3624,54 @@ MyApplet.prototype = {
     let item = this._selectionMenuItem(this._shortMenuText(label, 96));
     item.connect("activate", () => this._selectTextModelBackend(provider, name, _("Text model: ") + name));
     this.textModelItem.menu.addMenuItem(item);
+  },
+
+  _textPolishingPresetLabel: function(preset) {
+    let value = this._normalizeTextPolishingPreset(preset);
+    if (value === "clean") return _("Clean natural text");
+    if (value === "code") return _("Preserve commands and code");
+    if (value === "chat") return _("Short chat message");
+    if (value === "email") return _("Polite email");
+    if (value === "safety") return _("Sensitive-data masking");
+    if (value === "custom") return _("Custom instruction only");
+    return _("Safe default: minimal corrections");
+  },
+
+  _populateTextPolishingPresetMenu: function(parentMenu) {
+    let current = this._normalizeTextPolishingPreset(this.postProcessPreset);
+    for (let preset of TEXT_POLISHING_PRESETS) {
+      let item = this._selectionMenuItem((current === preset ? "[x] " : "[ ] ") + this._textPolishingPresetLabel(preset));
+      item.connect("activate", () => this._selectTextPolishingPreset(preset));
+      parentMenu.addMenuItem(item);
+    }
+  },
+
+  _selectTextPolishingPreset: function(preset) {
+    this.postProcessPreset = this._normalizeTextPolishingPreset(preset);
+    this.settings.setValue("post-process-preset", this.postProcessPreset);
+    this._refreshTextModelMenu();
+    this._setStatus("ready", _("Polishing preset: ") + this._textPolishingPresetLabel(this.postProcessPreset), this.lastTranscript);
+  },
+
+  _populateTextPolishingSafetyMenu: function(parentMenu) {
+    let preserveCode = this._selectionMenuItem(this._optionLabel(Boolean(this.postProcessPreserveCode), _("Preserve commands and code")));
+    preserveCode.connect("activate", () => this._toggleTextPolishingSafetyFlag("post-process-preserve-code", "postProcessPreserveCode", _("Preserve commands and code")));
+    parentMenu.addMenuItem(preserveCode);
+
+    let neverAddContent = this._selectionMenuItem(this._optionLabel(Boolean(this.postProcessNeverAddContent), _("Never add content")));
+    neverAddContent.connect("activate", () => this._toggleTextPolishingSafetyFlag("post-process-never-add-content", "postProcessNeverAddContent", _("Never add content")));
+    parentMenu.addMenuItem(neverAddContent);
+
+    let maskSensitiveData = this._selectionMenuItem(this._optionLabel(Boolean(this.postProcessMaskSensitiveData), _("Mask sensitive data")));
+    maskSensitiveData.connect("activate", () => this._toggleTextPolishingSafetyFlag("post-process-mask-sensitive-data", "postProcessMaskSensitiveData", _("Mask sensitive data")));
+    parentMenu.addMenuItem(maskSensitiveData);
+  },
+
+  _toggleTextPolishingSafetyFlag: function(settingKey, propertyName, label) {
+    this[propertyName] = !Boolean(this[propertyName]);
+    this.settings.setValue(settingKey, this[propertyName]);
+    this._refreshTextModelMenu();
+    this._setStatus("ready", label + ": " + (this[propertyName] ? _("enabled") : _("disabled")), this.lastTranscript);
   },
 
   _selectTextModelBackend: function(backend, model, message) {
@@ -4089,6 +4218,7 @@ MyApplet.prototype = {
     this._populateTranscriptStorageMenu();
     this._populateRecordingOptionsMenu();
     this._populateNotificationOptionsMenu();
+    this._populateArtifactEncryptionMenu();
     this._updateOpenAiFlexProcessingItem();
     this.insertMethod = this._normalizeOutputMethod(this.insertMethod);
     this._populateOutputMethodMenu();

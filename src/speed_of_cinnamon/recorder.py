@@ -1532,7 +1532,7 @@ def stop_process(
     def target_identity_still_safe() -> bool:
         if _recording_process_identity_matches(pid, expected_process_identity):
             return True
-        return process_group_target and not _process_is_gone(process_target)
+        return False
 
     _run_kill(["kill", "-INT", "--", process_target], check_exit=False)
 

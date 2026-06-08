@@ -1771,12 +1771,13 @@ def build_transcripts_document(
     allow_truncate: bool = False,
 ) -> tuple[str, int, bool]:
     if limit <= 0:
-        limit = MAX_HISTORY_LIMIT
-    limit = min(limit, MAX_HISTORY_LIMIT)
+        limit = 0
+    else:
+        limit = min(limit, MAX_HISTORY_LIMIT)
     if max_chars is not None and (isinstance(max_chars, bool) or max_chars < 1):
         raise RuntimeError("transcript document size limit must be positive")
     directory = transcript_dir()
-    candidates = heapq.nlargest(max(limit * 4, limit + 16), _transcript_history_candidates(directory))
+    candidates = [] if limit <= 0 else heapq.nlargest(max(limit * 4, limit + 16), _transcript_history_candidates(directory))
     lines = [
         "Speed of Cinnamon transcripts",
         f"Generated: {now_iso()}",
@@ -1847,6 +1848,8 @@ def write_transcripts_export(
     plaintext: bool = False,
     confirm_plaintext: bool = False,
 ) -> tuple[Path, int, str]:
+    plaintext = _coerce_bool(plaintext, field_name="plaintext transcript export")
+    confirm_plaintext = _coerce_bool(confirm_plaintext, field_name="confirm_plaintext")
     if plaintext:
         if not confirm_plaintext:
             raise RuntimeError("plaintext transcript export requires --confirm-plaintext")
@@ -3910,8 +3913,9 @@ def command_benchmark_models(args: argparse.Namespace) -> dict[str, object]:
 def command_history(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     limit = _coerce_int(args.limit, field_name="history limit", max_value=MAX_HISTORY_LIMIT)
+    confirm_plaintext = _coerce_bool(getattr(args, "confirm_plaintext", False), field_name="confirm_plaintext")
     transcripts, unreadable_count = _collect_transcript_history(limit)
-    if not bool(getattr(args, "confirm_plaintext", False)):
+    if not confirm_plaintext:
         transcripts = _redact_history_previews(transcripts)
     return {"status": "done", "transcripts": transcripts, "unreadable_count": unreadable_count}
 
@@ -3919,7 +3923,8 @@ def command_history(args: argparse.Namespace) -> dict[str, object]:
 def command_transcripts_document(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     limit = _coerce_int(args.limit, field_name="history limit", max_value=MAX_HISTORY_LIMIT)
-    if not bool(getattr(args, "confirm_plaintext", False)):
+    confirm_plaintext = _coerce_bool(getattr(args, "confirm_plaintext", False), field_name="confirm_plaintext")
+    if not confirm_plaintext:
         raise RuntimeError("plaintext transcript document requires --confirm-plaintext")
     max_chars = MAX_TRANSCRIPTS_DOCUMENT_CHARS
     for _attempt in range(8):
@@ -3945,19 +3950,21 @@ def command_transcripts_document(args: argparse.Namespace) -> dict[str, object]:
 def command_transcripts_export(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     limit = _coerce_int(args.limit, field_name="history limit", max_value=MAX_HISTORY_LIMIT)
+    plaintext = _coerce_bool(getattr(args, "plaintext", False), field_name="plaintext")
+    confirm_plaintext = _coerce_bool(getattr(args, "confirm_plaintext", False), field_name="confirm_plaintext")
     output_path, count, encryption = write_transcripts_export(
         limit,
         encryption_mode=args.artifact_encryption,
-        plaintext=args.plaintext,
-        confirm_plaintext=args.confirm_plaintext,
+        plaintext=plaintext,
+        confirm_plaintext=confirm_plaintext,
     )
     return {
         "status": "done",
         "path": str(output_path),
         "transcripts": count,
         "encryption": encryption,
-        "plaintext": args.plaintext,
-        "encrypted": encryption != ARTIFACT_ENCRYPTION_OFF and not args.plaintext,
+        "plaintext": plaintext,
+        "encrypted": encryption != ARTIFACT_ENCRYPTION_OFF and not plaintext,
     }
 
 

@@ -99,6 +99,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('args.push("--no-openai-compatible-flex-processing")', source)
         self.assertNotIn('this.openAiFlexProcessingItem = new PopupMenu.PopupMenuItem("")', source)
         self.assertIn('openaiCompatible.connect("activate", () => this._openExternalApiEnvEditor("text"));', source)
+        self.assertIn('let presetMenu = new PopupMenu.PopupSubMenuMenuItem(_("Polishing preset: ") + this._textPolishingPresetLabel(this.postProcessPreset));', source)
+        self.assertIn("_populateTextPolishingPresetMenu: function(parentMenu)", source)
+        self.assertIn("_selectTextPolishingPreset: function(preset)", source)
+        self.assertIn("const TEXT_POLISHING_PRESETS = [", source)
+        self.assertIn('this.settings.setValue("post-process-preset", this.postProcessPreset);', source)
+        self.assertIn('let safetyMenu = new PopupMenu.PopupSubMenuMenuItem(_("Polishing safety"));', source)
+        self.assertIn("_populateTextPolishingSafetyMenu: function(parentMenu)", source)
+        self.assertIn("_toggleTextPolishingSafetyFlag: function(settingKey, propertyName, label)", source)
+        self.assertIn('this._toggleTextPolishingSafetyFlag("post-process-preserve-code", "postProcessPreserveCode", _("Preserve commands and code"))', source)
+        self.assertIn('this._toggleTextPolishingSafetyFlag("post-process-never-add-content", "postProcessNeverAddContent", _("Never add content"))', source)
+        self.assertIn('this._toggleTextPolishingSafetyFlag("post-process-mask-sensitive-data", "postProcessMaskSensitiveData", _("Mask sensitive data"))', source)
         self.assertIn('this.postProcessBackend = "openai-compatible";', source)
         self.assertIn('this.settings.setValue("post-process-backend", this.postProcessBackend);', source)
         self.assertIn('this._setStatus("ready", _("Text polishing: OpenAI-compatible API"), this.lastTranscript);', source)
@@ -147,9 +158,34 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let externalMenu = new PopupMenu.PopupSubMenuMenuItem(_("External API"));', source)
         self.assertIn("this._populateExternalApiVoiceMenu(externalMenu.menu);", source)
         self.assertIn("_populateExternalApiVoiceMenu: function(parentMenu)", source)
+        self.assertIn('let whisperCommand = this._selectionMenuItem((whisperCommandActive ? "[x] " : "[ ] ") + _("OpenAI Whisper command"));', source)
+        self.assertIn('whisperCommand.connect("activate", () => this._selectStaticVoiceBackend("whisper", _("Voice model: OpenAI Whisper command")));', source)
+        self.assertIn('let customCommand = this._selectionMenuItem((customCommandActive ? "[x] " : "[ ] ") + _("Custom command"));', source)
+        self.assertIn('customCommand.connect("activate", () => this._selectStaticVoiceBackend("command", _("Voice model: custom command")));', source)
+        self.assertIn("_selectStaticVoiceBackend: function(transcriber, message)", source)
+        self.assertIn('this.settings.setValue("transcriber", this.transcriber);', source)
+        self.assertIn('this.settings.setValue("whisper-model", this.whisperModel);', source)
         self.assertIn("_selectExternalApiVoiceBackend: function()", source)
         self.assertIn('this.transcriber = "openai-compatible";', source)
         self.assertIn('return _("Voice: External API ") + (String(this.openaiCompatibleModel || "").trim() || _("not configured"));', source)
+
+    def test_applet_exposes_artifact_encryption_submenu(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            set(schema["artifact-encryption"]["options"].values()),
+            {"keyring", "passphrase", "off"},
+        )
+        self.assertIn("const ARTIFACT_ENCRYPTION_MODES = [", source)
+        self.assertIn('this.artifactEncryptionItem = new PopupMenu.PopupSubMenuMenuItem(_("Encryption: Secret Service keyring"))', source)
+        self.assertIn("this.textOutputMenuItem.menu.addMenuItem(this.artifactEncryptionItem);", source)
+        self.assertIn("_populateArtifactEncryptionMenu: function()", source)
+        self.assertIn("_artifactEncryptionLabel: function(method)", source)
+        self.assertIn("_selectArtifactEncryptionMode: function(mode)", source)
+        self.assertIn('this.settings.setValue("artifact-encryption", this.artifactEncryption);', source)
+        self.assertIn('args.push("--artifact-encryption", this._normalizeArtifactEncryption(this.artifactEncryption));', source)
+        self.assertIn("this._populateArtifactEncryptionMenu();", source)
 
     def test_external_api_voice_menu_opens_env_file_for_configuration(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

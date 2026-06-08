@@ -9174,5 +9174,71 @@ class CliTest(unittest.TestCase):
             self.assertEqual(payload["path"], str(output))
             self.assertTrue(output.exists())
 
+    def test_history_rejects_non_boolean_confirm_plaintext_direct_arg(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_DATA_HOME": tmp}):
+                args = argparse.Namespace(limit=1, confirm_plaintext="false")
+                with self.assertRaisesRegex(RuntimeError, "confirm_plaintext must be a boolean"):
+                    cli.command_history(args)
+
+    def test_transcripts_document_rejects_non_boolean_confirm_plaintext_direct_arg(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_DATA_HOME": tmp}):
+                args = argparse.Namespace(limit=1, confirm_plaintext="false")
+                with self.assertRaisesRegex(RuntimeError, "confirm_plaintext must be a boolean"):
+                    cli.command_transcripts_document(args)
+
+    def test_transcripts_export_rejects_non_boolean_plaintext_direct_args(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_DATA_HOME": tmp}):
+                args = argparse.Namespace(
+                    limit=1,
+                    artifact_encryption="keyring",
+                    plaintext="false",
+                    confirm_plaintext=False,
+                )
+                with self.assertRaisesRegex(RuntimeError, "plaintext must be a boolean"):
+                    cli.command_transcripts_export(args)
+
+                args = argparse.Namespace(
+                    limit=1,
+                    artifact_encryption="keyring",
+                    plaintext=True,
+                    confirm_plaintext="false",
+                )
+                with self.assertRaisesRegex(RuntimeError, "confirm_plaintext must be a boolean"):
+                    cli.command_transcripts_export(args)
+
+    def test_transcripts_document_limit_zero_returns_no_transcripts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_DATA_HOME": tmp}):
+                transcript_dir = cli.transcript_dir()
+                transcript_dir.mkdir(parents=True)
+                (transcript_dir / "visible.txt").write_text("private transcript\n", encoding="utf-8")
+                stdout = io.StringIO()
+                with redirect_stdout(stdout):
+                    code = cli.run(["transcripts-document", "--limit", "0", "--confirm-plaintext", "--json"])
+
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["transcripts"], 0)
+            self.assertNotIn("private transcript", payload["content"])
+
+    def test_transcripts_export_limit_zero_does_not_include_transcript_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_DATA_HOME": tmp}):
+                transcript_dir = cli.transcript_dir()
+                transcript_dir.mkdir(parents=True)
+                (transcript_dir / "visible.txt").write_text("private transcript\n", encoding="utf-8")
+                stdout = io.StringIO()
+                with redirect_stdout(stdout):
+                    code = cli.run(["transcripts-export", "--limit", "0", "--plaintext", "--confirm-plaintext", "--json"])
+                payload = json.loads(stdout.getvalue())
+                exported = Path(payload["path"]).read_text(encoding="utf-8")
+
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["transcripts"], 0)
+            self.assertNotIn("private transcript", exported)
+
 if __name__ == "__main__":
     unittest.main()

@@ -109,6 +109,21 @@ class ArtifactCryptoTest(unittest.TestCase):
                 with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase contains invalid control characters"):
                     artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
 
+    def test_environment_passphrase_rejects_oversized_utf8_bytes(self) -> None:
+        oversized = "A1!a" + ("😀" * ((artifact_crypto.MAX_PASSPHRASE_CHARS // 4) + 1))
+        self.assertLessEqual(len(oversized), artifact_crypto.MAX_PASSPHRASE_CHARS)
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {artifact_crypto.PASSPHRASE_ENV: oversized, artifact_crypto.PASSPHRASE_FILE_ENV: ""},
+                    clear=False,
+                ),
+                mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=Path(tmp) / "missing.key"),
+            ):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase is too large"):
+                    artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
+
     def test_private_passphrase_file_rejects_internal_control_characters(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "passphrase.txt"
