@@ -2024,9 +2024,15 @@ def _remove_transcript_file(path: Path) -> bool:
         raise RuntimeError(f"failed to delete transcript file: {path}") from exc
 
 
-def _require_json_path(path_value: str, *, field_name: str, default: Path | None = None) -> Path:
+def _require_json_path(
+    path_value: str,
+    *,
+    field_name: str,
+    default: Path | None = None,
+    max_chars: int = MAX_PATH_CHARS,
+) -> Path:
     if path_value:
-        path = _coerce_path(path_value, field_name=field_name, resolve=False)
+        path = _coerce_path(path_value, field_name=field_name, resolve=False, max_chars=max_chars)
         if not path.is_absolute():
             path = Path.cwd() / path
     elif default is not None:
@@ -2054,7 +2060,12 @@ def _settings_json_from_args(args: argparse.Namespace) -> dict[str, object]:
             raise RuntimeError("settings JSON must be provided by either --settings-json or stdin, not both")
         raw = sys.stdin.read(MAX_SETTINGS_JSON_CHARS + 1)
         return _parse_cli_settings_json(raw or "{}")
-    return _parse_cli_settings_json(getattr(args, "settings_json", "{}"))
+    settings = _parse_cli_settings_json(getattr(args, "settings_json", "{}"))
+    from .settings_export import NON_EXPORTABLE_PRIVATE_SETTINGS
+
+    if any(key in settings for key in NON_EXPORTABLE_PRIVATE_SETTINGS):
+        raise RuntimeError("private settings must be provided via --settings-json-stdin, not --settings-json")
+    return settings
 
 
 def _coerce_path(
@@ -3058,6 +3069,33 @@ def finalize_recording(
                 if not log_deleted:
                     cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
             _raise_recording_cleanup_failure(store, cleanup_failures)
+            cleanup_failed_paths = _cleanup_failed_paths(artifact_cleanup)
+            message = "silent recording skipped"
+            if cleanup_failed_paths:
+                _persist_cleanup_failure_state(store, cleanup_failed_paths)
+                message = f"{message}; {_cleanup_failure_error(cleanup_failed_paths)}"
+                return {
+                    "status": "error",
+                    "message": message,
+                    "error": message,
+                    "cleanup_failed_path_count": len(cleanup_failed_paths),
+                    "transcript": "",
+                    "transcript_path": "",
+                    "artifact_encryption": artifact_encryption,
+                    "transcript_encryption": ARTIFACT_ENCRYPTION_OFF,
+                    "transcript_encrypted": False,
+                    "recording_encryption": recording_encryption,
+                    "recording_encrypted": recording_encryption != ARTIFACT_ENCRYPTION_OFF,
+                    "inserted": False,
+                    "recording_artifact_cap": _public_cleanup_result(artifact_cleanup),
+                    "language": language,
+                    "recording_artifacts_kept": keep_recording_artifacts,
+                    "audio_deleted": audio_deleted,
+                    "log_deleted": log_deleted,
+                    "silence_detected": True,
+                    "silence_duration_seconds": silence.silence_seconds,
+                    "speech_duration_seconds": silence.speech_seconds,
+                }
             done = store.update(
                 status="done",
                 stopped_at=state.stopped_at or now_iso(),
@@ -3200,7 +3238,7 @@ def finalize_recording(
             if not log_deleted:
                 cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
         _raise_recording_cleanup_failure(store, cleanup_failures)
-        done = store.update(
+        done_candidate = RecordingState(
             status="done",
             stopped_at=state.stopped_at or now_iso(),
             audio_path=done_audio_path,
@@ -3210,13 +3248,6 @@ def finalize_recording(
             inserted=inserted,
             error="",
         )
-        preserve_written_text_on_error = True
-        post_done_cleanup_failures: list[tuple[str, str, str]] = []
-        if remove_original_after_state_update:
-            if not remove_file(str(audio_path), suffix=audio_suffix):
-                post_done_cleanup_failures.append(("audio_path", str(audio_path), "original recording artifact"))
-        _raise_recording_cleanup_failure(store, post_done_cleanup_failures)
-        state = done
         artifact_cleanup_active_paths: set[Path] = set()
         if stabilized_audio_path is not None:
             artifact_cleanup_active_paths.add(stabilized_audio_path)
@@ -3233,7 +3264,7 @@ def finalize_recording(
         transcript_cleanup = prune_files_by_mtime(
             _safe_transcript_artifact_files(),
             keep_transcripts,
-            active_artifact_paths(done, state_path=store.path),
+            active_artifact_paths(done_candidate, state_path=store.path),
             False,
         )
         transient_transcript_cleanup = prune_stale_transient_transcripts(False)
@@ -3242,12 +3273,31 @@ def finalize_recording(
             transcript_cleanup,
             transient_transcript_cleanup,
         )
-        status = done.status
         message = "recording finished without transcript" if not text.strip() else "transcription completed"
         if cleanup_failed_paths:
             _persist_cleanup_failure_state(store, cleanup_failed_paths)
             status = "error"
             message = f"{message}; {_cleanup_failure_error(cleanup_failed_paths)}"
+            done = done_candidate
+        else:
+            done = store.update(
+                status="done",
+                stopped_at=done_candidate.stopped_at,
+                audio_path=done_candidate.audio_path,
+                log_path=done_candidate.log_path,
+                transcript=done_candidate.transcript,
+                transcript_path=done_candidate.transcript_path,
+                inserted=done_candidate.inserted,
+                error=done_candidate.error,
+            )
+            preserve_written_text_on_error = True
+            post_done_cleanup_failures: list[tuple[str, str, str]] = []
+            if remove_original_after_state_update:
+                if not remove_file(str(audio_path), suffix=audio_suffix):
+                    post_done_cleanup_failures.append(("audio_path", str(audio_path), "original recording artifact"))
+            _raise_recording_cleanup_failure(store, post_done_cleanup_failures)
+            state = done
+            status = done.status
         return {
             "status": status,
             "message": message,
@@ -3461,7 +3511,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
 
         discarded_audio_path = state.audio_path
         has_artifacts = bool(discarded_audio_path or state.log_path or state.transcript_path)
-        has_recording_state = state.status in {"recording", "recorded", "processing", "finalizing"}
+        has_recording_state = state.status in {"recording", "recorded", "processing", "finalizing", "error"}
         if not has_artifacts and not has_recording_state:
             return {"status": "idle", "message": "nothing to cancel"}
 
@@ -4141,9 +4191,16 @@ def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
 
 
 def command_settings_export(args: argparse.Namespace) -> dict[str, object]:
+    from .settings_export import MAX_SETTINGS_EXPORT_PATH_CHARS
+
     ensure_runtime_dirs()
     settings = _settings_json_from_args(args)
-    path = _require_json_path(args.output, field_name="settings export output", default=default_settings_export_file())
+    path = _require_json_path(
+        args.output,
+        field_name="settings export output",
+        default=default_settings_export_file(),
+        max_chars=MAX_SETTINGS_EXPORT_PATH_CHARS,
+    )
     payload = write_export(path, settings, load_alarm_store())
     return {
         "status": "done",
@@ -4155,8 +4212,15 @@ def command_settings_export(args: argparse.Namespace) -> dict[str, object]:
 
 
 def command_settings_import(args: argparse.Namespace) -> dict[str, object]:
+    from .settings_export import MAX_SETTINGS_EXPORT_PATH_CHARS
+
     ensure_runtime_dirs()
-    path = _require_json_path(args.input, field_name="settings import input", default=default_settings_export_file())
+    path = _require_json_path(
+        args.input,
+        field_name="settings import input",
+        default=default_settings_export_file(),
+        max_chars=MAX_SETTINGS_EXPORT_PATH_CHARS,
+    )
     payload = read_export(path)
     save_alarm_store(payload["alarms"])
     include_settings = _coerce_bool(

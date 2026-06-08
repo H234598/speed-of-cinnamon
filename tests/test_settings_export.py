@@ -139,6 +139,12 @@ class SettingsExportTest(unittest.TestCase):
         with self.assertRaisesRegex(SettingsExportError, "invalid control character"):
             _sanitize_text_field("value\\rextra", field_name="setting value")
 
+    def test_sanitize_text_field_rejects_boundary_control_character(self) -> None:
+        with self.assertRaisesRegex(SettingsExportError, "invalid control character"):
+            _sanitize_text_field("\nvalue", field_name="setting value")
+        with self.assertRaisesRegex(SettingsExportError, "invalid control character"):
+            _sanitize_text_field("value\r", field_name="setting value")
+
     def test_sanitize_text_field_rejects_unencodable_text(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "invalid Unicode characters"):
             _sanitize_text_field("value\ud800", field_name="setting value")

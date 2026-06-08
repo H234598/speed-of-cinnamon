@@ -459,6 +459,16 @@ def _safe_model_listing_text(value: object, *, max_chars: int = MAX_OPENAI_COMPA
         return ""
 
 
+def _safe_model_listing_size(value: object) -> int:
+    if isinstance(value, bool) or isinstance(value, float):
+        return 0
+    try:
+        size = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return size if size > 0 else 0
+
+
 def _normalize_ollama_model(model: object) -> dict[str, object] | None:
     if not isinstance(model, dict):
         return None
@@ -479,7 +489,7 @@ def _normalize_ollama_model(model: object) -> dict[str, object] | None:
         "name": name,
         "model": name,
         "modified_at": _safe_model_listing_text(model.get("modified_at")),
-        "size": model.get("size") or 0,
+        "size": _safe_model_listing_size(model.get("size")),
         "size_label": _format_model_size(model.get("size")),
         "digest": _safe_model_listing_text(model.get("digest")),
         "family": family,

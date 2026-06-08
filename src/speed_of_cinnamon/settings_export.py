@@ -317,9 +317,9 @@ def _sanitize_text_field(value: object, *, field_name: str) -> str:
     text = str(value or "")
     if _contains_escaped_null(text):
         raise SettingsExportError(f"{field_name} contains invalid null byte")
-    text = text.strip()
     if _contains_http_header_control_chars(text):
         raise SettingsExportError(f"{field_name} contains invalid control character")
+    text = text.strip()
     if len(text) > MAX_SETTINGS_TEXT_CHARS:
         raise SettingsExportError(f"{field_name} is too long")
     if _utf8_byte_count(text, field_name=field_name) > MAX_SETTINGS_TEXT_CHARS:

@@ -288,21 +288,42 @@ class ArtifactCryptoTest(unittest.TestCase):
         with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "invalid length"):
             artifact_crypto._parse_keyring_secret(bad_secret)
 
+    def _pipe_reader(self, payload: bytes) -> object:
+        read_fd, write_fd = os.pipe()
+        os.write(write_fd, payload)
+        os.close(write_fd)
+        return os.fdopen(read_fd, "rb", buffering=0)
+
     def test_secret_tool_uses_pipe_output_capture(self) -> None:
-        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            self.assertEqual(kwargs["stdout"], subprocess.PIPE)
-            self.assertEqual(kwargs["stderr"], subprocess.PIPE)
-            return subprocess.CompletedProcess(command, 0, stdout=b"stored-secret\n", stderr=b"warning\n")
+        class FakePopen:
+            def __init__(self, command: list[str], **kwargs: object) -> None:
+                self.command = command
+                self.returncode = 0
+                self.stdin = None
+                self.stdout = self_outer._pipe_reader(b"stored-secret\n")
+                self.stderr = self_outer._pipe_reader(b"warning\n")
+
+            def wait(self, timeout: int | None = None) -> int:
+                return self.returncode
+
+            def kill(self) -> None:
+                self.returncode = -9
+
+        self_outer = self
 
         with (
             mock.patch("speed_of_cinnamon.artifact_crypto._secret_tool_path", return_value="/usr/bin/secret-tool"),
-            mock.patch("speed_of_cinnamon.artifact_crypto.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.artifact_crypto.subprocess.Popen", side_effect=FakePopen) as mocked_popen,
         ):
             proc = artifact_crypto._run_secret_tool(["lookup", "application", "test"])
 
         self.assertEqual(proc.returncode, 0)
         self.assertEqual(proc.stdout, b"stored-secret\n")
         self.assertEqual(proc.stderr, b"warning\n")
+        self.assertEqual(mocked_popen.call_args.kwargs["stdout"], subprocess.PIPE)
+        self.assertEqual(mocked_popen.call_args.kwargs["stderr"], subprocess.PIPE)
+        self.assertEqual(mocked_popen.call_args.kwargs["stdin"], None)
+        self.assertFalse(mocked_popen.call_args.kwargs["shell"])
 
     def test_secret_tool_environment_skips_control_character_values(self) -> None:
         with mock.patch.dict(
@@ -416,17 +437,38 @@ class ArtifactCryptoTest(unittest.TestCase):
                 mocked_secret_tool_path.assert_not_called()
 
     def test_secret_tool_rejects_oversized_output(self) -> None:
-        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-            stdout = kwargs["stdout"]
-            stdout.write(b"x" * (artifact_crypto.MAX_SECRET_TOOL_OUTPUT_BYTES + 1))
-            return subprocess.CompletedProcess(command, 0)
+        fake_proc_holder: dict[str, object] = {}
+
+        class FakePopen:
+            def __init__(self, command: list[str], **kwargs: object) -> None:
+                self.command = command
+                self.returncode = 0
+                self.killed = False
+                self.wait_calls = 0
+                self.stdin = None
+                self.stdout = self_outer._pipe_reader(b"x" * 17)
+                self.stderr = self_outer._pipe_reader(b"")
+                fake_proc_holder["proc"] = self
+
+            def wait(self, timeout: int | None = None) -> int:
+                self.wait_calls += 1
+                return self.returncode
+
+            def kill(self) -> None:
+                self.killed = True
+                self.returncode = -9
+
+        self_outer = self
 
         with (
             mock.patch("speed_of_cinnamon.artifact_crypto._secret_tool_path", return_value="/usr/bin/secret-tool"),
-            mock.patch("speed_of_cinnamon.artifact_crypto.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.artifact_crypto.MAX_SECRET_TOOL_OUTPUT_BYTES", 16),
+            mock.patch("speed_of_cinnamon.artifact_crypto.subprocess.Popen", side_effect=FakePopen),
         ):
             with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "exceeded safe output limit"):
                 artifact_crypto._run_secret_tool(["lookup", "application", "test"])
+        self.assertTrue(getattr(fake_proc_holder["proc"], "killed"))
+        self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 1)
 
     def test_keyring_decryption_does_not_create_missing_keyring_key(self) -> None:
         key = bytes(range(32))

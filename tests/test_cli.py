@@ -6118,6 +6118,52 @@ class CliTest(unittest.TestCase):
             self.assertEqual(final_state.audio_path, str(audio))
             self.assertEqual(final_state.log_path, str(log))
 
+    def test_finalize_silent_artifact_cap_failure_does_not_persist_done_if_error_state_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="finalizing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=True)
+            real_update = store.update
+            statuses: list[object] = []
+
+            def fake_update(**kwargs: object) -> RecordingState:
+                statuses.append(kwargs.get("status"))
+                if kwargs.get("status") == "done":
+                    raise AssertionError("done written before artifact-cap cleanup completed")
+                if kwargs.get("status") == "error":
+                    raise RuntimeError("error write failed")
+                return real_update(**kwargs)
+
+            failed_cleanup = {
+                "planned_paths": [],
+                "deleted_paths": [],
+                "failed_paths": [str(recordings_root / "stale.wav")],
+                "skipped_active_paths": [],
+            }
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch.object(store, "update", side_effect=fake_update),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=cli.SilenceDetectionResult(True, True, 2.0, 2.0, 0.0, 2.0, "silent")),
+                mock.patch("speed_of_cinnamon.cli._enforce_recording_artifact_cap", return_value=failed_cleanup),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "error write failed"):
+                    cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+            self.assertNotIn("done", statuses)
+            self.assertEqual(final_state.status, "finalizing")
+            self.assertEqual(final_state.audio_path, str(audio))
+
     def test_finalize_non_silent_keeps_artifacts_if_done_and_error_state_updates_fail(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -6279,6 +6325,58 @@ class CliTest(unittest.TestCase):
             self.assertEqual(final_state.log_path, "")
             self.assertFalse(audio.exists())
             self.assertFalse(log.exists())
+
+    def test_finalize_transient_cleanup_failure_does_not_persist_done_if_error_state_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="finalizing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=True)
+            real_update = store.update
+            statuses: list[object] = []
+
+            def fake_update(**kwargs: object) -> RecordingState:
+                statuses.append(kwargs.get("status"))
+                if kwargs.get("status") == "done":
+                    raise AssertionError("done written before cleanup completed")
+                if kwargs.get("status") == "error":
+                    raise RuntimeError("error write failed")
+                return real_update(**kwargs)
+
+            failed_cleanup = {
+                "planned_paths": [],
+                "deleted_paths": [],
+                "failed_paths": [str(tmp_path / "speed-of-cinnamon" / "transcripts" / "stale.tmp")],
+                "skipped_active_paths": [],
+            }
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch.object(store, "update", side_effect=fake_update),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent")),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("skip trim")),
+                mock.patch("speed_of_cinnamon.cli.reencode_recording_to_flac", side_effect=cli.RecorderError("skip encode")),
+                mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.prune_stale_transient_transcripts", return_value=failed_cleanup),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "error write failed"):
+                    cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+            self.assertNotIn("done", statuses)
+            self.assertEqual(final_state.status, "finalizing")
+            self.assertEqual(final_state.audio_path, str(audio))
 
     def test_finalize_removes_written_transcript_if_insert_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7161,7 +7259,7 @@ class CliTest(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
             audio_exists = audio.exists()
             log_exists = log.exists()
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 1)
         self.assertEqual(payload["status"], "error")
         self.assertEqual(payload["message"], "failed to discard recording artifacts")
         self.assertTrue(payload["discarded_audio_path_present"])
@@ -7368,6 +7466,22 @@ class CliTest(unittest.TestCase):
         self.assertTrue(source_exists)
         self.assertTrue(transcript_exists)
 
+    def test_cancel_clears_error_state_without_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="error", error="cleanup already resolved"))
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "idle")
+        self.assertEqual(final_state.status, "idle")
+        self.assertEqual(final_state.error, "")
+
     def test_cancel_removes_transcript_artifact_before_idle_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -7426,7 +7540,7 @@ class CliTest(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
             final_state = store.read()
 
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 1)
         self.assertEqual(payload["status"], "error")
         self.assertTrue(payload["audio_deleted"])
         self.assertFalse(payload["log_deleted"])
@@ -8988,6 +9102,77 @@ class CliTest(unittest.TestCase):
         self.assertIn("custom patterns are treated as literal text for safety", text)
         self.assertIn("Glitzerkram", text)
         self.assertIn("Frickelfrosch", text)
+
+    def test_settings_export_rejects_private_settings_in_argv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "settings-export.json"
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = cli.run([
+                    "settings-export",
+                    "--settings-json",
+                    '{"language":"de","openai-compatible-api-key":"sk-secret"}',
+                    "--output",
+                    str(output),
+                    "--json",
+                ])
+
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 1)
+            self.assertIn("private settings must be provided via --settings-json-stdin", payload["error"])
+            self.assertNotIn("sk-secret", payload["error"])
+            self.assertFalse(output.exists())
+
+    def test_settings_export_allows_private_settings_via_stdin_without_exporting_secret(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "settings-export.json"
+            stdout = io.StringIO()
+            with (
+                mock.patch("sys.stdin", io.StringIO('{"language":"de","openai-compatible-api-key":"sk-secret"}')),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "settings-export",
+                    "--settings-json-stdin",
+                    "--output",
+                    str(output),
+                    "--json",
+                ])
+
+            payload = json.loads(stdout.getvalue())
+            rendered = output.read_text(encoding="utf-8")
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["path"], str(output))
+            self.assertNotIn("sk-secret", rendered)
+            self.assertNotIn("openai-compatible-api-key", json.loads(rendered)["settings"])
+
+    def test_settings_export_accepts_module_path_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            for index in range(14):
+                parent = parent / f"nested-segment-{index:02d}"
+                parent.mkdir(mode=0o700)
+            output = parent / "settings-export.json"
+            self.assertGreater(len(str(output)), cli.MAX_PATH_CHARS)
+            self.assertLess(len(str(output)), 4096)
+
+            stdout = io.StringIO()
+            with (
+                mock.patch("sys.stdin", io.StringIO('{"language":"de"}')),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "settings-export",
+                    "--settings-json-stdin",
+                    "--output",
+                    str(output),
+                    "--json",
+                ])
+
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["path"], str(output))
+            self.assertTrue(output.exists())
 
 if __name__ == "__main__":
     unittest.main()

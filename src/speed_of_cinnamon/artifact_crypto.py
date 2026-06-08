@@ -9,6 +9,7 @@ import shutil
 import stat
 import subprocess  # nosec B404
 import tempfile
+import time
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -694,30 +695,90 @@ def _validate_secret_tool_args(args: object) -> list[str]:
     return validated
 
 
+def _read_secret_tool_pipes_bounded(proc: subprocess.Popen[bytes]) -> tuple[bytes, bytes]:
+    if proc.stdout is None or proc.stderr is None:
+        raise ArtifactCryptoError("Secret Service keyring helper output could not be captured safely")
+    outputs: dict[str, bytearray] = {"stdout": bytearray(), "stderr": bytearray()}
+    streams = ((proc.stdout, "stdout"), (proc.stderr, "stderr"))
+    active: dict[int, str] = {}
+    for stream, field_name in streams:
+        try:
+            fd = stream.fileno()
+            os.set_blocking(fd, False)
+        except OSError as exc:
+            raise ArtifactCryptoError("Secret Service keyring helper output could not be captured safely") from exc
+        active[fd] = field_name
+    deadline = time.monotonic() + _SECRET_TOOL_TIMEOUT_SECONDS
+    while active:
+        if time.monotonic() >= deadline:
+            with suppress(OSError):
+                proc.kill()
+            with suppress(Exception):
+                proc.wait(timeout=1)
+            raise ArtifactCryptoError("Secret Service keyring request timed out")
+        progressed = False
+        for fd, field_name in list(active.items()):
+            try:
+                chunk = os.read(fd, 8192)
+            except BlockingIOError:
+                continue
+            if not chunk:
+                active.pop(fd, None)
+                progressed = True
+                continue
+            progressed = True
+            outputs[field_name].extend(chunk)
+            if len(outputs[field_name]) > MAX_SECRET_TOOL_OUTPUT_BYTES:
+                with suppress(OSError):
+                    proc.kill()
+                with suppress(Exception):
+                    proc.wait(timeout=1)
+                raise ArtifactCryptoError(f"Secret Service keyring {field_name} exceeded safe output limit")
+        if not progressed:
+            time.sleep(0.01)
+    return bytes(outputs["stdout"]), bytes(outputs["stderr"])
+
+
 def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subprocess.CompletedProcess[bytes]:
     args = _validate_secret_tool_args(args)
     if input_text is not None:
         input_text = _validate_secret_tool_text(input_text, field_name="input")
     command = [_secret_tool_path(), *args]
     env = _filtered_environment()
+    proc: subprocess.Popen[bytes] | None = None
     try:
-        proc = subprocess.run(  # nosec B603
+        proc = subprocess.Popen(  # nosec B603
             command,
-            input=None if input_text is None else input_text.encode("utf-8"),
+            stdin=subprocess.PIPE if input_text is not None else None,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=_SECRET_TOOL_TIMEOUT_SECONDS,
             shell=False,
             env=env,
-            check=False,
         )
-        stdout = _validate_secret_tool_output(proc.stdout, field_name="stdout")
-        stderr = _validate_secret_tool_output(proc.stderr, field_name="stderr")
-        return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
-    except subprocess.TimeoutExpired as exc:
-        raise ArtifactCryptoError("Secret Service keyring request timed out") from exc
+        if input_text is not None:
+            if proc.stdin is None:
+                raise ArtifactCryptoError("Secret Service keyring helper input could not be sent safely")
+            proc.stdin.write(input_text.encode("utf-8"))
+            proc.stdin.close()
+        stdout, stderr = _read_secret_tool_pipes_bounded(proc)
+        try:
+            returncode = proc.wait(timeout=_SECRET_TOOL_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired as exc:
+            proc.kill()
+            with suppress(Exception):
+                proc.wait(timeout=1)
+            raise ArtifactCryptoError("Secret Service keyring request timed out") from exc
+        stdout = _validate_secret_tool_output(stdout, field_name="stdout")
+        stderr = _validate_secret_tool_output(stderr, field_name="stderr")
+        return subprocess.CompletedProcess(command, returncode, stdout, stderr)
     except OSError as exc:
         raise ArtifactCryptoError("Secret Service keyring helper could not be started") from exc
+    finally:
+        if proc is not None:
+            for stream in (proc.stdin, proc.stdout, proc.stderr):
+                if stream is not None:
+                    with suppress(OSError):
+                        stream.close()
 
 
 def _parse_keyring_secret(raw: bytes) -> bytes | None:

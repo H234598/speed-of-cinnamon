@@ -1156,6 +1156,24 @@ class PostProcessorTest(unittest.TestCase):
         self.assertEqual(result["models"][0]["model"], "safe-model")
         self.assertEqual(result["models"][0]["description"], "3B Q4")
 
+    def test_list_ollama_models_coerces_non_numeric_size_to_zero(self) -> None:
+        payload = {
+            "models": [
+                {"name": "string-size", "size": "bad\nsize"},
+                {"name": "object-size", "size": {"bytes": 123}},
+                {"name": "positive-size", "size": "123"},
+            ]
+        }
+
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", return_value=FakeResponse(payload)):
+            result = list_ollama_models("http://127.0.0.1:11434/")
+
+        self.assertTrue(result["available"])
+        sizes = {model["name"]: model["size"] for model in result["models"]}
+        self.assertEqual(sizes["string-size"], 0)
+        self.assertEqual(sizes["object-size"], 0)
+        self.assertEqual(sizes["positive-size"], 123)
+
     def test_list_ollama_models_reports_unavailable_server(self) -> None:
         with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=OSError("offline")):
             result = list_ollama_models("http://127.0.0.1:11434")

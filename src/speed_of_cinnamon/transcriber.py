@@ -68,7 +68,10 @@ def _validate_language_code(language: str) -> str:
         raise TranscriptionError("language contains invalid null byte")
     if _contains_http_header_control_chars(language):
         raise TranscriptionError("language contains invalid control character")
-    return _assert_text_length(language, field_name="language", max_chars=MAX_LANGUAGE_CODE_CHARS).strip()
+    normalized = _assert_text_length(language, field_name="language", max_chars=MAX_LANGUAGE_CODE_CHARS).strip()
+    if not normalized:
+        raise TranscriptionError("language must not be empty")
+    return normalized
 
 _COMMAND_TEMPLATE_PLACEHOLDER_RE = re.compile(
     r"\{(audio|language|text|output_base|output_dir|context|vocabulary|prompt)\}"

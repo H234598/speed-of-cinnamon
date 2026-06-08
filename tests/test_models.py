@@ -2198,8 +2198,8 @@ class ModelsTest(unittest.TestCase):
             lookalike_exists = lookalike.exists()
 
         self.assertTrue(payload["removed"])
-        self.assertEqual(payload["removed_orphans"], 1)
-        self.assertEqual(orphan_exists, [False, True, True, True])
+        self.assertEqual(payload["removed_orphans"], 3)
+        self.assertEqual(orphan_exists, [False, True, False, False])
         self.assertTrue(lookalike_exists)
 
     def test_remove_model_preserves_fresh_randomized_orphan(self) -> None:

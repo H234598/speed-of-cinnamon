@@ -1454,6 +1454,15 @@ def _is_model_orphan_name(model_name: str, candidate_name: str, *, allow_suffixl
     if remainder.endswith(".tmp"):
         token = remainder[:-4]
         return len(token) == 16 and all(char in "0123456789abcdef" for char in token)
+    if remainder.endswith(".backup"):
+        token = remainder[:-7]
+        return len(token) == 16 and all(char in "0123456789abcdef" for char in token)
+    if remainder.endswith(".orphan"):
+        backup_remainder = remainder[:-7]
+        parts = backup_remainder.split(".backup.")
+        if len(parts) != 2:
+            return False
+        return all(len(token) == 16 and all(char in "0123456789abcdef" for char in token) for token in parts)
     return False
 
 

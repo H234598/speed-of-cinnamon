@@ -1888,6 +1888,16 @@ class TranscriberTest(unittest.TestCase):
 
         mocked_run.assert_not_called()
 
+    def test_transcribe_rejects_empty_language_before_local_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with mock.patch("speed_of_cinnamon.transcriber._run_transcriber_process", side_effect=AssertionError("backend called")) as mocked_run:
+                with self.assertRaisesRegex(TranscriptionError, "language must not be empty"):
+                    transcribe(audio, "  ", Path(tmp) / "sample.txt", "printf ok")
+
+        mocked_run.assert_not_called()
+
     def test_openai_whisper_direct_helper_rejects_oversized_language_before_command_lookup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
