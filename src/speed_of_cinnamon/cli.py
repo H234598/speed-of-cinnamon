@@ -4065,10 +4065,10 @@ def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
         "would_delete_path_count": len(would_delete_paths),
         "failed_path_count": len(failed_paths),
         "skipped_active_path_count": len(skipped_active_paths),
-        "deleted_paths": [] if not dry_run else deleted_paths,
-        "would_delete_paths": would_delete_paths if dry_run else [],
-        "failed_paths": failed_paths if dry_run else [],
-        "skipped_active_paths": skipped_active_paths if dry_run else [],
+        "deleted_paths": [],
+        "would_delete_paths": [],
+        "failed_paths": [],
+        "skipped_active_paths": [],
     }
 
 
@@ -4172,7 +4172,7 @@ def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
 
     transcript_entries = [
         {key: entry[key] for key in ("name", "modified_at") if key in entry}
-        for entry in read_transcript_history(5)
+        for entry in _redact_history_previews(read_transcript_history(5))
     ]
     state_payload = _diagnostics_state_payload(build_store(args).read())
     state_file_path = normalized_path(args.state_file)

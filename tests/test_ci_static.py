@@ -721,7 +721,8 @@ class CiStaticTest(unittest.TestCase):
         workflow = (REPO_ROOT / ".github" / "workflows" / "frogbot-scan-and-fix.yml").read_text(encoding="utf-8")
         top_level_permissions = _workflow_block_lines(workflow, "permissions:")
 
-        self.assertEqual(top_level_permissions, ["  contents: read"])
+        self.assertIn("  contents: read", top_level_permissions)
+        self.assertNotIn("  security-events: write", top_level_permissions)
         self.assertIn(
             "  create-fix-pull-requests:\n"
             "    needs: check-frogbot-secrets\n"
@@ -738,7 +739,8 @@ class CiStaticTest(unittest.TestCase):
         workflow = (REPO_ROOT / ".github" / "workflows" / "frogbot-scan-pr.yml").read_text(encoding="utf-8")
         top_level_permissions = _workflow_block_lines(workflow, "permissions:")
 
-        self.assertEqual(top_level_permissions, ["  contents: read"])
+        self.assertIn("  contents: read", top_level_permissions)
+        self.assertNotIn("  security-events: write", top_level_permissions)
         self.assertIn(
             "  scan-pull-request:\n"
             "    needs: check-frogbot-secrets\n"
@@ -1447,6 +1449,20 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("security-events: write", workflow)
         self.assertNotIn("id-token: write", workflow)
         self.assertIn("publish_results: false", workflow)
+
+    def test_osv_pr_scan_does_not_inherit_security_events_write(self) -> None:
+        workflow = (REPO_ROOT / ".github" / "workflows" / "osv-scanner.yml").read_text(encoding="utf-8")
+        top_level_permissions = _workflow_block_lines(workflow, "permissions:")
+        scan_scheduled = _workflow_block_lines(workflow, "scan-scheduled:")
+        scan_pr = _workflow_block_lines(workflow, "scan-pr:")
+
+        self.assertIn("  contents: read", top_level_permissions)
+        self.assertNotIn("  security-events: write", top_level_permissions)
+        self.assertIn("    permissions:", scan_scheduled)
+        self.assertIn("      security-events: write", scan_scheduled)
+        self.assertIn("    permissions:", scan_pr)
+        self.assertIn("      contents: read", scan_pr)
+        self.assertNotIn("      security-events: write", scan_pr)
 
     def test_bandit_workflow_runs_native_blocking_scan_without_extra_token_scope(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "bandit.yml").read_text(encoding="utf-8")

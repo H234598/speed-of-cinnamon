@@ -3401,7 +3401,8 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["status"], "error")
         self.assertEqual(payload["would_delete_transient_transcripts"], 1)
         self.assertEqual(payload["failed_path_count"], 1)
-        self.assertIn(str(owner), payload["failed_paths"])
+        self.assertEqual(payload["failed_paths"], [])
+        self.assertNotIn(str(owner), json.dumps(payload))
         self.assertTrue(stale_exists)
         self.assertTrue(owner_is_symlink)
 
@@ -3424,7 +3425,8 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(payload["status"], "error")
         self.assertIn("failed to scan or delete 1 file", payload["error"])
-        self.assertIn(str(failed_dir), payload["failed_paths"])
+        self.assertEqual(payload["failed_paths"], [])
+        self.assertNotIn(str(failed_dir), json.dumps(payload))
 
     def test_cleanup_failed_paths_rejects_malformed_cleanup_results(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "missing failed_paths"):
@@ -4520,8 +4522,9 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("log_path", payload["state"])
         self.assertNotIn("transcript_path", payload["state"])
         self.assertNotIn("process_identity", payload["state"])
-        self.assertEqual(payload["recent_transcripts"][0]["name"], "secret.txt")
+        self.assertEqual(payload["recent_transcripts"][0]["name"], cli.HISTORY_METADATA_REDACTED_TEXT)
         self.assertNotIn("path", payload["recent_transcripts"][0])
+        self.assertNotIn("secret.txt", encoded)
         self.assertNotIn("secret dictated words", encoded)
         self.assertNotIn(str(audio_path), encoded)
         self.assertNotIn(str(log_path), encoded)
@@ -6778,7 +6781,9 @@ class CliTest(unittest.TestCase):
             dry_run_payload = payload
             self.assertEqual(code, 0)
             self.assertEqual(dry_run_payload["would_delete_recordings"], 1)
-            self.assertIn(str(finalized), dry_run_payload["would_delete_paths"])
+            self.assertGreaterEqual(dry_run_payload["would_delete_path_count"], 1)
+            self.assertEqual(dry_run_payload["would_delete_paths"], [])
+            self.assertNotIn(str(finalized), json.dumps(dry_run_payload))
             self.assertTrue(finalized.exists())
 
             with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}):

@@ -2363,7 +2363,7 @@ MyApplet.prototype = {
     this._setStatus("processing", _("Preparing profanity replacement list..."), this.lastTranscript);
     this._spawnJson(this._profanityFilterDocumentArgs(), (payload) => {
       if (payload.error) {
-        this._setStatus("error", payload.error, this.lastTranscript);
+        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       let path = String(payload.path || "");
@@ -2378,7 +2378,7 @@ MyApplet.prototype = {
   _copySetupPlan: function() {
     this._spawnJson(this._setupArgs(), (payload) => {
       if (payload.error) {
-        this._setStatus("error", payload.error, this.lastTranscript);
+        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       this.clipboard.set_text(St.ClipboardType.CLIPBOARD, String(payload.text || JSON.stringify(payload, null, 2)));
@@ -2408,7 +2408,7 @@ MyApplet.prototype = {
   _copySetupCommands: function() {
     this._spawnJson(this._setupArgs(), (payload) => {
       if (payload.error) {
-        this._setStatus("error", payload.error, this.lastTranscript);
+        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
 
@@ -2426,7 +2426,7 @@ MyApplet.prototype = {
   _copyDiagnostics: function() {
     this._spawnJson(this._diagnosticsArgs(), (payload) => {
       if (payload.error) {
-        this._setStatus("error", payload.error, this.lastTranscript);
+        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       this.clipboard.set_text(St.ClipboardType.CLIPBOARD, JSON.stringify(payload, null, 2));
@@ -2437,7 +2437,7 @@ MyApplet.prototype = {
   _saveDiagnostics: function() {
     this._spawnJson(this._diagnosticsSaveArgs(), (payload) => {
       if (payload.error) {
-        this._setStatus("error", payload.error, this.lastTranscript);
+        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       this._setStatus("done", _("Saved diagnostics"), this.lastTranscript);
@@ -2608,7 +2608,7 @@ MyApplet.prototype = {
     this._setStatus("processing", _("Benchmarking downloaded models..."), this.lastTranscript);
     this._spawnJson(this._benchmarkArgs(audioPath), (payload) => {
       if (payload.error) {
-        this._setStatus("error", payload.error, this.lastTranscript);
+        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       let results = Array.isArray(payload.results) ? payload.results : [];
@@ -2638,8 +2638,8 @@ MyApplet.prototype = {
     this._populateAlarmMenu([], _("Loading alarms..."));
     this._spawnJson(this._alarmListArgs(), (payload) => {
       if (payload.error) {
-        this._populateAlarmMenu([], payload.error);
-        this._setStatus("error", payload.error, this.lastTranscript);
+        this._populateAlarmMenu([], this._sanitizeErrorMessage(payload.error));
+        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       this._populateAlarmMenu(payload.alarms || [], payload.summary || "");
@@ -2727,7 +2727,7 @@ MyApplet.prototype = {
     this._setAlarmOptionStatus(enabled ? _("Enabling alarm...") : _("Disabling alarm..."));
     this._spawnJson(this._alarmEnableArgs(id, enabled), (payload) => {
       if (payload.error) {
-        this._setStatus("error", payload.error, this.lastTranscript);
+        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       this._setAlarmOptionStatus(enabled ? _("Alarm enabled") : _("Alarm disabled"));
@@ -2739,7 +2739,7 @@ MyApplet.prototype = {
     this._setAlarmOptionStatus(_("Removing alarm..."));
     this._spawnJson(this._alarmRemoveArgs(id), (payload) => {
       if (payload.error) {
-        this._setStatus("error", payload.error, this.lastTranscript);
+        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       this._setAlarmOptionStatus(payload.removed ? _("Alarm removed") : _("Alarm not found"));
@@ -2751,7 +2751,7 @@ MyApplet.prototype = {
     this._spawnJson(this._alarmCheckArgs(), (payload) => {
       if (payload.error) {
         if (manual) {
-          this._setStatus("error", payload.error, this.lastTranscript);
+          this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         }
         return;
       }
@@ -2783,8 +2783,8 @@ MyApplet.prototype = {
     this._populateInputSourceMenu([], _("Loading input sources..."));
     this._spawnJson(this._listInputsArgs(), (payload) => {
       if (payload.error) {
-        this._populateInputSourceMenu([], payload.error);
-        this._setStatus("error", payload.error, this.lastTranscript);
+        this._populateInputSourceMenu([], this._sanitizeErrorMessage(payload.error));
+        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       this._populateInputSourceMenu(payload.sources || []);
@@ -3143,7 +3143,7 @@ MyApplet.prototype = {
     this._spawnJson(this._downloadModelArgs(name), (payload) => {
       this.isCommandRunning = false;
       if (payload.error) {
-        this._setStatus("error", payload.error, this.lastTranscript);
+        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         this._refreshModelMenu();
         return;
       }
@@ -3166,7 +3166,7 @@ MyApplet.prototype = {
     this._spawnJson(this._removeModelArgs(name), (payload) => {
       this.isCommandRunning = false;
       if (payload.error) {
-        this._setStatus("error", payload.error, this.lastTranscript);
+        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         this._refreshModelMenu();
         return;
       }
@@ -3738,8 +3738,9 @@ MyApplet.prototype = {
     this._setStatus("processing", _("Checking Ollama..."), this.lastTranscript);
     this._spawnJson(this._textModelsArgs("ollama"), (payload) => {
       if (payload.error) {
-        this._setStatus("error", payload.error, this.lastTranscript);
-        this._notify(_("Could not check Ollama"), String(payload.error), true);
+        let safeError = this._sanitizeErrorMessage(payload.error);
+        this._setStatus("error", safeError, this.lastTranscript);
+        this._notify(_("Could not check Ollama"), safeError, true);
         return;
       }
       let models = Array.isArray(payload.models) ? payload.models : [];
@@ -3801,8 +3802,9 @@ MyApplet.prototype = {
     this._setStatus("processing", _("Loading Ollama text models..."), this.lastTranscript);
     this._spawnJson(this._textModelsArgs("ollama"), (payload) => {
       if (payload.error) {
-        this._setStatus("error", payload.error, this.lastTranscript);
-        this._notify(_("Could not load Ollama models"), String(payload.error), true);
+        let safeError = this._sanitizeErrorMessage(payload.error);
+        this._setStatus("error", safeError, this.lastTranscript);
+        this._notify(_("Could not load Ollama models"), safeError, true);
         return;
       }
       let models = Array.isArray(payload.models) ? payload.models : [];
@@ -3866,8 +3868,9 @@ MyApplet.prototype = {
     this._spawnJson(this._installTextModelArgs(model), (payload) => {
       this.isCommandRunning = false;
       if (payload.error) {
-        this._setStatus("error", payload.error, this.lastTranscript);
-        this._notify(_("Ollama model installation failed"), String(payload.error), true);
+        let safeError = this._sanitizeErrorMessage(payload.error);
+        this._setStatus("error", safeError, this.lastTranscript);
+        this._notify(_("Ollama model installation failed"), safeError, true);
         this._refreshTextModelMenu();
         return;
       }
@@ -3882,7 +3885,7 @@ MyApplet.prototype = {
     this._spawnJson(this._historyArgs(), (payload) => {
       if (payload.error) {
         this._populateHistoryMenu([]);
-        this._setStatus("error", payload.error, this.lastTranscript);
+        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       this._populateHistoryMenu(payload.transcripts || []);
@@ -3954,7 +3957,7 @@ MyApplet.prototype = {
     this._spawnJson(this._allHistoryArgs(), (payload) => {
       this.isCommandRunning = false;
       if (payload.error) {
-        this._setStatus("error", payload.error, this.lastTranscript);
+        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       let content = String(payload.content || "");
@@ -4019,7 +4022,7 @@ MyApplet.prototype = {
     this._spawnJson(this._transcriptsExportArgs(), (payload) => {
       this.isCommandRunning = false;
       if (payload.error) {
-        this._setStatus("error", payload.error, this.lastTranscript);
+        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         this._maybeWarnRejectedArtifactPassphrase(payload.error);
         return;
       }
@@ -4161,7 +4164,7 @@ MyApplet.prototype = {
     this._spawnJson(this._cleanupPreviewArgs(), (payload) => {
       this.isCommandRunning = false;
       if (payload.error) {
-        this._setStatus("error", payload.error, this.lastTranscript);
+        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       this._setStatus("ready", _("Cleanup preview: ") + String(this._cleanupCount(payload, true)), this.lastTranscript);
@@ -4178,7 +4181,7 @@ MyApplet.prototype = {
     this._spawnJson(this._cleanupArgs(), (payload) => {
       this.isCommandRunning = false;
       if (payload.error) {
-        this._setStatus("error", payload.error, this.lastTranscript);
+        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       let deleted = this._cleanupCount(payload, false);
@@ -4213,7 +4216,7 @@ MyApplet.prototype = {
     this._setStatus("processing", _("Exporting settings..."), this.lastTranscript);
     this._spawnJson(this._settingsExportArgs(), (payload) => {
       if (payload.error) {
-        this._setStatus("error", payload.error, this.lastTranscript);
+        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       this._setStatus("done", _("Exported settings"), this.lastTranscript);
@@ -4224,7 +4227,7 @@ MyApplet.prototype = {
     this._setStatus("processing", _("Importing settings..."), this.lastTranscript);
     this._spawnJson(this._settingsImportArgs(), (payload) => {
       if (payload.error) {
-        this._setStatus("error", payload.error, this.lastTranscript);
+        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       let applied = this._applyImportedSettings(payload.settings || {});
@@ -4686,7 +4689,7 @@ MyApplet.prototype = {
       this.cancelPendingWhileCommandRunning = false;
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
-      this._setStatus("error", payload.error, this.lastTranscript);
+      this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
       this._maybeWarnRejectedArtifactPassphrase(payload.error);
       return;
     }
@@ -4974,7 +4977,7 @@ MyApplet.prototype = {
       this.ollamaInstallWatchPolls++;
       this._spawnJson(this._textModelsArgs("ollama"), (payload) => {
         if (payload.error) {
-          this._setStatus("error", payload.error, this.lastTranscript);
+          this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
           return;
         }
         if (payload.available !== false) {
@@ -6251,7 +6254,7 @@ MyApplet.prototype = {
       if (payload.error) {
         this.autoRelistenPending = false;
         this.autoRelistenPendingToken = "";
-        this._setStatus("error", payload.error, this.lastTranscript);
+        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       if (payload.status === "recording" || payload.status === "recorded") {
