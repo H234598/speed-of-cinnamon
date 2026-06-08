@@ -224,6 +224,16 @@ class RecorderTest(unittest.TestCase):
         self.assertIn(recorder_module.WAV_TRIM_CHUNK_FRAMES, read_sizes)
         self.assertTrue(all(size <= recorder_module.WAV_TRIM_CHUNK_FRAMES for size in read_sizes))
 
+    def test_trim_recording_leading_silence_rejects_oversized_streamed_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            self._write_wav(audio, [0] * 1600 + [12000] * 1600)
+            with mock.patch("speed_of_cinnamon.recorder.MAX_FFMPEG_ARTIFACT_BYTES", 4):
+                with self.assertRaisesRegex(RecorderError, "exceeded safe artifact size limit"):
+                    trim_recording_leading_silence(audio, 0.1)
+
+            self.assertEqual([path.name for path in Path(tmp).glob("*trimmed*.wav")], [])
+
     def test_trim_recording_leading_silence_keeps_speech_on_fractional_start_frame(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
@@ -343,6 +353,24 @@ class RecorderTest(unittest.TestCase):
             )
         )
 
+    @mock.patch("speed_of_cinnamon.recorder.os.open", wraps=os.open)
+    def test_open_recording_artifact_leaf_adds_secure_open_flags(self, mocked_open: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            fd = recorder_module._open_recording_artifact_leaf(audio, os.O_RDONLY, field_name="recording audio file")
+            os.close(fd)
+
+        self.assertTrue(
+            any(
+                args[0] == audio.name
+                and isinstance(args[1], int)
+                and args[1] & os.O_NOFOLLOW
+                and "dir_fd" in kwargs
+                for args, kwargs in mocked_open.call_args_list
+            )
+        )
+
     def test_trim_recording_leading_silence_open_error_does_not_leak_audio_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "secret-sample.wav"
@@ -369,7 +397,7 @@ class RecorderTest(unittest.TestCase):
             audio.write_bytes(b"audio")
 
             def oversized_output(command: list[str]) -> subprocess.CompletedProcess[bytes]:
-                Path(command[-1]).write_bytes(b"x" * 5)
+                Path(command[-1]).write_bytes(b"x" * 4)
                 return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
 
             with (
@@ -456,7 +484,7 @@ class RecorderTest(unittest.TestCase):
             audio.write_bytes(b"audio")
 
             def oversized_output(command: list[str]) -> subprocess.CompletedProcess[bytes]:
-                Path(command[-1]).write_bytes(b"x" * 5)
+                Path(command[-1]).write_bytes(b"x" * 4)
                 return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
 
             with (

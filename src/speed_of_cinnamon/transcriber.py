@@ -211,9 +211,45 @@ def _model_path_exists(path: str) -> bool:
     if _contains_http_header_control_chars(path):
         return False
     try:
-        return Path(path).expanduser().exists()
-    except (OSError, ValueError):
+        return _local_model_path_kind(Path(path).expanduser(), field_name="whisper model path") is not None
+    except (OSError, ValueError, TranscriptionError):
         return False
+
+
+def _local_model_path_kind(path: Path, *, field_name: str) -> str | None:
+    try:
+        path_stat = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise TranscriptionError(f"{field_name} is invalid") from exc
+    if stat_module.S_ISLNK(path_stat.st_mode):
+        raise TranscriptionError(f"{field_name} must not pass through a symlink")
+    if stat_module.S_ISDIR(path_stat.st_mode):
+        return "directory"
+    if stat_module.S_ISREG(path_stat.st_mode):
+        return "file"
+    return "other"
+
+
+def _validate_ctranslate2_model_tree(path: Path, *, field_name: str) -> None:
+    try:
+        for root, dirnames, filenames in os.walk(path, followlinks=False):
+            root_path = Path(root)
+            for name in dirnames:
+                entry = root_path / name
+                entry_kind = _local_model_path_kind(entry, field_name=field_name)
+                if entry_kind != "directory":
+                    raise TranscriptionError(f"{field_name} contains unsafe directory entries")
+            for name in filenames:
+                entry = root_path / name
+                entry_kind = _local_model_path_kind(entry, field_name=field_name)
+                if entry_kind != "file":
+                    raise TranscriptionError(f"{field_name} contains unsafe file entries")
+    except TranscriptionError:
+        raise
+    except OSError as exc:
+        raise TranscriptionError(f"{field_name} is invalid") from exc
 
 
 def _validate_local_model_path(value: str, *, field_name: str, directory: bool) -> str:
@@ -233,12 +269,14 @@ def _validate_local_model_path(value: str, *, field_name: str, directory: bool) 
         raise TranscriptionError(str(exc)) from exc
     except (OSError, ValueError) as exc:
         raise TranscriptionError(f"{field_name} is invalid") from exc
-    if not path.exists():
+    path_kind = _local_model_path_kind(path, field_name=field_name)
+    if path_kind is None:
         raise TranscriptionError(f"{field_name} is missing")
     if directory:
-        if not path.is_dir():
+        if path_kind != "directory":
             raise TranscriptionError(f"{field_name} must be a directory")
-    elif not path.is_file():
+        _validate_ctranslate2_model_tree(path, field_name=field_name)
+    elif path_kind != "file":
         raise TranscriptionError(f"{field_name} must be a file")
     return str(path)
 
@@ -1729,12 +1767,15 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
     has_configured_model = bool(configured_model)
     configured_model_backend = model_backend_for_path(configured_model) if configured_model else ""
     configured_model_is_dir = False
+    configured_model_exists = False
     configured_model_path = None
     if configured_model:
         try:
             configured_model_path = Path(configured_model).expanduser()
             assert_no_symlink_ancestors(configured_model_path, field_name="configured whisper model path")
-            configured_model_is_dir = configured_model_path.exists() and configured_model_path.is_dir()
+            configured_model_kind = _local_model_path_kind(configured_model_path, field_name="configured whisper model path")
+            configured_model_exists = configured_model_kind is not None
+            configured_model_is_dir = configured_model_kind == "directory"
         except (OSError, ValueError):
             configured_model_is_dir = False
         except RuntimeError as exc:
@@ -1744,8 +1785,8 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
         if config.command_template.strip():
             return "command"
         if has_configured_model:
-            if not _model_path_exists(configured_model):
-                raise TranscriptionError(f"configured whisper model path is missing: {configured_model}")
+            if not configured_model_exists:
+                raise TranscriptionError("configured whisper model path is missing")
             if configured_model_backend == "faster-whisper" or configured_model_is_dir:
                 if faster_whisper_available():
                     return "faster-whisper"

@@ -2786,6 +2786,36 @@ class TranscriberTest(unittest.TestCase):
             with self.assertRaisesRegex(TranscriptionError, "CTranslate2 model path must not pass through a symlink"):
                 transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
 
+    def test_faster_whisper_direct_helper_rejects_symlink_inside_model_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            model_path = Path(tmp) / "ct2-model"
+            model_path.mkdir()
+            real_file = Path(tmp) / "real-model.bin"
+            real_file.write_bytes(b"model")
+            (model_path / "model.bin").symlink_to(real_file)
+
+            with self.assertRaisesRegex(TranscriptionError, "CTranslate2 model path must not pass through a symlink"):
+                transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
+
+    def test_faster_whisper_direct_helper_rejects_non_regular_model_tree_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            model_path = Path(tmp) / "ct2-model"
+            model_path.mkdir()
+            fifo = model_path / "model.fifo"
+            try:
+                os.mkfifo(fifo)
+            except OSError as exc:
+                self.skipTest(f"fifo unavailable: {exc}")
+
+            with self.assertRaisesRegex(TranscriptionError, "CTranslate2 model path contains unsafe file entries"):
+                transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
+
     def test_faster_whisper_direct_helper_requires_model_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"

@@ -687,9 +687,13 @@ def trim_recording_leading_silence(audio_path: Path, leading_silence_seconds: fl
                     with wave.open(output_file, "wb") as dest:
                         dest.setparams(params)
                         remaining = total_frames - start_frame
+                        written_bytes = 0
                         while remaining > 0:
                             chunk = source.readframes(min(WAV_TRIM_CHUNK_FRAMES, remaining))
                             frames_read = len(chunk) // frame_width
+                            written_bytes += len(chunk)
+                            if written_bytes >= MAX_FFMPEG_ARTIFACT_BYTES:
+                                raise RecorderError("recording leading silence trim exceeded safe artifact size limit")
                             if frames_read <= 0:
                                 raise RecorderError("failed to trim recording audio file")
                             dest.writeframesraw(chunk)
@@ -817,7 +821,7 @@ def trim_recording_silence(
     if output_size == 0:
         _unlink_recording_path_if_same(trimmed_path, output_stat)
         raise RecorderError("ffmpeg silence trimming produced empty output")
-    if output_size > MAX_FFMPEG_ARTIFACT_BYTES:
+    if output_size >= MAX_FFMPEG_ARTIFACT_BYTES:
         _unlink_recording_path_if_same(trimmed_path, output_stat)
         raise RecorderError("ffmpeg silence trimming exceeded safe artifact size limit")
     if not output_matches_path:
@@ -910,7 +914,7 @@ def reencode_recording_to_flac(audio_path: Path) -> Path:
     if output_size == 0:
         _unlink_recording_path_if_same(encoded_path, output_stat)
         raise RecorderError("ffmpeg FLAC conversion produced empty output")
-    if output_size > MAX_FFMPEG_ARTIFACT_BYTES:
+    if output_size >= MAX_FFMPEG_ARTIFACT_BYTES:
         _unlink_recording_path_if_same(encoded_path, output_stat)
         raise RecorderError("ffmpeg FLAC conversion exceeded safe artifact size limit")
     if not output_matches_path:
@@ -1137,6 +1141,10 @@ def _validate_private_recording_audio_file(
 
 
 def _open_recording_artifact_leaf(path: Path, flags: int, *, field_name: str) -> int:
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise RecorderError("secure recording artifact open is not supported on this platform")
+    flags |= nofollow_flag
     parent_fd = open_directory_without_following_symlinks(path.parent, field_name=f"{field_name} directory")
     try:
         return os.open(path.name, flags, dir_fd=parent_fd)
