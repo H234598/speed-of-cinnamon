@@ -162,6 +162,19 @@ class StateStoreTest(unittest.TestCase):
         self.assertEqual(loaded.transcript, "  hello  ")
         self.assertEqual(loaded.audio_path, " /tmp/audio.wav ")
 
+    def test_state_roundtrip_preserves_multiline_transcript(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = StateStore(Path(tmp) / "state.json")
+            store.write(RecordingState(transcript="hello\nworld\tagain\r\n"))
+            loaded = store.read()
+        self.assertEqual(loaded.transcript, "hello\nworld\tagain\r\n")
+
+    def test_state_rejects_non_newline_transcript_control_characters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = StateStore(Path(tmp) / "state.json")
+            with self.assertRaisesRegex(ValueError, "state transcript contains invalid control character"):
+                store.write(RecordingState(transcript="hello\x1fworld"))
+
     @mock.patch("speed_of_cinnamon.state.os.replace", side_effect=OSError("disk full"))
     def test_write_raises_runtime_error_when_atomic_replace_fails(self, mocked_replace: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:

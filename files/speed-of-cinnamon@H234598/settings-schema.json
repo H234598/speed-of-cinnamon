@@ -165,7 +165,7 @@
   },
   "main-menu-settings-map": {
     "type": "label",
-    "description": "All persistent settings from the applet menu are available here. Recording options mirror the Recording menu. Voice model settings mirror Recording > Voice model. Text backend and model selection mirror Text and output > Text model; polishing presets, custom instructions, and safety switches are configured here only. Output and Auto-Submitt are in Text output, personal context and vocabulary are in Personalization. Dynamic actions such as downloading or removing models, opening transcript folders, listing or exporting transcript documents, diagnostics, cleanup, and alarm commands remain in the applet panel menu."
+    "description": "All persistent settings from the applet menu are available here. Recording options mirror the Recording menu. Voice model settings mirror Recording > Voice model. Text backend and model selection mirror Text and output > Text model; polishing presets, custom instructions, and safety switches are configured here only. Output and Auto-Submit are in Text output, personal context and vocabulary are in Personalization. Dynamic actions such as downloading or removing models, opening transcript folders, listing or exporting transcript documents, diagnostics, cleanup, and alarm commands remain in the applet panel menu."
   },
   "settings-logo-header": {
     "type": "custom",
@@ -207,7 +207,7 @@
   "show-panel-label": {
     "type": "switch",
     "description": "Show status text in the panel",
-    "default": false
+    "default": true
   },
   "language": {
     "type": "combobox",
@@ -408,8 +408,8 @@
   },
   "auto-paste-window-title": {
     "type": "entry",
-    "description": "Auto-Submitt target markers",
-    "tooltip": "Built-in marker names match known window classes/app IDs; codex also matches the window title; custom strings match the full window title case-insensitively. Matching targets receive Enter only after Clipboard and paste, not after Clipboard only. Empty disables Auto-Submitt. Max 4096 chars.",
+    "description": "Auto-Submit target markers",
+    "tooltip": "Built-in marker names match known window classes/app IDs; codex matches known terminal identities and the window title; custom strings match the full window title case-insensitively. Matching targets receive Enter only after Clipboard and paste, not after Clipboard only. Empty disables Auto-Submit. Max 4096 chars.",
     "default": "codex"
   },
   "cli-path": {
@@ -464,7 +464,7 @@
   "text-polishing-help": {
     "type": "label",
     "description": "Text polishing runs after speech recognition and before clipboard/paste output. Presets provide safe reusable instructions: minimal corrections, natural text, command/code preservation, chat message, email, or sensitive-data masking. The custom instruction narrows the preset, for example tone, formatting, or app-specific requirements. Prefer precise instructions such as 'do not add content' or 'preserve commands exactly'.",
-    "tooltip": "This section controls what happens after speech recognition but before the text reaches the clipboard, paste target, or Auto-Submitt. Choose a preset for the general behavior, then use the custom instruction and safety switches to narrow it. Keep instructions short and explicit. Avoid secrets in prompts because external polishing backends may receive the transcript, context, vocabulary, and effective polishing instruction."
+    "tooltip": "This section controls what happens after speech recognition but before the text reaches the clipboard, paste target, or Auto-Submit. Choose a preset for the general behavior, then use the custom instruction and safety switches to narrow it. Keep instructions short and explicit. Avoid secrets in prompts because external polishing backends may receive the transcript, context, vocabulary, and effective polishing instruction."
   },
   "post-process-preset": {
     "type": "combobox",

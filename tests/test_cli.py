@@ -6538,6 +6538,37 @@ class CliTest(unittest.TestCase):
             skip_silent_auto_relisten=False,
         )
 
+    def test_finalize_persists_multiline_transcript_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "speech.wav"
+            log = recordings_root / "speech.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=False)
+            silence = cli.SilenceDetectionResult(False, False, 3.0, 0.0, 2.5, 0.0, "speech detected")
+            transcript = "hello\nworld"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=silence),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value=transcript),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True) as mocked_insert,
+            ):
+                payload = cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+        self.assertEqual(payload["status"], "done")
+        self.assertEqual(payload["transcript"], transcript)
+        self.assertEqual(final_state.transcript, transcript)
+        mocked_insert.assert_called_once_with(transcript, "none", 0)
+
     def test_finalize_skips_silent_auto_relisten_without_transcribing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -7143,6 +7174,23 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertNotIn("token abc123", payload["microphone_level"]["detail"])
         self.assertNotIn("abc123", payload["microphone_level"]["detail"])
+
+    def test_recording_level_payload_redacts_errors_for_direct_callers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "active.wav"
+            self._write_wav(audio, [0, 8192, -16384])
+            state = RecordingState(status="recording", pid=999999999, audio_path=str(audio))
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.read_recording_level", side_effect=cli.RecorderError("token abc123")),
+            ):
+                payload = cli._recording_level_payload(state)
+
+        self.assertIsNotNone(payload)
+        self.assertNotIn("token abc123", payload["detail"])
+        self.assertNotIn("abc123", payload["detail"])
 
     def test_start_defaults_language_to_english(self) -> None:
         proc = mock.Mock()

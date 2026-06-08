@@ -224,7 +224,7 @@ def _write_text_atomic(path: Path, text: str) -> None:
     try:
         write_text_atomically_without_following_symlinks(path, text, field_name="transcript path")
     except (OSError, RuntimeError) as exc:
-        raise TranscriptionError(f"failed to write transcript file: {path}") from exc
+        raise TranscriptionError("failed to write transcript file") from exc
 
 
 def _read_file_head(file: io.BufferedRandom, max_chars: int) -> str:
@@ -254,15 +254,15 @@ def _read_text_file(path: Path, *, size_field_name: str | None = None) -> str:
             max_bytes=MAX_TRANSCRIPT_TEXT_CHARS,
         )
     except UnicodeDecodeError as exc:
-        raise TranscriptionError(f"failed to read generated transcript: {path}") from exc
+        raise TranscriptionError("failed to read generated transcript") from exc
     except OSError as exc:
         if "too large" in str(exc) and size_field_name:
             raise TranscriptionError(
                 f"{size_field_name} is too large (max {MAX_TRANSCRIPT_TEXT_CHARS} bytes)"
             ) from exc
-        raise TranscriptionError(f"failed to read generated transcript: {path}") from exc
+        raise TranscriptionError("failed to read generated transcript") from exc
     if _contains_escaped_null(text):
-        raise TranscriptionError(f"failed to read generated transcript: {path}")
+        raise TranscriptionError("failed to read generated transcript")
     return text
 
 
@@ -283,12 +283,12 @@ def _snapshot_existing_file(path: Path) -> bytes | None:
         )
         assert_fd_is_regular_private_file(fd, field_name="existing transcript path")
     except OSError as exc:
-        raise TranscriptionError(f"failed to snapshot existing transcript file: {path}") from exc
+        raise TranscriptionError("failed to snapshot existing transcript file") from exc
     except RuntimeError as exc:
         if fd is not None:
             with suppress(OSError):
                 os.close(fd)
-        raise TranscriptionError(f"failed to snapshot existing transcript file: {path}") from exc
+        raise TranscriptionError("failed to snapshot existing transcript file") from exc
     try:
         with os.fdopen(fd, "rb") as handle:
             fd = None
@@ -297,9 +297,9 @@ def _snapshot_existing_file(path: Path) -> bytes | None:
         if fd is not None:
             with suppress(OSError):
                 os.close(fd)
-        raise TranscriptionError(f"failed to snapshot existing transcript file: {path}") from exc
+        raise TranscriptionError("failed to snapshot existing transcript file") from exc
     if len(data) > MAX_TRANSCRIPT_TEXT_CHARS:
-        raise TranscriptionError(f"existing transcript file is too large: {path}")
+        raise TranscriptionError("existing transcript file is too large")
     return data
 
 
@@ -311,7 +311,7 @@ def _restore_existing_file_snapshot(path: Path, snapshot: bytes) -> None:
             field_name="existing transcript path",
         )
     except (OSError, RuntimeError) as exc:
-        raise TranscriptionError(f"failed to restore existing transcript file: {path}") from exc
+        raise TranscriptionError("failed to restore existing transcript file") from exc
 
 
 def _remove_generated_transcript_file(path: Path, *, field_name: str = "generated transcript") -> None:
@@ -1781,7 +1781,7 @@ def transcribe(
     try:
         parent_fd = ensure_directory_without_following_symlinks(text_path.parent, field_name="transcript directory")
     except OSError as exc:
-        raise TranscriptionError(f"failed to prepare transcript directory: {text_path.parent}") from exc
+        raise TranscriptionError("failed to prepare transcript directory") from exc
     try:
         os.close(parent_fd)
     except OSError:

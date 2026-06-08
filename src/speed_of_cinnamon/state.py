@@ -61,6 +61,18 @@ def _contains_http_header_control_chars(value: str) -> bool:
     return False
 
 
+def _contains_transcript_control_chars(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise ValueError("value must be text")
+    for char in value:
+        if char in ("\n", "\r", "\t"):
+            continue
+        codepoint = ord(char)
+        if codepoint < 0x20 or codepoint == 0x7F or 0x80 <= codepoint <= 0x9F:
+            return True
+    return False
+
+
 @dataclass
 class RecordingState:
     status: str = "idle"
@@ -157,6 +169,23 @@ class StateStore:
         return text
 
     @staticmethod
+    def _sanitize_transcript_field(value: Any) -> str:
+        if value is None:
+            raise ValueError("state transcript must be text")
+        if isinstance(value, bool) or not isinstance(value, str):
+            raise ValueError("state transcript must be text")
+        text = str(value)
+        if _contains_escaped_null(text):
+            raise ValueError("state transcript contains invalid null byte")
+        if _contains_transcript_control_chars(text):
+            raise ValueError("state transcript contains invalid control character")
+        if len(text) > MAX_STATE_STRING_CHARS:
+            raise ValueError(f"state transcript is too large (max {MAX_STATE_STRING_CHARS} characters)")
+        if _utf8_byte_count(text, field_name="state transcript") > MAX_STATE_STRING_CHARS:
+            raise ValueError(f"state transcript is too large (max {MAX_STATE_STRING_CHARS} bytes)")
+        return text
+
+    @staticmethod
     def _coerce_boolean(value: Any) -> bool:
         if not isinstance(value, bool):
             raise ValueError("state inserted contains invalid boolean value")
@@ -211,11 +240,12 @@ class StateStore:
                 "language",
                 "recorder",
                 "input_device",
-                "transcript",
                 "error",
                 "updated_at",
             }:
                 normalized[field_name] = StateStore._sanitize_text_field(value, field_name=field_name)
+            elif field_name == "transcript":
+                normalized[field_name] = StateStore._sanitize_transcript_field(value)
             elif field_name in optional_text_fields:
                 normalized[field_name] = StateStore._sanitize_text_field(
                     value, field_name=field_name, allow_null=True

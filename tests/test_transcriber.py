@@ -166,12 +166,13 @@ class TranscriberTest(unittest.TestCase):
             target = Path(tmp) / "transcript.txt"
             with mock.patch(
                 "speed_of_cinnamon.transcriber.write_text_atomically_without_following_symlinks",
-                side_effect=OSError("disk full"),
+                side_effect=OSError(f"disk full {target}"),
             ):
-                with self.assertRaisesRegex(TranscriptionError, "failed to write transcript file"):
+                with self.assertRaisesRegex(TranscriptionError, "failed to write transcript file") as raised:
                     _write_text_atomic(target, "private output")
 
             self.assertFalse(target.exists())
+            self.assertNotIn(str(target), str(raised.exception))
 
     def test_remove_generated_transcript_file_removes_regular_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -536,8 +537,9 @@ class TranscriberTest(unittest.TestCase):
             path.write_text("abcde", encoding="utf-8")
 
             with mock.patch("speed_of_cinnamon.transcriber.MAX_TRANSCRIPT_TEXT_CHARS", 4):
-                with self.assertRaisesRegex(TranscriptionError, "failed to read generated transcript"):
+                with self.assertRaisesRegex(TranscriptionError, "failed to read generated transcript") as raised:
                     _read_text_file(path)
+            self.assertNotIn(str(path), str(raised.exception))
 
     def test_validate_audio_file_rejects_null_byte_path(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "invalid null byte"):
@@ -605,8 +607,9 @@ class TranscriberTest(unittest.TestCase):
             except OSError as exc:
                 self.skipTest(f"hardlinks unavailable: {exc}")
 
-            with self.assertRaisesRegex(TranscriptionError, "failed to snapshot existing transcript file"):
+            with self.assertRaisesRegex(TranscriptionError, "failed to snapshot existing transcript file") as raised:
                 transcriber_module._snapshot_existing_file(hardlink)
+            self.assertNotIn(str(hardlink), str(raised.exception))
 
     def test_snapshot_existing_file_rejects_fifo_without_blocking(self) -> None:
         if not hasattr(os, "mkfifo"):
@@ -615,8 +618,33 @@ class TranscriberTest(unittest.TestCase):
             fifo = Path(tmp) / "sample.txt"
             os.mkfifo(fifo)
 
-            with self.assertRaisesRegex(TranscriptionError, "failed to snapshot existing transcript file"):
+            with self.assertRaisesRegex(TranscriptionError, "failed to snapshot existing transcript file") as raised:
                 transcriber_module._snapshot_existing_file(fifo)
+            self.assertNotIn(str(fifo), str(raised.exception))
+
+    def test_restore_existing_file_error_does_not_leak_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "secret-transcript.txt"
+            with mock.patch(
+                "speed_of_cinnamon.transcriber.write_bytes_atomically_without_following_symlinks",
+                side_effect=OSError(f"restore failed {path}"),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "failed to restore existing transcript file") as raised:
+                    transcriber_module._restore_existing_file_snapshot(path, b"previous transcript")
+            self.assertNotIn(str(path), str(raised.exception))
+
+    def test_transcribe_prepare_directory_error_does_not_leak_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "private" / "secret-transcript.txt"
+            with mock.patch(
+                "speed_of_cinnamon.transcriber.ensure_directory_without_following_symlinks",
+                side_effect=OSError(f"cannot prepare {text_path.parent}"),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "failed to prepare transcript directory") as raised:
+                    transcriber_module.transcribe(audio, "en", text_path, backend="command", command_template="printf hello")
+            self.assertNotIn(str(text_path.parent), str(raised.exception))
 
     def test_read_private_file_bytes_rejects_hardlinked_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

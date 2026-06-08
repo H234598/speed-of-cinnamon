@@ -410,7 +410,7 @@ MyApplet.prototype = {
     this.keepRecordingArtifacts = false;
     this.recorder = "auto";
     this.inputDevice = "";
-    this.insertMethod = "none";
+    this.insertMethod = "clipboard-paste";
     this.appendSpace = true;
     this.typingDelayMs = DEFAULT_TYPING_DELAY_MS;
     this.sanitizeSpecialChars = false;
@@ -664,7 +664,7 @@ MyApplet.prototype = {
     this.textOutputMenuItem.menu.addMenuItem(this.textOptionsItem);
     this._populateTextOptionsMenu();
 
-    this.autoPasteItem = new PopupMenu.PopupSubMenuMenuItem(_("Auto-Submitt: codex"));
+    this.autoPasteItem = new PopupMenu.PopupSubMenuMenuItem(_("Auto-Submit: codex"));
     this.autoPasteItem.menu.connect("open-state-changed", (menu, open) => {
       if (open) {
         this._populateAutoPasteMenu();
@@ -1750,8 +1750,8 @@ MyApplet.prototype = {
     return [
       "zenity",
       "--entry",
-      "--title=Auto-Submitt",
-      "--text=Built-in marker names match known window classes/app IDs; codex also matches the window title. Custom strings match the full window title case-insensitively. Empty disables Auto-Submitt.",
+      "--title=Auto-Submit",
+      "--text=Built-in marker names match known window classes/app IDs; codex matches known terminal identities and the window title. Custom strings match the full window title case-insensitively. Empty disables Auto-Submit.",
       "--entry-text=" + current
     ];
   },
@@ -1763,17 +1763,17 @@ MyApplet.prototype = {
   _autoPasteLabel: function() {
     let titles = this._autoPasteTitleValues(this.autoPasteWindowTitle);
     if (titles.length === 0) {
-      return _("Auto-Submitt: off");
+      return _("Auto-Submit: off");
     }
-    return _("Auto-Submitt: ") + this._shortMenuText(titles.join(", "), 48);
+    return _("Auto-Submit: ") + this._shortMenuText(titles.join(", "), 48);
   },
 
   _configureAutoPaste: function() {
     if (!this._findTrustedProgramInPath("zenity")) {
-      this._setTextOptionStatus(_("Install zenity to enter a custom Auto-Submitt string"));
+      this._setTextOptionStatus(_("Install zenity to enter a custom Auto-Submit string"));
       return;
     }
-    this._setTextOptionStatus(_("Enter custom Auto-Submitt window title text..."));
+    this._setTextOptionStatus(_("Enter custom Auto-Submit window title text..."));
     this._spawnText(this._autoPastePromptArgs(), (output) => {
       this._setAutoPasteTitles(this._autoPasteTitleValues(output));
     }, { timeoutMs: 0 });
@@ -1784,8 +1784,8 @@ MyApplet.prototype = {
     this.settings.setValue("auto-paste-window-title", this.autoPasteWindowTitle);
     this._populateAutoPasteMenu();
     let message = this._autoPasteEnabled()
-      ? _("Auto-Submitt targets: ") + this.autoPasteWindowTitle
-      : _("Auto-Submitt disabled");
+      ? _("Auto-Submit targets: ") + this.autoPasteWindowTitle
+      : _("Auto-Submit disabled");
     this._setTextOptionStatus(message);
   },
 
@@ -5123,7 +5123,7 @@ MyApplet.prototype = {
     }
     this.selfProtectionNoticeKey = key;
     this.selfProtectionNoticeAtMs = now;
-    let message = _("Auto-Submitt self-protection blocked target: ") + detail;
+    let message = _("Auto-Submit self-protection blocked target: ") + detail;
     this.lastMessage = message;
     this._updatePanel();
     this._notify(_("Speed of Cinnamon"), message, true);

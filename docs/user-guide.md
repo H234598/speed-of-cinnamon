@@ -115,7 +115,7 @@ be recognized or preserved, such as commands, abbreviations, file names, project
 passwords, API keys, account data, or other highly sensitive values there; the configured transcription or polishing
 backend may receive these values.
 
-Use `Auto-Submitt` to choose one or more target-window markers such as `codex`, `Terminal`, `PDF`, `Excel`, `Telegram`, or `Teams`. Built-in marker names such as `Terminal`, `PDF`, `Excel`, `Telegram`, and `Teams` match known window classes/app IDs before inserted text gets a trailing Enter. `codex` and other custom comma-separated or line-separated markers match the full window title case-insensitively; an empty custom value disables Auto-Submitt. The default marker is `codex`.
+Use `Auto-Submit` to choose one or more target-window markers such as `codex`, `Terminal`, `PDF`, `Excel`, `Telegram`, or `Teams`. Built-in marker names such as `Terminal`, `PDF`, `Excel`, `Telegram`, and `Teams` match known window classes/app IDs before inserted text gets a trailing Enter. `codex` matches known Codex/terminal identities and the full window title case-insensitively; other custom comma-separated or line-separated markers match the full window title case-insensitively. An empty custom value disables Auto-Submit. The default marker is `codex`.
 
 Accent replacement is a compatibility fallback for direct typing. Saved transcripts stay unchanged.
 

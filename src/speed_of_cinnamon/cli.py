@@ -2311,7 +2311,7 @@ def _recording_level_payload(state: RecordingState) -> dict[str, object] | None:
     try:
         return asdict(read_recording_level(audio_path))
     except RecorderError as exc:
-        return {"ok": False, "percent": 0, "peak": 0.0, "rms": 0.0, "samples": 0, "detail": str(exc)}
+        return {"ok": False, "percent": 0, "peak": 0.0, "rms": 0.0, "samples": 0, "detail": _redact_error_for_user(str(exc))}
 
 
 def _remove_recording_artifact(path_value: str | None) -> bool:
