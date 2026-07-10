@@ -1731,6 +1731,7 @@ MyApplet.prototype = {
     this.alarmMenuRefreshToken = null;
     this.inputSourceMenuRefreshToken = null;
     this.ollamaModelFlowToken = null;
+    this.ollamaInstallWatchToken = null;
     this._runTeardownGuarded("teardown-processes", () => this._terminateAllProcesses());
     this._runTeardownGuarded("teardown-cancellables", () => this._cancelAllCancellables());
     this._runTeardownGuarded("teardown-dialogs", () => this._destroyTrackedDialogs());
@@ -5965,20 +5966,33 @@ MyApplet.prototype = {
 
   _watchOllamaInstallThenChoose: function() {
     this._clearOllamaInstallWatchTimer();
+    let watchToken = {};
+    this.ollamaInstallWatchToken = watchToken;
     this.ollamaInstallWatchPolls = 0;
     this._setStatus("processing", _("Waiting for Ollama installation..."), this.lastTranscript);
-    this._scheduleOllamaInstallWatchPoll();
+    this._scheduleOllamaInstallWatchPoll(watchToken);
   },
 
-  _scheduleOllamaInstallWatchPoll: function() {
+  _scheduleOllamaInstallWatchPoll: function(watchToken) {
+    if (!watchToken || this.ollamaInstallWatchToken !== watchToken || !this._lifecycleAllowsWork()) {
+      return;
+    }
     this._scheduleTrackedTimer("ollama-install", OLLAMA_INSTALL_POLL_SECONDS, () => {
+      if (this.ollamaInstallWatchToken !== watchToken || !this._lifecycleAllowsWork()) {
+        return false;
+      }
       this.ollamaInstallWatchPolls++;
       this._spawnJson(this._textModelsArgs("ollama"), (payload) => {
+        if (this.ollamaInstallWatchToken !== watchToken || !this._lifecycleAllowsWork()) {
+          return;
+        }
         if (payload.error) {
+          this.ollamaInstallWatchToken = null;
           this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
           return;
         }
         if (payload.available !== false) {
+          this.ollamaInstallWatchToken = null;
           let models = Array.isArray(payload.models) ? payload.models : [];
           this._setStatus("ready", _("Ollama is ready"), this.lastTranscript);
           if (models.length > 0) {
@@ -5989,11 +6003,12 @@ MyApplet.prototype = {
           return;
         }
         if (this.ollamaInstallWatchPolls >= OLLAMA_INSTALL_MAX_POLLS) {
+          this.ollamaInstallWatchToken = null;
           this._setStatus("error", _("Ollama installation did not become reachable"), this.lastTranscript);
           this._notify(_("Ollama is not reachable"), _("Install finished or was cancelled, but 127.0.0.1:11434 is still unavailable."), true);
           return;
         }
-        this._scheduleOllamaInstallWatchPoll();
+        this._scheduleOllamaInstallWatchPoll(watchToken);
       }, { timeoutMs: STATUS_COMMAND_TIMEOUT_MS });
       return false;
     }, true, "ollamaInstallWatchTimer");

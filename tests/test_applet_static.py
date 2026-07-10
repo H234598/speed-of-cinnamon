@@ -680,6 +680,18 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn("this.ollamaModelFlowToken !== flowToken", block)
             self.assertIn("!this._lifecycleAllowsWork()", block)
 
+    def test_ollama_install_watch_ignores_stale_poll_responses(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        watch_start = source.index("_watchOllamaInstallThenChoose: function()")
+        watch_end = source.index("\n  _scheduleSetupCheck:", watch_start)
+        watch_block = source[watch_start:watch_end]
+        self.assertIn("let watchToken = {};", watch_block)
+        self.assertIn("this.ollamaInstallWatchToken = watchToken;", watch_block)
+        self.assertIn("this.ollamaInstallWatchToken !== watchToken", watch_block)
+        self.assertIn("this._scheduleOllamaInstallWatchPoll(watchToken);", watch_block)
+        self.assertIn("this.ollamaInstallWatchToken = null;", watch_block)
+
     def test_recording_artifact_retention_is_optional(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
@@ -1148,7 +1160,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._connectSafe(ollama, \"activate\", () => this._activateOllamaTextModelFlow());", source)
         self.assertIn("this._installOllamaRuntime(true);", source)
         self.assertIn("_watchOllamaInstallThenChoose: function()", source)
-        self.assertIn("_scheduleOllamaInstallWatchPoll: function()", source)
+        self.assertIn("_scheduleOllamaInstallWatchPoll: function(watchToken)", source)
         self.assertIn("OLLAMA_INSTALL_POLL_SECONDS", source)
         self.assertIn("OLLAMA_INSTALL_MAX_POLLS", source)
         self.assertIn("this._clearOllamaInstallWatchTimer();", source)
