@@ -661,13 +661,21 @@ MyApplet.prototype = {
   },
 
   _dialogAddChild: function(dialog, child, group) {
-    if (!dialog || !dialog.contentLayout || !dialog.contentLayout.add_child) {
+    if (!dialog || !child || !dialog.contentLayout || !dialog.contentLayout.add_child) {
       return false;
     }
     return this._runGuarded("dialog-" + String(group || "content"), () => {
       dialog.contentLayout.add_child(child);
       return true;
     }, false) === true;
+  },
+
+  _newSafeLabel: function(text, options, group) {
+    return this._runGuarded("dialog-" + String(group || "label"), () => {
+      let properties = Object.assign({}, options || {});
+      properties.text = String(text || "");
+      return new St.Label(properties);
+    }, null);
   },
 
   _dialogSetButtons: function(dialog, buttons, group) {
@@ -4682,11 +4690,12 @@ MyApplet.prototype = {
         completionCallback(result === true);
       }
     };
-    if (!dialog || !this._dialogAddChild(dialog, new St.Label({ text: _("List all transcripts?"), x_expand: true }), "transcript-list") ||
-      !this._dialogAddChild(dialog, new St.Label({
-      text: _("This shows complete transcript contents in a plaintext window. Continue only if your screen and session are trusted."),
-      x_expand: true
-    }), "transcript-list")) {
+    if (!dialog || !this._dialogAddChild(dialog, this._newSafeLabel(_("List all transcripts?"), { x_expand: true }, "transcript-list"), "transcript-list") ||
+      !this._dialogAddChild(dialog, this._newSafeLabel(
+      _("This shows complete transcript contents in a plaintext window. Continue only if your screen and session are trusted."),
+      { x_expand: true },
+      "transcript-list"
+    ), "transcript-list")) {
       this._dialogClose(dialog, "transcript-list");
       this._setStatus("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);
       complete(false);
@@ -4864,7 +4873,7 @@ MyApplet.prototype = {
 
   _showCleanupPreviewDialog: function(payload) {
     let dialog = this._newSafeDialog("cleanup-preview");
-    if (!dialog || !this._dialogAddChild(dialog, new St.Label({ text: this._cleanupPreviewText(payload), x_expand: true }), "cleanup-preview") ||
+    if (!dialog || !this._dialogAddChild(dialog, this._newSafeLabel(this._cleanupPreviewText(payload), { x_expand: true }, "cleanup-preview"), "cleanup-preview") ||
       !this._dialogSetButtons(dialog, [
       {
         label: _("Close"),
@@ -6749,8 +6758,8 @@ MyApplet.prototype = {
         completionCallback(result === true);
       }
     };
-    if (!dialog || !this._dialogAddChild(dialog, new St.Label({ text: message, x_expand: true }), "clipboard-overwrite") ||
-      !this._dialogAddChild(dialog, new St.Label({ text: _("Replace clipboard content and continue paste?"), x_expand: true }), "clipboard-overwrite")) {
+    if (!dialog || !this._dialogAddChild(dialog, this._newSafeLabel(message, { x_expand: true }, "clipboard-overwrite"), "clipboard-overwrite") ||
+      !this._dialogAddChild(dialog, this._newSafeLabel(_("Replace clipboard content and continue paste?"), { x_expand: true }, "clipboard-overwrite"), "clipboard-overwrite")) {
       this._dialogClose(dialog, "clipboard-overwrite");
       this._setStatus("error", _("Clipboard overwrite prompt could not be opened"), transcript);
       complete(false);
