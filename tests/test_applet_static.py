@@ -255,6 +255,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._disconnectTrackedSignalsForTarget(monitor);", source)
         self.assertIn("_clearMenuItems: function(menu)", source)
         self.assertIn("this._clearMenuItems(this.recorderItem.menu);", source)
+        self.assertIn("addTarget(item);", source)
+        self.assertIn("addTarget(item.menu);", source)
         self.assertIn("Gio.FileMonitorEvent.CHANGES_DONE_HINT", source)
         self.assertIn("_applyExternalApiEnvFile: function(showStatus)", source)
         self.assertIn("_validateExternalApiUrl: function(value, fieldName)", source)

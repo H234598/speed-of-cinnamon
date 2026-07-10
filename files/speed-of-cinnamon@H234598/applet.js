@@ -599,11 +599,15 @@ MyApplet.prototype = {
       return;
     }
     let targets = [];
+    let addTarget = (target) => {
+      if (target && targets.indexOf(target) < 0) {
+        targets.push(target);
+      }
+    };
     let collect = (current) => {
-      if (!current || targets.indexOf(current) >= 0) {
+      if (!current) {
         return;
       }
-      targets.push(current);
       let items = [];
       try {
         if (current._getMenuItems) {
@@ -614,8 +618,9 @@ MyApplet.prototype = {
         return;
       }
       for (let item of items) {
-        collect(item);
+        addTarget(item);
         if (item && item.menu) {
+          addTarget(item.menu);
           collect(item.menu);
         }
       }
