@@ -160,7 +160,7 @@
   },
   "about-version": {
     "type": "label",
-    "description": "Version: 0.2.1\nAuthor: H234598\nCinnamon-native voice typing for Fedora Cinnamon."
+    "description": "Version: 0.2.2\nAuthor: H234598\nCinnamon-native voice typing for Fedora Cinnamon."
   },
   "main-menu-settings-map": {
     "type": "label",
