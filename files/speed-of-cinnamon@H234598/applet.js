@@ -20,6 +20,7 @@ const LIFECYCLE_REMOVING = "REMOVING";
 const LIFECYCLE_REMOVED = "REMOVED";
 const LIFECYCLE_ERROR_WINDOW_MS = 60000;
 const LIFECYCLE_ERROR_THRESHOLD = 3;
+const PAYLOAD_STATUSES = ["idle", "recording", "recorded", "processing", "done", "error", "setup"];
 const HOTKEY_ID = "speed-of-cinnamon-toggle";
 const PRIMARY_HOTKEY_ID = "speed-of-cinnamon-primary-language";
 const SECONDARY_HOTKEY_ID = "speed-of-cinnamon-secondary-language";
@@ -1549,6 +1550,20 @@ MyApplet.prototype = {
       return this._sanitizeErrorMessage(payload.message);
     }
     return this._sanitizeErrorMessage(fallback || "");
+  },
+
+  _normalizePayloadStatus: function(value, hasError) {
+    if (value === undefined || value === null || value === "") {
+      return hasError ? "error" : "idle";
+    }
+    if (typeof value !== "string") {
+      return "error";
+    }
+    let normalized = value.trim().toLowerCase();
+    if (normalized === "") {
+      return hasError ? "error" : "idle";
+    }
+    return PAYLOAD_STATUSES.indexOf(normalized) >= 0 ? normalized : "error";
   },
 
   _hotkeyName: function(id) {
@@ -5873,7 +5888,7 @@ MyApplet.prototype = {
     if (typeof statusRefreshToken !== "number") {
       this._statusRefreshToken++;
     }
-    let status = payload.status || (payload.error ? "error" : "idle");
+    let status = this._normalizePayloadStatus(payload.status, Boolean(payload.error));
     this._applyPayloadLanguage(payload);
     this._updateRecordingTiming(payload, status);
     this._applyMicrophoneLevel(payload.microphone_level, status);

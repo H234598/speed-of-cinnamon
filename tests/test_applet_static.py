@@ -709,6 +709,20 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("for (let model of (Array.isArray(models) ? models : []))", ollama_block)
         self.assertIn('if (!model || typeof model !== "object")', ollama_block)
 
+    def test_backend_status_values_are_normalized(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn('const PAYLOAD_STATUSES = ["idle", "recording", "recorded", "processing", "done", "error", "setup"];', source)
+        normalize_start = source.index("_normalizePayloadStatus: function(value, hasError)")
+        normalize_end = source.index("\n  _hotkeyName:", normalize_start)
+        normalize_block = source[normalize_start:normalize_end]
+        self.assertIn('if (typeof value !== "string")', normalize_block)
+        self.assertIn("return PAYLOAD_STATUSES.indexOf(normalized) >= 0 ? normalized : \"error\";", normalize_block)
+
+        apply_start = source.index("_applyPayload: function(payload, statusRefreshToken)")
+        apply_end = source.index("\n  _artifactEncryptionWarningKey:", apply_start)
+        self.assertIn("let status = this._normalizePayloadStatus(payload.status, Boolean(payload.error));", source[apply_start:apply_end])
+
     def test_input_source_refresh_ignores_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
@@ -1006,7 +1020,7 @@ class AppletStaticTest(unittest.TestCase):
         apply_index = source.index("_applyPayload: function(payload, statusRefreshToken) {")
         self.assertIn("if (typeof statusRefreshToken === \"number\" && statusRefreshToken !== this._statusRefreshToken) {", source)
         guard_return = source.index("return;", apply_index)
-        guard_end = source.index("let status = payload.status", apply_index)
+        guard_end = source.index("let status = this._normalizePayloadStatus", apply_index)
         self.assertLess(guard_return, guard_end)
         self.assertIn('if (typeof statusRefreshToken !== "number") {', source[apply_index:guard_end])
         self.assertIn("this._statusRefreshToken++;", source[apply_index:guard_end])
