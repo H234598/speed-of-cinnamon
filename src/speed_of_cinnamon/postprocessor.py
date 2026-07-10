@@ -345,7 +345,9 @@ def _ollama_endpoint(url: str, path: str) -> str:
 def _openai_compatible_endpoint(url: str, path: str) -> str:
     base = _validate_openai_compatible_http_url(url).rstrip("/")
     normalized_path = "/" + path.strip("/")
-    if base.endswith(normalized_path):
+    base_parts = [part for part in urllib.parse.urlparse(base).path.split("/") if part]
+    target_parts = [part for part in normalized_path.split("/") if part]
+    if target_parts and len(base_parts) >= len(target_parts) and base_parts[-len(target_parts):] == target_parts:
         return base
     return base + normalized_path
 

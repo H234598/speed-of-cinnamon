@@ -6,7 +6,11 @@ import ipaddress
 def is_loopback_hostname(hostname: str | None) -> bool:
     if hostname is None:
         return False
-    normalized = hostname.strip().lower().strip("[]")
+    normalized = hostname.lower()
+    if normalized.startswith("[") or normalized.endswith("]"):
+        if not (normalized.startswith("[") and normalized.endswith("]")):
+            return False
+        normalized = normalized[1:-1]
     if normalized == "localhost":
         return True
     try:

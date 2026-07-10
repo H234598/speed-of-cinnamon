@@ -1102,6 +1102,29 @@ class ModelsTest(unittest.TestCase):
         self.assertNotIn(str(path), str(payload["message"]))
         self.assertIn("already downloaded", second_payload["message"])
 
+    def test_model_download_urls_normalize_and_quote_multifile_names(self) -> None:
+        spec = models.ModelSpec(
+            name="ct2-url-normalization",
+            filename="ct2-url-normalization",
+            size="2 KiB",
+            sha1="",
+            description="ct2 URL normalization",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-url-normalization",
+            files=(" config file.json ",),
+        )
+
+        self.assertEqual(
+            models.model_download_urls(spec),
+            [
+                (
+                    "config file.json",
+                    "https://huggingface.co/example/ct2-url-normalization/resolve/main/config%20file.json",
+                )
+            ],
+        )
+
     def test_ctranslate2_directory_model_without_file_hashes_is_not_trusted_for_default(self) -> None:
         spec = models.ModelSpec(
             name="ct2-unhashed",
@@ -1728,6 +1751,26 @@ class ModelsTest(unittest.TestCase):
             self.assertEqual(downloaded, 2)
             self.assertEqual(tmp_path.read_bytes(), b"{}")
 
+    def test_download_url_rejects_huggingface_resolve_cache_redirect_with_extra_path_segment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(models.ModelError, "redirect URL is not allowed"):
+                with mock.patch(
+                    "speed_of_cinnamon.models._open_model_download_url",
+                    side_effect=[
+                        fake_redirect(
+                            "https://huggingface.co/Systran/faster-whisper-base/resolve/main/config.json",
+                            "/api/resolve-cache/models/Systran/faster-whisper-base/ebe41f70/extra/config.json?%2FSystran%2Ffaster-whisper-base%2Fresolve%2Fmain%2Fconfig.json=",
+                        ),
+                    ],
+                ):
+                    models._download_url_to_file(
+                        "https://huggingface.co/Systran/faster-whisper-base/resolve/main/config.json",
+                        Path(tmp),
+                        1024,
+                        "ct2-base",
+                        prefix=".model.",
+                    )
+
     def test_download_url_allows_huggingface_storage_redirect(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch(
@@ -1749,6 +1792,60 @@ class ModelsTest(unittest.TestCase):
                 )
             self.assertEqual(downloaded, 5)
             self.assertEqual(tmp_path.read_bytes(), b"model")
+
+    def test_download_url_rejects_huggingface_storage_redirect_when_path_leaf_differs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(models.ModelError, "redirect URL is not allowed"):
+                with mock.patch(
+                    "speed_of_cinnamon.models._open_model_download_url",
+                    side_effect=fake_redirect(
+                        "https://huggingface.co/Systran/faster-whisper-base/resolve/main/model.bin",
+                        "https://cas-bridge.xethub.hf.co/xet-bridge-us/abc/evil.bin?response-content-disposition=inline%3B+filename%3D%22model.bin%22",
+                    ),
+                ):
+                    models._download_url_to_file(
+                        "https://huggingface.co/Systran/faster-whisper-base/resolve/main/model.bin",
+                        Path(tmp),
+                        1024,
+                        "ct2-base",
+                        prefix=".model.",
+                    )
+
+    def test_download_url_rejects_huggingface_storage_redirect_with_conflicting_disposition_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(models.ModelError, "redirect URL is not allowed"):
+                with mock.patch(
+                    "speed_of_cinnamon.models._open_model_download_url",
+                    side_effect=fake_redirect(
+                        "https://huggingface.co/Systran/faster-whisper-base/resolve/main/model.bin",
+                        "https://cas-bridge.xethub.hf.co/xet-bridge-us/abc/model.bin?response-content-disposition=inline%3B+filename%3D%22model.bin%22&response-content-disposition=inline%3B+filename%3D%22evil.bin%22",
+                    ),
+                ):
+                    models._download_url_to_file(
+                        "https://huggingface.co/Systran/faster-whisper-base/resolve/main/model.bin",
+                        Path(tmp),
+                        1024,
+                        "ct2-base",
+                        prefix=".model.",
+                    )
+
+    def test_download_url_rejects_huggingface_storage_redirect_with_encoded_path_separator(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(models.ModelError, "redirect URL is not allowed"):
+                with mock.patch(
+                    "speed_of_cinnamon.models._open_model_download_url",
+                    side_effect=fake_redirect(
+                        "https://huggingface.co/Systran/faster-whisper-base/resolve/main/model.bin",
+                        "https://cas-bridge.xethub.hf.co/xet-bridge-us/abc/evil%2Fmodel.bin?response-content-disposition=inline%3B+filename%3D%22model.bin%22",
+                    ),
+                ):
+                    models._download_url_to_file(
+                        "https://huggingface.co/Systran/faster-whisper-base/resolve/main/model.bin",
+                        Path(tmp),
+                        1024,
+                        "ct2-base",
+                        prefix=".model.",
+                    )
 
     def test_download_url_rejects_huggingface_storage_redirect_for_other_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2991,6 +3088,45 @@ class ModelsTest(unittest.TestCase):
         self.assertFalse(models._huggingface_resolve_cache_redirect_matches(malformed, allowed))
         self.assertFalse(models._huggingface_storage_redirect_matches(malformed, allowed))
         self.assertFalse(models._download_redirect_matches_allowed_url(malformed, allowed))
+
+    def test_download_redirect_matchers_accept_semantically_equivalent_default_ports(self) -> None:
+        https_allowed = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin"
+        https_redirect = "https://huggingface.co:443/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin?download=1"
+        http_allowed = "http://127.0.0.1/model.bin"
+        http_redirect = "http://127.0.0.1:80/model.bin?download=1"
+
+        self.assertTrue(models._url_matches_allowed_base(https_redirect, https_allowed))
+        self.assertTrue(models._url_matches_allowed_base(http_redirect, http_allowed))
+        self.assertTrue(models._download_redirect_matches_allowed_url(https_redirect, https_allowed))
+        self.assertTrue(models._download_redirect_matches_allowed_url(http_redirect, http_allowed))
+
+    def test_download_redirect_matchers_reject_query_mismatch_when_allowed_url_has_query(self) -> None:
+        allowed = "https://huggingface.co/wabisabisocial/whisper-tiny-german-ggml/resolve/main/ggml-tiny-de.bin?download=1"
+        redirected = "https://huggingface.co:443/wabisabisocial/whisper-tiny-german-ggml/resolve/main/ggml-tiny-de.bin?download=0"
+
+        self.assertFalse(models._download_redirect_matches_allowed_url(redirected, allowed))
+        self.assertTrue(models._download_redirect_matches_allowed_url(redirected.replace("download=0", "download=1"), allowed))
+
+    def test_download_redirect_matchers_accept_reordered_query_parameters(self) -> None:
+        allowed = "https://huggingface.co/wabisabisocial/whisper-tiny-german-ggml/resolve/main/ggml-tiny-de.bin?download=1&x=2"
+        redirected = "https://huggingface.co:443/wabisabisocial/whisper-tiny-german-ggml/resolve/main/ggml-tiny-de.bin?x=2&download=1"
+
+        self.assertTrue(models._download_redirect_matches_allowed_url(redirected, allowed))
+
+    def test_download_redirect_matchers_reject_userinfo_and_unapproved_fragment(self) -> None:
+        allowed = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin"
+        self.assertFalse(
+            models._download_redirect_matches_allowed_url(
+                "https://user:secret@huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
+                allowed,
+            )
+        )
+        self.assertFalse(
+            models._download_redirect_matches_allowed_url(
+                f"{allowed}#fragment",
+                allowed,
+            )
+        )
 
     def test_assert_download_url_allows_loopback_plain_http(self) -> None:
         url = "http://127.0.0.1:8000/model.bin"

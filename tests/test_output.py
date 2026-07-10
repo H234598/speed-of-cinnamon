@@ -40,6 +40,15 @@ class OutputTest(unittest.TestCase):
         output_module._LAST_CLIPBOARD_INSERTION = 0.0
         output_module._LAST_CLIPBOARD_CONTEXT = None
 
+    def _expected_paste_fingerprint(self, text: str) -> str:
+        return output_module._clipboard_insertion_fingerprint(
+            text,
+            output_module._clipboard_method_dedupe_context(
+                "clipboard-paste",
+                output_module._LAST_CLIPBOARD_CONTEXT,
+            ),
+        )
+
     def test_contains_escaped_null_rejects_non_text(self) -> None:
         with self.assertRaisesRegex(OutputError, "value must be text"):
             _contains_escaped_null(12)  # type: ignore[arg-type]
@@ -803,7 +812,7 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=3.0),
         ):
             self.assertTrue(insert_text("wiederholung", "clipboard"))
-            self.assertFalse(insert_text("wiederholung", "clipboard-paste"))
+            self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
 
     def test_insert_text_reserves_duplicate_state_before_paste(self) -> None:
         calls: list[str] = []
@@ -901,10 +910,7 @@ class OutputTest(unittest.TestCase):
                 (
                     True,
                     (
-                        output_module._clipboard_insertion_fingerprint(
-                            "wiederholung",
-                            output_module._LAST_CLIPBOARD_CONTEXT,
-                        ),
+                        self._expected_paste_fingerprint("wiederholung"),
                         5.0,
                     ),
                     True,
@@ -959,10 +965,7 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
         ):
             self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
-            expected = output_module._clipboard_insertion_fingerprint(
-                "wiederholung",
-                output_module._LAST_CLIPBOARD_CONTEXT,
-            )
+            expected = self._expected_paste_fingerprint("wiederholung")
             self.assertEqual(
                 output_module._read_clipboard_dedup_state(),
                 (expected, 9.5),
@@ -986,10 +989,7 @@ class OutputTest(unittest.TestCase):
                 self.assertTrue(payload.get("pending"))
                 self.assertEqual(
                     payload["sha256"],
-                    output_module._clipboard_insertion_fingerprint(
-                        "wiederholung",
-                        output_module._LAST_CLIPBOARD_CONTEXT,
-                    ),
+                    self._expected_paste_fingerprint("wiederholung"),
                 )
 
             with mock.patch("speed_of_cinnamon.output.paste_from_clipboard", side_effect=fake_paste):
@@ -998,14 +998,11 @@ class OutputTest(unittest.TestCase):
             self.assertEqual(
                 json.loads(state_path.read_text(encoding="utf-8")),
                 {
-                    "sha256": output_module._clipboard_insertion_fingerprint(
-                        "wiederholung",
-                        output_module._LAST_CLIPBOARD_CONTEXT,
-                    ),
+                    "sha256": self._expected_paste_fingerprint("wiederholung"),
                     "at": 11.0,
                 },
             )
-            mocked_clipboard.assert_called_once_with("wiederholung")
+            mocked_clipboard.assert_called_once_with("wiederholung", allowed_helpers=("xclip", "xsel"))
 
     def test_insert_text_keeps_pending_clipboard_state_when_paste_fails(self) -> None:
         with (
@@ -1022,10 +1019,7 @@ class OutputTest(unittest.TestCase):
                 self.assertTrue(payload.get("pending"))
                 self.assertEqual(
                     payload["sha256"],
-                    output_module._clipboard_insertion_fingerprint(
-                        "wiederholung",
-                        output_module._LAST_CLIPBOARD_CONTEXT,
-                    ),
+                    self._expected_paste_fingerprint("wiederholung"),
                 )
                 raise OutputError("paste failed")
 
@@ -1046,10 +1040,7 @@ class OutputTest(unittest.TestCase):
                 (
                     True,
                     (
-                        output_module._clipboard_insertion_fingerprint(
-                            "wiederholung",
-                            output_module._LAST_CLIPBOARD_CONTEXT,
-                        ),
+                        self._expected_paste_fingerprint("wiederholung"),
                         5.0,
                     ),
                     True,
@@ -1114,7 +1105,7 @@ class OutputTest(unittest.TestCase):
                 ):
                     self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
 
-            mocked_clipboard.assert_called_once_with("wiederholung")
+            mocked_clipboard.assert_called_once_with("wiederholung", allowed_helpers=("xclip", "xsel"))
             mocked_paste.assert_called_once()
 
     def test_insert_text_fails_closed_without_readable_text_clipboard_snapshot(self) -> None:
@@ -1297,7 +1288,7 @@ class OutputTest(unittest.TestCase):
             self.assertTrue(trusted)
             self.assertEqual(
                 state[0],
-                output_module._clipboard_insertion_fingerprint("new text", output_module._LAST_CLIPBOARD_CONTEXT),
+                self._expected_paste_fingerprint("new text"),
             )
             self.assertTrue(pending)
 
@@ -1322,7 +1313,7 @@ class OutputTest(unittest.TestCase):
             self.assertTrue(trusted)
             self.assertEqual(
                 snapshot[0],
-                output_module._clipboard_insertion_fingerprint("new text", output_module._LAST_CLIPBOARD_CONTEXT),
+                self._expected_paste_fingerprint("new text"),
             )
             self.assertTrue(pending)
             self.assertTrue(
@@ -1410,7 +1401,7 @@ class OutputTest(unittest.TestCase):
         self.assertTrue(trusted)
         self.assertEqual(
             final_state[0],
-            output_module._clipboard_insertion_fingerprint("wiederholung", output_module._LAST_CLIPBOARD_CONTEXT),
+            self._expected_paste_fingerprint("wiederholung"),
         )
         self.assertTrue(pending)
         self.assertEqual(output_module._LAST_CLIPBOARD_TEXT, "wiederholung")
@@ -1517,7 +1508,7 @@ class OutputTest(unittest.TestCase):
             self.assertTrue(insert_text("same text", "clipboard-paste"))
             self.assertFalse(insert_text("same text", "clipboard-paste"))
 
-        mocked_clipboard.assert_called_once_with("same text")
+        mocked_clipboard.assert_called_once_with("same text", allowed_helpers=("xclip", "xsel"))
         mocked_paste.assert_called_once()
 
     def test_clipboard_copy_does_not_suppress_followup_clipboard_paste(self) -> None:
@@ -1564,7 +1555,7 @@ class OutputTest(unittest.TestCase):
             self.assertTrue(insert_text("same text", "clipboard-paste"))
             self.assertFalse(insert_text("same text", "clipboard-paste"))
 
-        mocked_clipboard.assert_called_once_with("same text")
+        mocked_clipboard.assert_called_once_with("same text", allowed_helpers=("xclip", "xsel"))
         mocked_paste.assert_called_once()
 
     def test_insert_text_empty_clipboard_text_is_noop(self) -> None:
@@ -1666,7 +1657,10 @@ class OutputTest(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
-            mock.patch("speed_of_cinnamon.output._write_clipboard_dedup_state", return_value=False),
+            mock.patch(
+                "speed_of_cinnamon.output._write_clipboard_dedup_fingerprint_state",
+                side_effect=[True, False],
+            ),
             mock.patch("speed_of_cinnamon.output.time.time", return_value=21.0),
             mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
         ):

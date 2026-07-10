@@ -390,6 +390,23 @@ def _snapshot_existing_file(path: Path) -> bytes | None:
     return data
 
 
+def _file_state(path: Path) -> tuple[int, int, int, int, int, int] | None:
+    try:
+        file_stat = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise TranscriptionError("failed to inspect generated transcript") from exc
+    return (
+        file_stat.st_dev,
+        file_stat.st_ino,
+        file_stat.st_mode,
+        file_stat.st_size,
+        getattr(file_stat, "st_mtime_ns", 0),
+        getattr(file_stat, "st_ctime_ns", 0),
+    )
+
+
 def _restore_existing_file_snapshot(path: Path, snapshot: bytes) -> None:
     try:
         write_bytes_atomically_without_following_symlinks(
@@ -1174,9 +1191,10 @@ def transcribe_with_openai_whisper(
     except TranscriptionError as exc:
         raise TranscriptionError("OpenAI whisper command is not installed") from exc
     output_dir = text_path.parent
-    existing_snapshot = _snapshot_existing_file(output_dir / f"{audio_path.stem}.txt")
+    generated = output_dir / f"{audio_path.stem}.txt"
+    generated_state = _file_state(generated)
+    existing_snapshot = _snapshot_existing_file(generated)
     with _staged_audio_file_for_local_backend(audio_path, expected_snapshot=audio_snapshot) as staged_audio_path:
-        generated = output_dir / f"{audio_path.stem}.txt"
         try:
             _run_limited_process(
                 [
@@ -1191,10 +1209,12 @@ def transcribe_with_openai_whisper(
                 ],
             )
         except Exception:
-            if generated.exists():
+            if existing_snapshot is not None or generated.exists():
                 _restore_or_remove_generated_transcript(generated, existing_snapshot)
             raise
         if generated.exists():
+            if generated_state is not None and _file_state(generated) == generated_state:
+                raise TranscriptionError("whisper completed but did not produce a transcript")
             if generated == text_path:
                 try:
                     text = _read_text_file(generated, size_field_name="transcript").strip()
@@ -1334,18 +1354,28 @@ def transcribe_with_whisper_cpp(
             if legacy_generated_path != generated_path:
                 generated_candidates.insert(0, legacy_generated_path)
         snapshots: dict[Path, tuple[int, int, int, int, int] | None] = {}
+        generated_states: dict[Path, tuple[int, int, int, int, int, int] | None] = {}
         for candidate in generated_candidates:
+            generated_states[candidate] = _file_state(candidate)
             if candidate.exists():
                 snapshots[candidate] = _snapshot_existing_file(candidate)
         try:
             _run_limited_process(invocation)
         except Exception:
             for candidate in generated_candidates:
-                if candidate.exists():
+                if snapshots.get(candidate) is not None or candidate.exists():
                     _restore_or_remove_generated_transcript(candidate, snapshots.get(candidate))
             raise
         active_generated_path = next(
-            (candidate for candidate in generated_candidates if candidate.exists()),
+            (
+                candidate
+                for candidate in generated_candidates
+                if candidate.exists()
+                and (
+                    generated_states[candidate] is None
+                    or _file_state(candidate) != generated_states[candidate]
+                )
+            ),
             None,
         )
         if active_generated_path is not None:
@@ -1389,7 +1419,7 @@ def transcribe_with_whisper_cpp(
 def faster_whisper_available() -> bool:
     try:
         import faster_whisper  # noqa: F401
-    except ImportError:
+    except Exception:
         return False
     return True
 
@@ -1412,6 +1442,8 @@ def transcribe_with_faster_whisper(
         from faster_whisper import WhisperModel
     except ImportError as exc:
         raise TranscriptionError("faster-whisper is not installed") from exc
+    except Exception as exc:
+        raise TranscriptionError("faster-whisper could not be loaded") from exc
 
     audio_snapshot = _snapshot_private_file(
         audio_path,
@@ -1455,7 +1487,9 @@ def _openai_compatible_endpoint(url: str, path: str) -> str:
     if not base:
         raise TranscriptionError("OpenAI-compatible API URL is required")
     normalized_path = "/" + path.strip("/")
-    if base.endswith(normalized_path):
+    base_parts = [part for part in urllib.parse.urlparse(base).path.split("/") if part]
+    target_parts = [part for part in normalized_path.split("/") if part]
+    if target_parts and len(base_parts) >= len(target_parts) and base_parts[-len(target_parts):] == target_parts:
         return base
     return base + normalized_path
 
@@ -1490,12 +1524,16 @@ def _validate_openai_compatible_api_url(
     base = _assert_text_length(url, field_name=field_name, max_chars=MAX_OPENAI_URL_CHARS).strip()
     if not base:
         raise TranscriptionError(f"{field_name} is required")
+    if any(char.isspace() for char in base):
+        raise TranscriptionError(f"{field_name} contains invalid whitespace")
     try:
         parsed = urllib.parse.urlparse(base)
     except ValueError as exc:
         raise TranscriptionError(f"{field_name} is invalid") from exc
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise TranscriptionError(f"{field_name} must use http:// or https://")
+    if not parsed.hostname:
+        raise TranscriptionError(f"{field_name} is missing hostname")
     if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
         raise TranscriptionError(f"{field_name} must use https:// unless host is local loopback")
     try:
@@ -1771,7 +1809,10 @@ def transcribe_with_openai_compatible_api(
         error = payload["error"]
         detail = _sanitize_remote_error_detail(str(error.get("message") or error) if isinstance(error, dict) else str(error))
         raise TranscriptionError(f"OpenAI-compatible speech API failed at {endpoint_display}: {detail}")
-    text = str(payload.get("text") or "").strip()
+    raw_text = payload.get("text")
+    if raw_text is not None and not isinstance(raw_text, str):
+        raise TranscriptionError("OpenAI-compatible speech API response text must be text")
+    text = (raw_text or "").strip()
     if not text:
         raise TranscriptionError("OpenAI-compatible speech API returned no transcript")
     _assert_text_length(text, field_name="transcript")
@@ -1809,7 +1850,12 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
     if not isinstance(config, TranscriberConfig):
         raise TranscriptionError("config must be TranscriberConfig")
     backend = normalize_backend(config.backend)
-    raw_whisper_model = config.whisper_model or ""
+    if isinstance(config.command_template, bool) or not isinstance(config.command_template, str):
+        raise TranscriptionError("command template must be text")
+    if isinstance(config.whisper_model, bool) or not isinstance(config.whisper_model, str):
+        raise TranscriptionError("whisper model must be text")
+    language = _validate_language_code(config.language)
+    raw_whisper_model = config.whisper_model
     if _contains_escaped_null(raw_whisper_model):
         raise TranscriptionError("whisper model contains invalid null byte")
     if _contains_http_header_control_chars(raw_whisper_model):
@@ -1831,7 +1877,7 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
             configured_model_is_dir = False
         except RuntimeError as exc:
             raise TranscriptionError(str(exc)) from exc
-    local_model = configured_model or default_ctranslate2_model_path(config.language) or default_whisper_cpp_model_path(config.language)
+    local_model = configured_model or default_ctranslate2_model_path(language) or default_whisper_cpp_model_path(language)
     if backend == "auto":
         if config.command_template.strip():
             return "command"

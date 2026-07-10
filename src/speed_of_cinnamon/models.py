@@ -456,11 +456,35 @@ def _url_matches_allowed_base(url: str, allowed_url: str) -> bool:
         allowed = urllib.parse.urlsplit(allowed_url)
     except ValueError:
         return False
-    return (
-        parsed.scheme == allowed.scheme
-        and parsed.netloc == allowed.netloc
-        and parsed.path == allowed.path
-    )
+    if parsed.scheme != allowed.scheme:
+        return False
+    if (parsed.hostname or "").lower() != (allowed.hostname or "").lower():
+        return False
+    try:
+        parsed_port = parsed.port
+        allowed_port = allowed.port
+    except ValueError:
+        return False
+    if parsed_port is None:
+        parsed_port = 80 if parsed.scheme == "http" else 443 if parsed.scheme == "https" else None
+    if allowed_port is None:
+        allowed_port = 80 if allowed.scheme == "http" else 443 if allowed.scheme == "https" else None
+    if parsed_port != allowed_port:
+        return False
+    return parsed.path == allowed.path
+
+
+def _url_matches_exact_allowed_url(url: str, allowed_url: str) -> bool:
+    if not _url_matches_allowed_base(url, allowed_url):
+        return False
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        allowed = urllib.parse.urlsplit(allowed_url)
+    except ValueError:
+        return False
+    parsed_query = tuple(sorted(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)))
+    allowed_query = tuple(sorted(urllib.parse.parse_qsl(allowed.query, keep_blank_values=True)))
+    return parsed_query == allowed_query and parsed.fragment == allowed.fragment
 
 
 def _huggingface_resolve_parts(url: str) -> tuple[str, str] | None:
@@ -491,11 +515,16 @@ def _huggingface_resolve_cache_redirect_matches(url: str, allowed_url: str) -> b
     if (parsed.hostname or "").lower() != HUGGING_FACE_DOWNLOAD_HOST:
         return False
     repo, filename = allowed_parts
-    redirect_path = urllib.parse.unquote(parsed.path).lstrip("/")
-    return (
-        redirect_path.startswith(f"api/resolve-cache/models/{repo}/")
-        and redirect_path.endswith(f"/{filename}")
-    )
+    redirect_parts = [part for part in urllib.parse.unquote(parsed.path).split("/") if part]
+    repo_parts = [part for part in repo.split("/") if part]
+    expected_len = 3 + len(repo_parts) + 2
+    if len(redirect_parts) != expected_len:
+        return False
+    if redirect_parts[:3] != ["api", "resolve-cache", "models"]:
+        return False
+    if redirect_parts[3 : 3 + len(repo_parts)] != repo_parts:
+        return False
+    return redirect_parts[-1] == filename
 
 
 def _huggingface_storage_redirect_matches(url: str, allowed_url: str) -> bool:
@@ -508,18 +537,59 @@ def _huggingface_storage_redirect_matches(url: str, allowed_url: str) -> bool:
         return False
     if (parsed.hostname or "").lower() not in HUGGING_FACE_STORAGE_REDIRECT_HOSTS:
         return False
+    if "%2f" in parsed.path.lower() or "%5c" in parsed.path.lower():
+        return False
     _repo, filename = allowed_parts
     leaf = filename.rsplit("/", 1)[-1]
+    redirect_path = urllib.parse.unquote(parsed.path).rstrip("/")
+    if not redirect_path.endswith(f"/{leaf}"):
+        return False
     disposition_values = urllib.parse.parse_qs(parsed.query).get("response-content-disposition", [])
-    return any(
-        f'filename="{leaf}"' in value
-        or f"filename={leaf}" in value
-        or f"filename*=UTF-8''{leaf}" in value
-        for value in disposition_values
-    )
+    if len(disposition_values) != 1:
+        return False
+    disposition_value = urllib.parse.unquote(disposition_values[0]).strip()
+    if not disposition_value:
+        return False
+    parts = [part.strip() for part in disposition_value.split(";") if part.strip()]
+    if len(parts) < 2:
+        return False
+    filename_seen = False
+    for part in parts[1:]:
+        if "=" not in part:
+            continue
+        key, raw_value = part.split("=", 1)
+        key = key.strip().lower()
+        value = raw_value.strip().strip('"')
+        if key == "filename":
+            filename_seen = True
+            if value != leaf:
+                return False
+        elif key == "filename*":
+            filename_seen = True
+            if value.lower().startswith("utf-8''"):
+                value = urllib.parse.unquote(value[7:])
+            if value != leaf:
+                return False
+    return filename_seen
 
 
 def _download_redirect_matches_allowed_url(url: str, allowed_url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        allowed = urllib.parse.urlsplit(allowed_url)
+    except ValueError:
+        return False
+    if (
+        parsed.username is not None
+        or parsed.password is not None
+        or allowed.username is not None
+        or allowed.password is not None
+    ):
+        return False
+    if allowed.query or allowed.fragment:
+        return _url_matches_exact_allowed_url(url, allowed_url)
+    if parsed.fragment:
+        return False
     return (
         _url_matches_allowed_base(url, allowed_url)
         or _huggingface_resolve_cache_redirect_matches(url, allowed_url)
@@ -958,13 +1028,17 @@ def model_download_urls(model: ModelSpec) -> list[tuple[str, str]]:
     filename = _validated_catalog_path_fragment(model.filename, field_name="model filename")
     if model.files:
         repo_id = _validated_huggingface_repo_id(model.repo_id)
-        return [
-            (
-                str(_validated_catalog_path_fragment(filename, field_name="model file path")),
-                HUGGING_FACE_RESOLVE_URL.format(repo=repo_id, filename=filename),
+        urls: list[tuple[str, str]] = []
+        for raw_filename in model.files:
+            normalized_filename = _validated_catalog_path_fragment(raw_filename, field_name="model file path")
+            url_filename = urllib.parse.quote(normalized_filename.as_posix(), safe="/")
+            urls.append(
+                (
+                    str(normalized_filename),
+                    HUGGING_FACE_RESOLVE_URL.format(repo=repo_id, filename=url_filename),
+                )
             )
-            for filename in model.files
-        ]
+        return urls
     return [(str(filename), model.url)]
 
 

@@ -675,6 +675,12 @@ class PostProcessorTest(unittest.TestCase):
             "http://127.0.0.1:8000/v1/models",
         )
 
+    def test_openai_compatible_endpoint_ignores_suffix_collisions(self) -> None:
+        self.assertEqual(
+            _openai_compatible_endpoint("http://127.0.0.1:8000/v1x", "/models"),
+            "http://127.0.0.1:8000/v1x/models",
+        )
+
     def test_remote_redirects_must_keep_same_origin(self) -> None:
         _validate_same_origin_redirect(
             "https://api.openai.com/v1/models",

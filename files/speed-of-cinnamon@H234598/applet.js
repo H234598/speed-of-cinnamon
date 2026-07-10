@@ -30,6 +30,8 @@ const PASTE_SUBMIT_DELAY_MS = 300;
 const CLIPBOARD_READY_RETRY_MS = 40;
 const CLIPBOARD_READY_TIMEOUT_MS = 1000;
 const NON_TEXT_TEXT_CLIPBOARD_TARGETS = {
+  "text/html": true,
+  "text/rtf": true,
   "text/uri-list": true,
   "text/x-moz-url": true
 };
@@ -4069,6 +4071,11 @@ MyApplet.prototype = {
       _("Recordings: ") + String(Number(payload.would_delete_recordings || 0)),
       _("Logs: ") + String(Number(payload.would_delete_logs || 0))
     ];
+    let hiddenPathCount = Number(payload.would_delete_path_count || 0) + Number(payload.failed_path_count || 0) + Number(payload.skipped_active_path_count || 0);
+    if (hiddenPathCount > 0 && plannedPaths.length === 0 && failedPaths.length === 0 && skippedPaths.length === 0) {
+      lines.push("");
+      lines.push(_("File paths are hidden for privacy; counts are shown instead."));
+    }
     let addPaths = (title, paths) => {
       if (paths.length === 0) {
         return;

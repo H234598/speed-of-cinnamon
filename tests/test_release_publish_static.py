@@ -46,6 +46,7 @@ def test_release_notes_commit_must_match_verified_tag_commit():
     )
 
     assert 'if ! tag_commit="$(git rev-parse --verify "${tag}^{commit}")"; then' in script
-    assert 'commit="${GITHUB_SHA:-${tag_commit}}"' in script
+    assert 'commit="${RELEASE_EXPECTED_COMMIT:-${GITHUB_SHA:-${tag_commit}}}"' in script
     assert 'if [[ "${commit}" != "${tag_commit}" ]]; then' in script
-    assert "GITHUB_SHA does not match release tag commit" in script
+    assert "release expected commit does not match release tag commit" in script
+    assert "GITHUB_SHA does not match release tag commit" not in script

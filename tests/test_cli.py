@@ -1814,6 +1814,16 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["models"][0]["name"], "llama3.2:3b")
         mocked_list.assert_called_once_with("http://localhost:11434")
 
+    def test_is_local_ollama_url_accepts_local_http_endpoints_without_port(self) -> None:
+        self.assertTrue(cli._is_local_ollama_url("http://localhost"))
+        self.assertTrue(cli._is_local_ollama_url("http://127.0.0.1"))
+        self.assertTrue(cli._is_local_ollama_url("http://[::1]"))
+
+    def test_is_local_ollama_url_rejects_non_local_or_credentialed_urls(self) -> None:
+        self.assertFalse(cli._is_local_ollama_url("http://api.example.test:11434"))
+        self.assertFalse(cli._is_local_ollama_url("http://localhost:11434@evil.com"))
+        self.assertFalse(cli._is_local_ollama_url("http://localhost:11434?token=secret"))
+
     @mock.patch("speed_of_cinnamon.cli.list_ollama_models")
     def test_text_models_reports_missing_local_ollama_command(self, mocked_list: mock.Mock) -> None:
         mocked_list.return_value = {
@@ -2787,6 +2797,44 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("cli-path", import_payload["settings"])
         self.assertEqual(alarms["alarms"][0]["name"], "Standup")
 
+    def test_settings_export_import_supports_home_tilde_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            home.chmod(0o700)
+            export_path = home / "settings.json"
+            stdout = io.StringIO()
+            with (
+                mock.patch("sys.stdin", io.StringIO(json.dumps({"language": "en"}))),
+                mock.patch.dict(os.environ, {"HOME": str(home), "XDG_DATA_HOME": tmp}),
+                redirect_stdout(stdout),
+            ):
+                export_code = cli.run([
+                    "settings-export",
+                    "--settings-json-stdin",
+                    "--output",
+                    "~/settings.json",
+                    "--json",
+                ])
+            export_payload = json.loads(stdout.getvalue())
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"HOME": str(home), "XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+                import_code = cli.run([
+                    "settings-import",
+                    "--input",
+                    "~/settings.json",
+                    "--confirm-plaintext-settings-output",
+                    "--json",
+                ])
+            import_payload = json.loads(stdout.getvalue())
+            self.assertTrue(export_path.exists())
+
+        self.assertEqual(export_code, 0)
+        self.assertEqual(import_code, 0)
+        self.assertEqual(export_payload["message"], "settings exported")
+        self.assertEqual(import_payload["message"], "settings imported")
+        self.assertEqual(import_payload["settings"]["language"], "en")
+
     def test_settings_export_accepts_settings_json_from_stdin(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             export_path = Path(tmp) / "settings.json"
@@ -3460,6 +3508,216 @@ class CliTest(unittest.TestCase):
         self.assertNotIn(str(owner), json.dumps(payload))
         self.assertTrue(owner_is_symlink)
         self.assertTrue(target_exists)
+
+    def test_cleanup_resolves_relative_transcript_paths_against_state_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            state_dir = tmp_path / "speed-of-cinnamon"
+            transcript_dir = state_dir / "transcripts"
+            state_dir.mkdir(parents=True)
+            state_dir.chmod(0o700)
+            transcript_dir.mkdir(parents=True)
+            transcript = transcript_dir / "stale.txt"
+            transcript.write_text("secret", encoding="utf-8")
+            state_file = state_dir / "state.json"
+            StateStore(state_file).write(
+                RecordingState(
+                    status="finalizing",
+                    transcript_path="transcripts/stale.txt",
+                )
+            )
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cleanup", "--keep-transcripts", "0", "--keep-recordings", "0", "--json"])
+            payload = json.loads(stdout.getvalue())
+            self.assertTrue(transcript.exists())
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "done")
+
+    def test_cleanup_keeps_relative_recording_artifacts_under_state_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            state_dir = tmp_path / "speed-of-cinnamon"
+            recordings_dir = state_dir / "recordings"
+            state_dir.mkdir(parents=True)
+            state_dir.chmod(0o700)
+            recordings_dir.mkdir(parents=True)
+            audio = recordings_dir / "active.wav"
+            log = recordings_dir / "active.log"
+            audio.write_bytes(b"audio")
+            log.write_text("log", encoding="utf-8")
+            old = time.time() - cli.TRANSIENT_TRANSCRIPT_MAX_AGE_SECONDS - 60
+            os.utime(audio, (old, old))
+            os.utime(log, (old, old))
+            state_file = state_dir / "state.json"
+            StateStore(state_file).write(
+                RecordingState(
+                    status="finalizing",
+                    audio_path="recordings/active.wav",
+                    log_path="recordings/active.log",
+                )
+            )
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cleanup", "--keep-transcripts", "0", "--keep-recordings", "0", "--json"])
+            payload = json.loads(stdout.getvalue())
+            self.assertTrue(audio.exists())
+            self.assertTrue(log.exists())
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "done")
+            self.assertEqual(payload["deleted_recordings"], 0)
+            self.assertEqual(payload["deleted_logs"], 0)
+
+    def test_cleanup_keeps_inflight_trimmed_artifact_for_relative_state_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            state_dir = tmp_path / "speed-of-cinnamon"
+            recordings_dir = state_dir / "recordings"
+            state_dir.mkdir(parents=True)
+            state_dir.chmod(0o700)
+            recordings_dir.mkdir(parents=True)
+            trimmed = recordings_dir / "active.trimmed-123.wav"
+            trimmed.write_bytes(b"old")
+            old = time.time() - 86400
+            os.utime(trimmed, (old, old))
+            state_file = state_dir / "state.json"
+            StateStore(state_file).write(RecordingState(status="finalizing", audio_path="recordings/active.wav"))
+            lock = cli._acquire_finalization_lock(state_file)
+            self.assertIsNotNone(lock)
+            stdout = io.StringIO()
+            try:
+                with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                    code = cli.run(["cleanup", "--keep-transcripts", "0", "--keep-recordings", "0", "--json"])
+            finally:
+                cli._release_finalization_lock(lock)
+            payload = json.loads(stdout.getvalue())
+            self.assertTrue(trimmed.exists())
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "done")
+            self.assertEqual(payload["deleted_recordings"], 0)
+            self.assertGreaterEqual(payload["skipped_active_path_count"], 1)
+
+    def test_recording_artifact_cap_keeps_relative_state_artifact_active(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            state_dir = tmp_path / "speed-of-cinnamon"
+            recordings_dir = state_dir / "recordings"
+            state_dir.mkdir(parents=True)
+            state_dir.chmod(0o700)
+            recordings_dir.mkdir(parents=True)
+            current = recordings_dir / "current.wav"
+            old = recordings_dir / "old.wav"
+            current.write_bytes(b"current")
+            old.write_bytes(b"old")
+            state_file = state_dir / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="recording", audio_path="recordings/current.wav", log_path="recordings/current.log"))
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), mock.patch.object(cli, "MAX_TEMP_RECORDING_FILES", 0):
+                result = cli._enforce_recording_artifact_cap(store.read(), state_path=state_file)
+            self.assertTrue(current.exists())
+            self.assertFalse(old.exists())
+            self.assertIn(str(current), result["skipped_active_paths"])
+
+    def test_stop_finalizes_relative_recording_artifacts_under_state_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            state_dir = tmp_path / "speed-of-cinnamon"
+            recordings_dir = state_dir / "recordings"
+            state_dir.mkdir(parents=True)
+            state_dir.chmod(0o700)
+            recordings_dir.mkdir(parents=True)
+            audio = recordings_dir / "active.wav"
+            log = recordings_dir / "active.log"
+            audio.write_bytes(b"audio")
+            log.write_text("log", encoding="utf-8")
+            state_file = state_dir / "state.json"
+            StateStore(state_file).write(
+                RecordingState(
+                    status="recorded",
+                    audio_path="recordings/active.wav",
+                    log_path="recordings/active.log",
+                )
+            )
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="hello"),
+                mock.patch("speed_of_cinnamon.cli.insert_text", return_value=False),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["stop", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = StateStore(state_file).read()
+            self.assertFalse(audio.exists())
+            self.assertFalse(log.exists())
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "done")
+            self.assertEqual(final_state.status, "done")
+            self.assertFalse(final_state.audio_path)
+            self.assertFalse(final_state.log_path)
+
+    def test_start_locked_promotes_relative_recording_path_to_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            state_dir = tmp_path / "speed-of-cinnamon"
+            recordings_dir = state_dir / "recordings"
+            state_dir.mkdir(parents=True)
+            state_dir.chmod(0o700)
+            recordings_dir.mkdir(parents=True)
+            audio = recordings_dir / "active.wav"
+            audio.write_bytes(b"audio")
+            state_file = state_dir / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="recording", audio_path="recordings/active.wav"))
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}):
+                result = cli._command_start_locked(argparse.Namespace(), store)
+            final_state = store.read()
+            self.assertEqual(result["status"], "recorded")
+            self.assertEqual(final_state.status, "recorded")
+
+    def test_start_locked_rejects_relative_recording_path_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            state_dir = tmp_path / "speed-of-cinnamon"
+            state_dir.mkdir(parents=True)
+            state_dir.chmod(0o700)
+            (tmp_path / "escape.wav").write_bytes(b"audio")
+            state_file = state_dir / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="recording", audio_path="../escape.wav"))
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}):
+                result = cli._command_start_locked(argparse.Namespace(), store)
+            final_state = store.read()
+            self.assertEqual(result["status"], "error")
+            self.assertEqual(final_state.status, "error")
+
+    def test_status_reports_microphone_level_for_relative_recording_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            state_dir = tmp_path / "speed-of-cinnamon"
+            recordings_dir = state_dir / "recordings"
+            state_dir.mkdir(parents=True)
+            state_dir.chmod(0o700)
+            recordings_dir.mkdir(parents=True)
+            audio = recordings_dir / "active.wav"
+            with wave.open(str(audio), "wb") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(16000)
+                wav_file.writeframes(b"\x00\x00" * 32)
+            state_file = state_dir / "state.json"
+            StateStore(state_file).write(RecordingState(status="recording", audio_path="recordings/active.wav"))
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli._recording_process_verified_alive", return_value=True),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["status", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "recording")
+            self.assertIn("microphone_level", payload)
 
     def test_cleanup_dry_run_reports_unsafe_transient_transcript_owner_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4960,6 +5218,10 @@ class CliTest(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
         self.assertEqual(code, 1)
         self.assertIn("too large", payload["error"])
+
+    def test_require_json_path_rejects_overlong_path_before_suffix_validation(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "too large"):
+            cli._require_json_path("x" * (cli.MAX_PATH_CHARS + 10), field_name="settings export output")
 
     def test_settings_export_rejects_non_object_settings_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7044,6 +7306,46 @@ class CliTest(unittest.TestCase):
             confirm_plaintext_output=confirm_plaintext_output,
         )
 
+    def test_finalize_removes_cleanup_backups_after_done_state_persist_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=False)
+            real_update = store.update
+
+            def fail_done(*update_args: object, **update_kwargs: object) -> RecordingState:
+                if update_kwargs.get("status") == "done":
+                    raise RuntimeError("state backend unavailable")
+                return real_update(*update_args, **update_kwargs)
+
+            silence = cli.SilenceDetectionResult(False, False, 4.0, 0.0, 3.0, 0.0, "speech detected")
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch.object(cli, "validate_audio_file", return_value=audio),
+                mock.patch.object(cli, "detect_silent_recording", return_value=silence),
+                mock.patch.object(cli, "transcribe", return_value="transcript"),
+                mock.patch.object(cli, "trim_recording_silence", return_value=audio),
+                mock.patch.object(store, "update", side_effect=fail_done),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "state backend unavailable"):
+                    cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+            backup_files = sorted(recordings_root.glob(".cleanup.*.bak"))
+
+        self.assertEqual(final_state.status, "error")
+        self.assertFalse(audio.exists())
+        self.assertFalse(log.exists())
+        self.assertEqual(backup_files, [])
+
     def test_finalize_persists_multiline_transcript_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -7400,6 +7702,27 @@ class CliTest(unittest.TestCase):
         self.assertTrue(audio_exists)
         self.assertTrue(log_exists)
 
+    def test_cancel_with_only_invalid_audio_path_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            audio = tmp_path / "outside.wav"
+            audio.write_bytes(b"audio")
+            state_file = tmp_path / "state.json"
+            StateStore(state_file).write(RecordingState(status="error", audio_path=str(audio)))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = StateStore(state_file).read()
+            audio_exists = audio.exists()
+
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertTrue(payload["discarded_audio_path_present"])
+        self.assertFalse(payload["audio_deleted"])
+        self.assertEqual(final_state.audio_path, str(audio))
+        self.assertTrue(audio_exists)
+
     def test_cancel_marks_state_finalizing_without_error_during_artifact_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -7496,6 +7819,7 @@ class CliTest(unittest.TestCase):
         self.assertFalse(final_state.audio_path)
         self.assertFalse(final_state.log_path)
         self.assertFalse(final_state.transcript_path)
+        self.assertFalse(final_state.transcript)
 
     def test_cancel_missing_outside_artifacts_still_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7514,11 +7838,41 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["status"], "error")
         self.assertEqual(payload["message"], "failed to discard recording artifacts")
+        self.assertEqual(payload["exit_code"], 0)
         self.assertFalse(payload["audio_deleted"])
         self.assertFalse(payload["log_deleted"])
         self.assertEqual(final_state.status, "error")
         self.assertEqual(final_state.audio_path, str(audio))
         self.assertEqual(final_state.log_path, str(log))
+
+    def test_cancel_cleanup_failure_removes_rollback_backups(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "recording.wav"
+            log = recordings / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="finalizing", audio_path=str(audio), log_path=str(log)))
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.remove_file", return_value=False),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+            backup_files = sorted(recordings.glob(".*.cleanup.bak"))
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["message"], "failed to discard recording artifacts")
+        self.assertEqual(final_state.status, "error")
+        self.assertEqual(backup_files, [])
 
     def test_cancel_missing_outside_transcript_still_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -8238,16 +8592,35 @@ class CliTest(unittest.TestCase):
             tmp_path = Path(tmp)
             audio = tmp_path / "recording.wav"
             audio.write_bytes(b"audio")
+            log = tmp_path / "recording.log"
+            log.write_text("recorder log", encoding="utf-8")
+            transcript = tmp_path / "recording.txt"
+            transcript.write_text("transcript", encoding="utf-8")
             state_file = tmp_path / "state.json"
-            StateStore(state_file).write(RecordingState(status="recording", pid=1234, process_identity="owner-identity", audio_path=str(audio)))
+            store = StateStore(state_file)
+            store.write(
+                RecordingState(
+                    status="recording",
+                    pid=1234,
+                    process_identity="owner-identity",
+                    audio_path=str(audio),
+                    log_path=str(log),
+                    transcript_path=str(transcript),
+                )
+            )
             with (
                 mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value="owner-identity"),
                 redirect_stdout(io.StringIO()),
             ):
                 code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            final_state = store.read()
         self.assertEqual(code, 0)
         mocked_alive.assert_called_once_with(1234)
         mocked_stop.assert_called_once_with(1234, expected_process_identity="owner-identity")
+        self.assertEqual(final_state.status, "idle")
+        self.assertFalse(final_state.audio_path)
+        self.assertFalse(final_state.log_path)
+        self.assertFalse(final_state.transcript_path)
 
     @mock.patch("speed_of_cinnamon.cli.finalize_recording", return_value={"status": "done"})
     @mock.patch("speed_of_cinnamon.cli.stop_process")

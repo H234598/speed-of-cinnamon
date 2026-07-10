@@ -454,6 +454,39 @@ class AppLoggingTest(unittest.TestCase):
             for log_file in log_dir.glob("speed-of-cinnamon-*.log"):
                 self.assertLessEqual(log_file.stat().st_size, 256)
 
+    def test_maintain_logs_compresses_oversized_rotated_daily_log_without_rename_chain(self) -> None:
+        today = date(2026, 7, 10)
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            active = log_dir / f"speed-of-cinnamon-{today.isoformat()}.log"
+            active.write_bytes(b"x" * 101)
+
+            with mock.patch("speed_of_cinnamon.app_logging.MAX_DAILY_LOG_BYTES", 100):
+                app_logging.maintain_logs(log_dir, today=today)
+                app_logging.maintain_logs(log_dir, today=today)
+
+            rotated = log_dir / f"speed-of-cinnamon-{today.isoformat()}.1.log"
+            compressed = Path(f"{rotated}.gz")
+            self.assertFalse(rotated.exists())
+            self.assertTrue(compressed.exists())
+            with gzip.open(compressed, "rb") as handle:
+                self.assertEqual(handle.read(), b"x" * 101)
+            self.assertEqual(list(log_dir.glob(f"{active.stem}.*.*.log")), [])
+
+    def test_maintain_logs_uses_supplied_today_for_active_size_limits(self) -> None:
+        today = date(2026, 6, 5)
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            active = log_dir / f"speed-of-cinnamon-{today.isoformat()}.log"
+            active.write_bytes(b"x" * 101)
+
+            with mock.patch("speed_of_cinnamon.app_logging.MAX_DAILY_LOG_BYTES", 100):
+                app_logging.maintain_logs(log_dir, today=today)
+
+            self.assertFalse(active.exists())
+            self.assertTrue(active.with_name(f"{active.stem}.1{active.suffix}").exists())
+            self.assertFalse(Path(f"{active}.gz").exists())
+
 
     def test_rotate_active_if_needed_is_noop_for_missing_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

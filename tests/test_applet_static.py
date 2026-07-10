@@ -1940,6 +1940,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_cleanupPreviewText: function(payload)", source)
         self.assertIn("_showCleanupPreviewDialog: function(payload)", source)
         self.assertIn("let plannedPaths = Array.isArray(payload.would_delete_paths) ? payload.would_delete_paths : [];", source)
+        self.assertIn("let hiddenPathCount = Number(payload.would_delete_path_count || 0) + Number(payload.failed_path_count || 0) + Number(payload.skipped_active_path_count || 0);", source)
+        self.assertIn('lines.push(_("File paths are hidden for privacy; counts are shown instead."));', source)
         self.assertIn("addPaths(_(\"Planned files:\"), plannedPaths);", source)
         self.assertIn("new ModalDialog.ModalDialog()", source)
         self.assertIn("dialog.contentLayout.add_child(new St.Label({ text: this._cleanupPreviewText(payload), x_expand: true }));", source)
@@ -1985,6 +1987,8 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         self.assertIn('const NON_TEXT_TEXT_CLIPBOARD_TARGETS = {', source)
+        self.assertIn('"text/html": true,', source)
+        self.assertIn('"text/rtf": true,', source)
         self.assertIn('"text/uri-list": true,', source)
         self.assertIn('"text/x-moz-url": true', source)
         self.assertIn('let rawTarget = String(lines[i]).trim().toLowerCase();', source)

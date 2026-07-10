@@ -9,6 +9,7 @@ import secrets
 import stat as stat_module
 import string
 import time
+import zlib
 from contextlib import suppress
 from itertools import islice
 from datetime import date, datetime, timedelta, timezone
@@ -319,8 +320,8 @@ def maintain_logs(base_dir: Path | None = None, *, today: date | None = None) ->
     current_day = today or date.today()
     _merge_old_months(directory, current_day)
     _compress_old_daily_logs(directory, current_day)
-    _enforce_file_size_limit(directory)
-    _enforce_total_size_limit(directory)
+    _enforce_file_size_limit(directory, today=current_day)
+    _enforce_total_size_limit(directory, today=current_day)
 
 
 def sanitize_key(key: object) -> str:
@@ -653,6 +654,11 @@ def _merge_old_months(directory: Path, today: date) -> None:
                 _assert_same_log_file_identity(path, original_stat, field_name="monthly log source")
                 os.unlink(path.name, dir_fd=parent_fd)
                 os.fsync(parent_fd)
+        except (gzip.BadGzipFile, EOFError, zlib.error):
+            # Keep malformed archives intact so size-based cleanup can handle them.
+            _unlink_log_temp(parent_fd, temp_name)
+            temp_name = ""
+            continue
         except Exception:
             _unlink_log_temp(parent_fd, temp_name)
             raise
@@ -758,15 +764,20 @@ def _gzip_file(source: Path, target: Path) -> None:
         os.close(parent_fd)
 
 
-def _enforce_file_size_limit(directory: Path) -> None:
+def _enforce_file_size_limit(directory: Path, *, today: date | None = None) -> None:
+    active = _active_log_path(directory, today=today)
     for path in directory.glob("speed-of-cinnamon-*.log"):
         file_stat = _assert_regular_unlinked_file(path, field_name="log file")
         if file_stat.st_size <= MAX_DAILY_LOG_BYTES:
             continue
-        _rotate_active_if_needed(path)
+        if path == active:
+            _rotate_active_if_needed(path)
+            continue
+        if _daily_log_date(path) is not None:
+            _gzip_file(path, path.with_suffix(path.suffix + ".gz"))
 
 
-def _enforce_total_size_limit(directory: Path) -> None:
+def _enforce_total_size_limit(directory: Path, *, today: date | None = None) -> None:
     file_info = []
     for path in directory.glob("speed-of-cinnamon-*.log*"):
         if path.name.endswith(".tmp"):
@@ -785,7 +796,7 @@ def _enforce_total_size_limit(directory: Path) -> None:
     total = sum(size for _, _, size, _, _ in file_info)
     if total <= MAX_TOTAL_LOG_BYTES:
         return
-    active = _active_log_path(directory)
+    active = _active_log_path(directory, today=today)
     candidates = sorted(
         (item for item in file_info if item[3] != active),
         key=lambda item: (item[0], item[1]),

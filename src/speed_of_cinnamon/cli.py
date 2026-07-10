@@ -114,6 +114,7 @@ from .recorder import (
 )
 from .recorder import MAX_RECORDING_SECONDS, RecorderError, validate_recording_path
 from .settings_export import read_export, write_export
+from .settings_export import MAX_SETTINGS_EXPORT_PATH_CHARS
 from .setup_plan import build_setup_plan
 from .state import RecordingState, StateStore, now_iso, process_is_alive
 from .text_utils import sanitize_special_chars
@@ -699,11 +700,15 @@ def _is_local_ollama_url(url: str) -> bool:
     if _contains_escaped_null(raw) or _contains_http_header_control_chars(raw):
         return False
     normalized = raw.strip().lower()
-    return (
-        normalized.startswith("http://127.0.0.1:")
-        or normalized.startswith("http://localhost:")
-        or normalized.startswith("http://[::1]:")
-    )
+    try:
+        parsed = urllib.parse.urlparse(normalized)
+    except ValueError:
+        return False
+    if parsed.scheme != "http" or not parsed.hostname:
+        return False
+    if parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
+        return False
+    return is_loopback_hostname(parsed.hostname)
 
 
 def _effective_post_process_backend(backend: str, command_template: str) -> str:
@@ -1909,6 +1914,45 @@ def normalized_path(path_value: str | None) -> Path | None:
     return _coerce_path(path_value, field_name="path", resolve=True)
 
 
+def _normalized_state_artifact_path(path_value: str | None, *, state_path: Path | None = None) -> Path | None:
+    if not path_value:
+        return None
+    path = Path(path_value).expanduser()
+    base_dir = state_path.parent if state_path is not None else Path.cwd()
+    was_relative = not path.is_absolute()
+    normalized = path if not was_relative else base_dir / path
+    normalized = normalized.resolve(strict=False)
+    if was_relative and state_path is not None and not normalized.is_relative_to(base_dir.resolve(strict=False)):
+        return None
+    return normalized
+
+
+def _normalized_state_recording_artifact_path(
+    path_value: str | None,
+    *,
+    suffix: str | tuple[str, ...],
+    state_path: Path | None = None,
+    require_recordings_dir: bool = True,
+) -> Path | None:
+    if not path_value:
+        return None
+    path = Path(path_value).expanduser()
+    base_dir = state_path.parent if state_path is not None else Path.cwd()
+    was_relative = not path.is_absolute()
+    path = path if not was_relative else base_dir / path
+    path = path.resolve(strict=False)
+    if was_relative and state_path is not None and not path.is_relative_to(base_dir.resolve(strict=False)):
+        return None
+    try:
+        return validate_recording_path(
+            path,
+            suffix=suffix,
+            require_recordings_dir=require_recordings_dir,
+        )
+    except (RecorderError, ValueError, OSError, TypeError):
+        return None
+
+
 def _assert_json_payload_size(payload: dict[str, object], *, max_bytes: int) -> None:
     rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     if len(rendered.encode("utf-8")) > max_bytes:
@@ -2060,9 +2104,18 @@ def _require_json_path(
         path = default
     else:
         raise RuntimeError(f"{field_name} is required")
+    path = path.expanduser()
+    if len(str(path)) > max_chars:
+        raise RuntimeError(f"{field_name} is too large (max {max_chars} characters)")
     if path.suffix.lower() != ".json":
         raise RuntimeError(f"{field_name} must end with .json")
     return path
+
+
+def _settings_json_path_limit(path_value: str) -> int:
+    if not path_value:
+        return MAX_SETTINGS_EXPORT_PATH_CHARS
+    return MAX_SETTINGS_EXPORT_PATH_CHARS if Path(path_value).expanduser().is_absolute() else MAX_PATH_CHARS
 
 
 def _parse_cli_settings_json(raw: str) -> dict[str, object]:
@@ -2265,21 +2318,27 @@ def active_artifact_paths(
     state_path: Path | None = None,
 ) -> set[Path]:
     paths: set[Path] = set()
-    audio_path = _safe_recording_artifact_path(
+    audio_path = _normalized_state_recording_artifact_path(
         state.audio_path,
         suffix=(".wav", ".flac", ".socenc"),
+        state_path=state_path,
         require_recordings_dir=True,
     )
     if audio_path is not None and _recording_artifact_stat(audio_path) is None:
         audio_path = None
-    log_path = _safe_recording_artifact_path(state.log_path, suffix=".log", require_recordings_dir=True)
+    log_path = _normalized_state_recording_artifact_path(
+        state.log_path,
+        suffix=".log",
+        state_path=state_path,
+        require_recordings_dir=True,
+    )
     if log_path is not None and _recording_artifact_stat(log_path) is None:
         log_path = None
     if audio_path:
         paths.add(audio_path)
     if log_path:
         paths.add(log_path)
-    path = normalized_path(state.transcript_path)
+    path = _normalized_state_artifact_path(state.transcript_path, state_path=state_path)
     if path:
         paths.add(path)
     if state_path is not None and state.status == "finalizing":
@@ -2290,10 +2349,12 @@ def active_artifact_paths(
 def _enforce_recording_artifact_cap(
     state: RecordingState | None,
     active_paths: set[Path] | None = None,
+    *,
+    state_path: Path | None = None,
 ) -> dict[str, object]:
     if state is None:
         return {"planned_paths": [], "deleted_paths": [], "failed_paths": [], "skipped_active_paths": []}
-    active_paths = set(active_artifact_paths(state)) | (active_paths or set())
+    active_paths = set(active_artifact_paths(state, state_path=state_path)) | (active_paths or set())
     try:
         artifact_files = recording_artifact_files()
     except DirectoryScanError as exc:
@@ -2361,8 +2422,12 @@ def _raise_if_state_unreadable(state: RecordingState) -> None:
         raise RuntimeError(state.error)
 
 
-def _recording_level_payload(state: RecordingState) -> dict[str, object] | None:
-    audio_path = _safe_recording_artifact_path(state.audio_path, suffix=(".wav", ".flac", ".socenc"))
+def _recording_level_payload(state: RecordingState, *, state_path: Path | None = None) -> dict[str, object] | None:
+    audio_path = _normalized_state_recording_artifact_path(
+        state.audio_path,
+        suffix=(".wav", ".flac", ".socenc"),
+        state_path=state_path,
+    )
     if not audio_path:
         if state.audio_path:
             return {
@@ -2406,16 +2471,24 @@ def _remove_recording_artifact(path_value: str | None) -> bool:
     return remove_file(path_value, suffix=".wav") or remove_file(path_value, suffix=".flac")
 
 
-def _recording_artifact_missing_but_safe(path_value: str | None, *, suffix: str | tuple[str, ...]) -> bool:
+def _recording_artifact_missing_but_safe(
+    path_value: str | None,
+    *,
+    suffix: str | tuple[str, ...],
+    state_path: Path | None = None,
+) -> bool:
     if not path_value:
         return False
     try:
         path_value = _assert_clean_text(path_value, field_name="path", max_chars=MAX_PATH_CHARS)
-        path = validate_recording_path(
-            Path(path_value),
+        path = _normalized_state_recording_artifact_path(
+            path_value,
             suffix=suffix,
+            state_path=state_path,
             require_recordings_dir=True,
         )
+        if path is None:
+            return False
         path.lstat()
     except FileNotFoundError:
         return True
@@ -2585,7 +2658,12 @@ def _finalizing_inflight_artifact_paths(state_path: Path, state: RecordingState)
         return set()
 
     in_flight_paths: set[Path] = set()
-    audio_path = _safe_recording_artifact_path(state.audio_path, suffix=(".wav", ".flac", ".socenc"), require_recordings_dir=True)
+    audio_path = _normalized_state_recording_artifact_path(
+        state.audio_path,
+        suffix=(".wav", ".flac", ".socenc"),
+        state_path=state_path,
+        require_recordings_dir=True,
+    )
     if audio_path is None:
         return set()
     if audio_path.suffix.lower() in {".wav", ".flac"}:
@@ -2848,8 +2926,11 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
             "transcript_path_present": bool(current.transcript_path),
         }
     if current.status == "recording":
-        current_audio_path = _safe_recording_artifact_path(
-            current.audio_path, suffix=(".wav", ".flac", ".socenc"), require_recordings_dir=False
+        current_audio_path = _normalized_state_recording_artifact_path(
+            current.audio_path,
+            suffix=(".wav", ".flac", ".socenc"),
+            state_path=store.path,
+            require_recordings_dir=False,
         )
         if _recording_process_verified_alive(current):
             return {
@@ -2951,7 +3032,7 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
         remove_file(str(audio_path), suffix=".wav")
         remove_file(str(log_path), suffix=".log")
         raise
-    artifact_cleanup = _enforce_recording_artifact_cap(state)
+    artifact_cleanup = _enforce_recording_artifact_cap(state, state_path=store.path)
     cleanup_failed_paths = _cleanup_failed_paths(artifact_cleanup)
     message = "recording started"
     if cleanup_failed_paths:
@@ -3018,6 +3099,29 @@ def finalize_recording(
     written_text_path: Path | None = None
     artifact_encryption = ARTIFACT_ENCRYPTION_OFF
     preserve_written_text_on_error = False
+    cleanup_rollback_backups: list[tuple[Path, Path]] = []
+
+    def _backup_cleanup_file(path_text: str | None) -> Path | None:
+        if not path_text:
+            return None
+        source = Path(path_text)
+        backup = source.with_name(f".cleanup.{secrets.token_hex(8)}.bak")
+        shutil.copy2(source, backup)
+        cleanup_rollback_backups.append((source, backup))
+        return backup
+
+    def _restore_cleanup_backups() -> None:
+        for original_path, backup_path in cleanup_rollback_backups:
+            if backup_path.exists() and not original_path.exists():
+                shutil.copy2(backup_path, original_path)
+            backup_path.unlink(missing_ok=True)
+        cleanup_rollback_backups.clear()
+
+    def _discard_cleanup_backups() -> None:
+        for _, backup_path in cleanup_rollback_backups:
+            backup_path.unlink(missing_ok=True)
+        cleanup_rollback_backups.clear()
+
     try:
         state = store.read()
         _raise_if_state_unreadable(state)
@@ -3027,7 +3131,18 @@ def finalize_recording(
         if not state.audio_path:
             store.update(status="error", stopped_at=state.stopped_at or now_iso(), error="no recording is available")
             raise RuntimeError("no recording is available")
-        audio_path = _safe_recording_artifact_path(state.audio_path, suffix=(".wav", ".flac", ".socenc"), require_recordings_dir=True)
+        audio_path = _normalized_state_recording_artifact_path(
+            state.audio_path,
+            suffix=(".wav", ".flac", ".socenc"),
+            state_path=store.path,
+            require_recordings_dir=True,
+        )
+        log_path = _normalized_state_recording_artifact_path(
+            state.log_path,
+            suffix=".log",
+            state_path=store.path,
+            require_recordings_dir=True,
+        )
         if not audio_path:
             store.update(status="error", stopped_at=state.stopped_at or now_iso(), error="recording audio path is invalid")
             raise RuntimeError("recording audio path is invalid")
@@ -3066,7 +3181,7 @@ def finalize_recording(
         audio_deleted = False
         log_deleted = False
         done_audio_path = str(audio_path)
-        done_log_path = state.log_path
+        done_log_path = str(log_path) if log_path else None
         trimmed_audio_path: Path | None = None
         stabilized_audio_path: Path | None = None
         remove_original_after_state_update = False
@@ -3075,7 +3190,7 @@ def finalize_recording(
         audio_suffix = audio_path.suffix.lower()
         silence = detect_silent_recording(audio_path)
         if silence.silent:
-            cleanup_log_path = state.log_path
+            cleanup_log_path = str(log_path) if log_path else None
             recording_encryption = ARTIFACT_ENCRYPTION_OFF
             if not keep_recording_artifacts:
                 done_audio_path = None
@@ -3090,19 +3205,30 @@ def finalize_recording(
             state.audio_path = done_audio_path
             state.log_path = done_log_path
             state.transcript_path = ""
-            artifact_cleanup = _enforce_recording_artifact_cap(state)
+            artifact_cleanup = _enforce_recording_artifact_cap(state, state_path=store.path)
             cleanup_failures: list[tuple[str, str, str]] = []
             if not keep_recording_artifacts:
+                audio_backup = _backup_cleanup_file(str(audio_path))
+                log_backup = _backup_cleanup_file(cleanup_log_path)
                 audio_deleted = remove_file(str(audio_path), suffix=audio_suffix)
                 log_deleted = remove_file(cleanup_log_path, suffix=".log")
                 if not audio_deleted:
+                    if audio_backup is not None:
+                        audio_backup.unlink(missing_ok=True)
                     cleanup_failures.append(("audio_path", str(audio_path), "recording audio artifact"))
                 if cleanup_log_path and not log_deleted:
+                    if log_backup is not None:
+                        log_backup.unlink(missing_ok=True)
                     cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
             elif artifact_encryption != ARTIFACT_ENCRYPTION_OFF and cleanup_log_path:
+                log_backup = _backup_cleanup_file(cleanup_log_path)
                 log_deleted = remove_file(cleanup_log_path, suffix=".log")
                 if not log_deleted:
+                    if log_backup is not None:
+                        log_backup.unlink(missing_ok=True)
                     cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
+            if cleanup_failures:
+                _restore_cleanup_backups()
             _raise_recording_cleanup_failure(store, cleanup_failures)
             cleanup_failed_paths = _cleanup_failed_paths(artifact_cleanup)
             message = "silent recording skipped"
@@ -3141,6 +3267,7 @@ def finalize_recording(
                 inserted=False,
                 error="",
             )
+            _discard_cleanup_backups()
             return {
                 "status": done.status,
                 "message": "silent recording skipped",
@@ -3227,7 +3354,7 @@ def finalize_recording(
         cleanup_log_path: str | None = None
         if not keep_recording_artifacts:
             cleanup_audio_path = audio_path
-            cleanup_log_path = state.log_path
+            cleanup_log_path = str(log_path) if log_path else None
             done_audio_path = None
             done_log_path = None
         elif trimmed_audio_path is not None:
@@ -3248,6 +3375,8 @@ def finalize_recording(
                         remove_original_after_state_update = True
             else:
                 done_audio_path = str(audio_path)
+        if cleanup_log_path is None and not keep_recording_artifacts and log_path is not None:
+            cleanup_log_path = str(log_path)
 
         recording_encryption = ARTIFACT_ENCRYPTION_OFF
         plaintext_done_audio_path: Path | None = None
@@ -3265,14 +3394,21 @@ def finalize_recording(
 
         cleanup_failures: list[tuple[str, str, str]] = []
         if cleanup_audio_path is not None:
+            audio_backup = _backup_cleanup_file(str(cleanup_audio_path))
             audio_deleted = remove_file(str(cleanup_audio_path), suffix=audio_suffix)
             if not audio_deleted:
+                if audio_backup is not None:
+                    audio_backup.unlink(missing_ok=True)
                 cleanup_failures.append(("audio_path", str(cleanup_audio_path), "recording audio artifact"))
         if cleanup_log_path:
+            log_backup = _backup_cleanup_file(cleanup_log_path)
             log_deleted = remove_file(cleanup_log_path, suffix=".log")
             if not log_deleted:
+                if log_backup is not None:
+                    log_backup.unlink(missing_ok=True)
                 cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
         _raise_recording_cleanup_failure(store, cleanup_failures)
+
         done_candidate = RecordingState(
             status="done",
             stopped_at=state.stopped_at or now_iso(),
@@ -3290,7 +3426,7 @@ def finalize_recording(
             artifact_cleanup_active_paths.add(trimmed_audio_path)
         if audio_path is not None:
             artifact_cleanup_active_paths.add(audio_path)
-        artifact_cleanup = _enforce_recording_artifact_cap(state, artifact_cleanup_active_paths)
+        artifact_cleanup = _enforce_recording_artifact_cap(state, artifact_cleanup_active_paths, state_path=store.path)
         keep_transcripts = _coerce_int(
             getattr(args, "keep_transcripts", DEFAULT_KEEP_TRANSCRIPTS),
             field_name="keep-transcripts",
@@ -3333,6 +3469,7 @@ def finalize_recording(
             _raise_recording_cleanup_failure(store, post_done_cleanup_failures)
             state = done
             status = done.status
+            _discard_cleanup_backups()
         return {
             "status": status,
             "message": message,
@@ -3407,17 +3544,19 @@ def finalize_recording(
                     cleanup_targets.append(("audio_path", str(audio_path), audio_suffix))
                 if state.log_path:
                     cleanup_clear_update["log_path"] = ""
-                    cleanup_targets.append(("log_path", state.log_path, ".log"))
+                    cleanup_targets.append(("log_path", str(log_path) if log_path else state.log_path, ".log"))
             try:
                 store.update(**error_update)
             except Exception as update_exc:
                 update_error = _redact_error_for_user(str(update_exc))
+                _restore_cleanup_backups()
                 raise RuntimeError(f"{final_error_text}; failed to persist error state: {update_error}") from update_exc
             if cleanup_clear_update:
                 try:
                     store.update(**cleanup_clear_update)
                 except Exception as update_exc:
                     update_error = _redact_error_for_user(str(update_exc))
+                    _restore_cleanup_backups()
                     raise RuntimeError(f"{final_error_text}; failed to persist error cleanup state: {update_error}") from update_exc
                 cleanup_restore_update: dict[str, object] = {}
                 for cleanup_field, cleanup_path, cleanup_suffix in cleanup_targets:
@@ -3428,9 +3567,11 @@ def finalize_recording(
                         store.update(**cleanup_restore_update)
                     except Exception as update_exc:
                         update_error = _redact_error_for_user(str(update_exc))
+                        _restore_cleanup_backups()
                         raise RuntimeError(
                             f"{final_error_text}; failed to persist error cleanup state: {update_error}"
                         ) from update_exc
+            _discard_cleanup_backups()
         raise RuntimeError(str(error_update.get("error", error_text)) if state_marked_finalizing else error_text)
     finally:
         _release_finalization_lock(lock_path)
@@ -3530,6 +3671,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
     try:
         state = store.read()
         _raise_if_state_unreadable(state)
+        initial_status = state.status
         if state.status == "recording" and _recording_process_verified_alive(state):
             stopped = stop_process(
                 _coerce_int(state.pid, field_name="state pid"),
@@ -3544,8 +3686,31 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 )
                 return {"status": "recording", "message": error_text, "error": error_text}
 
-        discarded_audio_path = state.audio_path
-        has_artifacts = bool(discarded_audio_path or state.log_path or state.transcript_path)
+            store.update(
+                status="idle",
+                pid=None,
+                process_identity="",
+                audio_path=None,
+                log_path=None,
+                transcript_path=None,
+                transcript="",
+                stopped_at=now_iso(),
+                error="",
+                inserted=False,
+            )
+            return {"status": "idle", "message": "recording stopped"}
+
+        discarded_audio_path = _normalized_state_recording_artifact_path(
+            state.audio_path,
+            suffix=(".wav", ".flac", ".socenc"),
+            state_path=store.path,
+        )
+        discarded_log_path = _normalized_state_recording_artifact_path(
+            state.log_path,
+            suffix=".log",
+            state_path=store.path,
+        )
+        has_artifacts = bool(state.audio_path or state.log_path or state.transcript_path)
         has_recording_state = state.status in {"recording", "recorded", "processing", "finalizing", "error"}
         if not has_artifacts and not has_recording_state:
             return {"status": "idle", "message": "nothing to cancel"}
@@ -3565,27 +3730,38 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             )
         )
 
-        audio_deleted = _remove_recording_artifact(discarded_audio_path)
-        log_deleted = remove_file(state.log_path, suffix=".log")
+        audio_deleted = _remove_recording_artifact(str(discarded_audio_path) if discarded_audio_path else None)
+        log_deleted = remove_file(str(discarded_log_path) if discarded_log_path else None, suffix=".log")
         if not audio_deleted and discarded_audio_path:
             if Path(str(discarded_audio_path)).name.lower().endswith(ENCRYPTED_RECORDING_ARTIFACT_SUFFIXES):
-                audio_deleted = _recording_artifact_missing_but_safe(discarded_audio_path, suffix=".socenc")
+                audio_deleted = _recording_artifact_missing_but_safe(
+                    str(discarded_audio_path),
+                    suffix=".socenc",
+                    state_path=store.path,
+                )
             else:
-                audio_deleted = _recording_artifact_missing_but_safe(discarded_audio_path, suffix=(".wav", ".flac"))
-        if not log_deleted and state.log_path:
-            log_deleted = _recording_artifact_missing_but_safe(state.log_path, suffix=".log")
+                audio_deleted = _recording_artifact_missing_but_safe(
+                    str(discarded_audio_path),
+                    suffix=(".wav", ".flac"),
+                    state_path=store.path,
+                )
+        if not log_deleted and discarded_log_path:
+            log_deleted = _recording_artifact_missing_but_safe(str(discarded_log_path), suffix=".log", state_path=store.path)
         transcript_deleted = True
         if state.transcript_path:
             transcript_path: Path | None = None
             try:
-                transcript_path = Path(_assert_clean_text(state.transcript_path, field_name="transcript path", max_chars=MAX_PATH_CHARS))
+                transcript_path = _normalized_state_artifact_path(
+                    _assert_clean_text(state.transcript_path, field_name="transcript path", max_chars=MAX_PATH_CHARS),
+                    state_path=store.path,
+                )
                 transcript_deleted = _remove_transcript_file(transcript_path)
             except RuntimeError:
                 transcript_deleted = False
             if not transcript_deleted and transcript_path is not None:
                 transcript_deleted = _transcript_artifact_missing_but_safe(transcript_path)
         if (
-            (discarded_audio_path and not audio_deleted)
+            (state.audio_path and not audio_deleted)
             or (state.log_path and not log_deleted)
             or (state.transcript_path and not transcript_deleted)
         ):
@@ -3604,14 +3780,17 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     error=error_message,
                 )
             )
-            return {
+            payload = {
                 "status": "error",
                 "message": error_message,
-                "discarded_audio_path_present": bool(discarded_audio_path),
+                "discarded_audio_path_present": bool(state.audio_path),
                 "audio_deleted": audio_deleted,
                 "log_deleted": log_deleted,
                 "transcript_deleted": transcript_deleted,
             }
+            if initial_status == "finalizing":
+                payload["exit_code"] = 0
+            return payload
         try:
             store.write(
                 RecordingState(
@@ -3636,13 +3815,17 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                         error="failed to persist canceled recording state",
                     )
                 )
-            except Exception:
-                pass
+            except Exception as persist_exc:
+                log_event(
+                    "error",
+                    "cancel_error_state_persist_failed",
+                    error=sanitize_error_message(str(persist_exc)),
+                )
             raise
         return {
             "status": "idle",
             "message": "recording discarded",
-            "discarded_audio_path_present": bool(discarded_audio_path),
+            "discarded_audio_path_present": bool(state.audio_path),
             "audio_deleted": audio_deleted,
             "log_deleted": log_deleted,
             "transcript_deleted": transcript_deleted,
@@ -3656,19 +3839,24 @@ def command_toggle(args: argparse.Namespace) -> dict[str, object]:
     state = store.read()
     _raise_if_state_unreadable(state)
     if state.status == "finalizing":
+        args.confirm_plaintext_output = True
         return command_stop(args)
     if state.status == "recording":
         if _recording_process_verified_alive(state):
+            args.confirm_plaintext_output = True
             return command_stop(args)
         if state.audio_path:
+            args.confirm_plaintext_output = True
             return command_stop(args)
     if state.status in {"recorded", "processing"}:
+        args.confirm_plaintext_output = True
         return command_stop(args)
     return command_start(args)
 
 
 def command_status(args: argparse.Namespace) -> dict[str, object]:
-    state = build_store(args).read()
+    store = build_store(args)
+    state = store.read()
     payload = _diagnostics_state_payload(state)
     if state.error.startswith("state file "):
         payload["status"] = "error"
@@ -3684,7 +3872,7 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
             payload["status"] = "recorded"
             payload["message"] = "recording process has exited; run stop to transcribe"
     if payload.get("status") in {"recording", "recorded"}:
-        microphone_level = _recording_level_payload(state)
+        microphone_level = _recording_level_payload(state, state_path=store.path)
         if microphone_level is not None:
             payload["microphone_level"] = microphone_level
     return payload
@@ -4262,15 +4450,13 @@ def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
 
 
 def command_settings_export(args: argparse.Namespace) -> dict[str, object]:
-    from .settings_export import MAX_SETTINGS_EXPORT_PATH_CHARS
-
     ensure_runtime_dirs()
     settings = _settings_json_from_args(args)
     path = _require_json_path(
         args.output,
         field_name="settings export output",
         default=default_settings_export_file(),
-        max_chars=MAX_SETTINGS_EXPORT_PATH_CHARS,
+        max_chars=_settings_json_path_limit(args.output),
     )
     payload = write_export(path, settings, load_alarm_store())
     return {
@@ -4283,14 +4469,12 @@ def command_settings_export(args: argparse.Namespace) -> dict[str, object]:
 
 
 def command_settings_import(args: argparse.Namespace) -> dict[str, object]:
-    from .settings_export import MAX_SETTINGS_EXPORT_PATH_CHARS
-
     ensure_runtime_dirs()
     path = _require_json_path(
         args.input,
         field_name="settings import input",
         default=default_settings_export_file(),
-        max_chars=MAX_SETTINGS_EXPORT_PATH_CHARS,
+        max_chars=_settings_json_path_limit(args.input),
     )
     payload = read_export(path)
     save_alarm_store(payload["alarms"])
@@ -4803,6 +4987,9 @@ def run(argv: list[str] | None = None) -> int:
         else:
             log_event("info", "command_done", command=command_name, status=status)
         print_result(payload, json_output)
+        exit_code = payload.get("exit_code")
+        if command_name == "cancel" and isinstance(exit_code, int) and not isinstance(exit_code, bool) and 0 <= exit_code <= 255:
+            return exit_code
         return 0 if status != "error" and not payload.get("error") else 1
     except Exception as exc:
         error_message = _redact_error_for_user(str(exc))
