@@ -1022,10 +1022,27 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_benchmarkAudioFileDialogArgs: function()", source)
         self.assertIn("--file-selection", source)
         self.assertIn("--file-filter=Audio files | *.wav *.WAV *.flac *.FLAC *.mp3 *.MP3 *.ogg *.OGG *.oga *.OGA *.opus *.OPUS *.m4a *.M4A *.aac *.AAC *.webm *.WEBM", source)
-        self.assertIn("_benchmarkDownloadedModels: function(audioPath)", source)
+        self.assertIn("_benchmarkDownloadedModels: function(audioPath, flowToken)", source)
         self.assertIn('return [this._cliCommand(), "benchmark-models", String(audioPath || ""), "--language", String(this._currentLanguage()), "--json"]', source)
-        self.assertIn("_benchmarkDownloadedModels(audioPath)", source)
+        self.assertIn("_benchmarkDownloadedModels(audioPath, flowToken)", source)
         self.assertIn("BENCHMARK_COMMAND_TIMEOUT_MS", source)
+
+    def test_benchmark_audio_selection_ignores_stale_dialog_responses(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        select_start = source.index("_selectBenchmarkAudioFile: function()")
+        select_end = source.index("\n  _benchmarkDownloadedModels:", select_start)
+        select_block = source[select_start:select_end]
+        self.assertIn("let flowToken = {};", select_block)
+        self.assertIn("this.benchmarkFlowToken = flowToken;", select_block)
+        self.assertIn("this.benchmarkFlowToken !== flowToken", select_block)
+        self.assertIn("this._benchmarkDownloadedModels(audioPath, flowToken);", select_block)
+
+        benchmark_start = source.index("_benchmarkDownloadedModels: function(audioPath, flowToken)")
+        benchmark_end = source.index("\n  _setAlarmOptionStatus:", benchmark_start)
+        benchmark_block = source[benchmark_start:benchmark_end]
+        self.assertIn("this.benchmarkFlowToken !== flowToken", benchmark_block)
+        self.assertIn("this.benchmarkFlowToken = null;", benchmark_block)
 
     def test_saved_diagnostics_does_not_copy_or_display_full_path(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

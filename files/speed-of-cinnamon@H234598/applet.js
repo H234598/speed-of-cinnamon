@@ -1732,6 +1732,7 @@ MyApplet.prototype = {
     this.inputSourceMenuRefreshToken = null;
     this.ollamaModelFlowToken = null;
     this.ollamaInstallWatchToken = null;
+    this.benchmarkFlowToken = null;
     this._runTeardownGuarded("teardown-processes", () => this._terminateAllProcesses());
     this._runTeardownGuarded("teardown-cancellables", () => this._cancelAllCancellables());
     this._runTeardownGuarded("teardown-dialogs", () => this._destroyTrackedDialogs());
@@ -3335,26 +3336,39 @@ MyApplet.prototype = {
       this._setStatus("error", _("Install zenity to choose a benchmark audio file"), this.lastTranscript);
       return;
     }
+    let flowToken = {};
+    this.benchmarkFlowToken = flowToken;
     this._setStatus("processing", _("Choose benchmark audio file..."), this.lastTranscript);
     this._spawnText(this._benchmarkAudioFileDialogArgs(), (output) => {
+      if (this.benchmarkFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
       let audioPath = String(output || "").trim();
       if (audioPath === "") {
+        this.benchmarkFlowToken = null;
         this._setStatus("ready", _("Benchmark cancelled"), this.lastTranscript);
         return;
       }
-      this._benchmarkDownloadedModels(audioPath);
+      this._benchmarkDownloadedModels(audioPath, flowToken);
     }, { timeoutMs: 0 });
   },
 
-  _benchmarkDownloadedModels: function(audioPath) {
+  _benchmarkDownloadedModels: function(audioPath, flowToken) {
+    flowToken = flowToken || {};
+    this.benchmarkFlowToken = flowToken;
     this._setStatus("processing", _("Benchmarking downloaded models..."), this.lastTranscript);
     this._spawnJson(this._benchmarkArgs(audioPath), (payload) => {
+      if (this.benchmarkFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
       if (payload.error) {
+        this.benchmarkFlowToken = null;
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       let results = Array.isArray(payload.results) ? payload.results : [];
       if (!this._setClipboardText(JSON.stringify(payload, null, 2))) {
+        this.benchmarkFlowToken = null;
         this._setStatus("error", _("Could not copy benchmark results"), this.lastTranscript);
         return;
       }
@@ -3363,6 +3377,7 @@ MyApplet.prototype = {
       if (fastest !== "") {
         message += "; " + _("fastest: ") + fastest;
       }
+      this.benchmarkFlowToken = null;
       this._setStatus("done", message + _("; copied results") + " (" + String(results.length) + ")", this.lastTranscript);
     }, { timeoutMs: BENCHMARK_COMMAND_TIMEOUT_MS });
   },
