@@ -5948,7 +5948,7 @@ MyApplet.prototype = {
     if (this.cancelPendingWhileCommandRunning && !this.isCommandRunning) {
       this.cancelPendingWhileCommandRunning = false;
     }
-    if (status === "done" && payload.silence_detected) {
+    if (status === "done" && payload.silence_detected === true) {
       this._finishSilentRelistenSkip(payload);
       return;
     }

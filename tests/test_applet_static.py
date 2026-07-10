@@ -817,7 +817,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('"leere aufnahme"', source)
         self.assertIn("_isEmptyTranscriptText: function(transcript)", source)
         self.assertIn('let hasTranscript = typeof payload.transcript === "string" && !this._isEmptyTranscriptText(payload.transcript);', source)
-        self.assertIn('if (status === "done" && payload.silence_detected)', source)
+        self.assertIn('if (status === "done" && payload.silence_detected === true)', source)
         self.assertIn('if (status === "done" && hasTranscript)', source)
         self.assertIn('if (status === "done" && this.autoRelistenPending)', source)
         self.assertIn('typeof payload.transcript === "string" && !this._isEmptyTranscriptText(payload.transcript)', source)
@@ -849,7 +849,7 @@ class AppletStaticTest(unittest.TestCase):
     def test_auto_relisten_done_payload_routing_is_ordered(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
-        silent_index = source.index('if (status === "done" && payload.silence_detected)')
+        silent_index = source.index('if (status === "done" && payload.silence_detected === true)')
         transcript_index = source.index('if (status === "done" && hasTranscript)')
         empty_index = source.index('if (status === "done" && this.autoRelistenPending)')
         finish_index = source.index("_finishPendingRelisten: function()")
@@ -2062,7 +2062,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.autoRelistenPendingToken = "";', source)
         self.assertIn("_finishSilentRelistenSkip: function(payload)", source)
         self.assertIn("_finishEmptyRelistenDone: function(payload)", source)
-        self.assertIn('if (status === "done" && payload.silence_detected)', source)
+        self.assertIn('if (status === "done" && payload.silence_detected === true)', source)
         self.assertIn("this.notificationSessionActive = true;", source)
         self.assertIn('if (status === "done" && hasTranscript)', source)
         self.assertIn('this._payloadMessage(payload, _("Recording finished without transcript")', source)
