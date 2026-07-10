@@ -1273,6 +1273,17 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn("this.alarmActionToken !== actionToken", block)
             self.assertIn("!this._lifecycleAllowsWork()", block)
 
+    def test_alarm_checks_ignore_stale_backend_responses(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_checkAlarms: function(manual)")
+        end = source.index("\n  _refreshInputSourceMenu:", start)
+        block = source[start:end]
+        self.assertIn("let checkToken = {};", block)
+        self.assertIn("this.alarmCheckToken = checkToken;", block)
+        self.assertIn("this.alarmCheckToken !== checkToken", block)
+        self.assertIn("!this._lifecycleAllowsWork()", block)
+
     def test_text_model_menu_keeps_selected_ollama_model_when_refresh_is_empty(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

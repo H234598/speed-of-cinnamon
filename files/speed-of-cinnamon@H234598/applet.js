@@ -1744,6 +1744,7 @@ MyApplet.prototype = {
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
     this.alarmActionToken = null;
+    this.alarmCheckToken = null;
     this._runTeardownGuarded("teardown-processes", () => this._terminateAllProcesses());
     this._runTeardownGuarded("teardown-cancellables", () => this._cancelAllCancellables());
     this._runTeardownGuarded("teardown-dialogs", () => this._destroyTrackedDialogs());
@@ -3559,13 +3560,20 @@ MyApplet.prototype = {
   },
 
   _checkAlarms: function(manual) {
+    let checkToken = {};
+    this.alarmCheckToken = checkToken;
     this._spawnJson(this._alarmCheckArgs(), (payload) => {
+      if (this.alarmCheckToken !== checkToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
       if (payload.error) {
+        this.alarmCheckToken = null;
         if (manual) {
           this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         }
         return;
       }
+      this.alarmCheckToken = null;
       let due = payload.due || [];
       for (let alarm of due) {
         if (alarm.notify === false) {
