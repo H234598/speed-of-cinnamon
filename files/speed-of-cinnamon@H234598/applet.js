@@ -404,6 +404,14 @@ MyApplet.prototype = {
     this._lifecycleErrors = {};
     this._lifecycleErrorCounts = {};
     this._disabledErrorGroups = {};
+    this._resourceRegistry = {
+      timers: {},
+      signals: [],
+      hotkeys: {},
+      monitors: [],
+      dialogs: [],
+      processes: {},
+    };
     this._teardownComplete = false;
     this._initFailed = false;
     this.appletRemoved = false;
@@ -519,6 +527,80 @@ MyApplet.prototype = {
   _finishTeardown: function() {
     this.lifecycleState = LIFECYCLE_REMOVED;
     this._teardownComplete = true;
+  },
+
+  _trackTimer: function(name, sourceId, propertyName) {
+    if (!this._resourceRegistry || !sourceId) {
+      return sourceId;
+    }
+    let key = String(name || propertyName || "timer");
+    this._resourceRegistry.timers[key] = sourceId;
+    if (propertyName) {
+      this[propertyName] = sourceId;
+    }
+    return sourceId;
+  },
+
+  _untrackTimer: function(name, sourceId, propertyName) {
+    let key = String(name || propertyName || "timer");
+    if (this._resourceRegistry && this._resourceRegistry.timers[key] === sourceId) {
+      delete this._resourceRegistry.timers[key];
+    }
+    if (propertyName && (!sourceId || this[propertyName] === sourceId)) {
+      this[propertyName] = 0;
+    }
+  },
+
+  _clearTrackedTimer: function(name, propertyName) {
+    let key = String(name || propertyName || "timer");
+    let sourceId = this._resourceRegistry && this._resourceRegistry.timers[key];
+    if (!sourceId && propertyName) {
+      sourceId = this[propertyName];
+    }
+    if (!sourceId) {
+      if (propertyName) {
+        this[propertyName] = 0;
+      }
+      return;
+    }
+    if (this._resourceRegistry && this._resourceRegistry.timers[key] === sourceId) {
+      delete this._resourceRegistry.timers[key];
+    }
+    if (propertyName && this[propertyName] === sourceId) {
+      this[propertyName] = 0;
+    }
+    try {
+      Mainloop.source_remove(sourceId);
+    } catch (error) {
+      this._recordLifecycleError("timer-clear", error);
+    }
+  },
+
+  _scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName) {
+    if (!this._lifecycleAllowsWork() || typeof callback !== "function") {
+      return 0;
+    }
+    let key = String(name || propertyName || "timer");
+    this._clearTrackedTimer(key, propertyName);
+    let generation = this.spawnGeneration;
+    let sourceId = 0;
+    let timerCallback = () => {
+      if (this.appletRemoved || this.spawnGeneration !== generation) {
+        this._untrackTimer(key, sourceId, propertyName);
+        return false;
+      }
+      this._untrackTimer(key, sourceId, propertyName);
+      return this._runGuarded("timer-" + key, callback, false) === true;
+    };
+    try {
+      sourceId = useSeconds
+        ? Mainloop.timeout_add_seconds(Math.max(1, Number(delay || 1)), timerCallback)
+        : Mainloop.timeout_add(Math.max(1, Number(delay || 1)), timerCallback);
+      return this._trackTimer(key, sourceId, propertyName);
+    } catch (error) {
+      this._recordLifecycleError("timer-" + key, error);
+      return 0;
+    }
   },
 
   _init: function(metadata, orientation, panelHeight, instanceId) {
@@ -5079,45 +5161,27 @@ MyApplet.prototype = {
   },
 
   _clearStatusTimer: function() {
-    if (this.statusTimer) {
-      Mainloop.source_remove(this.statusTimer);
-      this.statusTimer = 0;
-    }
+    this._clearTrackedTimer("status", "statusTimer");
   },
 
   _clearDisplayTimer: function() {
-    if (this.displayTimer) {
-      Mainloop.source_remove(this.displayTimer);
-      this.displayTimer = 0;
-    }
+    this._clearTrackedTimer("display", "displayTimer");
   },
 
   _clearSetupCheckTimer: function() {
-    if (this.setupCheckTimer) {
-      Mainloop.source_remove(this.setupCheckTimer);
-      this.setupCheckTimer = 0;
-    }
+    this._clearTrackedTimer("setup", "setupCheckTimer");
   },
 
   _clearPasteTimer: function() {
-    if (this.pasteTimer) {
-      Mainloop.source_remove(this.pasteTimer);
-      this.pasteTimer = 0;
-    }
+    this._clearTrackedTimer("paste", "pasteTimer");
   },
 
   _clearAlarmTimer: function() {
-    if (this.alarmTimer) {
-      Mainloop.source_remove(this.alarmTimer);
-      this.alarmTimer = 0;
-    }
+    this._clearTrackedTimer("alarm", "alarmTimer");
   },
 
   _clearOllamaInstallWatchTimer: function() {
-    if (this.ollamaInstallWatchTimer) {
-      Mainloop.source_remove(this.ollamaInstallWatchTimer);
-      this.ollamaInstallWatchTimer = 0;
-    }
+    this._clearTrackedTimer("ollama-install", "ollamaInstallWatchTimer");
   },
 
   _watchOllamaInstallThenChoose: function() {
@@ -5128,8 +5192,7 @@ MyApplet.prototype = {
   },
 
   _scheduleOllamaInstallWatchPoll: function() {
-    this.ollamaInstallWatchTimer = Mainloop.timeout_add_seconds(OLLAMA_INSTALL_POLL_SECONDS, () => {
-      this.ollamaInstallWatchTimer = 0;
+    this._scheduleTrackedTimer("ollama-install", OLLAMA_INSTALL_POLL_SECONDS, () => {
       this.ollamaInstallWatchPolls++;
       this._spawnJson(this._textModelsArgs("ollama"), (payload) => {
         if (payload.error) {
@@ -5154,7 +5217,7 @@ MyApplet.prototype = {
         this._scheduleOllamaInstallWatchPoll();
       }, { timeoutMs: STATUS_COMMAND_TIMEOUT_MS });
       return false;
-    });
+    }, true, "ollamaInstallWatchTimer");
   },
 
   _scheduleSetupCheck: function() {
@@ -5162,16 +5225,12 @@ MyApplet.prototype = {
     if (this.appletRemoved) {
       return;
     }
-    this.setupCheckTimer = Mainloop.timeout_add_seconds(2, () => {
-      this.setupCheckTimer = 0;
-      if (this.appletRemoved) {
-        return false;
-      }
+    this._scheduleTrackedTimer("setup", 2, () => {
       if (this.status === "idle") {
         this._runDoctor(true);
       }
       return false;
-    });
+    }, true, "setupCheckTimer");
   },
 
   _scheduleAlarmCheck: function(delaySeconds) {
@@ -5179,44 +5238,38 @@ MyApplet.prototype = {
     if (this.appletRemoved) {
       return;
     }
-    this.alarmTimer = Mainloop.timeout_add_seconds(Math.max(5, Number(delaySeconds || ALARM_CHECK_SECONDS)), () => {
-      this.alarmTimer = 0;
-      if (this.appletRemoved) {
-        return false;
-      }
+    this._scheduleTrackedTimer("alarm", Math.max(5, Number(delaySeconds || ALARM_CHECK_SECONDS)), () => {
       this._checkAlarms(false);
       if (!this.appletRemoved) {
         this._scheduleAlarmCheck(ALARM_CHECK_SECONDS);
       }
       return false;
-    });
+    }, true, "alarmTimer");
   },
 
   _scheduleStatusPoll: function() {
     this._clearStatusTimer();
-    if (this.appletRemoved || (this.status !== "recording" && this.status !== "processing")) {
+    if (this.appletRemoved) {
       return;
     }
-    this.statusTimer = Mainloop.timeout_add_seconds(2, () => {
-      this.statusTimer = 0;
-      if (this.appletRemoved) {
-        return false;
-      }
+    if (this.status !== "recording" && this.status !== "processing") {
+      return;
+    }
+    this._scheduleTrackedTimer("status", 2, () => {
       this._refreshStatus();
       return false;
-    });
+    }, true, "statusTimer");
   },
 
   _scheduleDisplayTick: function() {
     this._clearDisplayTimer();
-    if (this.appletRemoved || this.status !== "recording") {
+    if (this.appletRemoved) {
       return;
     }
-    this.displayTimer = Mainloop.timeout_add_seconds(1, () => {
-      this.displayTimer = 0;
-      if (this.appletRemoved) {
-        return false;
-      }
+    if (this.status !== "recording") {
+      return;
+    }
+    this._scheduleTrackedTimer("display", 1, () => {
       if (this.status === "recording") {
         this._updatePanel();
         if (!this.appletRemoved) {
@@ -5224,7 +5277,7 @@ MyApplet.prototype = {
         }
       }
       return false;
-    });
+    }, true, "displayTimer");
   },
 
   _isUsableTargetWindow: function(window) {
@@ -5961,19 +6014,15 @@ MyApplet.prototype = {
       complete(false);
       return false;
     }
-    try {
-      this.pasteTimer = Mainloop.timeout_add(PASTE_FOCUS_DELAY_MS, () => {
-        this.pasteTimer = 0;
-        if (this.appletRemoved) {
-          complete(false);
-          return false;
-        }
-        this._spawnKeyboardWhenClipboardReady(args, followUpArgs, expectedClipboardText, Date.now() + CLIPBOARD_READY_TIMEOUT_MS, expectedTargetWindow, complete);
+    if (!this._scheduleTrackedTimer("paste", PASTE_FOCUS_DELAY_MS, () => {
+      if (this.appletRemoved) {
+        complete(false);
         return false;
-      });
-    } catch (err) {
-      global.logError(err);
-      this._setStatus("error", _("Keyboard insert failed") + ": " + String(err), this.lastTranscript);
+      }
+      this._spawnKeyboardWhenClipboardReady(args, followUpArgs, expectedClipboardText, Date.now() + CLIPBOARD_READY_TIMEOUT_MS, expectedTargetWindow, complete);
+      return false;
+    }, false, "pasteTimer")) {
+      this._setStatus("error", _("Keyboard insert failed: timer could not be scheduled"), this.lastTranscript);
       complete(false);
       return false;
     }
@@ -6005,21 +6054,17 @@ MyApplet.prototype = {
           }
           return;
         }
-        try {
-          this.pasteTimer = Mainloop.timeout_add(CLIPBOARD_READY_RETRY_MS, () => {
-            this.pasteTimer = 0;
-            if (this.appletRemoved) {
-              if (typeof completionCallback === "function") {
-                completionCallback(false);
-              }
-              return false;
+        if (!this._scheduleTrackedTimer("paste", CLIPBOARD_READY_RETRY_MS, () => {
+          if (this.appletRemoved) {
+            if (typeof completionCallback === "function") {
+              completionCallback(false);
             }
-            this._spawnKeyboardWhenClipboardReady(args, followUpArgs, expected, deadlineMs, expectedTargetWindow, completionCallback);
             return false;
-          });
-        } catch (err) {
-          global.logError(err);
-          this._setStatus("error", _("Keyboard insert failed") + ": " + String(err), this.lastTranscript);
+          }
+          this._spawnKeyboardWhenClipboardReady(args, followUpArgs, expected, deadlineMs, expectedTargetWindow, completionCallback);
+          return false;
+        }, false, "pasteTimer")) {
+          this._setStatus("error", _("Keyboard insert failed: retry timer could not be scheduled"), this.lastTranscript);
           if (typeof completionCallback === "function") {
             completionCallback(false);
           }
@@ -6053,8 +6098,7 @@ MyApplet.prototype = {
               }
               return;
             }
-            this.pasteTimer = Mainloop.timeout_add(CLIPBOARD_READY_RETRY_MS, () => {
-              this.pasteTimer = 0;
+            if (!this._scheduleTrackedTimer("paste", CLIPBOARD_READY_RETRY_MS, () => {
               if (this.appletRemoved) {
                 if (typeof completionCallback === "function") {
                   completionCallback(false);
@@ -6063,7 +6107,11 @@ MyApplet.prototype = {
               }
               this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow, expected, expectedClipboardDeadlineMs, completionCallback);
               return false;
-            });
+            }, false, "pasteTimer")) {
+              if (typeof completionCallback === "function") {
+                completionCallback(false);
+              }
+            }
             return;
           }
           this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow, null, null, completionCallback);
@@ -6100,8 +6148,7 @@ MyApplet.prototype = {
           }
           return;
         }
-        this.pasteTimer = Mainloop.timeout_add(PASTE_SUBMIT_DELAY_MS, () => {
-          this.pasteTimer = 0;
+        if (!this._scheduleTrackedTimer("paste", PASTE_SUBMIT_DELAY_MS, () => {
           if (this.appletRemoved) {
             if (typeof completionCallback === "function") {
               completionCallback(false);
@@ -6128,7 +6175,11 @@ MyApplet.prototype = {
             }
           }
           return false;
-        });
+        }, false, "pasteTimer")) {
+          if (typeof completionCallback === "function") {
+            completionCallback(false);
+          }
+        }
       } else if (typeof completionCallback === "function") {
         completionCallback(true);
       }
