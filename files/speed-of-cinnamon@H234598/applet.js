@@ -1727,6 +1727,7 @@ MyApplet.prototype = {
     this.autoRelistenManualStopRequested = false;
     this.modelMenuRefreshToken = null;
     this.textModelMenuRefreshToken = null;
+    this.historyRefreshToken = null;
     this._runTeardownGuarded("teardown-processes", () => this._terminateAllProcesses());
     this._runTeardownGuarded("teardown-cancellables", () => this._cancelAllCancellables());
     this._runTeardownGuarded("teardown-dialogs", () => this._destroyTrackedDialogs());
@@ -4701,7 +4702,15 @@ MyApplet.prototype = {
   },
 
   _refreshHistory: function() {
+    if (!this._canMutateMenu(this.historyItem)) {
+      return;
+    }
+    let refreshToken = {};
+    this.historyRefreshToken = refreshToken;
     this._spawnJson(this._historyArgs(), (payload) => {
+      if (this.historyRefreshToken !== refreshToken || !this._canMutateMenu(this.historyItem)) {
+        return;
+      }
       if (payload.error) {
         this._populateHistoryMenu([]);
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);

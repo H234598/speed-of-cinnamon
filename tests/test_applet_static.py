@@ -632,6 +632,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("result.error || result.timedOut || result.outputTooLarge", terminal_block)
         self.assertNotIn("}, function() {});", terminal_block)
 
+    def test_history_refresh_ignores_stale_backend_responses(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        refresh_start = source.index("_refreshHistory: function()")
+        refresh_end = source.index("\n  _listAllTranscripts:", refresh_start)
+        refresh_block = source[refresh_start:refresh_end]
+        self.assertIn("let refreshToken = {};", refresh_block)
+        self.assertIn("this.historyRefreshToken = refreshToken;", refresh_block)
+        self.assertIn("this.historyRefreshToken !== refreshToken", refresh_block)
+        self.assertIn("!this._canMutateMenu(this.historyItem)", refresh_block)
+
     def test_recording_artifact_retention_is_optional(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
