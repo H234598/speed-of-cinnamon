@@ -654,6 +654,38 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.alarmMenuRefreshToken !== refreshToken", refresh_block)
         self.assertIn("!this._canMutateMenu(this.alarmItem)", refresh_block)
 
+    def test_menu_payload_arrays_and_entries_are_shape_safe(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        for method, next_method, variable in [
+            ("_populateAlarmMenu: function(alarms, summary, message)", "\n  _addAlarmMenuEntry:", "alarms"),
+            ("_populateInputSourceMenu: function(sources, message)", "\n  _selectInputSource:", "sources"),
+            ("_populateModelMenu: function(models, message)", "\n  _populateExternalApiVoiceMenu:", "models"),
+            ("_populateTextModelMenu: function(models, message, provider)", "\n  _canMutateMenu:", "models"),
+            ("_populateHistoryMenu: function(transcripts)", "\n  _copyHistoryTranscript:", "transcripts"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn(f"{variable} = Array.isArray({variable}) ? {variable} : [];", block)
+            self.assertIn(f"if (!{variable[:-1] if variable.endswith('s') else variable} || typeof {variable[:-1] if variable.endswith('s') else variable} !== \"object\")", block)
+
+        for method, next_method, parameter in [
+            ("_addAlarmMenuEntry: function(alarm)", "\n  _copyAlarmCommands:", "alarm"),
+            ("_addModelMenuEntry: function(model, parentMenu)", "\n  _isEnglishLanguage:", "model"),
+            ("_addTextModelMenuEntry: function(model, backend)", "\n  _textPolishingPresetLabel:", "model"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn(f"if (!{parameter} || typeof {parameter} !== \"object\")", block)
+
+        check_start = source.index("_checkAlarms: function(manual)")
+        check_end = source.index("\n  _refreshInputSourceMenu:", check_start)
+        check_block = source[check_start:check_end]
+        self.assertIn("let due = Array.isArray(payload.due)", check_block)
+        self.assertIn('payload.due.filter((alarm) => alarm && typeof alarm === "object")', check_block)
+
     def test_input_source_refresh_ignores_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

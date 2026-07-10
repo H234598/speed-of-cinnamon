@@ -3487,6 +3487,7 @@ MyApplet.prototype = {
     if (!this.alarmItem) {
       return;
     }
+    alarms = Array.isArray(alarms) ? alarms : [];
     this._clearMenuItems(this.alarmItem.menu);
 
     let summaryText = message || summary || _("No alarms configured");
@@ -3520,11 +3521,17 @@ MyApplet.prototype = {
       return;
     }
     for (let alarm of alarms) {
+      if (!alarm || typeof alarm !== "object") {
+        continue;
+      }
       this._addAlarmMenuEntry(alarm);
     }
   },
 
   _addAlarmMenuEntry: function(alarm) {
+    if (!alarm || typeof alarm !== "object") {
+      return;
+    }
     let id = String(alarm.id || "");
     if (id === "") {
       return;
@@ -3616,7 +3623,9 @@ MyApplet.prototype = {
         return;
       }
       this.alarmCheckToken = null;
-      let due = payload.due || [];
+      let due = Array.isArray(payload.due)
+        ? payload.due.filter((alarm) => alarm && typeof alarm === "object")
+        : [];
       for (let alarm of due) {
         if (alarm.notify === false) {
           continue;
@@ -3661,6 +3670,7 @@ MyApplet.prototype = {
     if (!this.inputSourceItem) {
       return;
     }
+    sources = Array.isArray(sources) ? sources : [];
     this._clearMenuItems(this.inputSourceItem.menu);
     let current = String(this.inputDevice || "");
     let currentWasListed = current === "";
@@ -3691,6 +3701,9 @@ MyApplet.prototype = {
       return;
     }
     for (let source of sources) {
+      if (!source || typeof source !== "object") {
+        continue;
+      }
       let sourceName = String(source.name || "");
       if (sourceName === "") {
         continue;
@@ -3754,6 +3767,7 @@ MyApplet.prototype = {
     if (!this._canMutateMenu(this.modelItem)) {
       return;
     }
+    models = Array.isArray(models) ? models : [];
     this._clearMenuItems(this.modelItem.menu);
 
     let autoActive = String(this.transcriber || "auto") === "auto" && String(this.whisperModel || "") === "";
@@ -3828,6 +3842,9 @@ MyApplet.prototype = {
     let ct2Count = 0;
     let ggmlCount = 0;
     for (let model of models) {
+      if (!model || typeof model !== "object") {
+        continue;
+      }
       if (String(model.model_format || "") === "ctranslate2" || String(model.backend || "") === "faster-whisper") {
         this._addModelMenuEntry(model, ct2Menu.menu);
         ct2Count++;
@@ -3859,6 +3876,9 @@ MyApplet.prototype = {
   },
 
   _addModelMenuEntry: function(model, parentMenu) {
+    if (!model || typeof model !== "object") {
+      return;
+    }
     let name = String(model.name || "");
     if (name === "") {
       return;
@@ -4498,6 +4518,7 @@ MyApplet.prototype = {
     if (!this._canMutateMenu(this.textModelItem)) {
       return;
     }
+    models = Array.isArray(models) ? models : [];
     this._clearMenuItems(this.textModelItem.menu);
     let backend = String(this.postProcessBackend || "none");
     let activeProvider = String(provider || (backend === "openai-compatible" ? "openai-compatible" : "ollama"));
@@ -4573,6 +4594,9 @@ MyApplet.prototype = {
       return;
     }
     for (let model of models) {
+      if (!model || typeof model !== "object") {
+        continue;
+      }
       this._addTextModelMenuEntry(model, activeProvider);
     }
   },
@@ -4588,6 +4612,9 @@ MyApplet.prototype = {
   },
 
   _addTextModelMenuEntry: function(model, backend) {
+    if (!model || typeof model !== "object") {
+      return;
+    }
     let name = String(model.name || "");
     if (name === "") {
       return;
@@ -7671,6 +7698,7 @@ MyApplet.prototype = {
     if (!this.historyItem) {
       return;
     }
+    transcripts = Array.isArray(transcripts) ? transcripts : [];
     this._clearMenuItems(this.historyItem.menu);
     if (!transcripts || transcripts.length === 0) {
       let empty = new PopupMenu.PopupMenuItem(_("No transcripts yet"));
@@ -7679,6 +7707,9 @@ MyApplet.prototype = {
       return;
     }
     for (let transcript of transcripts) {
+      if (!transcript || typeof transcript !== "object") {
+        continue;
+      }
       let label = this._shortMenuText(String(transcript.preview || transcript.name || _("Transcript")), 80);
       let entry = new PopupMenu.PopupSubMenuMenuItem(label);
       this.historyItem.menu.addMenuItem(entry);
