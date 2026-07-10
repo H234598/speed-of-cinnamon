@@ -417,6 +417,7 @@ MyApplet.prototype = {
       processes: {},
       cancellables: {},
     };
+    this._hotkeyDefinitions = {};
     this._teardownComplete = false;
     this._initFailed = false;
     this.appletRemoved = false;
@@ -1546,6 +1547,9 @@ MyApplet.prototype = {
       return;
     }
     let name = this._hotkeyName(id);
+    let previous = this._hotkeyDefinitions && this._hotkeyDefinitions[name]
+      ? this._hotkeyDefinitions[name]
+      : null;
     this._runGuarded("hotkeys", () => {
       Main.keybindingManager.removeHotKey(name);
       if (this._resourceRegistry) {
@@ -1554,14 +1558,44 @@ MyApplet.prototype = {
     }, undefined);
     let accelerator = String(binding || "").trim();
     if (accelerator === "") {
+      if (this._hotkeyDefinitions) {
+        delete this._hotkeyDefinitions[name];
+      }
       return;
     }
-    let registered = this._runGuarded("hotkeys", () => {
-      Main.keybindingManager.addHotKey(name, accelerator, this._guardCallback("hotkeys", callback, undefined));
-      return true;
-    }, false) === true;
+    let hasBinding = accelerator.split("::").some((part) => String(part || "").trim() !== "");
+    let registered = false;
+    if (hasBinding) {
+      registered = this._runGuarded("hotkeys", () => {
+        return Main.keybindingManager.addHotKey(name, accelerator, this._guardCallback("hotkeys", callback, undefined)) === true;
+      }, false) === true;
+    }
     if (registered && this._resourceRegistry) {
       this._resourceRegistry.hotkeys[name] = true;
+      this._hotkeyDefinitions[name] = { binding: accelerator, callback: callback };
+      return;
+    }
+    if (previous) {
+      let restored = this._runGuarded("hotkeys", () => {
+        return Main.keybindingManager.addHotKey(
+          name,
+          previous.binding,
+          this._guardCallback("hotkeys", previous.callback, undefined)
+        ) === true;
+      }, false) === true;
+      if (restored) {
+        if (this._resourceRegistry) {
+          this._resourceRegistry.hotkeys[name] = true;
+        }
+        this._hotkeyDefinitions[name] = previous;
+        return;
+      }
+    }
+    if (this._resourceRegistry) {
+      delete this._resourceRegistry.hotkeys[name];
+    }
+    if (this._hotkeyDefinitions) {
+      delete this._hotkeyDefinitions[name];
     }
   },
 
@@ -1570,6 +1604,9 @@ MyApplet.prototype = {
     this._runTeardownGuarded("teardown-hotkeys", () => Main.keybindingManager.removeHotKey(name));
     if (this._resourceRegistry) {
       delete this._resourceRegistry.hotkeys[name];
+    }
+    if (this._hotkeyDefinitions) {
+      delete this._hotkeyDefinitions[name];
     }
   },
 
