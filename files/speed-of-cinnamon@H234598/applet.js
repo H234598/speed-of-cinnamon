@@ -3022,7 +3022,11 @@ MyApplet.prototype = {
         timeoutMs: 0,
         maxStdoutBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
         maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
-      }, function() {});
+      }, (stdout, stderr, result) => {
+        if (result && (result.error || result.timedOut || result.outputTooLarge)) {
+          this._setStatus("error", _("Cinnamon applet settings process exited unexpectedly"), this.lastTranscript);
+        }
+      });
       if (!handle) {
         throw new Error("xlet-settings process could not be started");
       }
@@ -3216,7 +3220,11 @@ MyApplet.prototype = {
         timeoutMs: 0,
         maxStdoutBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
         maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
-      }, function() {});
+      }, (stdout, stderr, result) => {
+        if (result && (result.error || result.timedOut || result.outputTooLarge)) {
+          this._setStatus("error", _("Terminal process exited unexpectedly"), this.lastTranscript);
+        }
+      });
       if (!handle) {
         throw new Error("terminal process could not be started");
       }

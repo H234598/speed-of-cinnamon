@@ -615,6 +615,23 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._setStatus("done", _("Copied shortcut reference"), this.lastTranscript)', source)
         self.assertIn("this._populateShortcutMenu();", source)
 
+    def test_ui_subprocess_launchers_handle_async_exit_failures(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        settings_start = source.index("_openAppletSettings: function()")
+        settings_end = source.index("\n  _openSetupGuide:", settings_start)
+        settings_block = source[settings_start:settings_end]
+        self.assertIn('_("Cinnamon applet settings process exited unexpectedly")', settings_block)
+        self.assertIn("result.error || result.timedOut || result.outputTooLarge", settings_block)
+        self.assertNotIn("}, function() {});", settings_block)
+
+        terminal_start = source.index("_runTerminalWorkflow: function(title, command, openedMessage)")
+        terminal_end = source.index("\n  _terminalWorkflowScript:", terminal_start)
+        terminal_block = source[terminal_start:terminal_end]
+        self.assertIn('_("Terminal process exited unexpectedly")', terminal_block)
+        self.assertIn("result.error || result.timedOut || result.outputTooLarge", terminal_block)
+        self.assertNotIn("}, function() {});", terminal_block)
+
     def test_recording_artifact_retention_is_optional(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
