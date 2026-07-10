@@ -1734,6 +1734,7 @@ MyApplet.prototype = {
     this.ollamaInstallWatchToken = null;
     this.benchmarkFlowToken = null;
     this.customLimitPromptToken = null;
+    this.autoPastePromptToken = null;
     this._runTeardownGuarded("teardown-processes", () => this._terminateAllProcesses());
     this._runTeardownGuarded("teardown-cancellables", () => this._cancelAllCancellables());
     this._runTeardownGuarded("teardown-dialogs", () => this._destroyTrackedDialogs());
@@ -2537,8 +2538,14 @@ MyApplet.prototype = {
       this._setTextOptionStatus(_("Install zenity to enter a custom Auto-Submit string"));
       return;
     }
+    let promptToken = {};
+    this.autoPastePromptToken = promptToken;
     this._setTextOptionStatus(_("Enter custom Auto-Submit window title text..."));
     this._spawnText(this._autoPastePromptArgs(), (output) => {
+      if (this.autoPastePromptToken !== promptToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
+      this.autoPastePromptToken = null;
       this._setAutoPasteTitles(this._autoPasteTitleValues(output));
     }, { timeoutMs: 0 });
   },

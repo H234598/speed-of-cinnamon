@@ -1231,6 +1231,17 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn("this.customLimitPromptToken !== promptToken", block)
             self.assertIn("!this._lifecycleAllowsWork()", block)
 
+    def test_auto_paste_dialog_ignores_stale_callbacks(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_configureAutoPaste: function()")
+        end = source.index("\n  _setAutoPasteTitles:", start)
+        block = source[start:end]
+        self.assertIn("let promptToken = {};", block)
+        self.assertIn("this.autoPastePromptToken = promptToken;", block)
+        self.assertIn("this.autoPastePromptToken !== promptToken", block)
+        self.assertIn("!this._lifecycleAllowsWork()", block)
+
     def test_text_model_menu_keeps_selected_ollama_model_when_refresh_is_empty(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
