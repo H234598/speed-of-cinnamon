@@ -3515,6 +3515,7 @@ MyApplet.prototype = {
       return;
     }
     alarms = Array.isArray(alarms) ? alarms : [];
+    alarms = alarms.filter((alarm) => alarm && typeof alarm === "object" && String(alarm.id || "").trim() !== "");
     this._clearMenuItems(this.alarmItem.menu);
 
     let summaryText = message || summary || _("No alarms configured");
@@ -3698,6 +3699,7 @@ MyApplet.prototype = {
       return;
     }
     sources = Array.isArray(sources) ? sources : [];
+    sources = sources.filter((source) => source && typeof source === "object" && String(source.name || "").trim() !== "");
     this._clearMenuItems(this.inputSourceItem.menu);
     let current = String(this.inputDevice || "");
     let currentWasListed = current === "";
@@ -3795,6 +3797,7 @@ MyApplet.prototype = {
       return;
     }
     models = Array.isArray(models) ? models : [];
+    models = models.filter((model) => model && typeof model === "object" && String(model.name || "").trim() !== "");
     this._clearMenuItems(this.modelItem.menu);
 
     let autoActive = String(this.transcriber || "auto") === "auto" && String(this.whisperModel || "") === "";
@@ -4546,6 +4549,7 @@ MyApplet.prototype = {
       return;
     }
     models = Array.isArray(models) ? models : [];
+    models = models.filter((model) => model && typeof model === "object" && String(model.name || "").trim() !== "");
     this._clearMenuItems(this.textModelItem.menu);
     let backend = String(this.postProcessBackend || "none");
     let activeProvider = String(provider || (backend === "openai-compatible" ? "openai-compatible" : "ollama"));
@@ -7733,6 +7737,7 @@ MyApplet.prototype = {
       return;
     }
     transcripts = Array.isArray(transcripts) ? transcripts : [];
+    transcripts = transcripts.filter((transcript) => transcript && typeof transcript === "object" && String(transcript.preview || transcript.name || transcript.text || "").trim() !== "");
     this._clearMenuItems(this.historyItem.menu);
     if (!transcripts || transcripts.length === 0) {
       let empty = new PopupMenu.PopupMenuItem(_("No transcripts yet"));

@@ -668,6 +668,7 @@ class AppletStaticTest(unittest.TestCase):
             end = source.index(next_method, start)
             block = source[start:end]
             self.assertIn(f"{variable} = Array.isArray({variable}) ? {variable} : [];", block)
+            self.assertIn(f"{variable} = {variable}.filter(", block)
             self.assertIn(f"if (!{variable[:-1] if variable.endswith('s') else variable} || typeof {variable[:-1] if variable.endswith('s') else variable} !== \"object\")", block)
 
         for method, next_method, parameter in [
