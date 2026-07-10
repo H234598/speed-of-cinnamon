@@ -717,6 +717,8 @@ class AppletStaticTest(unittest.TestCase):
         normalize_end = source.index("\n  _hotkeyName:", normalize_start)
         normalize_block = source[normalize_start:normalize_end]
         self.assertIn('if (typeof value !== "string")', normalize_block)
+        self.assertIn('if (normalized === "finalizing")', normalize_block)
+        self.assertIn('return "processing";', normalize_block)
         self.assertIn("return PAYLOAD_STATUSES.indexOf(normalized) >= 0 ? normalized : \"error\";", normalize_block)
 
         apply_start = source.index("_applyPayload: function(payload, statusRefreshToken)")

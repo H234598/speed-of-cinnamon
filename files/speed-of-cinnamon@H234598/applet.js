@@ -1563,6 +1563,9 @@ MyApplet.prototype = {
     if (normalized === "") {
       return hasError ? "error" : "idle";
     }
+    if (normalized === "finalizing") {
+      return "processing";
+    }
     return PAYLOAD_STATUSES.indexOf(normalized) >= 0 ? normalized : "error";
   },
 
