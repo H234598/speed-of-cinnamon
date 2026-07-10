@@ -686,6 +686,29 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let due = Array.isArray(payload.due)", check_block)
         self.assertIn('payload.due.filter((alarm) => alarm && typeof alarm === "object")', check_block)
 
+    def test_nested_backend_payloads_are_shape_safe(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        doctor_start = source.index("_applyDoctorPayload: function(payload, startupCheck)")
+        doctor_end = source.index("\n  _applyLegacyDoctorPayload:", doctor_start)
+        self.assertIn("let warnings = Array.isArray(configured.warnings)", source[doctor_start:doctor_end])
+
+        legacy_start = source.index("_applyLegacyDoctorPayload: function(payload, startupCheck)")
+        legacy_end = source.index("\n  _presentDoctorResult:", legacy_start)
+        legacy_block = source[legacy_start:legacy_end]
+        self.assertIn("let checks = Array.isArray(payload.checks) ? payload.checks : [];", legacy_block)
+        self.assertIn('if (!check || typeof check !== "object")', legacy_block)
+
+        language_start = source.index("_voiceModelSupportsCurrentLanguage: function(model)")
+        language_end = source.index("\n  _languageMatches:", language_start)
+        self.assertIn("let languages = Array.isArray(model.languages) ? model.languages : [];", source[language_start:language_end])
+
+        ollama_start = source.index("_ollamaModelChoiceArgs: function(models)")
+        ollama_end = source.index("\n  _chooseOllamaTextModel:", ollama_start)
+        ollama_block = source[ollama_start:ollama_end]
+        self.assertIn("for (let model of (Array.isArray(models) ? models : []))", ollama_block)
+        self.assertIn('if (!model || typeof model !== "object")', ollama_block)
+
     def test_input_source_refresh_ignores_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

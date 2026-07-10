@@ -2982,7 +2982,9 @@ MyApplet.prototype = {
       this._presentDoctorResult(message, true, Boolean(startupCheck));
       return;
     }
-    let warnings = configured.warnings || [];
+    let warnings = Array.isArray(configured.warnings)
+      ? configured.warnings.filter((warning) => typeof warning === "string" && warning.trim() !== "")
+      : [];
     if (warnings.length > 0) {
       let message = summary + "; " + warnings.join("; ");
       this._setStatus("ready", message, this.lastTranscript);
@@ -2995,9 +2997,16 @@ MyApplet.prototype = {
 
   _applyLegacyDoctorPayload: function(payload, startupCheck) {
     let missing = [];
-    for (let check of payload.checks || []) {
+    let checks = Array.isArray(payload.checks) ? payload.checks : [];
+    for (let check of checks) {
+      if (!check || typeof check !== "object") {
+        continue;
+      }
       if (!check.ok) {
-        missing.push(check.name);
+        let name = String(check.name || "").trim();
+        if (name !== "") {
+          missing.push(name);
+        }
       }
     }
     if (payload.ok) {
@@ -3927,7 +3936,7 @@ MyApplet.prototype = {
   },
 
   _voiceModelSupportsCurrentLanguage: function(model) {
-    let languages = model.languages || [];
+    let languages = Array.isArray(model.languages) ? model.languages : [];
     if (languages.length > 0) {
       for (let language of languages) {
         if (this._languageMatches(this._voiceModelLanguage(), language)) {
@@ -4756,7 +4765,10 @@ MyApplet.prototype = {
       "ADD",
       _("Add another model...")
     ];
-    for (let model of (models || [])) {
+    for (let model of (Array.isArray(models) ? models : [])) {
+      if (!model || typeof model !== "object") {
+        continue;
+      }
       let name = this._coerceCliTextArg(model.name || "", "ollama model");
       if (name.trim() === "") {
         continue;
