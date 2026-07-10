@@ -14,6 +14,13 @@ const Mainloop = imports.mainloop;
 const Extension = imports.ui.extension;
 
 const UUID = "speed-of-cinnamon@H234598";
+const LIFECYCLE_INITIALIZING = "INITIALIZING";
+const LIFECYCLE_RUNNING = "RUNNING";
+const LIFECYCLE_DEGRADED = "DEGRADED";
+const LIFECYCLE_REMOVING = "REMOVING";
+const LIFECYCLE_REMOVED = "REMOVED";
+const LIFECYCLE_ERROR_WINDOW_MS = 60000;
+const LIFECYCLE_ERROR_THRESHOLD = 3;
 const HOTKEY_ID = "speed-of-cinnamon-toggle";
 const PRIMARY_HOTKEY_ID = "speed-of-cinnamon-primary-language";
 const SECONDARY_HOTKEY_ID = "speed-of-cinnamon-secondary-language";
@@ -392,8 +399,132 @@ function MyApplet(metadata, orientation, panelHeight, instanceId) {
 MyApplet.prototype = {
   __proto__: Applet.TextIconApplet.prototype,
 
+  _startLifecycle: function() {
+    this.lifecycleState = LIFECYCLE_INITIALIZING;
+    this._lifecycleErrors = {};
+    this._lifecycleErrorCounts = {};
+    this._disabledErrorGroups = {};
+    this._teardownComplete = false;
+    this._initFailed = false;
+    this.appletRemoved = false;
+    this.spawnGeneration = 0;
+  },
+
+  _lifecycleAllowsWork: function() {
+    return this.lifecycleState !== LIFECYCLE_REMOVING &&
+      this.lifecycleState !== LIFECYCLE_REMOVED &&
+      !this.appletRemoved;
+  },
+
+  _lifecycleGroupEnabled: function(group) {
+    return !this._disabledErrorGroups || !this._disabledErrorGroups[String(group || "unknown")];
+  },
+
+  _lifecycleErrorText: function(error) {
+    let raw = "unknown error";
+    try {
+      raw = error && error.message ? String(error.message) : String(error || raw);
+    } catch (ignored) {
+      raw = "unknown error";
+    }
+    try {
+      return this._sanitizeErrorMessage(raw) || "unknown error";
+    } catch (ignored) {
+      return raw.slice(0, MAX_SETTING_TEXT_CHARS);
+    }
+  },
+
+  _logLifecycleError: function(group, error) {
+    try {
+      global.logError("Speed of Cinnamon [" + String(group || "unknown") + "]: " + this._lifecycleErrorText(error));
+    } catch (ignored) {
+      // Logging must never become a second failure during recovery.
+    }
+  },
+
+  _recordLifecycleError: function(group, error) {
+    let key = String(group || "unknown");
+    let now = Date.now();
+    let entries = Array.isArray(this._lifecycleErrors[key]) ? this._lifecycleErrors[key] : [];
+    entries = entries.filter((timestamp) => now - timestamp <= LIFECYCLE_ERROR_WINDOW_MS);
+    entries.push(now);
+    this._lifecycleErrors[key] = entries;
+    this._lifecycleErrorCounts[key] = entries.length;
+    this._logLifecycleError(key, error);
+    if (entries.length >= LIFECYCLE_ERROR_THRESHOLD) {
+      this._disabledErrorGroups[key] = true;
+      if (this.lifecycleState === LIFECYCLE_RUNNING) {
+        this.lifecycleState = LIFECYCLE_DEGRADED;
+      }
+    }
+  },
+
+  _runGuarded: function(group, callback, fallback) {
+    let key = String(group || "unknown");
+    if (!this._lifecycleAllowsWork() || !this._lifecycleGroupEnabled(key) || typeof callback !== "function") {
+      return fallback;
+    }
+    try {
+      return callback();
+    } catch (error) {
+      this._recordLifecycleError(key, error);
+      return fallback;
+    }
+  },
+
+  _runTeardownGuarded: function(group, callback) {
+    if (typeof callback !== "function") {
+      return;
+    }
+    try {
+      callback();
+    } catch (error) {
+      this._recordLifecycleError(group || "teardown", error);
+    }
+  },
+
+  _guardCallback: function(group, callback, fallback) {
+    if (typeof callback !== "function") {
+      return null;
+    }
+    return (...args) => this._runGuarded(group, () => callback.apply(this, args), fallback);
+  },
+
+  _handleInitializationFailure: function(error) {
+    this._initFailed = true;
+    this._recordLifecycleError("init", error);
+    this.lifecycleState = LIFECYCLE_DEGRADED;
+    try {
+      if (this.set_applet_label) {
+        this.set_applet_label("ERR");
+      }
+      if (this.set_applet_tooltip) {
+        this.set_applet_tooltip(_("Speed of Cinnamon could not initialize"));
+      }
+    } catch (ignored) {
+      // A partially initialized applet may not have an actor yet.
+    }
+  },
+
+  _beginTeardown: function() {
+    if (this._teardownComplete || this.lifecycleState === LIFECYCLE_REMOVED || this.lifecycleState === LIFECYCLE_REMOVING) {
+      return false;
+    }
+    this.lifecycleState = LIFECYCLE_REMOVING;
+    this.appletRemoved = true;
+    this.spawnGeneration += 1;
+    return true;
+  },
+
+  _finishTeardown: function() {
+    this.lifecycleState = LIFECYCLE_REMOVED;
+    this._teardownComplete = true;
+  },
+
   _init: function(metadata, orientation, panelHeight, instanceId) {
-    Applet.TextIconApplet.prototype._init.call(this, orientation, panelHeight, instanceId);
+    this._startLifecycle();
+    try {
+      Applet.TextIconApplet.prototype._init.call(this, orientation, panelHeight, instanceId);
 
     this.metadata = metadata;
     this.orientation = orientation;
@@ -486,9 +617,6 @@ MyApplet.prototype = {
     this.ollamaInstallWatchPolls = 0;
     this.externalApiEnvMonitor = null;
     this.externalApiEnvApplyTarget = "voice";
-    this.appletRemoved = false;
-    this.spawnGeneration = 0;
-
     this.set_applet_icon_path(this.metadata.path + "/icon.svg");
     this.set_applet_label("");
     this.set_applet_tooltip(_("Speed of Cinnamon"));
@@ -503,6 +631,10 @@ MyApplet.prototype = {
     this._refreshStatus();
     this._scheduleSetupCheck();
     this._scheduleAlarmCheck(5);
+      this.lifecycleState = LIFECYCLE_RUNNING;
+    } catch (error) {
+      this._handleInitializationFailure(error);
+    }
   },
 
   _bindSettings: function() {
@@ -933,31 +1065,40 @@ MyApplet.prototype = {
   },
 
   _registerHotkey: function(id, binding, callback) {
+    if (!this._lifecycleAllowsWork()) {
+      return;
+    }
     let name = this._hotkeyName(id);
-    Main.keybindingManager.removeHotKey(name);
+    this._runGuarded("hotkeys", () => {
+      Main.keybindingManager.removeHotKey(name);
+    }, undefined);
     let accelerator = String(binding || "").trim();
     if (accelerator === "") {
       return;
     }
-    Main.keybindingManager.addHotKey(name, accelerator, callback);
+    this._runGuarded("hotkeys", () => {
+      Main.keybindingManager.addHotKey(name, accelerator, this._guardCallback("hotkeys", callback, undefined));
+    }, undefined);
   },
 
   _registerHotkeys: function() {
-    this._registerHotkey(HOTKEY_ID, this.toggleKeybinding, () => {
-      this._rememberFocusedWindow();
-      this._toggleRecording();
-    });
-    this._registerHotkey(PRIMARY_HOTKEY_ID, this.primaryLanguageKeybinding, () => {
-      this._rememberFocusedWindow();
-      this._startWithLanguage(this._primaryLanguage());
-    });
-    this._registerHotkey(SECONDARY_HOTKEY_ID, this.secondaryLanguageKeybinding, () => {
-      this._rememberFocusedWindow();
-      this._startWithLanguage(this._secondaryLanguage());
-    });
-    this._registerHotkey(CANCEL_HOTKEY_ID, this.cancelKeybinding, () => {
-      this._cancelRecording();
-    });
+    this._runGuarded("hotkeys", () => {
+      this._registerHotkey(HOTKEY_ID, this.toggleKeybinding, () => {
+        this._rememberFocusedWindow();
+        this._toggleRecording();
+      });
+      this._registerHotkey(PRIMARY_HOTKEY_ID, this.primaryLanguageKeybinding, () => {
+        this._rememberFocusedWindow();
+        this._startWithLanguage(this._primaryLanguage());
+      });
+      this._registerHotkey(SECONDARY_HOTKEY_ID, this.secondaryLanguageKeybinding, () => {
+        this._rememberFocusedWindow();
+        this._startWithLanguage(this._secondaryLanguage());
+      });
+      this._registerHotkey(CANCEL_HOTKEY_ID, this.cancelKeybinding, () => {
+        this._cancelRecording();
+      });
+    }, undefined);
   },
 
   _onHotkeyChanged: function() {
@@ -1038,28 +1179,30 @@ MyApplet.prototype = {
   },
 
   on_applet_removed_from_panel: function() {
-    this.appletRemoved = true;
-    this.spawnGeneration += 1;
+    if (!this._beginTeardown()) {
+      return;
+    }
     this.autoRelistenPending = false;
     this.autoRelistenPendingToken = "";
     this.autoRelistenManualStopRequested = false;
     this.modelMenuRefreshToken = null;
     this.textModelMenuRefreshToken = null;
-    this._clearStatusTimer();
-    this._clearDisplayTimer();
-    this._clearSetupCheckTimer();
-    this._clearPasteTimer();
-    this._clearClipboardOverwriteApproval();
-    this._clearAlarmTimer();
-    this._clearOllamaInstallWatchTimer();
-    this._clearExternalApiEnvMonitor();
-    Main.keybindingManager.removeHotKey(this._hotkeyName(HOTKEY_ID));
-    Main.keybindingManager.removeHotKey(this._hotkeyName(PRIMARY_HOTKEY_ID));
-    Main.keybindingManager.removeHotKey(this._hotkeyName(SECONDARY_HOTKEY_ID));
-    Main.keybindingManager.removeHotKey(this._hotkeyName(CANCEL_HOTKEY_ID));
+    this._runTeardownGuarded("teardown-timer", () => this._clearStatusTimer());
+    this._runTeardownGuarded("teardown-timer", () => this._clearDisplayTimer());
+    this._runTeardownGuarded("teardown-timer", () => this._clearSetupCheckTimer());
+    this._runTeardownGuarded("teardown-timer", () => this._clearPasteTimer());
+    this._runTeardownGuarded("teardown-clipboard", () => this._clearClipboardOverwriteApproval());
+    this._runTeardownGuarded("teardown-timer", () => this._clearAlarmTimer());
+    this._runTeardownGuarded("teardown-timer", () => this._clearOllamaInstallWatchTimer());
+    this._runTeardownGuarded("teardown-monitor", () => this._clearExternalApiEnvMonitor());
+    this._runTeardownGuarded("teardown-hotkeys", () => Main.keybindingManager.removeHotKey(this._hotkeyName(HOTKEY_ID)));
+    this._runTeardownGuarded("teardown-hotkeys", () => Main.keybindingManager.removeHotKey(this._hotkeyName(PRIMARY_HOTKEY_ID)));
+    this._runTeardownGuarded("teardown-hotkeys", () => Main.keybindingManager.removeHotKey(this._hotkeyName(SECONDARY_HOTKEY_ID)));
+    this._runTeardownGuarded("teardown-hotkeys", () => Main.keybindingManager.removeHotKey(this._hotkeyName(CANCEL_HOTKEY_ID)));
     if (this.settings) {
-      this.settings.finalize();
+      this._runTeardownGuarded("teardown-settings", () => this.settings.finalize());
     }
+    this._finishTeardown();
   },
 
   _baseArgs: function(command) {
@@ -6570,98 +6713,102 @@ MyApplet.prototype = {
   },
 
   _applyPanelStyle: function(status) {
-    if (!this.actor || !this.actor.add_style_class_name || !this.actor.remove_style_class_name) {
-      return;
-    }
-    for (let styleClass of PANEL_STATUS_CLASSES) {
-      this.actor.remove_style_class_name(styleClass);
-    }
-    this.actor.add_style_class_name(this._panelStyleClassForStatus(status));
+    return this._runGuarded("panel-style", () => {
+      if (!this.actor || !this.actor.add_style_class_name || !this.actor.remove_style_class_name) {
+        return;
+      }
+      for (let styleClass of PANEL_STATUS_CLASSES) {
+        this.actor.remove_style_class_name(styleClass);
+      }
+      this.actor.add_style_class_name(this._panelStyleClassForStatus(status));
+    }, undefined);
   },
 
   _updatePanel: function() {
-    let label = "";
-    let tooltip = "Speed of Cinnamon";
-    let statusText = this.status || "idle";
-    if (this.status === "recording") {
-      let progress = this._recordingProgressText();
-      let mic = this._microphoneLevelText();
-      label = "REC " + this._formatSeconds(this._recordingElapsedSeconds());
-      tooltip = _("Recording...") + " " + progress + "\n" + mic;
-      statusText = "recording " + progress + "; " + mic;
-      if (this.toggleItem) this.toggleItem.label.text = _("Stop dictation");
-    } else if (this.status === "processing") {
-      label = "...";
-      tooltip = this.lastMessage || _("Processing...");
-      if (this.toggleItem) this.toggleItem.label.text = _("Working...");
-    } else if (this.status === "error") {
-      label = "ERR";
-      tooltip = this.lastMessage || _("Error");
-      statusText = "error";
-      if (this.lastMessage) {
-        statusText += " - " + this._shortMenuText(this.lastMessage, 140);
+    return this._runGuarded("panel-update", () => {
+      let label = "";
+      let tooltip = "Speed of Cinnamon";
+      let statusText = this.status || "idle";
+      if (this.status === "recording") {
+        let progress = this._recordingProgressText();
+        let mic = this._microphoneLevelText();
+        label = "REC " + this._formatSeconds(this._recordingElapsedSeconds());
+        tooltip = _("Recording...") + " " + progress + "\n" + mic;
+        statusText = "recording " + progress + "; " + mic;
+        if (this.toggleItem) this.toggleItem.label.text = _("Stop dictation");
+      } else if (this.status === "processing") {
+        label = "...";
+        tooltip = this.lastMessage || _("Processing...");
+        if (this.toggleItem) this.toggleItem.label.text = _("Working...");
+      } else if (this.status === "error") {
+        label = "ERR";
+        tooltip = this.lastMessage || _("Error");
+        statusText = "error";
+        if (this.lastMessage) {
+          statusText += " - " + this._shortMenuText(this.lastMessage, 140);
+        }
+        if (this.toggleItem) this.toggleItem.label.text = _("Start dictation");
+      } else if (this.status === "recorded") {
+        label = "RDY";
+        tooltip = this.lastMessage || _("Ready to transcribe");
+        if (this.toggleItem) this.toggleItem.label.text = _("Transcribe recording");
+      } else if (this.status === "setup") {
+        label = "SET";
+        tooltip = this.lastMessage || _("Setup needed");
+        if (this.toggleItem) this.toggleItem.label.text = _("Start dictation");
+      } else {
+        label = "SOC";
+        tooltip = this.lastMessage || _("Ready");
+        if (this.toggleItem) this.toggleItem.label.text = _("Start dictation");
       }
-      if (this.toggleItem) this.toggleItem.label.text = _("Start dictation");
-    } else if (this.status === "recorded") {
-      label = "RDY";
-      tooltip = this.lastMessage || _("Ready to transcribe");
-      if (this.toggleItem) this.toggleItem.label.text = _("Transcribe recording");
-    } else if (this.status === "setup") {
-      label = "SET";
-      tooltip = this.lastMessage || _("Setup needed");
-      if (this.toggleItem) this.toggleItem.label.text = _("Start dictation");
-    } else {
-      label = "SOC";
-      tooltip = this.lastMessage || _("Ready");
-      if (this.toggleItem) this.toggleItem.label.text = _("Start dictation");
-    }
-    this._applyPanelStyle(this.status);
-    this.set_applet_label(this.showPanelLabel ? label : "");
-    this.set_applet_tooltip(tooltip + "\n" + this._shortTranscript());
-    if (this.statusItem) {
-      this.statusItem.label.text = _("Status: ") + statusText;
-    }
-    if (this.microphoneLevelItem) {
-      this.microphoneLevelItem.label.text = this._microphoneLevelText();
-    }
-    if (this.doctorSummaryItem) {
-      this.doctorSummaryItem.label.text = this.doctorSummaryText || _("Doctor: not checked");
-    }
-    if (this.languageItem) {
-      this.languageItem.label.text = _("Language: ") + this._currentLanguage();
-    }
-    if (this.recorderItem) {
-      this.recorderItem.label.text = _("Recorder: ") + this._recorderLabel(this._normalizeRecorder(this.recorder));
-    }
-    if (this.recordingLimitItem) {
-      this.recordingLimitItem.label.text = _("Duration: ") + this._formatSeconds(this._normalizeRecordingLimit(this.maxSeconds));
-    }
-    if (this.recordingOptionsItem) {
-      this.recordingOptionsItem.label.text = this._recordingOptionsLabel();
-    }
-    if (this.notificationOptionsItem) {
-      this.notificationOptionsItem.label.text = this._notificationOptionsLabel();
-    }
-    if (this.outputMethodItem) {
-      this.outputMethodItem.label.text = _("Output: ") + this._outputMethodLabel(this._normalizeOutputMethod(this.insertMethod));
-    }
-    if (this.textOptionsItem) {
-      this.textOptionsItem.label.text = this._textOptionsLabel();
-    }
-    this._updateAutoPasteItem();
-    this._updateTranscriptStorageItem();
-    if (this.inputSourceItem) {
-      this.inputSourceItem.label.text = this._inputSourceLabel();
-    }
-    if (this.modelItem) {
-      this.modelItem.label.text = this._voiceBackendLabel();
-    }
-    if (this.textModelItem) {
-      this.textModelItem.label.text = this._textModelLabel();
-    }
-    if (this.transcriptItem) {
-      this.transcriptItem.label.text = this._shortTranscript();
-    }
+      this._applyPanelStyle(this.status);
+      this.set_applet_label(this.showPanelLabel ? label : "");
+      this.set_applet_tooltip(tooltip + "\n" + this._shortTranscript());
+      if (this.statusItem) {
+        this.statusItem.label.text = _("Status: ") + statusText;
+      }
+      if (this.microphoneLevelItem) {
+        this.microphoneLevelItem.label.text = this._microphoneLevelText();
+      }
+      if (this.doctorSummaryItem) {
+        this.doctorSummaryItem.label.text = this.doctorSummaryText || _("Doctor: not checked");
+      }
+      if (this.languageItem) {
+        this.languageItem.label.text = _("Language: ") + this._currentLanguage();
+      }
+      if (this.recorderItem) {
+        this.recorderItem.label.text = _("Recorder: ") + this._recorderLabel(this._normalizeRecorder(this.recorder));
+      }
+      if (this.recordingLimitItem) {
+        this.recordingLimitItem.label.text = _("Duration: ") + this._formatSeconds(this._normalizeRecordingLimit(this.maxSeconds));
+      }
+      if (this.recordingOptionsItem) {
+        this.recordingOptionsItem.label.text = this._recordingOptionsLabel();
+      }
+      if (this.notificationOptionsItem) {
+        this.notificationOptionsItem.label.text = this._notificationOptionsLabel();
+      }
+      if (this.outputMethodItem) {
+        this.outputMethodItem.label.text = _("Output: ") + this._outputMethodLabel(this._normalizeOutputMethod(this.insertMethod));
+      }
+      if (this.textOptionsItem) {
+        this.textOptionsItem.label.text = this._textOptionsLabel();
+      }
+      this._updateAutoPasteItem();
+      this._updateTranscriptStorageItem();
+      if (this.inputSourceItem) {
+        this.inputSourceItem.label.text = this._inputSourceLabel();
+      }
+      if (this.modelItem) {
+        this.modelItem.label.text = this._voiceBackendLabel();
+      }
+      if (this.textModelItem) {
+        this.textModelItem.label.text = this._textModelLabel();
+      }
+      if (this.transcriptItem) {
+        this.transcriptItem.label.text = this._shortTranscript();
+      }
+    }, undefined);
   }
 };
 

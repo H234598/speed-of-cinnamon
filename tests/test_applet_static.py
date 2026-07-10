@@ -714,6 +714,31 @@ class AppletStaticTest(unittest.TestCase):
                 block = source[start:] if end == -1 else source[start:end]
                 self.assertIn("if (this.appletRemoved)", block)
 
+    def test_applet_has_fault_containment_lifecycle(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        for state in ("INITIALIZING", "RUNNING", "DEGRADED", "REMOVING", "REMOVED"):
+            self.assertIn('"' + state + '"', source)
+        for marker in (
+            "_startLifecycle: function()",
+            "_runGuarded: function(group, callback, fallback)",
+            "_guardCallback: function(group, callback, fallback)",
+            "_handleInitializationFailure: function(error)",
+            "_beginTeardown: function()",
+            "_finishTeardown: function()",
+            "this._recordLifecycleError(\"init\", error);",
+            "this._disabledErrorGroups[key] = true;",
+            "this.lifecycleState = LIFECYCLE_DEGRADED;",
+            "this._runGuarded(\"panel-style\"",
+            "this._runGuarded(\"panel-update\"",
+        ):
+            self.assertIn(marker, source)
+
+        self.assertIn("LIFECYCLE_ERROR_WINDOW_MS = 60000", source)
+        self.assertIn("LIFECYCLE_ERROR_THRESHOLD = 3", source)
+        self.assertIn("if (!this._beginTeardown())", source)
+        self.assertIn("this._finishTeardown();", source)
+
     def test_applet_exposes_notification_options_submenu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
