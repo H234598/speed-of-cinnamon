@@ -721,7 +721,11 @@ class AppletStaticTest(unittest.TestCase):
 
         apply_start = source.index("_applyPayload: function(payload, statusRefreshToken)")
         apply_end = source.index("\n  _artifactEncryptionWarningKey:", apply_start)
-        self.assertIn("let status = this._normalizePayloadStatus(payload.status, Boolean(payload.error));", source[apply_start:apply_end])
+        apply_block = source[apply_start:apply_end]
+        self.assertIn("let status = this._normalizePayloadStatus(payload.status, Boolean(payload.error));", apply_block)
+        self.assertIn("this._applyPayloadLanguage(payload, status);", apply_block)
+        self.assertIn("if (status === \"done\")", apply_block)
+        self.assertIn("this._maybeAutoTranscribeRecorded(payload, status);", apply_block)
 
     def test_input_source_refresh_ignores_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -810,9 +814,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('"leere aufnahme"', source)
         self.assertIn("_isEmptyTranscriptText: function(transcript)", source)
         self.assertIn('let hasTranscript = typeof payload.transcript === "string" && !this._isEmptyTranscriptText(payload.transcript);', source)
-        self.assertIn('if (payload.status === "done" && payload.silence_detected)', source)
-        self.assertIn('if (payload.status === "done" && hasTranscript)', source)
-        self.assertIn('if (payload.status === "done" && this.autoRelistenPending)', source)
+        self.assertIn('if (status === "done" && payload.silence_detected)', source)
+        self.assertIn('if (status === "done" && hasTranscript)', source)
+        self.assertIn('if (status === "done" && this.autoRelistenPending)', source)
         self.assertIn('typeof payload.transcript === "string" && !this._isEmptyTranscriptText(payload.transcript)', source)
         self.assertIn("_ensureAutoRelistenPendingForDonePayload: function(payload)", source)
         self.assertIn("this._ensureAutoRelistenPendingForDonePayload(payload);", source)
@@ -842,9 +846,9 @@ class AppletStaticTest(unittest.TestCase):
     def test_auto_relisten_done_payload_routing_is_ordered(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
-        silent_index = source.index('if (payload.status === "done" && payload.silence_detected)')
-        transcript_index = source.index('if (payload.status === "done" && hasTranscript)')
-        empty_index = source.index('if (payload.status === "done" && this.autoRelistenPending)')
+        silent_index = source.index('if (status === "done" && payload.silence_detected)')
+        transcript_index = source.index('if (status === "done" && hasTranscript)')
+        empty_index = source.index('if (status === "done" && this.autoRelistenPending)')
         finish_index = source.index("_finishPendingRelisten: function()")
         restart_index = source.index("relistenStarted = this._restartRelistenRecording();", finish_index)
         status_index = source.index('this._payloadMessage(payload, _("Recording finished without transcript")', empty_index)
@@ -858,7 +862,7 @@ class AppletStaticTest(unittest.TestCase):
     def test_auto_relisten_pending_token_is_not_cleared_during_running_command(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         apply_index = source.index("_applyPayload: function(payload, statusRefreshToken)")
-        maybe_index = source.index("this._maybeAutoTranscribeRecorded(payload);", apply_index)
+        maybe_index = source.index("this._maybeAutoTranscribeRecorded(payload, status);", apply_index)
         guarded_reset = source.index(
             "if (!this.isCommandRunning && !this.autoRelistenManualStopRequested) {",
             apply_index,
@@ -1816,8 +1820,8 @@ class AppletStaticTest(unittest.TestCase):
         apply_end = source.index("_applyMicrophoneLevel: function", apply_index)
         block = source[apply_index:apply_end]
 
-        cancel_done_index = block.index('if (this.cancelPendingWhileCommandRunning && payload.status === "done")')
-        finish_insert_index = block.index('if (payload.status === "done" && hasTranscript)')
+        cancel_done_index = block.index('if (this.cancelPendingWhileCommandRunning && status === "done")')
+        finish_insert_index = block.index('if (status === "done" && hasTranscript)')
         self.assertLess(cancel_done_index, finish_insert_index)
         self.assertIn('this._setStatus("ready", _("Cancel applied; transcript not inserted"), this.lastTranscript);', block)
         self.assertIn("this.cancelPendingWhileCommandRunning = false;", block)
@@ -1842,7 +1846,7 @@ class AppletStaticTest(unittest.TestCase):
         apply_index = source.index("_applyPayload: function(payload, statusRefreshToken)")
         apply_end = source.index("_applyMicrophoneLevel: function", apply_index)
 
-        self.assertIn('(payload.status === "recording" || payload.status === "recorded")', source[apply_index:apply_end])
+        self.assertIn('(status === "recording" || status === "recorded")', source[apply_index:apply_end])
         self.assertIn("this.autoRelistenManualStopRequested &&", source[apply_index:apply_end])
         self.assertIn("this._toggleRecording();", source[apply_index:apply_end])
         self.assertIn("if (!this.isCommandRunning && !this.autoRelistenManualStopRequested) {", source[apply_index:apply_end])
@@ -1875,7 +1879,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.autoRelistenPendingToken = "";', block)
         self.assertNotIn("} else if (!shouldRelisten) {", block)
         self.assertIn("if (payload.error) {\n        this.autoRelistenPending = false;", restart_block)
-        self.assertIn('payload.status === "recording" || payload.status === "recorded"', restart_block)
+        self.assertIn('nextStatus === "recording" || nextStatus === "recorded"', restart_block)
         self.assertIn('this.autoRelistenPendingToken = "";', restart_block)
         apply_index = restart_block.index("this._applyPayload(payload);")
         self.assertNotIn("this.autoRelistenManualStopRequested = false;", restart_block[:apply_index])
@@ -2010,12 +2014,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_isRejectedArtifactPassphraseError: function(message)", source)
         self.assertIn("_maybeWarnRejectedArtifactPassphrase: function(message)", source)
         self.assertIn("this._maybeWarnRejectedArtifactPassphrase(payload.error);", source)
-        self.assertIn("_maybeWarnUnencryptedArtifactStorage: function(payload)", source)
+        self.assertIn("_maybeWarnUnencryptedArtifactStorage: function(payload, statusOverride)", source)
         self.assertIn('let mode = this._normalizeArtifactEncryption(payload.artifact_encryption || this.artifactEncryption);', source)
         self.assertIn('let transcriptStoredPlaintext = transcriptPath !== "" && payload.transcript_encrypted === false;', source)
         self.assertIn('let recordingStoredPlaintext = payload.recording_artifacts_kept === true && payload.recording_encrypted === false;', source)
         self.assertIn('this._notify(_("Speed of Cinnamon encryption warning"), message, true);', source)
-        self.assertIn("this._maybeWarnUnencryptedArtifactStorage(payload);", source)
+        self.assertIn("this._maybeWarnUnencryptedArtifactStorage(payload, status);", source)
         self.assertIn('if (key === "artifact-encryption")', source)
 
     def test_dynamic_model_menus_guard_fast_expand_clicks(self) -> None:
@@ -2054,9 +2058,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.autoRelistenPendingToken = "";', source)
         self.assertIn("_finishSilentRelistenSkip: function(payload)", source)
         self.assertIn("_finishEmptyRelistenDone: function(payload)", source)
-        self.assertIn('if (payload.status === "done" && payload.silence_detected)', source)
+        self.assertIn('if (status === "done" && payload.silence_detected)', source)
         self.assertIn("this.notificationSessionActive = true;", source)
-        self.assertIn('if (payload.status === "done" && hasTranscript)', source)
+        self.assertIn('if (status === "done" && hasTranscript)', source)
         self.assertIn('this._payloadMessage(payload, _("Recording finished without transcript")', source)
         self.assertIn('if (method === "none")', source)
         self.assertIn('if (method === "type")', source)

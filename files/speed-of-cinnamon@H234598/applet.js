@@ -5889,7 +5889,7 @@ MyApplet.prototype = {
       this._statusRefreshToken++;
     }
     let status = this._normalizePayloadStatus(payload.status, Boolean(payload.error));
-    this._applyPayloadLanguage(payload);
+    this._applyPayloadLanguage(payload, status);
     this._updateRecordingTiming(payload, status);
     this._applyMicrophoneLevel(payload.microphone_level, status);
     if (payload.error) {
@@ -5901,10 +5901,10 @@ MyApplet.prototype = {
       return;
     }
     let hasTranscript = typeof payload.transcript === "string" && !this._isEmptyTranscriptText(payload.transcript);
-    if (payload.status === "done") {
-      this._maybeWarnUnencryptedArtifactStorage(payload);
+    if (status === "done") {
+      this._maybeWarnUnencryptedArtifactStorage(payload, status);
     }
-    if (this.cancelPendingWhileCommandRunning && payload.status === "done") {
+    if (this.cancelPendingWhileCommandRunning && status === "done") {
       this.cancelPendingWhileCommandRunning = false;
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
@@ -5914,7 +5914,7 @@ MyApplet.prototype = {
     }
     if (
       this.cancelPendingWhileCommandRunning &&
-      (payload.status === "recording" || payload.status === "recorded") &&
+      (status === "recording" || status === "recorded") &&
       !this.isCommandRunning
     ) {
       this.cancelPendingWhileCommandRunning = false;
@@ -5924,15 +5924,15 @@ MyApplet.prototype = {
     if (this.cancelPendingWhileCommandRunning && !this.isCommandRunning) {
       this.cancelPendingWhileCommandRunning = false;
     }
-    if (payload.status === "done" && payload.silence_detected) {
+    if (status === "done" && payload.silence_detected) {
       this._finishSilentRelistenSkip(payload);
       return;
     }
-    if (payload.status === "done" && hasTranscript) {
+    if (status === "done" && hasTranscript) {
       this._finishAppletTextInsert(payload);
       return;
     }
-    if (payload.status === "done" && this.autoRelistenPending) {
+    if (status === "done" && this.autoRelistenPending) {
       this._finishEmptyRelistenDone(payload);
       return;
     }
@@ -5946,14 +5946,14 @@ MyApplet.prototype = {
       : this.lastTranscript || "";
     this._setStatus(status, message, transcript);
     if (
-      (payload.status === "recording" || payload.status === "recorded") &&
+      (status === "recording" || status === "recorded") &&
       this.autoRelistenManualStopRequested &&
       !this.isCommandRunning
     ) {
       this._toggleRecording();
       return;
     }
-    this._maybeAutoTranscribeRecorded(payload);
+    this._maybeAutoTranscribeRecorded(payload, status);
   },
 
   _artifactEncryptionWarningKey: function(payload) {
@@ -6000,8 +6000,9 @@ MyApplet.prototype = {
     );
   },
 
-  _maybeWarnUnencryptedArtifactStorage: function(payload) {
-    if (!payload || String(payload.status || "") !== "done") {
+  _maybeWarnUnencryptedArtifactStorage: function(payload, statusOverride) {
+    let status = statusOverride || this._normalizePayloadStatus(payload && payload.status, Boolean(payload && payload.error));
+    if (!payload || status !== "done") {
       return;
     }
     let mode = this._normalizeArtifactEncryption(payload.artifact_encryption || this.artifactEncryption);
@@ -6057,9 +6058,9 @@ MyApplet.prototype = {
     this.microphoneLevel = safeLevel;
   },
 
-  _applyPayloadLanguage: function(payload) {
+  _applyPayloadLanguage: function(payload, statusOverride) {
     let language = String(payload.language || "").trim();
-    let status = String(payload.status || "");
+    let status = statusOverride || this._normalizePayloadStatus(payload.status, Boolean(payload.error));
     if (language !== "" && (status === "recording" || status === "recorded" || status === "processing")) {
       this.activeLanguage = language;
       this.activeLanguageExplicit = true;
@@ -6095,11 +6096,12 @@ MyApplet.prototype = {
     return isNaN(parsed) ? 0 : parsed;
   },
 
-  _maybeAutoTranscribeRecorded: function(payload) {
+  _maybeAutoTranscribeRecorded: function(payload, statusOverride) {
     if ((!this.autoTranscribeTimeout && !this.autoRelisten) || !this.notificationSessionActive || this.isCommandRunning) {
       return;
     }
-    if ((payload.status || "") !== "recorded") {
+    let status = statusOverride || this._normalizePayloadStatus(payload.status, Boolean(payload.error));
+    if (status !== "recorded") {
       return;
     }
     let recordingKey = String(payload.audio_path || payload.audio || "recorded");
@@ -7657,7 +7659,8 @@ MyApplet.prototype = {
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
-      if (payload.status === "recording" || payload.status === "recorded") {
+      let nextStatus = this._normalizePayloadStatus(payload && payload.status, Boolean(payload && payload.error));
+      if (nextStatus === "recording" || nextStatus === "recorded") {
         this.autoRelistenPending = false;
         this.autoRelistenPendingToken = "";
       }
