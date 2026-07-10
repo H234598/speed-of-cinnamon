@@ -5462,15 +5462,7 @@ MyApplet.prototype = {
   },
 
   _isStatusCommandArgs: function(args) {
-    if (!Array.isArray(args)) {
-      return false;
-    }
-    for (let i = 0; i < args.length; i++) {
-      if (String(args[i] || "") === "status") {
-        return true;
-      }
-    }
-    return false;
+    return Array.isArray(args) && args.length > 1 && String(args[1] || "") === "status";
   },
 
   _spawnJson: function(args, callback, options) {

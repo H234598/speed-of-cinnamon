@@ -871,6 +871,10 @@ class AppletStaticTest(unittest.TestCase):
         spawn_index = source.index("_spawnJson: function(args, callback, options) {")
         spawn_end = source.index("_spawnText: function(args, callback, options) {", spawn_index)
         self.assertIn("_isStatusCommandArgs: function(args) {", source[:spawn_index])
+        status_helper_index = source.index("_isStatusCommandArgs: function(args) {")
+        status_helper_end = source.index("\n  _spawnJson:", status_helper_index)
+        self.assertIn('args.length > 1 && String(args[1] || "") === "status"', source[status_helper_index:status_helper_end])
+        self.assertNotIn("for (let i = 0; i < args.length; i++)", source[status_helper_index:status_helper_end])
         self.assertIn("if (!this._isStatusCommandArgs(normalizedArgs)) {", source[spawn_index:spawn_end])
         self.assertIn("this._statusRefreshToken++;", source[spawn_index:spawn_end])
 
