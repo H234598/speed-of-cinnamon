@@ -808,7 +808,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.spawnGeneration += 1;", source)
         self.assertIn("let generation = this.spawnGeneration;", source)
         self.assertIn("let processToken = this._registerProcess(process, generation, options.resourceGroup);", source)
-        self.assertIn('if (this.appletRemoved || this.spawnGeneration !== generation || typeof callback !== "function")', source)
+        self.assertIn('if (suppressCallback || this.appletRemoved || this.spawnGeneration !== generation || typeof callback !== "function")', source)
 
     def test_lifecycle_timers_ignore_removed_applet(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -1241,6 +1241,22 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.autoPastePromptToken = promptToken;", block)
         self.assertIn("this.autoPastePromptToken !== promptToken", block)
         self.assertIn("!this._lifecycleAllowsWork()", block)
+
+    def test_process_group_cancellation_suppresses_stale_callbacks(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        bounded_start = source.index("_runBoundedSubprocess: function(args, env, options, callback)")
+        bounded_end = source.index("\n  _spawnJsonWithBackendEnvironment:", bounded_start)
+        bounded_block = source[bounded_start:bounded_end]
+        self.assertIn("let finish = (result, terminate, suppressCallback)", bounded_block)
+        self.assertIn("suppressCallback || this.appletRemoved", bounded_block)
+        self.assertIn("this._resourceRegistry.processes[processToken].cancel", bounded_block)
+
+        group_start = source.index("_terminateProcessesByGroup: function(group)")
+        group_end = source.index("\n  _cancelAllCancellables:", group_start)
+        group_block = source[group_start:group_end]
+        self.assertIn("typeof processes[token].cancel === \"function\"", group_block)
+        self.assertIn("processes[token].cancel();", group_block)
 
     def test_text_model_menu_keeps_selected_ollama_model_when_refresh_is_empty(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

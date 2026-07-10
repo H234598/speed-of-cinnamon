@@ -879,7 +879,11 @@ MyApplet.prototype = {
       : {};
     for (let token in processes) {
       if (Object.prototype.hasOwnProperty.call(processes, token)) {
-        this._terminateProcess(processes[token].process);
+        if (processes[token] && typeof processes[token].cancel === "function") {
+          processes[token].cancel();
+        } else {
+          this._terminateProcess(processes[token].process);
+        }
         delete processes[token];
       }
     }
@@ -894,7 +898,11 @@ MyApplet.prototype = {
       if (!Object.prototype.hasOwnProperty.call(processes, token) || String(processes[token].group || "process") !== wanted) {
         continue;
       }
-      this._terminateProcess(processes[token].process);
+      if (processes[token] && typeof processes[token].cancel === "function") {
+        processes[token].cancel();
+      } else {
+        this._terminateProcess(processes[token].process);
+      }
       delete processes[token];
     }
   },
@@ -5489,7 +5497,7 @@ MyApplet.prototype = {
     let processSuccessful = false;
     let processWaitError = null;
 
-    let finish = (result, terminate) => {
+    let finish = (result, terminate, suppressCallback) => {
       if (done) {
         return;
       }
@@ -5505,7 +5513,7 @@ MyApplet.prototype = {
       }
       this._unregisterProcess(processToken);
       this._unregisterCancellable(cancellableToken);
-      if (this.appletRemoved || this.spawnGeneration !== generation || typeof callback !== "function") {
+      if (suppressCallback || this.appletRemoved || this.spawnGeneration !== generation || typeof callback !== "function") {
         return;
       }
       try {
@@ -5514,6 +5522,9 @@ MyApplet.prototype = {
         this._recordLifecycleError("process-callback", error);
       }
     };
+    if (this._resourceRegistry && this._resourceRegistry.processes[processToken]) {
+      this._resourceRegistry.processes[processToken].cancel = () => finish({ cancelled: true }, true, true);
+    }
 
     let finishWhenReady = () => {
       if (!processExited || !ended.stdout || !ended.stderr) {
