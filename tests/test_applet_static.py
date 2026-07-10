@@ -1856,11 +1856,12 @@ class AppletStaticTest(unittest.TestCase):
     def test_apply_payload_does_not_clear_manual_relisten_stop_for_payload_error(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         apply_index = source.index("_applyPayload: function(payload, statusRefreshToken) {")
-        error_index = source.index("if (payload.error) {", apply_index)
+        error_index = source.index('if (payload.error || status === "error") {', apply_index)
         error_end = source.index("let hasTranscript", error_index)
         error_block = source[error_index:error_end]
 
-        self.assertIn("if (payload.error) {", error_block)
+        self.assertIn('if (payload.error || status === "error") {', error_block)
+        self.assertIn('let errorMessage = payload.error || payload.message || _("Backend reported an error");', error_block)
         self.assertNotIn("this.autoRelistenManualStopRequested = false;", error_block)
 
     def test_relisten_restart_clears_pending_only_after_restart_resolution(self) -> None:

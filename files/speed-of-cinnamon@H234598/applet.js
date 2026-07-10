@@ -5895,12 +5895,13 @@ MyApplet.prototype = {
     this._applyPayloadLanguage(payload, status);
     this._updateRecordingTiming(payload, status);
     this._applyMicrophoneLevel(payload.microphone_level, status);
-    if (payload.error) {
+    if (payload.error || status === "error") {
       this.cancelPendingWhileCommandRunning = false;
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
-      this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
-      this._maybeWarnRejectedArtifactPassphrase(payload.error);
+      let errorMessage = payload.error || payload.message || _("Backend reported an error");
+      this._setStatus("error", this._sanitizeErrorMessage(errorMessage), this.lastTranscript);
+      this._maybeWarnRejectedArtifactPassphrase(errorMessage);
       return;
     }
     let hasTranscript = typeof payload.transcript === "string" && !this._isEmptyTranscriptText(payload.transcript);
