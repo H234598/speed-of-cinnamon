@@ -2347,7 +2347,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("payload.would_delete_transcripts", source)
         self.assertIn("_cleanupPreviewText: function(payload)", source)
         self.assertIn("_showCleanupPreviewDialog: function(payload)", source)
-        self.assertIn("let plannedPaths = Array.isArray(payload.would_delete_paths) ? payload.would_delete_paths : [];", source)
+        self.assertIn('payload.would_delete_paths.filter((path) => typeof path === "string" && path.trim() !== "")', source)
         self.assertIn("let hiddenPathCount = this._safePayloadCount(payload.would_delete_path_count) + this._safePayloadCount(payload.failed_path_count) + this._safePayloadCount(payload.skipped_active_path_count);", source)
         self.assertIn("_safePayloadCount: function(value)", source)
         self.assertIn('lines.push(_("File paths are hidden for privacy; counts are shown instead."));', source)

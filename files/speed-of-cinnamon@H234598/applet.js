@@ -5107,9 +5107,15 @@ MyApplet.prototype = {
 
   _cleanupPreviewText: function(payload) {
     payload = payload && typeof payload === "object" ? payload : {};
-    let plannedPaths = Array.isArray(payload.would_delete_paths) ? payload.would_delete_paths : [];
-    let failedPaths = Array.isArray(payload.failed_paths) ? payload.failed_paths : [];
-    let skippedPaths = Array.isArray(payload.skipped_active_paths) ? payload.skipped_active_paths : [];
+    let plannedPaths = Array.isArray(payload.would_delete_paths)
+      ? payload.would_delete_paths.filter((path) => typeof path === "string" && path.trim() !== "")
+      : [];
+    let failedPaths = Array.isArray(payload.failed_paths)
+      ? payload.failed_paths.filter((path) => typeof path === "string" && path.trim() !== "")
+      : [];
+    let skippedPaths = Array.isArray(payload.skipped_active_paths)
+      ? payload.skipped_active_paths.filter((path) => typeof path === "string" && path.trim() !== "")
+      : [];
     let lines = [
       _("Clean all old files preview"),
       "",
