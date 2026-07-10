@@ -4604,10 +4604,10 @@ MyApplet.prototype = {
         return;
       }
       if (models.length === 0) {
-        this._promptInstallOllamaTextModel();
+        this._promptInstallOllamaTextModel(flowToken);
         return;
       }
-      this._promptChooseOllamaTextModel(models);
+      this._promptChooseOllamaTextModel(models, flowToken);
     });
   },
 
@@ -4674,23 +4674,28 @@ MyApplet.prototype = {
           this._installOllamaRuntime(true);
           return;
         }
-        this._promptInstallOllamaTextModel();
+        this._promptInstallOllamaTextModel(flowToken);
         return;
       }
-      this._promptChooseOllamaTextModel(models);
+      this._promptChooseOllamaTextModel(models, flowToken);
     });
   },
 
-  _promptChooseOllamaTextModel: function(models) {
+  _promptChooseOllamaTextModel: function(models, flowToken) {
+    flowToken = flowToken || this.ollamaModelFlowToken || {};
+    this.ollamaModelFlowToken = flowToken;
     this._setStatus("processing", _("Choose Ollama text model..."), this.lastTranscript);
     this._spawnText(this._ollamaModelChoiceArgs(models), (output) => {
+      if (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
       let choice = String(output || "").trim();
       if (choice === "") {
         this._setStatus("ready", _("Ollama model selection cancelled"), this.lastTranscript);
         return;
       }
       if (choice === "ADD") {
-        this._promptInstallOllamaTextModel();
+        this._promptInstallOllamaTextModel(flowToken);
         return;
       }
       if (choice.indexOf("SELECT:") === 0) {
@@ -4702,13 +4707,18 @@ MyApplet.prototype = {
     }, { timeoutMs: 0 });
   },
 
-  _promptInstallOllamaTextModel: function() {
+  _promptInstallOllamaTextModel: function(flowToken) {
     if (!this._findTrustedProgramInPath("zenity")) {
       this._setStatus("error", _("Install zenity to enter an Ollama model name"), this.lastTranscript);
       return;
     }
+    flowToken = flowToken || this.ollamaModelFlowToken || {};
+    this.ollamaModelFlowToken = flowToken;
     this._setStatus("processing", _("Choose Ollama text model..."), this.lastTranscript);
     this._spawnText(this._ollamaModelPromptArgs(), (output) => {
+      if (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
       let model = String(output || "").trim();
       if (model === "") {
         this._setStatus("ready", _("Ollama model installation cancelled"), this.lastTranscript);
@@ -6011,9 +6021,9 @@ MyApplet.prototype = {
           let models = Array.isArray(payload.models) ? payload.models : [];
           this._setStatus("ready", _("Ollama is ready"), this.lastTranscript);
           if (models.length > 0) {
-            this._promptChooseOllamaTextModel(models);
+            this._promptChooseOllamaTextModel(models, this.ollamaModelFlowToken);
           } else {
-            this._promptInstallOllamaTextModel();
+            this._promptInstallOllamaTextModel(this.ollamaModelFlowToken);
           }
           return;
         }

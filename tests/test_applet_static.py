@@ -1187,7 +1187,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (choice === "ADD")', source)
         self.assertIn('if (choice.indexOf("SELECT:") === 0)', source)
         self.assertIn('this._selectTextModelBackend("ollama", model, _("Text model: ") + model);', source)
-        self.assertIn("_promptInstallOllamaTextModel: function()", source)
+        self.assertIn("_promptInstallOllamaTextModel: function(flowToken)", source)
         self.assertIn("_ollamaModelPromptArgs: function()", source)
         self.assertIn("--entry-text=llama3.2:3b", source)
         self.assertIn("_installOllamaTextModel: function(model)", source)
@@ -1199,6 +1199,22 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._notify(_("Could not load Ollama models"), safeError, true)', source)
         self.assertNotIn('String(payload.error), true)', source)
         self.assertIn('this._notify(_("Ollama model installed"), installedModel, false)', source)
+
+    def test_ollama_model_dialogs_ignore_stale_callbacks(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        choose_start = source.index("_promptChooseOllamaTextModel: function(models, flowToken)")
+        choose_end = source.index("\n  _promptInstallOllamaTextModel:", choose_start)
+        choose_block = source[choose_start:choose_end]
+        self.assertIn("this.ollamaModelFlowToken !== flowToken", choose_block)
+        self.assertIn("!this._lifecycleAllowsWork()", choose_block)
+        self.assertIn("this._promptInstallOllamaTextModel(flowToken);", choose_block)
+
+        install_start = source.index("_promptInstallOllamaTextModel: function(flowToken)")
+        install_end = source.index("\n  _installOllamaTextModel:", install_start)
+        install_block = source[install_start:install_end]
+        self.assertIn("this.ollamaModelFlowToken !== flowToken", install_block)
+        self.assertIn("!this._lifecycleAllowsWork()", install_block)
 
     def test_text_model_menu_keeps_selected_ollama_model_when_refresh_is_empty(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
