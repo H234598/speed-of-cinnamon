@@ -1258,6 +1258,21 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("typeof processes[token].cancel === \"function\"", group_block)
         self.assertIn("processes[token].cancel();", group_block)
 
+    def test_alarm_actions_ignore_stale_backend_responses(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        for method, next_method in [
+            ("_setAlarmEnabled: function(id, enabled)", "\n  _removeAlarm:"),
+            ("_removeAlarm: function(id)", "\n  _checkAlarms:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn("let actionToken = {};", block)
+            self.assertIn("this.alarmActionToken = actionToken;", block)
+            self.assertIn("this.alarmActionToken !== actionToken", block)
+            self.assertIn("!this._lifecycleAllowsWork()", block)
+
     def test_text_model_menu_keeps_selected_ollama_model_when_refresh_is_empty(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

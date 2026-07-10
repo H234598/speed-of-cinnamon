@@ -1743,6 +1743,7 @@ MyApplet.prototype = {
     this.benchmarkFlowToken = null;
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
+    this.alarmActionToken = null;
     this._runTeardownGuarded("teardown-processes", () => this._terminateAllProcesses());
     this._runTeardownGuarded("teardown-cancellables", () => this._cancelAllCancellables());
     this._runTeardownGuarded("teardown-dialogs", () => this._destroyTrackedDialogs());
@@ -3520,24 +3521,38 @@ MyApplet.prototype = {
   },
 
   _setAlarmEnabled: function(id, enabled) {
+    let actionToken = {};
+    this.alarmActionToken = actionToken;
     this._setAlarmOptionStatus(enabled ? _("Enabling alarm...") : _("Disabling alarm..."));
     this._spawnJson(this._alarmEnableArgs(id, enabled), (payload) => {
+      if (this.alarmActionToken !== actionToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
       if (payload.error) {
+        this.alarmActionToken = null;
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
+      this.alarmActionToken = null;
       this._setAlarmOptionStatus(enabled ? _("Alarm enabled") : _("Alarm disabled"));
       this._refreshAlarmMenu();
     });
   },
 
   _removeAlarm: function(id) {
+    let actionToken = {};
+    this.alarmActionToken = actionToken;
     this._setAlarmOptionStatus(_("Removing alarm..."));
     this._spawnJson(this._alarmRemoveArgs(id), (payload) => {
+      if (this.alarmActionToken !== actionToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
       if (payload.error) {
+        this.alarmActionToken = null;
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
+      this.alarmActionToken = null;
       this._setAlarmOptionStatus(payload.removed ? _("Alarm removed") : _("Alarm not found"));
       this._refreshAlarmMenu();
     });
