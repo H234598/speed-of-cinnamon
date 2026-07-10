@@ -5519,6 +5519,7 @@ MyApplet.prototype = {
 
     try {
       let normalizedArgs = this._coerceSpawnArgs(args);
+      this._statusRefreshToken++;
       let timeoutMs = Object.prototype.hasOwnProperty.call(options, "timeoutMs")
         ? Number(options.timeoutMs)
         : CLI_COMMAND_TIMEOUT_MS;

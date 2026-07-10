@@ -887,6 +887,14 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_spawnJson: function(args, callback, options) {", source)
         self.assertIn('Object.prototype.hasOwnProperty.call(options, "timeoutMs")', source)
         self.assertIn("if (timeoutMs > 0 && !this._scheduleTrackedTimer", source)
+
+    def test_text_spawn_invalidates_stale_status_responses(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        spawn_text_index = source.index("_spawnText: function(args, callback, options) {")
+        spawn_text_end = source.index("\n  _applyPayload:", spawn_text_index)
+        spawn_text_block = source[spawn_text_index:spawn_text_end]
+        self.assertIn("this._statusRefreshToken++;", spawn_text_block)
         self.assertIn("this._scheduleTrackedTimer(timeoutKey", source)
         self.assertIn("this._terminateProcess(process);", source)
         self.assertIn("this._unregisterProcess(processToken);", source)
