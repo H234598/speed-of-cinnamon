@@ -1733,6 +1733,7 @@ MyApplet.prototype = {
     this.ollamaModelFlowToken = null;
     this.ollamaInstallWatchToken = null;
     this.benchmarkFlowToken = null;
+    this.customLimitPromptToken = null;
     this._runTeardownGuarded("teardown-processes", () => this._terminateAllProcesses());
     this._runTeardownGuarded("teardown-cancellables", () => this._cancelAllCancellables());
     this._runTeardownGuarded("teardown-dialogs", () => this._destroyTrackedDialogs());
@@ -2135,7 +2136,13 @@ MyApplet.prototype = {
       this._setStatus("ready", this.lastMessage, this.lastTranscript);
       return;
     }
+    let promptToken = {};
+    this.customLimitPromptToken = promptToken;
     this._spawnText(this._customRecordingLimitPromptArgs(), (output) => {
+      if (this.customLimitPromptToken !== promptToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
+      this.customLimitPromptToken = null;
       let seconds = this._parseCustomRecordingLimit(output);
       if (seconds === null) {
         return;
@@ -2223,7 +2230,13 @@ MyApplet.prototype = {
       this._setStatus("ready", this.lastMessage, this.lastTranscript);
       return;
     }
+    let promptToken = {};
+    this.customLimitPromptToken = promptToken;
     this._spawnText(this._customTranscriptLimitPromptArgs(), (output) => {
+      if (this.customLimitPromptToken !== promptToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
+      this.customLimitPromptToken = null;
       let limit = this._parseCustomTranscriptLimit(output);
       if (limit === null) {
         return;

@@ -1216,6 +1216,21 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.ollamaModelFlowToken !== flowToken", install_block)
         self.assertIn("!this._lifecycleAllowsWork()", install_block)
 
+    def test_custom_limit_dialogs_ignore_stale_callbacks(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        for method, next_method in [
+            ("_promptCustomRecordingLimit: function()", "\n  _parseCustomRecordingLimit:"),
+            ("_promptCustomTranscriptLimit: function()", "\n  _parseCustomTranscriptLimit:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn("let promptToken = {};", block)
+            self.assertIn("this.customLimitPromptToken = promptToken;", block)
+            self.assertIn("this.customLimitPromptToken !== promptToken", block)
+            self.assertIn("!this._lifecycleAllowsWork()", block)
+
     def test_text_model_menu_keeps_selected_ollama_model_when_refresh_is_empty(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
