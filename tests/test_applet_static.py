@@ -251,6 +251,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._selectExternalApiVoiceBackend();", source)
         self.assertNotIn('this._selectTextModelBackend("openai-compatible", this.openaiCompatibleModel, _("Text polishing: OpenAI-compatible API"));', source)
         self.assertIn("_watchExternalApiEnvFile: function(path)", source)
+        self.assertIn("_disconnectTrackedSignalsForTarget: function(target)", source)
+        self.assertIn("this._disconnectTrackedSignalsForTarget(monitor);", source)
         self.assertIn("Gio.FileMonitorEvent.CHANGES_DONE_HINT", source)
         self.assertIn("_applyExternalApiEnvFile: function(showStatus)", source)
         self.assertIn("_validateExternalApiUrl: function(value, fieldName)", source)

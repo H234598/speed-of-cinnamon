@@ -573,6 +573,26 @@ MyApplet.prototype = {
     }
   },
 
+  _disconnectTrackedSignalsForTarget: function(target) {
+    if (!target || !this._resourceRegistry || !Array.isArray(this._resourceRegistry.signals)) {
+      return;
+    }
+    let signals = this._resourceRegistry.signals.splice(0);
+    for (let connection of signals) {
+      if (!connection || connection.target !== target) {
+        this._resourceRegistry.signals.push(connection);
+        continue;
+      }
+      try {
+        if (target.disconnect && connection.id) {
+          target.disconnect(connection.id);
+        }
+      } catch (error) {
+        this._recordLifecycleError("teardown-target-signals", error);
+      }
+    }
+  },
+
   _trackDialog: function(dialog) {
     if (dialog && this._resourceRegistry && Array.isArray(this._resourceRegistry.dialogs) &&
       this._resourceRegistry.dialogs.indexOf(dialog) < 0) {
@@ -4158,6 +4178,7 @@ MyApplet.prototype = {
   _clearExternalApiEnvMonitor: function() {
     if (this.externalApiEnvMonitor) {
       let monitor = this.externalApiEnvMonitor;
+      this._disconnectTrackedSignalsForTarget(monitor);
       try {
         monitor.cancel();
       } catch (err) {
