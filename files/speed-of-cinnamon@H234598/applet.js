@@ -1599,13 +1599,16 @@ MyApplet.prototype = {
   },
 
   on_applet_clicked: function() {
-    if (!this._lifecycleAllowsWork()) {
+    if (!this._lifecycleAllowsWork() || !this.menu || typeof this.menu.toggle !== "function") {
       return;
     }
-    if (!this.menu.isOpen) {
-      this._rememberFocusedWindow();
-    }
-    this.menu.toggle();
+    let menu = this.menu;
+    this._runGuarded("menu-toggle", () => {
+      if (!menu.isOpen) {
+        this._rememberFocusedWindow();
+      }
+      menu.toggle();
+    }, undefined);
   },
 
   on_applet_removed_from_panel: function() {
@@ -5287,6 +5290,9 @@ MyApplet.prototype = {
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let ended = { stdout: false, stderr: false };
+    let processExited = false;
+    let processSuccessful = false;
+    let processWaitError = null;
 
     let finish = (result, terminate) => {
       if (done) {
@@ -5314,6 +5320,21 @@ MyApplet.prototype = {
       }
     };
 
+    let finishWhenReady = () => {
+      if (!processExited || !ended.stdout || !ended.stderr) {
+        return;
+      }
+      if (processWaitError) {
+        finish({ error: processWaitError }, false);
+        return;
+      }
+      if (!processSuccessful) {
+        finish({ error: "Subprocess exited unsuccessfully" }, false);
+        return;
+      }
+      finish({ completed: true }, false);
+    };
+
     let readStream = (stream, name, maxBytes, chunks) => {
       if (done || !stream || !stream.read_bytes_async) {
         finish({ error: "Subprocess output stream unavailable" }, true);
@@ -5329,9 +5350,7 @@ MyApplet.prototype = {
             let size = bytes && bytes.get_size ? Number(bytes.get_size()) : Number(bytes && bytes.length || 0);
             if (!size) {
               ended[name] = true;
-              if (ended.stdout && ended.stderr) {
-                finish({ completed: true }, false);
-              }
+              finishWhenReady();
               return;
             }
             let data = bytes && bytes.get_data ? bytes.get_data() : bytes;
@@ -5363,6 +5382,30 @@ MyApplet.prototype = {
     }, false)) {
       finish({ error: "Subprocess timeout could not be scheduled" }, true);
       return null;
+    }
+
+    try {
+      if (!process.wait_check_async || !process.wait_check_finish) {
+        finish({ error: "Subprocess exit status API unavailable" }, true);
+      } else {
+        process.wait_check_async(cancellable, (source, result) => {
+          if (done) {
+            return;
+          }
+          processExited = true;
+          try {
+            source.wait_check_finish(result);
+            processSuccessful = true;
+          } catch (error) {
+            processWaitError = error;
+          }
+          finishWhenReady();
+        });
+      }
+    } catch (error) {
+      processExited = true;
+      processWaitError = error;
+      finishWhenReady();
     }
 
     try {
