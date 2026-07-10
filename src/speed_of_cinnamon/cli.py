@@ -348,7 +348,10 @@ def _same_finalization_lock_identity(current: os.stat_result, expected: os.stat_
         current.st_dev == expected.st_dev
         and current.st_ino == expected.st_ino
         and current.st_mode == expected.st_mode
+        and current.st_size == expected.st_size
         and getattr(current, "st_nlink", 1) == getattr(expected, "st_nlink", 1)
+        and current.st_mtime_ns == expected.st_mtime_ns
+        and current.st_ctime_ns == expected.st_ctime_ns
     )
 
 

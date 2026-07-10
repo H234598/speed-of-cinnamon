@@ -694,7 +694,10 @@ def _assert_same_log_file_identity(path: Path, expected_stat: os.stat_result, *,
     if (
         current_stat.st_dev != expected_stat.st_dev
         or current_stat.st_ino != expected_stat.st_ino
+        or current_stat.st_size != expected_stat.st_size
         or getattr(current_stat, "st_nlink", 1) != getattr(expected_stat, "st_nlink", 1)
+        or current_stat.st_mtime_ns != expected_stat.st_mtime_ns
+        or current_stat.st_ctime_ns != expected_stat.st_ctime_ns
     ):
         raise RuntimeError(f"{field_name} changed before deletion: {path}")
 
@@ -710,7 +713,10 @@ def _unlink_log_file_with_parent_fsync(path: Path, expected_stat: os.stat_result
             current_stat.st_dev != expected_stat.st_dev
             or current_stat.st_ino != expected_stat.st_ino
             or current_stat.st_mode != expected_stat.st_mode
+            or current_stat.st_size != expected_stat.st_size
             or getattr(current_stat, "st_nlink", 1) != getattr(expected_stat, "st_nlink", 1)
+            or current_stat.st_mtime_ns != expected_stat.st_mtime_ns
+            or current_stat.st_ctime_ns != expected_stat.st_ctime_ns
         ):
             raise RuntimeError(f"{field_name} changed before deletion: {path}")
         if not stat_module.S_ISREG(current_stat.st_mode):

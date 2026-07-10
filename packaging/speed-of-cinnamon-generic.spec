@@ -1,5 +1,5 @@
 Name:           speed-of-cinnamon
-Version:        0.2.2
+Version:        0.2.3
 Release:        2%{?dist}
 Summary:        Cross-distribution Cinnamon-native voice typing helper
 
