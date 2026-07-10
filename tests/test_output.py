@@ -39,6 +39,19 @@ class OutputTest(unittest.TestCase):
         output_module._LAST_CLIPBOARD_METHOD = None
         output_module._LAST_CLIPBOARD_INSERTION = 0.0
         output_module._LAST_CLIPBOARD_CONTEXT = None
+        self._default_active_window_snapshot_patch = mock.patch(
+            "speed_of_cinnamon.output._active_x_window_snapshot",
+            return_value=("123", "Editor", "Xed"),
+        )
+        self._default_active_window_snapshot_patch.start()
+
+    def tearDown(self) -> None:
+        if self._default_active_window_snapshot_patch is not None:
+            self._default_active_window_snapshot_patch.stop()
+
+    def _use_real_active_window_snapshot(self) -> None:
+        self._default_active_window_snapshot_patch.stop()
+        self._default_active_window_snapshot_patch = None
 
     def _expected_paste_fingerprint(self, text: str) -> str:
         return output_module._clipboard_insertion_fingerprint(
@@ -646,6 +659,8 @@ class OutputTest(unittest.TestCase):
                 paste_from_clipboard(expected_window_snapshot=("1", "Editor", "xed"))
 
     def test_active_window_paste_key_uses_shift_for_terminal_class(self) -> None:
+        self._use_real_active_window_snapshot()
+
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             command = args[0] if args else kwargs["args"]
             assert isinstance(command, list)
@@ -662,6 +677,8 @@ class OutputTest(unittest.TestCase):
             self.assertEqual(_active_window_paste_key(), "ctrl+shift+v")
 
     def test_active_window_paste_key_falls_back_to_normal_paste(self) -> None:
+        self._use_real_active_window_snapshot()
+
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             command = args[0] if args else kwargs["args"]
             assert isinstance(command, list)
@@ -678,6 +695,8 @@ class OutputTest(unittest.TestCase):
             self.assertEqual(_active_window_paste_key(), "ctrl+v")
 
     def test_active_window_paste_key_uses_shift_for_terminal_title(self) -> None:
+        self._use_real_active_window_snapshot()
+
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             command = args[0] if args else kwargs["args"]
             assert isinstance(command, list)
@@ -808,6 +827,7 @@ class OutputTest(unittest.TestCase):
             mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
             mock.patch("speed_of_cinnamon.output.set_clipboard"),
             mock.patch("speed_of_cinnamon.output.paste_from_clipboard"),
+            mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "")),
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
             mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=3.0),
         ):
@@ -1465,6 +1485,8 @@ class OutputTest(unittest.TestCase):
             self.assertFalse(output_module._active_x_window_matches_snapshot(("123", "Editor", "Terminal")))
 
     def test_active_window_snapshot_requires_window_class(self) -> None:
+        self._use_real_active_window_snapshot()
+
         with (
             mock.patch("speed_of_cinnamon.output._which", return_value="/usr/bin/xdotool"),
             mock.patch("speed_of_cinnamon.output._run_stdout", side_effect=["123", "Editor", ""]),
