@@ -1730,6 +1730,7 @@ MyApplet.prototype = {
     this.historyRefreshToken = null;
     this.alarmMenuRefreshToken = null;
     this.inputSourceMenuRefreshToken = null;
+    this.ollamaModelFlowToken = null;
     this._runTeardownGuarded("teardown-processes", () => this._terminateAllProcesses());
     this._runTeardownGuarded("teardown-cancellables", () => this._cancelAllCancellables());
     this._runTeardownGuarded("teardown-dialogs", () => this._destroyTrackedDialogs());
@@ -4567,8 +4568,13 @@ MyApplet.prototype = {
       this._setStatus("error", _("Install zenity to choose an Ollama model"), this.lastTranscript);
       return;
     }
+    let flowToken = {};
+    this.ollamaModelFlowToken = flowToken;
     this._setStatus("processing", _("Checking Ollama..."), this.lastTranscript);
     this._spawnJson(this._textModelsArgs("ollama"), (payload) => {
+      if (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
       if (payload.error) {
         let safeError = this._sanitizeErrorMessage(payload.error);
         this._setStatus("error", safeError, this.lastTranscript);
@@ -4631,8 +4637,13 @@ MyApplet.prototype = {
       this._setStatus("error", _("Install zenity to choose an Ollama model"), this.lastTranscript);
       return;
     }
+    let flowToken = {};
+    this.ollamaModelFlowToken = flowToken;
     this._setStatus("processing", _("Loading Ollama text models..."), this.lastTranscript);
     this._spawnJson(this._textModelsArgs("ollama"), (payload) => {
+      if (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
       if (payload.error) {
         let safeError = this._sanitizeErrorMessage(payload.error);
         this._setStatus("error", safeError, this.lastTranscript);

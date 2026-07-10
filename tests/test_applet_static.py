@@ -665,6 +665,21 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.inputSourceMenuRefreshToken !== refreshToken", refresh_block)
         self.assertIn("!this._canMutateMenu(this.inputSourceItem)", refresh_block)
 
+    def test_ollama_model_checks_ignore_stale_flow_responses(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        for method, next_method in [
+            ("_activateOllamaTextModelFlow: function()", "\n  _ollamaModelPromptArgs:"),
+            ("_chooseOllamaTextModel: function()", "\n  _promptChooseOllamaTextModel:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn("let flowToken = {};", block)
+            self.assertIn("this.ollamaModelFlowToken = flowToken;", block)
+            self.assertIn("this.ollamaModelFlowToken !== flowToken", block)
+            self.assertIn("!this._lifecycleAllowsWork()", block)
+
     def test_recording_artifact_retention_is_optional(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
