@@ -3161,7 +3161,7 @@ MyApplet.prototype = {
         return;
       }
       this.setupDiagnosticsToken = null;
-      this._openFile(path, _("Opened profanity replacement list: ") + String(payload.entries || 0));
+      this._openFile(path, _("Opened profanity replacement list: ") + String(this._safePayloadCount(payload.entries)));
     }, this._settingsSnapshotInputOption());
   },
 
@@ -5008,7 +5008,7 @@ MyApplet.prototype = {
         this._setStatus("error", _("Transcript list is empty"), this.lastTranscript);
         return;
       }
-      this._showTranscriptsWindow(content, Number(payload.transcripts || 0), Boolean(payload.truncated));
+      this._showTranscriptsWindow(content, this._safePayloadCount(payload.transcripts), Boolean(payload.truncated));
     });
   },
 
@@ -5089,14 +5089,24 @@ MyApplet.prototype = {
     });
   },
 
-  _cleanupCount: function(payload, dryRun) {
-    if (dryRun) {
-      return Number(payload.would_delete_transcripts || 0) + Number(payload.would_delete_recordings || 0) + Number(payload.would_delete_logs || 0);
+  _safePayloadCount: function(value) {
+    let count = Number(value);
+    if (!isFinite(count) || count < 0) {
+      return 0;
     }
-    return Number(payload.deleted_transcripts || 0) + Number(payload.deleted_recordings || 0) + Number(payload.deleted_logs || 0);
+    return Math.floor(count);
+  },
+
+  _cleanupCount: function(payload, dryRun) {
+    payload = payload && typeof payload === "object" ? payload : {};
+    if (dryRun) {
+      return this._safePayloadCount(payload.would_delete_transcripts) + this._safePayloadCount(payload.would_delete_recordings) + this._safePayloadCount(payload.would_delete_logs);
+    }
+    return this._safePayloadCount(payload.deleted_transcripts) + this._safePayloadCount(payload.deleted_recordings) + this._safePayloadCount(payload.deleted_logs);
   },
 
   _cleanupPreviewText: function(payload) {
+    payload = payload && typeof payload === "object" ? payload : {};
     let plannedPaths = Array.isArray(payload.would_delete_paths) ? payload.would_delete_paths : [];
     let failedPaths = Array.isArray(payload.failed_paths) ? payload.failed_paths : [];
     let skippedPaths = Array.isArray(payload.skipped_active_paths) ? payload.skipped_active_paths : [];
@@ -5104,11 +5114,11 @@ MyApplet.prototype = {
       _("Clean all old files preview"),
       "",
       _("Files that would be deleted: ") + String(this._cleanupCount(payload, true)),
-      _("Transcripts: ") + String(Number(payload.would_delete_transcripts || 0)),
-      _("Recordings: ") + String(Number(payload.would_delete_recordings || 0)),
-      _("Logs: ") + String(Number(payload.would_delete_logs || 0))
+      _("Transcripts: ") + String(this._safePayloadCount(payload.would_delete_transcripts)),
+      _("Recordings: ") + String(this._safePayloadCount(payload.would_delete_recordings)),
+      _("Logs: ") + String(this._safePayloadCount(payload.would_delete_logs))
     ];
-    let hiddenPathCount = Number(payload.would_delete_path_count || 0) + Number(payload.failed_path_count || 0) + Number(payload.skipped_active_path_count || 0);
+    let hiddenPathCount = this._safePayloadCount(payload.would_delete_path_count) + this._safePayloadCount(payload.failed_path_count) + this._safePayloadCount(payload.skipped_active_path_count);
     if (hiddenPathCount > 0 && plannedPaths.length === 0 && failedPaths.length === 0 && skippedPaths.length === 0) {
       lines.push("");
       lines.push(_("File paths are hidden for privacy; counts are shown instead."));
