@@ -1746,6 +1746,7 @@ MyApplet.prototype = {
     this.alarmActionToken = null;
     this.alarmCheckToken = null;
     this.settingsTransferToken = null;
+    this.setupDiagnosticsToken = null;
     this._runTeardownGuarded("teardown-processes", () => this._terminateAllProcesses());
     this._runTeardownGuarded("teardown-cancellables", () => this._cancelAllCancellables());
     this._runTeardownGuarded("teardown-dialogs", () => this._destroyTrackedDialogs());
@@ -3130,15 +3131,23 @@ MyApplet.prototype = {
   },
 
   _copySetupPlan: function() {
+    let actionToken = {};
+    this.setupDiagnosticsToken = actionToken;
     this._spawnJson(this._setupArgs(), (payload) => {
+      if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
       if (payload.error) {
+        this.setupDiagnosticsToken = null;
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       if (!this._setClipboardText(String(payload.text || JSON.stringify(payload, null, 2)))) {
+        this.setupDiagnosticsToken = null;
         this._setStatus("error", _("Could not copy setup plan"), this.lastTranscript);
         return;
       }
+      this.setupDiagnosticsToken = null;
       this._setStatus("done", _("Copied setup plan"), this.lastTranscript);
     }, this._settingsSnapshotInputOption());
   },
@@ -3163,46 +3172,70 @@ MyApplet.prototype = {
   },
 
   _copySetupCommands: function() {
+    let actionToken = {};
+    this.setupDiagnosticsToken = actionToken;
     this._spawnJson(this._setupArgs(), (payload) => {
+      if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
       if (payload.error) {
+        this.setupDiagnosticsToken = null;
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
 
       let text = this._setupCommandsText(payload);
       if (text === "") {
+        this.setupDiagnosticsToken = null;
         this._setStatus("ready", _("No setup commands needed"), this.lastTranscript);
         return;
       }
 
       if (!this._setClipboardText(text)) {
+        this.setupDiagnosticsToken = null;
         this._setStatus("error", _("Could not copy setup commands"), this.lastTranscript);
         return;
       }
+      this.setupDiagnosticsToken = null;
       this._setStatus("done", _("Copied setup commands"), this.lastTranscript);
     }, this._settingsSnapshotInputOption());
   },
 
   _copyDiagnostics: function() {
+    let actionToken = {};
+    this.setupDiagnosticsToken = actionToken;
     this._spawnJson(this._diagnosticsArgs(), (payload) => {
+      if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
       if (payload.error) {
+        this.setupDiagnosticsToken = null;
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       if (!this._setClipboardText(JSON.stringify(payload, null, 2))) {
+        this.setupDiagnosticsToken = null;
         this._setStatus("error", _("Could not copy diagnostics"), this.lastTranscript);
         return;
       }
+      this.setupDiagnosticsToken = null;
       this._setStatus("done", _("Copied diagnostics"), this.lastTranscript);
     }, this._settingsSnapshotInputOption(true));
   },
 
   _saveDiagnostics: function() {
+    let actionToken = {};
+    this.setupDiagnosticsToken = actionToken;
     this._spawnJson(this._diagnosticsSaveArgs(), (payload) => {
+      if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
       if (payload.error) {
+        this.setupDiagnosticsToken = null;
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
+      this.setupDiagnosticsToken = null;
       this._setStatus("done", _("Saved diagnostics"), this.lastTranscript);
     }, this._settingsSnapshotInputOption(true));
   },
