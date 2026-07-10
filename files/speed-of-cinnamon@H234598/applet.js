@@ -7525,6 +7525,8 @@ MyApplet.prototype = {
     if (!this._lifecycleAllowsWork()) {
       return;
     }
+    // A local UI transition supersedes any status response that is still in flight.
+    this._statusRefreshToken++;
     let previousStatus = this.status;
     this.status = status;
     this.lastMessage = status === "error" ? this._sanitizeErrorMessage(message) : message || "";

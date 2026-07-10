@@ -889,6 +889,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!this._isStatusCommandArgs(normalizedArgs)) {", source[spawn_index:spawn_end])
         self.assertIn("this._statusRefreshToken++;", source[spawn_index:spawn_end])
 
+    def test_local_status_updates_invalidate_inflight_status_responses(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        set_status_index = source.index("_setStatus: function(status, message, transcript)")
+        set_status_end = source.index("\n  _maybeNotify:", set_status_index)
+        set_status_block = source[set_status_index:set_status_end]
+        self.assertIn("this._statusRefreshToken++;", set_status_block)
+        self.assertLess(
+            set_status_block.index("this._statusRefreshToken++;"),
+            set_status_block.index("let previousStatus = this.status;"),
+        )
+
     def test_status_checks_use_spawn_json_timeout(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
