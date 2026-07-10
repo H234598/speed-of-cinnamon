@@ -100,6 +100,27 @@ def _require_cinnamon_applet() -> None:
         raise unittest.SkipTest(f"live paste test requires running applet {APPLET_UUID}")
 
 
+def _require_clipboard_target_probe() -> None:
+    try:
+        payload = _cinnamon_eval(
+            f"""
+(() => {{
+  const A = imports.ui.appletManager;
+  const applet = A.definitions
+    .filter(d => d.real_uuid === {json.dumps(APPLET_UUID)} || d.uuid === {json.dumps(APPLET_UUID)})
+    .map(d => d.applet)
+    .filter(a => !!a)[0];
+  const spec = applet && applet._clipboardProgramSpec ? applet._clipboardProgramSpec() : null;
+  return spec ? {{program: String(spec.program || ""), targetArgs: Array.isArray(spec.targetArgs)}} : null;
+}})()
+"""
+        )
+    except (AssertionError, subprocess.SubprocessError) as exc:
+        raise unittest.SkipTest(f"live paste test requires clipboard target probing: {exc}") from exc
+    if not isinstance(payload, dict) or payload.get("program") not in {"xclip", "wl-paste"} or payload.get("targetArgs") is not True:
+        raise unittest.SkipTest("live paste test requires a clipboard helper with target probing support")
+
+
 def _window_ids_for(args: list[str]) -> list[str]:
     result = _run(args, timeout=2, check=False)
     if result.returncode != 0:
@@ -251,6 +272,7 @@ class LivePasteEditorTest(unittest.TestCase):
         terminal = _require_tool("gnome-terminal")
         xdotool = _require_tool("xdotool")
         _require_cinnamon_applet()
+        _require_clipboard_target_probe()
 
         paste_text = f"soc-terminal-paste-{uuid.uuid4().hex}"
         with tempfile.TemporaryDirectory(prefix="soc-live-terminal-paste-") as tmpdir:
@@ -318,6 +340,7 @@ class LivePasteEditorTest(unittest.TestCase):
         xed = _require_tool("xed")
         xdotool = _require_tool("xdotool")
         _require_cinnamon_applet()
+        _require_clipboard_target_probe()
 
         paste_text = f"soc-live-paste-{uuid.uuid4().hex}"
         with tempfile.TemporaryDirectory(prefix="soc-live-paste-") as tmpdir:
