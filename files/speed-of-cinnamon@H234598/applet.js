@@ -683,6 +683,57 @@ MyApplet.prototype = {
     }
   },
 
+  _destroyMenus: function() {
+    let menus = [this.menu, this._applet_context_menu];
+    for (let menu of menus) {
+      this._runTeardownGuarded("teardown-menu-signals", () => {
+        if (menu && menu.disconnectAllSignals) {
+          menu.disconnectAllSignals();
+        }
+      });
+    }
+    for (let menu of menus) {
+      this._runTeardownGuarded("teardown-menu-close", () => {
+        if (menu && menu.close) {
+          menu.close(false);
+        }
+      });
+    }
+    for (let menu of menus) {
+      this._runTeardownGuarded("teardown-menu-destroy", () => {
+        if (menu && menu.destroy) {
+          menu.destroy();
+        }
+      });
+    }
+    for (let manager of [this.menuManager, this._menuManager]) {
+      this._runTeardownGuarded("teardown-menu-manager-signals", () => {
+        if (manager && manager.disconnectAllSignals) {
+          manager.disconnectAllSignals();
+        }
+      });
+      this._runTeardownGuarded("teardown-menu-manager", () => {
+        if (manager && manager.destroy) {
+          manager.destroy();
+        }
+      });
+    }
+    this.menu = null;
+    this.menuManager = null;
+    this._applet_context_menu = null;
+    this._menuManager = null;
+  },
+
+  _destroyAppletTooltip: function() {
+    let tooltip = this._applet_tooltip;
+    this._runTeardownGuarded("teardown-tooltip", () => {
+      if (tooltip && tooltip.destroy) {
+        tooltip.destroy();
+      }
+    });
+    this._applet_tooltip = null;
+  },
+
   _trackMonitor: function(monitor) {
     if (monitor && this._resourceRegistry && Array.isArray(this._resourceRegistry.monitors) &&
       this._resourceRegistry.monitors.indexOf(monitor) < 0) {
@@ -1035,8 +1086,20 @@ MyApplet.prototype = {
 
   _buildMenu: function() {
     this.menuManager = new PopupMenu.PopupMenuManager(this);
-    this.menu = new Applet.AppletPopupMenu(this, this.orientation);
+    this.menu = new PopupMenu.PopupMenu(this.actor, this.orientation);
+    Main.uiGroup.add_actor(this.menu.actor);
+    this.menu.actor.hide();
     this.menuManager.addMenu(this.menu);
+    this._connectSafe(this.menu, "open-state-changed", (menu, open) => {
+      if (!this._applet_context_menu.isOpen) {
+        this.actor.change_style_pseudo_class("checked", open);
+      }
+    }, "menu-open-state");
+    this._connectSafe(this, "orientation-changed", (applet, orientation) => {
+      if (this.menu && this.menu.setOrientation) {
+        this.menu.setOrientation(orientation);
+      }
+    }, "menu-orientation");
 
     this.toggleItem = new PopupMenu.PopupIconMenuItem(_("Start dictation"), "audio-input-microphone-symbolic", St.IconType.SYMBOLIC);
     this._connectSafe(this.toggleItem, "activate", () => {
@@ -1566,14 +1629,21 @@ MyApplet.prototype = {
     this._runTeardownGuarded("teardown-timer", () => this._clearOllamaInstallWatchTimer());
     this._runTeardownGuarded("teardown-monitor", () => this._clearExternalApiEnvMonitor());
     this._runTeardownGuarded("teardown-signals", () => this._disconnectAllSignals());
+    this._runTeardownGuarded("teardown-applet-signals", () => {
+      if (this.disconnectAllSignals) {
+        this.disconnectAllSignals();
+      }
+    });
     this._removeHotkey(HOTKEY_ID);
     this._removeHotkey(PRIMARY_HOTKEY_ID);
     this._removeHotkey(SECONDARY_HOTKEY_ID);
     this._removeHotkey(CANCEL_HOTKEY_ID);
+    this._runTeardownGuarded("teardown-menus", () => this._destroyMenus());
     if (this.settings) {
       this._runTeardownGuarded("teardown-settings", () => this.settings.finalize());
     }
     this._finishTeardown();
+    this._destroyAppletTooltip();
   },
 
   _baseArgs: function(command) {

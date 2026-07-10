@@ -762,6 +762,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_trackMonitor: function(monitor)", source)
         self.assertIn("_removeHotkey: function(id)", source)
 
+    def test_applet_teardown_owns_popup_menus_and_tooltip(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("this.menu = new PopupMenu.PopupMenu(this.actor, this.orientation);", source)
+        self.assertIn("Main.uiGroup.add_actor(this.menu.actor);", source)
+        self.assertIn("_destroyMenus: function()", source)
+        self.assertIn("_destroyAppletTooltip: function()", source)
+        self.assertIn("this.disconnectAllSignals()", source)
+        self.assertIn("this._runTeardownGuarded(\"teardown-menus\", () => this._destroyMenus());", source)
+        self.assertIn("this._destroyAppletTooltip();", source)
+        self.assertNotIn("new Applet.AppletPopupMenu(this, this.orientation)", source)
+
     def test_applet_exposes_notification_options_submenu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))

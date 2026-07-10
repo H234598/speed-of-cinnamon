@@ -169,6 +169,9 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("APPLET_CRASH_SAFETY_CYCLES", harness)
         self.assertIn("APPLET_CRASH_SAFETY_FAULT_INJECTION", harness)
         self.assertIn("ReloadXlet", harness)
+        self.assertIn("imports.system.gc()", harness)
+        self.assertIn("NO_AT_BRIDGE", harness)
+        self.assertIn("Cjs-CRITICAL", harness)
         self.assertIn("Cinnamon RSS grew by more than 50 MiB", harness)
         self.assertNotIn("sudo ", harness)
 
