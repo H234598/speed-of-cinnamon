@@ -1303,6 +1303,7 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         for method, next_method in [
+            ("_openProfanityFilterList: function()", "\n  _copySetupPlan:"),
             ("_copySetupPlan: function()", "\n  _setupCommandsText:"),
             ("_copySetupCommands: function()", "\n  _copyDiagnostics:"),
             ("_copyDiagnostics: function()", "\n  _saveDiagnostics:"),

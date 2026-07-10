@@ -3115,17 +3115,25 @@ MyApplet.prototype = {
   },
 
   _openProfanityFilterList: function() {
+    let actionToken = {};
+    this.setupDiagnosticsToken = actionToken;
     this._setStatus("processing", _("Preparing profanity replacement list..."), this.lastTranscript);
     this._spawnJson(this._profanityFilterDocumentArgs(), (payload) => {
+      if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
       if (payload.error) {
+        this.setupDiagnosticsToken = null;
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       let path = String(payload.path || "");
       if (path === "") {
+        this.setupDiagnosticsToken = null;
         this._setStatus("error", _("Profanity replacement list was not generated"), this.lastTranscript);
         return;
       }
+      this.setupDiagnosticsToken = null;
       this._openFile(path, _("Opened profanity replacement list: ") + String(payload.entries || 0));
     }, this._settingsSnapshotInputOption());
   },
