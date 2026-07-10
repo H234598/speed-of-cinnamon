@@ -106,6 +106,8 @@ const TEXT_POLISHING_PRESET_INSTRUCTIONS = {
 const MAX_TYPE_COMMAND_CHARS = 4000;
 const MAX_SPAWN_JSON_BYTES = 262144;
 const MAX_SPAWN_TEXT_BYTES = 262144;
+const MAX_SPAWN_STDERR_BYTES = 262144;
+const SUBPROCESS_READ_CHUNK_BYTES = 4096;
 const MAX_EXTERNAL_API_ENV_BYTES = 65536;
 const MIN_RECORDING_SECONDS = 0;
 const MAX_RECORDING_SECONDS = 3600;
@@ -411,6 +413,7 @@ MyApplet.prototype = {
       monitors: [],
       dialogs: [],
       processes: {},
+      cancellables: {},
     };
     this._teardownComplete = false;
     this._initFailed = false;
@@ -527,6 +530,124 @@ MyApplet.prototype = {
   _finishTeardown: function() {
     this.lifecycleState = LIFECYCLE_REMOVED;
     this._teardownComplete = true;
+  },
+
+  _bindSetting: function(direction, key, propertyName, callback, callbackThis) {
+    let safeCallback = callback ? this._guardCallback("settings", callback, undefined) : null;
+    return this.settings.bindProperty(direction, key, propertyName, safeCallback, callbackThis);
+  },
+
+  _connectSafe: function(target, signal, callback, group) {
+    if (!this._lifecycleAllowsWork() || !target || typeof target.connect !== "function") {
+      return 0;
+    }
+    let signalGroup = "signal-" + String(group || signal || "callback");
+    let connectionId = 0;
+    try {
+      connectionId = this._connectSafe(target, signal, this._guardCallback(signalGroup, callback, undefined));
+      if (this._resourceRegistry && connectionId) {
+        this._resourceRegistry.signals.push({ target: target, id: connectionId });
+      }
+      return connectionId;
+    } catch (error) {
+      this._recordLifecycleError(signalGroup, error);
+      return 0;
+    }
+  },
+
+  _disconnectAllSignals: function() {
+    let signals = this._resourceRegistry && Array.isArray(this._resourceRegistry.signals)
+      ? this._resourceRegistry.signals.splice(0)
+      : [];
+    for (let connection of signals) {
+      try {
+        if (connection && connection.target && connection.target.disconnect && connection.id) {
+          connection.target.disconnect(connection.id);
+        }
+      } catch (error) {
+        this._recordLifecycleError("teardown-signals", error);
+      }
+    }
+  },
+
+  _nextResourceToken: function(prefix) {
+    this._resourceTokenSequence = Number(this._resourceTokenSequence || 0) + 1;
+    return String(prefix || "resource") + "-" + String(this._resourceTokenSequence);
+  },
+
+  _registerCancellable: function(cancellable) {
+    let token = this._nextResourceToken("cancellable");
+    if (this._resourceRegistry && cancellable) {
+      this._resourceRegistry.cancellables[token] = cancellable;
+    }
+    return token;
+  },
+
+  _unregisterCancellable: function(token) {
+    if (this._resourceRegistry && token && this._resourceRegistry.cancellables[token]) {
+      delete this._resourceRegistry.cancellables[token];
+    }
+  },
+
+  _registerProcess: function(process, generation) {
+    let token = this._nextResourceToken("process");
+    if (this._resourceRegistry && process) {
+      this._resourceRegistry.processes[token] = {
+        process: process,
+        generation: generation,
+      };
+    }
+    return token;
+  },
+
+  _unregisterProcess: function(token) {
+    if (this._resourceRegistry && token && this._resourceRegistry.processes[token]) {
+      delete this._resourceRegistry.processes[token];
+    }
+  },
+
+  _terminateProcess: function(process) {
+    if (!process) {
+      return;
+    }
+    try {
+      if (!process.get_if_exited() && process.force_exit) {
+        process.force_exit();
+      }
+    } catch (error) {
+      this._recordLifecycleError("process-kill", error);
+    }
+  },
+
+  _terminateAllProcesses: function() {
+    let processes = this._resourceRegistry && this._resourceRegistry.processes
+      ? this._resourceRegistry.processes
+      : {};
+    for (let token in processes) {
+      if (Object.prototype.hasOwnProperty.call(processes, token)) {
+        this._terminateProcess(processes[token].process);
+        delete processes[token];
+      }
+    }
+  },
+
+  _cancelAllCancellables: function() {
+    let cancellables = this._resourceRegistry && this._resourceRegistry.cancellables
+      ? this._resourceRegistry.cancellables
+      : {};
+    for (let token in cancellables) {
+      if (!Object.prototype.hasOwnProperty.call(cancellables, token)) {
+        continue;
+      }
+      try {
+        if (cancellables[token] && cancellables[token].cancel) {
+          cancellables[token].cancel();
+        }
+      } catch (error) {
+        this._recordLifecycleError("teardown-cancellable", error);
+      }
+      delete cancellables[token];
+    }
   },
 
   _trackTimer: function(name, sourceId, propertyName) {
@@ -720,50 +841,50 @@ MyApplet.prototype = {
   },
 
   _bindSettings: function() {
-    this.settings.bindProperty(Settings.BindingDirection.IN, "toggle-keybinding", "toggleKeybinding", this._onHotkeyChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "primary-language-keybinding", "primaryLanguageKeybinding", this._onHotkeyChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "secondary-language-keybinding", "secondaryLanguageKeybinding", this._onHotkeyChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "cancel-keybinding", "cancelKeybinding", this._onHotkeyChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "show-panel-label", "showPanelLabel", this._updatePanel, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "language", "language", this._onLanguageSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "secondary-language", "secondaryLanguage", this._onLanguageSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "max-seconds", "maxSeconds", this._onRecordingLimitSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "auto-transcribe-timeout", "autoTranscribeTimeout", this._onRecordingOptionsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "auto-relisten", "autoRelisten", this._onRecordingOptionsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "keep-recording-artifacts", "keepRecordingArtifacts", this._onRecordingOptionsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "recorder", "recorder", this._onRecorderSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "input-device", "inputDevice", this._onInputSourceSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "insert-method", "insertMethod", this._onOutputSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "append-space", "appendSpace", this._onTextOutputSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "typing-delay-ms", "typingDelayMs", this._onTextOutputSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "sanitize-special-chars", "sanitizeSpecialChars", this._onTextOutputSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "soften-profanity", "softenProfanity", this._onTextOutputSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "max-transcript-files", "maxTranscriptFiles", this._onTranscriptRetentionSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "artifact-encryption", "artifactEncryption", this._onTextOutputSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "auto-paste-window-title", "autoPasteWindowTitle", this._onTextOutputSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "cli-path", "cliPath", null, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "transcriber", "transcriber", this._onVoiceBackendSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "whisper-model", "whisperModel", this._onVoiceBackendSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "transcriber-command", "transcriberCommand", this._onVoiceBackendSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-backend", "postProcessBackend", this._onTextModelSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-command", "postProcessCommand", this._onTextModelSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "ollama-url", "ollamaUrl", this._onTextModelSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "ollama-model", "ollamaModel", this._onTextModelSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-url", "openaiCompatibleUrl", this._onTextModelSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-model", "openaiCompatibleModel", this._onVoiceBackendSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-text-model", "openaiCompatibleTextModel", this._onTextModelSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-flex-processing", "openaiCompatibleFlexProcessing", this._onOpenAiFlexProcessingSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "openai-compatible-api-key", "openaiCompatibleApiKey", this._onVoiceBackendSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-preset", "postProcessPreset", this._onTextModelSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-preserve-code", "postProcessPreserveCode", this._onTextModelSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-never-add-content", "postProcessNeverAddContent", this._onTextModelSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-mask-sensitive-data", "postProcessMaskSensitiveData", this._onTextModelSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "post-process-prompt", "postProcessPrompt", this._onTextModelSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "personal-context", "personalContext", null, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "vocabulary", "vocabulary", null, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "notify-recording", "notifyRecording", this._onNotificationSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "notify-complete", "notifyComplete", this._onNotificationSettingsChanged, null);
-    this.settings.bindProperty(Settings.BindingDirection.IN, "notify-error", "notifyError", this._onNotificationSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "toggle-keybinding", "toggleKeybinding", this._onHotkeyChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "primary-language-keybinding", "primaryLanguageKeybinding", this._onHotkeyChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "secondary-language-keybinding", "secondaryLanguageKeybinding", this._onHotkeyChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "cancel-keybinding", "cancelKeybinding", this._onHotkeyChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "show-panel-label", "showPanelLabel", this._updatePanel, null);
+    this._bindSetting(Settings.BindingDirection.IN, "language", "language", this._onLanguageSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "secondary-language", "secondaryLanguage", this._onLanguageSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "max-seconds", "maxSeconds", this._onRecordingLimitSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "auto-transcribe-timeout", "autoTranscribeTimeout", this._onRecordingOptionsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "auto-relisten", "autoRelisten", this._onRecordingOptionsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "keep-recording-artifacts", "keepRecordingArtifacts", this._onRecordingOptionsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "recorder", "recorder", this._onRecorderSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "input-device", "inputDevice", this._onInputSourceSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "insert-method", "insertMethod", this._onOutputSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "append-space", "appendSpace", this._onTextOutputSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "typing-delay-ms", "typingDelayMs", this._onTextOutputSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "sanitize-special-chars", "sanitizeSpecialChars", this._onTextOutputSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "soften-profanity", "softenProfanity", this._onTextOutputSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "max-transcript-files", "maxTranscriptFiles", this._onTranscriptRetentionSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "artifact-encryption", "artifactEncryption", this._onTextOutputSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "auto-paste-window-title", "autoPasteWindowTitle", this._onTextOutputSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "cli-path", "cliPath", null, null);
+    this._bindSetting(Settings.BindingDirection.IN, "transcriber", "transcriber", this._onVoiceBackendSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "whisper-model", "whisperModel", this._onVoiceBackendSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "transcriber-command", "transcriberCommand", this._onVoiceBackendSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "post-process-backend", "postProcessBackend", this._onTextModelSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "post-process-command", "postProcessCommand", this._onTextModelSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "ollama-url", "ollamaUrl", this._onTextModelSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "ollama-model", "ollamaModel", this._onTextModelSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "openai-compatible-url", "openaiCompatibleUrl", this._onTextModelSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "openai-compatible-model", "openaiCompatibleModel", this._onVoiceBackendSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "openai-compatible-text-model", "openaiCompatibleTextModel", this._onTextModelSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "openai-compatible-flex-processing", "openaiCompatibleFlexProcessing", this._onOpenAiFlexProcessingSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "openai-compatible-api-key", "openaiCompatibleApiKey", this._onVoiceBackendSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "post-process-preset", "postProcessPreset", this._onTextModelSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "post-process-preserve-code", "postProcessPreserveCode", this._onTextModelSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "post-process-never-add-content", "postProcessNeverAddContent", this._onTextModelSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "post-process-mask-sensitive-data", "postProcessMaskSensitiveData", this._onTextModelSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "post-process-prompt", "postProcessPrompt", this._onTextModelSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "personal-context", "personalContext", null, null);
+    this._bindSetting(Settings.BindingDirection.IN, "vocabulary", "vocabulary", null, null);
+    this._bindSetting(Settings.BindingDirection.IN, "notify-recording", "notifyRecording", this._onNotificationSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "notify-complete", "notifyComplete", this._onNotificationSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "notify-error", "notifyError", this._onNotificationSettingsChanged, null);
   },
 
   _buildMenu: function() {
@@ -772,7 +893,7 @@ MyApplet.prototype = {
     this.menuManager.addMenu(this.menu);
 
     this.toggleItem = new PopupMenu.PopupIconMenuItem(_("Start dictation"), "audio-input-microphone-symbolic", St.IconType.SYMBOLIC);
-    this.toggleItem.connect("activate", () => {
+    this._connectSafe(this.toggleItem, "activate", () => {
       this._rememberFocusedWindow(true);
       this._toggleRecording();
     });
@@ -780,7 +901,7 @@ MyApplet.prototype = {
 
     this.cancelItem = new PopupMenu.PopupIconMenuItem(_("Cancel recording"), "process-stop-symbolic", St.IconType.SYMBOLIC);
     this.cancelItem.setSensitive(false);
-    this.cancelItem.connect("activate", () => this._cancelRecording());
+    this._connectSafe(this.cancelItem, "activate", () => this._cancelRecording());
     this.menu.addMenuItem(this.cancelItem);
 
     this.statusItem = this._styleMenuItemLabel(new PopupMenu.PopupMenuItem(_("Status: idle")), { maxWidthEm: MENU_LABEL_WIDTH_EM });
@@ -795,7 +916,7 @@ MyApplet.prototype = {
     this.doctorSummaryItem.setSensitive(false);
 
     this.languageItem = new PopupMenu.PopupSubMenuMenuItem(_("Language: en"));
-    this.languageItem.menu.connect("open-state-changed", (menu, open) => {
+    this._connectSafe(this.languageItem.menu, "open-state-changed", (menu, open) => {
       if (open) {
         this._populateLanguageMenu();
       }
@@ -816,7 +937,7 @@ MyApplet.prototype = {
     this.menu.addMenuItem(this.toolsMenuItem);
 
     this.recorderItem = new PopupMenu.PopupSubMenuMenuItem(_("Recorder: Automatic"));
-    this.recorderItem.menu.connect("open-state-changed", (menu, open) => {
+    this._connectSafe(this.recorderItem.menu, "open-state-changed", (menu, open) => {
       if (open) {
         this._populateRecorderMenu();
       }
@@ -825,7 +946,7 @@ MyApplet.prototype = {
     this._populateRecorderMenu();
 
     this.recordingLimitItem = new PopupMenu.PopupSubMenuMenuItem(_("Duration: 30s"));
-    this.recordingLimitItem.menu.connect("open-state-changed", (menu, open) => {
+    this._connectSafe(this.recordingLimitItem.menu, "open-state-changed", (menu, open) => {
       if (open) {
         this._populateRecordingLimitMenu();
       }
@@ -834,7 +955,7 @@ MyApplet.prototype = {
     this._populateRecordingLimitMenu();
 
     this.recordingOptionsItem = new PopupMenu.PopupSubMenuMenuItem(_("Recording options"));
-    this.recordingOptionsItem.menu.connect("open-state-changed", (menu, open) => {
+    this._connectSafe(this.recordingOptionsItem.menu, "open-state-changed", (menu, open) => {
       if (open) {
         this._populateRecordingOptionsMenu();
       }
@@ -843,7 +964,7 @@ MyApplet.prototype = {
     this._populateRecordingOptionsMenu();
 
     this.notificationOptionsItem = new PopupMenu.PopupSubMenuMenuItem(_("Notifications"));
-    this.notificationOptionsItem.menu.connect("open-state-changed", (menu, open) => {
+    this._connectSafe(this.notificationOptionsItem.menu, "open-state-changed", (menu, open) => {
       if (open) {
         this._populateNotificationOptionsMenu();
       }
@@ -852,7 +973,7 @@ MyApplet.prototype = {
     this._populateNotificationOptionsMenu();
 
     this.alarmItem = new PopupMenu.PopupSubMenuMenuItem(_("Alarms"));
-    this.alarmItem.menu.connect("open-state-changed", (menu, open) => {
+    this._connectSafe(this.alarmItem.menu, "open-state-changed", (menu, open) => {
       if (open) {
         this._refreshAlarmMenu();
       }
@@ -861,7 +982,7 @@ MyApplet.prototype = {
     this._populateAlarmMenu([], _("Open menu to load alarms"));
 
     this.shortcutItem = new PopupMenu.PopupSubMenuMenuItem(_("Keyboard shortcuts"));
-    this.shortcutItem.menu.connect("open-state-changed", (menu, open) => {
+    this._connectSafe(this.shortcutItem.menu, "open-state-changed", (menu, open) => {
       if (open) {
         this._populateShortcutMenu();
       }
@@ -874,7 +995,7 @@ MyApplet.prototype = {
     this._populateOutputMethodMenu();
 
     this.artifactEncryptionItem = new PopupMenu.PopupSubMenuMenuItem(_("Encryption: Secret Service keyring"));
-    this.artifactEncryptionItem.menu.connect("open-state-changed", (menu, open) => {
+    this._connectSafe(this.artifactEncryptionItem.menu, "open-state-changed", (menu, open) => {
       if (open) {
         this._populateArtifactEncryptionMenu();
       }
@@ -883,7 +1004,7 @@ MyApplet.prototype = {
     this._populateArtifactEncryptionMenu();
 
     this.textOptionsItem = new PopupMenu.PopupSubMenuMenuItem(_("Text options"));
-    this.textOptionsItem.menu.connect("open-state-changed", (menu, open) => {
+    this._connectSafe(this.textOptionsItem.menu, "open-state-changed", (menu, open) => {
       if (open) {
         this._populateTextOptionsMenu();
       }
@@ -892,7 +1013,7 @@ MyApplet.prototype = {
     this._populateTextOptionsMenu();
 
     this.autoPasteItem = new PopupMenu.PopupSubMenuMenuItem(_("Auto-Submit: codex"));
-    this.autoPasteItem.menu.connect("open-state-changed", (menu, open) => {
+    this._connectSafe(this.autoPasteItem.menu, "open-state-changed", (menu, open) => {
       if (open) {
         this._populateAutoPasteMenu();
       }
@@ -906,16 +1027,16 @@ MyApplet.prototype = {
 
     this.copyLastItem = new PopupMenu.PopupIconMenuItem(_("Copy last transcript"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
     this.copyLastItem.setSensitive(false);
-    this.copyLastItem.connect("activate", () => this._copyLastTranscript());
+    this._connectSafe(this.copyLastItem, "activate", () => this._copyLastTranscript());
     this.transcriptsMenuItem.menu.addMenuItem(this.copyLastItem);
 
     this.insertLastItem = new PopupMenu.PopupIconMenuItem(_("Insert last transcript"), "edit-paste-symbolic", St.IconType.SYMBOLIC);
     this.insertLastItem.setSensitive(false);
-    this.insertLastItem.connect("activate", () => this._insertLastTranscript());
+    this._connectSafe(this.insertLastItem, "activate", () => this._insertLastTranscript());
     this.transcriptsMenuItem.menu.addMenuItem(this.insertLastItem);
 
     this.historyItem = new PopupMenu.PopupSubMenuMenuItem(_("Recent transcripts"));
-    this.historyItem.menu.connect("open-state-changed", (menu, open) => {
+    this._connectSafe(this.historyItem.menu, "open-state-changed", (menu, open) => {
       if (open) {
         this._refreshHistory();
       }
@@ -924,42 +1045,42 @@ MyApplet.prototype = {
     this._populateHistoryMenu([]);
 
     let statusNow = new PopupMenu.PopupIconMenuItem(_("Refresh status"), "view-refresh-symbolic", St.IconType.SYMBOLIC);
-    statusNow.connect("activate", () => this._refreshStatus());
+    this._connectSafe(statusNow, "activate", () => this._refreshStatus());
     this.toolsMenuItem.menu.addMenuItem(statusNow);
 
     let restartApplet = new PopupMenu.PopupIconMenuItem(_("Restart applet"), "view-refresh-symbolic", St.IconType.SYMBOLIC);
-    restartApplet.connect("activate", () => this._restartApplet());
+    this._connectSafe(restartApplet, "activate", () => this._restartApplet());
     this.toolsMenuItem.menu.addMenuItem(restartApplet);
 
     let doctor = new PopupMenu.PopupIconMenuItem(_("Run doctor"), "dialog-information-symbolic", St.IconType.SYMBOLIC);
-    doctor.connect("activate", () => this._runDoctor());
+    this._connectSafe(doctor, "activate", () => this._runDoctor());
     this.toolsMenuItem.menu.addMenuItem(doctor);
 
     let openSettings = new PopupMenu.PopupIconMenuItem(_("Open applet settings"), "preferences-system-symbolic", St.IconType.SYMBOLIC);
-    openSettings.connect("activate", () => this._openAppletSettings());
+    this._connectSafe(openSettings, "activate", () => this._openAppletSettings());
     this.toolsMenuItem.menu.addMenuItem(openSettings);
 
     let openGuide = new PopupMenu.PopupIconMenuItem(_("Open setup guide"), "help-browser-symbolic", St.IconType.SYMBOLIC);
-    openGuide.connect("activate", () => this._openSetupGuide());
+    this._connectSafe(openGuide, "activate", () => this._openSetupGuide());
     this.toolsMenuItem.menu.addMenuItem(openGuide);
 
     this.installMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Install"));
     this.toolsMenuItem.menu.addMenuItem(this.installMenuItem);
 
     let installOllamaRuntime = new PopupMenu.PopupIconMenuItem(_("Install Ollama"), "system-software-install-symbolic", St.IconType.SYMBOLIC);
-    installOllamaRuntime.connect("activate", () => this._installOllamaRuntime());
+    this._connectSafe(installOllamaRuntime, "activate", () => this._installOllamaRuntime());
     this.installMenuItem.menu.addMenuItem(installOllamaRuntime);
 
     let uninstallOllamaRuntime = new PopupMenu.PopupIconMenuItem(_("Uninstall Ollama"), "edit-delete-symbolic", St.IconType.SYMBOLIC);
-    uninstallOllamaRuntime.connect("activate", () => this._uninstallOllamaRuntime());
+    this._connectSafe(uninstallOllamaRuntime, "activate", () => this._uninstallOllamaRuntime());
     this.installMenuItem.menu.addMenuItem(uninstallOllamaRuntime);
 
     let basicSetup = new PopupMenu.PopupIconMenuItem(_("Basic setup"), "emblem-system-symbolic", St.IconType.SYMBOLIC);
-    basicSetup.connect("activate", () => this._runBasicSetup());
+    this._connectSafe(basicSetup, "activate", () => this._runBasicSetup());
     this.installMenuItem.menu.addMenuItem(basicSetup);
 
     let installOllamaModel = new PopupMenu.PopupIconMenuItem(_("Choose Ollama text model"), "view-list-symbolic", St.IconType.SYMBOLIC);
-    installOllamaModel.connect("activate", () => this._chooseOllamaTextModel());
+    this._connectSafe(installOllamaModel, "activate", () => this._chooseOllamaTextModel());
     this.installMenuItem.menu.addMenuItem(installOllamaModel);
 
     this.diagnosticsMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Diagnostics"));
@@ -967,27 +1088,27 @@ MyApplet.prototype = {
     this.diagnosticsMenuItem.menu.addMenuItem(this.doctorSummaryItem);
 
     let setupPlan = new PopupMenu.PopupIconMenuItem(_("Copy setup plan"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
-    setupPlan.connect("activate", () => this._copySetupPlan());
+    this._connectSafe(setupPlan, "activate", () => this._copySetupPlan());
     this.diagnosticsMenuItem.menu.addMenuItem(setupPlan);
 
     let setupCommands = new PopupMenu.PopupIconMenuItem(_("Copy setup commands"), "utilities-terminal-symbolic", St.IconType.SYMBOLIC);
-    setupCommands.connect("activate", () => this._copySetupCommands());
+    this._connectSafe(setupCommands, "activate", () => this._copySetupCommands());
     this.diagnosticsMenuItem.menu.addMenuItem(setupCommands);
 
     let diagnostics = new PopupMenu.PopupIconMenuItem(_("Copy diagnostics"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
-    diagnostics.connect("activate", () => this._copyDiagnostics());
+    this._connectSafe(diagnostics, "activate", () => this._copyDiagnostics());
     this.diagnosticsMenuItem.menu.addMenuItem(diagnostics);
 
     let saveDiagnostics = new PopupMenu.PopupIconMenuItem(_("Save diagnostics"), "document-save-symbolic", St.IconType.SYMBOLIC);
-    saveDiagnostics.connect("activate", () => this._saveDiagnostics());
+    this._connectSafe(saveDiagnostics, "activate", () => this._saveDiagnostics());
     this.diagnosticsMenuItem.menu.addMenuItem(saveDiagnostics);
 
     let benchmark = new PopupMenu.PopupIconMenuItem(_("Benchmark downloaded models"), "utilities-system-monitor-symbolic", St.IconType.SYMBOLIC);
-    benchmark.connect("activate", () => this._selectBenchmarkAudioFile());
+    this._connectSafe(benchmark, "activate", () => this._selectBenchmarkAudioFile());
     this.diagnosticsMenuItem.menu.addMenuItem(benchmark);
 
     this.inputSourceItem = new PopupMenu.PopupSubMenuMenuItem(_("Input source"));
-    this.inputSourceItem.menu.connect("open-state-changed", (menu, open) => {
+    this._connectSafe(this.inputSourceItem.menu, "open-state-changed", (menu, open) => {
       if (open) {
         this._refreshInputSourceMenu();
       }
@@ -996,7 +1117,7 @@ MyApplet.prototype = {
     this._populateInputSourceMenu([], _("Open menu to load input sources"));
 
     this.modelItem = new PopupMenu.PopupSubMenuMenuItem(_("Voice model"));
-    this.modelItem.menu.connect("open-state-changed", (menu, open) => {
+    this._connectSafe(this.modelItem.menu, "open-state-changed", (menu, open) => {
       if (open) {
         this._refreshModelMenu();
       }
@@ -1005,7 +1126,7 @@ MyApplet.prototype = {
     this._populateModelMenu([], _("Open menu to load voice models"));
 
     this.textModelItem = new PopupMenu.PopupSubMenuMenuItem(_("Text model"));
-    this.textModelItem.menu.connect("open-state-changed", (menu, open) => {
+    this._connectSafe(this.textModelItem.menu, "open-state-changed", (menu, open) => {
       if (open) {
         this._refreshTextModelMenu();
       }
@@ -1017,33 +1138,33 @@ MyApplet.prototype = {
     this.toolsMenuItem.menu.addMenuItem(this.maintenanceMenuItem);
 
     let transcripts = new PopupMenu.PopupIconMenuItem(_("Open transcripts"), "folder-documents-symbolic", St.IconType.SYMBOLIC);
-    transcripts.connect("activate", () => {
+    this._connectSafe(transcripts, "activate", () => {
       this._openFolder(GLib.build_filenamev([GLib.get_user_state_dir(), "speed-of-cinnamon", "transcripts"]), _("Opened transcripts"));
     });
     this.maintenanceMenuItem.menu.addMenuItem(transcripts);
 
     let listTranscripts = new PopupMenu.PopupIconMenuItem(_("List all Transcripts"), "view-list-symbolic", St.IconType.SYMBOLIC);
-    listTranscripts.connect("activate", () => this._listAllTranscripts());
+    this._connectSafe(listTranscripts, "activate", () => this._listAllTranscripts());
     this.maintenanceMenuItem.menu.addMenuItem(listTranscripts);
 
     let exportTranscripts = new PopupMenu.PopupIconMenuItem(_("Export all Transcripts"), "document-save-symbolic", St.IconType.SYMBOLIC);
-    exportTranscripts.connect("activate", () => this._exportAllTranscripts());
+    this._connectSafe(exportTranscripts, "activate", () => this._exportAllTranscripts());
     this.maintenanceMenuItem.menu.addMenuItem(exportTranscripts);
 
     let cleanupPreview = new PopupMenu.PopupIconMenuItem(_("Preview cleanup"), "edit-find-symbolic", St.IconType.SYMBOLIC);
-    cleanupPreview.connect("activate", () => this._previewCleanup());
+    this._connectSafe(cleanupPreview, "activate", () => this._previewCleanup());
     this.maintenanceMenuItem.menu.addMenuItem(cleanupPreview);
 
     let cleanup = new PopupMenu.PopupIconMenuItem(_("Clean all old files"), "edit-clear-symbolic", St.IconType.SYMBOLIC);
-    cleanup.connect("activate", () => this._cleanupOldFiles());
+    this._connectSafe(cleanup, "activate", () => this._cleanupOldFiles());
     this.maintenanceMenuItem.menu.addMenuItem(cleanup);
 
     let exportSettings = new PopupMenu.PopupIconMenuItem(_("Export settings"), "document-save-symbolic", St.IconType.SYMBOLIC);
-    exportSettings.connect("activate", () => this._exportSettings());
+    this._connectSafe(exportSettings, "activate", () => this._exportSettings());
     this.maintenanceMenuItem.menu.addMenuItem(exportSettings);
 
     let importSettings = new PopupMenu.PopupIconMenuItem(_("Import settings"), "document-open-symbolic", St.IconType.SYMBOLIC);
-    importSettings.connect("activate", () => this._importSettings());
+    this._connectSafe(importSettings, "activate", () => this._importSettings());
     this.maintenanceMenuItem.menu.addMenuItem(importSettings);
 
     this._styleWideMenus();
@@ -1254,6 +1375,9 @@ MyApplet.prototype = {
   },
 
   on_applet_clicked: function() {
+    if (!this._lifecycleAllowsWork()) {
+      return;
+    }
     if (!this.menu.isOpen) {
       this._rememberFocusedWindow();
     }
@@ -1269,6 +1393,8 @@ MyApplet.prototype = {
     this.autoRelistenManualStopRequested = false;
     this.modelMenuRefreshToken = null;
     this.textModelMenuRefreshToken = null;
+    this._runTeardownGuarded("teardown-processes", () => this._terminateAllProcesses());
+    this._runTeardownGuarded("teardown-cancellables", () => this._cancelAllCancellables());
     this._runTeardownGuarded("teardown-timer", () => this._clearStatusTimer());
     this._runTeardownGuarded("teardown-timer", () => this._clearDisplayTimer());
     this._runTeardownGuarded("teardown-timer", () => this._clearSetupCheckTimer());
@@ -1277,6 +1403,7 @@ MyApplet.prototype = {
     this._runTeardownGuarded("teardown-timer", () => this._clearAlarmTimer());
     this._runTeardownGuarded("teardown-timer", () => this._clearOllamaInstallWatchTimer());
     this._runTeardownGuarded("teardown-monitor", () => this._clearExternalApiEnvMonitor());
+    this._runTeardownGuarded("teardown-signals", () => this._disconnectAllSignals());
     this._runTeardownGuarded("teardown-hotkeys", () => Main.keybindingManager.removeHotKey(this._hotkeyName(HOTKEY_ID)));
     this._runTeardownGuarded("teardown-hotkeys", () => Main.keybindingManager.removeHotKey(this._hotkeyName(PRIMARY_HOTKEY_ID)));
     this._runTeardownGuarded("teardown-hotkeys", () => Main.keybindingManager.removeHotKey(this._hotkeyName(SECONDARY_HOTKEY_ID)));
@@ -1563,7 +1690,7 @@ MyApplet.prototype = {
     for (let method of RECORDER_METHODS) {
       let label = (current === method ? "[x] " : "[ ] ") + this._recorderLabel(method);
       let item = new PopupMenu.PopupMenuItem(label);
-      item.connect("activate", () => this._selectRecorder(method));
+      this._connectSafe(item, "activate", () => this._selectRecorder(method));
       this.recorderItem.menu.addMenuItem(item);
     }
   },
@@ -1621,12 +1748,12 @@ MyApplet.prototype = {
     for (let seconds of RECORDING_LIMIT_SECONDS) {
       let label = (current === seconds ? "[x] " : "[ ] ") + this._formatSeconds(seconds);
       let item = new PopupMenu.PopupMenuItem(label);
-      item.connect("activate", () => this._selectRecordingLimit(seconds));
+      this._connectSafe(item, "activate", () => this._selectRecordingLimit(seconds));
       this.recordingLimitItem.menu.addMenuItem(item);
     }
     this.recordingLimitItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
     let custom = new PopupMenu.PopupIconMenuItem((hasPreset ? "[ ] " : "[x] ") + _("Custom seconds..."), "document-edit-symbolic", St.IconType.SYMBOLIC);
-    custom.connect("activate", () => this._promptCustomRecordingLimit());
+    this._connectSafe(custom, "activate", () => this._promptCustomRecordingLimit());
     this.recordingLimitItem.menu.addMenuItem(custom);
   },
 
@@ -1714,12 +1841,12 @@ MyApplet.prototype = {
     for (let limit of TRANSCRIPT_STORAGE_LIMITS) {
       let label = (current === limit ? "[x] " : "[ ] ") + _("Keep a maximum of ") + String(limit) + _(" transcript files");
       let item = new PopupMenu.PopupMenuItem(label);
-      item.connect("activate", () => this._selectTranscriptStorageLimit(limit));
+      this._connectSafe(item, "activate", () => this._selectTranscriptStorageLimit(limit));
       this.transcriptStorageItem.menu.addMenuItem(item);
     }
     this.transcriptStorageItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
     let custom = new PopupMenu.PopupIconMenuItem((hasPreset ? "[ ] " : "[x] ") + _("Custom transcript limit..."), "document-edit-symbolic", St.IconType.SYMBOLIC);
-    custom.connect("activate", () => this._promptCustomTranscriptLimit());
+    this._connectSafe(custom, "activate", () => this._promptCustomTranscriptLimit());
     this.transcriptStorageItem.menu.addMenuItem(custom);
     this._updateTranscriptStorageItem();
   },
@@ -1783,15 +1910,15 @@ MyApplet.prototype = {
     this.recordingOptionsItem.menu.removeAll();
 
     let autoTranscribe = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.autoTranscribeTimeout), _("Auto-transcribe at time limit")));
-    autoTranscribe.connect("activate", () => this._toggleAutoTranscribeTimeout());
+    this._connectSafe(autoTranscribe, "activate", () => this._toggleAutoTranscribeTimeout());
     this.recordingOptionsItem.menu.addMenuItem(autoTranscribe);
 
     let autoRelisten = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.autoRelisten), _("Auto Relisten")));
-    autoRelisten.connect("activate", () => this._toggleAutoRelisten());
+    this._connectSafe(autoRelisten, "activate", () => this._toggleAutoRelisten());
     this.recordingOptionsItem.menu.addMenuItem(autoRelisten);
 
     let keepArtifacts = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.keepRecordingArtifacts), _("Keep recording files")));
-    keepArtifacts.connect("activate", () => this._toggleKeepRecordingArtifacts());
+    this._connectSafe(keepArtifacts, "activate", () => this._toggleKeepRecordingArtifacts());
     this.recordingOptionsItem.menu.addMenuItem(keepArtifacts);
   },
 
@@ -1838,15 +1965,15 @@ MyApplet.prototype = {
     this.notificationOptionsItem.menu.removeAll();
 
     let recording = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.notifyRecording), _("Recording start and limit")));
-    recording.connect("activate", () => this._toggleNotifyRecording());
+    this._connectSafe(recording, "activate", () => this._toggleNotifyRecording());
     this.notificationOptionsItem.menu.addMenuItem(recording);
 
     let complete = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.notifyComplete), _("Dictation complete")));
-    complete.connect("activate", () => this._toggleNotifyComplete());
+    this._connectSafe(complete, "activate", () => this._toggleNotifyComplete());
     this.notificationOptionsItem.menu.addMenuItem(complete);
 
     let errors = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.notifyError), _("Dictation errors")));
-    errors.connect("activate", () => this._toggleNotifyError());
+    this._connectSafe(errors, "activate", () => this._toggleNotifyError());
     this.notificationOptionsItem.menu.addMenuItem(errors);
   },
 
@@ -1895,7 +2022,7 @@ MyApplet.prototype = {
     for (let method of OUTPUT_METHODS) {
       let label = (current === method ? "[x] " : "[ ] ") + this._outputMethodLabel(method);
       let item = new PopupMenu.PopupMenuItem(label);
-      item.connect("activate", () => this._selectOutputMethod(method));
+      this._connectSafe(item, "activate", () => this._selectOutputMethod(method));
       this.outputMethodItem.menu.addMenuItem(item);
     }
   },
@@ -1910,7 +2037,7 @@ MyApplet.prototype = {
     for (let mode of ARTIFACT_ENCRYPTION_MODES) {
       let label = (this.artifactEncryption === mode ? "[x] " : "[ ] ") + this._artifactEncryptionLabel(mode);
       let item = this._selectionMenuItem(label);
-      item.connect("activate", () => this._selectArtifactEncryptionMode(mode));
+      this._connectSafe(item, "activate", () => this._selectArtifactEncryptionMode(mode));
       this.artifactEncryptionItem.menu.addMenuItem(item);
     }
   },
@@ -1951,15 +2078,15 @@ MyApplet.prototype = {
     }
     this.textOptionsItem.menu.removeAll();
     let append = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.appendSpace), _("Append trailing space")));
-    append.connect("activate", () => this._toggleAppendSpace());
+    this._connectSafe(append, "activate", () => this._toggleAppendSpace());
     this.textOptionsItem.menu.addMenuItem(append);
 
     let sanitize = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.sanitizeSpecialChars), _("Replace accents before output")));
-    sanitize.connect("activate", () => this._toggleSanitizeSpecialChars());
+    this._connectSafe(sanitize, "activate", () => this._toggleSanitizeSpecialChars());
     this.textOptionsItem.menu.addMenuItem(sanitize);
 
     let soften = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.softenProfanity), _("Replace profanity with harmless words")));
-    soften.connect("activate", () => this._toggleSoftenProfanity());
+    this._connectSafe(soften, "activate", () => this._toggleSoftenProfanity());
     this.textOptionsItem.menu.addMenuItem(soften);
   },
 
@@ -2100,16 +2227,16 @@ MyApplet.prototype = {
     for (let preset of AUTO_PASTE_TITLE_PRESETS) {
       let label = (current[String(preset).toLowerCase()] ? "[x] " : "[ ] ") + String(preset);
       let item = new PopupMenu.PopupMenuItem(label);
-      item.connect("activate", () => this._toggleAutoPasteTitle(preset));
+      this._connectSafe(item, "activate", () => this._toggleAutoPasteTitle(preset));
       this.autoPasteItem.menu.addMenuItem(item);
     }
     this.autoPasteItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
     let disabled = new PopupMenu.PopupMenuItem((currentValues.length === 0 ? "[x] " : "[ ] ") + _("Disabled"));
-    disabled.connect("activate", () => this._setAutoPasteTitles([]));
+    this._connectSafe(disabled, "activate", () => this._setAutoPasteTitles([]));
     this.autoPasteItem.menu.addMenuItem(disabled);
     this.autoPasteItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
     let custom = new PopupMenu.PopupIconMenuItem(_("Custom string..."), "document-edit-symbolic", St.IconType.SYMBOLIC);
-    custom.connect("activate", () => this._configureAutoPaste());
+    this._connectSafe(custom, "activate", () => this._configureAutoPaste());
     this.autoPasteItem.menu.addMenuItem(custom);
   },
 
@@ -2256,27 +2383,27 @@ MyApplet.prototype = {
     let current = this._currentLanguage();
 
     let selectPrimary = new PopupMenu.PopupMenuItem((current === primary ? "[x] " : "[ ] ") + _("Use primary: ") + primary);
-    selectPrimary.connect("activate", () => this._setActiveLanguage(primary, _("Language: ") + primary));
+    this._connectSafe(selectPrimary, "activate", () => this._setActiveLanguage(primary, _("Language: ") + primary));
     this.languageItem.menu.addMenuItem(selectPrimary);
 
     let selectSecondary = new PopupMenu.PopupMenuItem((current === secondary ? "[x] " : "[ ] ") + _("Use secondary: ") + secondary);
-    selectSecondary.connect("activate", () => this._setActiveLanguage(secondary, _("Language: ") + secondary));
+    this._connectSafe(selectSecondary, "activate", () => this._setActiveLanguage(secondary, _("Language: ") + secondary));
     this.languageItem.menu.addMenuItem(selectSecondary);
 
     this.languageItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
     let startPrimary = new PopupMenu.PopupIconMenuItem(_("Start primary: ") + primary, "media-record-symbolic", St.IconType.SYMBOLIC);
-    startPrimary.connect("activate", () => this._startWithLanguage(primary, true));
+    this._connectSafe(startPrimary, "activate", () => this._startWithLanguage(primary, true));
     this.languageItem.menu.addMenuItem(startPrimary);
 
     let startSecondary = new PopupMenu.PopupIconMenuItem(_("Start secondary: ") + secondary, "media-record-symbolic", St.IconType.SYMBOLIC);
-    startSecondary.connect("activate", () => this._startWithLanguage(secondary, true));
+    this._connectSafe(startSecondary, "activate", () => this._startWithLanguage(secondary, true));
     this.languageItem.menu.addMenuItem(startSecondary);
 
     this.languageItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
     let switchItem = new PopupMenu.PopupIconMenuItem(_("Switch primary/secondary"), "preferences-desktop-locale-symbolic", St.IconType.SYMBOLIC);
-    switchItem.connect("activate", () => this._switchLanguage());
+    this._connectSafe(switchItem, "activate", () => this._switchLanguage());
     this.languageItem.menu.addMenuItem(switchItem);
   },
 
@@ -2310,10 +2437,10 @@ MyApplet.prototype = {
     }
     this.shortcutItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
     let configure = new PopupMenu.PopupIconMenuItem(_("Configure shortcuts"), "preferences-desktop-keyboard-symbolic", St.IconType.SYMBOLIC);
-    configure.connect("activate", () => this._openShortcutSettings());
+    this._connectSafe(configure, "activate", () => this._openShortcutSettings());
     this.shortcutItem.menu.addMenuItem(configure);
     let copy = new PopupMenu.PopupIconMenuItem(_("Copy shortcut reference"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
-    copy.connect("activate", () => this._copyShortcutReference());
+    this._connectSafe(copy, "activate", () => this._copyShortcutReference());
     this.shortcutItem.menu.addMenuItem(copy);
   },
 
@@ -2891,15 +3018,15 @@ MyApplet.prototype = {
     this.alarmItem.menu.addMenuItem(summaryItem);
 
     let checkNow = new PopupMenu.PopupIconMenuItem(_("Check alarms now"), "view-refresh-symbolic", St.IconType.SYMBOLIC);
-    checkNow.connect("activate", () => this._checkAlarms(true));
+    this._connectSafe(checkNow, "activate", () => this._checkAlarms(true));
     this.alarmItem.menu.addMenuItem(checkNow);
 
     let copyCommands = new PopupMenu.PopupIconMenuItem(_("Copy alarm commands"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
-    copyCommands.connect("activate", () => this._copyAlarmCommands());
+    this._connectSafe(copyCommands, "activate", () => this._copyAlarmCommands());
     this.alarmItem.menu.addMenuItem(copyCommands);
 
     let openFolder = new PopupMenu.PopupIconMenuItem(_("Open alarm store"), "folder-symbolic", St.IconType.SYMBOLIC);
-    openFolder.connect("activate", () => {
+    this._connectSafe(openFolder, "activate", () => {
       this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon"]), _("Opened alarm store"));
     });
     this.alarmItem.menu.addMenuItem(openFolder);
@@ -2938,11 +3065,11 @@ MyApplet.prototype = {
     entry.menu.addMenuItem(details);
 
     let toggle = new PopupMenu.PopupIconMenuItem(alarm.enabled ? _("Disable alarm") : _("Enable alarm"), alarm.enabled ? "media-playback-pause-symbolic" : "media-playback-start-symbolic", St.IconType.SYMBOLIC);
-    toggle.connect("activate", () => this._setAlarmEnabled(id, !alarm.enabled));
+    this._connectSafe(toggle, "activate", () => this._setAlarmEnabled(id, !alarm.enabled));
     entry.menu.addMenuItem(toggle);
 
     let remove = new PopupMenu.PopupIconMenuItem(_("Remove alarm"), "edit-delete-symbolic", St.IconType.SYMBOLIC);
-    remove.connect("activate", () => this._removeAlarm(id));
+    this._connectSafe(remove, "activate", () => this._removeAlarm(id));
     entry.menu.addMenuItem(remove);
   },
 
@@ -3033,7 +3160,7 @@ MyApplet.prototype = {
     let currentWasListed = current === "";
     let defaultLabel = (current === "" ? "[x] " : "[ ] ") + _("System default");
     let defaultItem = this._selectionMenuItem(defaultLabel);
-    defaultItem.connect("activate", () => this._selectInputSource("", _("system default")));
+    this._connectSafe(defaultItem, "activate", () => this._selectInputSource("", _("system default")));
     this.inputSourceItem.menu.addMenuItem(defaultItem);
 
     let addCurrentCustomInput = () => {
@@ -3042,7 +3169,7 @@ MyApplet.prototype = {
       }
       let label = _("Current custom input source: ") + this._shortMenuText(current, 96);
       let item = this._selectionMenuItem("[x] " + label);
-      item.connect("activate", () => this._selectInputSource(current, label));
+      this._connectSafe(item, "activate", () => this._selectInputSource(current, label));
       this.inputSourceItem.menu.addMenuItem(item);
       currentWasListed = true;
     };
@@ -3071,7 +3198,7 @@ MyApplet.prototype = {
       }
       let itemLabel = (current === sourceName ? "[x] " : "[ ] ") + this._shortMenuText(label + " - " + sourceName, 96);
       let item = this._selectionMenuItem(itemLabel);
-      item.connect("activate", () => this._selectInputSource(sourceName, label));
+      this._connectSafe(item, "activate", () => this._selectInputSource(sourceName, label));
       this.inputSourceItem.menu.addMenuItem(item);
     }
     addCurrentCustomInput();
@@ -3125,19 +3252,19 @@ MyApplet.prototype = {
 
     let autoActive = String(this.transcriber || "auto") === "auto" && String(this.whisperModel || "") === "";
     let automatic = this._selectionMenuItem((autoActive ? "[x] " : "[ ] ") + _("Automatic voice model"));
-    automatic.connect("activate", () => this._selectAutomaticVoiceBackend());
+    this._connectSafe(automatic, "activate", () => this._selectAutomaticVoiceBackend());
     this.modelItem.menu.addMenuItem(automatic);
 
     let whisperCommandActive = String(this.transcriber || "") === "whisper" && String(this.whisperModel || "") === "";
     let whisperCommand = this._selectionMenuItem((whisperCommandActive ? "[x] " : "[ ] ") + _("OpenAI Whisper command"));
-    whisperCommand.connect("activate", () => this._selectStaticVoiceBackend("whisper", _("Voice model: OpenAI Whisper command")));
+    this._connectSafe(whisperCommand, "activate", () => this._selectStaticVoiceBackend("whisper", _("Voice model: OpenAI Whisper command")));
     this.modelItem.menu.addMenuItem(whisperCommand);
 
     let customCommandActive = String(this.transcriber || "") === "command" && String(this.whisperModel || "") === "";
     let customCommandConfigured = String(this.transcriberCommand || "").trim() !== "";
     let customCommandLabel = _("Custom command") + (customCommandConfigured ? "" : _(" - configure in settings"));
     let customCommand = this._selectionMenuItem((customCommandActive ? "[x] " : "[ ] ") + customCommandLabel);
-    customCommand.connect("activate", () => {
+    this._connectSafe(customCommand, "activate", () => {
       if (customCommandConfigured) {
         this._selectStaticVoiceBackend("command", _("Voice model: custom command"));
         return;
@@ -3152,17 +3279,17 @@ MyApplet.prototype = {
     let download = this._styleMenuItemLabel(
       new PopupMenu.PopupIconMenuItem(_("Download starter model") + ": " + this._starterVoiceModelName(), "folder-download-symbolic", St.IconType.SYMBOLIC)
     );
-    download.connect("activate", () => this._downloadStarterModel());
+    this._connectSafe(download, "activate", () => this._downloadStarterModel());
     this.modelItem.menu.addMenuItem(download);
 
     let openFolder = new PopupMenu.PopupIconMenuItem(_("Open GGML model folder"), "folder-symbolic", St.IconType.SYMBOLIC);
-    openFolder.connect("activate", () => {
+    this._connectSafe(openFolder, "activate", () => {
       this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon", "models", "whisper.cpp"]), _("Opened model folder"));
     });
     this.modelItem.menu.addMenuItem(openFolder);
 
     let openCt2Folder = new PopupMenu.PopupIconMenuItem(_("Open CTranslate2 model folder"), "folder-symbolic", St.IconType.SYMBOLIC);
-    openCt2Folder.connect("activate", () => {
+    this._connectSafe(openCt2Folder, "activate", () => {
       this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon", "models", "ctranslate2"]), _("Opened model folder"));
     });
     this.modelItem.menu.addMenuItem(openCt2Folder);
@@ -3217,7 +3344,7 @@ MyApplet.prototype = {
     let url = String(this.openaiCompatibleUrl || "").trim();
     let useItem = new PopupMenu.PopupIconMenuItem((active ? "[x] " : "[ ] ") + _("Use OpenAI-compatible API"), "network-server-symbolic", St.IconType.SYMBOLIC);
     this._styleMenuItemLabel(useItem);
-    useItem.connect("activate", () => this._openExternalApiEnvEditor("voice"));
+    this._connectSafe(useItem, "activate", () => this._openExternalApiEnvEditor("voice"));
     parentMenu.addMenuItem(useItem);
 
     parentMenu.addMenuItem(this._selectionInfoItem(_("Endpoint: ") + (url || _("not configured"))));
@@ -3254,17 +3381,17 @@ MyApplet.prototype = {
       let useItem = new PopupMenu.PopupIconMenuItem(_("Use this model"), "emblem-ok-symbolic", St.IconType.SYMBOLIC);
       this._styleMenuItemLabel(useItem);
       useItem.setSensitive(!current && compatible);
-      useItem.connect("activate", () => this._selectVoiceModel(model));
+      this._connectSafe(useItem, "activate", () => this._selectVoiceModel(model));
       entry.menu.addMenuItem(useItem);
 
       let removeItem = new PopupMenu.PopupIconMenuItem(_("Remove model"), "edit-delete-symbolic", St.IconType.SYMBOLIC);
-      removeItem.connect("activate", () => this._removeVoiceModel(model));
+      this._connectSafe(removeItem, "activate", () => this._removeVoiceModel(model));
       entry.menu.addMenuItem(removeItem);
       return;
     }
 
     let downloadItem = this._styleMenuItemLabel(new PopupMenu.PopupIconMenuItem(_("Download model"), "folder-download-symbolic", St.IconType.SYMBOLIC));
-    downloadItem.connect("activate", () => this._downloadVoiceModel(model));
+    this._connectSafe(downloadItem, "activate", () => this._downloadVoiceModel(model));
     entry.menu.addMenuItem(downloadItem);
   },
 
@@ -3704,7 +3831,7 @@ MyApplet.prototype = {
     try {
       let file = Gio.File.new_for_path(path);
       this.externalApiEnvMonitor = file.monitor_file(Gio.FileMonitorFlags.NONE, null);
-      this.externalApiEnvMonitor.connect("changed", (monitor, fileObj, otherFile, eventType) => {
+      this._connectSafe(this.externalApiEnvMonitor, "changed", (monitor, fileObj, otherFile, eventType) => {
         if (this.appletRemoved) {
           return;
         }
@@ -3794,13 +3921,13 @@ MyApplet.prototype = {
     let activeProvider = String(provider || (backend === "openai-compatible" ? "openai-compatible" : "ollama"));
 
     let disabled = this._selectionMenuItem((backend === "none" ? "[x] " : "[ ] ") + _("Disabled"));
-    disabled.connect("activate", () => this._selectTextModelBackend("none", "", _("Text polishing disabled")));
+    this._connectSafe(disabled, "activate", () => this._selectTextModelBackend("none", "", _("Text polishing disabled")));
     this.textModelItem.menu.addMenuItem(disabled);
 
     let textCommandConfigured = String(this.postProcessCommand || "").trim() !== "";
     let customLabel = _("Custom command") + (textCommandConfigured ? "" : _(" - configure in settings"));
     let custom = this._selectionMenuItem((backend === "command" || backend === "custom" ? "[x] " : "[ ] ") + customLabel);
-    custom.connect("activate", () => {
+    this._connectSafe(custom, "activate", () => {
       if (textCommandConfigured) {
         this._selectTextModelBackend("command", "", _("Text polishing: custom command"));
         return;
@@ -3813,11 +3940,11 @@ MyApplet.prototype = {
     this.textModelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
     let ollama = this._selectionMenuItem((backend === "ollama" ? "[x] " : "[ ] ") + _("Ollama local model"));
-    ollama.connect("activate", () => this._activateOllamaTextModelFlow());
+    this._connectSafe(ollama, "activate", () => this._activateOllamaTextModelFlow());
     this.textModelItem.menu.addMenuItem(ollama);
 
     let openaiCompatible = this._selectionMenuItem((backend === "openai-compatible" ? "[x] " : "[ ] ") + _("OpenAI-compatible API"));
-    openaiCompatible.connect("activate", () => this._openExternalApiEnvEditor("text"));
+    this._connectSafe(openaiCompatible, "activate", () => this._openExternalApiEnvEditor("text"));
     this.textModelItem.menu.addMenuItem(openaiCompatible);
 
     this.textModelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -3837,7 +3964,7 @@ MyApplet.prototype = {
     this.textModelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
     let reset = this._selectionMenuItem(_("Reset polishing defaults"));
-    reset.connect("activate", () => this._resetTextPolishingDefaults());
+    this._connectSafe(reset, "activate", () => this._resetTextPolishingDefaults());
     this.textModelItem.menu.addMenuItem(reset);
 
     this.textModelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -3892,7 +4019,7 @@ MyApplet.prototype = {
       label += " (" + details + ")";
     }
     let item = this._selectionMenuItem(this._shortMenuText(label, 96));
-    item.connect("activate", () => this._selectTextModelBackend(provider, name, _("Text model: ") + name));
+    this._connectSafe(item, "activate", () => this._selectTextModelBackend(provider, name, _("Text model: ") + name));
     this.textModelItem.menu.addMenuItem(item);
   },
 
@@ -3911,7 +4038,7 @@ MyApplet.prototype = {
     let current = this._normalizeTextPolishingPreset(this.postProcessPreset);
     for (let preset of TEXT_POLISHING_PRESETS) {
       let item = this._selectionMenuItem((current === preset ? "[x] " : "[ ] ") + this._textPolishingPresetLabel(preset));
-      item.connect("activate", () => this._selectTextPolishingPreset(preset));
+      this._connectSafe(item, "activate", () => this._selectTextPolishingPreset(preset));
       parentMenu.addMenuItem(item);
     }
   },
@@ -3925,15 +4052,15 @@ MyApplet.prototype = {
 
   _populateTextPolishingSafetyMenu: function(parentMenu) {
     let preserveCode = this._selectionMenuItem(this._optionLabel(Boolean(this.postProcessPreserveCode), _("Preserve commands and code")));
-    preserveCode.connect("activate", () => this._toggleTextPolishingSafetyFlag("post-process-preserve-code", "postProcessPreserveCode", _("Preserve commands and code")));
+    this._connectSafe(preserveCode, "activate", () => this._toggleTextPolishingSafetyFlag("post-process-preserve-code", "postProcessPreserveCode", _("Preserve commands and code")));
     parentMenu.addMenuItem(preserveCode);
 
     let neverAddContent = this._selectionMenuItem(this._optionLabel(Boolean(this.postProcessNeverAddContent), _("Never add content")));
-    neverAddContent.connect("activate", () => this._toggleTextPolishingSafetyFlag("post-process-never-add-content", "postProcessNeverAddContent", _("Never add content")));
+    this._connectSafe(neverAddContent, "activate", () => this._toggleTextPolishingSafetyFlag("post-process-never-add-content", "postProcessNeverAddContent", _("Never add content")));
     parentMenu.addMenuItem(neverAddContent);
 
     let maskSensitiveData = this._selectionMenuItem(this._optionLabel(Boolean(this.postProcessMaskSensitiveData), _("Mask sensitive data")));
-    maskSensitiveData.connect("activate", () => this._toggleTextPolishingSafetyFlag("post-process-mask-sensitive-data", "postProcessMaskSensitiveData", _("Mask sensitive data")));
+    this._connectSafe(maskSensitiveData, "activate", () => this._toggleTextPolishingSafetyFlag("post-process-mask-sensitive-data", "postProcessMaskSensitiveData", _("Mask sensitive data")));
     parentMenu.addMenuItem(maskSensitiveData);
   },
 
@@ -4218,17 +4345,19 @@ MyApplet.prototype = {
       "--height=700",
     ];
     try {
-      let process = Gio.Subprocess.new(
-        args,
-        Gio.SubprocessFlags.STDIN_PIPE | Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE
-      );
-      process.communicate_utf8_async(String(content || ""), null, (proc, result) => {
-        try {
-          proc.communicate_utf8_finish(result);
-        } catch (err) {
-          global.logError(err);
+      let handle = this._runBoundedSubprocess(args, {}, {
+        inputText: String(content || ""),
+        timeoutMs: 0,
+        maxStdoutBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
+        maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
+      }, (stdout, stderr, result) => {
+        if (result && result.error && !result.cancelled) {
+          this._setStatus("error", _("Transcript list window closed unexpectedly"), this.lastTranscript);
         }
       });
+      if (!handle) {
+        throw new Error("Transcript list process could not be started");
+      }
       let message = _("Opened transcript list: ") + String(count);
       if (truncated) {
         message += _(" (truncated)");
@@ -4721,37 +4850,170 @@ MyApplet.prototype = {
     });
   },
 
-  _spawnJsonWithBackendEnvironment: function(args, env, callback, inputText) {
-    env = env || {};
-    let hasInput = inputText !== null && inputText !== undefined;
+  _runBoundedSubprocess: function(args, env, options, callback) {
+    options = options || {};
+    if (!this._lifecycleAllowsWork()) {
+      return null;
+    }
+    let hasInput = options.inputText !== null && options.inputText !== undefined;
+    if (hasInput && utf8ByteLength(String(options.inputText || "")) > MAX_SPAWN_JSON_BYTES) {
+      throw new Error("Subprocess input is too large");
+    }
+    let maxStdoutBytes = Math.max(1, Number(options.maxStdoutBytes || MAX_SPAWN_JSON_BYTES));
+    let maxStderrBytes = Math.max(1, Number(options.maxStderrBytes || MAX_SPAWN_STDERR_BYTES));
+    let timeoutMs = Number(options.timeoutMs || 0);
     let flags = Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE;
     if (hasInput) {
       flags |= Gio.SubprocessFlags.STDIN_PIPE;
     }
-    let launcher = new Gio.SubprocessLauncher({
-      flags: flags,
-    });
+    let launcher = new Gio.SubprocessLauncher({ flags: flags });
+    env = env || {};
     for (let key in env) {
       if (Object.prototype.hasOwnProperty.call(env, key)) {
         launcher.setenv(key, String(env[key] || ""), true);
       }
     }
-    let process;
-    try {
-      process = launcher.spawnv(args);
-    } catch (err) {
-      throw err;
-    }
-    process.communicate_utf8_async(hasInput ? String(inputText || "") : null, null, (subprocess, result) => {
+    let process = launcher.spawnv(args);
+    let generation = this.spawnGeneration;
+    let processToken = this._registerProcess(process, generation);
+    let cancellable = new Gio.Cancellable();
+    let cancellableToken = this._registerCancellable(cancellable);
+    let timeoutKey = "process-timeout-" + processToken;
+    let done = false;
+    let stdoutParts = [];
+    let stderrParts = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let ended = { stdout: false, stderr: false };
+
+    let finish = (result, terminate) => {
+      if (done) {
+        return;
+      }
+      done = true;
+      this._clearTrackedTimer(timeoutKey);
+      if (terminate) {
+        this._terminateProcess(process);
+      }
       try {
-        let [, stdout] = subprocess.communicate_utf8_finish(result);
-        callback(String(stdout || ""));
-      } catch (err) {
-        global.logError(err);
-        callback("");
+        cancellable.cancel();
+      } catch (ignored) {
+        // Cancellation is best effort during normal EOF and teardown.
+      }
+      this._unregisterProcess(processToken);
+      this._unregisterCancellable(cancellableToken);
+      if (this.appletRemoved || this.spawnGeneration !== generation || typeof callback !== "function") {
+        return;
+      }
+      try {
+        callback(stdoutParts.join(""), stderrParts.join(""), result || {});
+      } catch (error) {
+        this._recordLifecycleError("process-callback", error);
+      }
+    };
+
+    let readStream = (stream, name, maxBytes, chunks) => {
+      if (done || !stream || !stream.read_bytes_async) {
+        finish({ error: "Subprocess output stream unavailable" }, true);
+        return;
+      }
+      try {
+        stream.read_bytes_async(SUBPROCESS_READ_CHUNK_BYTES, GLib.PRIORITY_DEFAULT, cancellable, (source, result) => {
+          if (done) {
+            return;
+          }
+          try {
+            let bytes = source.read_bytes_finish(result);
+            let size = bytes && bytes.get_size ? Number(bytes.get_size()) : Number(bytes && bytes.length || 0);
+            if (!size) {
+              ended[name] = true;
+              if (ended.stdout && ended.stderr) {
+                finish({ completed: true }, false);
+              }
+              return;
+            }
+            let data = bytes && bytes.get_data ? bytes.get_data() : bytes;
+            let chunk = ByteArray.toString(data || "");
+            let chunkBytes = utf8ByteLength(chunk);
+            if (name === "stdout") {
+              stdoutBytes += chunkBytes;
+            } else {
+              stderrBytes += chunkBytes;
+            }
+            if ((name === "stdout" ? stdoutBytes : stderrBytes) > maxBytes) {
+              finish({ outputTooLarge: true, stream: name }, true);
+              return;
+            }
+            chunks.push(chunk);
+            readStream(stream, name, maxBytes, chunks);
+          } catch (error) {
+            finish({ error: error }, true);
+          }
+        });
+      } catch (error) {
+        finish({ error: error }, true);
+      }
+    };
+
+    if (timeoutMs > 0 && !this._scheduleTrackedTimer(timeoutKey, Math.max(250, timeoutMs), () => {
+      finish({ timedOut: true }, true);
+      return false;
+    }, false)) {
+      finish({ error: "Subprocess timeout could not be scheduled" }, true);
+      return null;
+    }
+
+    try {
+      readStream(process.get_stdout_pipe(), "stdout", maxStdoutBytes, stdoutParts);
+      readStream(process.get_stderr_pipe(), "stderr", maxStderrBytes, stderrParts);
+    } catch (error) {
+      finish({ error: error }, true);
+    }
+    if (hasInput) {
+      let stdin = process.get_stdin_pipe();
+      let inputBytes = ByteArray.fromString(String(options.inputText || ""));
+      try {
+        if (stdin && stdin.write_all_async) {
+          stdin.write_all_async(inputBytes, GLib.PRIORITY_DEFAULT, cancellable, (stream, result) => {
+            try {
+              stream.write_all_finish(result);
+              if (stream.close) {
+                stream.close(null);
+              }
+            } catch (error) {
+              finish({ error: error }, true);
+            }
+          });
+        } else if (stdin && stdin.write_all) {
+          stdin.write_all(inputBytes, null);
+          stdin.close(null);
+        } else {
+          finish({ error: "Subprocess input stream unavailable" }, true);
+        }
+      } catch (error) {
+        finish({ error: error }, true);
+      }
+    }
+    return {
+      token: processToken,
+      process: process,
+      cancellable: cancellable,
+      cancel: () => finish({ cancelled: true }, true),
+    };
+  },
+
+  _spawnJsonWithBackendEnvironment: function(args, env, callback, inputText, options) {
+    options = options || {};
+    return this._runBoundedSubprocess(args, env, {
+      inputText: inputText,
+      timeoutMs: options.timeoutMs,
+      maxStdoutBytes: options.maxStdoutBytes || MAX_SPAWN_JSON_BYTES,
+      maxStderrBytes: options.maxStderrBytes || MAX_SPAWN_STDERR_BYTES,
+    }, (stdout, stderr, result) => {
+      if (typeof callback === "function") {
+        callback(String(stdout || ""), result || {}, String(stderr || ""));
       }
     });
-    return process;
   },
 
   _isStatusCommandArgs: function(args) {
@@ -4768,46 +5030,8 @@ MyApplet.prototype = {
 
   _spawnJson: function(args, callback, options) {
     options = options || {};
-    let timeoutId = 0;
-    let done = false;
     let normalizedArgs;
-    let activeProcess = null;
-    let callbackFn = typeof callback === "function" ? callback : function() {};
-    let applet = this;
-    let spawnGeneration = this.spawnGeneration;
-
-    const terminateActiveProcess = function() {
-      if (!activeProcess) {
-        return;
-      }
-      try {
-        if (!activeProcess.get_if_exited()) {
-          activeProcess.force_exit();
-        }
-      } catch (err) {
-        global.logError(err);
-      }
-      activeProcess = null;
-    };
-
-    const finalize = function(payload) {
-      if (done) {
-        return;
-      }
-      done = true;
-      if (timeoutId) {
-        Mainloop.source_remove(timeoutId);
-        timeoutId = 0;
-      }
-      if (applet.appletRemoved || applet.spawnGeneration !== spawnGeneration) {
-        return;
-      }
-      try {
-        callbackFn(payload || {});
-      } catch (err) {
-        global.logError(err);
-      }
-    };
+    let callbackFn = this._guardCallback("backend-json", callback, undefined) || function() {};
 
     try {
       normalizedArgs = this._coerceSpawnArgs(args);
@@ -4817,98 +5041,66 @@ MyApplet.prototype = {
       let timeoutMs = Object.prototype.hasOwnProperty.call(options, "timeoutMs")
         ? Number(options.timeoutMs)
         : CLI_COMMAND_TIMEOUT_MS;
-      if (timeoutMs > 0) {
-        timeoutId = Mainloop.timeout_add(Math.max(250, timeoutMs), () => {
-          terminateActiveProcess();
-          finalize({ status: "error", error: "Backend command timed out" });
-          return false;
-        });
-      }
-      this._runWithBackendEnvironment(this._shouldExposeOpenAiCompatibleApiKeyToBackend(normalizedArgs), (backendEnv) => {
-        let handleOutput = (stdout) => {
-          if (done) {
+      let inputText = Object.prototype.hasOwnProperty.call(options, "inputText")
+        ? String(options.inputText || "")
+        : null;
+      return this._runWithBackendEnvironment(this._shouldExposeOpenAiCompatibleApiKeyToBackend(normalizedArgs), (backendEnv) => {
+        return this._spawnJsonWithBackendEnvironment(normalizedArgs, backendEnv || {}, (stdout, result) => {
+          if (result && result.timedOut) {
+            callbackFn({ status: "error", error: "Backend command timed out" });
             return;
           }
-          finalize(this._parseSpawnOutput(stdout));
-        };
-        let inputText = Object.prototype.hasOwnProperty.call(options, "inputText")
-          ? String(options.inputText || "")
-          : null;
-        activeProcess = this._spawnJsonWithBackendEnvironment(normalizedArgs, backendEnv || {}, handleOutput, inputText);
+          if (result && result.outputTooLarge) {
+            callbackFn({ status: "error", error: "Backend response is too large" });
+            return;
+          }
+          if (result && result.error) {
+            callbackFn({ status: "error", error: "Backend command failed" });
+            return;
+          }
+          if (String(stdout || "").trim() === "") {
+            callbackFn({ status: "error", error: "Backend returned no response" });
+            return;
+          }
+          callbackFn(this._parseSpawnOutput(stdout));
+        }, inputText, {
+          timeoutMs: timeoutMs,
+          maxStdoutBytes: MAX_SPAWN_JSON_BYTES,
+          maxStderrBytes: MAX_SPAWN_STDERR_BYTES,
+        });
       });
-    } catch (err) {
-      finalize({ status: "error", error: String(err) });
+    } catch (error) {
+      this._recordLifecycleError("backend-json-spawn", error);
+      callbackFn({ status: "error", error: this._lifecycleErrorText(error) });
+      return null;
     }
   },
 
   _spawnText: function(args, callback, options) {
     options = options || {};
-    let timeoutId = 0;
-    let done = false;
-    let activeProcess = null;
-    let callbackFn = typeof callback === "function" ? callback : function() {};
-    let applet = this;
-    let spawnGeneration = this.spawnGeneration;
-
-    const terminateActiveProcess = function() {
-      if (!activeProcess) {
-        return;
-      }
-      try {
-        if (!activeProcess.get_if_exited()) {
-          activeProcess.force_exit();
-        }
-      } catch (err) {
-        global.logError(err);
-      }
-      activeProcess = null;
-    };
-
-    const finalize = function(output) {
-      if (done) {
-        return;
-      }
-      done = true;
-      if (timeoutId) {
-        Mainloop.source_remove(timeoutId);
-        timeoutId = 0;
-      }
-      if (applet.appletRemoved || applet.spawnGeneration !== spawnGeneration) {
-        return;
-      }
-      try {
-        callbackFn(String(output || ""));
-      } catch (err) {
-        global.logError(err);
-      }
-    };
+    let callbackFn = this._guardCallback("backend-text", callback, undefined) || function() {};
 
     try {
       let normalizedArgs = this._coerceSpawnArgs(args);
       let timeoutMs = Object.prototype.hasOwnProperty.call(options, "timeoutMs")
         ? Number(options.timeoutMs)
         : CLI_COMMAND_TIMEOUT_MS;
-      if (timeoutMs > 0) {
-        timeoutId = Mainloop.timeout_add(Math.max(250, timeoutMs), () => {
-          terminateActiveProcess();
-          finalize("");
-          return false;
-        });
-      }
-      activeProcess = this._spawnJsonWithBackendEnvironment(normalizedArgs, {}, (stdout) => {
-        if (done) {
+      return this._spawnJsonWithBackendEnvironment(normalizedArgs, {}, (stdout, result) => {
+        if ((result && (result.timedOut || result.outputTooLarge || result.error))) {
+          callbackFn("");
           return;
         }
         let output = String(stdout || "");
-        if (utf8ByteLength(output) > MAX_SPAWN_TEXT_BYTES) {
-          finalize("");
-          return;
-        }
-        finalize(output);
+        callbackFn(utf8ByteLength(output) > MAX_SPAWN_TEXT_BYTES ? "" : output);
+      }, null, {
+        timeoutMs: timeoutMs,
+        maxStdoutBytes: MAX_SPAWN_TEXT_BYTES,
+        maxStderrBytes: MAX_SPAWN_STDERR_BYTES,
       });
-    } catch (err) {
-      global.logError(err);
-      finalize("");
+    } catch (error) {
+      this._recordLifecycleError("backend-text-spawn", error);
+      callbackFn("");
+      return null;
     }
   },
 
@@ -6542,11 +6734,11 @@ MyApplet.prototype = {
       this.historyItem.menu.addMenuItem(entry);
 
       let insertItem = new PopupMenu.PopupIconMenuItem(_("Insert transcript"), "edit-paste-symbolic", St.IconType.SYMBOLIC);
-      insertItem.connect("activate", () => this._insertHistoryTranscript(transcript.text || ""));
+      this._connectSafe(insertItem, "activate", () => this._insertHistoryTranscript(transcript.text || ""));
       entry.menu.addMenuItem(insertItem);
 
       let copyItem = new PopupMenu.PopupIconMenuItem(_("Copy transcript"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
-      copyItem.connect("activate", () => this._copyHistoryTranscript(transcript.text || ""));
+      this._connectSafe(copyItem, "activate", () => this._copyHistoryTranscript(transcript.text || ""));
       entry.menu.addMenuItem(copyItem);
     }
   },
