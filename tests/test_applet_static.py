@@ -1284,6 +1284,21 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.alarmCheckToken !== checkToken", block)
         self.assertIn("!this._lifecycleAllowsWork()", block)
 
+    def test_settings_transfers_ignore_stale_backend_responses(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        for method, next_method in [
+            ("_exportSettings: function()", "\n  _importSettings:"),
+            ("_importSettings: function()", "\n  _applyImportedSettings:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn("let transferToken = {};", block)
+            self.assertIn("this.settingsTransferToken = transferToken;", block)
+            self.assertIn("this.settingsTransferToken !== transferToken", block)
+            self.assertIn("!this._lifecycleAllowsWork()", block)
+
     def test_text_model_menu_keeps_selected_ollama_model_when_refresh_is_empty(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

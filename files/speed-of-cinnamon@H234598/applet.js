@@ -1745,6 +1745,7 @@ MyApplet.prototype = {
     this.autoPastePromptToken = null;
     this.alarmActionToken = null;
     this.alarmCheckToken = null;
+    this.settingsTransferToken = null;
     this._runTeardownGuarded("teardown-processes", () => this._terminateAllProcesses());
     this._runTeardownGuarded("teardown-cancellables", () => this._cancelAllCancellables());
     this._runTeardownGuarded("teardown-dialogs", () => this._destroyTrackedDialogs());
@@ -5210,23 +5211,37 @@ MyApplet.prototype = {
   },
 
   _exportSettings: function() {
+    let transferToken = {};
+    this.settingsTransferToken = transferToken;
     this._setStatus("processing", _("Exporting settings..."), this.lastTranscript);
     this._spawnJson(this._settingsExportArgs(), (payload) => {
+      if (this.settingsTransferToken !== transferToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
       if (payload.error) {
+        this.settingsTransferToken = null;
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
+      this.settingsTransferToken = null;
       this._setStatus("done", _("Exported settings"), this.lastTranscript);
     }, { inputText: JSON.stringify(this._settingsSnapshotForCli()) });
   },
 
   _importSettings: function() {
+    let transferToken = {};
+    this.settingsTransferToken = transferToken;
     this._setStatus("processing", _("Importing settings..."), this.lastTranscript);
     this._spawnJson(this._settingsImportArgs(), (payload) => {
+      if (this.settingsTransferToken !== transferToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
       if (payload.error) {
+        this.settingsTransferToken = null;
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
+      this.settingsTransferToken = null;
       let applied = this._applyImportedSettings(payload.settings || {});
       this._setStatus("done", _("Imported settings: ") + String(applied), this.lastTranscript);
     });
