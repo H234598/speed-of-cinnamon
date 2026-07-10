@@ -1728,6 +1728,7 @@ MyApplet.prototype = {
     this.modelMenuRefreshToken = null;
     this.textModelMenuRefreshToken = null;
     this.historyRefreshToken = null;
+    this.alarmMenuRefreshToken = null;
     this._runTeardownGuarded("teardown-processes", () => this._terminateAllProcesses());
     this._runTeardownGuarded("teardown-cancellables", () => this._cancelAllCancellables());
     this._runTeardownGuarded("teardown-dialogs", () => this._destroyTrackedDialogs());
@@ -3373,11 +3374,16 @@ MyApplet.prototype = {
   },
 
   _refreshAlarmMenu: function() {
-    if (!this.alarmItem) {
+    if (!this._canMutateMenu(this.alarmItem)) {
       return;
     }
+    let refreshToken = {};
+    this.alarmMenuRefreshToken = refreshToken;
     this._populateAlarmMenu([], _("Loading alarms..."));
     this._spawnJson(this._alarmListArgs(), (payload) => {
+      if (this.alarmMenuRefreshToken !== refreshToken || !this._canMutateMenu(this.alarmItem)) {
+        return;
+      }
       if (payload.error) {
         this._populateAlarmMenu([], this._sanitizeErrorMessage(payload.error));
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
