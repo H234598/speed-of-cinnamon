@@ -294,6 +294,24 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["desktop"]["desktop_session"], "")
         self.assertEqual(payload["desktop"]["session_type"], "x11")
 
+    def test_diagnostics_sanitizes_applet_lifecycle_payload(self) -> None:
+        payload = cli._diagnostics_applet_lifecycle_payload({
+            "applet-lifecycle": {
+                "state": "DEGRADED",
+                "error_counts": {"clipboard": 3, "private path": 99, "too_many": 999999},
+                "disabled_groups": ["clipboard", "private path", "clipboard"],
+                "resources": {"timers": 2, "private path": 77},
+                "process_groups": {"keyboard": 1, "private path": 88},
+            }
+        })
+
+        self.assertTrue(payload["present"])
+        self.assertEqual(payload["state"], "DEGRADED")
+        self.assertEqual(payload["error_counts"], {"clipboard": 3, "too_many": 100_000})
+        self.assertEqual(payload["disabled_groups"], ["clipboard"])
+        self.assertEqual(payload["resources"], {"timers": 2})
+        self.assertEqual(payload["process_groups"], {"keyboard": 1})
+
     def test_version_consistency_between_metadata_and_package(self) -> None:
         project_version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
         self.assertEqual(project_version, cli.__version__)

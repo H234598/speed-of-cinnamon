@@ -158,6 +158,20 @@ def _workflow_block_lines(text: str, header: str) -> list[str]:
 
 
 class CiStaticTest(unittest.TestCase):
+    def test_applet_crash_safety_gates_are_present_and_isolated(self) -> None:
+        makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+        harness = (REPO_ROOT / "scripts" / "applet-crash-safety.sh").read_text(encoding="utf-8")
+
+        self.assertIn("applet-safety-check", makefile)
+        self.assertIn("applet-crash-safety: applet-safety-check", makefile)
+        self.assertIn("Xephyr", harness)
+        self.assertIn("dbus-run-session", harness)
+        self.assertIn("APPLET_CRASH_SAFETY_CYCLES", harness)
+        self.assertIn("APPLET_CRASH_SAFETY_FAULT_INJECTION", harness)
+        self.assertIn("ReloadXlet", harness)
+        self.assertIn("Cinnamon RSS grew by more than 50 MiB", harness)
+        self.assertNotIn("sudo ", harness)
+
     def test_makefile_has_repo_local_clean_target(self) -> None:
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
 

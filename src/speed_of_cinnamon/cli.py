@@ -4375,6 +4375,76 @@ def _diagnostics_state_payload(state: RecordingState) -> dict[str, object]:
     return state_payload
 
 
+def _diagnostics_applet_lifecycle_payload(settings: dict[str, object]) -> dict[str, object]:
+    raw = settings.get("applet-lifecycle")
+    if not isinstance(raw, dict):
+        return {
+            "present": False,
+            "state": "unknown",
+            "error_counts": {},
+            "disabled_groups": [],
+            "resources": {},
+            "process_groups": {},
+        }
+    allowed_states = {"INITIALIZING", "RUNNING", "DEGRADED", "REMOVING", "REMOVED"}
+    state = str(raw.get("state") or "unknown")
+    if state not in allowed_states:
+        state = "unknown"
+
+    def safe_group(value: object) -> str:
+        text = str(value or "")
+        if not text or len(text) > 64 or not re.fullmatch(r"[A-Za-z0-9_-]+", text):
+            return ""
+        return text
+
+    def safe_count(value: object) -> int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            return 0
+        return max(0, min(100_000, value))
+
+    error_counts: dict[str, int] = {}
+    raw_errors = raw.get("error_counts")
+    if isinstance(raw_errors, dict):
+        for key, value in list(raw_errors.items())[:64]:
+            group = safe_group(key)
+            if group:
+                error_counts[group] = safe_count(value)
+
+    disabled_groups: list[str] = []
+    raw_disabled = raw.get("disabled_groups")
+    if isinstance(raw_disabled, list):
+        for value in raw_disabled[:64]:
+            group = safe_group(value)
+            if group and group not in disabled_groups:
+                disabled_groups.append(group)
+    disabled_groups.sort()
+
+    resources: dict[str, int] = {}
+    raw_resources = raw.get("resources")
+    if isinstance(raw_resources, dict):
+        for key, value in list(raw_resources.items())[:32]:
+            group = safe_group(key)
+            if group:
+                resources[group] = safe_count(value)
+
+    process_groups: dict[str, int] = {}
+    raw_process_groups = raw.get("process_groups")
+    if isinstance(raw_process_groups, dict):
+        for key, value in list(raw_process_groups.items())[:32]:
+            group = safe_group(key)
+            if group:
+                process_groups[group] = safe_count(value)
+
+    return {
+        "present": True,
+        "state": state,
+        "error_counts": error_counts,
+        "disabled_groups": disabled_groups,
+        "resources": resources,
+        "process_groups": process_groups,
+    }
+
+
 def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
     settings = _settings_json_from_args(args)
     ensure_runtime_dirs()
@@ -4440,6 +4510,7 @@ def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
             "redacted": True,
         },
         "state": state_payload,
+        "applet_lifecycle": _diagnostics_applet_lifecycle_payload(settings),
         "doctor": doctor_report(settings, applet=applet),
         "inputs": source_payload,
         "models": _redact_model_payload_paths(list_models()),

@@ -426,11 +426,16 @@ def _remove_generated_transcript_file(path: Path, *, field_name: str = "generate
 
     parent_fd: int | None = None
     file_fd: int | None = None
+    nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     try:
         parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name=f"{field_name} directory")
         try:
             try:
-                file_fd = open_file_without_following_symlinks(path, os.O_RDONLY, field_name=field_name)
+                file_fd = open_file_without_following_symlinks(
+                    path,
+                    os.O_RDONLY | nonblock_flag,
+                    field_name=field_name,
+                )
             except FileNotFoundError:
                 return
             except OSError as exc:
@@ -630,6 +635,18 @@ class TranscriberConfig:
     language: str = "en"
 
 
+def _normalize_transcript_path(path: Path) -> Path:
+    if not isinstance(path, Path):
+        raise TranscriptionError("text path must be a Path")
+    try:
+        normalized = path.expanduser()
+        if not normalized.is_absolute():
+            normalized = Path.cwd() / normalized
+    except OSError as exc:
+        raise TranscriptionError("text path is invalid") from exc
+    return normalized
+
+
 def _validate_audio_path_shape(path: Path) -> Path:
     if not isinstance(path, Path):
         raise TranscriptionError("audio path must be a Path")
@@ -643,6 +660,11 @@ def _validate_audio_path_shape(path: Path) -> Path:
     if _contains_http_header_control_chars(path_text):
         raise TranscriptionError("audio path contains invalid control character")
     normalized = path.expanduser()
+    try:
+        if not normalized.is_absolute():
+            normalized = Path.cwd() / normalized
+    except OSError as exc:
+        raise TranscriptionError("audio path is invalid") from exc
     try:
         str(normalized).encode("utf-8")
     except UnicodeEncodeError as exc:
@@ -1109,11 +1131,12 @@ def transcribe_with_template(
     personal_context: str = "",
     vocabulary: str = "",
 ) -> str:
+    if isinstance(template, bool) or not isinstance(template, str):
+        raise TranscriptionError("template must be text")
+    audio_path = validate_audio_file(audio_path)
     should_read_text_file = "{text}" in template
     if should_read_text_file:
-        if not isinstance(text_path, Path):
-            raise TranscriptionError("text path must be a Path")
-        text_path = text_path.expanduser()
+        text_path = _normalize_transcript_path(text_path)
         try:
             assert_no_symlink_ancestors(text_path, field_name="transcript path")
         except RuntimeError as exc:
@@ -1124,6 +1147,7 @@ def transcribe_with_template(
             raise TranscriptionError("failed to prepare transcript directory") from exc
         else:
             os.close(parent_fd)
+    existing_state = _file_state(text_path) if should_read_text_file else None
     existing_snapshot = (
         _snapshot_existing_file(text_path)
         if should_read_text_file and text_path.exists()
@@ -1160,9 +1184,15 @@ def transcribe_with_template(
         raise TranscriptionError(_sanitize_local_command_error(str(exc))) from exc
 
     try:
-        if should_read_text_file and text_path.exists():
-            output = _read_text_file(text_path, size_field_name="transcript file text")
-            return _assert_text_length(output.strip(), field_name="transcript file text")
+        if should_read_text_file:
+            current_state = _file_state(text_path)
+            if current_state is not None:
+                if existing_state is not None and current_state == existing_state:
+                    raise TranscriptionError("transcriber completed but did not update the transcript file")
+                output = _read_text_file(text_path, size_field_name="transcript file text")
+                return _assert_text_length(output.strip(), field_name="transcript file text")
+            if existing_snapshot is not None:
+                _restore_existing_file_snapshot(text_path, existing_snapshot)
         return _assert_text_length(output, field_name="transcript")
     except Exception as exc:
         try:
@@ -1181,6 +1211,17 @@ def transcribe_with_openai_whisper(
 ) -> str:
     language = _validate_language_code(language)
     audio_path = validate_audio_file(audio_path)
+    text_path = _normalize_transcript_path(text_path)
+    try:
+        assert_no_symlink_ancestors(text_path, field_name="transcript path")
+    except RuntimeError as exc:
+        raise TranscriptionError(str(exc)) from exc
+    try:
+        parent_fd = ensure_directory_without_following_symlinks(text_path.parent, field_name="transcript directory")
+    except OSError as exc:
+        raise TranscriptionError("failed to prepare transcript directory") from exc
+    else:
+        os.close(parent_fd)
     audio_snapshot = _snapshot_private_file(
         audio_path,
         field_name="audio file for backend",
@@ -1247,6 +1288,7 @@ def transcribe_with_openai_whisper(
                     if primary_error is None:
                         raise
             return text
+        _restore_or_remove_generated_transcript(generated, existing_snapshot)
         raise TranscriptionError("whisper completed but did not produce a transcript")
 
 
@@ -1313,9 +1355,7 @@ def transcribe_with_whisper_cpp(
 ) -> str:
     language = _validate_language_code(language)
     audio_path = validate_audio_file(audio_path)
-    if not isinstance(text_path, Path):
-        raise TranscriptionError("text path must be a Path")
-    text_path = text_path.expanduser()
+    text_path = _normalize_transcript_path(text_path)
     try:
         assert_no_symlink_ancestors(text_path, field_name="transcript path")
     except RuntimeError as exc:
@@ -1413,6 +1453,9 @@ def transcribe_with_whisper_cpp(
                     if primary_error is None:
                         raise
             return text
+        for candidate in generated_candidates:
+            if snapshots.get(candidate) is not None or candidate.exists():
+                _restore_or_remove_generated_transcript(candidate, snapshots.get(candidate))
         raise TranscriptionError("whisper.cpp completed but did not produce a transcript")
 
 
@@ -1433,6 +1476,7 @@ def transcribe_with_faster_whisper(
 ) -> str:
     language = _validate_language_code(language)
     audio_path = validate_audio_file(audio_path)
+    text_path = _normalize_transcript_path(text_path)
     model_path = _validate_local_model_path(model_path, field_name="CTranslate2 model path", directory=True)
     if not model_supports_language(model_path, language):
         raise TranscriptionError(
@@ -1695,6 +1739,7 @@ def transcribe_with_openai_compatible_api(
     openai_compatible_service_tier_fallback: bool = False,
 ) -> str:
     audio_path, audio_snapshot = _validate_audio_file_for_upload(audio_path)
+    text_path = _normalize_transcript_path(text_path)
     if _contains_escaped_null(model):
         raise TranscriptionError("OpenAI-compatible speech model contains invalid null byte")
     if _contains_http_header_control_chars(model):
@@ -1770,7 +1815,7 @@ def transcribe_with_openai_compatible_api(
         finally:
             with suppress(Exception):
                 exc.close()
-        raw_detail = _openai_compatible_error_detail(raw_error) or exc.reason or str(exc)
+        raw_detail = _openai_compatible_error_detail(raw_error) or str(exc.reason or exc)
         if allow_service_tier_fallback and _is_flex_service_tier_rejected(raw_detail):
             fallback_fields = dict(fields)
             fallback_fields.pop("service_tier", None)
@@ -1855,12 +1900,20 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
     if isinstance(config.whisper_model, bool) or not isinstance(config.whisper_model, str):
         raise TranscriptionError("whisper model must be text")
     language = _validate_language_code(config.language)
+    supported_backends = {"auto", "command", "whisper", "whisper-cpp", "faster-whisper", "openai-compatible"}
+    if backend not in supported_backends:
+        raise TranscriptionError(f"unknown transcriber backend: {config.backend}")
+
+    model_can_affect_resolution = backend in {"whisper-cpp", "faster-whisper"} or (
+        backend == "auto" and not config.command_template.strip()
+    )
     raw_whisper_model = config.whisper_model
-    if _contains_escaped_null(raw_whisper_model):
-        raise TranscriptionError("whisper model contains invalid null byte")
-    if _contains_http_header_control_chars(raw_whisper_model):
-        raise TranscriptionError("whisper model contains invalid control character")
-    configured_model = raw_whisper_model.strip()
+    configured_model = raw_whisper_model.strip() if model_can_affect_resolution else ""
+    if configured_model:
+        if _contains_escaped_null(raw_whisper_model):
+            raise TranscriptionError("whisper model contains invalid null byte")
+        if _contains_http_header_control_chars(raw_whisper_model):
+            raise TranscriptionError("whisper model contains invalid control character")
     has_configured_model = bool(configured_model)
     configured_model_backend = model_backend_for_path(configured_model) if configured_model else ""
     configured_model_is_dir = False
@@ -1877,7 +1930,7 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
             configured_model_is_dir = False
         except RuntimeError as exc:
             raise TranscriptionError(str(exc)) from exc
-    local_model = configured_model or default_ctranslate2_model_path(language) or default_whisper_cpp_model_path(language)
+    local_model = ""
     if backend == "auto":
         if config.command_template.strip():
             return "command"
@@ -1901,6 +1954,7 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
             return "whisper-cpp"
         if _is_command_available("whisper"):
             return "whisper"
+        local_model = default_ctranslate2_model_path(language) or default_whisper_cpp_model_path(language)
         local_model_backend = model_backend_for_path(local_model) if local_model else ""
         if local_model and local_model_backend == "faster-whisper" and faster_whisper_available():
             return "faster-whisper"
@@ -1910,8 +1964,6 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
             "no transcriber available; install 'whisper', install faster-whisper, configure whisper.cpp with a model, "
             "or set a custom transcriber command"
         )
-    if backend not in {"command", "whisper", "whisper-cpp", "faster-whisper", "openai-compatible"}:
-        raise TranscriptionError(f"unknown transcriber backend: {config.backend}")
     return backend
 
 
@@ -1935,7 +1987,7 @@ def transcribe(
     if not isinstance(text_path, Path):
         raise TranscriptionError("text path must be a Path")
     language = _validate_language_code(language)
-    text_path = text_path.expanduser()
+    text_path = _normalize_transcript_path(text_path)
     try:
         assert_no_symlink_ancestors(text_path, field_name="transcript path")
     except RuntimeError as exc:
@@ -1954,6 +2006,7 @@ def transcribe(
         raise TranscriptionError("backend must be text")
     if not isinstance(whisper_model, str) or isinstance(whisper_model, bool):
         raise TranscriptionError("whisper model must be text")
+    whisper_model = whisper_model.strip()
     if not isinstance(personal_context, str) or isinstance(personal_context, bool):
         raise TranscriptionError("personal context must be text")
     if not isinstance(vocabulary, str) or isinstance(vocabulary, bool):
