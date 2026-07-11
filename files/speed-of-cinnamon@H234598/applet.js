@@ -1842,7 +1842,12 @@ MyApplet.prototype = {
     let accelerator = typeof binding === "string" ? binding.trim() : "";
     if (accelerator === "") {
       if (this._hotkeyDefinitions) {
-        delete this._hotkeyDefinitions[name];
+        this._runStateGuarded("hotkeys", () => {
+          let deleted = delete this._hotkeyDefinitions[name];
+          if (deleted === false) {
+            throw new Error("Hotkey definition could not be removed");
+          }
+        }, undefined);
       }
       return;
     }

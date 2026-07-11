@@ -1813,6 +1813,15 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('throw new Error("Hotkey registry entry could not be removed during teardown");', block)
         self.assertIn('throw new Error("Hotkey definition could not be removed during teardown");', block)
 
+    def test_empty_hotkey_binding_contains_definition_delete_failure(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index('let accelerator = typeof binding === "string"')
+        end = source.index("\n    let hasBinding", start)
+        block = source[start:end]
+        self.assertIn('this._runStateGuarded("hotkeys", () => {', block)
+        self.assertIn("let deleted = delete this._hotkeyDefinitions[name];", block)
+        self.assertIn('throw new Error("Hotkey definition could not be removed");', block)
+
     def test_menu_toggle_remains_recoverable_after_guarded_failures(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("on_applet_clicked: function()")
