@@ -2942,6 +2942,9 @@ MyApplet.prototype = {
   },
 
   _toggleRecording: function() {
+    if (this.ollamaModelFlowToken || this.ollamaInstallWatchToken) {
+      this._cancelOllamaFlowForRecording();
+    }
     if (this.isCommandRunning) {
       if (this.autoRelisten && this.notificationSessionActive) {
         this.autoRelistenManualStopRequested = true;
@@ -3505,6 +3508,9 @@ MyApplet.prototype = {
         maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
       }, (stdout, stderr, result) => {
         this.terminalWorkflowRunning = false;
+        if (cancelOllamaFlow === true && (!ollamaFlowToken || this.ollamaModelFlowToken !== ollamaFlowToken)) {
+          return;
+        }
         if (result && (result.error || result.timedOut || result.outputTooLarge)) {
           if (cancelOllamaFlow === true && ollamaFlowToken && this.ollamaModelFlowToken === ollamaFlowToken) {
             this._cancelOllamaInstallWatch();
@@ -5234,6 +5240,17 @@ MyApplet.prototype = {
     return true;
   },
 
+  _cancelOllamaFlowForRecording: function() {
+    if (!this.ollamaModelFlowToken && !this.ollamaInstallWatchToken) {
+      return false;
+    }
+    this._cancelOllamaInstallWatch();
+    this._clearOllamaModelFlow();
+    this._terminateProcessesByGroup("ollama");
+    this.isCommandRunning = false;
+    return true;
+  },
+
   _activateOllamaTextModelFlow: function() {
     if (this._hasActiveRecordingState()) {
       return;
@@ -5282,7 +5299,7 @@ MyApplet.prototype = {
         return;
       }
       this._promptChooseOllamaTextModel(models, flowToken);
-    });
+    }, { resourceGroup: "ollama" });
   },
 
   _ollamaModelPromptArgs: function() {
@@ -5423,7 +5440,7 @@ MyApplet.prototype = {
         return;
       }
       this._promptChooseOllamaTextModel(models, flowToken);
-    });
+    }, { resourceGroup: "ollama" });
   },
 
   _promptChooseOllamaTextModel: function(models, flowToken) {
@@ -5470,7 +5487,7 @@ MyApplet.prototype = {
         }
       }
       finish(_("Ollama model selection was invalid"));
-    }, { timeoutMs: 0 });
+    }, { timeoutMs: 0, resourceGroup: "ollama" });
   },
 
   _promptInstallOllamaTextModel: function(flowToken) {
@@ -5493,7 +5510,7 @@ MyApplet.prototype = {
         return;
       }
       this._installOllamaTextModel(model);
-    }, { timeoutMs: 0 });
+    }, { timeoutMs: 0, resourceGroup: "ollama" });
   },
 
   _installOllamaTextModel: function(model) {
@@ -5547,7 +5564,7 @@ MyApplet.prototype = {
         return;
       }
       this._notify(_("Ollama model installed"), installedModel, false);
-    }, { timeoutMs: BENCHMARK_COMMAND_TIMEOUT_MS });
+    }, { timeoutMs: BENCHMARK_COMMAND_TIMEOUT_MS, resourceGroup: "ollama" });
   },
 
   _refreshHistory: function() {
@@ -6540,6 +6557,7 @@ MyApplet.prototype = {
       timeoutMs: options.timeoutMs,
       maxStdoutBytes: options.maxStdoutBytes || MAX_SPAWN_JSON_BYTES,
       maxStderrBytes: options.maxStderrBytes || MAX_SPAWN_STDERR_BYTES,
+      resourceGroup: options.resourceGroup,
     }, (stdout, stderr, result) => {
       completeOnce(String(stdout || ""), result || {}, String(stderr || ""));
     });
@@ -6592,6 +6610,7 @@ MyApplet.prototype = {
           timeoutMs: timeoutMs,
           maxStdoutBytes: MAX_SPAWN_JSON_BYTES,
           maxStderrBytes: MAX_SPAWN_STDERR_BYTES,
+          resourceGroup: options.resourceGroup,
         });
       });
     } catch (error) {
@@ -6622,6 +6641,7 @@ MyApplet.prototype = {
         timeoutMs: timeoutMs,
         maxStdoutBytes: MAX_SPAWN_TEXT_BYTES,
         maxStderrBytes: MAX_SPAWN_STDERR_BYTES,
+        resourceGroup: options.resourceGroup,
       });
     } catch (error) {
       this._recordLifecycleError("backend-text-spawn", error);
@@ -7001,7 +7021,7 @@ MyApplet.prototype = {
           return;
         }
         this._scheduleOllamaInstallWatchPoll(watchToken);
-      }, { timeoutMs: STATUS_COMMAND_TIMEOUT_MS });
+      }, { timeoutMs: STATUS_COMMAND_TIMEOUT_MS, resourceGroup: "ollama" });
       return false;
     }, true, "ollamaInstallWatchTimer");
   },

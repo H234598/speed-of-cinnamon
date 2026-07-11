@@ -3582,3 +3582,29 @@ class AppletStaticTest(unittest.TestCase):
             end = source.index(next_method, start)
             block = source[start:end]
             self.assertIn("_setStatusPreservingRecording", block, method)
+
+    def test_ollama_flows_are_cancelled_before_recording_starts(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        toggle_start = source.index("_toggleRecording: function()")
+        toggle_end = source.index("\n  _restartApplet:", toggle_start)
+        toggle_block = source[toggle_start:toggle_end]
+        self.assertLess(
+            toggle_block.index("this._cancelOllamaFlowForRecording();"),
+            toggle_block.index("if (this.isCommandRunning)"),
+        )
+
+        cancel_start = source.index("_cancelOllamaFlowForRecording: function()")
+        cancel_end = source.index("\n  _activateOllamaTextModelFlow:", cancel_start)
+        cancel_block = source[cancel_start:cancel_end]
+        self.assertIn('this._terminateProcessesByGroup("ollama");', cancel_block)
+        self.assertIn("this.isCommandRunning = false;", cancel_block)
+
+        self.assertIn('}, { resourceGroup: "ollama" });', source)
+        self.assertIn('resourceGroup: options.resourceGroup,', source)
+
+        terminal_start = source.index("_runTerminalWorkflow: function(")
+        terminal_end = source.index("\n  _terminalWorkflowScript:", terminal_start)
+        terminal_block = source[terminal_start:terminal_end]
+        self.assertIn("cancelOllamaFlow === true", terminal_block)
+        self.assertIn("this.ollamaModelFlowToken !== ollamaFlowToken", terminal_block)
