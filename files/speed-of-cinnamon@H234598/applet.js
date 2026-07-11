@@ -6782,7 +6782,11 @@ MyApplet.prototype = {
       if (!Object.prototype.hasOwnProperty.call(registry.processes, token)) {
         continue;
       }
-      let group = String(registry.processes[token].group || "process").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || "process";
+      let processEntry = registry.processes[token];
+      if (!processEntry || typeof processEntry !== "object") {
+        continue;
+      }
+      let group = String(processEntry.group || "process").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || "process";
       processGroups[group] = Number(processGroups[group] || 0) + 1;
     }
     return {

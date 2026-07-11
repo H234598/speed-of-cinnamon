@@ -2368,6 +2368,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("error_counts: errorCounts", source)
         self.assertIn("disabled_groups: disabledGroups", source)
         self.assertIn("process_groups: processGroups", source)
+        self.assertIn("let processEntry = registry.processes[token];", source)
+        self.assertIn('if (!processEntry || typeof processEntry !== "object")', source)
         self.assertIn("_settingsSnapshotInputOption: function(includeLifecycle)", source)
         self.assertIn("_settingsSnapshotInputOptionOrNull: function(includeLifecycle, errorStatus)", source)
         self.assertIn('snapshot["applet-lifecycle"] = this._appletLifecycleDiagnostics();', source)
