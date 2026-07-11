@@ -2212,6 +2212,7 @@ class AppletStaticTest(unittest.TestCase):
             start = source.index(method)
             end = source.index(next_method, start)
             block = source[start:end]
+            self.assertIn("if (this.setupDiagnosticsToken)", block)
             self.assertIn("let actionToken = {};", block)
             self.assertIn("this.setupDiagnosticsToken = actionToken;", block)
             self.assertIn("this.setupDiagnosticsToken !== actionToken", block)
