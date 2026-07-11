@@ -5227,6 +5227,9 @@ MyApplet.prototype = {
   },
 
   _activateOllamaTextModelFlow: function() {
+    if (this._hasActiveRecordingState()) {
+      return;
+    }
     if (this.ollamaModelFlowToken) {
       return;
     }
@@ -5365,6 +5368,9 @@ MyApplet.prototype = {
   },
 
   _chooseOllamaTextModel: function() {
+    if (this._hasActiveRecordingState()) {
+      return;
+    }
     if (this.ollamaModelFlowToken) {
       return;
     }
@@ -5484,6 +5490,10 @@ MyApplet.prototype = {
 
   _installOllamaTextModel: function(model) {
     let flowToken = this.ollamaModelFlowToken;
+    if (this._hasActiveRecordingState()) {
+      this._clearOllamaModelFlow(flowToken);
+      return;
+    }
     if (this.isCommandRunning) {
       this._clearOllamaModelFlow(flowToken);
       this._setStatus("error", _("Another command is already running"), this.lastTranscript);

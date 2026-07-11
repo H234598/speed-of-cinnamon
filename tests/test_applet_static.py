@@ -1898,6 +1898,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn('String(payload.error), true)', source)
         self.assertIn('this._notify(_("Ollama model installed"), installedModel, false)', source)
 
+    def test_ollama_model_actions_preserve_active_recording_state(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method in [
+            ("_activateOllamaTextModelFlow: function()", "\n  _ollamaModelPromptArgs:"),
+            ("_chooseOllamaTextModel: function()", "\n  _promptChooseOllamaTextModel:"),
+            ("_installOllamaTextModel: function(model)", "\n  _refreshHistory:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn("this._hasActiveRecordingState()", block)
+            self.assertIn("return;", block)
+
     def test_text_model_requests_preflight_urls_before_flow_tokens(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
