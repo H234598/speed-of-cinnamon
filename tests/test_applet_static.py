@@ -1365,7 +1365,7 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         self.assertIn("let name;", block)
         self.assertIn("name = this._coerceCliTextArg(model.name.trim(), \"ollama model\");", block)
-        self.assertIn("global.logError(err);", block)
+        self.assertIn("this._safeLogError(err);", block)
         self.assertIn("continue;", block)
         self.assertIn('"ollama model details"', block)
 

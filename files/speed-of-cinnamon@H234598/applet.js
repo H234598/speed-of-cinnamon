@@ -470,6 +470,14 @@ MyApplet.prototype = {
     }
   },
 
+  _safeLogError: function(error) {
+    try {
+      global.logError(error);
+    } catch (ignored) {
+      // Best-effort diagnostics must never escape a recovery path.
+    }
+  },
+
   _recordLifecycleError: function(group, error) {
     let key = String(group || "unknown");
     let now = Date.now();
@@ -1763,7 +1771,7 @@ MyApplet.prototype = {
         }
       }
     } catch (err) {
-      global.logError(err);
+      this._safeLogError(err);
     }
     return item;
   },
@@ -3407,7 +3415,7 @@ MyApplet.prototype = {
     try {
       Extension.reloadExtension(UUID, Extension.Type.APPLET);
     } catch (err) {
-      global.logError(err);
+      this._safeLogError(err);
       this._setStatusPreservingRecording("error", _("Could not restart applet"), this.lastTranscript);
     }
   },
@@ -3731,7 +3739,7 @@ MyApplet.prototype = {
       Gio.AppInfo.launch_default_for_uri(uri, null);
       this._setStatusPreservingRecording("ready", successMessage, this.lastTranscript);
     } catch (err) {
-      global.logError(err);
+      this._safeLogError(err);
       this._setStatusPreservingRecording("error", _("Could not open link"), this.lastTranscript);
     }
   },
@@ -3744,7 +3752,7 @@ MyApplet.prototype = {
       }
       this._openUri(GLib.filename_to_uri(path, null), successMessage);
     } catch (err) {
-      global.logError(err);
+      this._safeLogError(err);
       this._setStatusPreservingRecording("error", _("Could not open folder"), this.lastTranscript);
     }
   },
@@ -3756,7 +3764,7 @@ MyApplet.prototype = {
       }
       this._openUri(GLib.filename_to_uri(path, null), successMessage);
     } catch (err) {
-      global.logError(err);
+      this._safeLogError(err);
       this._setStatusPreservingRecording("error", _("Could not open file"), this.lastTranscript);
     }
   },
@@ -4069,7 +4077,7 @@ MyApplet.prototype = {
     } catch (err) {
       this.terminalWorkflowRunning = false;
       this.terminalWorkflowToken = null;
-      global.logError(err);
+      this._safeLogError(err);
       let safeError = this._sanitizeErrorMessage(String(err));
       this._setStatus("error", _("Could not open terminal: ") + safeError, this.lastTranscript);
       this._notify(_("Could not open terminal"), safeError, true);
@@ -4139,7 +4147,7 @@ MyApplet.prototype = {
     try {
       opened = this._runTerminalWorkflow(_("Install Ollama"), this._installOllamaRuntimeCommand(), _("Ollama install terminal opened"), continueOllamaFlow, ollamaFlowToken);
     } catch (err) {
-      global.logError(err);
+      this._safeLogError(err);
       let safeError = this._sanitizeErrorMessage(String(err));
       this._setStatus("error", _("Could not start install terminal: ") + safeError, this.lastTranscript);
       this._notify(_("Could not start install terminal"), safeError, true);
@@ -4164,7 +4172,7 @@ MyApplet.prototype = {
     try {
       this._runTerminalWorkflow(_("Uninstall Ollama"), this._uninstallOllamaRuntimeCommand(), _("Ollama uninstall terminal opened"));
     } catch (err) {
-      global.logError(err);
+      this._safeLogError(err);
       let safeError = this._sanitizeErrorMessage(String(err));
       this._setStatus("error", _("Could not start uninstall terminal: ") + safeError, this.lastTranscript);
       this._notify(_("Could not start uninstall terminal"), safeError, true);
@@ -4177,7 +4185,7 @@ MyApplet.prototype = {
     try {
       this._runTerminalWorkflow(_("Speed of Cinnamon basic setup"), this._basicSetupCommand(), _("Basic setup terminal opened"));
     } catch (err) {
-      global.logError(err);
+      this._safeLogError(err);
       let safeError = this._sanitizeErrorMessage(String(err));
       this._setStatus("error", _("Could not start setup terminal: ") + safeError, this.lastTranscript);
       this._notify(_("Could not start setup terminal"), safeError, true);
@@ -4375,7 +4383,7 @@ MyApplet.prototype = {
     try {
       id = this._coerceCliTextArg(alarm.id, "alarm id").trim();
     } catch (err) {
-      global.logError(err);
+      this._safeLogError(err);
       return;
     }
     if (id === "") {
@@ -4646,7 +4654,7 @@ MyApplet.prototype = {
       try {
         sourceName = this._coerceCliTextArg(source.name, "input source");
       } catch (err) {
-        global.logError(err);
+        this._safeLogError(err);
         continue;
       }
       if (sourceName.trim() === "") {
@@ -5363,7 +5371,7 @@ MyApplet.prototype = {
     try {
       this._writeExternalApiEnvFileContents(path, this._externalApiEnvContent());
     } catch (err) {
-      global.logError(err);
+      this._safeLogError(err);
       this._setStatusPreservingRecording("error", _("External API config file could not be written"), this.lastTranscript);
       return false;
     }
@@ -5404,7 +5412,7 @@ MyApplet.prototype = {
     try {
       this.settings.setValue("openai-compatible-api-key", "");
     } catch (err) {
-      global.logError(err);
+      this._safeLogError(err);
     }
   },
 
@@ -5418,7 +5426,7 @@ MyApplet.prototype = {
         this._migrateExternalApiEnvFile(path);
       }
     } catch (err) {
-      global.logError(err);
+      this._safeLogError(err);
       this._setStatusPreservingRecording("error", _("External API config file could not be written"), this.lastTranscript);
     }
     return path;
@@ -5429,7 +5437,7 @@ MyApplet.prototype = {
     try {
       text = this._readExternalApiEnvFile(path);
     } catch (err) {
-      global.logError(err);
+      this._safeLogError(err);
       return;
     }
     if (text === "") {
@@ -5454,7 +5462,7 @@ MyApplet.prototype = {
       try {
         this._writeExternalApiEnvFileContents(path, migrated);
       } catch (err) {
-        global.logError(err);
+        this._safeLogError(err);
         this._setStatusPreservingRecording("error", _("External API config file could not be written"), this.lastTranscript);
       }
     }
@@ -5487,7 +5495,7 @@ MyApplet.prototype = {
     try {
       text = this._readExternalApiEnvFile(path);
     } catch (err) {
-      global.logError(err);
+      this._safeLogError(err);
       return false;
     }
     if (text === "") {
@@ -5503,7 +5511,7 @@ MyApplet.prototype = {
         apiKey: values.OPENAI_COMPATIBLE_API_KEY || "",
       });
     } catch (err) {
-      global.logError(err);
+      this._safeLogError(err);
       this._setStatusPreservingRecording("error", _("External API config contains invalid values"), this.lastTranscript);
       return false;
     }
@@ -5570,7 +5578,7 @@ MyApplet.prototype = {
       }
     } catch (err) {
       this._clearExternalApiEnvMonitor();
-      global.logError(err);
+      this._safeLogError(err);
     }
   },
 
@@ -6011,7 +6019,7 @@ MyApplet.prototype = {
       try {
         name = this._coerceCliTextArg(model.name.trim(), "ollama model");
       } catch (err) {
-        global.logError(err);
+        this._safeLogError(err);
         continue;
       }
       if (name.trim() === "") {
@@ -6033,7 +6041,7 @@ MyApplet.prototype = {
           : (typeof model.size_label === "string" ? model.size_label : "");
         details = this._coerceCliTextArg(detailsValue.trim(), "ollama model details").trim();
       } catch (err) {
-        global.logError(err);
+        this._safeLogError(err);
       }
       let label = details ? name + " (" + details + ")" : name;
       if (utf8ByteLength(label) > MAX_CLI_ARG_BYTES) {
@@ -7037,7 +7045,7 @@ MyApplet.prototype = {
     try {
       return this._coerceCliTextArg(value, IMPORT_TEXT_SETTINGS[key]);
     } catch (err) {
-      global.logError(err);
+      this._safeLogError(err);
       return fallback;
     }
   },
@@ -9983,7 +9991,7 @@ MyApplet.prototype = {
         Main.notify(title, safeBody);
       }
     } catch (err) {
-      global.logError(err);
+      this._safeLogError(err);
     }
   },
 
