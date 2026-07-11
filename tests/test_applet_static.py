@@ -2505,6 +2505,24 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("try {\n        let applied = this._applyImportedSettings(payload.settings || {});", import_block)
         self.assertIn('this._setStatus("error", _("Could not apply imported settings: ") + safeError', import_block)
 
+    def test_settings_transfers_release_tokens_when_argument_building_fails(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        export_start = source.index("_exportSettings: function()")
+        export_end = source.index("\n  _importSettings:", export_start)
+        export_block = source[export_start:export_end]
+        import_start = source.index("_importSettings: function()")
+        import_end = source.index("\n  _applyImportedSettings:", import_start)
+        import_block = source[import_start:import_end]
+
+        self.assertIn("try {\n      exportArgs = this._settingsExportArgs();", export_block)
+        self.assertIn("this._spawnJson(exportArgs,", export_block)
+        self.assertIn("try {\n      importArgs = this._settingsImportArgs();", import_block)
+        self.assertIn("this._spawnJson(importArgs,", import_block)
+        for block in (export_block, import_block):
+            self.assertIn("if (this.settingsTransferToken === transferToken) {", block)
+            self.assertIn("this.settingsTransferToken = null;", block)
+            self.assertIn('this._recordLifecycleError("settings-transfer", error);', block)
+
     def test_setup_and_diagnostics_actions_ignore_stale_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

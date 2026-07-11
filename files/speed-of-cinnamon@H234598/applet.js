@@ -6252,7 +6252,18 @@ MyApplet.prototype = {
     let transferToken = {};
     this.settingsTransferToken = transferToken;
     this._setStatus("processing", _("Exporting settings..."), this.lastTranscript);
-    this._spawnJson(this._settingsExportArgs(), (payload) => {
+    let exportArgs;
+    try {
+      exportArgs = this._settingsExportArgs();
+    } catch (error) {
+      if (this.settingsTransferToken === transferToken) {
+        this.settingsTransferToken = null;
+      }
+      this._recordLifecycleError("settings-transfer", error);
+      this._setStatus("error", _("Could not prepare settings export"), this.lastTranscript);
+      return;
+    }
+    this._spawnJson(exportArgs, (payload) => {
       if (this.settingsTransferToken !== transferToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -6273,7 +6284,18 @@ MyApplet.prototype = {
     let transferToken = {};
     this.settingsTransferToken = transferToken;
     this._setStatus("processing", _("Importing settings..."), this.lastTranscript);
-    this._spawnJson(this._settingsImportArgs(), (payload) => {
+    let importArgs;
+    try {
+      importArgs = this._settingsImportArgs();
+    } catch (error) {
+      if (this.settingsTransferToken === transferToken) {
+        this.settingsTransferToken = null;
+      }
+      this._recordLifecycleError("settings-transfer", error);
+      this._setStatus("error", _("Could not prepare settings import"), this.lastTranscript);
+      return;
+    }
+    this._spawnJson(importArgs, (payload) => {
       if (this.settingsTransferToken !== transferToken || !this._lifecycleAllowsWork()) {
         return;
       }
