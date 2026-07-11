@@ -897,6 +897,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('typeof source.description === "string"', block)
         self.assertIn("let label = description || sourceName;", block)
 
+    def test_redacted_history_entries_disable_plaintext_actions(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_populateHistoryMenu: function(transcripts)")
+        end = source.index("\n  _copyHistoryTranscript:", start)
+        block = source[start:end]
+        self.assertIn('typeof transcript.text === "string"', block)
+        self.assertIn("let hasTranscriptText = transcriptText !== \"\" && !this._isEmptyTranscriptText(transcriptText);", block)
+        self.assertIn("insertItem.setSensitive(hasTranscriptText);", block)
+        self.assertIn("copyItem.setSensitive(hasTranscriptText);", block)
+        self.assertIn("Transcript content hidden; use List all Transcripts", block)
+
     def test_invalid_ollama_model_input_cannot_stick_command_running_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
@@ -2590,11 +2602,14 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._notify(_("Speed of Cinnamon transcript export"), message, false);', source)
         self.assertNotIn('this._openFile(path, _("Opened transcript document: ") + String(payload.transcripts || 0));', source)
         self.assertIn("let entry = new PopupMenu.PopupSubMenuMenuItem(label)", source)
-        self.assertIn('let label = this._shortMenuText(String(transcript.preview || transcript.name || _("Transcript")), 80);', source)
+        self.assertIn('let transcriptText = typeof transcript.text === "string" ? transcript.text : "";', source)
+        self.assertIn('let label = this._shortMenuText(preview || name || _("Transcript"), 80);', source)
         self.assertIn('new PopupMenu.PopupIconMenuItem(_("Insert transcript"), "edit-paste-symbolic"', source)
-        self.assertIn("this._connectSafe(insertItem, \"activate\", () => this._insertHistoryTranscript(transcript.text || \"\"))", source)
+        self.assertIn("insertItem.setSensitive(hasTranscriptText);", source)
+        self.assertIn("this._connectSafe(insertItem, \"activate\", () => this._insertHistoryTranscript(transcriptText))", source)
         self.assertIn('new PopupMenu.PopupIconMenuItem(_("Copy transcript"), "edit-copy-symbolic"', source)
-        self.assertIn("this._connectSafe(copyItem, \"activate\", () => this._copyHistoryTranscript(transcript.text || \"\"))", source)
+        self.assertIn("copyItem.setSensitive(hasTranscriptText);", source)
+        self.assertIn("this._connectSafe(copyItem, \"activate\", () => this._copyHistoryTranscript(transcriptText))", source)
         self.assertIn("_insertHistoryTranscript: function(text)", source)
         self.assertIn("this._insertTranscriptText(text);", source)
         self.assertIn("this._preparedTranscriptText(text, true)", source)

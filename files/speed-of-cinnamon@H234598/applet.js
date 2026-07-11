@@ -8021,17 +8021,26 @@ MyApplet.prototype = {
       if (!transcript || typeof transcript !== "object") {
         continue;
       }
-      let label = this._shortMenuText(String(transcript.preview || transcript.name || _("Transcript")), 80);
+      let preview = typeof transcript.preview === "string" ? transcript.preview.trim() : "";
+      let name = typeof transcript.name === "string" ? transcript.name.trim() : "";
+      let transcriptText = typeof transcript.text === "string" ? transcript.text : "";
+      let hasTranscriptText = transcriptText !== "" && !this._isEmptyTranscriptText(transcriptText);
+      let label = this._shortMenuText(preview || name || _("Transcript"), 80);
       let entry = new PopupMenu.PopupSubMenuMenuItem(label);
       this.historyItem.menu.addMenuItem(entry);
 
       let insertItem = new PopupMenu.PopupIconMenuItem(_("Insert transcript"), "edit-paste-symbolic", St.IconType.SYMBOLIC);
-      this._connectSafe(insertItem, "activate", () => this._insertHistoryTranscript(transcript.text || ""));
+      insertItem.setSensitive(hasTranscriptText);
+      this._connectSafe(insertItem, "activate", () => this._insertHistoryTranscript(transcriptText));
       entry.menu.addMenuItem(insertItem);
 
       let copyItem = new PopupMenu.PopupIconMenuItem(_("Copy transcript"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
-      this._connectSafe(copyItem, "activate", () => this._copyHistoryTranscript(transcript.text || ""));
+      copyItem.setSensitive(hasTranscriptText);
+      this._connectSafe(copyItem, "activate", () => this._copyHistoryTranscript(transcriptText));
       entry.menu.addMenuItem(copyItem);
+      if (!hasTranscriptText) {
+        entry.menu.addMenuItem(this._selectionInfoItem(_("Transcript content hidden; use List all Transcripts")));
+      }
     }
   },
 
