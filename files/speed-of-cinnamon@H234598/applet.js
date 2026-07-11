@@ -878,44 +878,69 @@ MyApplet.prototype = {
   },
 
   _destroyMenus: function() {
-    let menus = [this.menu, this._applet_context_menu];
-    for (let menu of menus) {
-      this._runTeardownGuarded("teardown-menu-signals", () => {
-        if (menu && menu.disconnectAllSignals) {
+    let cleanupMenu = (menu, group) => {
+      if (!menu) {
+        return true;
+      }
+      let signalsSucceeded = false;
+      this._runTeardownGuarded("teardown-" + group + "-signals", () => {
+        if (menu.disconnectAllSignals) {
           menu.disconnectAllSignals();
         }
+        signalsSucceeded = true;
       });
-    }
-    for (let menu of menus) {
-      this._runTeardownGuarded("teardown-menu-close", () => {
-        if (menu && menu.close) {
+      let closeSucceeded = false;
+      this._runTeardownGuarded("teardown-" + group + "-close", () => {
+        if (menu.close) {
           menu.close(false);
         }
+        closeSucceeded = true;
       });
-    }
-    for (let menu of menus) {
-      this._runTeardownGuarded("teardown-menu-destroy", () => {
-        if (menu && menu.destroy) {
+      let destroySucceeded = false;
+      this._runTeardownGuarded("teardown-" + group + "-destroy", () => {
+        if (menu.destroy) {
           menu.destroy();
         }
+        destroySucceeded = true;
       });
+      return signalsSucceeded && closeSucceeded && destroySucceeded;
+    };
+    let menu = this.menu;
+    if (cleanupMenu(menu, "menu")) {
+      this.menu = null;
     }
-    for (let manager of [this.menuManager, this._menuManager]) {
-      this._runTeardownGuarded("teardown-menu-manager-signals", () => {
-        if (manager && manager.disconnectAllSignals) {
+    let contextMenu = this._applet_context_menu;
+    if (cleanupMenu(contextMenu, "context-menu")) {
+      this._applet_context_menu = null;
+    }
+    let cleanupManager = (manager, group) => {
+      if (!manager) {
+        return true;
+      }
+      let signalsSucceeded = false;
+      this._runTeardownGuarded("teardown-" + group + "-signals", () => {
+        if (manager.disconnectAllSignals) {
           manager.disconnectAllSignals();
         }
+        signalsSucceeded = true;
       });
-      this._runTeardownGuarded("teardown-menu-manager", () => {
-        if (manager && manager.destroy) {
+      let destroySucceeded = false;
+      this._runTeardownGuarded("teardown-" + group + "-destroy", () => {
+        if (manager.destroy) {
           manager.destroy();
         }
+        destroySucceeded = true;
       });
+      return signalsSucceeded && destroySucceeded;
+    };
+    let menuManager = this.menuManager;
+    if (cleanupManager(menuManager, "menu-manager")) {
+      this.menuManager = null;
     }
-    this.menu = null;
-    this.menuManager = null;
-    this._applet_context_menu = null;
-    this._menuManager = null;
+    let privateMenuManager = this._menuManager;
+    if (cleanupManager(privateMenuManager, "private-menu-manager")) {
+      this._menuManager = null;
+    }
   },
 
   _destroyAppletTooltip: function() {

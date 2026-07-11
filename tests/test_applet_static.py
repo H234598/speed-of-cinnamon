@@ -1720,6 +1720,20 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (closeSucceeded && destroySucceeded)", block)
         self.assertIn("this._untrackDialog(dialog);", block)
 
+    def test_menu_teardown_retains_handles_after_cleanup_failures(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_destroyMenus: function()")
+        end = source.index("\n  _destroyAppletTooltip:", start)
+        block = source[start:end]
+        self.assertIn("let cleanupMenu = (menu, group) => {", block)
+        self.assertIn("let signalsSucceeded = false;", block)
+        self.assertIn("let closeSucceeded = false;", block)
+        self.assertIn("let destroySucceeded = false;", block)
+        self.assertIn("return signalsSucceeded && closeSucceeded && destroySucceeded;", block)
+        self.assertIn("if (cleanupMenu(menu, \"menu\"))", block)
+        self.assertIn("if (cleanupMenu(contextMenu, \"context-menu\"))", block)
+        self.assertIn("let cleanupManager = (manager, group) => {", block)
+
     def test_hotkey_mutations_are_not_suppressed_by_disabled_error_groups(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_registerHotkey: function(id, binding, callback)")
