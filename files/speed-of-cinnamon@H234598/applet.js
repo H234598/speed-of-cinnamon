@@ -4920,6 +4920,9 @@ MyApplet.prototype = {
     if (!this._canMutateMenu(this.textModelItem)) {
       return;
     }
+    if (this.textModelMenuRefreshToken && !backendOverride) {
+      return;
+    }
     this.textModelMenuRefreshToken = null;
     let textModelArgs = this._tryTextModelsArgs(backendOverride);
     if (!textModelArgs) {
@@ -4937,6 +4940,7 @@ MyApplet.prototype = {
       if (this.textModelMenuRefreshToken !== refreshToken || !this._canMutateMenu(this.textModelItem)) {
         return;
       }
+      this.textModelMenuRefreshToken = null;
       if (payload.error) {
         this._populateTextModelMenu([], this._sanitizeErrorMessage(payload.error), provider);
         return;

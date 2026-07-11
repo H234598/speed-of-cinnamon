@@ -1896,6 +1896,8 @@ class AppletStaticTest(unittest.TestCase):
         refresh_start = source.index("_refreshTextModelMenuForBackend: function(backendOverride)")
         refresh_end = source.index("\n  _populateTextModelMenu:", refresh_start)
         refresh_block = source[refresh_start:refresh_end]
+        self.assertIn("if (this.textModelMenuRefreshToken && !backendOverride)", refresh_block)
+        self.assertLess(refresh_block.index("if (this.textModelMenuRefreshToken && !backendOverride)"), refresh_block.index("let refreshToken = {};"))
         self.assertIn("this.textModelMenuRefreshToken = null;", refresh_block)
         self.assertLess(refresh_block.index("this.textModelMenuRefreshToken = null;"), refresh_block.index("this._tryTextModelsArgs"))
 
