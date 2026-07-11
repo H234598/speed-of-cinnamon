@@ -6245,22 +6245,27 @@ MyApplet.prototype = {
   },
 
   _artifactEncryptionWarningKey: function(payload) {
-    if (!payload) {
-      return "";
-    }
-    let marker = "";
-    for (let value of [payload.transcript_path, payload.audio_path, payload.audio, payload.stopped_at, payload.started_at]) {
-      if (typeof value === "string" && value.trim() !== "") {
-        marker = value.trim();
-        break;
-      }
-    }
+    let marker = this._payloadStringMarker(payload, ["transcript_path", "audio_path", "audio", "stopped_at", "started_at"], "");
     if (marker === "") {
-      marker = typeof payload.status === "string" && payload.status.trim() !== ""
-        ? payload.status.trim()
-        : "done";
+      marker = this._payloadStringMarker(payload, ["status"], "done");
     }
     return marker;
+  },
+
+  _payloadStringMarker: function(payload, keys, fallback) {
+    if (!payload || typeof payload !== "object" || !Array.isArray(keys)) {
+      return typeof fallback === "string" ? fallback : "";
+    }
+    for (let key of keys) {
+      if (typeof key !== "string") {
+        continue;
+      }
+      let value = payload[key];
+      if (typeof value === "string" && value.trim() !== "") {
+        return value.trim();
+      }
+    }
+    return typeof fallback === "string" ? fallback : "";
   },
 
   _isRejectedArtifactPassphraseError: function(message) {
@@ -6404,7 +6409,7 @@ MyApplet.prototype = {
     if (status !== "recorded") {
       return;
     }
-    let recordingKey = String(payload.audio_path || payload.audio || "recorded");
+    let recordingKey = this._payloadStringMarker(payload, ["audio_path", "audio"], "recorded");
     if (this.autoTranscribeRecordingKey === recordingKey) {
       return;
     }
@@ -7748,13 +7753,7 @@ MyApplet.prototype = {
     if (this.autoRelistenPending || !this.autoRelisten || !this.notificationSessionActive) {
       return;
     }
-    let marker = "done";
-    if (payload) {
-      marker = String(payload.audio_path || payload.audio || payload.transcript_path || payload.stopped_at || payload.started_at || "done");
-    }
-    if (marker === "") {
-      marker = "done";
-    }
+    let marker = this._payloadStringMarker(payload, ["audio_path", "audio", "transcript_path", "stopped_at", "started_at"], "done");
     this.autoRelistenSequence += 1;
     this.autoRelistenPending = true;
     this.autoRelistenPendingToken = String(this.autoRelistenSequence) + ":done:" + marker;
@@ -7794,10 +7793,10 @@ MyApplet.prototype = {
 
   _autoInsertFingerprint: function(payload, transcript) {
     let rawTranscript = String(transcript || "");
-    let marker = String(payload.audio_path || payload.audio || payload.transcript_path || "");
+    let marker = this._payloadStringMarker(payload, ["audio_path", "audio", "transcript_path"], "");
     let digest = this._transcriptDigest(rawTranscript);
     if (marker === "") {
-      marker = String(payload.started_at || payload.stopped_at || "");
+      marker = this._payloadStringMarker(payload, ["started_at", "stopped_at"], "");
     }
     if (marker === "") {
       return "len:" + String(rawTranscript.length) + ":" + digest;
