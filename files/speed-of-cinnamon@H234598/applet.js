@@ -3779,6 +3779,9 @@ MyApplet.prototype = {
   },
 
   _setAlarmEnabled: function(id, enabled) {
+    if (this.alarmActionToken) {
+      return;
+    }
     let actionToken = {};
     this.alarmActionToken = actionToken;
     this._setAlarmOptionStatus(enabled ? _("Enabling alarm...") : _("Disabling alarm..."));
@@ -3798,6 +3801,9 @@ MyApplet.prototype = {
   },
 
   _removeAlarm: function(id) {
+    if (this.alarmActionToken) {
+      return;
+    }
     let actionToken = {};
     this.alarmActionToken = actionToken;
     this._setAlarmOptionStatus(_("Removing alarm..."));

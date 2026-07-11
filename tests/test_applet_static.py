@@ -694,6 +694,20 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let checkToken = {};", block)
         self.assertLess(block.index("if (this.alarmCheckToken)"), block.index("let checkToken = {};"))
 
+    def test_alarm_actions_do_not_spawn_concurrent_backend_processes(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        for method, next_method, token in [
+            ("_setAlarmEnabled: function(id, enabled)", "\n  _removeAlarm:", "this.alarmActionToken"),
+            ("_removeAlarm: function(id)", "\n  _checkAlarms:", "this.alarmActionToken"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn(f"if ({token})", block)
+            self.assertIn("let actionToken = {};", block)
+            self.assertLess(block.index(f"if ({token})"), block.index("let actionToken = {};"))
+
     def test_menu_payload_arrays_and_entries_are_shape_safe(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
