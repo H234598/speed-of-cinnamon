@@ -779,7 +779,9 @@ class AppletStaticTest(unittest.TestCase):
         usable_end = source.index("\n  _addModelMenuEntry:", usable_start)
         usable_block = source[usable_start:usable_end]
         self.assertIn("model.downloaded === true", usable_block)
-        self.assertIn('backend === "whisper-cpp" || backend === "faster-whisper"', usable_block)
+        self.assertIn('let expectedBackend = modelFormat === "ggml"', usable_block)
+        self.assertIn('modelFormat === "ctranslate2"', usable_block)
+        self.assertIn("backend === expectedBackend", usable_block)
         self.assertIn("this._modelPathFromPayload(model)", usable_block)
 
         select_start = source.index("_selectVoiceModel: function(model)")

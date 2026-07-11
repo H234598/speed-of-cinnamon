@@ -3945,9 +3945,15 @@ MyApplet.prototype = {
   _isUsableVoiceModelPayload: function(model) {
     let backend = model && typeof model.backend === "string" ? model.backend.trim() : "";
     let name = model && typeof model.name === "string" ? model.name.trim() : "";
+    let modelFormat = model && typeof model.model_format === "string" ? model.model_format.trim().toLowerCase() : "";
+    let expectedBackend = modelFormat === "ggml"
+      ? "whisper-cpp"
+      : modelFormat === "ctranslate2"
+        ? "faster-whisper"
+        : "";
     return Boolean(model && typeof model === "object" && model.downloaded === true && name !== "" &&
       this._modelPathFromPayload(model) !== "" &&
-      (backend === "whisper-cpp" || backend === "faster-whisper"));
+      backend === expectedBackend);
   },
 
   _addModelMenuEntry: function(model, parentMenu) {
