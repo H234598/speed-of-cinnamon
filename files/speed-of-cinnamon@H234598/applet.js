@@ -6280,9 +6280,9 @@ MyApplet.prototype = {
       return;
     }
     let safeLevel = Object.assign({}, level);
-    if (safeLevel.detail !== undefined && safeLevel.detail !== null) {
-      safeLevel.detail = this._shortMenuText(this._sanitizeErrorMessage(safeLevel.detail), 160);
-    }
+    safeLevel.detail = typeof safeLevel.detail === "string"
+      ? this._shortMenuText(this._sanitizeErrorMessage(safeLevel.detail), 160)
+      : "";
     this.microphoneLevel = safeLevel;
   },
 
