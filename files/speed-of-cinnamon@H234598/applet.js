@@ -7777,7 +7777,7 @@ MyApplet.prototype = {
           this._setStatus("done", _("Copied and pasted into target window"), transcript);
         }
         completeOnce(completed === true);
-      })) {
+      }, isCurrentOperation)) {
         this._setStatus("error", _("Copied to clipboard; automatic paste command could not be started"), transcript);
         completeOnce(false);
       }
@@ -7869,7 +7869,12 @@ MyApplet.prototype = {
     }
   },
 
-  _pasteClipboardAfterFocus: function(sendEnter, expectedClipboardText, completionCallback) {
+  _pasteClipboardAfterFocus: function(sendEnter, expectedClipboardText, completionCallback, operationGuard) {
+    let isCurrentOperation = typeof operationGuard === "function" ? operationGuard : function() { return true; };
+    if (!isCurrentOperation()) {
+      if (typeof completionCallback === "function") completionCallback(false);
+      return false;
+    }
     let terminalPaste = this._isTerminalTargetWindow();
     let expectedTargetWindow = this._targetXWindowSnapshot();
     if (!expectedTargetWindow) {
@@ -7897,10 +7902,15 @@ MyApplet.prototype = {
     if (!args) {
       return false;
     }
-    return this._spawnKeyboardAfterFocus(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback);
+    return this._spawnKeyboardAfterFocus(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, isCurrentOperation);
   },
 
-  _typeTextAfterFocus: function(text, completionCallback) {
+  _typeTextAfterFocus: function(text, completionCallback, operationGuard) {
+    let isCurrentOperation = typeof operationGuard === "function" ? operationGuard : function() { return true; };
+    if (!isCurrentOperation()) {
+      if (typeof completionCallback === "function") completionCallback(false);
+      return false;
+    }
     let delay = this._normalizeTypingDelayMs(this.typingDelayMs);
     let typedText = this._coerceTypeText(text);
     if (typedText === null) {
@@ -7915,7 +7925,7 @@ MyApplet.prototype = {
       this._setStatus("error", _("Target window unavailable for direct typing"), this.lastTranscript);
       return false;
     }
-    return this._spawnKeyboardAfterFocus([xdotool, "type", "--clearmodifiers", "--delay", String(delay), "--", typedText], null, null, expectedTargetWindow, completionCallback);
+    return this._spawnKeyboardAfterFocus([xdotool, "type", "--clearmodifiers", "--delay", String(delay), "--", typedText], null, null, expectedTargetWindow, completionCallback, isCurrentOperation);
   },
 
   _coerceTypeText: function(text) {
@@ -7934,7 +7944,8 @@ MyApplet.prototype = {
     return value;
   },
 
-  _spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback) {
+  _spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, operationGuard) {
+    let isCurrentOperation = typeof operationGuard === "function" ? operationGuard : function() { return true; };
     this._clearPasteTimer();
     let completed = false;
     let complete = (result) => {
@@ -7946,16 +7957,16 @@ MyApplet.prototype = {
         completionCallback(result === true);
       }
     };
-    if (this.appletRemoved) {
+    if (this.appletRemoved || !isCurrentOperation()) {
       complete(false);
       return false;
     }
     if (!this._scheduleTrackedTimer("paste", PASTE_FOCUS_DELAY_MS, () => {
-      if (this.appletRemoved) {
+      if (this.appletRemoved || !isCurrentOperation()) {
         complete(false);
         return false;
       }
-      this._spawnKeyboardWhenClipboardReady(args, followUpArgs, expectedClipboardText, Date.now() + CLIPBOARD_READY_TIMEOUT_MS, expectedTargetWindow, complete);
+      this._spawnKeyboardWhenClipboardReady(args, followUpArgs, expectedClipboardText, Date.now() + CLIPBOARD_READY_TIMEOUT_MS, expectedTargetWindow, complete, isCurrentOperation);
       return false;
     }, false, "pasteTimer")) {
       this._setStatus("error", _("Keyboard insert failed: timer could not be scheduled"), this.lastTranscript);
@@ -7965,27 +7976,28 @@ MyApplet.prototype = {
     return true;
   },
 
-  _spawnKeyboardWhenClipboardReady: function(args, followUpArgs, expectedClipboardText, deadlineMs, expectedTargetWindow, completionCallback) {
-    if (!this._lifecycleAllowsWork() ||
+  _spawnKeyboardWhenClipboardReady: function(args, followUpArgs, expectedClipboardText, deadlineMs, expectedTargetWindow, completionCallback, operationGuard) {
+    let isCurrentOperation = typeof operationGuard === "function" ? operationGuard : function() { return true; };
+    if (!isCurrentOperation() || !this._lifecycleAllowsWork() ||
       (expectedClipboardText !== undefined && expectedClipboardText !== null && (!this.clipboard || !this.clipboard.get_text))) {
       if (typeof completionCallback === "function") completionCallback(false);
       return;
     }
     if (expectedClipboardText === undefined || expectedClipboardText === null) {
-      this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow, null, null, completionCallback);
+      this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow, null, null, completionCallback, isCurrentOperation);
       return;
     }
     let expected = String(expectedClipboardText);
     try {
       this.clipboard.get_text(St.ClipboardType.CLIPBOARD, this._guardCallback("clipboard-read", (clipboard, clipboardText) => {
-        if (this.appletRemoved) {
+        if (this.appletRemoved || !isCurrentOperation()) {
           if (typeof completionCallback === "function") {
             completionCallback(false);
           }
           return;
         }
         if (String(clipboardText || "") === expected) {
-          this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow, expected, deadlineMs, completionCallback);
+          this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow, expected, deadlineMs, completionCallback, isCurrentOperation);
           return;
         }
         if (Date.now() >= deadlineMs) {
@@ -7996,13 +8008,13 @@ MyApplet.prototype = {
           return;
         }
         if (!this._scheduleTrackedTimer("paste", CLIPBOARD_READY_RETRY_MS, () => {
-          if (this.appletRemoved) {
+          if (this.appletRemoved || !isCurrentOperation()) {
             if (typeof completionCallback === "function") {
               completionCallback(false);
             }
             return false;
           }
-          this._spawnKeyboardWhenClipboardReady(args, followUpArgs, expected, deadlineMs, expectedTargetWindow, completionCallback);
+          this._spawnKeyboardWhenClipboardReady(args, followUpArgs, expected, deadlineMs, expectedTargetWindow, completionCallback, isCurrentOperation);
           return false;
         }, false, "pasteTimer")) {
           this._setStatus("error", _("Keyboard insert failed: retry timer could not be scheduled"), this.lastTranscript);
@@ -8055,8 +8067,9 @@ MyApplet.prototype = {
     }
   },
 
-  _spawnKeyboardArgs: function(args, followUpArgs, expectedTargetWindow, expectedClipboardText, expectedClipboardDeadlineMs, completionCallback) {
-    if (!this._lifecycleAllowsWork() ||
+  _spawnKeyboardArgs: function(args, followUpArgs, expectedTargetWindow, expectedClipboardText, expectedClipboardDeadlineMs, completionCallback, operationGuard) {
+    let isCurrentOperation = typeof operationGuard === "function" ? operationGuard : function() { return true; };
+    if (!isCurrentOperation() || !this._lifecycleAllowsWork() ||
       (expectedClipboardText !== undefined && expectedClipboardText !== null && (!this.clipboard || !this.clipboard.get_text))) {
       if (typeof completionCallback === "function") completionCallback(false);
       return;
@@ -8065,7 +8078,7 @@ MyApplet.prototype = {
       let expected = String(expectedClipboardText);
       try {
         this.clipboard.get_text(St.ClipboardType.CLIPBOARD, this._guardCallback("clipboard-read", (clipboard, clipboardText) => {
-          if (this.appletRemoved) {
+          if (this.appletRemoved || !isCurrentOperation()) {
             if (typeof completionCallback === "function") {
               completionCallback(false);
             }
@@ -8080,13 +8093,13 @@ MyApplet.prototype = {
               return;
             }
             if (!this._scheduleTrackedTimer("paste", CLIPBOARD_READY_RETRY_MS, () => {
-              if (this.appletRemoved) {
+              if (this.appletRemoved || !isCurrentOperation()) {
                 if (typeof completionCallback === "function") {
                   completionCallback(false);
                 }
                 return false;
               }
-              this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow, expected, expectedClipboardDeadlineMs, completionCallback);
+              this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow, expected, expectedClipboardDeadlineMs, completionCallback, isCurrentOperation);
               return false;
             }, false, "pasteTimer")) {
               if (typeof completionCallback === "function") {
@@ -8095,7 +8108,7 @@ MyApplet.prototype = {
             }
             return;
           }
-          this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow, null, null, completionCallback);
+          this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow, null, null, completionCallback, isCurrentOperation);
         }, undefined));
       } catch (err) {
         global.logError(err);
@@ -8122,6 +8135,10 @@ MyApplet.prototype = {
       }
     };
     this._targetXWindowMatchesSnapshot(expectedTargetWindow, (matches) => {
+      if (!isCurrentOperation()) {
+        fail();
+        return;
+      }
       if (!matches) {
         fail(_("Target window changed before automatic paste"));
         return;
@@ -8131,21 +8148,33 @@ MyApplet.prototype = {
           fail(_("Keyboard insert failed"));
           return;
         }
+        if (!isCurrentOperation()) {
+          fail();
+          return;
+        }
         if (!followUpArgs) {
           if (typeof completionCallback === "function") completionCallback(true);
           return;
         }
         if (!this._scheduleTrackedTimer("paste", PASTE_SUBMIT_DELAY_MS, () => {
-          if (this.appletRemoved) {
+          if (this.appletRemoved || !isCurrentOperation()) {
             if (typeof completionCallback === "function") completionCallback(false);
             return false;
           }
           this._targetXWindowMatchesSnapshot(expectedTargetWindow, (submitTargetMatches) => {
+            if (!isCurrentOperation()) {
+              fail();
+              return;
+            }
             if (!submitTargetMatches) {
               fail(_("Target window changed before automatic submit"));
               return;
             }
             if (!this._spawnKeyboardProcess(followUpArgs, (submitCompleted) => {
+              if (!isCurrentOperation()) {
+                fail();
+                return;
+              }
               if (!submitCompleted) {
                 fail(_("Keyboard insert failed"));
                 return;
@@ -8405,7 +8434,7 @@ MyApplet.prototype = {
               this._setStatus("done", _("Typed into target window"), transcript);
             }
             complete(completed === true);
-          })) {
+          }, isCurrentInsert)) {
             complete(false);
           }
         });
