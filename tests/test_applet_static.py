@@ -1878,10 +1878,14 @@ class AppletStaticTest(unittest.TestCase):
         end = source.index("\n  _removeHotkey:", start)
         block = source[start:end]
         self.assertIn('let tracked = this._runStateGuarded("hotkeys", () => {', block)
+        self.assertIn('if (!this._resourceRegistry || !this._resourceRegistry.hotkeys || !this._hotkeyDefinitions)', block)
         self.assertIn("this._resourceRegistry.hotkeys[name] = true;", block)
         self.assertIn("this._hotkeyDefinitions[name] = { binding: accelerator, callback: callback };", block)
         self.assertIn("Main.keybindingManager.removeHotKey(name);", block)
         self.assertIn('delete this._resourceRegistry.hotkeys[name];', block)
+        self.assertIn("Object.prototype.hasOwnProperty.call(this._resourceRegistry.hotkeys, name)", block)
+        self.assertIn('Hotkey registry cleanup could not be completed', block)
+        self.assertIn('Hotkey definition cleanup could not be completed', block)
         self.assertIn("let removedExternally = false;", block)
         self.assertIn("if (removedExternally && previous)", block)
         self.assertIn('throw new Error("Hotkey registry entry could not be removed");', block)
@@ -1894,6 +1898,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._runTeardownGuarded("teardown-hotkeys", () => {', block)
         self.assertIn('throw new Error("Hotkey registry entry could not be removed during teardown");', block)
         self.assertIn('throw new Error("Hotkey definition could not be removed during teardown");', block)
+        self.assertIn("Object.prototype.hasOwnProperty.call(this._resourceRegistry.hotkeys, name)", block)
+        self.assertIn("Object.prototype.hasOwnProperty.call(this._hotkeyDefinitions, name)", block)
 
     def test_empty_hotkey_binding_contains_definition_delete_failure(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -1902,6 +1908,7 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         self.assertIn('this._runStateGuarded("hotkeys", () => {', block)
         self.assertIn("let deleted = delete this._hotkeyDefinitions[name];", block)
+        self.assertIn("Object.prototype.hasOwnProperty.call(this._hotkeyDefinitions, name)", block)
         self.assertIn('throw new Error("Hotkey definition could not be removed");', block)
 
     def test_menu_toggle_remains_recoverable_after_guarded_failures(self) -> None:

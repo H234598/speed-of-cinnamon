@@ -1921,7 +1921,7 @@ MyApplet.prototype = {
       removedExternally = true;
       if (this._resourceRegistry) {
         let deleted = delete this._resourceRegistry.hotkeys[name];
-        if (deleted === false) {
+        if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.hotkeys, name)) {
           throw new Error("Hotkey registry entry could not be removed");
         }
       }
@@ -1944,7 +1944,7 @@ MyApplet.prototype = {
       if (this._hotkeyDefinitions) {
         this._runStateGuarded("hotkeys", () => {
           let deleted = delete this._hotkeyDefinitions[name];
-          if (deleted === false) {
+          if (deleted === false || Object.prototype.hasOwnProperty.call(this._hotkeyDefinitions, name)) {
             throw new Error("Hotkey definition could not be removed");
           }
         }, undefined);
@@ -1958,8 +1958,11 @@ MyApplet.prototype = {
         return Main.keybindingManager.addHotKey(name, accelerator, this._guardStateCallback("hotkeys", callback, undefined)) === true;
       }, false) === true;
     }
-    if (registered && this._resourceRegistry) {
+    if (registered) {
       let tracked = this._runStateGuarded("hotkeys", () => {
+        if (!this._resourceRegistry || !this._resourceRegistry.hotkeys || !this._hotkeyDefinitions) {
+          throw new Error("Hotkey registry is unavailable");
+        }
         this._resourceRegistry.hotkeys[name] = true;
         this._hotkeyDefinitions[name] = { binding: accelerator, callback: callback };
         return true;
@@ -1998,12 +2001,18 @@ MyApplet.prototype = {
     }
     if (this._resourceRegistry) {
       this._runStateGuarded("hotkeys", () => {
-        delete this._resourceRegistry.hotkeys[name];
+        let deleted = delete this._resourceRegistry.hotkeys[name];
+        if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.hotkeys, name)) {
+          throw new Error("Hotkey registry cleanup could not be completed");
+        }
       }, undefined);
     }
     if (this._hotkeyDefinitions) {
       this._runStateGuarded("hotkeys", () => {
-        delete this._hotkeyDefinitions[name];
+        let deleted = delete this._hotkeyDefinitions[name];
+        if (deleted === false || Object.prototype.hasOwnProperty.call(this._hotkeyDefinitions, name)) {
+          throw new Error("Hotkey definition cleanup could not be completed");
+        }
       }, undefined);
     }
   },
@@ -2021,7 +2030,7 @@ MyApplet.prototype = {
     if (this._resourceRegistry) {
       this._runTeardownGuarded("teardown-hotkeys", () => {
         let deleted = delete this._resourceRegistry.hotkeys[name];
-        if (deleted === false) {
+        if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.hotkeys, name)) {
           throw new Error("Hotkey registry entry could not be removed during teardown");
         }
       });
@@ -2029,7 +2038,7 @@ MyApplet.prototype = {
     if (this._hotkeyDefinitions) {
       this._runTeardownGuarded("teardown-hotkeys", () => {
         let deleted = delete this._hotkeyDefinitions[name];
-        if (deleted === false) {
+        if (deleted === false || Object.prototype.hasOwnProperty.call(this._hotkeyDefinitions, name)) {
           throw new Error("Hotkey definition could not be removed during teardown");
         }
       });
