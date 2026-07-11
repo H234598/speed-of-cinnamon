@@ -4860,7 +4860,10 @@ MyApplet.prototype = {
       if (!model || typeof model !== "object") {
         continue;
       }
-      let name = this._coerceCliTextArg(model.name || "", "ollama model");
+      if (typeof model.name !== "string") {
+        continue;
+      }
+      let name = this._coerceCliTextArg(model.name.trim(), "ollama model");
       if (name.trim() === "") {
         continue;
       }

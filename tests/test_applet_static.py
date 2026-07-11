@@ -812,6 +812,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('typeof model.name === "string"', entry_block)
         self.assertIn('model.name === "string" ? model.name.trim() : ""', entry_block)
 
+        choice_start = source.index("_ollamaModelChoiceArgs: function(models)")
+        choice_end = source.index("\n  _chooseOllamaTextModel:", choice_start)
+        choice_block = source[choice_start:choice_end]
+        self.assertIn('typeof model.name !== "string"', choice_block)
+        self.assertIn('model.name.trim()', choice_block)
+
     def test_input_source_refresh_ignores_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
