@@ -8481,10 +8481,13 @@ MyApplet.prototype = {
   },
 
   _windowProbeValue: function(window, methodName) {
-    if (!window || !window[methodName]) {
+    if (!window) {
       return "";
     }
     try {
+      if (!window[methodName]) {
+        return "";
+      }
       return String(window[methodName]() || "").toLowerCase();
     } catch (err) {
       return "";

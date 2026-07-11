@@ -2978,6 +2978,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let generationMatches = () =>", match_block)
         self.assertIn("if (!generationMatches())", match_block)
 
+        probe_start = source.index("_windowProbeValue: function(window, methodName)")
+        probe_end = source.index("\n  _windowLooksLikeSpeedOfCinnamon:", probe_start)
+        probe_block = source[probe_start:probe_end]
+        self.assertLess(probe_block.index("try {"), probe_block.index("window[methodName]"))
+
         activate_start = source.index("_activateTargetXWindow: function(completionCallback)")
         activate_end = source.index("\n  _targetXWindowSnapshot:", activate_start)
         activate_block = source[activate_start:activate_end]
