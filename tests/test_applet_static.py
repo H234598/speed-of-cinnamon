@@ -2984,8 +2984,8 @@ class AppletStaticTest(unittest.TestCase):
     def test_open_file_and_folder_errors_do_not_render_local_paths(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
-        self.assertIn('this._setStatus("error", _("Could not open folder"), this.lastTranscript);', source)
-        self.assertIn('this._setStatus("error", _("Could not open file"), this.lastTranscript);', source)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Could not open folder"), this.lastTranscript);', source)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Could not open file"), this.lastTranscript);', source)
         self.assertNotIn('_("Could not open folder: ") + err.message', source)
         self.assertNotIn('_("Could not open file: ") + err.message', source)
 

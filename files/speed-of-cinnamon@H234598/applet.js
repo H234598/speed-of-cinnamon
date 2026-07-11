@@ -3294,7 +3294,7 @@ MyApplet.prototype = {
       this._openUri(GLib.filename_to_uri(path, null), successMessage);
     } catch (err) {
       global.logError(err);
-      this._setStatus("error", _("Could not open folder"), this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("Could not open folder"), this.lastTranscript);
     }
   },
 
@@ -3306,7 +3306,7 @@ MyApplet.prototype = {
       this._openUri(GLib.filename_to_uri(path, null), successMessage);
     } catch (err) {
       global.logError(err);
-      this._setStatus("error", _("Could not open file"), this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("Could not open file"), this.lastTranscript);
     }
   },
 
