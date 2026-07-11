@@ -1583,6 +1583,10 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('SNAP_BUILD must be 0 or 1.\\n', makefile)
         self.assertIn('BUILD_GENERIC_RPM must be 0 or 1.\\n', makefile)
         self.assertIn("release-require-snap:", makefile)
+        self.assertIn(
+            './scripts/verify-rpm.sh dist/rpmbuild/RPMS/noarch/speed-of-cinnamon-"$(PROJECT_VERSION)"-*.noarch.rpm',
+            makefile,
+        )
 
     def test_makefile_lint_checks_applet_js_syntax(self) -> None:
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")

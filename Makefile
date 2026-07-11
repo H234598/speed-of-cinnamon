@@ -123,7 +123,7 @@ rpm-generic-check: release-validate-flags
 	./scripts/verify-rpm.sh dist/rpmbuild-generic/RPMS/noarch/speed-of-cinnamon-"$(PROJECT_VERSION)"-*.noarch.rpm
 
 rpm-check: release-validate-flags
-	./scripts/verify-rpm.sh
+	./scripts/verify-rpm.sh dist/rpmbuild/RPMS/noarch/speed-of-cinnamon-"$(PROJECT_VERSION)"-*.noarch.rpm
 
 snap: release-validate-flags
 	@if [ "$(SNAP_BUILD)" = "0" ]; then \
