@@ -4605,7 +4605,7 @@ MyApplet.prototype = {
       let availabilityMessage = available
         ? ""
         : this._sanitizeErrorMessage(payload.message || _("Text model backend is unavailable"));
-      this._populateTextModelMenu(payload.models || [], availabilityMessage, payload.backend || provider);
+      this._populateTextModelMenu(payload.models || [], availabilityMessage, provider);
     });
   },
 
@@ -4617,7 +4617,9 @@ MyApplet.prototype = {
     models = models.filter((model) => model && typeof model === "object" && typeof model.name === "string" && model.name.trim() !== "");
     this._clearMenuItems(this.textModelItem.menu);
     let backend = String(this.postProcessBackend || "none");
-    let activeProvider = String(provider || (backend === "openai-compatible" ? "openai-compatible" : "ollama"));
+    let activeProvider = provider === "openai-compatible" || provider === "ollama"
+      ? provider
+      : (backend === "openai-compatible" ? "openai-compatible" : "ollama");
 
     let disabled = this._selectionMenuItem((backend === "none" ? "[x] " : "[ ] ") + _("Disabled"));
     this._connectSafe(disabled, "activate", () => this._selectTextModelBackend("none", "", _("Text polishing disabled")));
@@ -4715,7 +4717,10 @@ MyApplet.prototype = {
     if (name === "") {
       return;
     }
-    let provider = String(backend || "ollama");
+    let provider = backend === "openai-compatible" || backend === "ollama" ? backend : "";
+    if (provider === "") {
+      return;
+    }
     let currentModel = provider === "openai-compatible" ? String(this.openaiCompatibleTextModel || this.openaiCompatibleModel || "") : String(this.ollamaModel || "");
     let current = String(this.postProcessBackend || "") === provider && currentModel === name;
     let details = String(model.description || model.size_label || "");
