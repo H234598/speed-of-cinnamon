@@ -1132,7 +1132,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('relistenToken = String(this.autoRelistenSequence) + ":" + recordingKey;', source)
         self.assertIn('this.autoRelistenPending = Boolean(relistenToken);', source)
         self.assertIn('this.autoRelistenPendingToken = relistenToken;', source)
-        self.assertIn('if (relistenToken && this.autoRelistenPendingToken !== relistenToken) {\n        this.isCommandRunning = false;\n        return;\n      }', source)
+        self.assertIn('if (relistenToken && this.autoRelistenPendingToken !== relistenToken) {\n        this.isCommandRunning = false;\n        if (this.cancelPendingWhileCommandRunning) {\n          this._applyPayload(nextPayload);\n        }\n        return;\n      }', source)
         self.assertIn('if (nextPayload && nextPayload.error) {\n        this.autoTranscribeRecordingKey = "";\n      }', source)
         self.assertIn('const EMPTY_TRANSCRIPT_MARKERS = [', source)
         self.assertIn('"leere aufnahme"', source)
@@ -2207,7 +2207,7 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         toggle_index = source.index("_toggleRecording: function()")
         toggle_end = source.index("_restartApplet: function()", toggle_index)
-        cancel_index = source.index("_cancelRecording: function()")
+        cancel_index = source.index("_cancelRecording: function(statusOverride)")
         cancel_end = source.index("_runDoctor: function", cancel_index)
         ensure_index = source.index("_ensureAutoRelistenPendingForDonePayload: function(payload)")
         ensure_end = source.index("_finishPendingRelisten: function()", ensure_index)
@@ -2220,15 +2220,15 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.cancelPendingWhileCommandRunning = true;", source[cancel_index:cancel_end])
         self.assertIn("this.autoRelistenManualStopRequested = true;", source[cancel_index:cancel_end])
         self.assertIn('this._setStatus("processing", _("Stopping Auto Relisten..."), this.lastTranscript);', source[cancel_index:cancel_end])
-        self.assertIn("_hasCancelableRecordingWork: function()", source)
-        cancel_work_start = source.index("_hasCancelableRecordingWork: function()")
+        self.assertIn("_hasCancelableRecordingWork: function(statusOverride)", source)
+        cancel_work_start = source.index("_hasCancelableRecordingWork: function(statusOverride)")
         cancel_work_end = source.index("\n  _cancelRecording:", cancel_work_start)
         cancel_work_block = source[cancel_work_start:cancel_work_end]
-        self.assertIn('this.status === "recording" || this.status === "recorded"', cancel_work_block)
+        self.assertIn('effectiveStatus === "recording" || effectiveStatus === "recorded"', cancel_work_block)
         self.assertIn("this.autoRelistenPending", cancel_work_block)
         self.assertIn("this.isCommandRunning && this.notificationSessionActive", cancel_work_block)
         self.assertNotIn("return this.notificationSessionActive ||", cancel_work_block)
-        self.assertIn("if (!this._hasCancelableRecordingWork())", source[cancel_index:cancel_end])
+        self.assertIn("if (!this._hasCancelableRecordingWork(statusOverride))", source[cancel_index:cancel_end])
         self.assertIn("if (this.autoRelistenManualStopRequested) {\n      return;\n    }", source[ensure_index:ensure_end])
 
     def test_cancel_menu_uses_same_work_predicate_as_cancel_action(self) -> None:
@@ -2237,14 +2237,18 @@ class AppletStaticTest(unittest.TestCase):
         status_start = source.index("_setStatus: function(status, message, transcript)")
         status_end = source.index("\n  _maybeNotify:", status_start)
         status_block = source[status_start:status_end]
-        cancel_start = source.index("_cancelRecording: function()")
+        work_start = source.index("_hasCancelableRecordingWork: function(statusOverride)")
+        work_end = source.index("\n  _cancelRecording:", work_start)
+        work_block = source[work_start:work_end]
+        cancel_start = source.index("_cancelRecording: function(statusOverride)")
         cancel_end = source.index("\n  _runDoctor:", cancel_start)
         cancel_block = source[cancel_start:cancel_end]
 
         self.assertIn("this.cancelItem.setSensitive(this._hasCancelableRecordingWork());", status_block)
-        self.assertIn("if (!this._hasCancelableRecordingWork())", cancel_block)
+        self.assertIn("if (!this._hasCancelableRecordingWork(statusOverride))", cancel_block)
         self.assertIn("if (!this.isCommandRunning && this.autoRelistenPending && this.textInsertToken)", cancel_block)
         self.assertIn('this._setStatus("ready", _("Auto Relisten cancelled"), this.lastTranscript);', cancel_block)
+        self.assertIn("let effectiveStatus = typeof statusOverride === \"string\" ? statusOverride : this.status;", work_block)
 
     def test_async_keyboard_insert_reports_menu_close_failure(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2299,7 +2303,23 @@ class AppletStaticTest(unittest.TestCase):
         self.assertLess(cancel_done_index, finish_insert_index)
         self.assertIn('this._setStatus("ready", _("Cancel applied; transcript not inserted"), this.lastTranscript);', block)
         self.assertIn("this.cancelPendingWhileCommandRunning = false;", block)
-        self.assertIn("this._cancelRecording();", block)
+        self.assertIn("this._cancelRecording(status);", block)
+
+    def test_auto_transcribe_cancel_race_consumes_expected_stop_response(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_maybeAutoTranscribeRecorded: function(payload, statusOverride)")
+        end = source.index("\n  _clearStatusTimer:", start)
+        block = source[start:end]
+
+        mismatch = block.index("if (relistenToken && this.autoRelistenPendingToken !== relistenToken)")
+        mismatch_end = block.index("return;", mismatch)
+        self.assertIn("this.isCommandRunning = false;", block[mismatch:mismatch_end])
+        self.assertIn("if (this.cancelPendingWhileCommandRunning)", block[mismatch:mismatch_end])
+        self.assertIn("this._applyPayload(nextPayload);", block[mismatch:mismatch_end])
+        toggle_start = source.index("_toggleRecording: function()")
+        toggle_end = source.index("\n  _restartApplet:", toggle_start)
+        self.assertIn("this.cancelPendingWhileCommandRunning = false;", source[toggle_start:toggle_end])
 
     def test_failed_insert_stops_auto_relisten_restart(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

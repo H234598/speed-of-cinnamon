@@ -2928,6 +2928,7 @@ MyApplet.prototype = {
     this.autoInsertFingerprints = [];
     this.recordingStartedAtMs = 0;
     this.recordingMaxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
+    this.cancelPendingWhileCommandRunning = false;
     this.isCommandRunning = true;
     this._setStatus("processing", _("Working..."), "");
     this._spawnJson(toggleArgs, (payload) => {
@@ -2965,14 +2966,15 @@ MyApplet.prototype = {
     }, { timeoutMs: STATUS_COMMAND_TIMEOUT_MS });
   },
 
-  _hasCancelableRecordingWork: function() {
-    return this.status === "recording" || this.status === "recorded" ||
+  _hasCancelableRecordingWork: function(statusOverride) {
+    let effectiveStatus = typeof statusOverride === "string" ? statusOverride : this.status;
+    return effectiveStatus === "recording" || effectiveStatus === "recorded" ||
       this.autoRelistenPending ||
       (this.isCommandRunning && this.notificationSessionActive);
   },
 
-  _cancelRecording: function() {
-    if (!this._hasCancelableRecordingWork()) {
+  _cancelRecording: function(statusOverride) {
+    if (!this._hasCancelableRecordingWork(statusOverride)) {
       return;
     }
     if (!this.isCommandRunning && this.autoRelistenPending && this.textInsertToken) {
@@ -6239,7 +6241,7 @@ MyApplet.prototype = {
       !this.isCommandRunning
     ) {
       this.cancelPendingWhileCommandRunning = false;
-      this._cancelRecording();
+      this._cancelRecording(status);
       return;
     }
     if (this.cancelPendingWhileCommandRunning && !this.isCommandRunning) {
@@ -6467,6 +6469,9 @@ MyApplet.prototype = {
     this._spawnJson(stopArgs, (nextPayload) => {
       if (relistenToken && this.autoRelistenPendingToken !== relistenToken) {
         this.isCommandRunning = false;
+        if (this.cancelPendingWhileCommandRunning) {
+          this._applyPayload(nextPayload);
+        }
         return;
       }
       if (nextPayload && nextPayload.error) {
