@@ -852,6 +852,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('label += _(" - invalid metadata");', block)
         self.assertIn("useItem.setSensitive(!current && compatible && usable);", block)
 
+    def test_invalid_ollama_model_input_cannot_stick_command_running_state(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_installOllamaTextModel: function(model)")
+        end = source.index("\n  _refreshHistory:", start)
+        block = source[start:end]
+        self.assertIn("let installArgs;", block)
+        self.assertIn("installArgs = this._installTextModelArgs(model);", block)
+        self.assertIn("} catch (err) {", block)
+        self.assertIn('this._setStatus("error", _("Could not prepare Ollama model installation: ") + safeError', block)
+        self.assertLess(block.index("let installArgs;"), block.index("this.isCommandRunning = true;"))
+        self.assertIn("this._spawnJson(installArgs,", block)
+
     def test_input_source_refresh_ignores_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

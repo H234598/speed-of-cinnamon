@@ -4971,9 +4971,17 @@ MyApplet.prototype = {
     if (this.isCommandRunning) {
       return;
     }
+    let installArgs;
+    try {
+      installArgs = this._installTextModelArgs(model);
+    } catch (err) {
+      let safeError = this._sanitizeErrorMessage(err);
+      this._setStatus("error", _("Could not prepare Ollama model installation: ") + safeError, this.lastTranscript);
+      return;
+    }
     this.isCommandRunning = true;
     this._setStatus("processing", _("Installing Ollama model: ") + model, this.lastTranscript);
-    this._spawnJson(this._installTextModelArgs(model), (payload) => {
+    this._spawnJson(installArgs, (payload) => {
       this.isCommandRunning = false;
       if (payload.error) {
         let safeError = this._sanitizeErrorMessage(payload.error);
