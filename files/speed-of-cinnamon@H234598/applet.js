@@ -3648,7 +3648,7 @@ MyApplet.prototype = {
   },
 
   _selectBenchmarkAudioFile: function() {
-    if (this.benchmarkFlowToken) {
+    if (this._hasActiveRecordingState() || this.benchmarkFlowToken) {
       return;
     }
     if (!this._findTrustedProgramInPath("zenity")) {
@@ -3674,6 +3674,10 @@ MyApplet.prototype = {
 
   _benchmarkDownloadedModels: function(audioPath, flowToken) {
     flowToken = flowToken || {};
+    if (this._hasActiveRecordingState()) {
+      this.benchmarkFlowToken = null;
+      return;
+    }
     this.benchmarkFlowToken = flowToken;
     this._setStatus("processing", _("Benchmarking downloaded models..."), this.lastTranscript);
     this._spawnJson(this._benchmarkArgs(audioPath), (payload) => {

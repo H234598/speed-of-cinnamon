@@ -728,8 +728,8 @@ class AppletStaticTest(unittest.TestCase):
             start = source.index(method)
             end = source.index(next_method, start)
             block = source[start:end]
-            self.assertIn(f"if ({guard})", block)
-            self.assertLess(block.index(f"if ({guard})"), block.index('if (!this._findTrustedProgramInPath("zenity"))'))
+            self.assertIn(guard, block)
+            self.assertLess(block.index(guard), block.index('if (!this._findTrustedProgramInPath("zenity"))'))
 
     def test_output_settings_cancel_stale_insert_and_prompt_callbacks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -1695,6 +1695,7 @@ class AppletStaticTest(unittest.TestCase):
         select_start = source.index("_selectBenchmarkAudioFile: function()")
         select_end = source.index("\n  _benchmarkDownloadedModels:", select_start)
         select_block = source[select_start:select_end]
+        self.assertIn("if (this._hasActiveRecordingState() || this.benchmarkFlowToken)", select_block)
         self.assertIn("let flowToken = {};", select_block)
         self.assertIn("this.benchmarkFlowToken = flowToken;", select_block)
         self.assertIn("this.benchmarkFlowToken !== flowToken", select_block)
@@ -1703,6 +1704,8 @@ class AppletStaticTest(unittest.TestCase):
         benchmark_start = source.index("_benchmarkDownloadedModels: function(audioPath, flowToken)")
         benchmark_end = source.index("\n  _setAlarmOptionStatus:", benchmark_start)
         benchmark_block = source[benchmark_start:benchmark_end]
+        self.assertIn("if (this._hasActiveRecordingState())", benchmark_block)
+        self.assertIn("this.benchmarkFlowToken = null;", benchmark_block)
         self.assertIn("this.benchmarkFlowToken !== flowToken", benchmark_block)
         self.assertIn("this.benchmarkFlowToken = null;", benchmark_block)
         self.assertIn('let fastest = typeof payload.fastest_model === "string" ? payload.fastest_model.trim() : "";', benchmark_block)
