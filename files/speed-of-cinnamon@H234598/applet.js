@@ -3552,6 +3552,8 @@ MyApplet.prototype = {
   },
 
   _runBasicSetup: function() {
+    this._cancelOllamaInstallWatch();
+    this._clearOllamaModelFlow();
     try {
       this._runTerminalWorkflow(_("Speed of Cinnamon basic setup"), this._basicSetupCommand(), _("Basic setup terminal opened"));
     } catch (err) {

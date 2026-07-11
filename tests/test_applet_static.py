@@ -2132,6 +2132,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._cancelOllamaInstallWatch();", uninstall_block)
         self.assertIn("this._clearOllamaModelFlow();", uninstall_block)
 
+        setup_start = source.index("_runBasicSetup: function()")
+        setup_end = source.index("\n  _selectBenchmarkAudioFile:", setup_start)
+        setup_block = source[setup_start:setup_end]
+        self.assertIn("this._cancelOllamaInstallWatch();", setup_block)
+        self.assertIn("this._clearOllamaModelFlow();", setup_block)
+
     def test_terminal_workflow_preserves_shell_compound_syntax(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
