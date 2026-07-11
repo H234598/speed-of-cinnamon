@@ -477,7 +477,8 @@ def _read_private_passphrase_file(
             raise ArtifactCryptoError("artifact encryption passphrase file could not be read") from exc
     finally:
         if fd >= 0:
-            os.close(fd)
+            with suppress(Exception):
+                os.close(fd)
     if len(payload) > MAX_PASSPHRASE_FILE_BYTES:
         raise ArtifactCryptoError("artifact encryption passphrase file is too large")
     try:
