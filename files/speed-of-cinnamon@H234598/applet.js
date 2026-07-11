@@ -3344,9 +3344,13 @@ MyApplet.prototype = {
   },
 
   _setDoctorSummary: function(message) {
-    this.doctorSummaryText = this._uiMessageText(String(message || ""));
-    if (this.doctorSummaryItem) {
-      this.doctorSummaryItem.label.text = this.doctorSummaryText || _("Doctor: not checked");
+    try {
+      this.doctorSummaryText = this._uiMessageText(String(message || ""));
+      if (this.doctorSummaryItem) {
+        this.doctorSummaryItem.label.text = this.doctorSummaryText || _("Doctor: not checked");
+      }
+    } catch (error) {
+      this._recordLifecycleError("doctor-summary", error);
     }
   },
 

@@ -2173,6 +2173,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("} finally {", block)
         self.assertIn("this._doctorCommandRunning = false;", block)
 
+        summary_start = source.index("_setDoctorSummary: function(message)")
+        summary_end = source.index("\n  _doctorSummary:", summary_start)
+        summary_block = source[summary_start:summary_end]
+        self.assertIn("try {", summary_block)
+        self.assertIn('this._recordLifecycleError("doctor-summary", error);', summary_block)
+
     def test_recording_payload_callbacks_use_fail_closed_handler(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         helper_start = source.index("_applyPayloadSafely: function(payload, statusRefreshToken)")
