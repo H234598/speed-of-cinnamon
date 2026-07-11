@@ -4028,7 +4028,9 @@ MyApplet.prototype = {
     let usable = downloaded && this._isUsableVoiceModelPayload(model);
     let current = usable && this.whisperModel && path === String(this.whisperModel);
     let compatible = this._voiceModelSupportsCurrentLanguage(model);
-    let label = (current ? "[x] " : "[ ] ") + name + " (" + String(model.size || "?") + ")";
+    let size = typeof model.size === "string" ? model.size.trim() : "";
+    let description = typeof model.description === "string" ? model.description.trim() : "";
+    let label = (current ? "[x] " : "[ ] ") + name + " (" + (size || "?") + ")";
     if (!compatible) {
       label += _(" - English only");
     }
@@ -4042,7 +4044,7 @@ MyApplet.prototype = {
     this._styleSelectionSubmenu(entry);
     parentMenu.addMenuItem(entry);
 
-    entry.menu.addMenuItem(this._selectionInfoItem(String(model.description || "")));
+    entry.menu.addMenuItem(this._selectionInfoItem(description));
     if (!compatible) {
       entry.menu.addMenuItem(this._selectionInfoItem(_("Not suitable for primary language: ") + this._voiceModelLanguage()));
     }
@@ -4787,7 +4789,10 @@ MyApplet.prototype = {
     }
     let currentModel = provider === "openai-compatible" ? String(this.openaiCompatibleTextModel || this.openaiCompatibleModel || "") : String(this.ollamaModel || "");
     let current = String(this.postProcessBackend || "") === provider && currentModel === name;
-    let details = String(model.description || model.size_label || "");
+    let detailsValue = typeof model.description === "string"
+      ? model.description
+      : (typeof model.size_label === "string" ? model.size_label : "");
+    let details = detailsValue.trim();
     let label = (current ? "[x] " : "[ ] ") + name;
     if (details !== "") {
       label += " (" + details + ")";
@@ -4948,7 +4953,10 @@ MyApplet.prototype = {
       }
       let details = "";
       try {
-        details = this._coerceCliTextArg(String(model.description || model.size_label || "").trim(), "ollama model details").trim();
+        let detailsValue = typeof model.description === "string"
+          ? model.description
+          : (typeof model.size_label === "string" ? model.size_label : "");
+        details = this._coerceCliTextArg(detailsValue.trim(), "ollama model details").trim();
       } catch (err) {
         global.logError(err);
       }

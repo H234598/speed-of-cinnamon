@@ -897,6 +897,28 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('typeof source.description === "string"', block)
         self.assertIn("let label = description || sourceName;", block)
 
+    def test_optional_model_metadata_is_string_checked_before_display(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        voice_start = source.index("_addModelMenuEntry: function(model, parentMenu)")
+        voice_end = source.index("\n  _isEnglishLanguage:", voice_start)
+        voice_block = source[voice_start:voice_end]
+        self.assertIn('typeof model.size === "string"', voice_block)
+        self.assertIn('typeof model.description === "string"', voice_block)
+        self.assertIn("let label = (current ? \"[x] \" : \"[ ] \") + name + \" (\" + (size || \"?\") + \")\";", voice_block)
+
+        text_start = source.index("_addTextModelMenuEntry: function(model, backend)")
+        text_end = source.index("\n  _textPolishingPresetLabel:", text_start)
+        text_block = source[text_start:text_end]
+        self.assertIn('typeof model.description === "string"', text_block)
+        self.assertIn('typeof model.size_label === "string"', text_block)
+
+        choice_start = source.index("_ollamaModelChoiceArgs: function(models)")
+        choice_end = source.index("\n  _chooseOllamaTextModel:", choice_start)
+        choice_block = source[choice_start:choice_end]
+        self.assertIn('typeof model.description === "string"', choice_block)
+        self.assertIn('typeof model.size_label === "string"', choice_block)
+
     def test_redacted_history_entries_disable_plaintext_actions(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
