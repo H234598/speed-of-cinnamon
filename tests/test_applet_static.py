@@ -2468,6 +2468,23 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("totalBytes += valueBytes;", source)
         self.assertIn("if (totalBytes > MAX_CLI_COMMAND_BYTES) {", source)
         self.assertIn("if (String(args[0] || \"\").trim() === \"\") {", source)
+
+    def test_transcript_list_confirmation_is_serialized(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        list_start = source.index("_listAllTranscripts: function()")
+        list_end = source.index("\n  _confirmPlaintextTranscriptList:", list_start)
+        list_block = source[list_start:list_end]
+        self.assertIn("if (this.isCommandRunning || this.transcriptListPromptToken)", list_block)
+
+        prompt_start = source.index("_confirmPlaintextTranscriptList: function(completionCallback)")
+        prompt_end = source.index("\n  _loadAllTranscriptsDocument:", prompt_start)
+        prompt_block = source[prompt_start:prompt_end]
+        self.assertIn("if (this.transcriptListPromptToken)", prompt_block)
+        self.assertIn("let promptToken = {};", prompt_block)
+        self.assertIn("this.transcriptListPromptToken = promptToken;", prompt_block)
+        self.assertIn("this.transcriptListPromptToken === promptToken", prompt_block)
+        self.assertIn("this.transcriptListPromptToken = null;", prompt_block)
         self.assertIn("_isAllowedCliCommand: function(command) {", source)
         self.assertIn("_resolveAllowedCliCommand: function(command) {", source)
         self.assertIn("let resolvedCommand = this._resolveAllowedCliCommand(normalized[0]);", source)

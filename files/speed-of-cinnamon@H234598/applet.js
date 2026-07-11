@@ -1092,6 +1092,7 @@ MyApplet.prototype = {
     this.autoRelistenSequence = 0;
     this.autoInsertFingerprint = "";
     this.autoInsertFingerprints = [];
+    this.transcriptListPromptToken = null;
     this.textInsertToken = null;
     this.voiceModelActionToken = null;
     this.recordingStartedAtMs = 0;
@@ -1815,6 +1816,7 @@ MyApplet.prototype = {
     this.benchmarkFlowToken = null;
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
+    this.transcriptListPromptToken = null;
     this.textInsertToken = null;
     this.alarmActionToken = null;
     this.alarmCheckToken = null;
@@ -5490,7 +5492,7 @@ MyApplet.prototype = {
   },
 
   _listAllTranscripts: function() {
-    if (this.isCommandRunning) {
+    if (this.isCommandRunning || this.transcriptListPromptToken) {
       return;
     }
     if (!this._findTrustedProgramInPath("zenity")) {
@@ -5507,6 +5509,11 @@ MyApplet.prototype = {
   },
 
   _confirmPlaintextTranscriptList: function(completionCallback) {
+    if (this.transcriptListPromptToken) {
+      return;
+    }
+    let promptToken = {};
+    this.transcriptListPromptToken = promptToken;
     let dialog = this._newSafeDialog("transcript-list");
     let completed = false;
     let complete = (result) => {
@@ -5514,6 +5521,9 @@ MyApplet.prototype = {
         return;
       }
       completed = true;
+      if (this.transcriptListPromptToken === promptToken) {
+        this.transcriptListPromptToken = null;
+      }
       if (typeof completionCallback === "function") {
         completionCallback(result === true);
       }
