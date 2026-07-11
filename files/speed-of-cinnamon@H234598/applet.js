@@ -3739,7 +3739,7 @@ MyApplet.prototype = {
         continue;
       }
       let label = source.description || sourceName;
-      if (source.default) {
+      if (source.default === true) {
         label += _(" (system default)");
       }
       if (current === sourceName) {
@@ -4541,7 +4541,11 @@ MyApplet.prototype = {
         this._populateTextModelMenu([], this._sanitizeErrorMessage(payload.error), provider);
         return;
       }
-      this._populateTextModelMenu(payload.models || [], payload.available === false ? this._sanitizeErrorMessage(payload.message) : "", payload.backend || provider);
+      let available = payload.available === true;
+      let availabilityMessage = available
+        ? ""
+        : this._sanitizeErrorMessage(payload.message || _("Text model backend is unavailable"));
+      this._populateTextModelMenu(payload.models || [], availabilityMessage, payload.backend || provider);
     });
   },
 
@@ -4750,8 +4754,11 @@ MyApplet.prototype = {
         return;
       }
       let models = Array.isArray(payload.models) ? payload.models : [];
-      if (payload.available === false) {
-        this._setStatus("processing", _("Ollama is not installed or not reachable; opening installer..."), this.lastTranscript);
+      if (payload.available !== true) {
+        let safeMessage = payload.available === false && payload.message
+          ? this._sanitizeErrorMessage(payload.message)
+          : _("Ollama is not installed or not reachable");
+        this._setStatus("processing", safeMessage + "; " + _("opening installer..."), this.lastTranscript);
         this._installOllamaRuntime(true);
         return;
       }
@@ -4821,14 +4828,16 @@ MyApplet.prototype = {
         this._notify(_("Could not load Ollama models"), safeError, true);
         return;
       }
+      if (payload.available !== true) {
+        let safeMessage = payload.available === false && payload.message
+          ? this._sanitizeErrorMessage(payload.message)
+          : _("Ollama is not installed or not reachable");
+        this._setStatus("processing", safeMessage + "; " + _("opening installer..."), this.lastTranscript);
+        this._installOllamaRuntime(true);
+        return;
+      }
       let models = Array.isArray(payload.models) ? payload.models : [];
       if (models.length === 0) {
-        if (payload.available === false && payload.message) {
-          let safeMessage = this._sanitizeErrorMessage(payload.message);
-          this._setStatus("processing", safeMessage + "; " + _("opening installer..."), this.lastTranscript);
-          this._installOllamaRuntime(true);
-          return;
-        }
         this._promptInstallOllamaTextModel(flowToken);
         return;
       }
@@ -6207,7 +6216,7 @@ MyApplet.prototype = {
           this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
           return;
         }
-        if (payload.available !== false) {
+        if (payload.available === true) {
           this.ollamaInstallWatchToken = null;
           let models = Array.isArray(payload.models) ? payload.models : [];
           this._setStatus("ready", _("Ollama is ready"), this.lastTranscript);
