@@ -7267,11 +7267,11 @@ MyApplet.prototype = {
   },
 
   _setClipboardText: function(text) {
-    if (!this._lifecycleAllowsWork() || !this.clipboard || !this.clipboard.set_text) {
+    if (typeof text !== "string" || !this._lifecycleAllowsWork() || !this.clipboard || !this.clipboard.set_text) {
       return false;
     }
     try {
-      this.clipboard.set_text(St.ClipboardType.CLIPBOARD, String(text || ""));
+      this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
       return true;
     } catch (error) {
       this._recordLifecycleError("clipboard-set", error);

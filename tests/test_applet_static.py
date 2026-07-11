@@ -1566,6 +1566,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_selectionMenuItem: function(label)", source)
         self.assertIn("_shortMenuText: function(value, maxChars)", source)
         self.assertIn('let text = typeof value === "string" ? value.replace(/\\s+/g, " ").trim() : "";', source)
+        self.assertIn('typeof text !== "string" || !this._lifecycleAllowsWork()', source)
         self.assertIn('typeof label === "string" ? label : ""', source)
         self.assertIn("item.label.clutter_text.ellipsize = options.wrap ? Pango.EllipsizeMode.NONE : Pango.EllipsizeMode.END", source)
 
