@@ -6104,7 +6104,9 @@ MyApplet.prototype = {
   },
 
   _applyPayloadLanguage: function(payload, statusOverride) {
-    let language = String(payload.language || "").trim();
+    let language = payload && typeof payload.language === "string"
+      ? payload.language.trim()
+      : "";
     let status = statusOverride || this._normalizePayloadStatus(payload.status, Boolean(payload.error));
     if (language !== "" && (status === "recording" || status === "recorded" || status === "processing")) {
       this.activeLanguage = language;
