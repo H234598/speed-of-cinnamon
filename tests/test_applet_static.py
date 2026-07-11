@@ -1721,6 +1721,12 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn("if (!textModelArgs)", block)
             self.assertLess(block.index("this._tryTextModelsArgs"), block.index(token_assignment))
 
+        refresh_start = source.index("_refreshTextModelMenuForBackend: function(backendOverride)")
+        refresh_end = source.index("\n  _populateTextModelMenu:", refresh_start)
+        refresh_block = source[refresh_start:refresh_end]
+        self.assertIn("this.textModelMenuRefreshToken = null;", refresh_block)
+        self.assertLess(refresh_block.index("this.textModelMenuRefreshToken = null;"), refresh_block.index("this._tryTextModelsArgs"))
+
         watch_start = source.index("_scheduleOllamaInstallWatchPoll: function(watchToken)")
         watch_end = source.index("\n  _scheduleSetupCheck:", watch_start)
         watch_block = source[watch_start:watch_end]

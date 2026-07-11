@@ -4823,6 +4823,7 @@ MyApplet.prototype = {
     if (!this._canMutateMenu(this.textModelItem)) {
       return;
     }
+    this.textModelMenuRefreshToken = null;
     let textModelArgs = this._tryTextModelsArgs(backendOverride);
     if (!textModelArgs) {
       return;
