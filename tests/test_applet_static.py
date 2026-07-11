@@ -2043,11 +2043,11 @@ class AppletStaticTest(unittest.TestCase):
         helper_end = source.index("\n  _activateOllamaTextModelFlow:", helper_start)
         helper_block = source[helper_start:helper_end]
         self.assertIn("if (flowToken && this.ollamaModelFlowToken !== flowToken)", helper_block)
-        self.assertIn("let hadOllamaProcess = false;", helper_block)
-        self.assertIn('String(processes[token].group || "process") === "ollama"', helper_block)
+        self.assertIn("let hadOllamaModelInstall = Boolean(this.ollamaModelInstallRunning);", helper_block)
         self.assertIn("this.ollamaModelFlowToken = null;", helper_block)
         self.assertIn('this._terminateProcessesByGroup("ollama", true);', helper_block)
-        self.assertIn("if (hadOllamaProcess)", helper_block)
+        self.assertIn("this.ollamaModelInstallRunning = false;", helper_block)
+        self.assertIn("if (hadOllamaModelInstall)", helper_block)
 
         runtime_start = source.index("_installOllamaRuntime: function(openChooserAfterInstall)")
         runtime_end = source.index("\n  _uninstallOllamaRuntime:", runtime_start)
@@ -2064,6 +2064,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('_("Another command is already running")', install_block)
         self.assertIn("this.ollamaModelFlowToken !== flowToken", install_block)
         self.assertIn("if (!flowToken || this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork())", install_block)
+        self.assertIn("this.ollamaModelInstallRunning = true;", install_block)
+        self.assertIn("this.ollamaModelInstallRunning = false;", install_block)
         self.assertIn("this._clearOllamaModelFlow(flowToken);", install_block)
 
         watch_start = source.index("_scheduleOllamaInstallWatchPoll: function(watchToken)")
@@ -3709,7 +3711,7 @@ class AppletStaticTest(unittest.TestCase):
         cancel_end = source.index("\n  _activateOllamaTextModelFlow:", cancel_start)
         cancel_block = source[cancel_start:cancel_end]
         self.assertIn('this._terminateProcessesByGroup("ollama");', cancel_block)
-        self.assertIn("this.isCommandRunning = false;", cancel_block)
+        self.assertIn("this.ollamaModelInstallRunning", cancel_block)
 
         self.assertIn('}, { resourceGroup: "ollama" });', source)
         self.assertIn('resourceGroup: options.resourceGroup,', source)

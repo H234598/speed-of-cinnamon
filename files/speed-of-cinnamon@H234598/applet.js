@@ -1139,6 +1139,7 @@ MyApplet.prototype = {
     this.alarmTimer = 0;
     this.ollamaInstallWatchTimer = 0;
     this.ollamaInstallWatchPolls = 0;
+    this.ollamaModelInstallRunning = false;
     this.externalApiEnvMonitor = null;
     this.externalApiEnvApplyTarget = "voice";
     this.set_applet_icon_path(this.metadata.path + "/icon.svg");
@@ -1850,6 +1851,7 @@ MyApplet.prototype = {
     this.voiceModelActionToken = null;
     this.ollamaModelFlowToken = null;
     this.ollamaInstallWatchToken = null;
+    this.ollamaModelInstallRunning = false;
     this.benchmarkFlowToken = null;
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
@@ -5423,32 +5425,23 @@ MyApplet.prototype = {
     if (flowToken && this.ollamaModelFlowToken !== flowToken) {
       return false;
     }
-    let hadOllamaProcess = false;
-    let processes = this._resourceRegistry && this._resourceRegistry.processes
-      ? this._resourceRegistry.processes
-      : {};
-    for (let token in processes) {
-      if (Object.prototype.hasOwnProperty.call(processes, token) && String(processes[token].group || "process") === "ollama") {
-        hadOllamaProcess = true;
-        break;
-      }
-    }
+    let hadOllamaModelInstall = Boolean(this.ollamaModelInstallRunning);
     this.ollamaModelFlowToken = null;
     this._terminateProcessesByGroup("ollama", true);
-    if (hadOllamaProcess) {
+    this.ollamaModelInstallRunning = false;
+    if (hadOllamaModelInstall) {
       this.isCommandRunning = false;
     }
     return true;
   },
 
   _cancelOllamaFlowForRecording: function() {
-    if (!this.ollamaModelFlowToken && !this.ollamaInstallWatchToken) {
+    if (!this.ollamaModelFlowToken && !this.ollamaInstallWatchToken && !this.ollamaModelInstallRunning) {
       return false;
     }
     this._cancelOllamaInstallWatch();
     this._clearOllamaModelFlow();
     this._terminateProcessesByGroup("ollama");
-    this.isCommandRunning = false;
     return true;
   },
 
@@ -5735,9 +5728,11 @@ MyApplet.prototype = {
       return;
     }
     this.isCommandRunning = true;
+    this.ollamaModelInstallRunning = true;
     this._setStatus("processing", _("Installing Ollama model: ") + model, this.lastTranscript);
     this._spawnJson(installArgs, (payload) => {
       this.isCommandRunning = false;
+      this.ollamaModelInstallRunning = false;
       if (!flowToken || this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
         return;
       }
