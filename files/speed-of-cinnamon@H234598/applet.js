@@ -5192,8 +5192,8 @@ MyApplet.prototype = {
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
-      let content = String(payload.content || "");
-      if (content === "") {
+      let content = typeof payload.content === "string" ? payload.content : "";
+      if (content.trim() === "") {
         this._setStatus("error", _("Transcript list is empty"), this.lastTranscript);
         return;
       }
