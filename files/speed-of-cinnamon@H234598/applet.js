@@ -1602,7 +1602,7 @@ MyApplet.prototype = {
         delete this._resourceRegistry.hotkeys[name];
       }
     }, undefined);
-    let accelerator = String(binding || "").trim();
+    let accelerator = typeof binding === "string" ? binding.trim() : "";
     if (accelerator === "") {
       if (this._hotkeyDefinitions) {
         delete this._hotkeyDefinitions[name];
@@ -2836,7 +2836,7 @@ MyApplet.prototype = {
   },
 
   _formatKeybinding: function(binding) {
-    let value = String(binding || "").trim();
+    let value = typeof binding === "string" ? binding.trim() : "";
     if (value === "") {
       return _("not set");
     }

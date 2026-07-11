@@ -387,6 +387,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._registerHotkey(PRIMARY_HOTKEY_ID, this.primaryLanguageKeybinding', source)
         self.assertIn('this._registerHotkey(SECONDARY_HOTKEY_ID, this.secondaryLanguageKeybinding', source)
         self.assertIn('this._registerHotkey(CANCEL_HOTKEY_ID, this.cancelKeybinding', source)
+        self.assertIn('let accelerator = typeof binding === "string" ? binding.trim() : "";', source)
+        self.assertIn('let value = typeof binding === "string" ? binding.trim() : "";', source)
         self.assertIn("this._hotkeyDefinitions = {};", source)
         self.assertIn('return Main.keybindingManager.addHotKey(name, accelerator, this._guardCallback("hotkeys", callback, undefined)) === true;', source)
         self.assertIn('let hasBinding = accelerator.split("::").some((part) => String(part || "").trim() !== "");', source)
