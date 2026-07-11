@@ -5420,6 +5420,9 @@ MyApplet.prototype = {
   },
 
   _loadAllTranscriptsDocument: function() {
+    if (this.isCommandRunning) {
+      return;
+    }
     this.isCommandRunning = true;
     this._setStatus("processing", _("Preparing transcript list..."), this.lastTranscript);
     this._spawnJson(this._allHistoryArgs(), (payload) => {

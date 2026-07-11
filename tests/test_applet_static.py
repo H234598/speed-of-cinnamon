@@ -1795,6 +1795,15 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("models = models.slice(0, MAX_VOICE_MODEL_MENU_ENTRIES);", block)
         self.assertIn('_("Voice model list truncated for safety")', block)
 
+    def test_transcript_list_command_respects_existing_busy_state(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_loadAllTranscriptsDocument: function()")
+        end = source.index("\n  _showTranscriptsWindow:", start)
+        block = source[start:end]
+        self.assertIn("if (this.isCommandRunning)", block)
+        self.assertIn("return;", block)
+        self.assertLess(block.index("if (this.isCommandRunning)"), block.index("this.isCommandRunning = true;"))
+
     def test_custom_limit_dialogs_ignore_stale_callbacks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
