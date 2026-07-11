@@ -5057,7 +5057,7 @@ MyApplet.prototype = {
     } catch (err) {
       let safeError = this._sanitizeErrorMessage(err);
       this._setStatus("error", _("Text model is invalid: ") + safeError, this.lastTranscript);
-      return;
+      return false;
     }
     this.postProcessBackend = String(backend || "none");
     this.settings.setValue("post-process-backend", this.postProcessBackend);
@@ -5070,11 +5070,12 @@ MyApplet.prototype = {
       this.settings.setValue("openai-compatible-text-model", this.openaiCompatibleTextModel);
       if (!this._writeExternalApiEnvFile()) {
         this._refreshTextModelMenu();
-        return;
+        return false;
       }
     }
     this._refreshTextModelMenu();
     this._setStatus("ready", message, this.lastTranscript);
+    return true;
   },
 
   _clearOllamaModelFlow: function(flowToken) {
@@ -5377,7 +5378,10 @@ MyApplet.prototype = {
       }
       let message = _("Ollama model installed: ") + installedModel;
       this._clearOllamaModelFlow(flowToken);
-      this._selectTextModelBackend("ollama", installedModel, message);
+      if (!this._selectTextModelBackend("ollama", installedModel, message)) {
+        this._refreshTextModelMenu();
+        return;
+      }
       this._notify(_("Ollama model installed"), installedModel, false);
     }, { timeoutMs: BENCHMARK_COMMAND_TIMEOUT_MS });
   },
