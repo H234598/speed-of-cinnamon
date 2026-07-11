@@ -9530,13 +9530,19 @@ MyApplet.prototype = {
       return;
     }
     let index = this.autoInsertFingerprints.indexOf(fingerprint);
-    if (index >= 0) {
-      this.autoInsertFingerprints.splice(index, 1);
-    }
-    if (this.autoInsertFingerprint === fingerprint) {
-      this.autoInsertFingerprint = this.autoInsertFingerprints.length > 0
-        ? this.autoInsertFingerprints[this.autoInsertFingerprints.length - 1]
-        : "";
+    try {
+      if (index >= 0) {
+        this.autoInsertFingerprints.splice(index, 1);
+      }
+      if (this.autoInsertFingerprint === fingerprint) {
+        this.autoInsertFingerprint = this.autoInsertFingerprints.length > 0
+          ? this.autoInsertFingerprints[this.autoInsertFingerprints.length - 1]
+          : "";
+      }
+      return true;
+    } catch (error) {
+      this._recordLifecycleError("auto-insert-fingerprint", error);
+      return false;
     }
   },
 

@@ -3491,6 +3491,17 @@ class AppletStaticTest(unittest.TestCase):
         restart_end = source.index("_preparedTranscriptText: function", restart_index)
         self.assertNotIn("this._resetAutoInsertFingerprint();", source[restart_index:restart_end])
 
+    def test_auto_insert_fingerprint_untracking_contains_array_failures(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_forgetAutoInsertFingerprint: function(fingerprint)")
+        end = source.index("\n  _finishSilentRelistenSkip:", start)
+        block = source[start:end]
+
+        self.assertIn("try {", block)
+        self.assertIn("this.autoInsertFingerprints.splice(index, 1);", block)
+        self.assertIn('this._recordLifecycleError("auto-insert-fingerprint", error);', block)
+        self.assertIn("return false;", block)
+
     def test_successful_relisten_restart_skips_done_status(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         silent_index = source.index("_finishSilentRelistenSkip: function(payload)")
