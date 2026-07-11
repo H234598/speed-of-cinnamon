@@ -830,6 +830,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("payload.model.trim()", install_block)
         self.assertIn('String(model || "").trim()', install_block)
 
+    def test_alarm_summary_payloads_are_string_checked_before_menu_creation(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_populateAlarmMenu: function(alarms, summary, message)")
+        end = source.index("\n  _addAlarmMenuEntry:", start)
+        block = source[start:end]
+        self.assertIn('typeof message === "string"', block)
+        self.assertIn('typeof summary === "string"', block)
+        self.assertIn("let summaryLabel = messageText || summaryText", block)
+        self.assertIn("new PopupMenu.PopupMenuItem(summaryLabel)", block)
+
     def test_input_source_refresh_ignores_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

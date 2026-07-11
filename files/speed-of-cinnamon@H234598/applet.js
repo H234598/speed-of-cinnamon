@@ -3528,8 +3528,10 @@ MyApplet.prototype = {
     alarms = alarms.filter((alarm) => alarm && typeof alarm === "object" && String(alarm.id || "").trim() !== "");
     this._clearMenuItems(this.alarmItem.menu);
 
-    let summaryText = message || summary || _("No alarms configured");
-    let summaryItem = new PopupMenu.PopupMenuItem(summaryText);
+    let messageText = typeof message === "string" ? message.trim() : "";
+    let summaryText = typeof summary === "string" ? summary.trim() : "";
+    let summaryLabel = messageText || summaryText || _("No alarms configured");
+    let summaryItem = new PopupMenu.PopupMenuItem(summaryLabel);
     summaryItem.setSensitive(false);
     this.alarmItem.menu.addMenuItem(summaryItem);
 
