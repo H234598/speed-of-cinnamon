@@ -7269,7 +7269,7 @@ MyApplet.prototype = {
         this._recordLifecycleError("process-callback", error);
       }
     };
-    if (this._resourceRegistry && this._resourceRegistry.processes[processToken]) {
+    if (this._resourceRegistry && this._resourceRegistry.processes && this._resourceRegistry.processes[processToken]) {
       this._resourceRegistry.processes[processToken].cancel = (notifyCallback) => finish(
         { cancelled: true },
         true,
