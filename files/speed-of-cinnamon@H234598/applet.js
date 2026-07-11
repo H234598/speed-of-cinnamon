@@ -3867,12 +3867,7 @@ MyApplet.prototype = {
   },
 
   _setAlarmOptionStatus: function(message) {
-    if (this.status === "recording" || this.status === "processing") {
-      this.lastMessage = this._uiMessageText(message);
-      this._updatePanel();
-      return;
-    }
-    this._setStatus("ready", message, this.lastTranscript);
+    this._setStatusPreservingRecording("ready", message, this.lastTranscript);
   },
 
   _setAlarmErrorStatus: function(message) {

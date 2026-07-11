@@ -2317,6 +2317,11 @@ class AppletStaticTest(unittest.TestCase):
         error_start = source.index("_setAlarmErrorStatus: function(message)")
         error_end = source.index("\n  _refreshAlarmMenu:", error_start)
         error_block = source[error_start:error_end]
+        option_start = source.index("_setAlarmOptionStatus: function(message)")
+        option_end = source.index("\n  _setAlarmErrorStatus:", option_start)
+        option_block = source[option_start:option_end]
+        self.assertIn('this._setStatusPreservingRecording("ready", message, this.lastTranscript);', option_block)
+        self.assertNotIn('this.status === "recording" || this.status === "processing"', option_block)
         self.assertIn("if (this._hasActiveRecordingState())", error_block)
         self.assertIn("this._updatePanel();", error_block)
 
