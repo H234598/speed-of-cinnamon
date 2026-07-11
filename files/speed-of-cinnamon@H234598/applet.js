@@ -427,7 +427,8 @@ MyApplet.prototype = {
   },
 
   _lifecycleAllowsWork: function() {
-    return this.lifecycleState !== LIFECYCLE_REMOVING &&
+    return !this._initFailed &&
+      this.lifecycleState !== LIFECYCLE_REMOVING &&
       this.lifecycleState !== LIFECYCLE_REMOVED &&
       !this.appletRemoved;
   },

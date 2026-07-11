@@ -981,6 +981,7 @@ class AppletStaticTest(unittest.TestCase):
             "_beginTeardown: function()",
             "_finishTeardown: function()",
             "this._recordLifecycleError(\"init\", error);",
+            "return !this._initFailed &&",
             "this._disabledErrorGroups[key] = true;",
             "this.lifecycleState = LIFECYCLE_DEGRADED;",
             "this._runGuarded(\"panel-style\"",
