@@ -1784,6 +1784,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("sources = sources.slice(0, MAX_INPUT_SOURCE_MENU_ENTRIES);", block)
         self.assertIn('_("Input source list truncated for safety")', block)
 
+    def test_voice_model_menu_fanout_is_bounded(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        self.assertIn("const MAX_VOICE_MODEL_MENU_ENTRIES = 128;", source)
+
+        start = source.index("_populateModelMenu: function(models, message)")
+        end = source.index("\n  _populateExternalApiVoiceMenu:", start)
+        block = source[start:end]
+        self.assertIn("let voiceModelsWereTruncated = models.length > MAX_VOICE_MODEL_MENU_ENTRIES;", block)
+        self.assertIn("models = models.slice(0, MAX_VOICE_MODEL_MENU_ENTRIES);", block)
+        self.assertIn('_("Voice model list truncated for safety")', block)
+
     def test_custom_limit_dialogs_ignore_stale_callbacks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

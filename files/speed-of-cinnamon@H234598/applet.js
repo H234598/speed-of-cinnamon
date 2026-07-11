@@ -54,6 +54,7 @@ const ALARM_CHECK_SECONDS = 60;
 const MAX_ALARM_MENU_ENTRIES = 128;
 const MAX_ALARM_NOTIFICATIONS = 32;
 const MAX_INPUT_SOURCE_MENU_ENTRIES = 128;
+const MAX_VOICE_MODEL_MENU_ENTRIES = 128;
 const MAX_CLI_ARG_BYTES = 4096;
 const MAX_CLI_ARG_COUNT = 128;
 const MAX_CLI_COMMAND_BYTES = 32768;
@@ -3974,6 +3975,10 @@ MyApplet.prototype = {
     }
     models = Array.isArray(models) ? models : [];
     models = models.filter((model) => model && typeof model === "object" && typeof model.name === "string" && model.name.trim() !== "" && this._modelPathFromPayload(model) !== "");
+    let voiceModelsWereTruncated = models.length > MAX_VOICE_MODEL_MENU_ENTRIES;
+    if (voiceModelsWereTruncated) {
+      models = models.slice(0, MAX_VOICE_MODEL_MENU_ENTRIES);
+    }
     let messageText = typeof message === "string" ? message.trim() : "";
     messageText = this._uiMessageText(messageText);
     this._clearMenuItems(this.modelItem.menu);
@@ -4068,6 +4073,9 @@ MyApplet.prototype = {
     }
     if (ggmlCount === 0) {
       ggmlMenu.menu.addMenuItem(this._selectionInfoItem(_("No GGML models in catalog")));
+    }
+    if (voiceModelsWereTruncated) {
+      this.modelItem.menu.addMenuItem(this._selectionInfoItem(_("Voice model list truncated for safety")));
     }
   },
 
