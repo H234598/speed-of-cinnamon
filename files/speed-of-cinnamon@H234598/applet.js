@@ -7469,7 +7469,11 @@ MyApplet.prototype = {
   },
 
   _coerceTypeText: function(text) {
-    let value = String(text || "");
+    if (typeof text !== "string") {
+      this._setStatus("error", _("Text for direct typing is invalid"), this.lastTranscript);
+      return null;
+    }
+    let value = text;
     if (value.indexOf("\u0000") >= 0) {
       value = value.replace(/\u0000/g, "");
     }

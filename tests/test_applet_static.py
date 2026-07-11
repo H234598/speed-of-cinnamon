@@ -2005,6 +2005,8 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         self.assertIn("_coerceTypeText: function(text) {", source)
+        self.assertIn('if (typeof text !== "string")', source)
+        self.assertIn('Text for direct typing is invalid', source)
         self.assertIn('if (value.indexOf("\\u0000") >= 0) {', source)
         self.assertIn("value = value.replace(/\\u0000/g, \"\");", source)
         self.assertIn('if (value.length > MAX_TYPE_COMMAND_CHARS) {', source)
