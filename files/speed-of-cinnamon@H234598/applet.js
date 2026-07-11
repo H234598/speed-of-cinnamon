@@ -1537,7 +1537,11 @@ MyApplet.prototype = {
   },
 
   _sanitizeErrorMessage: function(value) {
-    let text = String(value || "").replace(NUL_RE, "");
+    let text = typeof value === "string" ? value : "";
+    if (value instanceof Error && typeof value.message === "string") {
+      text = value.message;
+    }
+    text = text.replace(NUL_RE, "");
     if (SENSITIVE_ERROR_RE.test(text) || LOCAL_PATH_ERROR_RE.test(text)) {
       return "[redacted error details]";
     }
