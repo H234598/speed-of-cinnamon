@@ -1070,6 +1070,7 @@ MyApplet.prototype = {
     this.lastTranscript = "";
     this.lastMessage = "";
     this.isCommandRunning = false;
+    this.terminalWorkflowRunning = false;
     this.cancelPendingWhileCommandRunning = false;
     this._statusRefreshToken = 0;
     this._statusCommandRunning = false;
@@ -1779,6 +1780,7 @@ MyApplet.prototype = {
     this.autoRelistenPending = false;
     this.autoRelistenPendingToken = "";
     this.autoRelistenManualStopRequested = false;
+    this.terminalWorkflowRunning = false;
     this.modelMenuRefreshToken = null;
     this.textModelMenuRefreshToken = null;
     this.historyRefreshToken = null;
@@ -3423,6 +3425,14 @@ MyApplet.prototype = {
   },
 
   _runTerminalWorkflow: function(title, command, openedMessage, cancelOllamaFlow, ollamaFlowToken) {
+    if (this.terminalWorkflowRunning) {
+      this._setStatus("error", _("Another terminal workflow is already running"), this.lastTranscript);
+      return false;
+    }
+    if (this.isCommandRunning) {
+      this._setStatus("error", _("Another command is already running"), this.lastTranscript);
+      return false;
+    }
     let terminalArgs = this._terminalCommandArgs(title, command);
     if (terminalArgs.length === 0) {
       this._setStatus("error", _("No supported terminal found"), this.lastTranscript);
@@ -3430,17 +3440,21 @@ MyApplet.prototype = {
       return false;
     }
     try {
+      this.terminalWorkflowRunning = true;
       let handle = this._runBoundedSubprocess(this._coerceSpawnArgs(terminalArgs), {}, {
         timeoutMs: 0,
         maxStdoutBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
         maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
       }, (stdout, stderr, result) => {
+        this.terminalWorkflowRunning = false;
         if (result && (result.error || result.timedOut || result.outputTooLarge)) {
           if (cancelOllamaFlow === true && ollamaFlowToken && this.ollamaModelFlowToken === ollamaFlowToken) {
             this._cancelOllamaInstallWatch();
             this._clearOllamaModelFlow();
           }
           this._setStatus("error", _("Terminal process exited unexpectedly"), this.lastTranscript);
+        } else if (cancelOllamaFlow !== true && this._lifecycleAllowsWork()) {
+          this._setStatus("ready", _("Terminal workflow finished"), this.lastTranscript);
         }
       });
       if (!handle) {
@@ -3449,6 +3463,7 @@ MyApplet.prototype = {
       this._setStatus("processing", openedMessage, this.lastTranscript);
       return true;
     } catch (err) {
+      this.terminalWorkflowRunning = false;
       global.logError(err);
       let safeError = this._sanitizeErrorMessage(String(err));
       this._setStatus("error", _("Could not open terminal: ") + safeError, this.lastTranscript);
