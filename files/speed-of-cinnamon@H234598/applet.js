@@ -8946,6 +8946,10 @@ MyApplet.prototype = {
   },
 
   _insertLastTranscript: function() {
+    if (this._hasActiveRecordingState()) {
+      this._setStatusPreservingRecording("ready", _("Finish the current recording before inserting another transcript"), this.lastTranscript);
+      return;
+    }
     if (!this.lastTranscript) {
       this._setStatus(this.status, _("No transcript yet"), this.lastTranscript);
       return;
@@ -9021,6 +9025,10 @@ MyApplet.prototype = {
 
   _insertHistoryTranscript: function(text) {
     if (!text) {
+      return;
+    }
+    if (this._hasActiveRecordingState()) {
+      this._setStatusPreservingRecording("ready", _("Finish the current recording before inserting another transcript"), this.lastTranscript);
       return;
     }
     this._insertTranscriptText(text);

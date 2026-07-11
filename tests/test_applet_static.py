@@ -3191,6 +3191,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._connectSafe(this.insertLastItem, \"activate\", () => this._insertLastTranscript())", source)
         self.assertIn("this.insertLastItem.setSensitive(Boolean(this.lastTranscript))", source)
         self.assertIn("_insertLastTranscript: function()", source)
+        insert_last_start = source.index("_insertLastTranscript: function()")
+        insert_last_end = source.index("\n  _populateHistoryMenu:", insert_last_start)
+        insert_last_block = source[insert_last_start:insert_last_end]
+        self.assertIn("if (this._hasActiveRecordingState())", insert_last_block)
+        self.assertIn('this._setStatusPreservingRecording("ready", _("Finish the current recording before inserting another transcript")', insert_last_block)
         self.assertIn("_insertTranscriptText: function(transcript, completionCallback)", source)
         self.assertIn("_finishAppletTextInsert: function(payload)", source)
         self.assertIn("_finishPendingRelisten: function()", source)
@@ -3482,6 +3487,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("copyItem.setSensitive(hasTranscriptText);", source)
         self.assertIn("this._connectSafe(copyItem, \"activate\", () => this._copyHistoryTranscript(transcriptText))", source)
         self.assertIn("_insertHistoryTranscript: function(text)", source)
+        insert_history_start = source.index("_insertHistoryTranscript: function(text)")
+        insert_history_end = source.index("\n  _setStatusPreservingRecording:", insert_history_start)
+        insert_history_block = source[insert_history_start:insert_history_end]
+        self.assertIn("if (this._hasActiveRecordingState())", insert_history_block)
+        self.assertIn('this._setStatusPreservingRecording("ready", _("Finish the current recording before inserting another transcript")', insert_history_block)
         self.assertIn("this._insertTranscriptText(text);", source)
         self.assertIn("this._preparedTranscriptText(text, true)", source)
         self.assertIn("this._preparedTranscriptText(this.lastTranscript, true)", source)
