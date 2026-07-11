@@ -2331,6 +2331,23 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("return;", block)
         self.assertLess(block.index("if (this.isCommandRunning || this._hasActiveRecordingState())"), block.index("this.isCommandRunning = true;"))
 
+    def test_busy_backend_actions_prepare_arguments_before_setting_busy_state(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method, args_name, builder_name, message in [
+            ("_loadAllTranscriptsDocument: function()", "\n  _showTranscriptsWindow:", "historyDocumentArgs", "_allHistoryArgs", "Could not prepare transcript list"),
+            ("_exportAllTranscripts: function()", "\n  _safePayloadCount:", "exportArgs", "_transcriptsExportArgs", "Could not prepare transcript export"),
+            ("_previewCleanup: function()", "\n  _cleanupOldFiles:", "cleanupPreviewArgs", "_cleanupPreviewArgs", "Could not prepare cleanup preview"),
+            ("_cleanupOldFiles: function()", "\n  _settingsSnapshot:", "cleanupArgs", "_cleanupArgs", "Could not prepare cleanup"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn(f"let {args_name};", block)
+            self.assertIn(f"{args_name} = this.{builder_name}();", block)
+            self.assertIn(f"this._spawnJson({args_name},", block)
+            self.assertIn(f'_("{message}")', block)
+            self.assertLess(block.index(f"{args_name} = this.{builder_name}();"), block.index("this.isCommandRunning = true;"))
+
     def test_doctor_payload_processing_fails_closed_on_unexpected_exceptions(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_runDoctor: function(startupCheck)")

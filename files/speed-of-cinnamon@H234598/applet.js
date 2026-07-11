@@ -6111,9 +6111,16 @@ MyApplet.prototype = {
     if (this.isCommandRunning || this._hasActiveRecordingState()) {
       return;
     }
+    let historyDocumentArgs;
+    try {
+      historyDocumentArgs = this._allHistoryArgs();
+    } catch (error) {
+      this._setStatus("error", _("Could not prepare transcript list"), this.lastTranscript);
+      return;
+    }
     this.isCommandRunning = true;
     this._setStatus("processing", _("Preparing transcript list..."), this.lastTranscript);
-    this._spawnJson(this._allHistoryArgs(), (payload) => {
+    this._spawnJson(historyDocumentArgs, (payload) => {
       this.isCommandRunning = false;
       if (payload.error) {
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
@@ -6197,9 +6204,16 @@ MyApplet.prototype = {
     if (this.isCommandRunning || this._hasActiveRecordingState()) {
       return;
     }
+    let exportArgs;
+    try {
+      exportArgs = this._transcriptsExportArgs();
+    } catch (error) {
+      this._setStatus("error", _("Could not prepare transcript export"), this.lastTranscript);
+      return;
+    }
     this.isCommandRunning = true;
     this._setStatus("processing", _("Exporting transcripts..."), this.lastTranscript);
-    this._spawnJson(this._transcriptsExportArgs(), (payload) => {
+    this._spawnJson(exportArgs, (payload) => {
       this.isCommandRunning = false;
       if (payload.error) {
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
@@ -6368,9 +6382,16 @@ MyApplet.prototype = {
     if (this.isCommandRunning || this._hasActiveRecordingState()) {
       return;
     }
+    let cleanupPreviewArgs;
+    try {
+      cleanupPreviewArgs = this._cleanupPreviewArgs();
+    } catch (error) {
+      this._setStatus("error", _("Could not prepare cleanup preview"), this.lastTranscript);
+      return;
+    }
     this.isCommandRunning = true;
     this._setStatus("processing", _("Previewing cleanup..."), this.lastTranscript);
-    this._spawnJson(this._cleanupPreviewArgs(), (payload) => {
+    this._spawnJson(cleanupPreviewArgs, (payload) => {
       this.isCommandRunning = false;
       if (payload.error) {
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
@@ -6385,9 +6406,16 @@ MyApplet.prototype = {
     if (this.isCommandRunning || this._hasActiveRecordingState()) {
       return;
     }
+    let cleanupArgs;
+    try {
+      cleanupArgs = this._cleanupArgs();
+    } catch (error) {
+      this._setStatus("error", _("Could not prepare cleanup"), this.lastTranscript);
+      return;
+    }
     this.isCommandRunning = true;
     this._setStatus("processing", _("Cleaning old files..."), this.lastTranscript);
-    this._spawnJson(this._cleanupArgs(), (payload) => {
+    this._spawnJson(cleanupArgs, (payload) => {
       this.isCommandRunning = false;
       if (payload.error) {
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
