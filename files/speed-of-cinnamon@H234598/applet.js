@@ -8100,8 +8100,10 @@ MyApplet.prototype = {
     this._statusRefreshToken++;
     let previousStatus = this.status;
     this.status = status;
-    this.lastMessage = status === "error" ? this._sanitizeErrorMessage(message) : message || "";
-    if (transcript) {
+    this.lastMessage = status === "error"
+      ? this._sanitizeErrorMessage(message)
+      : (typeof message === "string" ? message : "");
+    if (typeof transcript === "string" && transcript !== "") {
       this.lastTranscript = transcript;
     }
     if (this.copyLastItem) {
