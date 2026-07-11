@@ -2902,10 +2902,11 @@ class AppletStaticTest(unittest.TestCase):
         duplicate_finish_index = source.index("this._finishPendingRelisten();", duplicate_index)
         duplicate_return_index = source.index("return;", duplicate_index)
         self.assertLess(duplicate_finish_index, duplicate_return_index)
-        self.assertIn(
-            "if (!completed) {\n          this._forgetAutoInsertFingerprint(insertFingerprint);\n          this.autoRelistenPending = false;\n          this.autoRelistenPendingToken = \"\";\n          this.autoRelistenManualStopRequested = true;\n          return;\n        }",
-            source,
-        )
+        self.assertIn("if (!completed) {", source)
+        self.assertIn("this._forgetAutoInsertFingerprint(insertFingerprint);", source)
+        self.assertIn("this.autoRelistenPending = false;", source)
+        self.assertIn('this.autoRelistenPendingToken = "";', source)
+        self.assertIn("this.autoRelistenManualStopRequested = true;", source)
         self.assertIn("_hasAutoInsertFingerprint: function(fingerprint)", source)
         self.assertIn("_reserveAutoInsertFingerprint: function(fingerprint)", source)
         self.assertIn("_rememberAutoInsertFingerprint: function(fingerprint)", source)
@@ -3316,6 +3317,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.notificationSessionActive = true;", source)
         self.assertIn('if (status === "done" && hasTranscript)', source)
         self.assertIn('this._payloadMessage(payload, _("Recording finished without transcript")', source)
+        insert_start = source.index("_finishAppletTextInsert: function(payload)")
+        insert_end = source.index("\n  _ensureAutoRelistenPendingForDonePayload:", insert_start)
+        insert_block = source[insert_start:insert_end]
+        self.assertIn("try {\n        result = this._insertTranscriptText", insert_block)
+        self.assertIn('this._recordLifecycleError("payload-insert", error);', insert_block)
+        self.assertIn("this._forgetAutoInsertFingerprint(insertFingerprint);", insert_block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Could not insert transcript")', insert_block)
         self.assertIn('if (method === "none")', source)
         self.assertIn('if (method === "type")', source)
         self.assertIn("this.textInsertToken = null;", source)

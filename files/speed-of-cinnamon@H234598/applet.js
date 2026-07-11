@@ -8656,16 +8656,27 @@ MyApplet.prototype = {
       inserted = true;
       this._setStatus("done", this._payloadMessage(payload, _("Transcript already inserted by backend")), transcript);
     } else {
-      let result = this._insertTranscriptText(transcript, (completed) => {
-        if (!completed) {
-          this._forgetAutoInsertFingerprint(insertFingerprint);
-          this.autoRelistenPending = false;
-          this.autoRelistenPendingToken = "";
-          this.autoRelistenManualStopRequested = true;
-          return;
-        }
-        this._finishPendingRelisten();
-      });
+      let result;
+      try {
+        result = this._insertTranscriptText(transcript, (completed) => {
+          if (!completed) {
+            this._forgetAutoInsertFingerprint(insertFingerprint);
+            this.autoRelistenPending = false;
+            this.autoRelistenPendingToken = "";
+            this.autoRelistenManualStopRequested = true;
+            return;
+          }
+          this._finishPendingRelisten();
+        });
+      } catch (error) {
+        this._recordLifecycleError("payload-insert", error);
+        this._forgetAutoInsertFingerprint(insertFingerprint);
+        this.autoRelistenPending = false;
+        this.autoRelistenPendingToken = "";
+        this.autoRelistenManualStopRequested = true;
+        this._setStatusPreservingRecording("error", _("Could not insert transcript"), transcript);
+        return;
+      }
       if (result === null) {
         return;
       }
