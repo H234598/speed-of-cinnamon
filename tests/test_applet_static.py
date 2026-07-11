@@ -2781,6 +2781,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.cancelItem.setSensitive(this._hasCancelableRecordingWork());", status_block)
         self.assertIn("if (!this._hasCancelableRecordingWork(statusOverride))", cancel_block)
         self.assertIn("if (!this.isCommandRunning && this.autoRelistenPending && this.textInsertToken)", cancel_block)
+        self.assertIn("this._cancelTextInsertForSettingsChange();", cancel_block)
         self.assertIn('this._setStatus("ready", _("Auto Relisten cancelled"), this.lastTranscript);', cancel_block)
         self.assertIn("let effectiveStatus = typeof statusOverride === \"string\" ? statusOverride : this.status;", work_block)
 

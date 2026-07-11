@@ -3033,6 +3033,7 @@ MyApplet.prototype = {
       return;
     }
     if (!this.isCommandRunning && this.autoRelistenPending && this.textInsertToken) {
+      this._cancelTextInsertForSettingsChange();
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
       this.autoRelistenManualStopRequested = true;
