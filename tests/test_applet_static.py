@@ -711,6 +711,11 @@ class AppletStaticTest(unittest.TestCase):
             block = source[start:end]
             self.assertIn(f"if (!{parameter} || typeof {parameter} !== \"object\")", block)
 
+        alarm_start = source.index("_addAlarmMenuEntry: function(alarm)")
+        alarm_end = source.index("\n  _copyAlarmCommands:", alarm_start)
+        alarm_block = source[alarm_start:alarm_end]
+        self.assertIn('id = this._coerceCliTextArg(alarm.id, "alarm id").trim();', alarm_block)
+
         check_start = source.index("_checkAlarms: function(manual)")
         check_end = source.index("\n  _refreshInputSourceMenu:", check_start)
         check_block = source[check_start:check_end]
@@ -903,7 +908,7 @@ class AppletStaticTest(unittest.TestCase):
         entry_start = source.index("_addAlarmMenuEntry: function(alarm)")
         entry_end = source.index("\n  _copyAlarmCommands:", entry_start)
         entry_block = source[entry_start:entry_end]
-        self.assertIn('typeof alarm.id === "string"', entry_block)
+        self.assertIn('id = this._coerceCliTextArg(alarm.id, "alarm id").trim();', entry_block)
         self.assertIn('typeof alarm.label === "string"', entry_block)
         self.assertIn('typeof alarm.time === "string"', entry_block)
         self.assertIn('typeof alarm.summary === "string"', entry_block)

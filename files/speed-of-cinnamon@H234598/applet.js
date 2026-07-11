@@ -3634,7 +3634,13 @@ MyApplet.prototype = {
     if (!alarm || typeof alarm !== "object") {
       return;
     }
-    let id = typeof alarm.id === "string" ? alarm.id.trim() : "";
+    let id;
+    try {
+      id = this._coerceCliTextArg(alarm.id, "alarm id").trim();
+    } catch (err) {
+      global.logError(err);
+      return;
+    }
     if (id === "") {
       return;
     }
