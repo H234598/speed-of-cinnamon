@@ -4329,7 +4329,10 @@ MyApplet.prototype = {
     if (this.isCommandRunning) {
       return;
     }
-    let name = String(model.name || this._starterVoiceModelName());
+    let name = model && typeof model.name === "string" ? model.name.trim() : "";
+    if (name === "") {
+      name = this._starterVoiceModelName();
+    }
     this.isCommandRunning = true;
     this._setStatus("processing", _("Downloading model: ") + name, this.lastTranscript);
     this._spawnJson(this._downloadModelArgs(name), (payload) => {

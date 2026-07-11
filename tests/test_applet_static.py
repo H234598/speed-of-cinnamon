@@ -889,6 +889,17 @@ class AppletStaticTest(unittest.TestCase):
         remove_block = source[remove_start:remove_end]
         self.assertIn("let path = this._modelPathFromPayload(model);", remove_block)
 
+    def test_voice_model_download_handles_missing_model_payload(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_downloadVoiceModel: function(model)")
+        end = source.index("\n  _removeVoiceModel:", start)
+        block = source[start:end]
+        self.assertIn('model && typeof model.name === "string"', block)
+        self.assertIn('let name = model && typeof model.name === "string" ? model.name.trim() : "";', block)
+        self.assertIn('if (name === "")', block)
+        self.assertIn("name = this._starterVoiceModelName();", block)
+
     def test_text_model_payload_names_must_be_strings(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
