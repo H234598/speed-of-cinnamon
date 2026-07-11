@@ -990,6 +990,7 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_downloadVoiceModel: function(model)")
         end = source.index("\n  _removeVoiceModel:", start)
         block = source[start:end]
+        self.assertIn("if (this.isCommandRunning || this._hasActiveRecordingState())", block)
         self.assertIn('model && typeof model.name === "string"', block)
         self.assertIn('let name = model && typeof model.name === "string" ? model.name.trim() : "";', block)
         self.assertIn('if (name === "")', block)
@@ -1129,7 +1130,8 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_removeVoiceModel: function(model)")
         end = source.index("\n  _selectVoiceModel:", start)
         block = source[start:end]
-        self.assertIn("if (this.isCommandRunning || this.voiceModelActionToken)", block)
+        self.assertIn("if (this.isCommandRunning || this._hasActiveRecordingState() || this.voiceModelActionToken)", block)
+        self.assertIn("if (this.isCommandRunning || this._hasActiveRecordingState() || this.voiceModelActionToken)", block)
         self.assertIn("let actionToken = {};", block)
         self.assertIn("this.voiceModelActionToken = actionToken;", block)
         self.assertIn("this.voiceModelActionToken !== actionToken", block)

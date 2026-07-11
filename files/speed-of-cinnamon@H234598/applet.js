@@ -4429,7 +4429,7 @@ MyApplet.prototype = {
   },
 
   _downloadVoiceModel: function(model) {
-    if (this.isCommandRunning) {
+    if (this.isCommandRunning || this._hasActiveRecordingState()) {
       return;
     }
     let name = model && typeof model.name === "string" ? model.name.trim() : "";
@@ -4463,7 +4463,7 @@ MyApplet.prototype = {
   },
 
   _removeVoiceModel: function(model) {
-    if (this.isCommandRunning || this.voiceModelActionToken) {
+    if (this.isCommandRunning || this._hasActiveRecordingState() || this.voiceModelActionToken) {
       return;
     }
     let name = model && typeof model.name === "string" ? model.name.trim() : "";
