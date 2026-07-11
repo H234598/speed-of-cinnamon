@@ -1129,6 +1129,25 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('_("Model was not downloaded: ") + name', block)
         self.assertLess(block.index("if (payload.removed !== true)"), block.index("if (path !== \"\""))
 
+    def test_voice_model_refresh_serializes_backend_requests(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        refresh_start = source.index("_refreshModelMenu: function()")
+        refresh_end = source.index("\n  _populateModelMenu:", refresh_start)
+        refresh_block = source[refresh_start:refresh_end]
+        self.assertIn("if (this.modelMenuRefreshToken)", refresh_block)
+        self.assertIn("this.modelMenuRefreshToken = null;", refresh_block)
+        self.assertLess(refresh_block.index("if (this.modelMenuRefreshToken)"), refresh_block.index("let refreshToken = {};"))
+        self.assertLess(refresh_block.index("this.modelMenuRefreshToken = null;"), refresh_block.index("if (payload.error)"))
+
+        for method, next_method in [
+            ("_downloadVoiceModel: function(model)", "\n  _removeVoiceModel:"),
+            ("_removeVoiceModel: function(model)", "\n  _selectVoiceModel:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            self.assertIn("this.modelMenuRefreshToken = null;", source[start:end])
+
     def test_input_source_names_and_descriptions_are_string_checked(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

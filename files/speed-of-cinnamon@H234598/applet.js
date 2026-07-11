@@ -4051,6 +4051,9 @@ MyApplet.prototype = {
     if (!this._canMutateMenu(this.modelItem)) {
       return;
     }
+    if (this.modelMenuRefreshToken) {
+      return;
+    }
     let refreshToken = {};
     this.modelMenuRefreshToken = refreshToken;
     this._populateModelMenu([], _("Loading voice models..."));
@@ -4058,6 +4061,7 @@ MyApplet.prototype = {
       if (this.modelMenuRefreshToken !== refreshToken || !this._canMutateMenu(this.modelItem)) {
         return;
       }
+      this.modelMenuRefreshToken = null;
       if (payload.error) {
         let safeError = this._sanitizeErrorMessage(payload.error);
         this._populateModelMenu([], safeError);
@@ -4401,6 +4405,7 @@ MyApplet.prototype = {
     if (name === "") {
       name = this._starterVoiceModelName();
     }
+    this.modelMenuRefreshToken = null;
     let actionToken = {};
     this.voiceModelActionToken = actionToken;
     this.isCommandRunning = true;
@@ -4435,6 +4440,7 @@ MyApplet.prototype = {
     if (name === "") {
       return;
     }
+    this.modelMenuRefreshToken = null;
     let actionToken = {};
     this.voiceModelActionToken = actionToken;
     this.isCommandRunning = true;
