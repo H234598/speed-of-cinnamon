@@ -51,6 +51,8 @@ const MAX_CLIPBOARD_TARGET_OUTPUT_BYTES = 65536;
 const MAX_XDOTOOL_TARGET_OUTPUT_BYTES = 4096;
 const X11_COMMAND_TIMEOUT_MS = 2000;
 const ALARM_CHECK_SECONDS = 60;
+const MAX_ALARM_MENU_ENTRIES = 128;
+const MAX_ALARM_NOTIFICATIONS = 32;
 const MAX_CLI_ARG_BYTES = 4096;
 const MAX_CLI_ARG_COUNT = 128;
 const MAX_CLI_COMMAND_BYTES = 32768;
@@ -3630,6 +3632,10 @@ MyApplet.prototype = {
     }
     alarms = Array.isArray(alarms) ? alarms : [];
     alarms = alarms.filter((alarm) => alarm && typeof alarm === "object" && typeof alarm.id === "string" && alarm.id.trim() !== "");
+    let alarmsWereTruncated = alarms.length > MAX_ALARM_MENU_ENTRIES;
+    if (alarmsWereTruncated) {
+      alarms = alarms.slice(0, MAX_ALARM_MENU_ENTRIES);
+    }
     this._clearMenuItems(this.alarmItem.menu);
 
     let messageText = typeof message === "string" ? message.trim() : "";
@@ -3670,6 +3676,9 @@ MyApplet.prototype = {
         continue;
       }
       this._addAlarmMenuEntry(alarm);
+    }
+    if (alarmsWereTruncated) {
+      this.alarmItem.menu.addMenuItem(this._selectionInfoItem(_("Alarm list truncated for safety")));
     }
   },
 
@@ -3781,6 +3790,11 @@ MyApplet.prototype = {
       let due = Array.isArray(payload.due)
         ? payload.due.filter((alarm) => alarm && typeof alarm === "object")
         : [];
+      let dueCount = due.length;
+      let dueWasTruncated = dueCount > MAX_ALARM_NOTIFICATIONS;
+      if (dueWasTruncated) {
+        due = due.slice(0, MAX_ALARM_NOTIFICATIONS);
+      }
       for (let alarm of due) {
         if (alarm.notify !== true) {
           continue;
@@ -3794,7 +3808,11 @@ MyApplet.prototype = {
         if (manual || this.status === "idle" || this.status === "ready" || this.status === "done") {
           let firstLabel = typeof first.label === "string" ? first.label.trim() : "";
           let firstTime = typeof first.time === "string" ? first.time.trim() : "";
-          this._setAlarmOptionStatus(_("Alarm: ") + (firstLabel || firstTime || String(due.length)));
+          let alarmStatusLabel = firstLabel || firstTime || String(dueCount);
+          if (dueWasTruncated) {
+            alarmStatusLabel += " (" + _("some notifications suppressed for safety") + ")";
+          }
+          this._setAlarmOptionStatus(_("Alarm: ") + alarmStatusLabel);
         }
       } else if (manual) {
         this._setAlarmOptionStatus(_("No alarms due"));

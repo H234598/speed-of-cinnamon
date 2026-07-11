@@ -1753,6 +1753,26 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('args[3] = "--text="', choice_block)
         self.assertIn('_("model list truncated for safety")', choice_block)
 
+    def test_alarm_fanout_is_bounded_before_menu_or_notification_creation(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        self.assertIn("const MAX_ALARM_MENU_ENTRIES = 128;", source)
+        self.assertIn("const MAX_ALARM_NOTIFICATIONS = 32;", source)
+
+        menu_start = source.index("_populateAlarmMenu: function(alarms, summary, message)")
+        menu_end = source.index("\n  _addAlarmMenuEntry:", menu_start)
+        menu_block = source[menu_start:menu_end]
+        self.assertIn("let alarmsWereTruncated = alarms.length > MAX_ALARM_MENU_ENTRIES;", menu_block)
+        self.assertIn("alarms = alarms.slice(0, MAX_ALARM_MENU_ENTRIES);", menu_block)
+        self.assertIn('_("Alarm list truncated for safety")', menu_block)
+
+        check_start = source.index("_checkAlarms: function(manual)")
+        check_end = source.index("\n  _refreshInputSourceMenu:", check_start)
+        check_block = source[check_start:check_end]
+        self.assertIn("let dueCount = due.length;", check_block)
+        self.assertIn("let dueWasTruncated = dueCount > MAX_ALARM_NOTIFICATIONS;", check_block)
+        self.assertIn("due = due.slice(0, MAX_ALARM_NOTIFICATIONS);", check_block)
+        self.assertIn('_("some notifications suppressed for safety")', check_block)
+
     def test_custom_limit_dialogs_ignore_stale_callbacks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
