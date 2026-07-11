@@ -5648,8 +5648,13 @@ MyApplet.prototype = {
         return;
       }
       this.settingsTransferToken = null;
-      let applied = this._applyImportedSettings(payload.settings || {});
-      this._setStatus("done", _("Imported settings: ") + String(applied), this.lastTranscript);
+      try {
+        let applied = this._applyImportedSettings(payload.settings || {});
+        this._setStatus("done", _("Imported settings: ") + String(applied), this.lastTranscript);
+      } catch (err) {
+        let safeError = this._sanitizeErrorMessage(err);
+        this._setStatus("error", _("Could not apply imported settings: ") + safeError, this.lastTranscript);
+      }
     });
   },
 

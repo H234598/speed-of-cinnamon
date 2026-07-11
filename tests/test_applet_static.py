@@ -1820,6 +1820,12 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn("this.settingsTransferToken !== transferToken", block)
             self.assertIn("!this._lifecycleAllowsWork()", block)
 
+        import_start = source.index("_importSettings: function()")
+        import_end = source.index("\n  _applyImportedSettings:", import_start)
+        import_block = source[import_start:import_end]
+        self.assertIn("try {\n        let applied = this._applyImportedSettings(payload.settings || {});", import_block)
+        self.assertIn('this._setStatus("error", _("Could not apply imported settings: ") + safeError', import_block)
+
     def test_setup_and_diagnostics_actions_ignore_stale_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
