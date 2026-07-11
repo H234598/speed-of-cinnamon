@@ -3608,3 +3608,22 @@ class AppletStaticTest(unittest.TestCase):
         terminal_block = source[terminal_start:terminal_end]
         self.assertIn("cancelOllamaFlow === true", terminal_block)
         self.assertIn("this.ollamaModelFlowToken !== ollamaFlowToken", terminal_block)
+
+    def test_terminal_workflow_cannot_overwrite_new_recording_status(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        toggle_start = source.index("_toggleRecording: function()")
+        toggle_end = source.index("\n  _restartApplet:", toggle_start)
+        toggle_block = source[toggle_start:toggle_end]
+        self.assertLess(
+            toggle_block.index("this.terminalWorkflowToken = null;"),
+            toggle_block.index("if (this.isCommandRunning)"),
+        )
+
+        workflow_start = source.index("_runTerminalWorkflow: function(")
+        workflow_end = source.index("\n  _terminalWorkflowScript:", workflow_start)
+        workflow_block = source[workflow_start:workflow_end]
+        self.assertIn("let terminalWorkflowToken = {};", workflow_block)
+        self.assertIn("this.terminalWorkflowToken = terminalWorkflowToken;", workflow_block)
+        self.assertIn("if (this.terminalWorkflowToken !== terminalWorkflowToken)", workflow_block)
+        self.assertIn("this.terminalWorkflowToken = null;", workflow_block)

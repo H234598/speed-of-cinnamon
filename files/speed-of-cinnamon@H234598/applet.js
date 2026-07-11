@@ -431,6 +431,7 @@ MyApplet.prototype = {
     this.appletRemoved = false;
     this.spawnGeneration = 0;
     this.targetWindowGeneration = 0;
+    this.terminalWorkflowToken = null;
   },
 
   _lifecycleAllowsWork: function() {
@@ -1072,6 +1073,7 @@ MyApplet.prototype = {
     this.lastMessage = "";
     this.isCommandRunning = false;
     this.terminalWorkflowRunning = false;
+    this.terminalWorkflowToken = null;
     this.cancelPendingWhileCommandRunning = false;
     this._statusRefreshToken = 0;
     this._statusCommandRunning = false;
@@ -2945,6 +2947,9 @@ MyApplet.prototype = {
     if (this.ollamaModelFlowToken || this.ollamaInstallWatchToken) {
       this._cancelOllamaFlowForRecording();
     }
+    if (this.terminalWorkflowRunning || this.terminalWorkflowToken) {
+      this.terminalWorkflowToken = null;
+    }
     if (this.isCommandRunning) {
       if (this.autoRelisten && this.notificationSessionActive) {
         this.autoRelistenManualStopRequested = true;
@@ -3502,12 +3507,18 @@ MyApplet.prototype = {
     }
     try {
       this.terminalWorkflowRunning = true;
+      let terminalWorkflowToken = {};
+      this.terminalWorkflowToken = terminalWorkflowToken;
       let handle = this._runBoundedSubprocess(this._coerceSpawnArgs(terminalArgs), {}, {
         timeoutMs: 0,
         maxStdoutBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
         maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
       }, (stdout, stderr, result) => {
         this.terminalWorkflowRunning = false;
+        if (this.terminalWorkflowToken !== terminalWorkflowToken) {
+          return;
+        }
+        this.terminalWorkflowToken = null;
         if (cancelOllamaFlow === true && (!ollamaFlowToken || this.ollamaModelFlowToken !== ollamaFlowToken)) {
           return;
         }
@@ -3528,6 +3539,7 @@ MyApplet.prototype = {
       return true;
     } catch (err) {
       this.terminalWorkflowRunning = false;
+      this.terminalWorkflowToken = null;
       global.logError(err);
       let safeError = this._sanitizeErrorMessage(String(err));
       this._setStatus("error", _("Could not open terminal: ") + safeError, this.lastTranscript);
