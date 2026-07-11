@@ -1833,6 +1833,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._untrackTimer(key, sourceId, propertyName);", block)
         self.assertLess(block.index("let keepTimer"), block.index("if (!keepTimer)"))
 
+    def test_failed_timer_removal_remains_tracked(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_clearTrackedTimer: function(name, propertyName)")
+        end = source.index("\n  _scheduleTrackedTimer:", start)
+        block = source[start:end]
+        self.assertIn("let removed = Mainloop.source_remove(sourceId);", block)
+        self.assertIn('if (removed === false) {', block)
+        self.assertIn('this._recordLifecycleError("timer-clear", error);', block)
+        self.assertIn("return;", block)
+        self.assertLess(block.index("Mainloop.source_remove(sourceId)"), block.index("delete this._resourceRegistry.timers[key]"))
+
     def test_local_status_updates_invalidate_inflight_status_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

@@ -1008,16 +1008,20 @@ MyApplet.prototype = {
       }
       return;
     }
+    try {
+      let removed = Mainloop.source_remove(sourceId);
+      if (removed === false) {
+        throw new Error("Timer source could not be removed");
+      }
+    } catch (error) {
+      this._recordLifecycleError("timer-clear", error);
+      return;
+    }
     if (this._resourceRegistry && this._resourceRegistry.timers[key] === sourceId) {
       delete this._resourceRegistry.timers[key];
     }
     if (propertyName && this[propertyName] === sourceId) {
       this[propertyName] = 0;
-    }
-    try {
-      Mainloop.source_remove(sourceId);
-    } catch (error) {
-      this._recordLifecycleError("timer-clear", error);
     }
   },
 
