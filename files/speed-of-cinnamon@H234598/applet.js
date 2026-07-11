@@ -4245,13 +4245,12 @@ MyApplet.prototype = {
     }
     this.settings.setValue("input-device", this.inputDevice);
     this._refreshInputSourceMenu();
-    let safeLabel = this._uiMessageText(label);
+    let safeLabel = typeof label === "string" ? label : "";
     let message = this.inputDevice === ""
       ? _("Input device: system default")
       : _("Input device: ") + safeLabel;
     if (this._hasActiveRecordingState()) {
-      this.lastMessage = _("Input device for next recording: ") + safeLabel;
-      this._updatePanel();
+      this._setStatusPreservingRecording(this.status, _("Input device for next recording: ") + safeLabel, this.lastTranscript);
       return;
     }
     this._setStatusPreservingRecording("ready", message, this.lastTranscript);

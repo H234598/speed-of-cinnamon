@@ -3742,6 +3742,13 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn(expected, block, method)
             self.assertNotIn("this._uiMessageText(message)", block, method)
 
+        input_start = source.index("_selectInputSource: function(name, label)")
+        input_end = source.index("\n  _selectDefaultInputSource:", input_start)
+        input_block = source[input_start:input_end]
+        self.assertIn('let safeLabel = typeof label === "string" ? label : "";', input_block)
+        self.assertIn('this._setStatusPreservingRecording(this.status, _("Input device for next recording: ") + safeLabel', input_block)
+        self.assertNotIn("this._uiMessageText(label)", input_block)
+
     def test_ollama_flows_are_cancelled_before_recording_starts(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
