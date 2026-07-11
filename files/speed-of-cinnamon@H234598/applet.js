@@ -3970,7 +3970,9 @@ MyApplet.prototype = {
       if (!model || typeof model !== "object") {
         continue;
       }
-      if (String(model.model_format || "") === "ctranslate2" || String(model.backend || "") === "faster-whisper") {
+      let modelFormat = typeof model.model_format === "string" ? model.model_format.trim().toLowerCase() : "";
+      let modelBackend = typeof model.backend === "string" ? model.backend.trim().toLowerCase() : "";
+      if (modelFormat === "ctranslate2" || modelBackend === "faster-whisper") {
         this._addModelMenuEntry(model, ct2Menu.menu);
         ct2Count++;
       } else {

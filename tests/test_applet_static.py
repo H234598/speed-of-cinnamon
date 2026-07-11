@@ -785,6 +785,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (alarm.notify !== true)", source)
         self.assertIn("alarm.critical === true", source)
         self.assertIn("let downloaded = model.downloaded === true;", source)
+        self.assertIn('let modelFormat = typeof model.model_format === "string" ? model.model_format.trim().toLowerCase() : "";', source)
+        self.assertIn('let modelBackend = typeof model.backend === "string" ? model.backend.trim().toLowerCase() : "";', source)
         self.assertIn("payload.truncated === true", source)
         self.assertIn("payload.plaintext !== false", source)
         self.assertIn("source.default === true", source)
