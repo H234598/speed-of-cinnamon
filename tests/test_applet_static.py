@@ -3296,6 +3296,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_newSafeLabel: function(text, options, group)", source)
         self.assertIn("if (!dialog || !child || !dialog.contentLayout", source)
         self.assertIn('this._dialogSetButtons(dialog, [', source)
+        self.assertIn('safeButton.action = this._guardStateCallback("dialog-" + String(group || "action"), button.action, undefined);', source)
+        self.assertNotIn('safeButton.action = this._guardCallback("dialog-" + String(group || "action"), button.action, undefined);', source)
         self.assertIn('key: Clutter.KEY_Escape,', source)
         self.assertIn('let completed = false;', source)
         self.assertIn('let originalClipboardSignature = clipboardSnapshot && clipboardSnapshot.signature ? clipboardSnapshot.signature : "unknown";', source)

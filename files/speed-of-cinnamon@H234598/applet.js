@@ -726,7 +726,7 @@ MyApplet.prototype = {
       safeButtons = buttons.map((button) => {
         let safeButton = Object.assign({}, button);
         if (button && typeof button.action === "function") {
-          safeButton.action = this._guardCallback("dialog-" + String(group || "action"), button.action, undefined);
+          safeButton.action = this._guardStateCallback("dialog-" + String(group || "action"), button.action, undefined);
         }
         return safeButton;
       });
