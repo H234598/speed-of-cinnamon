@@ -853,6 +853,28 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (messageText !== "")', block)
         self.assertIn("new PopupMenu.PopupMenuItem(summaryLabel)", block)
 
+    def test_alarm_entry_payload_text_fields_are_string_checked(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        menu_start = source.index("_populateAlarmMenu: function(alarms, summary, message)")
+        menu_end = source.index("\n  _addAlarmMenuEntry:", menu_start)
+        menu_block = source[menu_start:menu_end]
+        self.assertIn('typeof alarm.id === "string"', menu_block)
+
+        entry_start = source.index("_addAlarmMenuEntry: function(alarm)")
+        entry_end = source.index("\n  _copyAlarmCommands:", entry_start)
+        entry_block = source[entry_start:entry_end]
+        self.assertIn('typeof alarm.id === "string"', entry_block)
+        self.assertIn('typeof alarm.label === "string"', entry_block)
+        self.assertIn('typeof alarm.time === "string"', entry_block)
+        self.assertIn('typeof alarm.summary === "string"', entry_block)
+
+        check_start = source.index("_checkAlarms: function(manual)")
+        check_end = source.index("\n  _refreshInputSourceMenu:", check_start)
+        check_block = source[check_start:check_end]
+        self.assertIn('typeof alarm.body === "string"', check_block)
+        self.assertIn('typeof alarm.label === "string"', check_block)
+
     def test_invalid_downloaded_voice_model_cannot_be_selected_from_menu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

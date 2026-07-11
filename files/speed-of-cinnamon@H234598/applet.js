@@ -3570,7 +3570,7 @@ MyApplet.prototype = {
       return;
     }
     alarms = Array.isArray(alarms) ? alarms : [];
-    alarms = alarms.filter((alarm) => alarm && typeof alarm === "object" && String(alarm.id || "").trim() !== "");
+    alarms = alarms.filter((alarm) => alarm && typeof alarm === "object" && typeof alarm.id === "string" && alarm.id.trim() !== "");
     this._clearMenuItems(this.alarmItem.menu);
 
     let messageText = typeof message === "string" ? message.trim() : "";
@@ -3617,13 +3617,15 @@ MyApplet.prototype = {
     if (!alarm || typeof alarm !== "object") {
       return;
     }
-    let id = String(alarm.id || "");
+    let id = typeof alarm.id === "string" ? alarm.id.trim() : "";
     if (id === "") {
       return;
     }
     let enabled = alarm.enabled === true;
-    let label = (enabled ? "[x] " : "[ ] ") + String(alarm.label || alarm.time || id);
-    let summary = String(alarm.summary || "");
+    let alarmLabel = typeof alarm.label === "string" ? alarm.label.trim() : "";
+    let alarmTime = typeof alarm.time === "string" ? alarm.time.trim() : "";
+    let label = (enabled ? "[x] " : "[ ] ") + (alarmLabel || alarmTime || id);
+    let summary = typeof alarm.summary === "string" ? alarm.summary.trim() : "";
     if (summary !== "") {
       label += " - " + summary;
     }
@@ -3716,12 +3718,16 @@ MyApplet.prototype = {
         if (alarm.notify !== true) {
           continue;
         }
-        this._notify(_("Speed of Cinnamon alarm"), alarm.body || alarm.label || _("Alarm due"), alarm.critical === true);
+        let body = typeof alarm.body === "string" ? alarm.body.trim() : "";
+        let label = typeof alarm.label === "string" ? alarm.label.trim() : "";
+        this._notify(_("Speed of Cinnamon alarm"), body || label || _("Alarm due"), alarm.critical === true);
       }
       if (due.length > 0) {
         let first = due[0] || {};
         if (manual || this.status === "idle" || this.status === "ready" || this.status === "done") {
-          this._setAlarmOptionStatus(_("Alarm: ") + String(first.label || first.time || due.length));
+          let firstLabel = typeof first.label === "string" ? first.label.trim() : "";
+          let firstTime = typeof first.time === "string" ? first.time.trim() : "";
+          this._setAlarmOptionStatus(_("Alarm: ") + (firstLabel || firstTime || String(due.length)));
         }
       } else if (manual) {
         this._setAlarmOptionStatus(_("No alarms due"));
