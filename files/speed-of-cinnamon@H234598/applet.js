@@ -3448,6 +3448,15 @@ MyApplet.prototype = {
     }
   },
 
+  _failSetupDiagnosticsAction: function(actionToken, error, message) {
+    if (this.setupDiagnosticsToken !== actionToken) {
+      return;
+    }
+    this.setupDiagnosticsToken = null;
+    this._recordLifecycleError("setup-diagnostics", error);
+    this._setStatus("error", message || _("Could not prepare setup diagnostics action"), this.lastTranscript);
+  },
+
   _openProfanityFilterList: function() {
     if (this.setupDiagnosticsToken || this._hasActiveRecordingState()) {
       return;
@@ -3459,7 +3468,14 @@ MyApplet.prototype = {
     let actionToken = {};
     this.setupDiagnosticsToken = actionToken;
     this._setStatus("processing", _("Preparing profanity replacement list..."), this.lastTranscript);
-    this._spawnJson(this._profanityFilterDocumentArgs(), (payload) => {
+    let documentArgs;
+    try {
+      documentArgs = this._profanityFilterDocumentArgs();
+    } catch (error) {
+      this._failSetupDiagnosticsAction(actionToken, error, _("Could not prepare profanity replacement list"));
+      return;
+    }
+    this._spawnJson(documentArgs, (payload) => {
       if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -3489,7 +3505,14 @@ MyApplet.prototype = {
     }
     let actionToken = {};
     this.setupDiagnosticsToken = actionToken;
-    this._spawnJson(this._setupArgs(), (payload) => {
+    let setupArgs;
+    try {
+      setupArgs = this._setupArgs();
+    } catch (error) {
+      this._failSetupDiagnosticsAction(actionToken, error, _("Could not prepare setup plan"));
+      return;
+    }
+    this._spawnJson(setupArgs, (payload) => {
       if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -3540,7 +3563,14 @@ MyApplet.prototype = {
     }
     let actionToken = {};
     this.setupDiagnosticsToken = actionToken;
-    this._spawnJson(this._setupArgs(), (payload) => {
+    let setupArgs;
+    try {
+      setupArgs = this._setupArgs();
+    } catch (error) {
+      this._failSetupDiagnosticsAction(actionToken, error, _("Could not prepare setup commands"));
+      return;
+    }
+    this._spawnJson(setupArgs, (payload) => {
       if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -3577,7 +3607,14 @@ MyApplet.prototype = {
     }
     let actionToken = {};
     this.setupDiagnosticsToken = actionToken;
-    this._spawnJson(this._diagnosticsArgs(), (payload) => {
+    let diagnosticsArgs;
+    try {
+      diagnosticsArgs = this._diagnosticsArgs();
+    } catch (error) {
+      this._failSetupDiagnosticsAction(actionToken, error, _("Could not prepare diagnostics"));
+      return;
+    }
+    this._spawnJson(diagnosticsArgs, (payload) => {
       if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -3606,7 +3643,14 @@ MyApplet.prototype = {
     }
     let actionToken = {};
     this.setupDiagnosticsToken = actionToken;
-    this._spawnJson(this._diagnosticsSaveArgs(), (payload) => {
+    let diagnosticsSaveArgs;
+    try {
+      diagnosticsSaveArgs = this._diagnosticsSaveArgs();
+    } catch (error) {
+      this._failSetupDiagnosticsAction(actionToken, error, _("Could not prepare diagnostics save"));
+      return;
+    }
+    this._spawnJson(diagnosticsSaveArgs, (payload) => {
       if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
         return;
       }

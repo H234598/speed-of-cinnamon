@@ -2542,6 +2542,24 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn("this.setupDiagnosticsToken !== actionToken", block)
             self.assertIn("!this._lifecycleAllowsWork()", block)
 
+    def test_setup_actions_release_tokens_when_argument_building_fails(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        self.assertIn("_failSetupDiagnosticsAction: function(actionToken, error, message)", source)
+        for method, next_method, args_name, builder_name in [
+            ("_openProfanityFilterList: function()", "\n  _copySetupPlan:", "documentArgs", "_profanityFilterDocumentArgs"),
+            ("_copySetupPlan: function()", "\n  _setupCommandsText:", "setupArgs", "_setupArgs"),
+            ("_copySetupCommands: function()", "\n  _copyDiagnostics:", "setupArgs", "_setupArgs"),
+            ("_copyDiagnostics: function()", "\n  _saveDiagnostics:", "diagnosticsArgs", "_diagnosticsArgs"),
+            ("_saveDiagnostics: function()", "\n  _benchmarkAudioFileDialogArgs:", "diagnosticsSaveArgs", "_diagnosticsSaveArgs"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn(f"let {args_name};", block)
+            self.assertIn(f"{args_name} = this.{builder_name}();", block)
+            self.assertIn(f"this._spawnJson({args_name},", block)
+            self.assertIn("this._failSetupDiagnosticsAction(actionToken, error", block)
+
     def test_text_model_menu_keeps_selected_ollama_model_when_refresh_is_empty(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
