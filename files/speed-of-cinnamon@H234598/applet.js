@@ -3437,7 +3437,7 @@ MyApplet.prototype = {
       "rc=0",
       "trap 'rc=$?; printf \"\\nFinished with exit code %s.\\n\" \"$rc\"; read -r -p \"Press Enter to close...\"; exit \"$rc\"' EXIT"
     ].concat(lines || []);
-    return script.join("; ");
+    return script.join("\n");
   },
 
   _installOllamaRuntimeCommand: function() {

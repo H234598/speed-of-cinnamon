@@ -1860,6 +1860,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._connectSafe(uninstallOllamaRuntime, \"activate\", () => this._uninstallOllamaRuntime());", source)
         self.assertIn('new PopupMenu.PopupIconMenuItem(_("Basic setup")', source)
         self.assertIn("this._connectSafe(basicSetup, \"activate\", () => this._runBasicSetup());", source)
+
+    def test_terminal_workflow_preserves_shell_compound_syntax(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_terminalWorkflowScript: function(lines)")
+        end = source.index("\n  _installOllamaRuntimeCommand:", start)
+        block = source[start:end]
+        self.assertIn('return script.join("\\n");', block)
+        self.assertNotIn('return script.join("; ");', block)
+        self.assertIn('"if command -v ollama >/dev/null 2>&1; then",', source)
+        self.assertIn('"else",', source)
+        self.assertIn('"fi",', source)
         self.assertIn("_terminalCommandArgs: function(title, command)", source)
         self.assertIn("_runTerminalWorkflow: function(title, command, openedMessage)", source)
         self.assertIn("return true;", source)
