@@ -749,6 +749,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("source.default === true", source)
         self.assertIn("payload.available !== true", source)
         self.assertIn("payload.available === true", source)
+        self.assertIn("if (level.ok !== true)", source)
+        self.assertIn('typeof level.percent === "number" && isFinite(level.percent)', source)
         self.assertNotIn("Boolean(alarm.critical)", source)
         self.assertNotIn("Boolean(model.downloaded)", source)
         self.assertNotIn("Boolean(payload.truncated)", source)

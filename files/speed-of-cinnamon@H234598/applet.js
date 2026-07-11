@@ -7936,10 +7936,11 @@ MyApplet.prototype = {
       return _("Microphone: idle");
     }
     let level = this.microphoneLevel || {};
-    if (!level.ok) {
+    if (level.ok !== true) {
       return _("Microphone: ") + String(level.detail || _("waiting for audio"));
     }
-    let percent = Math.max(0, Math.min(100, Math.round(Number(level.percent || 0))));
+    let percent = typeof level.percent === "number" && isFinite(level.percent) ? level.percent : 0;
+    percent = Math.max(0, Math.min(100, Math.round(percent)));
     return _("Microphone: ") + String(percent) + "% " + this._levelBar(percent);
   },
 
