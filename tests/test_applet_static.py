@@ -2253,6 +2253,19 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn(f'this._recordLifecycleError("{error_group}", error);', block)
             self.assertIn("completeOnce(null);", block)
 
+    def test_json_subprocess_wrapper_reports_missing_process_handles_once(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_spawnJsonWithBackendEnvironment: function(")
+        end = source.index("\n  _isStatusCommandArgs:", start)
+        block = source[start:end]
+
+        self.assertIn("let completed = false;", block)
+        self.assertIn("let completeOnce = (stdout, result, stderr) =>", block)
+        self.assertIn("let handle = this._runBoundedSubprocess(", block)
+        self.assertIn('if (!handle) {\n      completeOnce("", { error: "Subprocess could not be started" }, "");\n    }', block)
+        self.assertIn("return handle;", block)
+
     def test_cancel_pending_during_command_suppresses_done_transcript_insert(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         apply_index = source.index("_applyPayload: function(payload, statusRefreshToken)")

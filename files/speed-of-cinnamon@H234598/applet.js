@@ -6085,16 +6085,28 @@ MyApplet.prototype = {
 
   _spawnJsonWithBackendEnvironment: function(args, env, callback, inputText, options) {
     options = options || {};
-    return this._runBoundedSubprocess(args, env, {
+    let completed = false;
+    let completeOnce = (stdout, result, stderr) => {
+      if (completed) {
+        return;
+      }
+      completed = true;
+      if (typeof callback === "function") {
+        callback(stdout, result, stderr);
+      }
+    };
+    let handle = this._runBoundedSubprocess(args, env, {
       inputText: inputText,
       timeoutMs: options.timeoutMs,
       maxStdoutBytes: options.maxStdoutBytes || MAX_SPAWN_JSON_BYTES,
       maxStderrBytes: options.maxStderrBytes || MAX_SPAWN_STDERR_BYTES,
     }, (stdout, stderr, result) => {
-      if (typeof callback === "function") {
-        callback(String(stdout || ""), result || {}, String(stderr || ""));
-      }
+      completeOnce(String(stdout || ""), result || {}, String(stderr || ""));
     });
+    if (!handle) {
+      completeOnce("", { error: "Subprocess could not be started" }, "");
+    }
+    return handle;
   },
 
   _isStatusCommandArgs: function(args) {
