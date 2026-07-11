@@ -2957,6 +2957,9 @@ MyApplet.prototype = {
       this.terminalWorkflowToken = null;
     }
     this._invalidateBackgroundCallbacksForRecording();
+    if (this.textInsertToken) {
+      this._cancelTextInsertForSettingsChange();
+    }
     if (this.isCommandRunning) {
       if (this.autoRelisten && this.notificationSessionActive) {
         this.autoRelistenManualStopRequested = true;

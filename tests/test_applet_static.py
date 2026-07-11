@@ -3669,3 +3669,16 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.doctorCommandToken = doctorToken;", block)
         self.assertIn("if (this.doctorCommandToken !== doctorToken", block)
         self.assertIn("this.doctorCommandToken = null;", block)
+
+    def test_recording_start_cancels_stale_text_insert(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_toggleRecording: function()")
+        end = source.index("\n  _restartApplet:", start)
+        block = source[start:end]
+        self.assertIn("if (this.textInsertToken)", block)
+        self.assertIn("this._cancelTextInsertForSettingsChange();", block)
+        self.assertLess(
+            block.index("this._cancelTextInsertForSettingsChange();"),
+            block.index("if (this.isCommandRunning)"),
+        )
