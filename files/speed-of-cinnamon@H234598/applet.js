@@ -476,6 +476,9 @@ MyApplet.prototype = {
     let entries = Array.isArray(this._lifecycleErrors[key]) ? this._lifecycleErrors[key] : [];
     entries = entries.filter((timestamp) => now - timestamp <= LIFECYCLE_ERROR_WINDOW_MS);
     entries.push(now);
+    if (entries.length > LIFECYCLE_ERROR_THRESHOLD) {
+      entries = entries.slice(-LIFECYCLE_ERROR_THRESHOLD);
+    }
     this._lifecycleErrors[key] = entries;
     this._lifecycleErrorCounts[key] = entries.length;
     this._logLifecycleError(key, error);

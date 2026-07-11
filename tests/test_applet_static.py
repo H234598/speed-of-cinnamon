@@ -1512,6 +1512,7 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertIn("LIFECYCLE_ERROR_WINDOW_MS = 60000", source)
         self.assertIn("LIFECYCLE_ERROR_THRESHOLD = 3", source)
+        self.assertIn("entries = entries.slice(-LIFECYCLE_ERROR_THRESHOLD);", source)
         self.assertIn("if (!this._beginTeardown())", source)
         self.assertIn("this._finishTeardown();", source)
         self.assertIn("connectionId = target.connect(signal, this._guardStateCallback", source)
