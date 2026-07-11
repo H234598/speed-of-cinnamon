@@ -2699,6 +2699,18 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn('this._recordLifecycleError("ollama-flow", error);', block)
             self.assertIn(f'_("{message}")', block)
 
+    def test_ollama_install_prompt_releases_flow_on_program_probe_failure(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_promptInstallOllamaTextModel: function(flowToken)")
+        end = source.index("\n  _installOllamaTextModel:", start)
+        block = source[start:end]
+        self.assertIn("let zenity;", block)
+        self.assertIn('zenity = this._findTrustedProgramInPath("zenity");', block)
+        self.assertIn("this._clearOllamaModelFlow(flowToken);", block)
+        self.assertIn('this._recordLifecycleError("ollama-flow", error);', block)
+        self.assertIn('_("Could not prepare Ollama model prompt")', block)
+        self.assertIn("if (!zenity)", block)
+
     def test_text_model_menu_keeps_selected_ollama_model_when_refresh_is_empty(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

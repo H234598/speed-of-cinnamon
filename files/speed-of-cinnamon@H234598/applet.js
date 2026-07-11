@@ -5899,7 +5899,16 @@ MyApplet.prototype = {
 
   _promptInstallOllamaTextModel: function(flowToken) {
     flowToken = flowToken || this.ollamaModelFlowToken || {};
-    if (!this._findTrustedProgramInPath("zenity")) {
+    let zenity;
+    try {
+      zenity = this._findTrustedProgramInPath("zenity");
+    } catch (error) {
+      this._clearOllamaModelFlow(flowToken);
+      this._recordLifecycleError("ollama-flow", error);
+      this._setStatusPreservingRecording("error", _("Could not prepare Ollama model prompt"), this.lastTranscript);
+      return;
+    }
+    if (!zenity) {
       this._clearOllamaModelFlow(flowToken);
       this._setStatus("error", _("Install zenity to enter an Ollama model name"), this.lastTranscript);
       return;
