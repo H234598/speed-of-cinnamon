@@ -221,12 +221,12 @@ def _write_atomically_without_following_symlinks(
         if target_stat is not None and stat.S_ISLNK(target_stat.st_mode):
             raise OSError(f"{field_name} must not be a symlink")
         for _ in range(100):
-            temp_name = f".{path.name}.{secrets.token_hex(8)}.tmp"
+            candidate_name = f".{path.name}.{secrets.token_hex(8)}.tmp"
             try:
-                fd = os.open(temp_name, flags, 0o600, dir_fd=parent_fd)
+                fd = os.open(candidate_name, flags, 0o600, dir_fd=parent_fd)
+                temp_name = candidate_name
                 break
             except FileExistsError:
-                temp_name = ""
                 continue
         else:
             raise OSError(f"failed to create temporary file for {field_name}")

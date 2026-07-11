@@ -130,6 +130,23 @@ class PathSafetyTest(unittest.TestCase):
             self.assertFalse(target.exists())
             self.assertEqual(list(Path(tmp).iterdir()), [])
 
+    def test_atomic_write_preserves_temp_open_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            real_open = os.open
+
+            def fail_temp_open(path, flags, mode=0o777, **kwargs):
+                if flags & os.O_EXCL:
+                    raise PermissionError("temp open denied")
+                return real_open(path, flags, mode, **kwargs)
+
+            with mock.patch.object(path_safety.os, "open", side_effect=fail_temp_open):
+                with self.assertRaisesRegex(PermissionError, "temp open denied"):
+                    path_safety.write_text_atomically_without_following_symlinks(target, "{}")
+
+            self.assertFalse(target.exists())
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
     def test_read_text_without_following_symlinks_does_not_double_close_fd_on_read_error(self) -> None:
         class _FailingHandle:
             def __enter__(self):
