@@ -6146,7 +6146,17 @@ MyApplet.prototype = {
       this.transcriptWindowToken = null;
       return true;
     };
-    let zenity = this._findTrustedProgramInPath("zenity");
+    let zenity;
+    try {
+      zenity = this._findTrustedProgramInPath("zenity");
+    } catch (error) {
+      releaseWindow();
+      this._recordLifecycleError("transcript-window", error);
+      let message = _("Could not prepare transcript list window");
+      this._setStatusPreservingRecording("error", message, this.lastTranscript);
+      this._notify(_("Could not open transcript list"), message, true);
+      return;
+    }
     if (!zenity) {
       releaseWindow();
       let message = _("Install zenity to show the transcript list without writing a plaintext file.");

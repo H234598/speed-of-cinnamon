@@ -2331,6 +2331,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("return;", block)
         self.assertLess(block.index("if (this.isCommandRunning || this._hasActiveRecordingState())"), block.index("this.isCommandRunning = true;"))
 
+    def test_transcript_window_releases_token_when_program_probe_fails(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_showTranscriptsWindow: function(content, count, truncated)")
+        end = source.index("\n  _exportAllTranscripts:", start)
+        block = source[start:end]
+        self.assertIn("let windowToken = {};", block)
+        self.assertIn("let zenity;", block)
+        self.assertIn('zenity = this._findTrustedProgramInPath("zenity");', block)
+        self.assertIn("releaseWindow();", block)
+        self.assertIn('this._recordLifecycleError("transcript-window", error);', block)
+        self.assertIn('_("Could not prepare transcript list window")', block)
+
     def test_busy_backend_actions_prepare_arguments_before_setting_busy_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         for method, next_method, args_name, builder_name, message in [
@@ -3805,7 +3817,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let content = typeof payload.content === "string" ? payload.content : "";', source)
         self.assertIn('if (content.trim() === "")', source)
         self.assertNotIn('let content = String(payload.content || "");', source)
-        self.assertIn('let zenity = this._findTrustedProgramInPath("zenity");', source)
+        self.assertIn('let zenity;', source)
+        self.assertIn('zenity = this._findTrustedProgramInPath("zenity");', source)
         self.assertIn("Gio.SubprocessFlags.STDIN_PIPE", source)
         self.assertIn("this._runBoundedSubprocess(args, {}, {", source)
         self.assertIn("this.transcriptWindowToken = windowToken;", source)
