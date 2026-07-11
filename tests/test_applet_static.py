@@ -1445,6 +1445,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._coerceImportedEnumSetting(value, RECORDER_METHODS, fallback)", source)
         self.assertIn("this._coerceImportedEnumSetting(value, OUTPUT_METHODS, fallback)", source)
         self.assertIn("this._coerceCliTextArg(value, IMPORT_TEXT_SETTINGS[key])", source)
+        self.assertIn('if (typeof value !== "string")', source)
         self.assertIn("_coerceImportedEnumSetting: function(value, allowedValues, fallback)", source)
 
     def test_settings_export_uses_stdin_not_process_arguments_for_snapshot(self) -> None:

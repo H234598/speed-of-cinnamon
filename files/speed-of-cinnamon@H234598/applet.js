@@ -5752,6 +5752,9 @@ MyApplet.prototype = {
     if (!Object.prototype.hasOwnProperty.call(IMPORT_TEXT_SETTINGS, key)) {
       return fallback;
     }
+    if (typeof value !== "string") {
+      return fallback;
+    }
     try {
       return this._coerceCliTextArg(value, IMPORT_TEXT_SETTINGS[key]);
     } catch (err) {
