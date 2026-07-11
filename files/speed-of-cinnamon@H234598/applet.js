@@ -845,9 +845,15 @@ MyApplet.prototype = {
     if (!dialog) {
       return;
     }
-    if (this._resourceRegistry && Array.isArray(this._resourceRegistry.dialogs) &&
-      this._resourceRegistry.dialogs.indexOf(dialog) < 0) {
-      return;
+    if (this._resourceRegistry && Array.isArray(this._resourceRegistry.dialogs)) {
+      try {
+        if (this._resourceRegistry.dialogs.indexOf(dialog) < 0) {
+          return;
+        }
+      } catch (error) {
+        this._recordLifecycleError("dialog-close", error);
+        return;
+      }
     }
     let closed = false;
     this._runTeardownGuarded("dialog-" + String(group || "close"), () => {

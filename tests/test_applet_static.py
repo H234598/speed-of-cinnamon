@@ -366,6 +366,7 @@ class AppletStaticTest(unittest.TestCase):
         close_block = source[start:end]
         self.assertIn("this._untrackDialog(dialog);", close_block)
         self.assertIn("this._runTeardownGuarded", close_block)
+        self.assertIn('this._recordLifecycleError("dialog-close", error);', close_block)
 
     def test_external_env_monitor_registration_failure_rolls_back_monitor(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
