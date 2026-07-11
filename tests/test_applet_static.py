@@ -1558,6 +1558,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._runStateGuarded("menu-items"', block)
         self.assertNotIn('this._runGuarded("menu-items"', block)
 
+    def test_hotkey_mutations_are_not_suppressed_by_disabled_error_groups(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_registerHotkey: function(id, binding, callback)")
+        end = source.index("\n  _removeHotkey:", start)
+        register_block = source[start:end]
+        self.assertNotIn('this._runGuarded("hotkeys"', register_block)
+        self.assertIn('this._runStateGuarded("hotkeys"', register_block)
+
+        start = source.index("_registerHotkeys: function()")
+        end = source.index("\n  _onHotkeyChanged:", start)
+        self.assertIn('this._runStateGuarded("hotkeys"', source[start:end])
+
     def test_doctor_cannot_overwrite_an_active_recording_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_runDoctor: function(startupCheck)")

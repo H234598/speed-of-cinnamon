@@ -1656,7 +1656,7 @@ MyApplet.prototype = {
     let previous = this._hotkeyDefinitions && this._hotkeyDefinitions[name]
       ? this._hotkeyDefinitions[name]
       : null;
-    this._runGuarded("hotkeys", () => {
+    this._runStateGuarded("hotkeys", () => {
       Main.keybindingManager.removeHotKey(name);
       if (this._resourceRegistry) {
         delete this._resourceRegistry.hotkeys[name];
@@ -1672,7 +1672,7 @@ MyApplet.prototype = {
     let hasBinding = accelerator.split("::").some((part) => String(part || "").trim() !== "");
     let registered = false;
     if (hasBinding) {
-      registered = this._runGuarded("hotkeys", () => {
+      registered = this._runStateGuarded("hotkeys", () => {
         return Main.keybindingManager.addHotKey(name, accelerator, this._guardStateCallback("hotkeys", callback, undefined)) === true;
       }, false) === true;
     }
@@ -1682,7 +1682,7 @@ MyApplet.prototype = {
       return;
     }
     if (previous) {
-      let restored = this._runGuarded("hotkeys", () => {
+      let restored = this._runStateGuarded("hotkeys", () => {
         return Main.keybindingManager.addHotKey(
           name,
           previous.binding,
@@ -1717,7 +1717,7 @@ MyApplet.prototype = {
   },
 
   _registerHotkeys: function() {
-    this._runGuarded("hotkeys", () => {
+    this._runStateGuarded("hotkeys", () => {
       this._registerHotkey(HOTKEY_ID, this.toggleKeybinding, () => {
         this._rememberFocusedWindow();
         this._toggleRecording();
