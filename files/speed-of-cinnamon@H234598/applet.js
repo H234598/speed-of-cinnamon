@@ -754,11 +754,11 @@ MyApplet.prototype = {
     if (!dialog || !this._resourceRegistry || !Array.isArray(this._resourceRegistry.dialogs)) {
       return true;
     }
-    let index = this._resourceRegistry.dialogs.indexOf(dialog);
-    if (index < 0) {
-      return true;
-    }
     try {
+      let index = this._resourceRegistry.dialogs.indexOf(dialog);
+      if (index < 0) {
+        return true;
+      }
       this._resourceRegistry.dialogs.splice(index, 1);
       return true;
     } catch (error) {
@@ -1002,11 +1002,11 @@ MyApplet.prototype = {
     if (!monitor || !this._resourceRegistry || !Array.isArray(this._resourceRegistry.monitors)) {
       return true;
     }
-    let index = this._resourceRegistry.monitors.indexOf(monitor);
-    if (index < 0) {
-      return true;
-    }
     try {
+      let index = this._resourceRegistry.monitors.indexOf(monitor);
+      if (index < 0) {
+        return true;
+      }
       this._resourceRegistry.monitors.splice(index, 1);
       return true;
     } catch (error) {

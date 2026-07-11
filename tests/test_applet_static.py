@@ -343,6 +343,7 @@ class AppletStaticTest(unittest.TestCase):
         untrack_block = source[start:end]
         self.assertIn('this._recordLifecycleError("monitor-untrack", error);', untrack_block)
         self.assertIn("return false;", untrack_block)
+        self.assertLess(untrack_block.index("try {"), untrack_block.index("this._resourceRegistry.monitors.indexOf(monitor)"))
 
         start = source.index("_clearExternalApiEnvMonitor: function()")
         end = source.index("\n  _watchExternalApiEnvFile:", start)
@@ -358,6 +359,7 @@ class AppletStaticTest(unittest.TestCase):
         untrack_block = source[start:end]
         self.assertIn('this._recordLifecycleError("dialog-untrack", error);', untrack_block)
         self.assertIn("return false;", untrack_block)
+        self.assertLess(untrack_block.index("try {"), untrack_block.index("this._resourceRegistry.dialogs.indexOf(dialog)"))
 
         start = source.index("_dialogClose: function(dialog, group)")
         end = source.index("\n  _dialogOpen:", start)
