@@ -1614,6 +1614,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._setStatusPreservingRecording("error", _("Status refresh failed: ") + safeError', source)
         self.assertIn("} finally {", source)
         self.assertIn("this._statusCommandRunning = false;", source)
+        self.assertIn('if (this.status === "recording" || this.status === "processing") {\n        this._scheduleStatusPoll();', source)
 
     def test_status_refresh_applies_only_latest_response(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

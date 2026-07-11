@@ -3049,16 +3049,25 @@ MyApplet.prototype = {
     }
     this._statusCommandRunning = true;
     let statusRefreshToken = ++this._statusRefreshToken;
-    this._spawnJson(this._statusArgs(), (payload) => {
-      try {
-        this._applyPayload(payload, statusRefreshToken);
-      } catch (err) {
-        let safeError = this._sanitizeErrorMessage(err);
-        this._setStatusPreservingRecording("error", _("Status refresh failed: ") + safeError, this.lastTranscript);
-      } finally {
-        this._statusCommandRunning = false;
+    try {
+      this._spawnJson(this._statusArgs(), (payload) => {
+        try {
+          this._applyPayload(payload, statusRefreshToken);
+        } catch (err) {
+          let safeError = this._sanitizeErrorMessage(err);
+          this._setStatusPreservingRecording("error", _("Status refresh failed: ") + safeError, this.lastTranscript);
+        } finally {
+          this._statusCommandRunning = false;
+        }
+      }, { timeoutMs: STATUS_COMMAND_TIMEOUT_MS });
+    } catch (err) {
+      this._statusCommandRunning = false;
+      let safeError = this._sanitizeErrorMessage(err);
+      this._setStatusPreservingRecording("error", _("Status refresh failed: ") + safeError, this.lastTranscript);
+      if (this.status === "recording" || this.status === "processing") {
+        this._scheduleStatusPoll();
       }
-    }, { timeoutMs: STATUS_COMMAND_TIMEOUT_MS });
+    }
   },
 
   _hasCancelableRecordingWork: function(statusOverride) {
