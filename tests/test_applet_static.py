@@ -1706,6 +1706,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._resourceRegistry.signals.push(connection);", block)
         self.assertIn('this._recordLifecycleError("teardown-target-signals", error);', block)
 
+    def test_failed_dialog_close_remains_tracked(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_dialogClose: function(dialog, group)")
+        end = source.index("\n  _dialogOpen:", start)
+        block = source[start:end]
+        self.assertIn("let closed = false;", block)
+        self.assertIn("let result = dialog.close();", block)
+        self.assertIn('if (result === false)', block)
+        self.assertIn("if (closed) {", block)
+        self.assertIn("this._untrackDialog(dialog);", block)
+
     def test_applet_exposes_notification_options_submenu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))

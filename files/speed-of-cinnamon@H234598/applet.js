@@ -753,15 +753,20 @@ MyApplet.prototype = {
       this._resourceRegistry.dialogs.indexOf(dialog) < 0) {
       return;
     }
+    let closed = false;
     this._runTeardownGuarded("dialog-" + String(group || "close"), () => {
-      try {
-        if (dialog.close) {
-          dialog.close();
-        }
-      } finally {
-        this._untrackDialog(dialog);
+      if (typeof dialog.close !== "function") {
+        throw new Error("Dialog close operation is unavailable");
       }
+      let result = dialog.close();
+      if (result === false) {
+        throw new Error("Dialog close operation failed");
+      }
+      closed = true;
     });
+    if (closed) {
+      this._untrackDialog(dialog);
+    }
   },
 
   _dialogOpen: function(dialog, group) {
