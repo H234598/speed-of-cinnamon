@@ -999,8 +999,21 @@ MyApplet.prototype = {
   },
 
   _unregisterCancellable: function(token) {
-    if (this._resourceRegistry && token && this._resourceRegistry.cancellables[token]) {
-      delete this._resourceRegistry.cancellables[token];
+    if (!this._resourceRegistry || !token || !this._resourceRegistry.cancellables) {
+      return true;
+    }
+    try {
+      if (!Object.prototype.hasOwnProperty.call(this._resourceRegistry.cancellables, token)) {
+        return true;
+      }
+      let deleted = delete this._resourceRegistry.cancellables[token];
+      if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.cancellables, token)) {
+        throw new Error("Cancellable could not be unregistered");
+      }
+      return true;
+    } catch (error) {
+      this._recordLifecycleError("cancellable-unregister", error);
+      return false;
     }
   },
 
@@ -1021,8 +1034,21 @@ MyApplet.prototype = {
   },
 
   _unregisterProcess: function(token) {
-    if (this._resourceRegistry && token && this._resourceRegistry.processes[token]) {
-      delete this._resourceRegistry.processes[token];
+    if (!this._resourceRegistry || !token || !this._resourceRegistry.processes) {
+      return true;
+    }
+    try {
+      if (!Object.prototype.hasOwnProperty.call(this._resourceRegistry.processes, token)) {
+        return true;
+      }
+      let deleted = delete this._resourceRegistry.processes[token];
+      if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.processes, token)) {
+        throw new Error("Process could not be unregistered");
+      }
+      return true;
+    } catch (error) {
+      this._recordLifecycleError("process-unregister", error);
+      return false;
     }
   },
 
