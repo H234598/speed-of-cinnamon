@@ -3714,6 +3714,16 @@ MyApplet.prototype = {
     this._setStatus("ready", message, this.lastTranscript);
   },
 
+  _setAlarmErrorStatus: function(message) {
+    let safeMessage = this._sanitizeErrorMessage(message);
+    if (this._hasActiveRecordingState()) {
+      this.lastMessage = this._uiMessageText(safeMessage);
+      this._updatePanel();
+      return;
+    }
+    this._setStatus("error", safeMessage, this.lastTranscript);
+  },
+
   _refreshAlarmMenu: function() {
     if (!this._canMutateMenu(this.alarmItem)) {
       return;
@@ -3850,7 +3860,7 @@ MyApplet.prototype = {
   },
 
   _setAlarmEnabled: function(id, enabled) {
-    if (this.alarmActionToken) {
+    if (this.alarmActionToken || this._hasActiveRecordingState()) {
       return;
     }
     this.alarmMenuRefreshToken = null;
@@ -3863,7 +3873,7 @@ MyApplet.prototype = {
       }
       if (payload.error) {
         this.alarmActionToken = null;
-        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+        this._setAlarmErrorStatus(payload.error);
         return;
       }
       this.alarmActionToken = null;
@@ -3874,7 +3884,7 @@ MyApplet.prototype = {
   },
 
   _removeAlarm: function(id) {
-    if (this.alarmActionToken) {
+    if (this.alarmActionToken || this._hasActiveRecordingState()) {
       return;
     }
     this.alarmMenuRefreshToken = null;
@@ -3887,7 +3897,7 @@ MyApplet.prototype = {
       }
       if (payload.error) {
         this.alarmActionToken = null;
-        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+        this._setAlarmErrorStatus(payload.error);
         return;
       }
       this.alarmActionToken = null;
@@ -3898,7 +3908,7 @@ MyApplet.prototype = {
   },
 
   _checkAlarms: function(manual) {
-    if (this.alarmCheckToken) {
+    if (this.alarmCheckToken || (manual && this._hasActiveRecordingState())) {
       return;
     }
     this.alarmMenuRefreshToken = null;
@@ -3911,7 +3921,7 @@ MyApplet.prototype = {
       if (payload.error) {
         this.alarmCheckToken = null;
         if (manual) {
-          this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          this._setAlarmErrorStatus(payload.error);
         }
         return;
       }
