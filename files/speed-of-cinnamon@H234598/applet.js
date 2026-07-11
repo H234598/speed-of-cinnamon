@@ -3882,7 +3882,18 @@ MyApplet.prototype = {
     let flowToken = {};
     this.benchmarkFlowToken = flowToken;
     this._setStatus("processing", _("Choose benchmark audio file..."), this.lastTranscript);
-    this._spawnText(this._benchmarkAudioFileDialogArgs(), (output) => {
+    let audioDialogArgs;
+    try {
+      audioDialogArgs = this._benchmarkAudioFileDialogArgs();
+    } catch (error) {
+      if (this.benchmarkFlowToken === flowToken) {
+        this.benchmarkFlowToken = null;
+      }
+      this._recordLifecycleError("benchmark-flow", error);
+      this._setStatus("error", _("Could not prepare benchmark audio selection"), this.lastTranscript);
+      return;
+    }
+    this._spawnText(audioDialogArgs, (output) => {
       if (this.benchmarkFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
         return;
       }

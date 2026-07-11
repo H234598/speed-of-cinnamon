@@ -1911,6 +1911,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let fastest = typeof payload.fastest_model === "string" ? payload.fastest_model.trim() : "";', benchmark_block)
         self.assertNotIn('let fastest = String(payload.fastest_model || "").trim();', benchmark_block)
 
+    def test_benchmark_flow_releases_token_when_dialog_arguments_fail(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_selectBenchmarkAudioFile: function()")
+        end = source.index("\n  _benchmarkDownloadedModels:", start)
+        block = source[start:end]
+        self.assertIn("let audioDialogArgs;", block)
+        self.assertIn("try {\n      audioDialogArgs = this._benchmarkAudioFileDialogArgs();", block)
+        self.assertIn("this._spawnText(audioDialogArgs,", block)
+        self.assertIn("if (this.benchmarkFlowToken === flowToken) {", block)
+        self.assertIn("this.benchmarkFlowToken = null;", block)
+        self.assertIn('this._recordLifecycleError("benchmark-flow", error);', block)
+
     def test_saved_diagnostics_does_not_copy_or_display_full_path(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
