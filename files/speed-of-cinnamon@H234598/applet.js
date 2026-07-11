@@ -1167,17 +1167,20 @@ MyApplet.prototype = {
       if (removed === false) {
         throw new Error("Timer source could not be removed");
       }
+      if (this._resourceRegistry && this._resourceRegistry.timers[key] === sourceId) {
+        let deleted = delete this._resourceRegistry.timers[key];
+        if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.timers, key)) {
+          throw new Error("Timer registry entry could not be removed");
+        }
+      }
+      if (propertyName && this[propertyName] === sourceId) {
+        this[propertyName] = 0;
+      }
+      return true;
     } catch (error) {
       this._recordLifecycleError("timer-clear", error);
       return false;
     }
-    if (this._resourceRegistry && this._resourceRegistry.timers[key] === sourceId) {
-      delete this._resourceRegistry.timers[key];
-    }
-    if (propertyName && this[propertyName] === sourceId) {
-      this[propertyName] = 0;
-    }
-    return true;
   },
 
   _scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName) {
