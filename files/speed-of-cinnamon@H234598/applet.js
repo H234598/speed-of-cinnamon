@@ -3273,7 +3273,21 @@ MyApplet.prototype = {
       this._setDoctorSummary(_("Doctor: checking..."));
       this._setStatus(this._hasActiveRecordingState() ? this.status : "processing", _("Doctor: checking..."), this.lastTranscript);
     }
-    this._spawnJson(this._doctorArgs(), (payload) => {
+    let doctorArgs;
+    try {
+      doctorArgs = this._doctorArgs();
+    } catch (error) {
+      if (this.doctorCommandToken === doctorToken) {
+        this.doctorCommandToken = null;
+      }
+      this._doctorCommandRunning = false;
+      this._recordLifecycleError("doctor", error);
+      let message = startupCheck ? _("Doctor could not be prepared") : _("Doctor could not be prepared");
+      this._setDoctorSummary(message);
+      this._setStatus(startupCheck ? "setup" : "error", message, this.lastTranscript);
+      return;
+    }
+    this._spawnJson(doctorArgs, (payload) => {
       if (this.doctorCommandToken !== doctorToken || !this._lifecycleAllowsWork()) {
         return;
       }

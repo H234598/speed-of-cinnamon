@@ -1886,6 +1886,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_doctorSummary: function(payload)", source)
         self.assertIn('this.doctorSummaryItem.label.text = this.doctorSummaryText || _("Doctor: not checked")', source)
 
+    def test_doctor_releases_state_when_argument_building_fails(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_runDoctor: function(startupCheck)")
+        end = source.index("\n  _applyDoctorPayload:", start)
+        block = source[start:end]
+        self.assertIn("let doctorArgs;", block)
+        self.assertIn("try {\n      doctorArgs = this._doctorArgs();", block)
+        self.assertIn("if (this.doctorCommandToken === doctorToken) {", block)
+        self.assertIn("this.doctorCommandToken = null;", block)
+        self.assertIn("this._doctorCommandRunning = false;", block)
+        self.assertIn('this._recordLifecycleError("doctor", error);', block)
+        self.assertIn('let message = startupCheck ? _("Doctor could not be prepared")', block)
+
     def test_diagnostics_menu_can_benchmark_downloaded_models_from_selected_audio_file(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
@@ -1990,7 +2003,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_settingsSnapshotInputOption: function(includeLifecycle)", source)
         self.assertIn("_settingsSnapshotInputOptionOrNull: function(includeLifecycle, errorStatus)", source)
         self.assertIn('snapshot["applet-lifecycle"] = this._appletLifecycleDiagnostics();', source)
-        self.assertIn("this._spawnJson(this._doctorArgs(), (payload) => {", source)
+        self.assertIn("this._spawnJson(doctorArgs, (payload) => {", source)
         self.assertIn("let inputOption = this._settingsSnapshotInputOptionOrNull(false);", source)
         self.assertIn("let inputOption = this._settingsSnapshotInputOptionOrNull(true);", source)
         self.assertIn("}, inputOption);", source)
