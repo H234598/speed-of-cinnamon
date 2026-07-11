@@ -5401,7 +5401,21 @@ MyApplet.prototype = {
     if (flowToken && this.ollamaModelFlowToken !== flowToken) {
       return false;
     }
+    let hadOllamaProcess = false;
+    let processes = this._resourceRegistry && this._resourceRegistry.processes
+      ? this._resourceRegistry.processes
+      : {};
+    for (let token in processes) {
+      if (Object.prototype.hasOwnProperty.call(processes, token) && String(processes[token].group || "process") === "ollama") {
+        hadOllamaProcess = true;
+        break;
+      }
+    }
     this.ollamaModelFlowToken = null;
+    this._terminateProcessesByGroup("ollama", true);
+    if (hadOllamaProcess) {
+      this.isCommandRunning = false;
+    }
     return true;
   },
 
@@ -5702,7 +5716,7 @@ MyApplet.prototype = {
     this._setStatus("processing", _("Installing Ollama model: ") + model, this.lastTranscript);
     this._spawnJson(installArgs, (payload) => {
       this.isCommandRunning = false;
-      if (flowToken && (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork())) {
+      if (!flowToken || this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
         return;
       }
       if (payload.error) {
