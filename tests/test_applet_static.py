@@ -3333,6 +3333,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._preparedTranscriptText(text, true)", source)
         self.assertIn("this._preparedTranscriptText(this.lastTranscript, true)", source)
 
+    def test_history_refresh_serializes_backend_requests(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_refreshHistory: function()")
+        end = source.index("\n  _listAllTranscripts:", start)
+        block = source[start:end]
+        self.assertIn("if (this.historyRefreshToken)", block)
+        self.assertIn("this.historyRefreshToken = refreshToken;", block)
+        self.assertIn("this.historyRefreshToken = null;", block)
+        self.assertLess(block.index("if (this.historyRefreshToken)"), block.index("let refreshToken = {};"))
+        self.assertLess(block.index("this.historyRefreshToken = null;"), block.index("if (payload.error)"))
+
     def test_cleanup_can_be_previewed_before_deleting_files(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))

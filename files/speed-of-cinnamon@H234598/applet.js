@@ -5488,12 +5488,16 @@ MyApplet.prototype = {
     if (!this._canMutateMenu(this.historyItem)) {
       return;
     }
+    if (this.historyRefreshToken) {
+      return;
+    }
     let refreshToken = {};
     this.historyRefreshToken = refreshToken;
     this._spawnJson(this._historyArgs(), (payload) => {
       if (this.historyRefreshToken !== refreshToken || !this._canMutateMenu(this.historyItem)) {
         return;
       }
+      this.historyRefreshToken = null;
       if (payload.error) {
         this._populateHistoryMenu([]);
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
