@@ -1551,6 +1551,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("const CLI_TEXT_SETTINGS = {", source)
         self.assertIn("const MAX_SETTING_TEXT_CHARS = 4096;", source)
         self.assertIn("_coerceCliTextArg: function(value, fieldName)", source)
+        self.assertIn('if (value !== undefined && value !== null && typeof value !== "string")', source)
+        self.assertIn('let normalized = typeof value === "string" ? value : "";', source)
         self.assertIn('"personal-context": "personal context"', source)
         self.assertIn('"vocabulary": "vocabulary"', source)
         self.assertIn("let safeOpenAiCompatibleUrl = this._coerceCliTextArg(this.openaiCompatibleUrl, \"openai-compatible URL\")", source)

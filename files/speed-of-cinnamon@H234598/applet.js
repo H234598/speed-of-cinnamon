@@ -5686,7 +5686,10 @@ MyApplet.prototype = {
   },
 
   _coerceCliTextArg: function(value, fieldName) {
-    let normalized = String(value || "");
+    if (value !== undefined && value !== null && typeof value !== "string") {
+      throw new Error(String(fieldName || "value") + " must be text");
+    }
+    let normalized = typeof value === "string" ? value : "";
     if (normalized.indexOf("\u0000") >= 0) {
       throw new Error(String(fieldName || "value") + " contains invalid bytes");
     }
