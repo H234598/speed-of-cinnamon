@@ -7262,12 +7262,15 @@ MyApplet.prototype = {
     if (this.appletRemoved) {
       return;
     }
-    this._scheduleTrackedTimer("setup", 2, () => {
+    let timerId = this._scheduleTrackedTimer("setup", 2, () => {
       if (this.status === "idle") {
         this._runDoctor(true);
       }
       return false;
     }, true, "setupCheckTimer");
+    if (!timerId && this._lifecycleAllowsWork() && !this.appletRemoved) {
+      this._setStatusPreservingRecording("setup", _("Setup check timer could not be scheduled"), this.lastTranscript);
+    }
   },
 
   _scheduleAlarmCheck: function(delaySeconds) {
@@ -7275,7 +7278,7 @@ MyApplet.prototype = {
     if (this.appletRemoved) {
       return;
     }
-    this._scheduleTrackedTimer("alarm", Math.max(5, Number(delaySeconds || ALARM_CHECK_SECONDS)), () => {
+    let timerId = this._scheduleTrackedTimer("alarm", Math.max(5, Number(delaySeconds || ALARM_CHECK_SECONDS)), () => {
       try {
         this._checkAlarms(false);
       } finally {
@@ -7285,6 +7288,9 @@ MyApplet.prototype = {
       }
       return false;
     }, true, "alarmTimer");
+    if (!timerId && this._lifecycleAllowsWork() && !this.appletRemoved) {
+      this._setStatusPreservingRecording("error", _("Alarm timer could not be scheduled"), this.lastTranscript);
+    }
   },
 
   _scheduleStatusPoll: function() {

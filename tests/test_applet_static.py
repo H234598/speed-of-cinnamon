@@ -1724,6 +1724,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let timerId = this._scheduleTrackedTimer("display"', display_block)
         self.assertIn('this._setStatusPreservingRecording("error", _("Recording display timer could not be scheduled")', display_block)
 
+        setup_start = source.index("_scheduleSetupCheck: function()")
+        setup_end = source.index("\n  _scheduleAlarmCheck:", setup_start)
+        setup_block = source[setup_start:setup_end]
+        self.assertIn('let timerId = this._scheduleTrackedTimer("setup"', setup_block)
+        self.assertIn('this._setStatusPreservingRecording("setup", _("Setup check timer could not be scheduled")', setup_block)
+
+        alarm_start = source.index("_scheduleAlarmCheck: function(delaySeconds)")
+        alarm_end = source.index("\n  _scheduleStatusPoll:", alarm_start)
+        alarm_block = source[alarm_start:alarm_end]
+        self.assertIn('let timerId = this._scheduleTrackedTimer("alarm"', alarm_block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Alarm timer could not be scheduled")', alarm_block)
+
     def test_status_checks_use_spawn_json_timeout(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
