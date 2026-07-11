@@ -5842,11 +5842,14 @@ MyApplet.prototype = {
         label: _("Cancel"),
         key: Clutter.KEY_Escape,
         action: function() {
-          this._dialogClose(dialog, "transcript-list");
-          if (this.transcriptListPromptToken === promptToken) {
-            this._setStatusPreservingRecording("ready", _("Transcript list cancelled"), this.lastTranscript);
+          try {
+            this._dialogClose(dialog, "transcript-list");
+            if (this.transcriptListPromptToken === promptToken) {
+              this._setStatusPreservingRecording("ready", _("Transcript list cancelled"), this.lastTranscript);
+            }
+          } finally {
+            complete(false);
           }
-          complete(false);
         }.bind(this),
       },
       {
@@ -8213,37 +8216,50 @@ MyApplet.prototype = {
         label: _("Cancel"),
         key: Clutter.KEY_Escape,
         action: function() {
-          this._dialogClose(dialog, "clipboard-overwrite");
-          if (isCurrentOperation()) {
-            this._setStatus("ready", _("Clipboard overwrite cancelled"), transcript);
+          try {
+            this._dialogClose(dialog, "clipboard-overwrite");
+            if (isCurrentOperation()) {
+              this._setStatus("ready", _("Clipboard overwrite cancelled"), transcript);
+            }
+          } finally {
+            complete(false);
           }
-          complete(false);
         }.bind(this),
       },
       {
         label: _("Overwrite clipboard"),
         action: function() {
-          this._dialogClose(dialog, "clipboard-overwrite");
-          if (!isCurrentOperation()) {
-            complete(false);
-            return;
-          }
-          this._clipboardPayloadSnapshotAsync((currentClipboardSnapshot) => {
+          try {
+            this._dialogClose(dialog, "clipboard-overwrite");
             if (!isCurrentOperation()) {
               complete(false);
               return;
             }
-            if (!this._clipboardPayloadSignaturesMatch(clipboardSnapshot, currentClipboardSnapshot)) {
-              this._setStatus("ready", _("Clipboard changed; overwrite cancelled"), transcript);
-              complete(false);
-              return;
-            }
-            this._setClipboardOverwriteApproval(currentClipboardSnapshot);
-            let result = this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn, complete, operationGuard);
-            if (result !== null) {
-              complete(result);
-            }
-          });
+            this._clipboardPayloadSnapshotAsync((currentClipboardSnapshot) => {
+              try {
+                if (!isCurrentOperation()) {
+                  complete(false);
+                  return;
+                }
+                if (!this._clipboardPayloadSignaturesMatch(clipboardSnapshot, currentClipboardSnapshot)) {
+                  this._setStatus("ready", _("Clipboard changed; overwrite cancelled"), transcript);
+                  complete(false);
+                  return;
+                }
+                this._setClipboardOverwriteApproval(currentClipboardSnapshot);
+                let result = this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn, complete, operationGuard);
+                if (result !== null) {
+                  complete(result);
+                }
+              } catch (error) {
+                this._recordLifecycleError("clipboard-overwrite", error);
+                complete(false);
+              }
+            });
+          } catch (error) {
+            this._recordLifecycleError("clipboard-overwrite", error);
+            complete(false);
+          }
         }.bind(this),
       }
     ], "clipboard-overwrite")) {

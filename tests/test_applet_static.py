@@ -2668,6 +2668,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.transcriptListPromptToken = promptToken;", prompt_block)
         self.assertIn("this.transcriptListPromptToken === promptToken", prompt_block)
         self.assertIn("this.transcriptListPromptToken = null;", prompt_block)
+        self.assertIn("} finally {\n            complete(false);", prompt_block)
         cancel_status = prompt_block.index('this._setStatusPreservingRecording("ready", _("Transcript list cancelled")')
         self.assertIn("if (this.transcriptListPromptToken === promptToken)", prompt_block[cancel_status - 90:cancel_status])
 
@@ -3816,6 +3817,8 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         cancel = block.index('this._setStatus("ready", _("Clipboard overwrite cancelled")')
         self.assertIn("if (isCurrentOperation())", block[cancel - 80:cancel])
+        self.assertIn("} finally {\n            complete(false);", block)
+        self.assertIn('this._recordLifecycleError("clipboard-overwrite", error);', block)
 
     def test_dynamic_menu_errors_preserve_active_recording_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
