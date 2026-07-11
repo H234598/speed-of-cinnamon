@@ -718,7 +718,7 @@ def _read_secret_tool_pipes_bounded(proc: subprocess.Popen[bytes]) -> tuple[byte
         try:
             fd = stream.fileno()
             os.set_blocking(fd, False)
-        except OSError as exc:
+        except Exception as exc:
             raise ArtifactCryptoError("Secret Service keyring helper output could not be captured safely") from exc
         active[fd] = field_name
     deadline = time.monotonic() + _SECRET_TOOL_TIMEOUT_SECONDS
@@ -735,6 +735,8 @@ def _read_secret_tool_pipes_bounded(proc: subprocess.Popen[bytes]) -> tuple[byte
                 chunk = os.read(fd, 8192)
             except BlockingIOError:
                 continue
+            except Exception as exc:
+                raise ArtifactCryptoError("Secret Service keyring helper output could not be captured safely") from exc
             if not chunk:
                 active.pop(fd, None)
                 progressed = True

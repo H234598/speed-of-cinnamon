@@ -381,6 +381,29 @@ class ArtifactCryptoTest(unittest.TestCase):
         self.assertEqual(mocked_popen.call_args.kwargs["stdin"], None)
         self.assertFalse(mocked_popen.call_args.kwargs["shell"])
 
+    def test_secret_tool_closed_pipe_failure_is_controlled(self) -> None:
+        class BrokenStream:
+            def fileno(self) -> int:
+                raise ValueError("closed pipe")
+
+            def close(self) -> None:
+                return None
+
+        class FakePopen:
+            def __init__(self, command: list[str], **kwargs: object) -> None:
+                self.command = command
+                self.returncode = 0
+                self.stdin = None
+                self.stdout = BrokenStream()
+                self.stderr = BrokenStream()
+
+        with (
+            mock.patch("speed_of_cinnamon.artifact_crypto._secret_tool_path", return_value="/usr/bin/secret-tool"),
+            mock.patch("speed_of_cinnamon.artifact_crypto.subprocess.Popen", side_effect=FakePopen),
+        ):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "output could not be captured safely"):
+                artifact_crypto._run_secret_tool(["lookup", "application", "test"])
+
     def test_secret_tool_environment_skips_control_character_values(self) -> None:
         with mock.patch.dict(
             os.environ,
