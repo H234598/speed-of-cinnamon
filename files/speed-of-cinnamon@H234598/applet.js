@@ -3807,7 +3807,7 @@ MyApplet.prototype = {
       return;
     }
     models = Array.isArray(models) ? models : [];
-    models = models.filter((model) => model && typeof model === "object" && String(model.name || "").trim() !== "");
+    models = models.filter((model) => model && typeof model === "object" && typeof model.name === "string" && model.name.trim() !== "" && this._modelPathFromPayload(model) !== "");
     this._clearMenuItems(this.modelItem.menu);
 
     let autoActive = String(this.transcriber || "auto") === "auto" && String(this.whisperModel || "") === "";
@@ -3915,16 +3915,54 @@ MyApplet.prototype = {
     parentMenu.addMenuItem(this._selectionInfoItem(_("Configure URL, model, and optional API key in applet settings.")));
   },
 
+  _modelPathFromPayload: function(model) {
+    if (!model || typeof model !== "object" || typeof model.filename !== "string" || typeof model.model_format !== "string") {
+      return "";
+    }
+    let filename = model.filename.trim();
+    let modelFormat = model.model_format.trim().toLowerCase();
+    if (filename === "" || !/^[A-Za-z0-9._-]+$/.test(filename)) {
+      return "";
+    }
+    let directory = "";
+    if (modelFormat === "ggml") {
+      directory = "whisper.cpp";
+    } else if (modelFormat === "ctranslate2") {
+      directory = "ctranslate2";
+    } else {
+      return "";
+    }
+    return GLib.build_filenamev([
+      GLib.get_user_data_dir(),
+      "speed-of-cinnamon",
+      "models",
+      directory,
+      filename,
+    ]);
+  },
+
+  _isUsableVoiceModelPayload: function(model) {
+    let backend = model && typeof model.backend === "string" ? model.backend.trim() : "";
+    let name = model && typeof model.name === "string" ? model.name.trim() : "";
+    return Boolean(model && typeof model === "object" && model.downloaded === true && name !== "" &&
+      this._modelPathFromPayload(model) !== "" &&
+      (backend === "whisper-cpp" || backend === "faster-whisper"));
+  },
+
   _addModelMenuEntry: function(model, parentMenu) {
     if (!model || typeof model !== "object") {
       return;
     }
-    let name = String(model.name || "");
+    let name = typeof model.name === "string" ? model.name.trim() : "";
     if (name === "") {
       return;
     }
+    let path = this._modelPathFromPayload(model);
+    if (path === "") {
+      return;
+    }
     let downloaded = model.downloaded === true;
-    let current = downloaded && this.whisperModel && String(model.path || "") === String(this.whisperModel);
+    let current = downloaded && this.whisperModel && path === String(this.whisperModel);
     let compatible = this._voiceModelSupportsCurrentLanguage(model);
     let label = (current ? "[x] " : "[ ] ") + name + " (" + String(model.size || "?") + ")";
     if (!compatible) {
@@ -4073,6 +4111,11 @@ MyApplet.prototype = {
         this._refreshModelMenu();
         return;
       }
+      if (!this._isUsableVoiceModelPayload(payload)) {
+        this._setStatus("error", _("Downloaded model response was invalid"), this.lastTranscript);
+        this._refreshModelMenu();
+        return;
+      }
       this._selectVoiceModel(payload);
       this._refreshModelMenu();
     });
@@ -4082,8 +4125,8 @@ MyApplet.prototype = {
     if (this.isCommandRunning) {
       return;
     }
-    let name = String(model.name || "");
-    let path = String(model.path || "");
+    let name = model && typeof model.name === "string" ? model.name.trim() : "";
+    let path = this._modelPathFromPayload(model);
     if (name === "") {
       return;
     }
@@ -4108,21 +4151,22 @@ MyApplet.prototype = {
   },
 
   _selectVoiceModel: function(model) {
-    let path = String(model.path || "");
-    let name = String(model.name || "voice model");
-    let backend = String(model.backend || "whisper-cpp");
-    if (path === "") {
-      return;
+    let path = this._modelPathFromPayload(model);
+    let name = model && typeof model.name === "string" ? model.name.trim() : "";
+    let backend = model && typeof model.backend === "string" ? model.backend.trim() : "";
+    if (!this._isUsableVoiceModelPayload(model)) {
+      return false;
     }
     if (!this._voiceModelSupportsCurrentLanguage(model)) {
       this._setStatus("error", _("English-only model cannot transcribe primary language: ") + this._voiceModelLanguage(), this.lastTranscript);
-      return;
+      return false;
     }
     this.transcriber = backend;
     this.whisperModel = path;
     this.settings.setValue("transcriber", this.transcriber);
     this.settings.setValue("whisper-model", this.whisperModel);
     this._setStatus("ready", _("Voice model: ") + name, this.lastTranscript);
+    return true;
   },
 
   _selectAutomaticVoiceBackend: function() {

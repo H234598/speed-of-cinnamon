@@ -762,6 +762,39 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn("Boolean(payload.truncated)", source)
         self.assertNotIn("Boolean(payload.plaintext)", source)
 
+    def test_voice_model_payloads_derive_redacted_paths_from_safe_metadata(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        path_start = source.index("_modelPathFromPayload: function(model)")
+        path_end = source.index("\n  _isUsableVoiceModelPayload:", path_start)
+        path_block = source[path_start:path_end]
+        self.assertIn('typeof model.filename !== "string"', path_block)
+        self.assertIn('typeof model.model_format !== "string"', path_block)
+        self.assertIn("/^[A-Za-z0-9._-]+$/", path_block)
+        self.assertIn('directory = "whisper.cpp";', path_block)
+        self.assertIn('directory = "ctranslate2";', path_block)
+        self.assertIn('"speed-of-cinnamon",', path_block)
+
+        usable_start = source.index("_isUsableVoiceModelPayload: function(model)")
+        usable_end = source.index("\n  _addModelMenuEntry:", usable_start)
+        usable_block = source[usable_start:usable_end]
+        self.assertIn("model.downloaded === true", usable_block)
+        self.assertIn('backend === "whisper-cpp" || backend === "faster-whisper"', usable_block)
+        self.assertIn("this._modelPathFromPayload(model)", usable_block)
+
+        select_start = source.index("_selectVoiceModel: function(model)")
+        select_end = source.index("\n  _selectAutomaticVoiceBackend:", select_start)
+        select_block = source[select_start:select_end]
+        self.assertIn("let path = this._modelPathFromPayload(model);", select_block)
+        self.assertIn("return false;", select_block)
+        self.assertIn("return true;", select_block)
+        self.assertNotIn("String(model.path || \"\")", select_block)
+
+        remove_start = source.index("_removeVoiceModel: function(model)")
+        remove_end = source.index("\n  _selectVoiceModel:", remove_start)
+        remove_block = source[remove_start:remove_end]
+        self.assertIn("let path = this._modelPathFromPayload(model);", remove_block)
+
     def test_input_source_refresh_ignores_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
