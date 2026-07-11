@@ -7223,7 +7223,7 @@ MyApplet.prototype = {
     if (!watchToken || this.ollamaInstallWatchToken !== watchToken || !this._lifecycleAllowsWork()) {
       return;
     }
-    this._scheduleTrackedTimer("ollama-install", OLLAMA_INSTALL_POLL_SECONDS, () => {
+    let timerId = this._scheduleTrackedTimer("ollama-install", OLLAMA_INSTALL_POLL_SECONDS, () => {
       if (this.ollamaInstallWatchToken !== watchToken || !this._lifecycleAllowsWork()) {
         return false;
       }
@@ -7273,6 +7273,11 @@ MyApplet.prototype = {
       }, { timeoutMs: STATUS_COMMAND_TIMEOUT_MS, resourceGroup: "ollama" });
       return false;
     }, true, "ollamaInstallWatchTimer");
+    if (!timerId && this.ollamaInstallWatchToken === watchToken) {
+      this.ollamaInstallWatchToken = null;
+      this._clearOllamaModelFlow();
+      this._setStatusPreservingRecording("error", _("Ollama installation watch could not be scheduled"), this.lastTranscript);
+    }
   },
 
   _scheduleSetupCheck: function() {

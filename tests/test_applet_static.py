@@ -2021,6 +2021,9 @@ class AppletStaticTest(unittest.TestCase):
         watch_block = source[watch_start:watch_end]
         self.assertIn('this._tryTextModelsArgs("ollama")', watch_block)
         self.assertIn("this.ollamaInstallWatchToken = null;", watch_block)
+        self.assertIn("let timerId = this._scheduleTrackedTimer", watch_block)
+        self.assertIn("if (!timerId && this.ollamaInstallWatchToken === watchToken)", watch_block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Ollama installation watch could not be scheduled")', watch_block)
         self.assertIn("return false;", watch_block)
 
     def test_ollama_model_dialogs_ignore_stale_callbacks(self) -> None:
