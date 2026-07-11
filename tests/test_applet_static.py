@@ -2379,8 +2379,7 @@ class AppletStaticTest(unittest.TestCase):
         option_block = source[option_start:option_end]
         self.assertIn('this._setStatusPreservingRecording("ready", message, this.lastTranscript);', option_block)
         self.assertNotIn('this.status === "recording" || this.status === "processing"', option_block)
-        self.assertIn("if (this._hasActiveRecordingState())", error_block)
-        self.assertIn("this._updatePanel();", error_block)
+        self.assertIn('this._setStatusPreservingRecording("error", message, this.lastTranscript);', error_block)
 
     def test_settings_transfers_ignore_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

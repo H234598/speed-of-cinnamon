@@ -3907,13 +3907,7 @@ MyApplet.prototype = {
   },
 
   _setAlarmErrorStatus: function(message) {
-    let safeMessage = this._sanitizeErrorMessage(message);
-    if (this._hasActiveRecordingState()) {
-      this.lastMessage = this._uiMessageText(safeMessage);
-      this._updatePanel();
-      return;
-    }
-    this._setStatus("error", safeMessage, this.lastTranscript);
+    this._setStatusPreservingRecording("error", message, this.lastTranscript);
   },
 
   _refreshAlarmMenu: function() {
