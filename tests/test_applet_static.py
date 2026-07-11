@@ -2071,6 +2071,16 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('throw new Error("Timer registry entry could not be removed");', block)
         self.assertIn('this._recordLifecycleError("timer-clear", error);', block)
 
+    def test_timer_untracking_contains_registry_delete_failures(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_untrackTimer: function(name, sourceId, propertyName)")
+        end = source.index("\n  _clearTrackedTimer:", start)
+        block = source[start:end]
+        self.assertIn("let deleted = delete this._resourceRegistry.timers[key];", block)
+        self.assertIn("Object.prototype.hasOwnProperty.call(this._resourceRegistry.timers, key)", block)
+        self.assertIn('this._recordLifecycleError("timer-untrack", error);', block)
+        self.assertIn("return false;", block)
+
     def test_timer_reschedule_aborts_when_previous_timer_cannot_be_removed(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName)")

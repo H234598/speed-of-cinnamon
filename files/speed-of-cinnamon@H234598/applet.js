@@ -1142,11 +1142,20 @@ MyApplet.prototype = {
 
   _untrackTimer: function(name, sourceId, propertyName) {
     let key = String(name || propertyName || "timer");
-    if (this._resourceRegistry && this._resourceRegistry.timers[key] === sourceId) {
-      delete this._resourceRegistry.timers[key];
-    }
-    if (propertyName && (!sourceId || this[propertyName] === sourceId)) {
-      this[propertyName] = 0;
+    try {
+      if (this._resourceRegistry && this._resourceRegistry.timers[key] === sourceId) {
+        let deleted = delete this._resourceRegistry.timers[key];
+        if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.timers, key)) {
+          throw new Error("Timer registry entry could not be untracked");
+        }
+      }
+      if (propertyName && (!sourceId || this[propertyName] === sourceId)) {
+        this[propertyName] = 0;
+      }
+      return true;
+    } catch (error) {
+      this._recordLifecycleError("timer-untrack", error);
+      return false;
     }
   },
 
