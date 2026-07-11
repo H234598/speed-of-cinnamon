@@ -3924,6 +3924,9 @@ MyApplet.prototype = {
     if (!this._canMutateMenu(this.inputSourceItem)) {
       return;
     }
+    if (this.inputSourceMenuRefreshToken) {
+      return;
+    }
     let refreshToken = {};
     this.inputSourceMenuRefreshToken = refreshToken;
     this._populateInputSourceMenu([], _("Loading input sources..."));
@@ -3931,6 +3934,7 @@ MyApplet.prototype = {
       if (this.inputSourceMenuRefreshToken !== refreshToken || !this._canMutateMenu(this.inputSourceItem)) {
         return;
       }
+      this.inputSourceMenuRefreshToken = null;
       if (payload.error) {
         this._populateInputSourceMenu([], this._sanitizeErrorMessage(payload.error));
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);

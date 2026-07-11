@@ -1261,6 +1261,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.inputSourceMenuRefreshToken !== refreshToken", refresh_block)
         self.assertIn("!this._canMutateMenu(this.inputSourceItem)", refresh_block)
 
+    def test_input_source_refresh_serializes_backend_requests(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_refreshInputSourceMenu: function()")
+        end = source.index("\n  _populateInputSourceMenu:", start)
+        block = source[start:end]
+        self.assertIn("if (this.inputSourceMenuRefreshToken)", block)
+        self.assertIn("this.inputSourceMenuRefreshToken = null;", block)
+        self.assertLess(block.index("if (this.inputSourceMenuRefreshToken)"), block.index("let refreshToken = {};"))
+        self.assertLess(block.index("this.inputSourceMenuRefreshToken = null;"), block.index("if (payload.error)"))
+
     def test_ollama_model_checks_ignore_stale_flow_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
