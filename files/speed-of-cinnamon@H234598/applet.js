@@ -891,7 +891,7 @@ MyApplet.prototype = {
     }
   },
 
-  _terminateProcessesByGroup: function(group) {
+  _terminateProcessesByGroup: function(group, notifyCallback) {
     let wanted = String(group || "process");
     let processes = this._resourceRegistry && this._resourceRegistry.processes
       ? this._resourceRegistry.processes
@@ -901,7 +901,7 @@ MyApplet.prototype = {
         continue;
       }
       if (processes[token] && typeof processes[token].cancel === "function") {
-        processes[token].cancel();
+        processes[token].cancel(Boolean(notifyCallback));
       } else {
         this._terminateProcess(processes[token].process);
       }
@@ -5953,7 +5953,11 @@ MyApplet.prototype = {
       }
     };
     if (this._resourceRegistry && this._resourceRegistry.processes[processToken]) {
-      this._resourceRegistry.processes[processToken].cancel = () => finish({ cancelled: true }, true, true);
+      this._resourceRegistry.processes[processToken].cancel = (notifyCallback) => finish(
+        { cancelled: true },
+        true,
+        notifyCallback === true ? false : true
+      );
     }
 
     let finishWhenReady = () => {
@@ -6635,7 +6639,7 @@ MyApplet.prototype = {
   _rememberFocusedWindow: function(preserveOnFailure) {
     this.targetWindowGeneration = Number(this.targetWindowGeneration || 0) + 1;
     let targetGeneration = this.targetWindowGeneration;
-    this._terminateProcessesByGroup("keyboard");
+    this._terminateProcessesByGroup("keyboard", true);
     let window = global.display ? global.display.focus_window : null;
     if (this._isUsableTargetWindow(window)) {
       this.targetWindow = window;
@@ -6731,7 +6735,7 @@ MyApplet.prototype = {
         maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
         resourceGroup: "x11",
       }, (stdout, stderr, result) => {
-        if (result && (result.error || result.timedOut || result.outputTooLarge)) {
+        if (result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge)) {
           completeOnce(null);
           return;
         }
@@ -7101,7 +7105,7 @@ MyApplet.prototype = {
         maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
         resourceGroup: "clipboard",
       }, (stdout, stderr, result) => {
-        if (result && (result.error || result.timedOut || result.outputTooLarge)) {
+        if (result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge)) {
           completeOnce(null);
           return;
         }
@@ -7629,7 +7633,7 @@ MyApplet.prototype = {
         maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
         resourceGroup: "keyboard",
       }, (stdout, stderr, result) => {
-        complete(!(result && (result.error || result.timedOut || result.outputTooLarge)));
+        complete(!(result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge)));
       });
       if (!handle) {
         complete(false);

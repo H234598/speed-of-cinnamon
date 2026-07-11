@@ -1705,13 +1705,27 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('typeof options.timeoutMs === "number" && isFinite(options.timeoutMs)', bounded_block)
         self.assertIn('typeof options.minimumTimeoutMs === "number" && isFinite(options.minimumTimeoutMs)', bounded_block)
         self.assertIn("suppressCallback || this.appletRemoved", bounded_block)
-        self.assertIn("this._resourceRegistry.processes[processToken].cancel", bounded_block)
+        self.assertIn("this._resourceRegistry.processes[processToken].cancel = (notifyCallback) => finish(", bounded_block)
+        self.assertIn("notifyCallback === true ? false : true", bounded_block)
 
-        group_start = source.index("_terminateProcessesByGroup: function(group)")
+        group_start = source.index("_terminateProcessesByGroup: function(group, notifyCallback)")
         group_end = source.index("\n  _cancelAllCancellables:", group_start)
         group_block = source[group_start:group_end]
         self.assertIn("typeof processes[token].cancel === \"function\"", group_block)
-        self.assertIn("processes[token].cancel();", group_block)
+        self.assertIn("processes[token].cancel(Boolean(notifyCallback));", group_block)
+
+    def test_keyboard_group_cancel_notifies_active_insert_cleanup(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        remember_start = source.index("_rememberFocusedWindow: function(preserveOnFailure)")
+        remember_end = source.index("\n  _closeMenuForKeyboardInsert:", remember_start)
+        remember_block = source[remember_start:remember_end]
+        keyboard_start = source.index("_spawnKeyboardProcess: function(args, completionCallback)")
+        keyboard_end = source.index("\n  _spawnKeyboardArgs:", keyboard_start)
+        keyboard_block = source[keyboard_start:keyboard_end]
+
+        self.assertIn('this._terminateProcessesByGroup("keyboard", true);', remember_block)
+        self.assertIn("result.cancelled", keyboard_block)
 
     def test_alarm_actions_ignore_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
