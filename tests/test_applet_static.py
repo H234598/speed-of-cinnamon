@@ -2322,6 +2322,14 @@ class AppletStaticTest(unittest.TestCase):
         group_block = source[group_start:group_end]
         self.assertIn("typeof processes[token].cancel === \"function\"", group_block)
         self.assertIn("processes[token].cancel(Boolean(notifyCallback));", group_block)
+        self.assertIn('this._recordLifecycleError("process-cancel", error);', group_block)
+        self.assertIn("finally {\n        delete processes[token];", group_block)
+
+        all_start = source.index("_terminateAllProcesses: function()")
+        all_end = source.index("\n  _terminateProcessesByGroup:", all_start)
+        all_block = source[all_start:all_end]
+        self.assertIn('this._recordLifecycleError("process-cancel", error);', all_block)
+        self.assertIn("finally {\n          delete processes[token];", all_block)
 
     def test_keyboard_group_cancel_notifies_active_insert_cleanup(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

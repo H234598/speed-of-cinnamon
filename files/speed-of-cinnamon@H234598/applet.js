@@ -916,12 +916,17 @@ MyApplet.prototype = {
       : {};
     for (let token in processes) {
       if (Object.prototype.hasOwnProperty.call(processes, token)) {
-        if (processes[token] && typeof processes[token].cancel === "function") {
-          processes[token].cancel();
-        } else {
-          this._terminateProcess(processes[token].process);
+        try {
+          if (processes[token] && typeof processes[token].cancel === "function") {
+            processes[token].cancel();
+          } else if (processes[token]) {
+            this._terminateProcess(processes[token].process);
+          }
+        } catch (error) {
+          this._recordLifecycleError("process-cancel", error);
+        } finally {
+          delete processes[token];
         }
-        delete processes[token];
       }
     }
   },
@@ -935,12 +940,17 @@ MyApplet.prototype = {
       if (!Object.prototype.hasOwnProperty.call(processes, token) || String(processes[token].group || "process") !== wanted) {
         continue;
       }
-      if (processes[token] && typeof processes[token].cancel === "function") {
-        processes[token].cancel(Boolean(notifyCallback));
-      } else {
-        this._terminateProcess(processes[token].process);
+      try {
+        if (processes[token] && typeof processes[token].cancel === "function") {
+          processes[token].cancel(Boolean(notifyCallback));
+        } else if (processes[token]) {
+          this._terminateProcess(processes[token].process);
+        }
+      } catch (error) {
+        this._recordLifecycleError("process-cancel", error);
+      } finally {
+        delete processes[token];
       }
-      delete processes[token];
     }
   },
 
