@@ -7149,9 +7149,12 @@ MyApplet.prototype = {
       return;
     }
     this._scheduleTrackedTimer("alarm", Math.max(5, Number(delaySeconds || ALARM_CHECK_SECONDS)), () => {
-      this._checkAlarms(false);
-      if (!this.appletRemoved) {
-        this._scheduleAlarmCheck(ALARM_CHECK_SECONDS);
+      try {
+        this._checkAlarms(false);
+      } finally {
+        if (!this.appletRemoved) {
+          this._scheduleAlarmCheck(ALARM_CHECK_SECONDS);
+        }
       }
       return false;
     }, true, "alarmTimer");

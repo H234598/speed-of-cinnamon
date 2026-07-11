@@ -1575,6 +1575,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_scheduleAlarmCheck(5)", source)
         self.assertIn("_clearAlarmTimer()", source)
         self.assertIn("this._notify(_(\"Speed of Cinnamon alarm\")", source)
+        alarm_start = source.index("_scheduleAlarmCheck: function(delaySeconds)")
+        alarm_end = source.index("\n  _scheduleStatusPoll:", alarm_start)
+        alarm_block = source[alarm_start:alarm_end]
+        self.assertIn("try {\n        this._checkAlarms(false);\n      } finally {", alarm_block)
+        self.assertIn("this._scheduleAlarmCheck(ALARM_CHECK_SECONDS);", alarm_block)
 
     def test_panel_status_style_classes_are_applied(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
