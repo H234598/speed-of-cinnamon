@@ -3892,6 +3892,20 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("} finally {\n            complete(false);", block)
         self.assertIn('this._recordLifecycleError("clipboard-overwrite", error);', block)
 
+    def test_text_insert_releases_token_on_sync_snapshot_failure(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_insertTranscriptText: function(transcript, completionCallback)")
+        end = source.index("\n  _restartRelistenRecording:", start)
+        block = source[start:end]
+        snapshot_start = block.index("this._clipboardPayloadSnapshotAsync")
+        snapshot_block = block[snapshot_start - 20:]
+        self.assertIn("try {", snapshot_block)
+        self.assertIn("release();", snapshot_block)
+        self.assertIn('this._recordLifecycleError("text-insert", error);', snapshot_block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Could not prepare text insertion")', snapshot_block)
+        self.assertIn("return false;", snapshot_block)
+
     def test_dynamic_menu_errors_preserve_active_recording_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

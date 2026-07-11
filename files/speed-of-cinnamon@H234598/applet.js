@@ -8876,38 +8876,45 @@ MyApplet.prototype = {
       }
       return result;
     }
-    this._clipboardPayloadSnapshotAsync((clipboardSnapshot) => {
-      if (!isCurrentInsert()) {
-        complete(false);
-        return;
-      }
-      if (clipboardSnapshot.hasNonTextPayload) {
-        if (this._hasValidClipboardOverwriteApproval(clipboardSnapshot)) {
-          this._clearClipboardOverwriteApproval();
-          let result = this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn, complete, isCurrentInsert);
-          if (result !== null) {
-            release();
-          }
+    try {
+      this._clipboardPayloadSnapshotAsync((clipboardSnapshot) => {
+        if (!isCurrentInsert()) {
+          complete(false);
           return;
         }
-        this._clearClipboardOverwriteApproval();
-        this._confirmClipboardOverwriteForPaste(
-          clipboardSnapshot,
-          transcript,
-          text,
-          method,
-          canPasteWithKeyboard,
-          submitWithReturn,
-          complete,
-          isCurrentInsert
-        );
-        return;
-      }
-      let result = this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn, complete, isCurrentInsert);
-      if (result !== null) {
-        release();
-      }
-    });
+        if (clipboardSnapshot.hasNonTextPayload) {
+          if (this._hasValidClipboardOverwriteApproval(clipboardSnapshot)) {
+            this._clearClipboardOverwriteApproval();
+            let result = this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn, complete, isCurrentInsert);
+            if (result !== null) {
+              release();
+            }
+            return;
+          }
+          this._clearClipboardOverwriteApproval();
+          this._confirmClipboardOverwriteForPaste(
+            clipboardSnapshot,
+            transcript,
+            text,
+            method,
+            canPasteWithKeyboard,
+            submitWithReturn,
+            complete,
+            isCurrentInsert
+          );
+          return;
+        }
+        let result = this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn, complete, isCurrentInsert);
+        if (result !== null) {
+          release();
+        }
+      });
+    } catch (error) {
+      release();
+      this._recordLifecycleError("text-insert", error);
+      this._setStatusPreservingRecording("error", _("Could not prepare text insertion"), this.lastTranscript);
+      return false;
+    }
     return null;
   },
 
