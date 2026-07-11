@@ -2523,7 +2523,7 @@ MyApplet.prototype = {
 
   _setTextOptionStatus: function(message) {
     if (this.status === "recording" || this.status === "processing") {
-      this.lastMessage = message;
+      this.lastMessage = this._uiMessageText(message);
       this._updatePanel();
       return;
     }

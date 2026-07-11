@@ -753,6 +753,7 @@ class AppletStaticTest(unittest.TestCase):
             ("_populateAlarmMenu: function(alarms, summary, message)", "\n  _addAlarmMenuEntry:"),
             ("_addAlarmMenuEntry: function(alarm)", "\n  _copyAlarmCommands:"),
             ("_addModelMenuEntry: function(model, parentMenu)", "\n  _isEnglishLanguage:"),
+            ("_setTextOptionStatus: function(message)", "\n  _toggleAppendSpace:"),
         ]:
             start = source.index(method)
             end = source.index(next_method, start)
