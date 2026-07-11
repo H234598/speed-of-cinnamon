@@ -3035,6 +3035,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!isCurrentInsert())", insert_block)
         self.assertIn("let complete = (result) =>", insert_block)
         self.assertIn("if (!this._typeTextAfterFocus(text, (completed) => {", source)
+        self.assertIn('if (completed && isCurrentInsert())', source)
         self.assertIn('if (!this._closeMenuForKeyboardInsert()) {\n          this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);\n          release();\n          return false;\n        }\n        this._restoreTargetWindowForPaste((restored) => {', source)
         self.assertIn("_spawnKeyboardProcess: function(args, completionCallback)", source)
         self.assertIn('let xdotool = this._findTrustedProgramInPath("xdotool");', source)

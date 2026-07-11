@@ -8430,7 +8430,7 @@ MyApplet.prototype = {
             return;
           }
           if (!this._typeTextAfterFocus(text, (completed) => {
-            if (completed) {
+            if (completed && isCurrentInsert()) {
               this._setStatus("done", _("Typed into target window"), transcript);
             }
             complete(completed === true);
