@@ -1782,6 +1782,11 @@ MyApplet.prototype = {
     this._clearPasteTimer();
     this._terminateProcessesByGroup("keyboard");
     this._terminateProcessesByGroup("clipboard");
+    if (this.autoRelistenPending) {
+      this.autoRelistenPending = false;
+      this.autoRelistenPendingToken = "";
+      this.autoRelistenManualStopRequested = true;
+    }
   },
 
   on_applet_clicked: function() {

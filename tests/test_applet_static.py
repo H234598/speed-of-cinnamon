@@ -740,6 +740,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._clearPasteTimer();", cancel_block)
         self.assertIn('this._terminateProcessesByGroup("keyboard");', cancel_block)
         self.assertIn('this._terminateProcessesByGroup("clipboard");', cancel_block)
+        self.assertIn("if (this.autoRelistenPending)", cancel_block)
+        self.assertIn("this.autoRelistenPendingToken = \"\";", cancel_block)
+        self.assertIn("this.autoRelistenManualStopRequested = true;", cancel_block)
 
         output_start = source.index("_onOutputSettingsChanged: function()")
         output_end = source.index("\n  _onTextOutputSettingsChanged:", output_start)
