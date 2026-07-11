@@ -1039,6 +1039,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("copyItem.setSensitive(hasTranscriptText);", block)
         self.assertIn("Transcript content hidden; use List all Transcripts", block)
 
+    def test_history_menu_fanout_is_bounded(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("const MAX_HISTORY_MENU_ENTRIES = 128;", source)
+        start = source.index("_populateHistoryMenu: function(transcripts)")
+        end = source.index("\n  _copyHistoryTranscript:", start)
+        block = source[start:end]
+        self.assertIn("let historyWasTruncated = transcripts.length > MAX_HISTORY_MENU_ENTRIES;", block)
+        self.assertIn("transcripts = transcripts.slice(0, MAX_HISTORY_MENU_ENTRIES);", block)
+        self.assertIn('_("Transcript list truncated for safety")', block)
+
     def test_invalid_ollama_model_input_cannot_stick_command_running_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

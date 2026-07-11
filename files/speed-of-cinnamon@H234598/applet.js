@@ -55,6 +55,7 @@ const MAX_ALARM_MENU_ENTRIES = 128;
 const MAX_ALARM_NOTIFICATIONS = 32;
 const MAX_INPUT_SOURCE_MENU_ENTRIES = 128;
 const MAX_VOICE_MODEL_MENU_ENTRIES = 128;
+const MAX_HISTORY_MENU_ENTRIES = 128;
 const MAX_CLI_ARG_BYTES = 4096;
 const MAX_CLI_ARG_COUNT = 128;
 const MAX_CLI_COMMAND_BYTES = 32768;
@@ -8513,6 +8514,10 @@ MyApplet.prototype = {
       let text = typeof transcript.text === "string" ? transcript.text.trim() : "";
       return preview !== "" || name !== "" || text !== "";
     });
+    let historyWasTruncated = transcripts.length > MAX_HISTORY_MENU_ENTRIES;
+    if (historyWasTruncated) {
+      transcripts = transcripts.slice(0, MAX_HISTORY_MENU_ENTRIES);
+    }
     this._clearMenuItems(this.historyItem.menu);
     if (!transcripts || transcripts.length === 0) {
       let empty = new PopupMenu.PopupMenuItem(_("No transcripts yet"));
@@ -8544,6 +8549,9 @@ MyApplet.prototype = {
       if (!hasTranscriptText) {
         entry.menu.addMenuItem(this._selectionInfoItem(_("Transcript content hidden; use List all Transcripts")));
       }
+    }
+    if (historyWasTruncated) {
+      this.historyItem.menu.addMenuItem(this._selectionInfoItem(_("Transcript list truncated for safety")));
     }
   },
 
