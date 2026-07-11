@@ -3971,7 +3971,8 @@ MyApplet.prototype = {
       return;
     }
     let downloaded = model.downloaded === true;
-    let current = downloaded && this.whisperModel && path === String(this.whisperModel);
+    let usable = downloaded && this._isUsableVoiceModelPayload(model);
+    let current = usable && this.whisperModel && path === String(this.whisperModel);
     let compatible = this._voiceModelSupportsCurrentLanguage(model);
     let label = (current ? "[x] " : "[ ] ") + name + " (" + String(model.size || "?") + ")";
     if (!compatible) {
@@ -3979,6 +3980,8 @@ MyApplet.prototype = {
     }
     if (!downloaded) {
       label += _(" - not downloaded");
+    } else if (!usable) {
+      label += _(" - invalid metadata");
     }
     let entry = new PopupMenu.PopupSubMenuMenuItem(label);
     this._styleMenuItemLabel(entry);
@@ -3993,7 +3996,7 @@ MyApplet.prototype = {
     if (downloaded) {
       let useItem = new PopupMenu.PopupIconMenuItem(_("Use this model"), "emblem-ok-symbolic", St.IconType.SYMBOLIC);
       this._styleMenuItemLabel(useItem);
-      useItem.setSensitive(!current && compatible);
+      useItem.setSensitive(!current && compatible && usable);
       this._connectSafe(useItem, "activate", () => this._selectVoiceModel(model));
       entry.menu.addMenuItem(useItem);
 

@@ -841,6 +841,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let summaryLabel = messageText || summaryText", block)
         self.assertIn("new PopupMenu.PopupMenuItem(summaryLabel)", block)
 
+    def test_invalid_downloaded_voice_model_cannot_be_selected_from_menu(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_addModelMenuEntry: function(model, parentMenu)")
+        end = source.index("\n  _isEnglishLanguage:", start)
+        block = source[start:end]
+        self.assertIn("let usable = downloaded && this._isUsableVoiceModelPayload(model);", block)
+        self.assertIn("let current = usable && this.whisperModel", block)
+        self.assertIn('label += _(" - invalid metadata");', block)
+        self.assertIn("useItem.setSensitive(!current && compatible && usable);", block)
+
     def test_input_source_refresh_ignores_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
