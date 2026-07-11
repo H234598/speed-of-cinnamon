@@ -1773,6 +1773,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("due = due.slice(0, MAX_ALARM_NOTIFICATIONS);", check_block)
         self.assertIn('_("some notifications suppressed for safety")', check_block)
 
+    def test_input_source_menu_fanout_is_bounded(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        self.assertIn("const MAX_INPUT_SOURCE_MENU_ENTRIES = 128;", source)
+
+        start = source.index("_populateInputSourceMenu: function(sources, message)")
+        end = source.index("\n  _selectInputSource:", start)
+        block = source[start:end]
+        self.assertIn("let sourcesWereTruncated = sources.length > MAX_INPUT_SOURCE_MENU_ENTRIES;", block)
+        self.assertIn("sources = sources.slice(0, MAX_INPUT_SOURCE_MENU_ENTRIES);", block)
+        self.assertIn('_("Input source list truncated for safety")', block)
+
     def test_custom_limit_dialogs_ignore_stale_callbacks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

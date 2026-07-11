@@ -53,6 +53,7 @@ const X11_COMMAND_TIMEOUT_MS = 2000;
 const ALARM_CHECK_SECONDS = 60;
 const MAX_ALARM_MENU_ENTRIES = 128;
 const MAX_ALARM_NOTIFICATIONS = 32;
+const MAX_INPUT_SOURCE_MENU_ENTRIES = 128;
 const MAX_CLI_ARG_BYTES = 4096;
 const MAX_CLI_ARG_COUNT = 128;
 const MAX_CLI_COMMAND_BYTES = 32768;
@@ -3849,6 +3850,10 @@ MyApplet.prototype = {
     }
     sources = Array.isArray(sources) ? sources : [];
     sources = sources.filter((source) => source && typeof source === "object" && typeof source.name === "string" && source.name.trim() !== "");
+    let sourcesWereTruncated = sources.length > MAX_INPUT_SOURCE_MENU_ENTRIES;
+    if (sourcesWereTruncated) {
+      sources = sources.slice(0, MAX_INPUT_SOURCE_MENU_ENTRIES);
+    }
     let messageText = typeof message === "string" ? message.trim() : "";
     messageText = this._uiMessageText(messageText);
     this._clearMenuItems(this.inputSourceItem.menu);
@@ -3908,6 +3913,9 @@ MyApplet.prototype = {
       this.inputSourceItem.menu.addMenuItem(item);
     }
     addCurrentCustomInput();
+    if (sourcesWereTruncated) {
+      this.inputSourceItem.menu.addMenuItem(this._selectionInfoItem(_("Input source list truncated for safety")));
+    }
   },
 
   _selectInputSource: function(name, label) {
