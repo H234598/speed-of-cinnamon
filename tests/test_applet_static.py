@@ -298,8 +298,9 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_watchExternalApiEnvFile: function(path)")
         end = source.index("\n  _openExternalApiEnvEditor:", start)
         block = source[start:end]
-        self.assertIn("let monitor = this._trackMonitor(file.monitor_file", block)
+        self.assertIn("let monitor = file.monitor_file", block)
         self.assertIn("this.externalApiEnvMonitor = monitor;", block)
+        self.assertIn("this._trackMonitor(monitor);", block)
         self.assertIn('let connectionId = this._connectSafe(monitor, "changed",', block)
         self.assertIn("if (!connectionId) {\n        this._clearExternalApiEnvMonitor();", block)
         self.assertIn("} catch (err) {\n      this._clearExternalApiEnvMonitor();", block)
@@ -309,13 +310,24 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_clearExternalApiEnvMonitor: function()")
         end = source.index("\n  _watchExternalApiEnvFile:", start)
         block = source[start:end]
-        self.assertIn("let cancelled = false;", block)
         self.assertIn("let result = monitor.cancel();", block)
         self.assertIn('if (result === false)', block)
         self.assertIn('this._recordLifecycleError("monitor-cancel", err);', block)
-        self.assertIn("return;", block)
+        self.assertIn("return false;", block)
         self.assertIn("this._untrackMonitor(monitor);", block)
         self.assertIn("this.externalApiEnvMonitor = null;", block)
+
+    def test_external_env_monitor_registration_failure_rolls_back_monitor(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_watchExternalApiEnvFile: function(path)")
+        end = source.index("\n  _openExternalApiEnvEditor:", start)
+        block = source[start:end]
+        self.assertIn("if (!this._clearExternalApiEnvMonitor()) {", block)
+        self.assertIn("let monitor = file.monitor_file", block)
+        self.assertIn("this.externalApiEnvMonitor = monitor;", block)
+        self.assertIn("this._trackMonitor(monitor);", block)
+        self.assertLess(block.index("this.externalApiEnvMonitor = monitor;"), block.index("this._trackMonitor(monitor);"))
+        self.assertIn("this._clearExternalApiEnvMonitor();", block)
 
     def test_error_status_displays_backend_error_message(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

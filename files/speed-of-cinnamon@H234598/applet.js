@@ -5325,33 +5325,34 @@ MyApplet.prototype = {
   },
 
   _clearExternalApiEnvMonitor: function() {
-    if (this.externalApiEnvMonitor) {
-      let monitor = this.externalApiEnvMonitor;
-      this._disconnectTrackedSignalsForTarget(monitor);
-      let cancelled = false;
-      try {
-        let result = monitor.cancel();
-        if (result === false) {
-          throw new Error("External API monitor could not be cancelled");
-        }
-        cancelled = true;
-      } catch (err) {
-        this._recordLifecycleError("monitor-cancel", err);
-        return;
-      }
-      if (cancelled) {
-        this._untrackMonitor(monitor);
-        this.externalApiEnvMonitor = null;
-      }
+    if (!this.externalApiEnvMonitor) {
+      return true;
     }
+    let monitor = this.externalApiEnvMonitor;
+    this._disconnectTrackedSignalsForTarget(monitor);
+    try {
+      let result = monitor.cancel();
+      if (result === false) {
+        throw new Error("External API monitor could not be cancelled");
+      }
+    } catch (err) {
+      this._recordLifecycleError("monitor-cancel", err);
+      return false;
+    }
+    this._untrackMonitor(monitor);
+    this.externalApiEnvMonitor = null;
+    return true;
   },
 
   _watchExternalApiEnvFile: function(path) {
-    this._clearExternalApiEnvMonitor();
+    if (!this._clearExternalApiEnvMonitor()) {
+      return;
+    }
     try {
       let file = Gio.File.new_for_path(path);
-      let monitor = this._trackMonitor(file.monitor_file(Gio.FileMonitorFlags.NONE, null));
+      let monitor = file.monitor_file(Gio.FileMonitorFlags.NONE, null);
       this.externalApiEnvMonitor = monitor;
+      this._trackMonitor(monitor);
       let connectionId = this._connectSafe(monitor, "changed", (monitor, fileObj, otherFile, eventType) => {
         if (this.appletRemoved) {
           return;
