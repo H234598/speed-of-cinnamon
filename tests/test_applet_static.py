@@ -3700,9 +3700,9 @@ class AppletStaticTest(unittest.TestCase):
     def test_applet_blocks_auto_paste_when_clipboard_targets_unknown_or_empty(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
-        self.assertIn('if (targets === null || targets === undefined) {\n        complete(this._clipboardUnknownPayloadSnapshot());', source)
-        self.assertIn('if (targetLines.length > CLIPBOARD_MAX_TARGETS) {\n        complete(this._clipboardUnknownPayloadSnapshot());', source)
-        self.assertIn('if (payloadFingerprint === "unknown") {\n          complete(this._clipboardUnknownPayloadSnapshot());', source)
+        self.assertIn('if (targets === null || targets === undefined) {\n            unknown();', source)
+        self.assertIn('if (targetLines.length > CLIPBOARD_MAX_TARGETS) {\n            unknown();', source)
+        self.assertIn('if (payloadFingerprint === "unknown") {\n                unknown();', source)
         self.assertIn('let originalPayloadFingerprint = clipboardSnapshot && clipboardSnapshot.payloadFingerprint ? clipboardSnapshot.payloadFingerprint : "unknown";', source)
         self.assertIn('if (originalClipboardSignature === "unknown" || originalPayloadFingerprint === "unknown") {', source)
         self.assertIn('this._setStatus("ready", _("Clipboard state unavailable; overwrite cancelled"), transcript);', source)
@@ -3761,7 +3761,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._clipboardPayloadFingerprintFromTargetsAsync(spec, targetText", source)
         self.assertIn("payloadFingerprint: \"unknown\",", source)
         self.assertIn('if (snapshotA.payloadFingerprint === "unknown" || snapshotB.payloadFingerprint === "unknown") {', source)
-        self.assertIn("let sortedTargets = nonTextTargets.slice().sort().slice(0, CLIPBOARD_MAX_TARGETS);", source)
+        self.assertIn("let sortedTargets;", source)
+        self.assertIn("sortedTargets = nonTextTargets.slice().sort().slice(0, CLIPBOARD_MAX_TARGETS);", source)
         self.assertIn("let readNext = (index) => {", source)
         self.assertIn('complete(fingerprints.join("|"));', source)
         self.assertNotIn("let sampleTarget = String(nonTextTargets[0]);", source)
@@ -4216,6 +4217,24 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let failPreparation = (error) => {", block)
         self.assertIn("this.textInsertToken !== insertToken", block)
         self.assertIn("try {\n        let result = this._copyAndMaybePasteTranscriptText", block)
+
+    def test_async_clipboard_snapshot_failures_complete_with_unknown_payload(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        snapshot_start = source.index("_clipboardPayloadSnapshotAsync: function(completionCallback)")
+        snapshot_end = source.index("\n  _clipboardPayloadFingerprintFromTargetsAsync:", snapshot_start)
+        snapshot_block = source[snapshot_start:snapshot_end]
+        self.assertIn("let completed = false;", snapshot_block)
+        self.assertIn("let unknown = () => complete(this._clipboardUnknownPayloadSnapshot());", snapshot_block)
+        self.assertIn('this._recordLifecycleError("clipboard-query", error);', snapshot_block)
+        self.assertIn("try {\n          if (targets === null || targets === undefined)", snapshot_block)
+
+        fingerprint_start = source.index("_clipboardPayloadFingerprintFromTargetsAsync: function(")
+        fingerprint_end = source.index("\n  _clipboardPayloadFingerprintFromText:", fingerprint_start)
+        fingerprint_block = source[fingerprint_start:fingerprint_end]
+        self.assertIn("let completed = false;", fingerprint_block)
+        self.assertIn('let fail = (error) =>', fingerprint_block)
+        self.assertIn('complete("unknown");', fingerprint_block)
+        self.assertIn('this._recordLifecycleError("clipboard-query-completion", error);', fingerprint_block)
 
     def test_dynamic_menu_errors_preserve_active_recording_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

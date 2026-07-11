@@ -8276,74 +8276,148 @@ MyApplet.prototype = {
   },
 
   _clipboardPayloadSnapshotAsync: function(completionCallback) {
-    let complete = this._guardStateCallback("clipboard-query", completionCallback, this._clipboardUnknownPayloadSnapshot()) || function() {};
-    let spec = this._clipboardProgramSpec();
+    let guardedComplete = this._guardStateCallback("clipboard-query", completionCallback, this._clipboardUnknownPayloadSnapshot()) || function() {};
+    let completed = false;
+    let complete = (snapshot) => {
+      if (completed) {
+        return;
+      }
+      completed = true;
+      guardedComplete(snapshot);
+    };
+    let unknown = () => complete(this._clipboardUnknownPayloadSnapshot());
+    let spec;
+    try {
+      spec = this._clipboardProgramSpec();
+    } catch (error) {
+      this._recordLifecycleError("clipboard-query", error);
+      unknown();
+      return false;
+    }
     if (!spec) {
-      complete(this._clipboardUnknownPayloadSnapshot());
+      unknown();
       return false;
     }
     let deadlineMs = Date.now() + CLIPBOARD_COMMAND_TIMEOUT_MS;
-    this._clipboardTargetList(spec.program, spec.targetArgs, (targets) => {
-      if (targets === null || targets === undefined) {
-        complete(this._clipboardUnknownPayloadSnapshot());
-        return;
-      }
-      let targetText = String(targets || "");
-      let targetLines = targetText.split("\n").filter((line) => String(line || "").trim() !== "");
-      if (targetLines.length > CLIPBOARD_MAX_TARGETS) {
-        complete(this._clipboardUnknownPayloadSnapshot());
-        return;
-      }
-      let nonTextTargets = this._clipboardNonTextPayloadTargets(targetText);
-      if (nonTextTargets.length > CLIPBOARD_MAX_TARGETS) {
-        complete(this._clipboardUnknownPayloadSnapshot());
-        return;
-      }
-      this._clipboardPayloadFingerprintFromTargetsAsync(spec, targetText, (payloadFingerprint) => {
-        if (payloadFingerprint === "unknown") {
-          complete(this._clipboardUnknownPayloadSnapshot());
-          return;
+    try {
+      this._clipboardTargetList(spec.program, spec.targetArgs, (targets) => {
+        try {
+          if (targets === null || targets === undefined) {
+            unknown();
+            return;
+          }
+          let targetText = String(targets || "");
+          let targetLines = targetText.split("\n").filter((line) => String(line || "").trim() !== "");
+          if (targetLines.length > CLIPBOARD_MAX_TARGETS) {
+            unknown();
+            return;
+          }
+          let nonTextTargets = this._clipboardNonTextPayloadTargets(targetText);
+          if (nonTextTargets.length > CLIPBOARD_MAX_TARGETS) {
+            unknown();
+            return;
+          }
+          this._clipboardPayloadFingerprintFromTargetsAsync(spec, targetText, (payloadFingerprint) => {
+            try {
+              if (payloadFingerprint === "unknown") {
+                unknown();
+                return;
+              }
+              complete({
+                signature: targetText,
+                hasNonTextPayload: nonTextTargets.length > 0,
+                payloadFingerprint: payloadFingerprint,
+                description: this._clipboardPayloadDescriptionFromTargets(targetText),
+              });
+            } catch (error) {
+              this._recordLifecycleError("clipboard-query", error);
+              unknown();
+            }
+          }, deadlineMs);
+        } catch (error) {
+          this._recordLifecycleError("clipboard-query", error);
+          unknown();
         }
-        complete({
-          signature: targetText,
-          hasNonTextPayload: nonTextTargets.length > 0,
-          payloadFingerprint: payloadFingerprint,
-          description: this._clipboardPayloadDescriptionFromTargets(targetText),
-        });
-      }, deadlineMs);
-    }, Math.max(1, deadlineMs - Date.now()));
+      }, Math.max(1, deadlineMs - Date.now()));
+    } catch (error) {
+      this._recordLifecycleError("clipboard-query", error);
+      unknown();
+      return false;
+    }
     return true;
   },
 
   _clipboardPayloadFingerprintFromTargetsAsync: function(spec, targets, completionCallback, deadlineMs) {
-    let complete = typeof completionCallback === "function" ? completionCallback : function() {};
-    let nonTextTargets = this._clipboardNonTextPayloadTargets(targets);
-    if (!Array.isArray(nonTextTargets) || nonTextTargets.length === 0) {
-      complete("no-nontext");
+    let callback = typeof completionCallback === "function" ? completionCallback : function() {};
+    let completed = false;
+    let complete = (value) => {
+      if (completed) {
+        return;
+      }
+      completed = true;
+      try {
+        callback(value);
+      } catch (error) {
+        this._recordLifecycleError("clipboard-query-completion", error);
+      }
+    };
+    let fail = (error) => {
+      if (error) {
+        this._recordLifecycleError("clipboard-query", error);
+      }
+      complete("unknown");
+    };
+    let nonTextTargets;
+    try {
+      nonTextTargets = this._clipboardNonTextPayloadTargets(targets);
+      if (!Array.isArray(nonTextTargets) || nonTextTargets.length === 0) {
+        complete("no-nontext");
+        return;
+      }
+    } catch (error) {
+      fail(error);
       return;
     }
     let fingerprints = [];
-    let sortedTargets = nonTextTargets.slice().sort().slice(0, CLIPBOARD_MAX_TARGETS);
+    let sortedTargets;
+    try {
+      sortedTargets = nonTextTargets.slice().sort().slice(0, CLIPBOARD_MAX_TARGETS);
+    } catch (error) {
+      fail(error);
+      return;
+    }
     let readNext = (index) => {
-      if (index >= sortedTargets.length) {
-        complete(fingerprints.join("|"));
-        return;
-      }
-      if (deadlineMs && Date.now() >= deadlineMs) {
-        complete("unknown");
-        return;
-      }
-      let targetName = String(sortedTargets[index] || "");
-      this._clipboardTargetList(spec.program, this._clipboardPayloadArgs(spec, targetName), (payload) => {
-        if (payload === null || payload === undefined) {
+      try {
+        if (index >= sortedTargets.length) {
+          complete(fingerprints.join("|"));
+          return;
+        }
+        if (deadlineMs && Date.now() >= deadlineMs) {
           complete("unknown");
           return;
         }
-        fingerprints.push(this._clipboardPayloadFingerprintFromText(String(payload), targetName));
-        readNext(index + 1);
-      }, Math.max(1, deadlineMs ? deadlineMs - Date.now() : CLIPBOARD_COMMAND_TIMEOUT_MS));
+        let targetName = String(sortedTargets[index] || "");
+        this._clipboardTargetList(spec.program, this._clipboardPayloadArgs(spec, targetName), (payload) => {
+          try {
+            if (payload === null || payload === undefined) {
+              complete("unknown");
+              return;
+            }
+            fingerprints.push(this._clipboardPayloadFingerprintFromText(String(payload), targetName));
+            readNext(index + 1);
+          } catch (error) {
+            fail(error);
+          }
+        }, Math.max(1, deadlineMs ? deadlineMs - Date.now() : CLIPBOARD_COMMAND_TIMEOUT_MS));
+      } catch (error) {
+        fail(error);
+      }
     };
-    readNext(0);
+    try {
+      readNext(0);
+    } catch (error) {
+      fail(error);
+    }
   },
 
   _clipboardPayloadFingerprintFromText: function(payload, targetLabel) {
