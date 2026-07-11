@@ -346,7 +346,7 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
     parent_fd = -1
     temp_fd = -1
     temp_name = ""
-    cleanup_error: OSError | None = None
+    cleanup_error: Exception | None = None
     try:
         parent_fd = ensure_directory_without_following_symlinks(
             path.parent,
@@ -397,17 +397,25 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
         raise ArtifactCryptoError("artifact encryption passphrase file could not be generated") from exc
     finally:
         if temp_fd >= 0:
-            os.close(temp_fd)
+            try:
+                os.close(temp_fd)
+            except Exception as exc:
+                cleanup_error = exc
         if temp_name and parent_fd >= 0:
             try:
                 os.unlink(temp_name, dir_fd=parent_fd)
                 _fsync_fd(parent_fd)
-            except OSError as exc:
-                with suppress(OSError, RuntimeError):
+            except Exception as exc:
+                with suppress(Exception):
                     _scrub_temp_passphrase_file(parent_fd, temp_name)
-                cleanup_error = exc
+                if cleanup_error is None:
+                    cleanup_error = exc
         if parent_fd >= 0:
-            os.close(parent_fd)
+            try:
+                os.close(parent_fd)
+            except Exception as exc:
+                if cleanup_error is None:
+                    cleanup_error = exc
         if cleanup_error is not None:
             raise _temp_passphrase_cleanup_error() from cleanup_error
     return passphrase

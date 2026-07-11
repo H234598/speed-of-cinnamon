@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import socket
@@ -200,6 +201,45 @@ class ArtifactCryptoTest(unittest.TestCase):
 
             self.assertFalse(path.exists())
             self.assertTrue(any(child.name.startswith(".artifact.key.") and child.name.endswith(".tmp") for child in Path(tmp).iterdir()))
+
+    def test_default_passphrase_generation_closes_parent_after_temp_close_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.key"
+            close_modes: list[int | None] = []
+            leaked_fds: set[int] = set()
+            real_close = artifact_crypto.os.close
+            real_fstat = artifact_crypto.os.fstat
+
+            def flaky_close(fd: int) -> None:
+                try:
+                    mode: int | None = real_fstat(fd).st_mode
+                except OSError:
+                    mode = None
+                close_modes.append(mode)
+                if mode is not None and stat.S_ISREG(mode):
+                    leaked_fds.add(fd)
+                    raise OSError("temp close failed")
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: ""},
+                        clear=False,
+                    ),
+                    mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
+                    mock.patch("speed_of_cinnamon.artifact_crypto.os.close", side_effect=flaky_close),
+                ):
+                    with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "temporary file could not be removed"):
+                        artifact_crypto._generate_default_passphrase_file(path)
+            finally:
+                for fd in leaked_fds:
+                    with contextlib.suppress(OSError):
+                        real_close(fd)
+
+            self.assertTrue(any(mode is not None and stat.S_ISDIR(mode) for mode in close_modes))
+            self.assertFalse(any(child.name.startswith(".artifact.key.") and child.name.endswith(".tmp") for child in Path(tmp).iterdir()))
 
     def test_default_passphrase_generation_cleanup_failure_truncates_temp_secret(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
