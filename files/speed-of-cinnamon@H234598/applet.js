@@ -499,6 +499,19 @@ MyApplet.prototype = {
     }
   },
 
+  _runStateGuarded: function(group, callback, fallback) {
+    let key = String(group || "state");
+    if (!this._lifecycleAllowsWork() || typeof callback !== "function") {
+      return fallback;
+    }
+    try {
+      return callback();
+    } catch (error) {
+      this._recordLifecycleError(key, error);
+      return fallback;
+    }
+  },
+
   _runTeardownGuarded: function(group, callback) {
     if (typeof callback !== "function") {
       return;
@@ -522,17 +535,7 @@ MyApplet.prototype = {
       return null;
     }
     let key = String(group || "state-callback");
-    return (...args) => {
-      if (!this._lifecycleAllowsWork()) {
-        return fallback;
-      }
-      try {
-        return callback.apply(this, args);
-      } catch (error) {
-        this._recordLifecycleError(key, error);
-        return fallback;
-      }
-    };
+    return (...args) => this._runStateGuarded(key, () => callback.apply(this, args), fallback);
   },
 
   _handleInitializationFailure: function(error) {
@@ -1016,7 +1019,7 @@ MyApplet.prototype = {
         this._untrackTimer(key, sourceId, propertyName);
         return false;
       }
-      let keepTimer = this._runGuarded("timer-" + key, callback, false) === true;
+    let keepTimer = this._runStateGuarded("timer-" + key, callback, false) === true;
       if (!keepTimer) {
         this._untrackTimer(key, sourceId, propertyName);
       }

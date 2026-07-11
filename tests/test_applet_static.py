@@ -1476,6 +1476,7 @@ class AppletStaticTest(unittest.TestCase):
         for marker in (
             "_startLifecycle: function()",
             "_runGuarded: function(group, callback, fallback)",
+            "_runStateGuarded: function(group, callback, fallback)",
             "_guardCallback: function(group, callback, fallback)",
             "_guardStateCallback: function(group, callback, fallback)",
             "_handleInitializationFailure: function(error)",
@@ -1501,12 +1502,16 @@ class AppletStaticTest(unittest.TestCase):
 
     def test_state_callbacks_are_not_suppressed_by_disabled_error_groups(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
-        start = source.index("_guardStateCallback: function(group, callback, fallback)")
-        end = source.index("\n  _handleInitializationFailure:", start)
-        block = source[start:end]
-        self.assertIn("if (!this._lifecycleAllowsWork())", block)
-        self.assertNotIn("_lifecycleGroupEnabled", block)
-        self.assertIn("this._recordLifecycleError(key, error);", block)
+        state_start = source.index("_runStateGuarded: function(group, callback, fallback)")
+        state_end = source.index("\n  _runTeardownGuarded:", state_start)
+        state_block = source[state_start:state_end]
+        self.assertIn("!this._lifecycleAllowsWork()", state_block)
+        self.assertNotIn("_lifecycleGroupEnabled", state_block)
+        callback_start = source.index("_guardStateCallback: function(group, callback, fallback)")
+        callback_end = source.index("\n  _handleInitializationFailure:", callback_start)
+        callback_block = source[callback_start:callback_end]
+        self.assertIn("this._runStateGuarded(key, () => callback.apply(this, args), fallback)", callback_block)
+        self.assertIn("this._recordLifecycleError(key, error);", state_block)
 
     def test_doctor_cannot_overwrite_an_active_recording_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -1634,7 +1639,7 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName)")
         end = source.index("\n  _init:", start)
         block = source[start:end]
-        self.assertIn("let keepTimer = this._runGuarded(\"timer-\" + key, callback, false) === true;", block)
+        self.assertIn("let keepTimer = this._runStateGuarded(\"timer-\" + key, callback, false) === true;", block)
         self.assertIn("if (!keepTimer) {", block)
         self.assertIn("this._untrackTimer(key, sourceId, propertyName);", block)
         self.assertLess(block.index("let keepTimer"), block.index("if (!keepTimer)"))
