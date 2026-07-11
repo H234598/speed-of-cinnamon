@@ -2906,9 +2906,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('typeof options.timeoutMs === "number" && isFinite(options.timeoutMs)', bounded_block)
         self.assertIn('typeof options.minimumTimeoutMs === "number" && isFinite(options.minimumTimeoutMs)', bounded_block)
         self.assertIn("suppressCallback || this.appletRemoved", bounded_block)
-        self.assertIn("this._resourceRegistry && this._resourceRegistry.processes &&", bounded_block)
-        self.assertIn("this._resourceRegistry.processes[processToken].cancel = (notifyCallback) => finish(", bounded_block)
+        self.assertIn("let processEntry = this._resourceRegistry && this._resourceRegistry.processes", bounded_block)
+        self.assertIn("processEntry.cancel = (notifyCallback) => finish(", bounded_block)
         self.assertIn("notifyCallback === true ? false : true", bounded_block)
+        self.assertIn('"process-cancel-registration"', bounded_block)
         stdin_start = bounded_block.rindex("if (hasInput) {")
         stdin_block = bounded_block[stdin_start:]
         self.assertIn("try {", stdin_block)

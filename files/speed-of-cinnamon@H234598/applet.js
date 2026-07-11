@@ -7431,12 +7431,22 @@ MyApplet.prototype = {
         this._recordLifecycleError("process-callback", error);
       }
     };
-    if (this._resourceRegistry && this._resourceRegistry.processes && this._resourceRegistry.processes[processToken]) {
-      this._resourceRegistry.processes[processToken].cancel = (notifyCallback) => finish(
-        { cancelled: true },
-        true,
-        notifyCallback === true ? false : true
-      );
+    try {
+      let processEntry = this._resourceRegistry && this._resourceRegistry.processes
+        ? this._resourceRegistry.processes[processToken]
+        : null;
+      if (!processEntry) {
+        throw new Error("Process registry entry is unavailable");
+      }
+      processEntry.cancel = (notifyCallback) => finish(
+          { cancelled: true },
+          true,
+          notifyCallback === true ? false : true
+        );
+    } catch (error) {
+      this._runTeardownGuarded("process-cancel-registration", () => this._recordLifecycleError("process-cancel-registration", error));
+      finish({ error: error }, true, true);
+      return null;
     }
 
     let finishWhenReady = () => {
