@@ -2539,11 +2539,11 @@ MyApplet.prototype = {
   },
 
   _autoPasteTitleValues: function(value) {
-    let raw = String(value || "").replace(NUL_RE, "").slice(0, MAX_SETTING_TEXT_CHARS);
+    let raw = typeof value === "string" ? value.replace(NUL_RE, "").slice(0, MAX_SETTING_TEXT_CHARS) : "";
     let values = [];
-    let seen = {};
+    let seen = Object.create(null);
     for (let item of raw.split(/[,\n\r]+/)) {
-      let title = String(item || "").trim();
+      let title = typeof item === "string" ? item.trim() : "";
       let key = title.toLowerCase();
       if (title === "" || seen[key]) {
         continue;
@@ -2559,7 +2559,7 @@ MyApplet.prototype = {
   },
 
   _normalizedAutoPasteWindowTitle: function(value) {
-    return String(value || "").replace(NUL_RE, "").trim().toLowerCase();
+    return (typeof value === "string" ? value : "").replace(NUL_RE, "").trim().toLowerCase();
   },
 
   _autoPastePromptArgs: function() {
