@@ -2212,6 +2212,9 @@ MyApplet.prototype = {
   },
 
   _promptCustomRecordingLimit: function() {
+    if (this.customLimitPromptToken) {
+      return;
+    }
     if (!this._findTrustedProgramInPath("zenity")) {
       this.lastMessage = _("Install zenity to enter a custom duration.");
       this._setStatus("ready", this.lastMessage, this.lastTranscript);
@@ -2306,6 +2309,9 @@ MyApplet.prototype = {
   },
 
   _promptCustomTranscriptLimit: function() {
+    if (this.customLimitPromptToken) {
+      return;
+    }
     if (!this._findTrustedProgramInPath("zenity")) {
       this.lastMessage = _("Install zenity to enter a custom transcript limit.");
       this._setStatus("ready", this.lastMessage, this.lastTranscript);
@@ -2614,6 +2620,9 @@ MyApplet.prototype = {
   },
 
   _configureAutoPaste: function() {
+    if (this.autoPastePromptToken) {
+      return;
+    }
     if (!this._findTrustedProgramInPath("zenity")) {
       this._setTextOptionStatus(_("Install zenity to enter a custom Auto-Submit string"));
       return;
@@ -3591,6 +3600,9 @@ MyApplet.prototype = {
   },
 
   _selectBenchmarkAudioFile: function() {
+    if (this.benchmarkFlowToken) {
+      return;
+    }
     if (!this._findTrustedProgramInPath("zenity")) {
       this._setStatus("error", _("Install zenity to choose a benchmark audio file"), this.lastTranscript);
       return;
@@ -5117,6 +5129,9 @@ MyApplet.prototype = {
   },
 
   _activateOllamaTextModelFlow: function() {
+    if (this.ollamaModelFlowToken) {
+      return;
+    }
     if (!this._findTrustedProgramInPath("zenity")) {
       this._cancelOllamaInstallWatch();
       this._clearOllamaModelFlow();
@@ -5252,6 +5267,9 @@ MyApplet.prototype = {
   },
 
   _chooseOllamaTextModel: function() {
+    if (this.ollamaModelFlowToken) {
+      return;
+    }
     if (!this._findTrustedProgramInPath("zenity")) {
       this._cancelOllamaInstallWatch();
       this._clearOllamaModelFlow();

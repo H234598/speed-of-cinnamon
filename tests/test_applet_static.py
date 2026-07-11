@@ -708,6 +708,23 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn("let actionToken = {};", block)
             self.assertLess(block.index(f"if ({token})"), block.index("let actionToken = {};"))
 
+    def test_interactive_dialogs_do_not_spawn_concurrent_flows(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        for method, next_method, guard in [
+            ("_promptCustomRecordingLimit: function()", "\n  _parseCustomRecordingLimit:", "this.customLimitPromptToken"),
+            ("_promptCustomTranscriptLimit: function()", "\n  _parseCustomTranscriptLimit:", "this.customLimitPromptToken"),
+            ("_configureAutoPaste: function()", "\n  _setAutoPasteTitles:", "this.autoPastePromptToken"),
+            ("_selectBenchmarkAudioFile: function()", "\n  _benchmarkDownloadedModels:", "this.benchmarkFlowToken"),
+            ("_activateOllamaTextModelFlow: function()", "\n  _ollamaModelPromptArgs:", "this.ollamaModelFlowToken"),
+            ("_chooseOllamaTextModel: function()", "\n  _promptChooseOllamaTextModel:", "this.ollamaModelFlowToken"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn(f"if ({guard})", block)
+            self.assertLess(block.index(f"if ({guard})"), block.index('if (!this._findTrustedProgramInPath("zenity"))'))
+
     def test_menu_payload_arrays_and_entries_are_shape_safe(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
