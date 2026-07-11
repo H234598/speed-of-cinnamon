@@ -375,7 +375,7 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertIn("on_applet_clicked: function()", source)
         self.assertIn('if (!this._lifecycleAllowsWork() || !this.menu || typeof this.menu.toggle !== "function") {', source)
-        self.assertIn('this._runGuarded("menu-toggle", () => {', source)
+        self.assertIn('this._runStateGuarded("menu-toggle", () => {', source)
         self.assertIn("if (!menu.isOpen) {", source)
         self.assertIn("this._rememberFocusedWindow();", source)
         activation_keys = schema["layout"]["activation-section"]["keys"]
@@ -1569,6 +1569,14 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_registerHotkeys: function()")
         end = source.index("\n  _onHotkeyChanged:", start)
         self.assertIn('this._runStateGuarded("hotkeys"', source[start:end])
+
+    def test_menu_toggle_remains_recoverable_after_guarded_failures(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("on_applet_clicked: function()")
+        end = source.index("\n  on_applet_removed_from_panel:", start)
+        block = source[start:end]
+        self.assertIn('this._runStateGuarded("menu-toggle"', block)
+        self.assertNotIn('this._runGuarded("menu-toggle"', block)
 
     def test_doctor_cannot_overwrite_an_active_recording_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2836,7 +2844,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('on_applet_clicked: function() {', source)
         self.assertIn('if (!this._lifecycleAllowsWork()) {', source)
         self.assertIn('let menu = this.menu;', source)
-        self.assertIn('this._runGuarded("menu-toggle", () => {', source)
+        self.assertIn('this._runStateGuarded("menu-toggle", () => {', source)
         self.assertIn('this._rememberFocusedWindow();\n      }\n      menu.toggle();', source)
         self.assertNotIn('if (this.status !== "recording") {\n      this._rememberFocusedWindow();\n    }\n    this.notificationSessionActive = true;', source)
         self.assertIn("global.display ? global.display.focus_window : null", source)

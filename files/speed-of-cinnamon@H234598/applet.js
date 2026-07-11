@@ -1840,7 +1840,7 @@ MyApplet.prototype = {
       return;
     }
     let menu = this.menu;
-    this._runGuarded("menu-toggle", () => {
+    this._runStateGuarded("menu-toggle", () => {
       if (!menu.isOpen) {
         this._rememberFocusedWindow();
       }
