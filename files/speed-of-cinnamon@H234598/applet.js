@@ -1911,6 +1911,18 @@ MyApplet.prototype = {
     let safePostProcessBackend = POST_PROCESS_BACKENDS.indexOf(String(this.postProcessBackend || "")) >= 0
       ? String(this.postProcessBackend)
       : "none";
+    if (safeTranscriber === "command" && safeTranscriberCommand.trim() === "") {
+      safeTranscriber = "auto";
+    }
+    if ((safeTranscriber === "whisper-cpp" || safeTranscriber === "faster-whisper") && safeWhisperModel.trim() === "") {
+      safeTranscriber = "auto";
+    }
+    if (safePostProcessBackend === "command" && safePostProcessCommand.trim() === "") {
+      safePostProcessBackend = "none";
+    }
+    if (safePostProcessBackend === "ollama" && safeOllamaModel.trim() === "") {
+      safePostProcessBackend = "none";
+    }
 
     let args = [
       this._cliCommand(),
@@ -1942,46 +1954,84 @@ MyApplet.prototype = {
     if (this.autoRelisten) {
       args.push("--skip-silent-auto-relisten");
     }
+    let transcriberCommandIncluded = safeTranscriberCommand.trim() === "";
+    let postProcessCommandIncluded = safePostProcessCommand.trim() === "";
+    let ollamaModelIncluded = safeOllamaModel.trim() === "";
+    let whisperModelIncluded = safeWhisperModel.trim() === "";
     if (safeInputDevice.trim() !== "") {
-      args.push("--input-device", safeInputDevice);
+      this._appendCliOptionWithinBudget(args, "--input-device", safeInputDevice);
     }
     if (safeTranscriberCommand.trim() !== "") {
-      args.push("--transcriber-command", safeTranscriberCommand);
+      transcriberCommandIncluded = this._appendCliOptionWithinBudget(args, "--transcriber-command", safeTranscriberCommand);
     }
     if (safePostProcessCommand.trim() !== "") {
-      args.push("--post-process-command", safePostProcessCommand);
+      postProcessCommandIncluded = this._appendCliOptionWithinBudget(args, "--post-process-command", safePostProcessCommand);
     }
     if (safeOllamaUrl.trim() !== "") {
-      args.push("--ollama-url", safeOllamaUrl);
+      this._appendCliOptionWithinBudget(args, "--ollama-url", safeOllamaUrl);
     }
     if (safeOllamaModel.trim() !== "") {
-      args.push("--ollama-model", safeOllamaModel);
+      ollamaModelIncluded = this._appendCliOptionWithinBudget(args, "--ollama-model", safeOllamaModel);
     }
     if (safeOpenAiCompatibleUrl.trim() !== "") {
-      args.push("--openai-compatible-url", safeOpenAiCompatibleUrl);
+      this._appendCliOptionWithinBudget(args, "--openai-compatible-url", safeOpenAiCompatibleUrl);
     }
     if (safeOpenAiCompatibleModel.trim() !== "") {
-      args.push("--openai-compatible-model", safeOpenAiCompatibleModel);
+      this._appendCliOptionWithinBudget(args, "--openai-compatible-model", safeOpenAiCompatibleModel);
     }
     if (safeOpenAiCompatibleTextModel.trim() !== "") {
-      args.push("--openai-compatible-text-model", safeOpenAiCompatibleTextModel);
+      this._appendCliOptionWithinBudget(args, "--openai-compatible-text-model", safeOpenAiCompatibleTextModel);
     }
     if (!Boolean(this.openaiCompatibleFlexProcessing)) {
       args.push("--no-openai-compatible-flex-processing");
     }
     if (safePostProcessPrompt.trim() !== "") {
-      args.push("--post-process-prompt", safePostProcessPrompt);
+      this._appendCliOptionWithinBudget(args, "--post-process-prompt", safePostProcessPrompt);
     }
     if (safeWhisperModel.trim() !== "") {
-      args.push("--whisper-model", safeWhisperModel);
+      whisperModelIncluded = this._appendCliOptionWithinBudget(args, "--whisper-model", safeWhisperModel);
     }
     if (safePersonalContext.trim() !== "") {
-      args.push("--personal-context", safePersonalContext);
+      this._appendCliOptionWithinBudget(args, "--personal-context", safePersonalContext);
     }
     if (safeVocabulary.trim() !== "") {
-      args.push("--vocabulary", safeVocabulary);
+      this._appendCliOptionWithinBudget(args, "--vocabulary", safeVocabulary);
+    }
+    if (!transcriberCommandIncluded && safeTranscriber === "command") {
+      args[args.indexOf("--transcriber") + 1] = "auto";
+    }
+    if (!whisperModelIncluded && (safeTranscriber === "whisper-cpp" || safeTranscriber === "faster-whisper")) {
+      args[args.indexOf("--transcriber") + 1] = "auto";
+    }
+    if (!postProcessCommandIncluded && safePostProcessBackend === "command") {
+      args[args.indexOf("--post-process-backend") + 1] = "none";
+    }
+    if (!ollamaModelIncluded && safePostProcessBackend === "ollama") {
+      args[args.indexOf("--post-process-backend") + 1] = "none";
     }
     return args;
+  },
+
+  _appendCliOptionWithinBudget: function(args, flag, value) {
+    if (!Array.isArray(args) || typeof flag !== "string" || typeof value !== "string") {
+      return false;
+    }
+    let flagBytes = utf8ByteLength(flag);
+    let valueBytes = utf8ByteLength(value);
+    if (flagBytes > MAX_CLI_ARG_BYTES || valueBytes > MAX_CLI_ARG_BYTES) {
+      this._logLifecycleError("settings-value", new Error("optional CLI setting exceeds argument limit"));
+      return false;
+    }
+    let totalBytes = 0;
+    for (let arg of args) {
+      totalBytes += utf8ByteLength(arg);
+    }
+    if (totalBytes + flagBytes + valueBytes > MAX_CLI_COMMAND_BYTES) {
+      this._logLifecycleError("settings-value", new Error("optional CLI setting exceeds command limit"));
+      return false;
+    }
+    args.push(flag, value);
+    return true;
   },
 
   _statusArgs: function() {
