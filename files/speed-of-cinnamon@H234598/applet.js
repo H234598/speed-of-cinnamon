@@ -3451,7 +3451,10 @@ MyApplet.prototype = {
       "  printf 'Install Ollama manually with your distribution package manager, then rerun this step.\\n' >&2",
       "  exit 1",
       "fi",
-      "if command -v ollama >/dev/null 2>&1; then ollama serve >/tmp/speed-of-cinnamon-ollama.log 2>&1 & sleep 2 || true; fi",
+      "if command -v ollama >/dev/null 2>&1; then",
+      "  ollama_log_file=\"$(mktemp \"${XDG_RUNTIME_DIR:-/tmp}/speed-of-cinnamon-ollama.XXXXXX.log\")\"",
+      "  ollama serve >\"$ollama_log_file\" 2>&1 & sleep 2 || true",
+      "fi",
       "if command -v ollama >/dev/null 2>&1; then ollama list >/dev/null 2>&1 && echo 'Ollama is reachable on 127.0.0.1:11434.' || { echo 'Ollama installed, but the local API is not reachable yet.'; exit 1; }; fi"
     ]);
   },
