@@ -7328,6 +7328,9 @@ MyApplet.prototype = {
     }
     if (!this._closeMenuForKeyboardInsert()) {
       this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);
+      if (typeof completionCallback === "function") {
+        completionCallback(false);
+      }
       return false;
     }
     this._restoreTargetWindowForPaste((restored) => {

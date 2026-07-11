@@ -2224,6 +2224,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.cancelItem.setSensitive(this._hasCancelableRecordingWork());", status_block)
         self.assertIn("if (!this._hasCancelableRecordingWork())", cancel_block)
 
+    def test_async_keyboard_insert_reports_menu_close_failure(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_copyAndMaybePasteTranscriptText: function(")
+        end = source.index("\n  _confirmClipboardOverwriteForPaste:", start)
+        block = source[start:end]
+        failure = block.index('if (!this._closeMenuForKeyboardInsert())')
+        failure_end = block.index("return false;", failure)
+
+        self.assertIn('this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);', block[failure:failure_end])
+        self.assertIn('if (typeof completionCallback === "function")', block[failure:failure_end])
+        self.assertIn("completionCallback(false);", block[failure:failure_end])
+
     def test_cancel_pending_during_command_suppresses_done_transcript_insert(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         apply_index = source.index("_applyPayload: function(payload, statusRefreshToken)")
