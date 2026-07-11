@@ -569,7 +569,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('Built-in marker names match known window classes/app IDs; codex matches known terminal identities and the window title. Custom strings match the full window title case-insensitively. Empty disables Auto-Submit.', source)
         self.assertIn('"--entry-text=" + current', source)
         self.assertIn('if (!this._findTrustedProgramInPath("zenity"))', source)
-        self.assertIn('this._spawnText(this._autoPastePromptArgs(), (output) => {', source)
+        self.assertIn('this._spawnText(promptArgs, (output) => {', source)
         self.assertIn('this._setAutoPasteTitles(this._autoPasteTitleValues(output));', source)
         self.assertIn('_autoPasteTitleValues: function(value)', source)
         self.assertIn('raw.split(/[,\\n\\r]+/)', source)
@@ -745,6 +745,21 @@ class AppletStaticTest(unittest.TestCase):
             block = source[start:end]
             self.assertIn(guard, block)
             self.assertLess(block.index(guard), block.index('if (!this._findTrustedProgramInPath("zenity"))'))
+
+    def test_interactive_prompt_tokens_release_when_argument_building_fails(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method, args_name, builder_name, token_name, error_group in [
+            ("_promptCustomRecordingLimit: function()", "\n  _parseCustomRecordingLimit:", "recordingPromptArgs", "_customRecordingLimitPromptArgs", "customLimitPromptToken", "recording-limit-prompt"),
+            ("_promptCustomTranscriptLimit: function()", "\n  _parseCustomTranscriptLimit:", "transcriptPromptArgs", "_customTranscriptLimitPromptArgs", "customLimitPromptToken", "transcript-limit-prompt"),
+            ("_configureAutoPaste: function()", "\n  _setAutoPasteTitles:", "promptArgs", "_autoPastePromptArgs", "autoPastePromptToken", "auto-paste-prompt"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn(f"let {args_name};", block)
+            self.assertIn(f"{args_name} = this.{builder_name}();", block)
+            self.assertIn(f"this.{token_name} = null;", block)
+            self.assertIn(f'this._recordLifecycleError("{error_group}", error);', block)
 
     def test_output_settings_cancel_stale_insert_and_prompt_callbacks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

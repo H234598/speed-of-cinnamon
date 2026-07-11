@@ -2376,7 +2376,18 @@ MyApplet.prototype = {
     }
     let promptToken = {};
     this.customLimitPromptToken = promptToken;
-    this._spawnText(this._customRecordingLimitPromptArgs(), (output) => {
+    let recordingPromptArgs;
+    try {
+      recordingPromptArgs = this._customRecordingLimitPromptArgs();
+    } catch (error) {
+      if (this.customLimitPromptToken === promptToken) {
+        this.customLimitPromptToken = null;
+      }
+      this._recordLifecycleError("recording-limit-prompt", error);
+      this._setStatusPreservingRecording("error", _("Could not prepare custom duration prompt"), this.lastTranscript);
+      return;
+    }
+    this._spawnText(recordingPromptArgs, (output) => {
       if (this.customLimitPromptToken !== promptToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -2473,7 +2484,18 @@ MyApplet.prototype = {
     }
     let promptToken = {};
     this.customLimitPromptToken = promptToken;
-    this._spawnText(this._customTranscriptLimitPromptArgs(), (output) => {
+    let transcriptPromptArgs;
+    try {
+      transcriptPromptArgs = this._customTranscriptLimitPromptArgs();
+    } catch (error) {
+      if (this.customLimitPromptToken === promptToken) {
+        this.customLimitPromptToken = null;
+      }
+      this._recordLifecycleError("transcript-limit-prompt", error);
+      this._setStatusPreservingRecording("error", _("Could not prepare custom transcript limit prompt"), this.lastTranscript);
+      return;
+    }
+    this._spawnText(transcriptPromptArgs, (output) => {
       if (this.customLimitPromptToken !== promptToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -2759,7 +2781,18 @@ MyApplet.prototype = {
     let promptToken = {};
     this.autoPastePromptToken = promptToken;
     this._setTextOptionStatus(_("Enter custom Auto-Submit window title text..."));
-    this._spawnText(this._autoPastePromptArgs(), (output) => {
+    let promptArgs;
+    try {
+      promptArgs = this._autoPastePromptArgs();
+    } catch (error) {
+      if (this.autoPastePromptToken === promptToken) {
+        this.autoPastePromptToken = null;
+      }
+      this._recordLifecycleError("auto-paste-prompt", error);
+      this._setTextOptionStatus(_("Could not prepare Auto-Submit prompt"));
+      return;
+    }
+    this._spawnText(promptArgs, (output) => {
       if (this.autoPastePromptToken !== promptToken || !this._lifecycleAllowsWork()) {
         return;
       }
