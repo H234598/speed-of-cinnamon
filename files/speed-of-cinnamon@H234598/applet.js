@@ -2726,8 +2726,12 @@ MyApplet.prototype = {
   },
 
   _normalizeLanguage: function(value, fallback) {
-    let language = String(value || "").trim();
-    return language === "" ? fallback : language;
+    let language = typeof value === "string" ? value.trim().toLowerCase() : "";
+    let safeFallback = typeof fallback === "string" ? fallback.trim().toLowerCase() : "";
+    if (LANGUAGE_CODES.indexOf(safeFallback) < 0) {
+      safeFallback = "en";
+    }
+    return LANGUAGE_CODES.indexOf(language) >= 0 ? language : safeFallback;
   },
 
   _currentLanguage: function() {

@@ -410,6 +410,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._connectSafe(selectPrimary, \"activate\", () => this._setActiveLanguage(primary", source)
         self.assertIn("this._connectSafe(startSecondary, \"activate\", () => this._startWithLanguage(secondary, true))", source)
         self.assertIn("if (!this.activeLanguageExplicit || (current !== primary && current !== secondary))", source)
+        self.assertIn('let language = typeof value === "string" ? value.trim().toLowerCase() : "";', source)
+        self.assertIn('LANGUAGE_CODES.indexOf(language) >= 0 ? language : safeFallback', source)
         self.assertIn("this.activeLanguageExplicit = false;", source)
         self.assertIn("this.activeLanguageExplicit = true;", source)
         self.assertIn('status === "recording" || status === "recorded" || status === "processing"', source)
