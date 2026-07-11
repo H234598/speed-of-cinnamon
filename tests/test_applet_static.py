@@ -730,6 +730,27 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (status === \"done\")", apply_block)
         self.assertIn("this._maybeAutoTranscribeRecorded(payload, status);", apply_block)
 
+    def test_backend_boolean_fields_require_explicit_json_booleans(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("if (section.ok !== true)", source)
+        self.assertIn("if (payload.ok !== true)", source)
+        self.assertIn("if (check.ok !== true)", source)
+        self.assertIn("if (payload.ok === true)", source)
+        self.assertIn("payload.ok === true ?", source)
+        self.assertIn("section.ok === true ?", source)
+        self.assertIn("let enabled = alarm.enabled === true;", source)
+        self.assertIn("payload.removed === true", source)
+        self.assertIn("if (alarm.notify !== true)", source)
+        self.assertIn("alarm.critical === true", source)
+        self.assertIn("let downloaded = model.downloaded === true;", source)
+        self.assertIn("payload.truncated === true", source)
+        self.assertIn("payload.plaintext !== false", source)
+        self.assertNotIn("Boolean(alarm.critical)", source)
+        self.assertNotIn("Boolean(model.downloaded)", source)
+        self.assertNotIn("Boolean(payload.truncated)", source)
+        self.assertNotIn("Boolean(payload.plaintext)", source)
+
     def test_input_source_refresh_ignores_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
@@ -1586,7 +1607,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._setStatus("ready", _("Transcript list cancelled"), this.lastTranscript);', source)
         self.assertIn("_loadAllTranscriptsDocument: function()", source)
         self.assertIn("this._confirmPlaintextTranscriptList(function(confirmed)", source)
-        self.assertIn("_showTranscriptsWindow(content, this._safePayloadCount(payload.transcripts), Boolean(payload.truncated));", source)
+        self.assertIn("_showTranscriptsWindow(content, this._safePayloadCount(payload.transcripts), payload.truncated === true);", source)
         self.assertIn('message += _(" (truncated)");', source)
         self.assertIn("const CLI_COMMAND_TIMEOUT_MS = 300000;", source)
         self.assertIn("_coerceSpawnArgs: function(args) {", source)
@@ -2300,7 +2321,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._runBoundedSubprocess(args, {}, {", source)
         self.assertNotIn("communicate_utf8_async", source)
         self.assertIn("_exportAllTranscripts: function()", source)
-        self.assertIn("if (payload.encrypted !== true || Boolean(payload.plaintext) || String(payload.encryption || \"\") === \"off\") {", source)
+        self.assertIn("if (payload.encrypted !== true || payload.plaintext !== false || String(payload.encryption || \"\") === \"off\") {", source)
         self.assertIn('let message = _("Transcript export was not encrypted");', source)
         self.assertIn('this._setStatus("processing", _("Exporting transcripts..."), this.lastTranscript)', source)
         self.assertIn('this._notify(_("Speed of Cinnamon transcript export"), message, false);', source)

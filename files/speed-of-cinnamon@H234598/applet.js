@@ -2990,11 +2990,11 @@ MyApplet.prototype = {
     let missing = [];
     for (let name of ["recorder", "transcriber", "output", "postprocessor"]) {
       let section = configured[name] || {};
-      if (!section.ok) {
+      if (section.ok !== true) {
         missing.push(name + ": " + (section.detail || "not ready"));
       }
     }
-    if (!payload.ok) {
+    if (payload.ok !== true) {
       let message = _("Setup needed: ") + missing.join("; ");
       this._setStatus(startupCheck ? "setup" : "error", message, this.lastTranscript);
       this._presentDoctorResult(message, true, Boolean(startupCheck));
@@ -3020,14 +3020,14 @@ MyApplet.prototype = {
       if (!check || typeof check !== "object") {
         continue;
       }
-      if (!check.ok) {
+      if (check.ok !== true) {
         let name = String(check.name || "").trim();
         if (name !== "") {
           missing.push(name);
         }
       }
     }
-    if (payload.ok) {
+    if (payload.ok === true) {
       let message = _("Doctor: core OK; optional missing: ") + missing.join(", ");
       this._setDoctorSummary(message);
       this._setStatus("ready", message, this.lastTranscript);
@@ -3062,12 +3062,12 @@ MyApplet.prototype = {
       this._doctorSectionText("Out", configured.output),
       this._doctorSectionText("Text", configured.postprocessor)
     ];
-    return (payload.ok ? _("Doctor: ready - ") : _("Doctor: setup needed - ")) + rows.join(", ");
+    return (payload.ok === true ? _("Doctor: ready - ") : _("Doctor: setup needed - ")) + rows.join(", ");
   },
 
   _doctorSectionText: function(label, section) {
     section = section || {};
-    return label + " " + (section.ok ? "OK" : "FAIL");
+    return label + " " + (section.ok === true ? "OK" : "FAIL");
   },
 
   _openAppletSettings: function() {
@@ -3564,7 +3564,8 @@ MyApplet.prototype = {
     if (id === "") {
       return;
     }
-    let label = (alarm.enabled ? "[x] " : "[ ] ") + String(alarm.label || alarm.time || id);
+    let enabled = alarm.enabled === true;
+    let label = (enabled ? "[x] " : "[ ] ") + String(alarm.label || alarm.time || id);
     let summary = String(alarm.summary || "");
     if (summary !== "") {
       label += " - " + summary;
@@ -3576,8 +3577,8 @@ MyApplet.prototype = {
     details.setSensitive(false);
     entry.menu.addMenuItem(details);
 
-    let toggle = new PopupMenu.PopupIconMenuItem(alarm.enabled ? _("Disable alarm") : _("Enable alarm"), alarm.enabled ? "media-playback-pause-symbolic" : "media-playback-start-symbolic", St.IconType.SYMBOLIC);
-    this._connectSafe(toggle, "activate", () => this._setAlarmEnabled(id, !alarm.enabled));
+    let toggle = new PopupMenu.PopupIconMenuItem(enabled ? _("Disable alarm") : _("Enable alarm"), enabled ? "media-playback-pause-symbolic" : "media-playback-start-symbolic", St.IconType.SYMBOLIC);
+    this._connectSafe(toggle, "activate", () => this._setAlarmEnabled(id, !enabled));
     entry.menu.addMenuItem(toggle);
 
     let remove = new PopupMenu.PopupIconMenuItem(_("Remove alarm"), "edit-delete-symbolic", St.IconType.SYMBOLIC);
@@ -3631,7 +3632,7 @@ MyApplet.prototype = {
         return;
       }
       this.alarmActionToken = null;
-      this._setAlarmOptionStatus(payload.removed ? _("Alarm removed") : _("Alarm not found"));
+      this._setAlarmOptionStatus(payload.removed === true ? _("Alarm removed") : _("Alarm not found"));
       this._refreshAlarmMenu();
     });
   },
@@ -3655,10 +3656,10 @@ MyApplet.prototype = {
         ? payload.due.filter((alarm) => alarm && typeof alarm === "object")
         : [];
       for (let alarm of due) {
-        if (alarm.notify === false) {
+        if (alarm.notify !== true) {
           continue;
         }
-        this._notify(_("Speed of Cinnamon alarm"), alarm.body || alarm.label || _("Alarm due"), Boolean(alarm.critical));
+        this._notify(_("Speed of Cinnamon alarm"), alarm.body || alarm.label || _("Alarm due"), alarm.critical === true);
       }
       if (due.length > 0) {
         let first = due[0] || {};
@@ -3913,7 +3914,7 @@ MyApplet.prototype = {
     if (name === "") {
       return;
     }
-    let downloaded = Boolean(model.downloaded);
+    let downloaded = model.downloaded === true;
     let current = downloaded && this.whisperModel && String(model.path || "") === String(this.whisperModel);
     let compatible = this._voiceModelSupportsCurrentLanguage(model);
     let label = (current ? "[x] " : "[ ] ") + name + " (" + String(model.size || "?") + ")";
@@ -5008,7 +5009,7 @@ MyApplet.prototype = {
         this._setStatus("error", _("Transcript list is empty"), this.lastTranscript);
         return;
       }
-      this._showTranscriptsWindow(content, this._safePayloadCount(payload.transcripts), Boolean(payload.truncated));
+      this._showTranscriptsWindow(content, this._safePayloadCount(payload.transcripts), payload.truncated === true);
     });
   },
 
@@ -5076,7 +5077,7 @@ MyApplet.prototype = {
         this._setStatus("error", _("Transcript export path is empty"), this.lastTranscript);
         return;
       }
-      if (payload.encrypted !== true || Boolean(payload.plaintext) || String(payload.encryption || "") === "off") {
+      if (payload.encrypted !== true || payload.plaintext !== false || String(payload.encryption || "") === "off") {
         let message = _("Transcript export was not encrypted");
         this._setStatus("error", message, this.lastTranscript);
         this._notify(_("Speed of Cinnamon transcript export"), message, true);
