@@ -2993,8 +2993,8 @@ MyApplet.prototype = {
       }
       return;
     }
-    let stoppingRecording = this.status === "recording";
-    if (!stoppingRecording && !this._ensureVoiceModelCompatibleWithCurrentLanguage(true)) {
+    let hasExistingRecordingWork = this._hasActiveRecordingState();
+    if (!hasExistingRecordingWork && !this._ensureVoiceModelCompatibleWithCurrentLanguage(true)) {
       return;
     }
     let toggleArgs;

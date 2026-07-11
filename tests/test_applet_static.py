@@ -3725,10 +3725,10 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_toggleRecording: function()")
         end = source.index("\n  _restartApplet:", start)
         block = source[start:end]
-        self.assertIn('let stoppingRecording = this.status === "recording";', block)
-        self.assertIn("if (!stoppingRecording && !this._ensureVoiceModelCompatibleWithCurrentLanguage(true))", block)
+        self.assertIn("let hasExistingRecordingWork = this._hasActiveRecordingState();", block)
+        self.assertIn("if (!hasExistingRecordingWork && !this._ensureVoiceModelCompatibleWithCurrentLanguage(true))", block)
         self.assertLess(
-            block.index('let stoppingRecording = this.status === "recording";'),
+            block.index("let hasExistingRecordingWork = this._hasActiveRecordingState();"),
             block.index('toggleArgs = this._baseArgs("toggle");'),
         )
 
