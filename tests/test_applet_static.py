@@ -725,6 +725,36 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn(f"if ({guard})", block)
             self.assertLess(block.index(f"if ({guard})"), block.index('if (!this._findTrustedProgramInPath("zenity"))'))
 
+    def test_output_settings_cancel_stale_insert_and_prompt_callbacks(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("_cancelTextInsertForSettingsChange: function()", source)
+        cancel_start = source.index("_cancelTextInsertForSettingsChange: function()")
+        cancel_end = source.index("\n  on_applet_clicked:", cancel_start)
+        cancel_block = source[cancel_start:cancel_end]
+        self.assertIn("this.textInsertToken = null;", cancel_block)
+        self.assertIn("this._clearPasteTimer();", cancel_block)
+        self.assertIn('this._terminateProcessesByGroup("keyboard");', cancel_block)
+        self.assertIn('this._terminateProcessesByGroup("clipboard");', cancel_block)
+
+        output_start = source.index("_onOutputSettingsChanged: function()")
+        output_end = source.index("\n  _onTextOutputSettingsChanged:", output_start)
+        self.assertIn("this._cancelTextInsertForSettingsChange();", source[output_start:output_end])
+
+        text_output_start = source.index("_onTextOutputSettingsChanged: function()")
+        text_output_end = source.index("\n  _onTranscriptRetentionSettingsChanged:", text_output_start)
+        text_output_block = source[text_output_start:text_output_end]
+        self.assertIn("this._cancelTextInsertForSettingsChange();", text_output_block)
+        self.assertIn("this.autoPastePromptToken = null;", text_output_block)
+
+        for method, next_method in [
+            ("_onRecordingLimitSettingsChanged: function()", "\n  _onRecordingOptionsChanged:"),
+            ("_onTranscriptRetentionSettingsChanged: function()", "\n  _onRecorderSettingsChanged:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            self.assertIn("this.customLimitPromptToken = null;", source[start:end])
+
     def test_menu_payload_arrays_and_entries_are_shape_safe(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

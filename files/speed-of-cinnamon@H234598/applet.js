@@ -1698,12 +1698,15 @@ MyApplet.prototype = {
   },
 
   _onOutputSettingsChanged: function() {
+    this._cancelTextInsertForSettingsChange();
     this.insertMethod = this._normalizeOutputMethod(this.insertMethod);
     this._populateOutputMethodMenu();
     this._updatePanel();
   },
 
   _onTextOutputSettingsChanged: function() {
+    this._cancelTextInsertForSettingsChange();
+    this.autoPastePromptToken = null;
     this.typingDelayMs = this._normalizeTypingDelayMs(this.typingDelayMs);
     this.artifactEncryption = this._normalizeArtifactEncryption(this.artifactEncryption);
     this._populateArtifactEncryptionMenu();
@@ -1713,6 +1716,7 @@ MyApplet.prototype = {
   },
 
   _onTranscriptRetentionSettingsChanged: function() {
+    this.customLimitPromptToken = null;
     this.maxTranscriptFiles = this._normalizeTranscriptLimit(this.maxTranscriptFiles);
     this._populateTranscriptStorageMenu();
     this._updatePanel();
@@ -1725,6 +1729,7 @@ MyApplet.prototype = {
   },
 
   _onRecordingLimitSettingsChanged: function() {
+    this.customLimitPromptToken = null;
     this.maxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
     this._populateRecordingLimitMenu();
     this._updatePanel();
@@ -1766,6 +1771,16 @@ MyApplet.prototype = {
     this.openaiCompatibleFlexProcessing = Boolean(this.openaiCompatibleFlexProcessing);
     this._updateOpenAiFlexProcessingItem();
     this._updatePanel();
+  },
+
+  _cancelTextInsertForSettingsChange: function() {
+    if (!this.textInsertToken) {
+      return;
+    }
+    this.textInsertToken = null;
+    this._clearPasteTimer();
+    this._terminateProcessesByGroup("keyboard");
+    this._terminateProcessesByGroup("clipboard");
   },
 
   on_applet_clicked: function() {
