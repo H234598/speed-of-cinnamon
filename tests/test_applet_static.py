@@ -1550,6 +1550,14 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._runStateGuarded(key, () => callback.apply(this, args), fallback)", callback_block)
         self.assertIn("this._recordLifecycleError(key, error);", state_block)
 
+    def test_menu_cleanup_is_not_suppressed_by_disabled_error_groups(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_clearMenuItems: function(menu)")
+        end = source.index("\n  _trackDialog:", start)
+        block = source[start:end]
+        self.assertIn('this._runStateGuarded("menu-items"', block)
+        self.assertNotIn('this._runGuarded("menu-items"', block)
+
     def test_doctor_cannot_overwrite_an_active_recording_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_runDoctor: function(startupCheck)")

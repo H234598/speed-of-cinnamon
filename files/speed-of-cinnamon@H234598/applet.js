@@ -666,7 +666,7 @@ MyApplet.prototype = {
     for (let target of targets) {
       this._disconnectTrackedSignalsForTarget(target);
     }
-    this._runGuarded("menu-items", () => {
+    this._runStateGuarded("menu-items", () => {
       if (menu.removeAll) {
         menu.removeAll();
       }
