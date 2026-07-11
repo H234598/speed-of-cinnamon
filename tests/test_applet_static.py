@@ -3707,6 +3707,18 @@ class AppletStaticTest(unittest.TestCase):
             block.index("if (this.isCommandRunning)"),
         )
 
+    def test_recording_stop_is_not_blocked_by_model_compatibility_check(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_toggleRecording: function()")
+        end = source.index("\n  _restartApplet:", start)
+        block = source[start:end]
+        self.assertIn('let stoppingRecording = this.status === "recording";', block)
+        self.assertIn("if (!stoppingRecording && !this._ensureVoiceModelCompatibleWithCurrentLanguage(true))", block)
+        self.assertLess(
+            block.index('let stoppingRecording = this.status === "recording";'),
+            block.index('toggleArgs = this._baseArgs("toggle");'),
+        )
+
     def test_clipboard_overwrite_cancel_respects_insert_token(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
