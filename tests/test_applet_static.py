@@ -3476,7 +3476,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._setStatus("processing", _("Previewing cleanup..."), this.lastTranscript)', source)
         self.assertIn('this._setStatus("ready", _("Cleanup preview: ") + String(this._cleanupCount(payload, true)), this.lastTranscript)', source)
         self.assertIn("this._showCleanupPreviewDialog(payload);", source)
+        preview_start = source.index("_previewCleanup: function()")
+        preview_end = source.index("\n  _cleanupOldFiles:", preview_start)
+        self.assertIn("if (this.isCommandRunning || this._hasActiveRecordingState())", source[preview_start:preview_end])
         self.assertIn("let deleted = this._cleanupCount(payload, false);", source)
+        cleanup_start = source.index("_cleanupOldFiles: function()")
+        cleanup_end = source.index("\n  _settingsSnapshot:", cleanup_start)
+        self.assertIn("if (this.isCommandRunning || this._hasActiveRecordingState())", source[cleanup_start:cleanup_end])
 
     def test_voice_model_menu_can_return_to_automatic_backend(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

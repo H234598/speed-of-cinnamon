@@ -5894,7 +5894,7 @@ MyApplet.prototype = {
   },
 
   _previewCleanup: function() {
-    if (this.isCommandRunning) {
+    if (this.isCommandRunning || this._hasActiveRecordingState()) {
       return;
     }
     this.isCommandRunning = true;
@@ -5911,7 +5911,7 @@ MyApplet.prototype = {
   },
 
   _cleanupOldFiles: function() {
-    if (this.isCommandRunning) {
+    if (this.isCommandRunning || this._hasActiveRecordingState()) {
       return;
     }
     this.isCommandRunning = true;
