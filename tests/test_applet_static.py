@@ -2193,6 +2193,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.autoRelistenManualStopRequested = true;", source[cancel_index:cancel_end])
         self.assertIn('this._setStatus("processing", _("Stopping Auto Relisten..."), this.lastTranscript);', source[cancel_index:cancel_end])
         self.assertIn("_hasCancelableRecordingWork: function()", source)
+        cancel_work_start = source.index("_hasCancelableRecordingWork: function()")
+        cancel_work_end = source.index("\n  _cancelRecording:", cancel_work_start)
+        cancel_work_block = source[cancel_work_start:cancel_work_end]
+        self.assertIn('this.status === "recording" || this.status === "recorded"', cancel_work_block)
+        self.assertIn("this.autoRelistenPending", cancel_work_block)
+        self.assertIn("this.isCommandRunning && this.notificationSessionActive", cancel_work_block)
+        self.assertNotIn("return this.notificationSessionActive ||", cancel_work_block)
         self.assertIn("if (!this._hasCancelableRecordingWork())", source[cancel_index:cancel_end])
         self.assertIn("if (this.autoRelistenManualStopRequested) {\n      return;\n    }", source[ensure_index:ensure_end])
 

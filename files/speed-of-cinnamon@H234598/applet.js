@@ -2966,7 +2966,9 @@ MyApplet.prototype = {
   },
 
   _hasCancelableRecordingWork: function() {
-    return this.notificationSessionActive || this.status === "recording" || this.status === "recorded";
+    return this.status === "recording" || this.status === "recorded" ||
+      this.autoRelistenPending ||
+      (this.isCommandRunning && this.notificationSessionActive);
   },
 
   _cancelRecording: function() {
