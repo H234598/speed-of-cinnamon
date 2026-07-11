@@ -570,7 +570,7 @@ MyApplet.prototype = {
   },
 
   _bindSetting: function(direction, key, propertyName, callback, callbackThis) {
-    let safeCallback = callback ? this._guardCallback("settings", callback, undefined) : null;
+    let safeCallback = callback ? this._guardStateCallback("settings", callback, undefined) : null;
     return this.settings.bindProperty(direction, key, propertyName, safeCallback, callbackThis);
   },
 
@@ -581,7 +581,7 @@ MyApplet.prototype = {
     let signalGroup = "signal-" + String(group || signal || "callback");
     let connectionId = 0;
     try {
-      connectionId = target.connect(signal, this._guardCallback(signalGroup, callback, undefined));
+      connectionId = target.connect(signal, this._guardStateCallback(signalGroup, callback, undefined));
       if (this._resourceRegistry && connectionId) {
         this._resourceRegistry.signals.push({ target: target, id: connectionId });
       }
@@ -1658,7 +1658,7 @@ MyApplet.prototype = {
     let registered = false;
     if (hasBinding) {
       registered = this._runGuarded("hotkeys", () => {
-        return Main.keybindingManager.addHotKey(name, accelerator, this._guardCallback("hotkeys", callback, undefined)) === true;
+        return Main.keybindingManager.addHotKey(name, accelerator, this._guardStateCallback("hotkeys", callback, undefined)) === true;
       }, false) === true;
     }
     if (registered && this._resourceRegistry) {
@@ -1671,7 +1671,7 @@ MyApplet.prototype = {
         return Main.keybindingManager.addHotKey(
           name,
           previous.binding,
-          this._guardCallback("hotkeys", previous.callback, undefined)
+          this._guardStateCallback("hotkeys", previous.callback, undefined)
         ) === true;
       }, false) === true;
       if (restored) {
