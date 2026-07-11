@@ -1686,6 +1686,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._resourceRegistry.processes[token] !== entry", process_block)
         self.assertIn('throw new Error("Process could not be registered");', process_block)
 
+    def test_process_group_cancellation_ignores_malformed_entries(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_terminateProcessesByGroup: function(group, notifyCallback)")
+        end = source.index("\n  _cancelAllCancellables:", start)
+        block = source[start:end]
+        self.assertIn("let entry = null;", block)
+        self.assertIn("let selected = false;", block)
+        self.assertIn('if (!entry || typeof entry !== "object" || String(entry.group || "process") !== wanted)', block)
+        self.assertIn('this._recordLifecycleError("process-cancel", error);', block)
+        self.assertIn("if (selected) {\n            this._unregisterProcess(token);", block)
+
     def test_process_and_cancellable_unregistration_contains_delete_failures(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_unregisterCancellable: function(token)")
@@ -2901,10 +2912,10 @@ class AppletStaticTest(unittest.TestCase):
         group_start = source.index("_terminateProcessesByGroup: function(group, notifyCallback)")
         group_end = source.index("\n  _cancelAllCancellables:", group_start)
         group_block = source[group_start:group_end]
-        self.assertIn("typeof processes[token].cancel === \"function\"", group_block)
-        self.assertIn("processes[token].cancel(Boolean(notifyCallback));", group_block)
+        self.assertIn("typeof entry.cancel === \"function\"", group_block)
+        self.assertIn("entry.cancel(Boolean(notifyCallback));", group_block)
         self.assertIn('this._recordLifecycleError("process-cancel", error);', group_block)
-        self.assertIn("finally {\n        this._unregisterProcess(token);", group_block)
+        self.assertIn("finally {\n          if (selected) {", group_block)
 
         all_start = source.index("_terminateAllProcesses: function()")
         all_end = source.index("\n  _terminateProcessesByGroup:", all_start)

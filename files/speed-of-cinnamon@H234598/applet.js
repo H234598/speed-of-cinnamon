@@ -1170,24 +1170,38 @@ MyApplet.prototype = {
 
   _terminateProcessesByGroup: function(group, notifyCallback) {
     let wanted = String(group || "process");
-    let processes = this._resourceRegistry && this._resourceRegistry.processes
-      ? this._resourceRegistry.processes
-      : {};
-    for (let token in processes) {
-      if (!Object.prototype.hasOwnProperty.call(processes, token) || String(processes[token].group || "process") !== wanted) {
-        continue;
-      }
-      try {
-        if (processes[token] && typeof processes[token].cancel === "function") {
-          processes[token].cancel(Boolean(notifyCallback));
-        } else if (processes[token]) {
-          this._terminateProcess(processes[token].process);
+    let processes = {};
+    try {
+      processes = this._resourceRegistry && this._resourceRegistry.processes
+        ? this._resourceRegistry.processes
+        : {};
+      for (let token in processes) {
+        if (!Object.prototype.hasOwnProperty.call(processes, token)) {
+          continue;
         }
-      } catch (error) {
-        this._recordLifecycleError("process-cancel", error);
-      } finally {
-        this._unregisterProcess(token);
+        let entry = null;
+        let selected = false;
+        try {
+          entry = processes[token];
+          if (!entry || typeof entry !== "object" || String(entry.group || "process") !== wanted) {
+            continue;
+          }
+          selected = true;
+          if (typeof entry.cancel === "function") {
+            entry.cancel(Boolean(notifyCallback));
+          } else {
+            this._terminateProcess(entry.process);
+          }
+        } catch (error) {
+          this._recordLifecycleError("process-cancel", error);
+        } finally {
+          if (selected) {
+            this._unregisterProcess(token);
+          }
+        }
       }
+    } catch (error) {
+      this._recordLifecycleError("process-cancel", error);
     }
   },
 
