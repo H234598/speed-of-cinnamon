@@ -889,6 +889,27 @@ class AppletStaticTest(unittest.TestCase):
         self.assertLess(block.index("let toggleArgs;"), block.index("this.isCommandRunning = true;"))
         self.assertIn("this._spawnJson(toggleArgs,", block)
 
+    def test_auto_recording_commands_validate_settings_before_busy_state(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        relisten_start = source.index("_restartRelistenRecording: function()")
+        relisten_end = source.index("\n  _preparedTranscriptText:", relisten_start)
+        relisten_block = source[relisten_start:relisten_end]
+        self.assertIn("let startArgs;", relisten_block)
+        self.assertIn('startArgs = this._baseArgs("start");', relisten_block)
+        self.assertIn('this._setStatus("error", _("Could not prepare relisten command: ") + safeError', relisten_block)
+        self.assertLess(relisten_block.index("let startArgs;"), relisten_block.index("this.isCommandRunning = true;"))
+        self.assertIn("this._spawnJson(startArgs,", relisten_block)
+
+        auto_start = source.index("_maybeAutoTranscribeRecorded: function(payload, statusOverride)")
+        auto_end = source.index("\n  _clearStatusTimer:", auto_start)
+        auto_block = source[auto_start:auto_end]
+        self.assertIn("let stopArgs;", auto_block)
+        self.assertIn('stopArgs = this._baseArgs("stop");', auto_block)
+        self.assertIn('this._setStatus("error", _("Could not prepare timed recording command: ") + safeError', auto_block)
+        self.assertLess(auto_block.index("let stopArgs;"), auto_block.index("this.isCommandRunning = true;"))
+        self.assertIn("this._spawnJson(stopArgs,", auto_block)
+
     def test_input_source_refresh_ignores_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
@@ -997,7 +1018,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (relistenStarted) {', source)
         self.assertIn('return true;', source)
         self.assertIn('return false;', source)
-        self.assertIn('this._spawnJson(this._baseArgs("start"), (payload) => {', source)
+        self.assertIn('this._spawnJson(startArgs, (payload) => {', source)
         self.assertIn('this._restartRelistenRecording();', source)
         self.assertIn('(!this.autoTranscribeTimeout && !this.autoRelisten)', source)
         self.assertIn('if (!this.autoRelisten) {', source)

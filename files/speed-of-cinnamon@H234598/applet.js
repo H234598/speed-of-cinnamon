@@ -6253,6 +6253,14 @@ MyApplet.prototype = {
     if (this.autoTranscribeRecordingKey === recordingKey) {
       return;
     }
+    let stopArgs;
+    try {
+      stopArgs = this._baseArgs("stop");
+    } catch (err) {
+      let safeError = this._sanitizeErrorMessage(err);
+      this._setStatus("error", _("Could not prepare timed recording command: ") + safeError, this.lastTranscript);
+      return;
+    }
     this.autoTranscribeRecordingKey = recordingKey;
     let relistenToken = "";
     if (this.autoRelisten) {
@@ -6263,7 +6271,7 @@ MyApplet.prototype = {
     this.autoRelistenPendingToken = relistenToken;
     this.isCommandRunning = true;
     this._setStatus("processing", _("Transcribing timed-out recording..."), this.lastTranscript);
-    this._spawnJson(this._baseArgs("stop"), (nextPayload) => {
+    this._spawnJson(stopArgs, (nextPayload) => {
       if (relistenToken && this.autoRelistenPendingToken !== relistenToken) {
         this.isCommandRunning = false;
         return;
@@ -7832,12 +7840,20 @@ MyApplet.prototype = {
     if (!this._ensureVoiceModelCompatibleWithCurrentLanguage(true)) {
       return false;
     }
+    let startArgs;
+    try {
+      startArgs = this._baseArgs("start");
+    } catch (err) {
+      let safeError = this._sanitizeErrorMessage(err);
+      this._setStatus("error", _("Could not prepare relisten command: ") + safeError, this.lastTranscript);
+      return false;
+    }
     this.isCommandRunning = true;
     this.autoTranscribeRecordingKey = "";
     this.recordingStartedAtMs = 0;
     this.recordingMaxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
     this._setStatus("processing", _("Starting next recording..."), this.lastTranscript);
-    this._spawnJson(this._baseArgs("start"), (payload) => {
+    this._spawnJson(startArgs, (payload) => {
       this.isCommandRunning = false;
       if (payload.error) {
         this.autoRelistenPending = false;
