@@ -5884,13 +5884,22 @@ MyApplet.prototype = {
       return null;
     }
     let hasInput = options.inputText !== null && options.inputText !== undefined;
-    if (hasInput && utf8ByteLength(String(options.inputText || "")) > MAX_SPAWN_JSON_BYTES) {
+    if (hasInput && typeof options.inputText !== "string") {
+      throw new Error("Subprocess input must be text");
+    }
+    if (hasInput && utf8ByteLength(options.inputText) > MAX_SPAWN_JSON_BYTES) {
       throw new Error("Subprocess input is too large");
     }
-    let maxStdoutBytes = Math.max(1, Number(options.maxStdoutBytes || MAX_SPAWN_JSON_BYTES));
-    let maxStderrBytes = Math.max(1, Number(options.maxStderrBytes || MAX_SPAWN_STDERR_BYTES));
-    let timeoutMs = Number(options.timeoutMs || 0);
-    let minimumTimeoutMs = Math.max(1, Number(options.minimumTimeoutMs || 250));
+    let maxStdoutBytes = typeof options.maxStdoutBytes === "number" && isFinite(options.maxStdoutBytes)
+      ? Math.max(1, options.maxStdoutBytes)
+      : MAX_SPAWN_JSON_BYTES;
+    let maxStderrBytes = typeof options.maxStderrBytes === "number" && isFinite(options.maxStderrBytes)
+      ? Math.max(1, options.maxStderrBytes)
+      : MAX_SPAWN_STDERR_BYTES;
+    let timeoutMs = typeof options.timeoutMs === "number" && isFinite(options.timeoutMs) ? Math.max(0, options.timeoutMs) : 0;
+    let minimumTimeoutMs = typeof options.minimumTimeoutMs === "number" && isFinite(options.minimumTimeoutMs)
+      ? Math.max(1, options.minimumTimeoutMs)
+      : 250;
     let flags = Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE;
     if (hasInput) {
       flags |= Gio.SubprocessFlags.STDIN_PIPE;
@@ -6043,7 +6052,7 @@ MyApplet.prototype = {
     }
     if (hasInput) {
       let stdin = process.get_stdin_pipe();
-      let inputBytes = ByteArray.fromString(String(options.inputText || ""));
+      let inputBytes = ByteArray.fromString(options.inputText);
       try {
         if (stdin && stdin.write_all_async) {
           stdin.write_all_async(inputBytes, GLib.PRIORITY_DEFAULT, cancellable, (stream, result) => {

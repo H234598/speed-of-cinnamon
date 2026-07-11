@@ -1699,6 +1699,11 @@ class AppletStaticTest(unittest.TestCase):
         bounded_end = source.index("\n  _spawnJsonWithBackendEnvironment:", bounded_start)
         bounded_block = source[bounded_start:bounded_end]
         self.assertIn("let finish = (result, terminate, suppressCallback)", bounded_block)
+        self.assertIn('if (hasInput && typeof options.inputText !== "string")', bounded_block)
+        self.assertIn('typeof options.maxStdoutBytes === "number" && isFinite(options.maxStdoutBytes)', bounded_block)
+        self.assertIn('typeof options.maxStderrBytes === "number" && isFinite(options.maxStderrBytes)', bounded_block)
+        self.assertIn('typeof options.timeoutMs === "number" && isFinite(options.timeoutMs)', bounded_block)
+        self.assertIn('typeof options.minimumTimeoutMs === "number" && isFinite(options.minimumTimeoutMs)', bounded_block)
         self.assertIn("suppressCallback || this.appletRemoved", bounded_block)
         self.assertIn("this._resourceRegistry.processes[processToken].cancel", bounded_block)
 
