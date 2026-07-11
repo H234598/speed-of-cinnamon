@@ -314,8 +314,23 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (result === false)', block)
         self.assertIn('this._recordLifecycleError("monitor-cancel", err);', block)
         self.assertIn("return false;", block)
-        self.assertIn("this._untrackMonitor(monitor);", block)
+        self.assertIn("this._untrackMonitor(monitor)", block)
         self.assertIn("this.externalApiEnvMonitor = null;", block)
+
+    def test_failed_external_env_monitor_untrack_remains_tracked(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_untrackMonitor: function(monitor)")
+        end = source.index("\n  _nextResourceToken:", start)
+        untrack_block = source[start:end]
+        self.assertIn('this._recordLifecycleError("monitor-untrack", error);', untrack_block)
+        self.assertIn("return false;", untrack_block)
+
+        start = source.index("_clearExternalApiEnvMonitor: function()")
+        end = source.index("\n  _watchExternalApiEnvFile:", start)
+        clear_block = source[start:end]
+        self.assertIn("if (!this._untrackMonitor(monitor)) {", clear_block)
+        self.assertIn("return false;", clear_block)
+        self.assertLess(clear_block.index("this._untrackMonitor(monitor)"), clear_block.index("this.externalApiEnvMonitor = null;"))
 
     def test_external_env_monitor_registration_failure_rolls_back_monitor(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

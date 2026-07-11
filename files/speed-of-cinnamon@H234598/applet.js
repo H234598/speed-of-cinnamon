@@ -872,11 +872,18 @@ MyApplet.prototype = {
 
   _untrackMonitor: function(monitor) {
     if (!monitor || !this._resourceRegistry || !Array.isArray(this._resourceRegistry.monitors)) {
-      return;
+      return true;
     }
     let index = this._resourceRegistry.monitors.indexOf(monitor);
-    if (index >= 0) {
+    if (index < 0) {
+      return true;
+    }
+    try {
       this._resourceRegistry.monitors.splice(index, 1);
+      return true;
+    } catch (error) {
+      this._recordLifecycleError("monitor-untrack", error);
+      return false;
     }
   },
 
@@ -5339,7 +5346,9 @@ MyApplet.prototype = {
       this._recordLifecycleError("monitor-cancel", err);
       return false;
     }
-    this._untrackMonitor(monitor);
+    if (!this._untrackMonitor(monitor)) {
+      return false;
+    }
     this.externalApiEnvMonitor = null;
     return true;
   },
