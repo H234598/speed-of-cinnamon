@@ -5890,6 +5890,9 @@ MyApplet.prototype = {
   },
 
   _exportSettings: function() {
+    if (this.settingsTransferToken) {
+      return;
+    }
     let inputOption = this._settingsSnapshotInputOptionOrNull(false);
     if (!inputOption) {
       return;
@@ -5912,6 +5915,9 @@ MyApplet.prototype = {
   },
 
   _importSettings: function() {
+    if (this.settingsTransferToken) {
+      return;
+    }
     let transferToken = {};
     this.settingsTransferToken = transferToken;
     this._setStatus("processing", _("Importing settings..."), this.lastTranscript);
