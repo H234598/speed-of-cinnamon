@@ -3253,7 +3253,7 @@ MyApplet.prototype = {
       return "";
     }
 
-    let seen = {};
+    let seen = Object.create(null);
     let lines = [];
     for (let i = 0; i < commands.length; i++) {
       let text = typeof commands[i] === "string" ? commands[i].trim() : "";

@@ -2292,6 +2292,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let commands = payload.commands || [];", source)
         self.assertIn("if (!Array.isArray(commands))", source)
         self.assertIn('let text = typeof commands[i] === "string" ? commands[i].trim() : "";', source)
+        self.assertIn("let seen = Object.create(null);", source)
         self.assertIn('let planText = typeof payload.text === "string" && payload.text.trim() !== ""', source)
         self.assertNotIn('String(commands[i] || "").trim()', source)
         self.assertNotIn('String(payload.text || JSON.stringify(payload, null, 2))', source)
