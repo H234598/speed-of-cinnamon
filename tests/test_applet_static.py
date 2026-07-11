@@ -3132,6 +3132,20 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._scheduleTrackedTimer("paste", PASTE_SUBMIT_DELAY_MS', source)
         self.assertIn("Copied and pasted into target window", source)
 
+    def test_x11_helper_probe_failures_complete_the_output_callback(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_xdotoolOutput: function(args, maxBytes, completionCallback, timeoutMs)")
+        end = source.index("\n  _xWindowLooksLikeSpeedOfCinnamon:", start)
+        block = source[start:end]
+        self.assertIn("let complete = typeof completionCallback === \"function\" ? completionCallback : function() {};", block)
+        self.assertIn("let completeOnce = (value) =>", block)
+        self.assertIn("let timeout;", block)
+        self.assertIn("let xdotool;", block)
+        self.assertIn('timeout = this._findTrustedProgramInPath("timeout");', block)
+        self.assertIn('xdotool = this._findTrustedProgramInPath("xdotool");', block)
+        self.assertIn('this._recordLifecycleError("x11-command", error);', block)
+        self.assertIn("completeOnce(null);", block)
+
     def test_applet_checks_insert_fingerprint_before_relisten_restart(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         finish_index = source.index("_finishAppletTextInsert: function(payload) {")

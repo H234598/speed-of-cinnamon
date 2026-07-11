@@ -7763,8 +7763,6 @@ MyApplet.prototype = {
   },
 
   _xdotoolOutput: function(args, maxBytes, completionCallback, timeoutMs) {
-    let timeout = this._findTrustedProgramInPath("timeout");
-    let xdotool = this._findTrustedProgramInPath("xdotool");
     let complete = typeof completionCallback === "function" ? completionCallback : function() {};
     let completed = false;
     let completeOnce = (value) => {
@@ -7774,6 +7772,16 @@ MyApplet.prototype = {
       completed = true;
       complete(value);
     };
+    let timeout;
+    let xdotool;
+    try {
+      timeout = this._findTrustedProgramInPath("timeout");
+      xdotool = this._findTrustedProgramInPath("xdotool");
+    } catch (error) {
+      this._recordLifecycleError("x11-command", error);
+      completeOnce(null);
+      return false;
+    }
     if (!timeout || !xdotool || !this._lifecycleAllowsWork()) {
       completeOnce(null);
       return false;
