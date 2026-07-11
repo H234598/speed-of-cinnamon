@@ -785,6 +785,26 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (this.appletRemoved || !isCurrentOperation())", source)
         self.assertIn("completionCallback, isCurrentOperation", source)
 
+    def test_keyboard_insert_timer_failures_complete_the_operation(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("_completeKeyboardInsertFailure: function(completionCallback, message, error)", source)
+        focus_start = source.index("_spawnKeyboardAfterFocus: function(")
+        focus_end = source.index("\n  _spawnKeyboardWhenClipboardReady:", focus_start)
+        focus_block = source[focus_start:focus_end]
+        self.assertIn("try {\n        this._spawnKeyboardWhenClipboardReady", focus_block)
+        self.assertIn('this._completeKeyboardInsertFailure(complete, _("Keyboard insert failed"), error);', focus_block)
+
+        for method, next_method in [
+            ("_spawnKeyboardWhenClipboardReady: function(", "\n  _spawnKeyboardProcess:"),
+            ("_spawnKeyboardArgs: function(", "\n  _finishAppletTextInsert:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn("let failAsync = (error, message)", block)
+            self.assertIn("failAsync(error);", block)
+
     def test_menu_payload_arrays_and_entries_are_shape_safe(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
