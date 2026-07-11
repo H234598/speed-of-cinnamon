@@ -2243,6 +2243,8 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertIn("this.cancelItem.setSensitive(this._hasCancelableRecordingWork());", status_block)
         self.assertIn("if (!this._hasCancelableRecordingWork())", cancel_block)
+        self.assertIn("if (!this.isCommandRunning && this.autoRelistenPending && this.textInsertToken)", cancel_block)
+        self.assertIn('this._setStatus("ready", _("Auto Relisten cancelled"), this.lastTranscript);', cancel_block)
 
     def test_async_keyboard_insert_reports_menu_close_failure(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

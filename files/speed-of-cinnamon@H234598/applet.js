@@ -2975,6 +2975,13 @@ MyApplet.prototype = {
     if (!this._hasCancelableRecordingWork()) {
       return;
     }
+    if (!this.isCommandRunning && this.autoRelistenPending && this.textInsertToken) {
+      this.autoRelistenPending = false;
+      this.autoRelistenPendingToken = "";
+      this.autoRelistenManualStopRequested = true;
+      this._setStatus("ready", _("Auto Relisten cancelled"), this.lastTranscript);
+      return;
+    }
     if (this.isCommandRunning) {
       this.autoTranscribeRecordingKey = "";
       this.cancelPendingWhileCommandRunning = true;
