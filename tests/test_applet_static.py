@@ -1841,6 +1841,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.cancelPendingWhileCommandRunning = true;", source[cancel_index:cancel_end])
         self.assertIn("this.autoRelistenManualStopRequested = true;", source[cancel_index:cancel_end])
         self.assertIn('this._setStatus("processing", _("Stopping Auto Relisten..."), this.lastTranscript);', source[cancel_index:cancel_end])
+        self.assertIn("_hasCancelableRecordingWork: function()", source)
+        self.assertIn("if (!this._hasCancelableRecordingWork())", source[cancel_index:cancel_end])
         self.assertIn("if (this.autoRelistenManualStopRequested) {\n      return;\n    }", source[ensure_index:ensure_end])
 
     def test_cancel_pending_during_command_suppresses_done_transcript_insert(self) -> None:

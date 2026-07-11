@@ -2927,7 +2927,14 @@ MyApplet.prototype = {
     }, { timeoutMs: STATUS_COMMAND_TIMEOUT_MS });
   },
 
+  _hasCancelableRecordingWork: function() {
+    return this.notificationSessionActive || this.status === "recording" || this.status === "recorded";
+  },
+
   _cancelRecording: function() {
+    if (!this._hasCancelableRecordingWork()) {
+      return;
+    }
     if (this.isCommandRunning) {
       this.autoTranscribeRecordingKey = "";
       this.cancelPendingWhileCommandRunning = true;
