@@ -1729,6 +1729,20 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!removed) {", block)
         self.assertIn("return;", block)
 
+    def test_hotkey_registry_write_failures_roll_back_external_binding(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_registerHotkey: function(id, binding, callback)")
+        end = source.index("\n  _removeHotkey:", start)
+        block = source[start:end]
+        self.assertIn('let tracked = this._runStateGuarded("hotkeys", () => {', block)
+        self.assertIn("this._resourceRegistry.hotkeys[name] = true;", block)
+        self.assertIn("this._hotkeyDefinitions[name] = { binding: accelerator, callback: callback };", block)
+        self.assertIn("Main.keybindingManager.removeHotKey(name);", block)
+        self.assertIn('delete this._resourceRegistry.hotkeys[name];', block)
+        self.assertIn("let removedExternally = false;", block)
+        self.assertIn("if (removedExternally && previous)", block)
+        self.assertIn('throw new Error("Hotkey registry entry could not be removed");', block)
+
     def test_menu_toggle_remains_recoverable_after_guarded_failures(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("on_applet_clicked: function()")

@@ -1758,14 +1758,28 @@ MyApplet.prototype = {
     let previous = this._hotkeyDefinitions && this._hotkeyDefinitions[name]
       ? this._hotkeyDefinitions[name]
       : null;
+    let removedExternally = false;
     let removed = this._runStateGuarded("hotkeys", () => {
       Main.keybindingManager.removeHotKey(name);
+      removedExternally = true;
       if (this._resourceRegistry) {
-        delete this._resourceRegistry.hotkeys[name];
+        let deleted = delete this._resourceRegistry.hotkeys[name];
+        if (deleted === false) {
+          throw new Error("Hotkey registry entry could not be removed");
+        }
       }
       return true;
     }, false) === true;
     if (!removed) {
+      if (removedExternally && previous) {
+        this._runStateGuarded("hotkeys", () => {
+          Main.keybindingManager.addHotKey(
+            name,
+            previous.binding,
+            this._guardStateCallback("hotkeys", previous.callback, undefined)
+          );
+        }, undefined);
+      }
       return;
     }
     let accelerator = typeof binding === "string" ? binding.trim() : "";
@@ -1783,9 +1797,18 @@ MyApplet.prototype = {
       }, false) === true;
     }
     if (registered && this._resourceRegistry) {
-      this._resourceRegistry.hotkeys[name] = true;
-      this._hotkeyDefinitions[name] = { binding: accelerator, callback: callback };
-      return;
+      let tracked = this._runStateGuarded("hotkeys", () => {
+        this._resourceRegistry.hotkeys[name] = true;
+        this._hotkeyDefinitions[name] = { binding: accelerator, callback: callback };
+        return true;
+      }, false) === true;
+      if (tracked) {
+        return;
+      }
+      this._runStateGuarded("hotkeys", () => {
+        Main.keybindingManager.removeHotKey(name);
+      }, undefined);
+      registered = false;
     }
     if (previous) {
       let restored = this._runStateGuarded("hotkeys", () => {
@@ -1796,18 +1819,30 @@ MyApplet.prototype = {
         ) === true;
       }, false) === true;
       if (restored) {
-        if (this._resourceRegistry) {
-          this._resourceRegistry.hotkeys[name] = true;
+        let tracked = this._runStateGuarded("hotkeys", () => {
+          if (this._resourceRegistry) {
+            this._resourceRegistry.hotkeys[name] = true;
+          }
+          this._hotkeyDefinitions[name] = previous;
+          return true;
+        }, false) === true;
+        if (tracked) {
+          return;
         }
-        this._hotkeyDefinitions[name] = previous;
-        return;
+        this._runStateGuarded("hotkeys", () => {
+          Main.keybindingManager.removeHotKey(name);
+        }, undefined);
       }
     }
     if (this._resourceRegistry) {
-      delete this._resourceRegistry.hotkeys[name];
+      this._runStateGuarded("hotkeys", () => {
+        delete this._resourceRegistry.hotkeys[name];
+      }, undefined);
     }
     if (this._hotkeyDefinitions) {
-      delete this._hotkeyDefinitions[name];
+      this._runStateGuarded("hotkeys", () => {
+        delete this._hotkeyDefinitions[name];
+      }, undefined);
     }
   },
 
