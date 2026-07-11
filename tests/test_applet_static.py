@@ -966,6 +966,15 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('label += _(" - invalid metadata");', block)
         self.assertIn("useItem.setSensitive(!current && compatible && usable);", block)
 
+    def test_voice_model_remove_requires_explicit_backend_confirmation(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_removeVoiceModel: function(model)")
+        end = source.index("\n  _selectVoiceModel:", start)
+        block = source[start:end]
+        self.assertIn("if (payload.removed !== true)", block)
+        self.assertIn('_("Model was not downloaded: ") + name', block)
+        self.assertLess(block.index("if (payload.removed !== true)"), block.index("if (path !== \"\""))
+
     def test_input_source_names_and_descriptions_are_string_checked(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

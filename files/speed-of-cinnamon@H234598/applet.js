@@ -4347,6 +4347,11 @@ MyApplet.prototype = {
         this._refreshModelMenu();
         return;
       }
+      if (payload.removed !== true) {
+        this._setStatus("ready", _("Model was not downloaded: ") + name, this.lastTranscript);
+        this._refreshModelMenu();
+        return;
+      }
       if (path !== "" && path === String(this.whisperModel || "")) {
         this.transcriber = "auto";
         this.whisperModel = "";
