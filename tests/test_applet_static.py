@@ -1278,6 +1278,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_activateOllamaTextModelFlow: function()", source)
         self.assertIn("this._connectSafe(ollama, \"activate\", () => this._activateOllamaTextModelFlow());", source)
         self.assertIn("this._installOllamaRuntime(true);", source)
+        self.assertIn("_cancelOllamaInstallWatch: function()", source)
         self.assertIn("_watchOllamaInstallThenChoose: function()", source)
         self.assertIn("_scheduleOllamaInstallWatchPoll: function(watchToken)", source)
         self.assertIn("OLLAMA_INSTALL_POLL_SECONDS", source)

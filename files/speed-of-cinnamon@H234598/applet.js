@@ -4749,6 +4749,7 @@ MyApplet.prototype = {
       this._setStatus("error", _("Install zenity to choose an Ollama model"), this.lastTranscript);
       return;
     }
+    this._cancelOllamaInstallWatch();
     let flowToken = {};
     this.ollamaModelFlowToken = flowToken;
     this._setStatus("processing", _("Checking Ollama..."), this.lastTranscript);
@@ -4824,6 +4825,7 @@ MyApplet.prototype = {
       this._setStatus("error", _("Install zenity to choose an Ollama model"), this.lastTranscript);
       return;
     }
+    this._cancelOllamaInstallWatch();
     let flowToken = {};
     this.ollamaModelFlowToken = flowToken;
     this._setStatus("processing", _("Loading Ollama text models..."), this.lastTranscript);
@@ -6198,8 +6200,13 @@ MyApplet.prototype = {
     this._clearTrackedTimer("ollama-install", "ollamaInstallWatchTimer");
   },
 
-  _watchOllamaInstallThenChoose: function() {
+  _cancelOllamaInstallWatch: function() {
+    this.ollamaInstallWatchToken = null;
     this._clearOllamaInstallWatchTimer();
+  },
+
+  _watchOllamaInstallThenChoose: function() {
+    this._cancelOllamaInstallWatch();
     let watchToken = {};
     this.ollamaInstallWatchToken = watchToken;
     this.ollamaInstallWatchPolls = 0;
