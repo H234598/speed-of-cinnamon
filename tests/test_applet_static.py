@@ -3627,3 +3627,31 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.terminalWorkflowToken = terminalWorkflowToken;", workflow_block)
         self.assertIn("if (this.terminalWorkflowToken !== terminalWorkflowToken)", workflow_block)
         self.assertIn("this.terminalWorkflowToken = null;", workflow_block)
+
+    def test_recording_start_invalidates_stale_background_callbacks(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        toggle_start = source.index("_toggleRecording: function()")
+        toggle_end = source.index("\n  _restartApplet:", toggle_start)
+        toggle_block = source[toggle_start:toggle_end]
+        self.assertIn("this._invalidateBackgroundCallbacksForRecording();", toggle_block)
+        self.assertLess(
+            toggle_block.index("this._invalidateBackgroundCallbacksForRecording();"),
+            toggle_block.index("if (this.isCommandRunning)"),
+        )
+
+        helper_start = source.index("_invalidateBackgroundCallbacksForRecording: function()")
+        helper_end = source.index("\n  _runDoctor:", helper_start)
+        helper_block = source[helper_start:helper_end]
+        for token in [
+            "historyRefreshToken",
+            "inputSourceMenuRefreshToken",
+            "modelMenuRefreshToken",
+            "textModelMenuRefreshToken",
+            "alarmMenuRefreshToken",
+            "alarmActionToken",
+            "benchmarkFlowToken",
+            "settingsTransferToken",
+            "setupDiagnosticsToken",
+        ]:
+            self.assertIn(f"this.{token} = null;", helper_block)

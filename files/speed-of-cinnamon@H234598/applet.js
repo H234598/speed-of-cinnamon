@@ -2950,6 +2950,7 @@ MyApplet.prototype = {
     if (this.terminalWorkflowRunning || this.terminalWorkflowToken) {
       this.terminalWorkflowToken = null;
     }
+    this._invalidateBackgroundCallbacksForRecording();
     if (this.isCommandRunning) {
       if (this.autoRelisten && this.notificationSessionActive) {
         this.autoRelistenManualStopRequested = true;
@@ -3065,6 +3066,18 @@ MyApplet.prototype = {
       this.isCommandRunning = false;
       this._applyPayloadSafely(payload);
     });
+  },
+
+  _invalidateBackgroundCallbacksForRecording: function() {
+    this.historyRefreshToken = null;
+    this.inputSourceMenuRefreshToken = null;
+    this.modelMenuRefreshToken = null;
+    this.textModelMenuRefreshToken = null;
+    this.alarmMenuRefreshToken = null;
+    this.alarmActionToken = null;
+    this.benchmarkFlowToken = null;
+    this.settingsTransferToken = null;
+    this.setupDiagnosticsToken = null;
   },
 
   _runDoctor: function(startupCheck) {
