@@ -3821,6 +3821,8 @@ class AppletStaticTest(unittest.TestCase):
             "settingsTransferToken",
             "setupDiagnosticsToken",
             "doctorCommandToken",
+            "customLimitPromptToken",
+            "autoPastePromptToken",
             "settingsWindowToken",
         ]:
             self.assertIn(f"this.{token} = null;", helper_block)
