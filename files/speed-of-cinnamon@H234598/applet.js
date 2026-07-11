@@ -5815,7 +5815,19 @@ MyApplet.prototype = {
     }
     let refreshToken = {};
     this.historyRefreshToken = refreshToken;
-    this._spawnJson(this._historyArgs(), (payload) => {
+    let historyArgs;
+    try {
+      historyArgs = this._historyArgs();
+    } catch (error) {
+      if (this.historyRefreshToken === refreshToken) {
+        this.historyRefreshToken = null;
+      }
+      this._recordLifecycleError("history-refresh", error);
+      this._populateHistoryMenu([]);
+      this._setStatusPreservingRecording("error", _("Could not prepare transcript history"), this.lastTranscript);
+      return;
+    }
+    this._spawnJson(historyArgs, (payload) => {
       if (this.historyRefreshToken !== refreshToken) {
         return;
       }

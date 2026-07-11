@@ -2523,6 +2523,19 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn("this.settingsTransferToken = null;", block)
             self.assertIn('this._recordLifecycleError("settings-transfer", error);', block)
 
+    def test_history_refresh_releases_token_when_argument_building_fails(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_refreshHistory: function()")
+        end = source.index("\n  _listAllTranscripts:", start)
+        block = source[start:end]
+        self.assertIn("let refreshToken = {};", block)
+        self.assertIn("try {\n      historyArgs = this._historyArgs();", block)
+        self.assertIn("this._spawnJson(historyArgs,", block)
+        self.assertIn("if (this.historyRefreshToken === refreshToken) {", block)
+        self.assertIn("this.historyRefreshToken = null;", block)
+        self.assertIn('this._recordLifecycleError("history-refresh", error);', block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Could not prepare transcript history")', block)
+
     def test_setup_and_diagnostics_actions_ignore_stale_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
@@ -3718,8 +3731,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.historyRefreshToken = refreshToken;", block)
         self.assertIn("this.historyRefreshToken = null;", block)
         self.assertLess(block.index("if (this.historyRefreshToken)"), block.index("let refreshToken = {};"))
-        self.assertLess(block.index("this.historyRefreshToken !== refreshToken"), block.index("this.historyRefreshToken = null;"))
-        self.assertLess(block.index("this.historyRefreshToken = null;"), block.index("if (payload.error)"))
+        callback_block = block[block.index("this._spawnJson(historyArgs,"):]
+        self.assertLess(callback_block.index("this.historyRefreshToken !== refreshToken"), callback_block.index("this.historyRefreshToken = null;"))
+        self.assertLess(callback_block.index("this.historyRefreshToken = null;"), callback_block.index("if (payload.error)"))
 
     def test_cleanup_can_be_previewed_before_deleting_files(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
