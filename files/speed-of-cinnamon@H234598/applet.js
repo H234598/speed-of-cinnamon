@@ -5415,7 +5415,8 @@ MyApplet.prototype = {
   },
 
   _singleLineCliTextValue: function(value) {
-    return String(value || "")
+    let text = typeof value === "string" ? value : "";
+    return text
       .replace(NUL_RE, "")
       .replace(/\\u000d|\\u000a|\\r|\\n/gi, " ")
       .replace(/[\u0001-\u001f\u007f]+/g, " ")
@@ -5430,7 +5431,7 @@ MyApplet.prototype = {
     if (presetInstruction !== "") {
       parts.push("Preset instruction: " + presetInstruction);
     }
-    let customInstruction = String(this.postProcessPrompt || "").trim();
+    let customInstruction = typeof this.postProcessPrompt === "string" ? this.postProcessPrompt.trim() : "";
     if (customInstruction !== "") {
       parts.push("Custom instruction: " + customInstruction);
     }

@@ -1783,6 +1783,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('"safety": "Check for sensitive data', source)
         self.assertIn("_normalizeTextPolishingPreset: function(value)", source)
         self.assertIn("_singleLineCliTextValue: function(value)", source)
+        self.assertIn('let text = typeof value === "string" ? value : "";', source)
+        self.assertIn('let customInstruction = typeof this.postProcessPrompt === "string" ? this.postProcessPrompt.trim() : "";', source)
         self.assertIn("_effectivePostProcessPrompt: function()", source)
         self.assertIn('let safePostProcessPrompt = this._coerceCliTextArg(this._effectivePostProcessPrompt(), "post-process prompt");', source)
         self.assertIn('replace(/\\\\u000d|\\\\u000a|\\\\r|\\\\n/gi, " ")', source)
