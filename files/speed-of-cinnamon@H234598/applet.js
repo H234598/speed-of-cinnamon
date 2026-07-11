@@ -1526,7 +1526,7 @@ MyApplet.prototype = {
   },
 
   _shortMenuText: function(value, maxChars) {
-    let text = String(value || "").replace(/\s+/g, " ").trim();
+    let text = typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
     let limit = Math.max(16, Number(maxChars || 72));
     if (text.length <= limit) {
       return text;
