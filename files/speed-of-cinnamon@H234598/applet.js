@@ -6222,9 +6222,17 @@ MyApplet.prototype = {
     if (!payload) {
       return "";
     }
-    let marker = String(payload.transcript_path || payload.audio_path || payload.audio || payload.stopped_at || payload.started_at || "");
+    let marker = "";
+    for (let value of [payload.transcript_path, payload.audio_path, payload.audio, payload.stopped_at, payload.started_at]) {
+      if (typeof value === "string" && value.trim() !== "") {
+        marker = value.trim();
+        break;
+      }
+    }
     if (marker === "") {
-      marker = String(payload.status || "done");
+      marker = typeof payload.status === "string" && payload.status.trim() !== ""
+        ? payload.status.trim()
+        : "done";
     }
     return marker;
   },
@@ -6271,7 +6279,7 @@ MyApplet.prototype = {
     if (mode === "off") {
       return;
     }
-    let transcriptPath = String(payload.transcript_path || "").trim();
+    let transcriptPath = typeof payload.transcript_path === "string" ? payload.transcript_path.trim() : "";
     let transcriptStoredPlaintext = transcriptPath !== "" && payload.transcript_encrypted === false;
     let recordingStoredPlaintext = payload.recording_artifacts_kept === true && payload.recording_encrypted === false;
     if (!transcriptStoredPlaintext && !recordingStoredPlaintext) {
