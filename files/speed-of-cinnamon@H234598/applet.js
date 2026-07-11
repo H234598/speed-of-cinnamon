@@ -1857,10 +1857,20 @@ MyApplet.prototype = {
       return;
     }
     if (this._resourceRegistry) {
-      delete this._resourceRegistry.hotkeys[name];
+      this._runTeardownGuarded("teardown-hotkeys", () => {
+        let deleted = delete this._resourceRegistry.hotkeys[name];
+        if (deleted === false) {
+          throw new Error("Hotkey registry entry could not be removed during teardown");
+        }
+      });
     }
     if (this._hotkeyDefinitions) {
-      delete this._hotkeyDefinitions[name];
+      this._runTeardownGuarded("teardown-hotkeys", () => {
+        let deleted = delete this._hotkeyDefinitions[name];
+        if (deleted === false) {
+          throw new Error("Hotkey definition could not be removed during teardown");
+        }
+      });
     }
   },
 

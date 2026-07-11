@@ -1743,6 +1743,15 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (removedExternally && previous)", block)
         self.assertIn('throw new Error("Hotkey registry entry could not be removed");', block)
 
+    def test_hotkey_teardown_registry_failures_do_not_escape(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_removeHotkey: function(id)")
+        end = source.index("\n  _registerHotkeys:", start)
+        block = source[start:end]
+        self.assertIn('this._runTeardownGuarded("teardown-hotkeys", () => {', block)
+        self.assertIn('throw new Error("Hotkey registry entry could not be removed during teardown");', block)
+        self.assertIn('throw new Error("Hotkey definition could not be removed during teardown");', block)
+
     def test_menu_toggle_remains_recoverable_after_guarded_failures(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("on_applet_clicked: function()")
