@@ -28,6 +28,7 @@ const CANCEL_HOTKEY_ID = "speed-of-cinnamon-cancel";
 const DEFAULT_CLI = GLib.build_filenamev([GLib.get_home_dir(), ".local", "bin", "speed-of-cinnamon"]);
 const SYSTEM_CLI = "/usr/bin/speed-of-cinnamon";
 const RUNBOOK_URL = "https://gist.github.com/H234598/b95129e13ac0b09c9777edd41aeedfa0";
+const DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434";
 const DEFAULT_OPENAI_COMPATIBLE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_COMPATIBLE_MODEL = "gpt-4o-transcribe";
 const DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL = "gpt-4o-mini";
@@ -1073,7 +1074,7 @@ MyApplet.prototype = {
     this.transcriberCommand = "";
     this.postProcessBackend = "none";
     this.postProcessCommand = "";
-    this.ollamaUrl = "http://127.0.0.1:11434";
+    this.ollamaUrl = DEFAULT_OLLAMA_URL;
     this.ollamaModel = "";
     this.openaiCompatibleUrl = DEFAULT_OPENAI_COMPATIBLE_URL;
     this.openaiCompatibleModel = DEFAULT_OPENAI_COMPATIBLE_MODEL;
@@ -1895,7 +1896,7 @@ MyApplet.prototype = {
     let safeInputDevice = this._coerceCliTextArgOrFallback(this.inputDevice, "input device", "");
     let safeTranscriberCommand = this._coerceCliTextArgOrFallback(this.transcriberCommand, "transcriber command", "");
     let safePostProcessCommand = this._coerceCliTextArgOrFallback(this.postProcessCommand, "post-process command", "");
-    let safeOllamaUrl = this._coerceCliTextArgOrFallback(this.ollamaUrl, "ollama URL", "http://127.0.0.1:11434");
+    let safeOllamaUrl = this._coerceCliTextArgOrFallback(this.ollamaUrl, "ollama URL", DEFAULT_OLLAMA_URL);
     let safeOllamaModel = this._coerceCliTextArgOrFallback(this.ollamaModel, "ollama model", "");
     let safeOpenAiCompatibleUrl = this._coerceCliTextArgOrFallback(this.openaiCompatibleUrl, "openai-compatible URL", DEFAULT_OPENAI_COMPATIBLE_URL);
     let safeOpenAiCompatibleModel = this._coerceCliTextArgOrFallback(this.openaiCompatibleModel, "openai-compatible model", DEFAULT_OPENAI_COMPATIBLE_MODEL);
@@ -1958,6 +1959,10 @@ MyApplet.prototype = {
     let postProcessCommandIncluded = safePostProcessCommand.trim() === "";
     let ollamaModelIncluded = safeOllamaModel.trim() === "";
     let whisperModelIncluded = safeWhisperModel.trim() === "";
+    let ollamaUrlIncluded = safeOllamaUrl.trim() === "" || safeOllamaUrl.trim() === DEFAULT_OLLAMA_URL;
+    let openAiCompatibleUrlIncluded = safeOpenAiCompatibleUrl.trim() === "" || safeOpenAiCompatibleUrl.trim() === DEFAULT_OPENAI_COMPATIBLE_URL;
+    let openAiCompatibleModelIncluded = safeOpenAiCompatibleModel.trim() === "" || safeOpenAiCompatibleModel.trim() === DEFAULT_OPENAI_COMPATIBLE_MODEL;
+    let openAiCompatibleTextModelIncluded = safeOpenAiCompatibleTextModel.trim() === "" || safeOpenAiCompatibleTextModel.trim() === DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL;
     if (safeInputDevice.trim() !== "") {
       this._appendCliOptionWithinBudget(args, "--input-device", safeInputDevice);
     }
@@ -1967,20 +1972,28 @@ MyApplet.prototype = {
     if (safePostProcessCommand.trim() !== "") {
       postProcessCommandIncluded = this._appendCliOptionWithinBudget(args, "--post-process-command", safePostProcessCommand);
     }
-    if (safeOllamaUrl.trim() !== "") {
-      this._appendCliOptionWithinBudget(args, "--ollama-url", safeOllamaUrl);
+    if (safeOllamaUrl.trim() !== "" && safeOllamaUrl.trim() !== DEFAULT_OLLAMA_URL) {
+      ollamaUrlIncluded = this._appendCliOptionWithinBudget(args, "--ollama-url", safeOllamaUrl);
     }
     if (safeOllamaModel.trim() !== "") {
       ollamaModelIncluded = this._appendCliOptionWithinBudget(args, "--ollama-model", safeOllamaModel);
     }
-    if (safeOpenAiCompatibleUrl.trim() !== "") {
-      this._appendCliOptionWithinBudget(args, "--openai-compatible-url", safeOpenAiCompatibleUrl);
+    if (safeOpenAiCompatibleUrl.trim() !== "" && safeOpenAiCompatibleUrl.trim() !== DEFAULT_OPENAI_COMPATIBLE_URL) {
+      openAiCompatibleUrlIncluded = this._appendCliOptionWithinBudget(args, "--openai-compatible-url", safeOpenAiCompatibleUrl);
     }
     if (safeOpenAiCompatibleModel.trim() !== "") {
-      this._appendCliOptionWithinBudget(args, "--openai-compatible-model", safeOpenAiCompatibleModel);
+      if (safeOpenAiCompatibleModel.trim() === DEFAULT_OPENAI_COMPATIBLE_MODEL) {
+        openAiCompatibleModelIncluded = true;
+      } else {
+        openAiCompatibleModelIncluded = this._appendCliOptionWithinBudget(args, "--openai-compatible-model", safeOpenAiCompatibleModel);
+      }
     }
     if (safeOpenAiCompatibleTextModel.trim() !== "") {
-      this._appendCliOptionWithinBudget(args, "--openai-compatible-text-model", safeOpenAiCompatibleTextModel);
+      if (safeOpenAiCompatibleTextModel.trim() === DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL) {
+        openAiCompatibleTextModelIncluded = true;
+      } else {
+        openAiCompatibleTextModelIncluded = this._appendCliOptionWithinBudget(args, "--openai-compatible-text-model", safeOpenAiCompatibleTextModel);
+      }
     }
     if (!Boolean(this.openaiCompatibleFlexProcessing)) {
       args.push("--no-openai-compatible-flex-processing");
@@ -2007,6 +2020,15 @@ MyApplet.prototype = {
       args[args.indexOf("--post-process-backend") + 1] = "none";
     }
     if (!ollamaModelIncluded && safePostProcessBackend === "ollama") {
+      args[args.indexOf("--post-process-backend") + 1] = "none";
+    }
+    if (!ollamaUrlIncluded && safePostProcessBackend === "ollama") {
+      args[args.indexOf("--post-process-backend") + 1] = "none";
+    }
+    if (safeTranscriber === "openai-compatible" && (!openAiCompatibleUrlIncluded || !openAiCompatibleModelIncluded)) {
+      args[args.indexOf("--transcriber") + 1] = "auto";
+    }
+    if (safePostProcessBackend === "openai-compatible" && (!openAiCompatibleUrlIncluded || !openAiCompatibleTextModelIncluded)) {
       args[args.indexOf("--post-process-backend") + 1] = "none";
     }
     return args;
