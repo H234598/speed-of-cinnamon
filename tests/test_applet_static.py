@@ -258,7 +258,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn('this._selectTextModelBackend("openai-compatible", this.openaiCompatibleModel, _("Text polishing: OpenAI-compatible API"));', source)
         self.assertIn("_watchExternalApiEnvFile: function(path)", source)
         self.assertIn("_disconnectTrackedSignalsForTarget: function(target)", source)
-        self.assertIn("this._disconnectTrackedSignalsForTarget(monitor);", source)
+        self.assertIn("this._disconnectTrackedSignalsForTarget(monitor)", source)
         self.assertIn("_clearMenuItems: function(menu)", source)
         self.assertIn("this._clearMenuItems(this.recorderItem.menu);", source)
         self.assertIn("addTarget(item);", source)
@@ -316,6 +316,25 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("return false;", block)
         self.assertIn("this._untrackMonitor(monitor)", block)
         self.assertIn("this.externalApiEnvMonitor = null;", block)
+
+    def test_failed_external_env_monitor_signal_disconnect_remains_tracked(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_disconnectTrackedSignalsForTarget: function(target)")
+        end = source.index("\n  _clearMenuItems:", start)
+        signal_block = source[start:end]
+        self.assertIn("let success = true;", signal_block)
+        self.assertIn("success = false;", signal_block)
+        self.assertIn("return success;", signal_block)
+
+        start = source.index("_clearExternalApiEnvMonitor: function()")
+        end = source.index("\n  _watchExternalApiEnvFile:", start)
+        monitor_block = source[start:end]
+        self.assertIn("if (!this._disconnectTrackedSignalsForTarget(monitor))", monitor_block)
+        self.assertIn("return false;", monitor_block)
+        self.assertLess(
+            monitor_block.index("_disconnectTrackedSignalsForTarget(monitor)"),
+            monitor_block.index("monitor.cancel()"),
+        )
 
     def test_failed_external_env_monitor_untrack_remains_tracked(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

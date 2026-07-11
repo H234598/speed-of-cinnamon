@@ -660,9 +660,10 @@ MyApplet.prototype = {
 
   _disconnectTrackedSignalsForTarget: function(target) {
     if (!target || !this._resourceRegistry || !Array.isArray(this._resourceRegistry.signals)) {
-      return;
+      return true;
     }
     let signals = this._resourceRegistry.signals;
+    let success = true;
     try {
       for (let index = signals.length - 1; index >= 0; index--) {
         let connection = signals[index];
@@ -675,17 +676,21 @@ MyApplet.prototype = {
           }
         } catch (error) {
           this._recordLifecycleError("teardown-target-signals", error);
+          success = false;
           continue;
         }
         try {
           signals.splice(index, 1);
         } catch (error) {
           this._recordLifecycleError("teardown-target-signals", error);
+          success = false;
         }
       }
     } catch (error) {
       this._recordLifecycleError("teardown-target-signals", error);
+      success = false;
     }
+    return success;
   },
 
   _clearMenuItems: function(menu) {
@@ -5557,7 +5562,9 @@ MyApplet.prototype = {
       return true;
     }
     let monitor = this.externalApiEnvMonitor;
-    this._disconnectTrackedSignalsForTarget(monitor);
+    if (!this._disconnectTrackedSignalsForTarget(monitor)) {
+      return false;
+    }
     try {
       let result = monitor.cancel();
       if (result === false) {
