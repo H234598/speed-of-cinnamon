@@ -3193,6 +3193,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("return this._spawnKeyboardAfterFocus(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, isCurrentOperation);", source)
         self.assertIn('this._setStatus("error", _("Target window unavailable for direct typing"), this.lastTranscript);', source)
         self.assertIn('[xdotool, "type", "--clearmodifiers", "--delay", String(delay), "--", typedText], null, null, expectedTargetWindow, completionCallback, isCurrentOperation)', source)
+        self.assertIn('if (!isCurrentOperation() || !this._lifecycleAllowsWork()) {', source)
+        self.assertIn('this._setStatus("error", _("Clipboard could not be verified before automatic paste"), this.lastTranscript);', source)
+        self.assertIn('this._setStatus("error", _("Clipboard changed before automatic paste"), this.lastTranscript);', source)
         self.assertIn("return false;", source)
         self.assertIn("return true;", source)
 

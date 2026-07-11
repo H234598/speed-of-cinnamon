@@ -8236,6 +8236,12 @@ MyApplet.prototype = {
       }, undefined));
     } catch (err) {
       global.logError(err);
+      if (!isCurrentOperation() || !this._lifecycleAllowsWork()) {
+        if (typeof completionCallback === "function") {
+          completionCallback(false);
+        }
+        return;
+      }
       this._setStatus("error", _("Clipboard could not be verified before automatic paste"), this.lastTranscript);
       if (typeof completionCallback === "function") {
         completionCallback(false);
@@ -8320,12 +8326,18 @@ MyApplet.prototype = {
             return;
           }
           this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow, null, null, completionCallback, isCurrentOperation);
-        }, undefined));
-      } catch (err) {
-        global.logError(err);
-        this._setStatus("error", _("Clipboard changed before automatic paste"), this.lastTranscript);
+      }, undefined));
+    } catch (err) {
+      global.logError(err);
+      if (!isCurrentOperation() || !this._lifecycleAllowsWork()) {
         if (typeof completionCallback === "function") {
           completionCallback(false);
+        }
+        return;
+      }
+      this._setStatus("error", _("Clipboard changed before automatic paste"), this.lastTranscript);
+      if (typeof completionCallback === "function") {
+        completionCallback(false);
         }
       }
       return;
