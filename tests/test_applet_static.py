@@ -839,6 +839,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('typeof message === "string"', block)
         self.assertIn('typeof summary === "string"', block)
         self.assertIn("let summaryLabel = messageText || summaryText", block)
+        self.assertIn('if (messageText !== "")', block)
         self.assertIn("new PopupMenu.PopupMenuItem(summaryLabel)", block)
 
     def test_invalid_downloaded_voice_model_cannot_be_selected_from_menu(self) -> None:

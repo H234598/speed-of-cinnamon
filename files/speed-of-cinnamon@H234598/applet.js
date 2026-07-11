@@ -3596,7 +3596,7 @@ MyApplet.prototype = {
 
     this.alarmItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-    if (message) {
+    if (messageText !== "") {
       return;
     }
     if (!alarms || alarms.length === 0) {
