@@ -1492,6 +1492,15 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_trackMonitor: function(monitor)", source)
         self.assertIn("_removeHotkey: function(id)", source)
 
+    def test_doctor_cannot_overwrite_an_active_recording_state(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_runDoctor: function(startupCheck)")
+        end = source.index("\n  _applyDoctorPayload:", start)
+        block = source[start:end]
+        self.assertIn("if (!startupCheck && this._hasActiveRecordingState())", block)
+        self.assertIn('this._setStatus(this.status, _("Finish the current recording before running doctor"), this.lastTranscript);', block)
+        self.assertLess(block.index("if (!startupCheck && this._hasActiveRecordingState())"), block.index("if (this._doctorCommandRunning)"))
+
     def test_applet_teardown_owns_popup_menus_and_tooltip(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

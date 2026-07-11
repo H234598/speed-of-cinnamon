@@ -3070,6 +3070,10 @@ MyApplet.prototype = {
   },
 
   _runDoctor: function(startupCheck) {
+    if (!startupCheck && this._hasActiveRecordingState()) {
+      this._setStatus(this.status, _("Finish the current recording before running doctor"), this.lastTranscript);
+      return;
+    }
     if (this._doctorCommandRunning) {
       if (!startupCheck) {
         this._setDoctorSummary(_("Doctor: already running"));
