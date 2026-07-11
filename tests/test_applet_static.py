@@ -1391,6 +1391,16 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!this._isStatusCommandArgs(normalizedArgs)) {", source[spawn_index:spawn_end])
         self.assertIn("this._statusRefreshToken++;", source[spawn_index:spawn_end])
 
+    def test_repeating_tracked_timers_remain_teardown_tracked(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName)")
+        end = source.index("\n  _init:", start)
+        block = source[start:end]
+        self.assertIn("let keepTimer = this._runGuarded(\"timer-\" + key, callback, false) === true;", block)
+        self.assertIn("if (!keepTimer) {", block)
+        self.assertIn("this._untrackTimer(key, sourceId, propertyName);", block)
+        self.assertLess(block.index("let keepTimer"), block.index("if (!keepTimer)"))
+
     def test_local_status_updates_invalidate_inflight_status_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

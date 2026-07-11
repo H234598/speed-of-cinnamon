@@ -994,8 +994,11 @@ MyApplet.prototype = {
         this._untrackTimer(key, sourceId, propertyName);
         return false;
       }
-      this._untrackTimer(key, sourceId, propertyName);
-      return this._runGuarded("timer-" + key, callback, false) === true;
+      let keepTimer = this._runGuarded("timer-" + key, callback, false) === true;
+      if (!keepTimer) {
+        this._untrackTimer(key, sourceId, propertyName);
+      }
+      return keepTimer;
     };
     try {
       sourceId = useSeconds
