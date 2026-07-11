@@ -3573,6 +3573,10 @@ class AppletStaticTest(unittest.TestCase):
             ("_selectTextPolishingPreset: function(preset)", "\n  _populateTextPolishingSafetyMenu:"),
             ("_toggleTextPolishingSafetyFlag: function(settingKey, propertyName, label)", "\n  _selectTextModelBackend:"),
             ("_selectTextModelBackend: function(backend, model, message)", "\n  _activateOllamaTextModelFlow:"),
+            ("_promptCustomRecordingLimit: function()", "\n  _parseCustomRecordingLimit:"),
+            ("_parseCustomRecordingLimit: function(value)", "\n  _transcriptStorageLabel:"),
+            ("_promptCustomTranscriptLimit: function()", "\n  _parseCustomTranscriptLimit:"),
+            ("_parseCustomTranscriptLimit: function(value)", "\n  _populateRecordingOptionsMenu:"),
         ]:
             start = source.index(method)
             end = source.index(next_method, start)

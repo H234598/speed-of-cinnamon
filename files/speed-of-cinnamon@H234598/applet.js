@@ -2242,7 +2242,7 @@ MyApplet.prototype = {
     }
     if (!this._findTrustedProgramInPath("zenity")) {
       this.lastMessage = _("Install zenity to enter a custom duration.");
-      this._setStatus("ready", this.lastMessage, this.lastTranscript);
+      this._setStatusPreservingRecording("ready", this.lastMessage, this.lastTranscript);
       return;
     }
     let promptToken = {};
@@ -2267,13 +2267,13 @@ MyApplet.prototype = {
     }
     if (!/^[0-9]+$/.test(text)) {
       this.lastMessage = _("Duration must be whole seconds.");
-      this._setStatus("ready", this.lastMessage, this.lastTranscript);
+      this._setStatusPreservingRecording("ready", this.lastMessage, this.lastTranscript);
       return null;
     }
     let seconds = Math.floor(Number(text));
     if (!isFinite(seconds) || seconds < MIN_RECORDING_SECONDS || seconds > MAX_RECORDING_SECONDS) {
       this.lastMessage = _("Duration must be between 0 and 3600 seconds.");
-      this._setStatus("ready", this.lastMessage, this.lastTranscript);
+      this._setStatusPreservingRecording("ready", this.lastMessage, this.lastTranscript);
       return null;
     }
     return seconds;
@@ -2339,7 +2339,7 @@ MyApplet.prototype = {
     }
     if (!this._findTrustedProgramInPath("zenity")) {
       this.lastMessage = _("Install zenity to enter a custom transcript limit.");
-      this._setStatus("ready", this.lastMessage, this.lastTranscript);
+      this._setStatusPreservingRecording("ready", this.lastMessage, this.lastTranscript);
       return;
     }
     let promptToken = {};
@@ -2364,13 +2364,13 @@ MyApplet.prototype = {
     }
     if (!/^[0-9]+$/.test(text)) {
       this.lastMessage = _("Transcript limit must be a whole number.");
-      this._setStatus("ready", this.lastMessage, this.lastTranscript);
+      this._setStatusPreservingRecording("ready", this.lastMessage, this.lastTranscript);
       return null;
     }
     let limit = Math.floor(Number(text));
     if (!isFinite(limit) || limit < MIN_TRANSCRIPT_FILES || limit > MAX_TRANSCRIPT_FILES) {
       this.lastMessage = _("Transcript limit must be between 1 and 1000.");
-      this._setStatus("ready", this.lastMessage, this.lastTranscript);
+      this._setStatusPreservingRecording("ready", this.lastMessage, this.lastTranscript);
       return null;
     }
     return limit;
