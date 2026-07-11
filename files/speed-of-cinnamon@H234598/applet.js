@@ -1292,7 +1292,10 @@ MyApplet.prototype = {
             throw new Error("Timer rollback could not remove source");
           }
           if (this._resourceRegistry && this._resourceRegistry.timers && this._resourceRegistry.timers[key] === sourceId) {
-            delete this._resourceRegistry.timers[key];
+            let deleted = delete this._resourceRegistry.timers[key];
+            if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.timers, key)) {
+              throw new Error("Timer rollback registry entry could not be removed");
+            }
           }
           if (propertyName && this[propertyName] === sourceId) {
             this[propertyName] = 0;

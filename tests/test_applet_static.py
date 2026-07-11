@@ -2116,6 +2116,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!keepTimer) {", block)
         self.assertIn("this._untrackTimer(key, sourceId, propertyName);", block)
         self.assertLess(block.index("let keepTimer"), block.index("if (!keepTimer)"))
+        self.assertIn("let deleted = delete this._resourceRegistry.timers[key];", block)
+        self.assertIn("Timer rollback registry entry could not be removed", block)
+        self.assertIn("Object.prototype.hasOwnProperty.call(this._resourceRegistry.timers, key)", block)
 
     def test_failed_timer_removal_remains_tracked(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
