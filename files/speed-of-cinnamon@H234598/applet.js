@@ -5079,9 +5079,13 @@ MyApplet.prototype = {
       if (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
         return;
       }
+      let finish = (message) => {
+        this.ollamaModelFlowToken = null;
+        this._setStatus("ready", message, this.lastTranscript);
+      };
       let choice = String(output || "").trim();
       if (choice === "") {
-        this._setStatus("ready", _("Ollama model selection cancelled"), this.lastTranscript);
+        finish(_("Ollama model selection cancelled"));
         return;
       }
       if (choice === "ADD") {
@@ -5090,10 +5094,26 @@ MyApplet.prototype = {
       }
       if (choice.indexOf("SELECT:") === 0) {
         let model = choice.slice("SELECT:".length).trim();
-        if (model !== "") {
+        let knownModel = false;
+        for (let candidate of (Array.isArray(models) ? models : [])) {
+          if (!candidate || typeof candidate !== "object" || typeof candidate.name !== "string") {
+            continue;
+          }
+          try {
+            if (this._coerceCliTextArg(candidate.name.trim(), "ollama model").trim() === model) {
+              knownModel = true;
+              break;
+            }
+          } catch (err) {
+            continue;
+          }
+        }
+        if (model !== "" && knownModel) {
           this._selectTextModelBackend("ollama", model, _("Text model: ") + model);
+          return;
         }
       }
+      finish(_("Ollama model selection was invalid"));
     }, { timeoutMs: 0 });
   },
 
