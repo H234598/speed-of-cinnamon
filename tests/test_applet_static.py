@@ -302,6 +302,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn(r"[a-z][a-z0-9+.-]*:\/\/[^/@\s:]+:[^/@\s]+@", source)
         self.assertIn("_sanitizeErrorMessage: function(value)", source)
         self.assertIn("_payloadMessage: function(payload, fallback)", source)
+        self.assertIn('if (payload && typeof payload.message === "string" && payload.message.trim() !== "")', source)
+        self.assertNotIn('if (payload && payload.message) {', source)
         self.assertIn('return "[redacted error details]";', source)
         self.assertIn('this.lastMessage = status === "error" ? this._sanitizeErrorMessage(message) : message || "";', source)
         self.assertIn("let safeBody = this._sanitizeErrorMessage(body);", source)

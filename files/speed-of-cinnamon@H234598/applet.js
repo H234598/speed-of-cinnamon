@@ -1548,7 +1548,7 @@ MyApplet.prototype = {
   },
 
   _payloadMessage: function(payload, fallback) {
-    if (payload && payload.message) {
+    if (payload && typeof payload.message === "string" && payload.message.trim() !== "") {
       return this._sanitizeErrorMessage(payload.message);
     }
     return this._sanitizeErrorMessage(fallback || "");
