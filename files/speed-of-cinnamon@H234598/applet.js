@@ -2111,7 +2111,7 @@ MyApplet.prototype = {
   },
 
   _normalizeRecordingLimit: function(seconds) {
-    let value = Math.floor(Number(seconds));
+    let value = typeof seconds === "number" && isFinite(seconds) ? Math.floor(seconds) : NaN;
     if (!isFinite(value)) {
       value = DEFAULT_RECORDING_SECONDS;
     }
@@ -2119,7 +2119,7 @@ MyApplet.prototype = {
   },
 
   _normalizeTypingDelayMs: function(delay) {
-    let value = Math.floor(Number(delay));
+    let value = typeof delay === "number" && isFinite(delay) ? Math.floor(delay) : NaN;
     if (!isFinite(value)) {
       value = DEFAULT_TYPING_DELAY_MS;
     }
@@ -2127,7 +2127,7 @@ MyApplet.prototype = {
   },
 
   _normalizeTranscriptLimit: function(limit) {
-    let value = Math.floor(Number(limit));
+    let value = typeof limit === "number" && isFinite(limit) ? Math.floor(limit) : NaN;
     if (!isFinite(value)) {
       value = DEFAULT_MAX_TRANSCRIPT_FILES;
     }
