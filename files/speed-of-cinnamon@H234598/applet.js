@@ -945,12 +945,16 @@ MyApplet.prototype = {
 
   _destroyAppletTooltip: function() {
     let tooltip = this._applet_tooltip;
+    let destroyed = false;
     this._runTeardownGuarded("teardown-tooltip", () => {
       if (tooltip && tooltip.destroy) {
         tooltip.destroy();
       }
+      destroyed = true;
     });
-    this._applet_tooltip = null;
+    if (destroyed) {
+      this._applet_tooltip = null;
+    }
   },
 
   _trackMonitor: function(monitor) {

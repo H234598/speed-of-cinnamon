@@ -1734,6 +1734,16 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (cleanupMenu(contextMenu, \"context-menu\"))", block)
         self.assertIn("let cleanupManager = (manager, group) => {", block)
 
+    def test_tooltip_teardown_retains_handle_after_destroy_failure(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_destroyAppletTooltip: function()")
+        end = source.index("\n  _trackMonitor:", start)
+        block = source[start:end]
+        self.assertIn("let destroyed = false;", block)
+        self.assertIn("destroyed = true;", block)
+        self.assertIn("if (destroyed)", block)
+        self.assertIn("this._applet_tooltip = null;", block)
+
     def test_hotkey_mutations_are_not_suppressed_by_disabled_error_groups(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_registerHotkey: function(id, binding, callback)")
