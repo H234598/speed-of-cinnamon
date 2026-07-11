@@ -3736,7 +3736,7 @@ MyApplet.prototype = {
   },
 
   _selectBenchmarkAudioFile: function() {
-    if (this._hasActiveRecordingState() || this.benchmarkFlowToken) {
+    if (this.isCommandRunning || this._hasActiveRecordingState() || this.benchmarkFlowToken) {
       return;
     }
     if (!this._findTrustedProgramInPath("zenity")) {
@@ -3762,13 +3762,24 @@ MyApplet.prototype = {
 
   _benchmarkDownloadedModels: function(audioPath, flowToken) {
     flowToken = flowToken || {};
-    if (this._hasActiveRecordingState()) {
+    if (this.isCommandRunning || this._hasActiveRecordingState()) {
       this.benchmarkFlowToken = null;
       return;
     }
+    let benchmarkArgs;
+    try {
+      benchmarkArgs = this._benchmarkArgs(audioPath);
+    } catch (err) {
+      this.benchmarkFlowToken = null;
+      let safeError = this._sanitizeErrorMessage(err);
+      this._setStatus("error", _("Could not prepare benchmark command: ") + safeError, this.lastTranscript);
+      return;
+    }
     this.benchmarkFlowToken = flowToken;
+    this.isCommandRunning = true;
     this._setStatus("processing", _("Benchmarking downloaded models..."), this.lastTranscript);
-    this._spawnJson(this._benchmarkArgs(audioPath), (payload) => {
+    this._spawnJson(benchmarkArgs, (payload) => {
+      this.isCommandRunning = false;
       if (this.benchmarkFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
         return;
       }

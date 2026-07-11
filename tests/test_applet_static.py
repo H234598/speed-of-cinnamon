@@ -1721,7 +1721,7 @@ class AppletStaticTest(unittest.TestCase):
         select_start = source.index("_selectBenchmarkAudioFile: function()")
         select_end = source.index("\n  _benchmarkDownloadedModels:", select_start)
         select_block = source[select_start:select_end]
-        self.assertIn("if (this._hasActiveRecordingState() || this.benchmarkFlowToken)", select_block)
+        self.assertIn("if (this.isCommandRunning || this._hasActiveRecordingState() || this.benchmarkFlowToken)", select_block)
         self.assertIn("let flowToken = {};", select_block)
         self.assertIn("this.benchmarkFlowToken = flowToken;", select_block)
         self.assertIn("this.benchmarkFlowToken !== flowToken", select_block)
@@ -1730,7 +1730,12 @@ class AppletStaticTest(unittest.TestCase):
         benchmark_start = source.index("_benchmarkDownloadedModels: function(audioPath, flowToken)")
         benchmark_end = source.index("\n  _setAlarmOptionStatus:", benchmark_start)
         benchmark_block = source[benchmark_start:benchmark_end]
-        self.assertIn("if (this._hasActiveRecordingState())", benchmark_block)
+        self.assertIn("if (this.isCommandRunning || this._hasActiveRecordingState())", benchmark_block)
+        self.assertIn("let benchmarkArgs;", benchmark_block)
+        self.assertIn("benchmarkArgs = this._benchmarkArgs(audioPath);", benchmark_block)
+        self.assertIn('this._setStatus("error", _("Could not prepare benchmark command: ") + safeError', benchmark_block)
+        self.assertIn("this.isCommandRunning = true;", benchmark_block)
+        self.assertIn("this.isCommandRunning = false;", benchmark_block)
         self.assertIn("this.benchmarkFlowToken = null;", benchmark_block)
         self.assertIn("this.benchmarkFlowToken !== flowToken", benchmark_block)
         self.assertIn("this.benchmarkFlowToken = null;", benchmark_block)
