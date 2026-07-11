@@ -653,6 +653,8 @@ class AppletStaticTest(unittest.TestCase):
         settings_block = source[settings_start:settings_end]
         self.assertIn('_("Cinnamon applet settings process exited unexpectedly")', settings_block)
         self.assertIn("result.error || result.timedOut || result.outputTooLarge", settings_block)
+        self.assertIn("let settingsToken = {};", settings_block)
+        self.assertIn("this.settingsWindowToken !== settingsToken", settings_block)
         self.assertNotIn("}, function() {});", settings_block)
 
         terminal_start = source.index("_runTerminalWorkflow: function(title, command, openedMessage, cancelOllamaFlow, ollamaFlowToken)")
@@ -3661,6 +3663,7 @@ class AppletStaticTest(unittest.TestCase):
             "settingsTransferToken",
             "setupDiagnosticsToken",
             "doctorCommandToken",
+            "settingsWindowToken",
         ]:
             self.assertIn(f"this.{token} = null;", helper_block)
 

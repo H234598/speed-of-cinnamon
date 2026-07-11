@@ -433,6 +433,7 @@ MyApplet.prototype = {
     this.targetWindowGeneration = 0;
     this.terminalWorkflowToken = null;
     this.doctorCommandToken = null;
+    this.settingsWindowToken = null;
   },
 
   _lifecycleAllowsWork: function() {
@@ -1075,6 +1076,7 @@ MyApplet.prototype = {
     this.isCommandRunning = false;
     this.terminalWorkflowRunning = false;
     this.terminalWorkflowToken = null;
+    this.settingsWindowToken = null;
     this.cancelPendingWhileCommandRunning = false;
     this._statusRefreshToken = 0;
     this._statusCommandRunning = false;
@@ -1832,6 +1834,7 @@ MyApplet.prototype = {
     this.transcriptListPromptToken = null;
     this.transcriptWindowToken = null;
     this.textInsertToken = null;
+    this.settingsWindowToken = null;
     this.alarmActionToken = null;
     this.alarmCheckToken = null;
     this.settingsTransferToken = null;
@@ -3091,6 +3094,7 @@ MyApplet.prototype = {
     this._doctorCommandRunning = false;
     this.transcriptListPromptToken = null;
     this.transcriptWindowToken = null;
+    this.settingsWindowToken = null;
   },
 
   _runDoctor: function(startupCheck) {
@@ -3251,12 +3255,18 @@ MyApplet.prototype = {
     if (instanceId !== "") {
       args.push("--id", instanceId);
     }
+    let settingsToken = {};
+    this.settingsWindowToken = settingsToken;
     try {
       let handle = this._runBoundedSubprocess(this._coerceSpawnArgs(args), {}, {
         timeoutMs: 0,
         maxStdoutBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
         maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
       }, (stdout, stderr, result) => {
+        if (this.settingsWindowToken !== settingsToken || !this._lifecycleAllowsWork()) {
+          return;
+        }
+        this.settingsWindowToken = null;
         if (result && (result.error || result.timedOut || result.outputTooLarge)) {
           this._setStatusPreservingRecording("error", _("Cinnamon applet settings process exited unexpectedly"), this.lastTranscript);
         }
@@ -3265,6 +3275,10 @@ MyApplet.prototype = {
         throw new Error("xlet-settings process could not be started");
       }
     } catch (err) {
+      if (this.settingsWindowToken !== settingsToken) {
+        return;
+      }
+      this.settingsWindowToken = null;
       this._setStatusPreservingRecording("error", this._sanitizeErrorMessage(err), this.lastTranscript);
       return;
     }
