@@ -2970,6 +2970,9 @@ MyApplet.prototype = {
     this._spawnJson(this._statusArgs(), (payload) => {
       try {
         this._applyPayload(payload, statusRefreshToken);
+      } catch (err) {
+        let safeError = this._sanitizeErrorMessage(err);
+        this._setStatus("error", _("Status refresh failed: ") + safeError, this.lastTranscript);
       } finally {
         this._statusCommandRunning = false;
       }
