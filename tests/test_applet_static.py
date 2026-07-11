@@ -1725,6 +1725,8 @@ class AppletStaticTest(unittest.TestCase):
         keyboard_block = source[keyboard_start:keyboard_end]
 
         self.assertIn('this._terminateProcessesByGroup("keyboard", true);', remember_block)
+        self.assertIn("let completeOnce = (result) =>", keyboard_block)
+        self.assertIn("if (!handle) {\n        completeOnce(false);", keyboard_block)
         self.assertIn("result.cancelled", keyboard_block)
 
     def test_alarm_actions_ignore_stale_backend_responses(self) -> None:

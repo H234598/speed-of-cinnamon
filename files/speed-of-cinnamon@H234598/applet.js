@@ -7622,8 +7622,16 @@ MyApplet.prototype = {
 
   _spawnKeyboardProcess: function(args, completionCallback) {
     let complete = typeof completionCallback === "function" ? completionCallback : function() {};
+    let completed = false;
+    let completeOnce = (result) => {
+      if (completed) {
+        return;
+      }
+      completed = true;
+      complete(result === true);
+    };
     if (!this._lifecycleAllowsWork()) {
-      complete(false);
+      completeOnce(false);
       return false;
     }
     try {
@@ -7633,16 +7641,16 @@ MyApplet.prototype = {
         maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
         resourceGroup: "keyboard",
       }, (stdout, stderr, result) => {
-        complete(!(result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge)));
+        completeOnce(!(result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge)));
       });
       if (!handle) {
-        complete(false);
+        completeOnce(false);
         return false;
       }
       return true;
     } catch (error) {
       this._recordLifecycleError("keyboard-process", error);
-      complete(false);
+      completeOnce(false);
       return false;
     }
   },
