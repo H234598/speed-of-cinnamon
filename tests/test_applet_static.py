@@ -2089,6 +2089,15 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._recordLifecycleError("keyboard-menu-close", err);', block)
         self.assertNotIn("global.logError(err);", block)
 
+    def test_keyboard_clipboard_read_failures_complete_insert(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_spawnKeyboardWhenClipboardReady: function(")
+        end = source.index("\n  _spawnKeyboardProcess:", start)
+        block = source[start:end]
+        self.assertIn("this._completeKeyboardInsertFailure(", block)
+        self.assertIn('_("Clipboard could not be verified before automatic paste")', block)
+        self.assertNotIn("global.logError(err);", block)
+
     def test_timer_reschedule_aborts_when_previous_timer_cannot_be_removed(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName)")
@@ -3946,7 +3955,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._setStatus("error", _("Target window unavailable for direct typing"), this.lastTranscript);', source)
         self.assertIn('[xdotool, "type", "--clearmodifiers", "--delay", String(delay), "--", typedText], null, null, expectedTargetWindow, completionCallback, isCurrentOperation)', source)
         self.assertIn('if (!isCurrentOperation() || !this._lifecycleAllowsWork()) {', source)
-        self.assertIn('this._setStatus("error", _("Clipboard could not be verified before automatic paste"), this.lastTranscript);', source)
+        self.assertIn("this._completeKeyboardInsertFailure(", source)
         self.assertIn('this._setStatus("error", _("Clipboard changed before automatic paste"), this.lastTranscript);', source)
         self.assertIn("return false;", source)
         self.assertIn("return true;", source)

@@ -9171,17 +9171,11 @@ MyApplet.prototype = {
         }
       }, undefined));
     } catch (err) {
-      global.logError(err);
-      if (!isCurrentOperation() || !this._lifecycleAllowsWork()) {
-        if (typeof completionCallback === "function") {
-          completionCallback(false);
-        }
-        return;
-      }
-      this._setStatus("error", _("Clipboard could not be verified before automatic paste"), this.lastTranscript);
-      if (typeof completionCallback === "function") {
-        completionCallback(false);
-      }
+      this._completeKeyboardInsertFailure(
+        completionCallback,
+        _("Clipboard could not be verified before automatic paste"),
+        err
+      );
     }
   },
 
