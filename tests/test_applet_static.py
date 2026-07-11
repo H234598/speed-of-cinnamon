@@ -737,6 +737,7 @@ class AppletStaticTest(unittest.TestCase):
         cancel_end = source.index("\n  on_applet_clicked:", cancel_start)
         cancel_block = source[cancel_start:cancel_end]
         self.assertIn("this.textInsertToken = null;", cancel_block)
+        self.assertIn("this._clearClipboardOverwriteApproval();", cancel_block)
         self.assertIn("this._clearPasteTimer();", cancel_block)
         self.assertIn('this._terminateProcessesByGroup("keyboard");', cancel_block)
         self.assertIn('this._terminateProcessesByGroup("clipboard");', cancel_block)

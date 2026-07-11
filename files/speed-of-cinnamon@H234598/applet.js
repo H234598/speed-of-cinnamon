@@ -1776,6 +1776,7 @@ MyApplet.prototype = {
   },
 
   _cancelTextInsertForSettingsChange: function() {
+    this._clearClipboardOverwriteApproval();
     if (!this.textInsertToken) {
       return;
     }
