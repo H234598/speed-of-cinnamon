@@ -1157,7 +1157,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('relistenToken = String(this.autoRelistenSequence) + ":" + recordingKey;', source)
         self.assertIn('this.autoRelistenPending = Boolean(relistenToken);', source)
         self.assertIn('this.autoRelistenPendingToken = relistenToken;', source)
-        self.assertIn('if (relistenToken && this.autoRelistenPendingToken !== relistenToken) {\n        this.isCommandRunning = false;\n        if (this.cancelPendingWhileCommandRunning) {\n          this._applyPayload(nextPayload);\n        }\n        return;\n      }', source)
+        self.assertIn('if (relistenToken && this.autoRelistenPendingToken !== relistenToken) {\n        this.isCommandRunning = false;\n        if (this.cancelPendingWhileCommandRunning) {\n          this._applyPayloadSafely(nextPayload);\n        }\n        return;\n      }', source)
         self.assertIn('if (nextPayload && nextPayload.error) {\n        this.autoTranscribeRecordingKey = "";\n      }', source)
         self.assertIn('const EMPTY_TRANSCRIPT_MARKERS = [', source)
         self.assertIn('"leere aufnahme"', source)
@@ -1816,6 +1816,20 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._setStatus(startupCheck ? \"setup\" : \"error\", message", block)
         self.assertIn("} finally {", block)
         self.assertIn("this._doctorCommandRunning = false;", block)
+
+    def test_recording_payload_callbacks_use_fail_closed_handler(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        helper_start = source.index("_applyPayloadSafely: function(payload, statusRefreshToken)")
+        helper_end = source.index("\n  _applyPayload: function(payload, statusRefreshToken)", helper_start)
+        helper_block = source[helper_start:helper_end]
+        self.assertIn("try {", helper_block)
+        self.assertIn("this._applyPayload(payload, statusRefreshToken);", helper_block)
+        self.assertIn('this._setStatus("error", _("Backend response handling failed: ") + safeError', helper_block)
+        for marker in [
+            "this._applyPayloadSafely(payload);",
+            "this._applyPayloadSafely(nextPayload);",
+        ]:
+            self.assertIn(marker, source)
 
     def test_custom_limit_dialogs_ignore_stale_callbacks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2527,7 +2541,7 @@ class AppletStaticTest(unittest.TestCase):
         mismatch_end = block.index("return;", mismatch)
         self.assertIn("this.isCommandRunning = false;", block[mismatch:mismatch_end])
         self.assertIn("if (this.cancelPendingWhileCommandRunning)", block[mismatch:mismatch_end])
-        self.assertIn("this._applyPayload(nextPayload);", block[mismatch:mismatch_end])
+        self.assertIn("this._applyPayloadSafely(nextPayload);", block[mismatch:mismatch_end])
         toggle_start = source.index("_toggleRecording: function()")
         toggle_end = source.index("\n  _restartApplet:", toggle_start)
         self.assertIn("this.cancelPendingWhileCommandRunning = false;", source[toggle_start:toggle_end])
@@ -2588,7 +2602,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (payload.error) {\n        this.autoRelistenPending = false;", restart_block)
         self.assertIn('nextStatus === "recording" || nextStatus === "recorded"', restart_block)
         self.assertIn('this.autoRelistenPendingToken = "";', restart_block)
-        apply_index = restart_block.index("this._applyPayload(payload);")
+        apply_index = restart_block.index("this._applyPayloadSafely(payload);")
         self.assertNotIn("this.autoRelistenManualStopRequested = false;", restart_block[:apply_index])
 
     def test_applet_uses_gio_for_desktop_links_and_folders(self) -> None:

@@ -2943,7 +2943,7 @@ MyApplet.prototype = {
     this._setStatus("processing", _("Working..."), "");
     this._spawnJson(toggleArgs, (payload) => {
       this.isCommandRunning = false;
-      this._applyPayload(payload);
+      this._applyPayloadSafely(payload);
     });
   },
 
@@ -3015,7 +3015,7 @@ MyApplet.prototype = {
     this._setStatus("processing", _("Cancelling..."), this.lastTranscript);
     this._spawnJson(this._cancelArgs(), (payload) => {
       this.isCommandRunning = false;
-      this._applyPayload(payload);
+      this._applyPayloadSafely(payload);
     });
   },
 
@@ -6396,6 +6396,15 @@ MyApplet.prototype = {
     }
   },
 
+  _applyPayloadSafely: function(payload, statusRefreshToken) {
+    try {
+      this._applyPayload(payload, statusRefreshToken);
+    } catch (err) {
+      let safeError = this._sanitizeErrorMessage(err);
+      this._setStatus("error", _("Backend response handling failed: ") + safeError, this.lastTranscript);
+    }
+  },
+
   _applyPayload: function(payload, statusRefreshToken) {
     if (typeof statusRefreshToken === "number" && statusRefreshToken !== this._statusRefreshToken) {
       return;
@@ -6664,7 +6673,7 @@ MyApplet.prototype = {
       if (relistenToken && this.autoRelistenPendingToken !== relistenToken) {
         this.isCommandRunning = false;
         if (this.cancelPendingWhileCommandRunning) {
-          this._applyPayload(nextPayload);
+          this._applyPayloadSafely(nextPayload);
         }
         return;
       }
@@ -6672,7 +6681,7 @@ MyApplet.prototype = {
         this.autoTranscribeRecordingKey = "";
       }
       this.isCommandRunning = false;
-      this._applyPayload(nextPayload);
+      this._applyPayloadSafely(nextPayload);
     });
   },
 
@@ -8379,7 +8388,7 @@ MyApplet.prototype = {
         this.autoRelistenPending = false;
         this.autoRelistenPendingToken = "";
       }
-      this._applyPayload(payload);
+      this._applyPayloadSafely(payload);
     });
     return true;
   },
