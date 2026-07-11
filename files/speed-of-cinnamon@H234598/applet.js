@@ -1554,6 +1554,15 @@ MyApplet.prototype = {
     return this._sanitizeErrorMessage(fallback || "");
   },
 
+  _payloadErrorMessage: function(payload, fallback) {
+    let value = payload && typeof payload.error === "string" && payload.error.trim() !== ""
+      ? payload.error
+      : payload && typeof payload.message === "string" && payload.message.trim() !== ""
+        ? payload.message
+        : fallback || "";
+    return this._sanitizeErrorMessage(value);
+  },
+
   _normalizePayloadStatus: function(value, hasError) {
     if (value === undefined || value === null || value === "") {
       return hasError ? "error" : "idle";
@@ -6123,8 +6132,8 @@ MyApplet.prototype = {
       this.cancelPendingWhileCommandRunning = false;
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
-      let errorMessage = payload.error || payload.message || _("Backend reported an error");
-      this._setStatus("error", this._sanitizeErrorMessage(errorMessage), this.lastTranscript);
+      let errorMessage = this._payloadErrorMessage(payload, _("Backend reported an error"));
+      this._setStatus("error", errorMessage, this.lastTranscript);
       this._maybeWarnRejectedArtifactPassphrase(errorMessage);
       return;
     }
