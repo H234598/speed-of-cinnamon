@@ -2186,6 +2186,7 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertIn('if (payload.error || status === "error") {', error_block)
         self.assertIn('let errorMessage = this._payloadErrorMessage(payload, _("Backend reported an error"));', error_block)
+        self.assertIn('this.autoTranscribeRecordingKey = "";', error_block)
         self.assertNotIn("this.autoRelistenManualStopRequested = false;", error_block)
 
     def test_relisten_restart_clears_pending_only_after_restart_resolution(self) -> None:

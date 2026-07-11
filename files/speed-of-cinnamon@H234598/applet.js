@@ -6130,6 +6130,7 @@ MyApplet.prototype = {
     this._applyMicrophoneLevel(payload.microphone_level, status);
     if (payload.error || status === "error") {
       this.cancelPendingWhileCommandRunning = false;
+      this.autoTranscribeRecordingKey = "";
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
       let errorMessage = this._payloadErrorMessage(payload, _("Backend reported an error"));
