@@ -5790,7 +5790,16 @@ MyApplet.prototype = {
     flowToken = flowToken || this.ollamaModelFlowToken || {};
     this.ollamaModelFlowToken = flowToken;
     this._setStatus("processing", _("Choose Ollama text model..."), this.lastTranscript);
-    this._spawnText(this._ollamaModelChoiceArgs(models), (output) => {
+    let choiceArgs;
+    try {
+      choiceArgs = this._ollamaModelChoiceArgs(models);
+    } catch (error) {
+      this._clearOllamaModelFlow(flowToken);
+      this._recordLifecycleError("ollama-flow", error);
+      this._setStatus("error", _("Could not prepare Ollama model selection"), this.lastTranscript);
+      return;
+    }
+    this._spawnText(choiceArgs, (output) => {
       if (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -5842,7 +5851,16 @@ MyApplet.prototype = {
     }
     this.ollamaModelFlowToken = flowToken;
     this._setStatus("processing", _("Choose Ollama text model..."), this.lastTranscript);
-    this._spawnText(this._ollamaModelPromptArgs(), (output) => {
+    let promptArgs;
+    try {
+      promptArgs = this._ollamaModelPromptArgs();
+    } catch (error) {
+      this._clearOllamaModelFlow(flowToken);
+      this._recordLifecycleError("ollama-flow", error);
+      this._setStatus("error", _("Could not prepare Ollama model prompt"), this.lastTranscript);
+      return;
+    }
+    this._spawnText(promptArgs, (output) => {
       if (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
         return;
       }

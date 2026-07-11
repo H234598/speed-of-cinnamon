@@ -2627,6 +2627,21 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn(f"this._spawnJson({args_name},", block)
             self.assertIn("this._failSetupDiagnosticsAction(actionToken, error", block)
 
+    def test_ollama_prompt_actions_release_flow_tokens_when_arguments_fail(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method, args_name, builder_name, message in [
+            ("_promptChooseOllamaTextModel: function(models, flowToken)", "\n  _promptInstallOllamaTextModel:", "choiceArgs", "_ollamaModelChoiceArgs", "Could not prepare Ollama model selection"),
+            ("_promptInstallOllamaTextModel: function(flowToken)", "\n  _installOllamaTextModel:", "promptArgs", "_ollamaModelPromptArgs", "Could not prepare Ollama model prompt"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn(f"let {args_name};", block)
+            self.assertIn(f"{args_name} = this.{builder_name}(", block)
+            self.assertIn("this._clearOllamaModelFlow(flowToken);", block)
+            self.assertIn('this._recordLifecycleError("ollama-flow", error);', block)
+            self.assertIn(f'_("{message}")', block)
+
     def test_text_model_menu_keeps_selected_ollama_model_when_refresh_is_empty(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
