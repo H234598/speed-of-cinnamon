@@ -4295,11 +4295,12 @@ MyApplet.prototype = {
   },
 
   _externalApiEnvValue: function(value, fallback) {
-    let normalized = String(value || "").trim();
+    let normalized = typeof value === "string" ? value.trim() : "";
+    let safeFallback = typeof fallback === "string" ? fallback : "";
     if (normalized === LEGACY_OPENAI_COMPATIBLE_URL) {
       return DEFAULT_OPENAI_COMPATIBLE_URL;
     }
-    return normalized || String(fallback || "");
+    return normalized || safeFallback;
   },
 
   _validateExternalApiUrl: function(value, fieldName) {
@@ -4360,7 +4361,8 @@ MyApplet.prototype = {
       this._externalApiEnvValue(values.textModel, DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL),
       "openai-compatible text model"
     ).trim();
-    let apiKey = this._coerceCliTextArg(values.apiKey || "", "openai-compatible API key").trim();
+    let apiKeyValue = typeof values.apiKey === "string" ? values.apiKey : "";
+    let apiKey = this._coerceCliTextArg(apiKeyValue, "openai-compatible API key").trim();
     if (model === "" || textModel === "") {
       throw new Error("openai-compatible model is required");
     }
