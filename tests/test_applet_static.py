@@ -3694,3 +3694,16 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         cancel = block.index('this._setStatus("ready", _("Clipboard overwrite cancelled")')
         self.assertIn("if (isCurrentOperation())", block[cancel - 80:cancel])
+
+    def test_dynamic_menu_errors_preserve_active_recording_state(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        for method, next_method, expected in [
+            ("_refreshAlarmMenu: function()", "\n  _populateAlarmMenu:", "this._setAlarmErrorStatus(payload.error);"),
+            ("_refreshInputSourceMenu: function()", "\n  _populateInputSourceMenu:", "this._setStatusPreservingRecording"),
+            ("_refreshHistory: function()", "\n  _listAllTranscripts:", "this._setStatusPreservingRecording"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn(expected, block, method)

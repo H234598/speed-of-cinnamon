@@ -3786,7 +3786,7 @@ MyApplet.prototype = {
       }
       if (payload.error) {
         this._populateAlarmMenu([], this._sanitizeErrorMessage(payload.error));
-        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+        this._setAlarmErrorStatus(payload.error);
         return;
       }
       this._populateAlarmMenu(payload.alarms || [], payload.summary || "");
@@ -4025,7 +4025,7 @@ MyApplet.prototype = {
       }
       if (payload.error) {
         this._populateInputSourceMenu([], this._sanitizeErrorMessage(payload.error));
-        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+        this._setStatusPreservingRecording("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       this._populateInputSourceMenu(payload.sources || []);
@@ -5632,7 +5632,7 @@ MyApplet.prototype = {
       }
       if (payload.error) {
         this._populateHistoryMenu([]);
-        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+        this._setStatusPreservingRecording("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
       this._populateHistoryMenu(payload.transcripts || []);
