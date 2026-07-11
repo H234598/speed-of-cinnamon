@@ -587,7 +587,21 @@ MyApplet.prototype = {
     try {
       connectionId = target.connect(signal, this._guardStateCallback(signalGroup, callback, undefined));
       if (this._resourceRegistry && connectionId) {
-        this._resourceRegistry.signals.push({ target: target, id: connectionId });
+        try {
+          if (!Array.isArray(this._resourceRegistry.signals)) {
+            throw new Error("Signal registry is unavailable");
+          }
+          this._resourceRegistry.signals.push({ target: target, id: connectionId });
+        } catch (registryError) {
+          try {
+            if (target.disconnect) {
+              target.disconnect(connectionId);
+            }
+          } catch (disconnectError) {
+            this._recordLifecycleError("signal-disconnect", disconnectError);
+          }
+          throw registryError;
+        }
       }
       return connectionId;
     } catch (error) {

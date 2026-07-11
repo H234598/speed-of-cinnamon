@@ -1635,6 +1635,16 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_trackMonitor: function(monitor)", source)
         self.assertIn("_removeHotkey: function(id)", source)
 
+    def test_signal_registration_failure_disconnects_new_connection(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_connectSafe: function(target, signal, callback, group)")
+        end = source.index("\n  _disconnectAllSignals:", start)
+        block = source[start:end]
+        self.assertIn("if (!Array.isArray(this._resourceRegistry.signals))", block)
+        self.assertIn("target.disconnect(connectionId);", block)
+        self.assertIn('this._recordLifecycleError("signal-disconnect", disconnectError);', block)
+        self.assertIn("throw registryError;", block)
+
     def test_state_callbacks_are_not_suppressed_by_disabled_error_groups(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         state_start = source.index("_runStateGuarded: function(group, callback, fallback)")
