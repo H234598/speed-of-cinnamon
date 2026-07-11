@@ -3493,6 +3493,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (this._hasActiveRecordingState())", insert_history_block)
         self.assertIn('this._setStatusPreservingRecording("ready", _("Finish the current recording before inserting another transcript")', insert_history_block)
         self.assertIn("this._insertTranscriptText(text);", source)
+        copy_history_start = source.index("_copyHistoryTranscript: function(text)")
+        copy_history_end = source.index("\n  _insertHistoryTranscript:", copy_history_start)
+        copy_history_block = source[copy_history_start:copy_history_end]
+        self.assertIn('let statusTranscript = this._hasActiveRecordingState() ? "" : text;', copy_history_block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Could not copy transcript"), statusTranscript);', copy_history_block)
+        self.assertIn('this._setStatusPreservingRecording("done", _("Copied transcript"), statusTranscript);', copy_history_block)
         self.assertIn("this._preparedTranscriptText(text, true)", source)
         self.assertIn("this._preparedTranscriptText(this.lastTranscript, true)", source)
 

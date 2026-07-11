@@ -9016,11 +9016,12 @@ MyApplet.prototype = {
     if (!text) {
       return;
     }
+    let statusTranscript = this._hasActiveRecordingState() ? "" : text;
     if (!this._setClipboardText(this._preparedTranscriptText(text, true))) {
-      this._setStatusPreservingRecording("error", _("Could not copy transcript"), text);
+      this._setStatusPreservingRecording("error", _("Could not copy transcript"), statusTranscript);
       return;
     }
-    this._setStatusPreservingRecording("done", _("Copied transcript"), text);
+    this._setStatusPreservingRecording("done", _("Copied transcript"), statusTranscript);
   },
 
   _insertHistoryTranscript: function(text) {
