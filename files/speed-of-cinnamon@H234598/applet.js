@@ -3711,10 +3711,13 @@ MyApplet.prototype = {
     this.alarmMenuRefreshToken = refreshToken;
     this._populateAlarmMenu([], _("Loading alarms..."));
     this._spawnJson(this._alarmListArgs(), (payload) => {
-      if (this.alarmMenuRefreshToken !== refreshToken || !this._canMutateMenu(this.alarmItem)) {
+      if (this.alarmMenuRefreshToken !== refreshToken) {
         return;
       }
       this.alarmMenuRefreshToken = null;
+      if (!this._canMutateMenu(this.alarmItem)) {
+        return;
+      }
       if (payload.error) {
         this._populateAlarmMenu([], this._sanitizeErrorMessage(payload.error));
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
@@ -3947,10 +3950,13 @@ MyApplet.prototype = {
     this.inputSourceMenuRefreshToken = refreshToken;
     this._populateInputSourceMenu([], _("Loading input sources..."));
     this._spawnJson(this._listInputsArgs(), (payload) => {
-      if (this.inputSourceMenuRefreshToken !== refreshToken || !this._canMutateMenu(this.inputSourceItem)) {
+      if (this.inputSourceMenuRefreshToken !== refreshToken) {
         return;
       }
       this.inputSourceMenuRefreshToken = null;
+      if (!this._canMutateMenu(this.inputSourceItem)) {
+        return;
+      }
       if (payload.error) {
         this._populateInputSourceMenu([], this._sanitizeErrorMessage(payload.error));
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
@@ -4074,10 +4080,13 @@ MyApplet.prototype = {
     this.modelMenuRefreshToken = refreshToken;
     this._populateModelMenu([], _("Loading voice models..."));
     this._spawnJson(this._modelsArgs(), (payload) => {
-      if (this.modelMenuRefreshToken !== refreshToken || !this._canMutateMenu(this.modelItem)) {
+      if (this.modelMenuRefreshToken !== refreshToken) {
         return;
       }
       this.modelMenuRefreshToken = null;
+      if (!this._canMutateMenu(this.modelItem)) {
+        return;
+      }
       if (payload.error) {
         let safeError = this._sanitizeErrorMessage(payload.error);
         this._populateModelMenu([], safeError);
@@ -4953,10 +4962,13 @@ MyApplet.prototype = {
       : _("Loading local text models...");
     this._populateTextModelMenu([], loadingMessage, provider);
     this._spawnJson(textModelArgs, (payload) => {
-      if (this.textModelMenuRefreshToken !== refreshToken || !this._canMutateMenu(this.textModelItem)) {
+      if (this.textModelMenuRefreshToken !== refreshToken) {
         return;
       }
       this.textModelMenuRefreshToken = null;
+      if (!this._canMutateMenu(this.textModelItem)) {
+        return;
+      }
       if (payload.error) {
         this._populateTextModelMenu([], this._sanitizeErrorMessage(payload.error), provider);
         return;
@@ -5524,10 +5536,13 @@ MyApplet.prototype = {
     let refreshToken = {};
     this.historyRefreshToken = refreshToken;
     this._spawnJson(this._historyArgs(), (payload) => {
-      if (this.historyRefreshToken !== refreshToken || !this._canMutateMenu(this.historyItem)) {
+      if (this.historyRefreshToken !== refreshToken) {
         return;
       }
       this.historyRefreshToken = null;
+      if (!this._canMutateMenu(this.historyItem)) {
+        return;
+      }
       if (payload.error) {
         this._populateHistoryMenu([]);
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);

@@ -3077,8 +3077,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!this._canMutateMenu(this.textModelItem))", source)
         self.assertIn("this.modelMenuRefreshToken = refreshToken;", source)
         self.assertIn("this.textModelMenuRefreshToken = refreshToken;", source)
-        self.assertIn("if (this.modelMenuRefreshToken !== refreshToken || !this._canMutateMenu(this.modelItem))", source)
-        self.assertIn("if (this.textModelMenuRefreshToken !== refreshToken || !this._canMutateMenu(this.textModelItem))", source)
+        self.assertIn("if (this.modelMenuRefreshToken !== refreshToken)", source)
+        self.assertIn("if (this.textModelMenuRefreshToken !== refreshToken)", source)
 
     def test_applet_can_reinsert_last_transcript_with_current_output_mode(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -3386,6 +3386,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.historyRefreshToken = refreshToken;", block)
         self.assertIn("this.historyRefreshToken = null;", block)
         self.assertLess(block.index("if (this.historyRefreshToken)"), block.index("let refreshToken = {};"))
+        self.assertLess(block.index("this.historyRefreshToken !== refreshToken"), block.index("this.historyRefreshToken = null;"))
         self.assertLess(block.index("this.historyRefreshToken = null;"), block.index("if (payload.error)"))
 
     def test_cleanup_can_be_previewed_before_deleting_files(self) -> None:
