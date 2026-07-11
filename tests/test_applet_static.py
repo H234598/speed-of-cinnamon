@@ -726,6 +726,8 @@ class AppletStaticTest(unittest.TestCase):
         legacy_block = source[legacy_start:legacy_end]
         self.assertIn("let checks = Array.isArray(payload.checks) ? payload.checks : [];", legacy_block)
         self.assertIn('if (!check || typeof check !== "object")', legacy_block)
+        self.assertIn('let name = typeof check.name === "string" ? check.name.trim() : "";', legacy_block)
+        self.assertNotIn('let name = String(check.name || "").trim();', legacy_block)
 
         language_start = source.index("_voiceModelSupportsCurrentLanguage: function(model)")
         language_end = source.index("\n  _languageMatches:", language_start)

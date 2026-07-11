@@ -3066,7 +3066,7 @@ MyApplet.prototype = {
         continue;
       }
       if (check.ok !== true) {
-        let name = String(check.name || "").trim();
+        let name = typeof check.name === "string" ? check.name.trim() : "";
         if (name !== "") {
           missing.push(name);
         }
