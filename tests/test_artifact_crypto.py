@@ -636,6 +636,24 @@ class ArtifactCryptoTest(unittest.TestCase):
                     artifact_crypto.read_private_bytes(path, field_name="artifact")
             self.assertNotIn(str(path), str(raised.exception))
 
+    def test_read_private_bytes_fdopen_value_error_is_wrapped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "secret-artifact.socenc"
+            path.write_bytes(b"payload")
+            path.chmod(0o600)
+            with mock.patch("speed_of_cinnamon.artifact_crypto.os.fdopen", side_effect=ValueError("bad fd")):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "failed to read artifact"):
+                    artifact_crypto.read_private_bytes(path, field_name="artifact")
+
+    def test_private_passphrase_fdopen_value_error_is_wrapped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "passphrase.key"
+            path.write_text(STRONG_PASSPHRASE + "\n", encoding="utf-8")
+            path.chmod(0o600)
+            with mock.patch("speed_of_cinnamon.artifact_crypto.os.fdopen", side_effect=ValueError("bad fd")):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be read"):
+                    artifact_crypto._read_private_passphrase_file(path)
+
     def test_write_encrypted_bytes_error_does_not_leak_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "secret-artifact.txt"

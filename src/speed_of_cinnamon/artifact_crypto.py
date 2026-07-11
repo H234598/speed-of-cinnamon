@@ -469,9 +469,12 @@ def _read_private_passphrase_file(
         if file_stat.st_mode & 0o077:
             raise ArtifactCryptoError("artifact encryption passphrase file must be private")
         _assert_no_posix_acl(path, field_name="artifact encryption passphrase file")
-        with os.fdopen(fd, "rb") as handle:
-            fd = -1
-            payload = handle.read(MAX_PASSPHRASE_FILE_BYTES + 1)
+        try:
+            with os.fdopen(fd, "rb") as handle:
+                fd = -1
+                payload = handle.read(MAX_PASSPHRASE_FILE_BYTES + 1)
+        except Exception as exc:
+            raise ArtifactCryptoError("artifact encryption passphrase file could not be read") from exc
     finally:
         if fd >= 0:
             os.close(fd)
@@ -983,15 +986,12 @@ def read_private_bytes(path: Path, *, field_name: str, max_bytes: int | None = N
     except (OSError, RuntimeError) as exc:
         raise ArtifactCryptoError(f"failed to read {field_name}") from exc
     try:
-        try:
-            assert_fd_is_regular_private_file(fd, field_name=field_name)
-            handle = os.fdopen(fd, "rb")
-            fd = -1
-        except OSError:
-            raise
+        assert_fd_is_regular_private_file(fd, field_name=field_name)
+        handle = os.fdopen(fd, "rb")
+        fd = -1
         with handle:
             data = handle.read(effective_max_bytes + 1)
-    except OSError as exc:
+    except Exception as exc:
         raise ArtifactCryptoError(f"failed to read {field_name}") from exc
     finally:
         if fd >= 0:
