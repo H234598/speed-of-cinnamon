@@ -3539,7 +3539,7 @@ MyApplet.prototype = {
         this._setStatus("error", _("Could not copy benchmark results"), this.lastTranscript);
         return;
       }
-      let fastest = String(payload.fastest_model || "").trim();
+      let fastest = typeof payload.fastest_model === "string" ? payload.fastest_model.trim() : "";
       let message = this._payloadMessage(payload, _("Benchmark complete"));
       if (fastest !== "") {
         message += "; " + _("fastest: ") + fastest;

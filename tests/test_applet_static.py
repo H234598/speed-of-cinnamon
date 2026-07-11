@@ -1400,6 +1400,8 @@ class AppletStaticTest(unittest.TestCase):
         benchmark_block = source[benchmark_start:benchmark_end]
         self.assertIn("this.benchmarkFlowToken !== flowToken", benchmark_block)
         self.assertIn("this.benchmarkFlowToken = null;", benchmark_block)
+        self.assertIn('let fastest = typeof payload.fastest_model === "string" ? payload.fastest_model.trim() : "";', benchmark_block)
+        self.assertNotIn('let fastest = String(payload.fastest_model || "").trim();', benchmark_block)
 
     def test_saved_diagnostics_does_not_copy_or_display_full_path(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
