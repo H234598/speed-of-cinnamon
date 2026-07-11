@@ -9389,7 +9389,15 @@ MyApplet.prototype = {
       return;
     }
     let insertFingerprint = this._autoInsertFingerprint(payload, transcript);
-    if (!this._reserveAutoInsertFingerprint(insertFingerprint)) {
+    let reservation = this._reserveAutoInsertFingerprint(insertFingerprint);
+    if (reservation === null) {
+      this.autoRelistenPending = false;
+      this.autoRelistenPendingToken = "";
+      this.autoRelistenManualStopRequested = true;
+      this._setStatusPreservingRecording("error", _("Could not prepare transcript insertion"), transcript);
+      return;
+    }
+    if (!reservation) {
       this._setStatus("done", this._payloadMessage(payload, _("Transcript already inserted")), transcript);
       this._finishPendingRelisten();
       return;
@@ -9515,26 +9523,45 @@ MyApplet.prototype = {
     if (!fingerprint) {
       return true;
     }
-    if (this._hasAutoInsertFingerprint(fingerprint)) {
-      return false;
+    try {
+      if (this._hasAutoInsertFingerprint(fingerprint)) {
+        return false;
+      }
+      if (!this._rememberAutoInsertFingerprint(fingerprint)) {
+        return null;
+      }
+      return true;
+    } catch (error) {
+      this._recordLifecycleError("auto-insert-fingerprint", error);
+      return null;
     }
-    this._rememberAutoInsertFingerprint(fingerprint);
-    return true;
   },
 
   _rememberAutoInsertFingerprint: function(fingerprint) {
     if (!fingerprint) {
-      return;
+      return true;
     }
-    this.autoInsertFingerprint = fingerprint;
-    if (!this.autoInsertFingerprints) {
-      this.autoInsertFingerprints = [];
-    }
-    if (this.autoInsertFingerprints.indexOf(fingerprint) < 0) {
-      this.autoInsertFingerprints.push(fingerprint);
-    }
-    while (this.autoInsertFingerprints.length > 20) {
-      this.autoInsertFingerprints.shift();
+    let previousFingerprint = this.autoInsertFingerprint;
+    try {
+      this.autoInsertFingerprint = fingerprint;
+      if (!this.autoInsertFingerprints) {
+        this.autoInsertFingerprints = [];
+      }
+      if (this.autoInsertFingerprints.indexOf(fingerprint) < 0) {
+        this.autoInsertFingerprints.push(fingerprint);
+      }
+      while (this.autoInsertFingerprints.length > 20) {
+        this.autoInsertFingerprints.shift();
+      }
+      return true;
+    } catch (error) {
+      try {
+        this.autoInsertFingerprint = previousFingerprint;
+      } catch (rollbackError) {
+        this._recordLifecycleError("auto-insert-fingerprint-rollback", rollbackError);
+      }
+      this._recordLifecycleError("auto-insert-fingerprint", error);
+      return false;
     }
   },
 

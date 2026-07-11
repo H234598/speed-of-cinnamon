@@ -3474,8 +3474,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._hasAutoInsertFingerprint(fingerprint)", source)
         self.assertIn("if (payload.inserted === true) {", source)
         self.assertIn('this._payloadMessage(payload, _("Transcript already inserted by backend")', source)
-        self.assertIn("if (!this._reserveAutoInsertFingerprint(insertFingerprint))", source)
-        self.assertIn("this._rememberAutoInsertFingerprint(fingerprint);", source)
+        self.assertIn("let reservation = this._reserveAutoInsertFingerprint(insertFingerprint);", source)
+        self.assertIn("if (!this._rememberAutoInsertFingerprint(fingerprint))", source)
         self.assertIn("this._forgetAutoInsertFingerprint(insertFingerprint);", source)
         self.assertIn("_transcriptDigest: function(transcript)", source)
         self.assertIn("GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, text, -1)", source)
@@ -3485,11 +3485,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn("text.slice(0, 256)", source)
         self.assertIn("_finishPendingRelisten: function()", source)
         self.assertIn("this._finishPendingRelisten();", source)
-        reserve_index = source.index("if (!this._reserveAutoInsertFingerprint(insertFingerprint))", finish_index)
+        reserve_index = source.index("let reservation = this._reserveAutoInsertFingerprint(insertFingerprint);", finish_index)
         insert_index = source.index("this._insertTranscriptText(transcript,", finish_index)
         self.assertLess(reserve_index, insert_index)
         self.assertIn("if (result === null) {\n        return;\n      }", source[finish_index:source.index("_finishPendingRelisten: function()", finish_index)])
-        duplicate_index = reserve_index
+        duplicate_index = source.index("if (!reservation) {", reserve_index)
         duplicate_finish_index = source.index("this._finishPendingRelisten();", duplicate_index)
         duplicate_return_index = source.index("return;", duplicate_index)
         self.assertLess(duplicate_finish_index, duplicate_return_index)
@@ -3516,6 +3516,33 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.autoInsertFingerprints.splice(index, 1);", block)
         self.assertIn('this._recordLifecycleError("auto-insert-fingerprint", error);', block)
         self.assertIn("return false;", block)
+
+    def test_auto_insert_fingerprint_reservation_contains_mutation_failures(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        finish_start = source.index("_finishAppletTextInsert: function(payload)")
+        finish_end = source.index("\n  _ensureAutoRelistenPendingForDonePayload:", finish_start)
+        finish_block = source[finish_start:finish_end]
+        reserve_start = source.index("_reserveAutoInsertFingerprint: function(fingerprint)")
+        reserve_end = source.index("\n  _rememberAutoInsertFingerprint:", reserve_start)
+        reserve_block = source[reserve_start:reserve_end]
+        remember_start = reserve_end + 3
+        remember_end = source.index("\n  _forgetAutoInsertFingerprint:", remember_start)
+        remember_block = source[remember_start:remember_end]
+
+        self.assertIn("let reservation = this._reserveAutoInsertFingerprint(insertFingerprint);", finish_block)
+        self.assertIn("if (reservation === null)", finish_block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Could not prepare transcript insertion")', finish_block)
+        self.assertIn("try {", reserve_block)
+        self.assertIn("if (!this._rememberAutoInsertFingerprint(fingerprint))", reserve_block)
+        self.assertIn("return null;", reserve_block)
+        self.assertIn('this._recordLifecycleError("auto-insert-fingerprint", error);', reserve_block)
+        self.assertIn("let previousFingerprint = this.autoInsertFingerprint;", remember_block)
+        self.assertIn("this.autoInsertFingerprints.push(fingerprint);", remember_block)
+        self.assertIn("this.autoInsertFingerprints.shift();", remember_block)
+        self.assertIn("this.autoInsertFingerprint = previousFingerprint;", remember_block)
+        self.assertIn('this._recordLifecycleError("auto-insert-fingerprint-rollback", rollbackError);', remember_block)
+        self.assertIn('this._recordLifecycleError("auto-insert-fingerprint", error);', remember_block)
+        self.assertIn("return false;", remember_block)
 
     def test_successful_relisten_restart_skips_done_status(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
