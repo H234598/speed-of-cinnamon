@@ -704,6 +704,10 @@ class AppletStaticTest(unittest.TestCase):
         doctor_start = source.index("_applyDoctorPayload: function(payload, startupCheck)")
         doctor_end = source.index("\n  _applyLegacyDoctorPayload:", doctor_start)
         self.assertIn("let warnings = Array.isArray(configured.warnings)", source[doctor_start:doctor_end])
+        self.assertIn('let section = configured[name] && typeof configured[name] === "object" ? configured[name] : {};', source[doctor_start:doctor_end])
+        self.assertIn('let detail = typeof section.detail === "string" ? section.detail.trim() : "";', source[doctor_start:doctor_end])
+        self.assertIn('missing.push(name + ": " + (detail || "not ready"));', source[doctor_start:doctor_end])
+        self.assertNotIn('missing.push(name + ": " + (section.detail || "not ready"));', source[doctor_start:doctor_end])
 
         legacy_start = source.index("_applyLegacyDoctorPayload: function(payload, startupCheck)")
         legacy_end = source.index("\n  _presentDoctorResult:", legacy_start)

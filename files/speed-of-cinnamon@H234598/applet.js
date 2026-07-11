@@ -3024,9 +3024,10 @@ MyApplet.prototype = {
     this._setDoctorSummary(summary);
     let missing = [];
     for (let name of ["recorder", "transcriber", "output", "postprocessor"]) {
-      let section = configured[name] || {};
+      let section = configured[name] && typeof configured[name] === "object" ? configured[name] : {};
+      let detail = typeof section.detail === "string" ? section.detail.trim() : "";
       if (section.ok !== true) {
-        missing.push(name + ": " + (section.detail || "not ready"));
+        missing.push(name + ": " + (detail || "not ready"));
       }
     }
     if (payload.ok !== true) {
