@@ -1897,6 +1897,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("return 0;", block)
         self.assertLess(block.index("this._clearTrackedTimer(key, propertyName)"), block.index("let generation = this.spawnGeneration;"))
 
+    def test_timer_registration_failure_rolls_back_created_source(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName)")
+        end = source.index("\n  _init:", start)
+        block = source[start:end]
+        self.assertIn("let trackedSourceId = this._trackTimer(key, sourceId, propertyName);", block)
+        self.assertIn("let registryHasTimer = !this._resourceRegistry", block)
+        self.assertIn("throw new Error(\"Timer could not be registered\");", block)
+        self.assertIn("let removed = Mainloop.source_remove(sourceId);", block)
+        self.assertIn('this._recordLifecycleError("timer-cleanup", cleanupError);', block)
+
     def test_local_status_updates_invalidate_inflight_status_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

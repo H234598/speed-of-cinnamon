@@ -1070,8 +1070,31 @@ MyApplet.prototype = {
       sourceId = useSeconds
         ? Mainloop.timeout_add_seconds(Math.max(1, Number(delay || 1)), timerCallback)
         : Mainloop.timeout_add(Math.max(1, Number(delay || 1)), timerCallback);
-      return this._trackTimer(key, sourceId, propertyName);
+      let trackedSourceId = this._trackTimer(key, sourceId, propertyName);
+      let registryHasTimer = !this._resourceRegistry ||
+        (this._resourceRegistry.timers && this._resourceRegistry.timers[key] === sourceId);
+      let propertyHasTimer = !propertyName || this[propertyName] === sourceId;
+      if (!sourceId || trackedSourceId !== sourceId || !registryHasTimer || !propertyHasTimer) {
+        throw new Error("Timer could not be registered");
+      }
+      return trackedSourceId;
     } catch (error) {
+      if (sourceId) {
+        try {
+          let removed = Mainloop.source_remove(sourceId);
+          if (removed === false) {
+            throw new Error("Timer rollback could not remove source");
+          }
+          if (this._resourceRegistry && this._resourceRegistry.timers && this._resourceRegistry.timers[key] === sourceId) {
+            delete this._resourceRegistry.timers[key];
+          }
+          if (propertyName && this[propertyName] === sourceId) {
+            this[propertyName] = 0;
+          }
+        } catch (cleanupError) {
+          this._recordLifecycleError("timer-cleanup", cleanupError);
+        }
+      }
       this._recordLifecycleError("timer-" + key, error);
       return 0;
     }
