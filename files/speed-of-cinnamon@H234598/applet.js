@@ -4682,7 +4682,7 @@ MyApplet.prototype = {
       let available = payload.available === true;
       let availabilityMessage = available
         ? ""
-        : this._sanitizeErrorMessage(payload.message || _("Text model backend is unavailable"));
+        : this._payloadMessage(payload, _("Text model backend is unavailable"));
       this._populateTextModelMenu(payload.models || [], availabilityMessage, provider);
     });
   },
@@ -4907,8 +4907,8 @@ MyApplet.prototype = {
       }
       let models = Array.isArray(payload.models) ? payload.models : [];
       if (payload.available !== true) {
-        let safeMessage = payload.available === false && payload.message
-          ? this._sanitizeErrorMessage(payload.message)
+        let safeMessage = payload.available === false
+          ? this._payloadMessage(payload, _("Ollama is not installed or not reachable"))
           : _("Ollama is not installed or not reachable");
         this._setStatus("processing", safeMessage + "; " + _("opening installer..."), this.lastTranscript);
         this._installOllamaRuntime(true);
@@ -5003,8 +5003,8 @@ MyApplet.prototype = {
         return;
       }
       if (payload.available !== true) {
-        let safeMessage = payload.available === false && payload.message
-          ? this._sanitizeErrorMessage(payload.message)
+        let safeMessage = payload.available === false
+          ? this._payloadMessage(payload, _("Ollama is not installed or not reachable"))
           : _("Ollama is not installed or not reachable");
         this._setStatus("processing", safeMessage + "; " + _("opening installer..."), this.lastTranscript);
         this._installOllamaRuntime(true);
