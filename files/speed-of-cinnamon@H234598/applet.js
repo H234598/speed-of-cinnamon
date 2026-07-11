@@ -5693,7 +5693,9 @@ MyApplet.prototype = {
         key: Clutter.KEY_Escape,
         action: function() {
           this._dialogClose(dialog, "transcript-list");
-          this._setStatusPreservingRecording("ready", _("Transcript list cancelled"), this.lastTranscript);
+          if (this.transcriptListPromptToken === promptToken) {
+            this._setStatusPreservingRecording("ready", _("Transcript list cancelled"), this.lastTranscript);
+          }
           complete(false);
         }.bind(this),
       },

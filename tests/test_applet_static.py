@@ -2582,6 +2582,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.transcriptListPromptToken = promptToken;", prompt_block)
         self.assertIn("this.transcriptListPromptToken === promptToken", prompt_block)
         self.assertIn("this.transcriptListPromptToken = null;", prompt_block)
+        cancel_status = prompt_block.index('this._setStatusPreservingRecording("ready", _("Transcript list cancelled")')
+        self.assertIn("if (this.transcriptListPromptToken === promptToken)", prompt_block[cancel_status - 90:cancel_status])
 
         for method, next_method in [
             ("_loadAllTranscriptsDocument: function()", "\n  _showTranscriptsWindow:"),
