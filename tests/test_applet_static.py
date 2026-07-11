@@ -2148,7 +2148,7 @@ class AppletStaticTest(unittest.TestCase):
         helper_block = source[helper_start:helper_end]
         self.assertIn("try {", helper_block)
         self.assertIn("this._applyPayload(payload, statusRefreshToken);", helper_block)
-        self.assertIn('this._setStatus("error", _("Backend response handling failed: ") + safeError', helper_block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Backend response handling failed: ") + safeError', helper_block)
         for marker in [
             "this._applyPayloadSafely(payload);",
             "this._applyPayloadSafely(nextPayload);",

@@ -6864,7 +6864,7 @@ MyApplet.prototype = {
       this._applyPayload(payload, statusRefreshToken);
     } catch (err) {
       let safeError = this._sanitizeErrorMessage(err);
-      this._setStatus("error", _("Backend response handling failed: ") + safeError, this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("Backend response handling failed: ") + safeError, this.lastTranscript);
     }
   },
 
