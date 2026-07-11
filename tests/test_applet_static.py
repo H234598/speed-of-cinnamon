@@ -352,7 +352,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn('_("Auto-Submit self-protection blocked target: ") + detail', source)
         self.assertIn('this._setStatusPreservingRecording("error", _("Could not open link"), this.lastTranscript);', source)
         self.assertNotIn('_("Could not open link: ") + err.message', source)
-        self.assertIn('this._setStatus("error", _("Could not restart applet"), this.lastTranscript);', source)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Could not restart applet"), this.lastTranscript);', source)
         self.assertNotIn('_("Could not restart applet: ") + String(err)', source)
         self.assertNotIn('this._notify(_("Could not open terminal"), String(err), true);', source)
         self.assertNotIn('this._notify(_("Could not start install terminal"), String(err), true);', source)
@@ -2626,6 +2626,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._connectSafe(restartApplet, \"activate\", () => this._restartApplet())", source)
         self.assertIn("_restartApplet: function()", source)
         self.assertIn("Extension.reloadExtension(UUID, Extension.Type.APPLET)", source)
+        restart_start = source.index("_restartApplet: function()")
+        restart_end = source.index("\n  _refreshStatus:", restart_start)
+        restart_block = source[restart_start:restart_end]
+        self.assertIn('this._setStatusPreservingRecording("processing", _("Restarting applet..."), this.lastTranscript);', restart_block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Could not restart applet"), this.lastTranscript);', restart_block)
 
     def test_cli_command_expands_home_directory_shortcut(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

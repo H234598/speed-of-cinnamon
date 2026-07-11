@@ -3120,12 +3120,12 @@ MyApplet.prototype = {
 
   _restartApplet: function() {
     this._terminateProcessesByGroup("keyboard");
-    this._setStatus("processing", _("Restarting applet..."), this.lastTranscript);
+    this._setStatusPreservingRecording("processing", _("Restarting applet..."), this.lastTranscript);
     try {
       Extension.reloadExtension(UUID, Extension.Type.APPLET);
     } catch (err) {
       global.logError(err);
-      this._setStatus("error", _("Could not restart applet"), this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("Could not restart applet"), this.lastTranscript);
     }
   },
 
