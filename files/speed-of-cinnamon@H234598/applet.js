@@ -748,9 +748,18 @@ MyApplet.prototype = {
   },
 
   _trackDialog: function(dialog) {
-    if (dialog && this._resourceRegistry && Array.isArray(this._resourceRegistry.dialogs) &&
-      this._resourceRegistry.dialogs.indexOf(dialog) < 0) {
-      this._resourceRegistry.dialogs.push(dialog);
+    if (!dialog) {
+      return dialog;
+    }
+    if (!this._resourceRegistry || !Array.isArray(this._resourceRegistry.dialogs)) {
+      throw new Error("Dialog registry is unavailable");
+    }
+    let dialogs = this._resourceRegistry.dialogs;
+    if (dialogs.indexOf(dialog) < 0) {
+      dialogs.push(dialog);
+      if (dialogs.indexOf(dialog) < 0) {
+        throw new Error("Dialog could not be registered");
+      }
     }
     return dialog;
   },
@@ -1005,9 +1014,18 @@ MyApplet.prototype = {
   },
 
   _trackMonitor: function(monitor) {
-    if (monitor && this._resourceRegistry && Array.isArray(this._resourceRegistry.monitors) &&
-      this._resourceRegistry.monitors.indexOf(monitor) < 0) {
-      this._resourceRegistry.monitors.push(monitor);
+    if (!monitor) {
+      return monitor;
+    }
+    if (!this._resourceRegistry || !Array.isArray(this._resourceRegistry.monitors)) {
+      throw new Error("Monitor registry is unavailable");
+    }
+    let monitors = this._resourceRegistry.monitors;
+    if (monitors.indexOf(monitor) < 0) {
+      monitors.push(monitor);
+      if (monitors.indexOf(monitor) < 0) {
+        throw new Error("Monitor could not be registered");
+      }
     }
     return monitor;
   },
@@ -1039,11 +1057,15 @@ MyApplet.prototype = {
 
   _registerCancellable: function(cancellable) {
     let token = this._nextResourceToken("cancellable");
-    if (this._resourceRegistry && cancellable) {
-      this._resourceRegistry.cancellables[token] = cancellable;
-      if (this._resourceRegistry.cancellables[token] !== cancellable) {
-        throw new Error("Cancellable could not be registered");
-      }
+    if (!cancellable) {
+      return token;
+    }
+    if (!this._resourceRegistry || !this._resourceRegistry.cancellables) {
+      throw new Error("Cancellable registry is unavailable");
+    }
+    this._resourceRegistry.cancellables[token] = cancellable;
+    if (this._resourceRegistry.cancellables[token] !== cancellable) {
+      throw new Error("Cancellable could not be registered");
     }
     return token;
   },
@@ -1072,16 +1094,20 @@ MyApplet.prototype = {
 
   _registerProcess: function(process, generation, group) {
     let token = this._nextResourceToken("process");
-    if (this._resourceRegistry && process) {
-      let entry = {
-        process: process,
-        generation: generation,
-        group: String(group || "process"),
-      };
-      this._resourceRegistry.processes[token] = entry;
-      if (this._resourceRegistry.processes[token] !== entry) {
-        throw new Error("Process could not be registered");
-      }
+    if (!process) {
+      return token;
+    }
+    if (!this._resourceRegistry || !this._resourceRegistry.processes) {
+      throw new Error("Process registry is unavailable");
+    }
+    let entry = {
+      process: process,
+      generation: generation,
+      group: String(group || "process"),
+    };
+    this._resourceRegistry.processes[token] = entry;
+    if (this._resourceRegistry.processes[token] !== entry) {
+      throw new Error("Process could not be registered");
     }
     return token;
   },
@@ -1185,8 +1211,11 @@ MyApplet.prototype = {
   },
 
   _trackTimer: function(name, sourceId, propertyName) {
-    if (!this._resourceRegistry || !sourceId) {
+    if (!sourceId) {
       return sourceId;
+    }
+    if (!this._resourceRegistry || !this._resourceRegistry.timers) {
+      throw new Error("Timer registry is unavailable");
     }
     let key = String(name || propertyName || "timer");
     this._resourceRegistry.timers[key] = sourceId;

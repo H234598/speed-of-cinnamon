@@ -380,6 +380,24 @@ class AppletStaticTest(unittest.TestCase):
         self.assertLess(block.index("this.externalApiEnvMonitor = monitor;"), block.index("this._trackMonitor(monitor);"))
         self.assertIn("this._clearExternalApiEnvMonitor();", block)
 
+    def test_dialog_and_monitor_registration_require_valid_resource_lists(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_trackDialog: function(dialog)")
+        end = source.index("\n  _untrackDialog:", start)
+        dialog_block = source[start:end]
+        self.assertIn("if (!this._resourceRegistry || !Array.isArray(this._resourceRegistry.dialogs))", dialog_block)
+        self.assertIn('throw new Error("Dialog registry is unavailable");', dialog_block)
+        self.assertIn("if (dialogs.indexOf(dialog) < 0)", dialog_block)
+        self.assertIn('throw new Error("Dialog could not be registered");', dialog_block)
+
+        start = source.index("_trackMonitor: function(monitor)")
+        end = source.index("\n  _untrackMonitor:", start)
+        monitor_block = source[start:end]
+        self.assertIn("if (!this._resourceRegistry || !Array.isArray(this._resourceRegistry.monitors))", monitor_block)
+        self.assertIn('throw new Error("Monitor registry is unavailable");', monitor_block)
+        self.assertIn("if (monitors.indexOf(monitor) < 0)", monitor_block)
+        self.assertIn('throw new Error("Monitor could not be registered");', monitor_block)
+
     def test_error_status_displays_backend_error_message(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
@@ -1652,6 +1670,8 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_registerCancellable: function(cancellable)")
         end = source.index("\n  _unregisterCancellable:", start)
         cancellable_block = source[start:end]
+        self.assertIn("if (!this._resourceRegistry || !this._resourceRegistry.cancellables)", cancellable_block)
+        self.assertIn('throw new Error("Cancellable registry is unavailable");', cancellable_block)
         self.assertIn("this._resourceRegistry.cancellables[token] = cancellable;", cancellable_block)
         self.assertIn("this._resourceRegistry.cancellables[token] !== cancellable", cancellable_block)
         self.assertIn('throw new Error("Cancellable could not be registered");', cancellable_block)
@@ -1659,6 +1679,8 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_registerProcess: function(process, generation, group)")
         end = source.index("\n  _unregisterProcess:", start)
         process_block = source[start:end]
+        self.assertIn("if (!this._resourceRegistry || !this._resourceRegistry.processes)", process_block)
+        self.assertIn('throw new Error("Process registry is unavailable");', process_block)
         self.assertIn("let entry = {", process_block)
         self.assertIn("this._resourceRegistry.processes[token] = entry;", process_block)
         self.assertIn("this._resourceRegistry.processes[token] !== entry", process_block)
@@ -2198,6 +2220,12 @@ class AppletStaticTest(unittest.TestCase):
 
     def test_timer_registration_failure_rolls_back_created_source(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_trackTimer: function(name, sourceId, propertyName)")
+        end = source.index("\n  _untrackTimer:", start)
+        track_block = source[start:end]
+        self.assertIn("if (!this._resourceRegistry || !this._resourceRegistry.timers)", track_block)
+        self.assertIn('throw new Error("Timer registry is unavailable");', track_block)
+
         start = source.index("_scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName)")
         end = source.index("\n  _init:", start)
         block = source[start:end]
