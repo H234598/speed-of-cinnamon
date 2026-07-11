@@ -304,6 +304,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!connectionId) {\n        this._clearExternalApiEnvMonitor();", block)
         self.assertIn("} catch (err) {\n      this._clearExternalApiEnvMonitor();", block)
 
+    def test_failed_external_env_monitor_cancel_remains_tracked(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_clearExternalApiEnvMonitor: function()")
+        end = source.index("\n  _watchExternalApiEnvFile:", start)
+        block = source[start:end]
+        self.assertIn("let cancelled = false;", block)
+        self.assertIn("let result = monitor.cancel();", block)
+        self.assertIn('if (result === false)', block)
+        self.assertIn('this._recordLifecycleError("monitor-cancel", err);', block)
+        self.assertIn("return;", block)
+        self.assertIn("this._untrackMonitor(monitor);", block)
+        self.assertIn("this.externalApiEnvMonitor = null;", block)
+
     def test_error_status_displays_backend_error_message(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

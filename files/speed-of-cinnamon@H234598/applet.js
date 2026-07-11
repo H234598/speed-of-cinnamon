@@ -5272,14 +5272,21 @@ MyApplet.prototype = {
     if (this.externalApiEnvMonitor) {
       let monitor = this.externalApiEnvMonitor;
       this._disconnectTrackedSignalsForTarget(monitor);
+      let cancelled = false;
       try {
-        monitor.cancel();
+        let result = monitor.cancel();
+        if (result === false) {
+          throw new Error("External API monitor could not be cancelled");
+        }
+        cancelled = true;
       } catch (err) {
-        global.logError(err);
-      } finally {
-        this._untrackMonitor(monitor);
+        this._recordLifecycleError("monitor-cancel", err);
+        return;
       }
-      this.externalApiEnvMonitor = null;
+      if (cancelled) {
+        this._untrackMonitor(monitor);
+        this.externalApiEnvMonitor = null;
+      }
     }
   },
 
