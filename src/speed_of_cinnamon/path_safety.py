@@ -188,7 +188,7 @@ def read_text_without_following_symlinks(
         except RuntimeError as exc:
             raise OSError(str(exc)) from exc
         handle = os.fdopen(fd, "rb")
-    except OSError:
+    except Exception:
         os.close(fd)
         raise
     with handle:
@@ -235,7 +235,7 @@ def _write_atomically_without_following_symlinks(
             handle_kwargs["encoding"] = encoding
         try:
             handle = os.fdopen(fd, mode, **handle_kwargs)
-        except OSError:
+        except Exception:
             os.close(fd)
             raise
         with handle:
