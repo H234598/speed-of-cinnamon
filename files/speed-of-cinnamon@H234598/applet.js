@@ -661,12 +661,15 @@ MyApplet.prototype = {
   },
 
   _disconnectTrackedSignalsForTarget: function(target) {
-    if (!target || !this._resourceRegistry || !Array.isArray(this._resourceRegistry.signals)) {
+    if (!target || !this._resourceRegistry) {
       return true;
     }
-    let signals = this._resourceRegistry.signals;
     let success = true;
     try {
+      if (!Array.isArray(this._resourceRegistry.signals)) {
+        return true;
+      }
+      let signals = this._resourceRegistry.signals;
       for (let index = signals.length - 1; index >= 0; index--) {
         let connection = signals[index];
         if (!connection || connection.target !== target) {
@@ -688,11 +691,11 @@ MyApplet.prototype = {
           success = false;
         }
       }
+      return success;
     } catch (error) {
       this._recordLifecycleError("teardown-target-signals", error);
-      success = false;
+      return false;
     }
-    return success;
   },
 
   _clearMenuItems: function(menu) {
@@ -753,10 +756,13 @@ MyApplet.prototype = {
   },
 
   _untrackDialog: function(dialog) {
-    if (!dialog || !this._resourceRegistry || !Array.isArray(this._resourceRegistry.dialogs)) {
+    if (!dialog || !this._resourceRegistry) {
       return true;
     }
     try {
+      if (!Array.isArray(this._resourceRegistry.dialogs)) {
+        return true;
+      }
       let index = this._resourceRegistry.dialogs.indexOf(dialog);
       if (index < 0) {
         return true;
@@ -1007,10 +1013,13 @@ MyApplet.prototype = {
   },
 
   _untrackMonitor: function(monitor) {
-    if (!monitor || !this._resourceRegistry || !Array.isArray(this._resourceRegistry.monitors)) {
+    if (!monitor || !this._resourceRegistry) {
       return true;
     }
     try {
+      if (!Array.isArray(this._resourceRegistry.monitors)) {
+        return true;
+      }
       let index = this._resourceRegistry.monitors.indexOf(monitor);
       if (index < 0) {
         return true;
@@ -1040,10 +1049,13 @@ MyApplet.prototype = {
   },
 
   _unregisterCancellable: function(token) {
-    if (!this._resourceRegistry || !token || !this._resourceRegistry.cancellables) {
+    if (!this._resourceRegistry || !token) {
       return true;
     }
     try {
+      if (!this._resourceRegistry.cancellables) {
+        return true;
+      }
       if (!Object.prototype.hasOwnProperty.call(this._resourceRegistry.cancellables, token)) {
         return true;
       }
@@ -1075,10 +1087,13 @@ MyApplet.prototype = {
   },
 
   _unregisterProcess: function(token) {
-    if (!this._resourceRegistry || !token || !this._resourceRegistry.processes) {
+    if (!this._resourceRegistry || !token) {
       return true;
     }
     try {
+      if (!this._resourceRegistry.processes) {
+        return true;
+      }
       if (!Object.prototype.hasOwnProperty.call(this._resourceRegistry.processes, token)) {
         return true;
       }

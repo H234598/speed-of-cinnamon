@@ -1672,6 +1672,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("Object.prototype.hasOwnProperty.call(this._resourceRegistry.cancellables, token)", cancellable_block)
         self.assertIn('this._recordLifecycleError("cancellable-unregister", error);', cancellable_block)
         self.assertIn("return false;", cancellable_block)
+        self.assertLess(cancellable_block.index("try {"), cancellable_block.index("this._resourceRegistry.cancellables"))
 
         start = source.index("_unregisterProcess: function(token)")
         end = source.index("\n  _terminateProcess:", start)
@@ -1679,6 +1680,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("Object.prototype.hasOwnProperty.call(this._resourceRegistry.processes, token)", process_block)
         self.assertIn('this._recordLifecycleError("process-unregister", error);', process_block)
         self.assertIn("return false;", process_block)
+        self.assertLess(process_block.index("try {"), process_block.index("this._resourceRegistry.processes"))
 
     def test_lifecycle_timers_ignore_removed_applet(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -1939,6 +1941,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let signals = this._resourceRegistry.signals;", block)
         self.assertIn("for (let index = signals.length - 1; index >= 0; index--)", block)
         self.assertIn("signals.splice(index, 1);", block)
+        self.assertLess(block.index("try {"), block.index("Array.isArray(this._resourceRegistry.signals)"))
         self.assertIn('this._recordLifecycleError("teardown-target-signals", error);', block)
 
     def test_failed_signal_teardown_remains_tracked(self) -> None:
