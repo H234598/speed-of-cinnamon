@@ -4086,7 +4086,9 @@ MyApplet.prototype = {
   },
 
   _voiceModelSupportsCurrentLanguage: function(model) {
-    let languages = Array.isArray(model.languages) ? model.languages : [];
+    let languages = Array.isArray(model.languages)
+      ? model.languages.filter((language) => typeof language === "string" && language.trim() !== "")
+      : [];
     if (languages.length > 0) {
       for (let language of languages) {
         if (this._languageMatches(this._voiceModelLanguage(), language)) {
@@ -4101,6 +4103,9 @@ MyApplet.prototype = {
   },
 
   _languageMatches: function(language, allowed) {
+    if (typeof allowed !== "string" || allowed.trim() === "") {
+      return false;
+    }
     let current = String(language || "").trim().toLowerCase().replace("_", "-");
     let expected = String(allowed || "").trim().toLowerCase().replace("_", "-");
     if (expected === "") {

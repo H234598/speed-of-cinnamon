@@ -731,7 +731,13 @@ class AppletStaticTest(unittest.TestCase):
 
         language_start = source.index("_voiceModelSupportsCurrentLanguage: function(model)")
         language_end = source.index("\n  _languageMatches:", language_start)
-        self.assertIn("let languages = Array.isArray(model.languages) ? model.languages : [];", source[language_start:language_end])
+        language_block = source[language_start:language_end]
+        self.assertIn("let languages = Array.isArray(model.languages)", language_block)
+        self.assertIn('model.languages.filter((language) => typeof language === "string" && language.trim() !== "")', language_block)
+        match_start = source.index("_languageMatches: function(language, allowed)")
+        match_end = source.index("\n  _voiceModelSupportsLanguage:", match_start)
+        match_block = source[match_start:match_end]
+        self.assertIn('if (typeof allowed !== "string" || allowed.trim() === "")', match_block)
 
         ollama_start = source.index("_ollamaModelChoiceArgs: function(models)")
         ollama_end = source.index("\n  _chooseOllamaTextModel:", ollama_start)
