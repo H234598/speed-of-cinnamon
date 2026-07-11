@@ -5559,7 +5559,7 @@ MyApplet.prototype = {
   },
 
   _listAllTranscripts: function() {
-    if (this.isCommandRunning || this.transcriptListPromptToken) {
+    if (this.isCommandRunning || this._hasActiveRecordingState() || this.transcriptListPromptToken) {
       return;
     }
     if (!this._findTrustedProgramInPath("zenity")) {
@@ -5638,7 +5638,7 @@ MyApplet.prototype = {
   },
 
   _loadAllTranscriptsDocument: function() {
-    if (this.isCommandRunning) {
+    if (this.isCommandRunning || this._hasActiveRecordingState()) {
       return;
     }
     this.isCommandRunning = true;
@@ -5705,7 +5705,7 @@ MyApplet.prototype = {
   },
 
   _exportAllTranscripts: function() {
-    if (this.isCommandRunning) {
+    if (this.isCommandRunning || this._hasActiveRecordingState()) {
       return;
     }
     this.isCommandRunning = true;

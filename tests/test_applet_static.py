@@ -2055,9 +2055,9 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_loadAllTranscriptsDocument: function()")
         end = source.index("\n  _showTranscriptsWindow:", start)
         block = source[start:end]
-        self.assertIn("if (this.isCommandRunning)", block)
+        self.assertIn("if (this.isCommandRunning || this._hasActiveRecordingState())", block)
         self.assertIn("return;", block)
-        self.assertLess(block.index("if (this.isCommandRunning)"), block.index("this.isCommandRunning = true;"))
+        self.assertLess(block.index("if (this.isCommandRunning || this._hasActiveRecordingState())"), block.index("this.isCommandRunning = true;"))
 
     def test_doctor_payload_processing_fails_closed_on_unexpected_exceptions(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2543,7 +2543,8 @@ class AppletStaticTest(unittest.TestCase):
         list_start = source.index("_listAllTranscripts: function()")
         list_end = source.index("\n  _confirmPlaintextTranscriptList:", list_start)
         list_block = source[list_start:list_end]
-        self.assertIn("if (this.isCommandRunning || this.transcriptListPromptToken)", list_block)
+        self.assertIn("if (this.isCommandRunning || this._hasActiveRecordingState() || this.transcriptListPromptToken)", list_block)
+        self.assertIn("this._hasActiveRecordingState()", list_block)
 
         prompt_start = source.index("_confirmPlaintextTranscriptList: function(completionCallback)")
         prompt_end = source.index("\n  _loadAllTranscriptsDocument:", prompt_start)
@@ -2553,6 +2554,14 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.transcriptListPromptToken = promptToken;", prompt_block)
         self.assertIn("this.transcriptListPromptToken === promptToken", prompt_block)
         self.assertIn("this.transcriptListPromptToken = null;", prompt_block)
+
+        for method, next_method in [
+            ("_loadAllTranscriptsDocument: function()", "\n  _showTranscriptsWindow:"),
+            ("_exportAllTranscripts: function()", "\n  _safePayloadCount:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            self.assertIn("this._hasActiveRecordingState()", source[start:end])
         self.assertIn("_isAllowedCliCommand: function(command) {", source)
         self.assertIn("_resolveAllowedCliCommand: function(command) {", source)
         self.assertIn("let resolvedCommand = this._resolveAllowedCliCommand(normalized[0]);", source)
