@@ -1942,6 +1942,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!Array.isArray(args)) {", source)
         self.assertIn("if (args[i] === null || args[i] === undefined) {", source)
         self.assertIn('throw new Error("Backend command argument is missing");', source)
+        self.assertIn('if (typeof args[i] !== "string")', source)
+        self.assertIn('throw new Error("Backend command argument must be text");', source)
         self.assertIn("if (i === 0) {", source)
         self.assertIn("value = value.trim();", source)
         self.assertIn("if (value.indexOf(\"\\u0000\") >= 0) {", source)

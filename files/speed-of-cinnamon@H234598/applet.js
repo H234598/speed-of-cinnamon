@@ -5657,7 +5657,10 @@ MyApplet.prototype = {
       if (args[i] === null || args[i] === undefined) {
         throw new Error("Backend command argument is missing");
       }
-      let value = String(args[i]);
+      if (typeof args[i] !== "string") {
+        throw new Error("Backend command argument must be text");
+      }
+      let value = args[i];
       if (i === 0) {
         value = value.trim();
       }
