@@ -1093,6 +1093,7 @@ MyApplet.prototype = {
     this.autoInsertFingerprint = "";
     this.autoInsertFingerprints = [];
     this.textInsertToken = null;
+    this.voiceModelActionToken = null;
     this.recordingStartedAtMs = 0;
     this.recordingMaxSeconds = 0;
     this.targetWindow = null;
@@ -1740,17 +1741,23 @@ MyApplet.prototype = {
   },
 
   _onInputSourceSettingsChanged: function() {
+    this.inputSourceMenuRefreshToken = null;
     this._populateInputSourceMenu([], _("Open menu to load input sources"));
     this._updatePanel();
   },
 
   _onVoiceBackendSettingsChanged: function() {
+    this.modelMenuRefreshToken = null;
+    this.voiceModelActionToken = null;
     this._ensureVoiceModelCompatibleWithPrimaryLanguage(false);
     this._populateModelMenu([], _("Open menu to load voice models"));
     this._updatePanel();
   },
 
   _onTextModelSettingsChanged: function() {
+    this._cancelOllamaInstallWatch();
+    this._clearOllamaModelFlow();
+    this.textModelMenuRefreshToken = null;
     this._populateTextModelMenu([], _("Open menu to load local text models"));
     this._updatePanel();
   },
@@ -1787,6 +1794,7 @@ MyApplet.prototype = {
     this.historyRefreshToken = null;
     this.alarmMenuRefreshToken = null;
     this.inputSourceMenuRefreshToken = null;
+    this.voiceModelActionToken = null;
     this.ollamaModelFlowToken = null;
     this.ollamaInstallWatchToken = null;
     this.benchmarkFlowToken = null;
@@ -2778,6 +2786,8 @@ MyApplet.prototype = {
   _onLanguageSettingsChanged: function() {
     this.activeLanguageExplicit = false;
     this._syncActiveLanguage();
+    this.modelMenuRefreshToken = null;
+    this.voiceModelActionToken = null;
     this._ensureVoiceModelCompatibleWithPrimaryLanguage(false);
     this._populateLanguageMenu();
     this._populateModelMenu([], _("Open menu to load voice models"));
@@ -4334,10 +4344,16 @@ MyApplet.prototype = {
     if (name === "") {
       name = this._starterVoiceModelName();
     }
+    let actionToken = {};
+    this.voiceModelActionToken = actionToken;
     this.isCommandRunning = true;
     this._setStatus("processing", _("Downloading model: ") + name, this.lastTranscript);
     this._spawnJson(this._downloadModelArgs(name), (payload) => {
       this.isCommandRunning = false;
+      if (this.voiceModelActionToken !== actionToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
+      this.voiceModelActionToken = null;
       if (payload.error) {
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         this._refreshModelMenu();

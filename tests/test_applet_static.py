@@ -900,6 +900,42 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (name === "")', block)
         self.assertIn("name = this._starterVoiceModelName();", block)
 
+    def test_voice_model_download_ignores_stale_settings_callbacks(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_downloadVoiceModel: function(model)")
+        end = source.index("\n  _removeVoiceModel:", start)
+        block = source[start:end]
+        self.assertIn("let actionToken = {};", block)
+        self.assertIn("this.voiceModelActionToken = actionToken;", block)
+        self.assertIn("this.voiceModelActionToken !== actionToken", block)
+        self.assertIn("this.voiceModelActionToken = null;", block)
+
+        for method, next_method in [
+            ("_onLanguageSettingsChanged: function()", "\n  _hasActiveRecordingState:"),
+            ("_onVoiceBackendSettingsChanged: function()", "\n  _onTextModelSettingsChanged:"),
+        ]:
+            settings_start = source.index(method)
+            settings_end = source.index(next_method, settings_start)
+            settings_block = source[settings_start:settings_end]
+            self.assertIn("this.voiceModelActionToken = null;", settings_block)
+
+        input_start = source.index("_onInputSourceSettingsChanged: function()")
+        input_end = source.index("\n  _onVoiceBackendSettingsChanged:", input_start)
+        self.assertIn("this.inputSourceMenuRefreshToken = null;", source[input_start:input_end])
+
+        voice_start = source.index("_onVoiceBackendSettingsChanged: function()")
+        voice_end = source.index("\n  _onTextModelSettingsChanged:", voice_start)
+        voice_block = source[voice_start:voice_end]
+        self.assertIn("this.modelMenuRefreshToken = null;", voice_block)
+
+        text_start = source.index("_onTextModelSettingsChanged: function()")
+        text_end = source.index("\n  _onOpenAiFlexProcessingSettingsChanged:", text_start)
+        text_block = source[text_start:text_end]
+        self.assertIn("this._cancelOllamaInstallWatch();", text_block)
+        self.assertIn("this._clearOllamaModelFlow();", text_block)
+        self.assertIn("this.textModelMenuRefreshToken = null;", text_block)
+
     def test_text_model_payload_names_must_be_strings(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
