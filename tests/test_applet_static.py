@@ -2017,6 +2017,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let destroySucceeded = false;", block)
         self.assertIn("if (closeSucceeded && destroySucceeded)", block)
         self.assertIn("this._untrackDialog(dialog);", block)
+        self.assertLess(block.index("try {"), block.index("Array.isArray(this._resourceRegistry.dialogs)"))
 
     def test_applet_exposes_notification_options_submenu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

@@ -899,11 +899,11 @@ MyApplet.prototype = {
   },
 
   _destroyTrackedDialogs: function() {
-    if (!this._resourceRegistry || !Array.isArray(this._resourceRegistry.dialogs)) {
-      return;
-    }
-    let dialogs = this._resourceRegistry.dialogs;
     try {
+      if (!this._resourceRegistry || !Array.isArray(this._resourceRegistry.dialogs)) {
+        return;
+      }
+      let dialogs = this._resourceRegistry.dialogs;
       for (let index = dialogs.length - 1; index >= 0; index--) {
         let dialog = dialogs[index];
         let closeSucceeded = false;
