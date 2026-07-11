@@ -2237,6 +2237,22 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (typeof completionCallback === "function")', block[failure:failure_end])
         self.assertIn("completionCallback(false);", block[failure:failure_end])
 
+    def test_x11_and_clipboard_wrappers_complete_when_subprocess_does_not_start(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        for method, next_method, error_group in [
+            ("_xdotoolOutput: function(", "\n  _xWindowLooksLikeSpeedOfCinnamon:", "x11-command"),
+            ("_clipboardTargetList: function(", "\n  _clipboardNonTextPayloadTargets:", "clipboard-command"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn("let completed = false;", block)
+            self.assertIn("let completeOnce = (value) =>", block)
+            self.assertIn("if (!handle) {\n        completeOnce(null);\n      }", block)
+            self.assertIn(f'this._recordLifecycleError("{error_group}", error);', block)
+            self.assertIn("completeOnce(null);", block)
+
     def test_cancel_pending_during_command_suppresses_done_transcript_insert(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         apply_index = source.index("_applyPayload: function(payload, statusRefreshToken)")

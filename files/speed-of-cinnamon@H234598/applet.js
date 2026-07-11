@@ -6694,8 +6694,16 @@ MyApplet.prototype = {
     let timeout = this._findTrustedProgramInPath("timeout");
     let xdotool = this._findTrustedProgramInPath("xdotool");
     let complete = typeof completionCallback === "function" ? completionCallback : function() {};
+    let completed = false;
+    let completeOnce = (value) => {
+      if (completed) {
+        return;
+      }
+      completed = true;
+      complete(value);
+    };
     if (!timeout || !xdotool || !this._lifecycleAllowsWork()) {
-      complete(null);
+      completeOnce(null);
       return false;
     }
     let command = [timeout, "--kill-after=1", String(CLIPBOARD_TARGET_TIMEOUT_SECONDS), xdotool];
@@ -6712,15 +6720,18 @@ MyApplet.prototype = {
         resourceGroup: "x11",
       }, (stdout, stderr, result) => {
         if (result && (result.error || result.timedOut || result.outputTooLarge)) {
-          complete(null);
+          completeOnce(null);
           return;
         }
-        complete(String(stdout || ""));
+        completeOnce(String(stdout || ""));
       });
+      if (!handle) {
+        completeOnce(null);
+      }
       return Boolean(handle);
     } catch (error) {
       this._recordLifecycleError("x11-command", error);
-      complete(null);
+      completeOnce(null);
       return false;
     }
   },
@@ -7054,8 +7065,16 @@ MyApplet.prototype = {
     let timeout = this._findTrustedProgramInPath("timeout");
     let helper = this._findTrustedProgramInPath(program);
     let complete = typeof completionCallback === "function" ? completionCallback : function() {};
+    let completed = false;
+    let completeOnce = (value) => {
+      if (completed) {
+        return;
+      }
+      completed = true;
+      complete(value);
+    };
     if (!timeout || !helper || !this._lifecycleAllowsWork()) {
-      complete(null);
+      completeOnce(null);
       return false;
     }
     let command = [timeout, "--kill-after=1", String(CLIPBOARD_TARGET_TIMEOUT_SECONDS), helper];
@@ -7071,15 +7090,18 @@ MyApplet.prototype = {
         resourceGroup: "clipboard",
       }, (stdout, stderr, result) => {
         if (result && (result.error || result.timedOut || result.outputTooLarge)) {
-          complete(null);
+          completeOnce(null);
           return;
         }
-        complete(String(stdout || ""));
+        completeOnce(String(stdout || ""));
       });
+      if (!handle) {
+        completeOnce(null);
+      }
       return Boolean(handle);
     } catch (error) {
       this._recordLifecycleError("clipboard-command", error);
-      complete(null);
+      completeOnce(null);
       return false;
     }
   },
