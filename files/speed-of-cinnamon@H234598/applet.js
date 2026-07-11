@@ -57,6 +57,7 @@ const MAX_CLI_COMMAND_BYTES = 32768;
 const MAX_TEXT_INSERT_CHARS = 120000;
 const MAX_SETTING_TEXT_CHARS = 4096;
 const MAX_UI_MESSAGE_CHARS = 512;
+const MAX_MODEL_MENU_ENTRIES = 128;
 const TRUSTED_SPAWN_DIRS = ["/usr/bin", "/usr/local/bin", "/bin"];
 const NUL_RE = /\u0000/g;
 const NON_ASCII_RE = /[^\u0000-\u007E]/g;
@@ -4775,6 +4776,10 @@ MyApplet.prototype = {
     }
     models = Array.isArray(models) ? models : [];
     models = models.filter((model) => model && typeof model === "object" && typeof model.name === "string" && model.name.trim() !== "");
+    let modelListWasTruncated = models.length > MAX_MODEL_MENU_ENTRIES;
+    if (modelListWasTruncated) {
+      models = models.slice(0, MAX_MODEL_MENU_ENTRIES);
+    }
     let messageText = typeof message === "string" ? message.trim() : "";
     messageText = this._uiMessageText(messageText);
     this._clearMenuItems(this.textModelItem.menu);
@@ -4782,6 +4787,24 @@ MyApplet.prototype = {
     let activeProvider = provider === "openai-compatible" || provider === "ollama"
       ? provider
       : (backend === "openai-compatible" ? "openai-compatible" : "ollama");
+    let selectedOllamaModel = String(this.ollamaModel || "").trim();
+
+    if (modelListWasTruncated && activeProvider === "ollama" && backend === "ollama" && selectedOllamaModel !== "") {
+      let selectedModelListed = false;
+      for (let model of models) {
+        if (model && typeof model.name === "string" && model.name.trim() === selectedOllamaModel) {
+          selectedModelListed = true;
+          break;
+        }
+      }
+      if (!selectedModelListed && models.length > 0) {
+        models[models.length - 1] = {
+          name: selectedOllamaModel,
+          model: selectedOllamaModel,
+          description: _("selected")
+        };
+      }
+    }
 
     let disabled = this._selectionMenuItem((backend === "none" ? "[x] " : "[ ] ") + _("Disabled"));
     this._connectSafe(disabled, "activate", () => this._selectTextModelBackend("none", "", _("Text polishing disabled")));
@@ -4837,7 +4860,6 @@ MyApplet.prototype = {
       return;
     }
     if (!models || models.length === 0) {
-      let selectedOllamaModel = String(this.ollamaModel || "").trim();
       if (activeProvider === "ollama" && backend === "ollama" && selectedOllamaModel !== "") {
         this._addTextModelMenuEntry({
           name: selectedOllamaModel,
@@ -4858,6 +4880,9 @@ MyApplet.prototype = {
         continue;
       }
       this._addTextModelMenuEntry(model, activeProvider);
+    }
+    if (modelListWasTruncated) {
+      this.textModelItem.menu.addMenuItem(this._selectionInfoItem(_("Model list truncated for safety")));
     }
   },
 
@@ -5043,6 +5068,13 @@ MyApplet.prototype = {
       "ADD",
       _("Add another model...")
     ];
+    let maxModelChoices = Math.min(MAX_MODEL_MENU_ENTRIES, Math.floor((MAX_CLI_ARG_COUNT - args.length) / 2));
+    let argumentBytes = 0;
+    for (let argument of args) {
+      argumentBytes += utf8ByteLength(argument);
+    }
+    let modelCount = 0;
+    let listWasTruncated = false;
     for (let model of (Array.isArray(models) ? models : [])) {
       if (!model || typeof model !== "object") {
         continue;
@@ -5060,6 +5092,15 @@ MyApplet.prototype = {
       if (name.trim() === "") {
         continue;
       }
+      if (modelCount >= maxModelChoices) {
+        listWasTruncated = true;
+        continue;
+      }
+      let selection = "SELECT:" + name;
+      if (utf8ByteLength(selection) > MAX_CLI_ARG_BYTES) {
+        listWasTruncated = true;
+        continue;
+      }
       let details = "";
       try {
         let detailsValue = typeof model.description === "string"
@@ -5070,7 +5111,24 @@ MyApplet.prototype = {
         global.logError(err);
       }
       let label = details ? name + " (" + details + ")" : name;
+      if (utf8ByteLength(label) > MAX_CLI_ARG_BYTES) {
+        label = name;
+      }
+      if (utf8ByteLength(label) > MAX_CLI_ARG_BYTES) {
+        listWasTruncated = true;
+        continue;
+      }
+      let additionBytes = utf8ByteLength(selection) + utf8ByteLength(label);
+      if (argumentBytes + additionBytes > MAX_CLI_COMMAND_BYTES - MAX_CLI_ARG_BYTES) {
+        listWasTruncated = true;
+        continue;
+      }
       args.push("SELECT:" + name, label);
+      argumentBytes += additionBytes;
+      modelCount++;
+    }
+    if (listWasTruncated) {
+      args[3] = "--text=" + _("Choose an installed Ollama model or add another one") + " (" + _("model list truncated for safety") + ")";
     }
     return args;
   },

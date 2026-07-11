@@ -1730,6 +1730,29 @@ class AppletStaticTest(unittest.TestCase):
         watch_block = source[watch_start:watch_end]
         self.assertIn("this._clearOllamaModelFlow();", watch_block)
 
+    def test_text_model_catalogs_are_bounded_before_menu_or_zenity_creation(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        self.assertIn("const MAX_MODEL_MENU_ENTRIES = 128;", source)
+
+        menu_start = source.index("_populateTextModelMenu: function(models, message, provider)")
+        menu_end = source.index("\n  _canMutateMenu:", menu_start)
+        menu_block = source[menu_start:menu_end]
+        self.assertIn("let modelListWasTruncated = models.length > MAX_MODEL_MENU_ENTRIES;", menu_block)
+        self.assertIn("models = models.slice(0, MAX_MODEL_MENU_ENTRIES);", menu_block)
+        self.assertIn("selectedOllamaModel", menu_block)
+        self.assertIn('description: _("selected")', menu_block)
+        self.assertIn('_("Model list truncated for safety")', menu_block)
+
+        choice_start = source.index("_ollamaModelChoiceArgs: function(models)")
+        choice_end = source.index("\n  _chooseOllamaTextModel:", choice_start)
+        choice_block = source[choice_start:choice_end]
+        self.assertIn("let maxModelChoices = Math.min(MAX_MODEL_MENU_ENTRIES", choice_block)
+        self.assertIn("MAX_CLI_ARG_COUNT", choice_block)
+        self.assertIn("MAX_CLI_COMMAND_BYTES - MAX_CLI_ARG_BYTES", choice_block)
+        self.assertIn("let listWasTruncated = false;", choice_block)
+        self.assertIn('args[3] = "--text="', choice_block)
+        self.assertIn('_("model list truncated for safety")', choice_block)
+
     def test_custom_limit_dialogs_ignore_stale_callbacks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
