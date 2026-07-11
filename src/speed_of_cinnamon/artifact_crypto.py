@@ -773,8 +773,11 @@ def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subpr
         if input_text is not None:
             if proc.stdin is None:
                 raise ArtifactCryptoError("Secret Service keyring helper input could not be sent safely")
-            proc.stdin.write(input_text.encode("utf-8"))
-            proc.stdin.close()
+            try:
+                proc.stdin.write(input_text.encode("utf-8"))
+                proc.stdin.close()
+            except Exception as exc:
+                raise ArtifactCryptoError("Secret Service keyring helper input could not be sent safely") from exc
         stdout, stderr = _read_secret_tool_pipes_bounded(proc)
         try:
             returncode = proc.wait(timeout=_SECRET_TOOL_TIMEOUT_SECONDS)
@@ -792,7 +795,7 @@ def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subpr
         if proc is not None:
             for stream in (proc.stdin, proc.stdout, proc.stderr):
                 if stream is not None:
-                    with suppress(OSError):
+                    with suppress(Exception):
                         stream.close()
 
 

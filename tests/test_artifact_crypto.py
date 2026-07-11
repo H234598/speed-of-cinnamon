@@ -404,6 +404,33 @@ class ArtifactCryptoTest(unittest.TestCase):
             with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "output could not be captured safely"):
                 artifact_crypto._run_secret_tool(["lookup", "application", "test"])
 
+    def test_secret_tool_input_failure_is_controlled(self) -> None:
+        class BrokenInput:
+            def write(self, _payload: bytes) -> None:
+                raise ValueError("closed stdin")
+
+            def close(self) -> None:
+                raise ValueError("stdin close failed")
+
+        class DummyStream:
+            def close(self) -> None:
+                return None
+
+        class FakePopen:
+            def __init__(self, command: list[str], **kwargs: object) -> None:
+                self.command = command
+                self.returncode = 0
+                self.stdin = BrokenInput()
+                self.stdout = DummyStream()
+                self.stderr = DummyStream()
+
+        with (
+            mock.patch("speed_of_cinnamon.artifact_crypto._secret_tool_path", return_value="/usr/bin/secret-tool"),
+            mock.patch("speed_of_cinnamon.artifact_crypto.subprocess.Popen", side_effect=FakePopen),
+        ):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "input could not be sent safely"):
+                artifact_crypto._run_secret_tool(["store", "application", "test"], input_text="secret")
+
     def test_secret_tool_environment_skips_control_character_values(self) -> None:
         with mock.patch.dict(
             os.environ,
