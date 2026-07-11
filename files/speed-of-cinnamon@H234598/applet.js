@@ -6580,9 +6580,24 @@ MyApplet.prototype = {
     }
     let process = launcher.spawnv(args);
     let generation = this.spawnGeneration;
-    let processToken = this._registerProcess(process, generation, options.resourceGroup);
-    let cancellable = new Gio.Cancellable();
-    let cancellableToken = this._registerCancellable(cancellable);
+    let processToken;
+    try {
+      processToken = this._registerProcess(process, generation, options.resourceGroup);
+    } catch (error) {
+      this._terminateProcess(process);
+      throw error;
+    }
+    let cancellable = null;
+    let cancellableToken = null;
+    try {
+      cancellable = new Gio.Cancellable();
+      cancellableToken = this._registerCancellable(cancellable);
+    } catch (error) {
+      this._unregisterCancellable(cancellableToken);
+      this._unregisterProcess(processToken);
+      this._terminateProcess(process);
+      throw error;
+    }
     let timeoutKey = "process-timeout-" + processToken;
     let done = false;
     let stdoutParts = [];

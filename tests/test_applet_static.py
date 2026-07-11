@@ -1469,8 +1469,22 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.appletRemoved = true;", source)
         self.assertIn("this.spawnGeneration += 1;", source)
         self.assertIn("let generation = this.spawnGeneration;", source)
-        self.assertIn("let processToken = this._registerProcess(process, generation, options.resourceGroup);", source)
+        self.assertIn("let processToken;", source)
+        self.assertIn("processToken = this._registerProcess(process, generation, options.resourceGroup);", source)
         self.assertIn('if (suppressCallback || this.appletRemoved || this.spawnGeneration !== generation || typeof callback !== "function")', source)
+
+    def test_subprocess_registration_failures_terminate_spawned_processes(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("let process = launcher.spawnv(args);")
+        end = source.index("let timeoutKey = \"process-timeout-\" + processToken;", start)
+        block = source[start:end]
+        self.assertIn("try {", block)
+        self.assertIn("processToken = this._registerProcess(process, generation, options.resourceGroup);", block)
+        self.assertIn("cancellable = new Gio.Cancellable();", block)
+        self.assertIn("cancellableToken = this._registerCancellable(cancellable);", block)
+        self.assertIn("this._unregisterProcess(processToken);", block)
+        self.assertIn("this._terminateProcess(process);", block)
 
     def test_lifecycle_timers_ignore_removed_applet(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
