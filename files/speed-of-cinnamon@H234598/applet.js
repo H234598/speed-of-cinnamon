@@ -479,22 +479,35 @@ MyApplet.prototype = {
   },
 
   _recordLifecycleError: function(group, error) {
-    let key = String(group || "unknown");
-    let now = Date.now();
-    let entries = Array.isArray(this._lifecycleErrors[key]) ? this._lifecycleErrors[key] : [];
-    entries = entries.filter((timestamp) => now - timestamp <= LIFECYCLE_ERROR_WINDOW_MS);
-    entries.push(now);
-    if (entries.length > LIFECYCLE_ERROR_THRESHOLD) {
-      entries = entries.slice(-LIFECYCLE_ERROR_THRESHOLD);
-    }
-    this._lifecycleErrors[key] = entries;
-    this._lifecycleErrorCounts[key] = entries.length;
-    this._logLifecycleError(key, error);
-    if (entries.length >= LIFECYCLE_ERROR_THRESHOLD) {
-      this._disabledErrorGroups[key] = true;
-      if (this.lifecycleState === LIFECYCLE_RUNNING) {
-        this.lifecycleState = LIFECYCLE_DEGRADED;
+    let key = "unknown";
+    let log = (value) => {
+      try {
+        this._logLifecycleError(key, value);
+      } catch (ignored) {
+        // Lifecycle diagnostics must never become a second failure.
       }
+    };
+    try {
+      key = String(group || "unknown");
+      let now = Date.now();
+      let entries = Array.isArray(this._lifecycleErrors[key]) ? this._lifecycleErrors[key] : [];
+      entries = entries.filter((timestamp) => now - timestamp <= LIFECYCLE_ERROR_WINDOW_MS);
+      entries.push(now);
+      if (entries.length > LIFECYCLE_ERROR_THRESHOLD) {
+        entries = entries.slice(-LIFECYCLE_ERROR_THRESHOLD);
+      }
+      this._lifecycleErrors[key] = entries;
+      this._lifecycleErrorCounts[key] = entries.length;
+      log(error);
+      if (entries.length >= LIFECYCLE_ERROR_THRESHOLD) {
+        this._disabledErrorGroups[key] = true;
+        if (this.lifecycleState === LIFECYCLE_RUNNING) {
+          this.lifecycleState = LIFECYCLE_DEGRADED;
+        }
+      }
+    } catch (recordError) {
+      log(error);
+      log(recordError);
     }
   },
 

@@ -1709,6 +1709,21 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_trackMonitor: function(monitor)", source)
         self.assertIn("_removeHotkey: function(id)", source)
 
+    def test_lifecycle_error_recording_cannot_escape_when_diagnostics_fail(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_recordLifecycleError: function(group, error)")
+        end = source.index("\n  _runGuarded:", start)
+        block = source[start:end]
+
+        self.assertIn('let key = "unknown";', block)
+        self.assertIn("let log = (value) =>", block)
+        self.assertIn("catch (recordError)", block)
+        self.assertIn("this._lifecycleErrors[key] = entries;", block)
+        self.assertIn("this._lifecycleErrorCounts[key] = entries.length;", block)
+        self.assertIn("log(error);", block)
+        self.assertIn("log(recordError);", block)
+        self.assertLess(block.index("try {"), block.index("this._lifecycleErrors[key] = entries;"))
+
     def test_signal_registration_failure_disconnects_new_connection(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_connectSafe: function(target, signal, callback, group)")
