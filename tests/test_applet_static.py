@@ -797,6 +797,21 @@ class AppletStaticTest(unittest.TestCase):
         remove_block = source[remove_start:remove_end]
         self.assertIn("let path = this._modelPathFromPayload(model);", remove_block)
 
+    def test_text_model_payload_names_must_be_strings(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        populate_start = source.index("_populateTextModelMenu: function(models, message, provider)")
+        populate_end = source.index("\n  _canMutateMenu:", populate_start)
+        populate_block = source[populate_start:populate_end]
+        self.assertIn('typeof model.name === "string"', populate_block)
+        self.assertIn("model.name.trim()", populate_block)
+
+        entry_start = source.index("_addTextModelMenuEntry: function(model, backend)")
+        entry_end = source.index("\n  _textPolishingPresetLabel:", entry_start)
+        entry_block = source[entry_start:entry_end]
+        self.assertIn('typeof model.name === "string"', entry_block)
+        self.assertIn('model.name === "string" ? model.name.trim() : ""', entry_block)
+
     def test_input_source_refresh_ignores_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

@@ -4614,7 +4614,7 @@ MyApplet.prototype = {
       return;
     }
     models = Array.isArray(models) ? models : [];
-    models = models.filter((model) => model && typeof model === "object" && String(model.name || "").trim() !== "");
+    models = models.filter((model) => model && typeof model === "object" && typeof model.name === "string" && model.name.trim() !== "");
     this._clearMenuItems(this.textModelItem.menu);
     let backend = String(this.postProcessBackend || "none");
     let activeProvider = String(provider || (backend === "openai-compatible" ? "openai-compatible" : "ollama"));
@@ -4711,7 +4711,7 @@ MyApplet.prototype = {
     if (!model || typeof model !== "object") {
       return;
     }
-    let name = String(model.name || "");
+    let name = typeof model.name === "string" ? model.name.trim() : "";
     if (name === "") {
       return;
     }
