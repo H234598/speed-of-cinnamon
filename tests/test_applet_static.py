@@ -917,9 +917,14 @@ class AppletStaticTest(unittest.TestCase):
         end = source.index("\n  _selectInputSource:", start)
         block = source[start:end]
         self.assertIn('typeof source.name === "string"', block)
-        self.assertIn("let sourceName = source.name;", block)
+        self.assertIn('sourceName = this._coerceCliTextArg(source.name, "input source");', block)
         self.assertIn('typeof source.description === "string"', block)
         self.assertIn("let label = description || sourceName;", block)
+        select_start = source.index("_selectInputSource: function(name, label)")
+        select_end = source.index("\n  _selectDefaultInputSource:", select_start)
+        select_block = source[select_start:select_end]
+        self.assertIn('if (typeof name !== "string")', select_block)
+        self.assertIn('this.inputDevice = this._coerceCliTextArg(name, "input device");', select_block)
 
     def test_optional_model_metadata_is_string_checked_before_display(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

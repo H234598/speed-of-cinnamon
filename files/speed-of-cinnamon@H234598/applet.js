@@ -3811,8 +3811,14 @@ MyApplet.prototype = {
       if (!source || typeof source !== "object") {
         continue;
       }
-      let sourceName = source.name;
-      if (sourceName === "") {
+      let sourceName;
+      try {
+        sourceName = this._coerceCliTextArg(source.name, "input source");
+      } catch (err) {
+        global.logError(err);
+        continue;
+      }
+      if (sourceName.trim() === "") {
         continue;
       }
       let description = typeof source.description === "string" ? source.description.trim() : "";
@@ -3832,7 +3838,16 @@ MyApplet.prototype = {
   },
 
   _selectInputSource: function(name, label) {
-    this.inputDevice = String(name || "");
+    if (typeof name !== "string") {
+      this._setStatus("error", _("Input source is invalid"), this.lastTranscript);
+      return;
+    }
+    try {
+      this.inputDevice = this._coerceCliTextArg(name, "input device");
+    } catch (err) {
+      this._setStatus("error", _("Input source is invalid"), this.lastTranscript);
+      return;
+    }
     this.settings.setValue("input-device", this.inputDevice);
     this._refreshInputSourceMenu();
     let message = this.inputDevice === ""
