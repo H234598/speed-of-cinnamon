@@ -517,6 +517,24 @@ MyApplet.prototype = {
     return (...args) => this._runGuarded(group, () => callback.apply(this, args), fallback);
   },
 
+  _guardStateCallback: function(group, callback, fallback) {
+    if (typeof callback !== "function") {
+      return null;
+    }
+    let key = String(group || "state-callback");
+    return (...args) => {
+      if (!this._lifecycleAllowsWork()) {
+        return fallback;
+      }
+      try {
+        return callback.apply(this, args);
+      } catch (error) {
+        this._recordLifecycleError(key, error);
+        return fallback;
+      }
+    };
+  },
+
   _handleInitializationFailure: function(error) {
     this._initFailed = true;
     this._recordLifecycleError("init", error);
@@ -6655,7 +6673,7 @@ MyApplet.prototype = {
   _spawnJson: function(args, callback, options) {
     options = options || {};
     let normalizedArgs;
-    let callbackFn = this._guardCallback("backend-json", callback, undefined) || function() {};
+    let callbackFn = this._guardStateCallback("backend-json", callback, undefined) || function() {};
 
     try {
       normalizedArgs = this._coerceSpawnArgs(args);
@@ -6703,7 +6721,7 @@ MyApplet.prototype = {
 
   _spawnText: function(args, callback, options) {
     options = options || {};
-    let callbackFn = this._guardCallback("backend-text", callback, undefined) || function() {};
+    let callbackFn = this._guardStateCallback("backend-text", callback, undefined) || function() {};
 
     try {
       let normalizedArgs = this._coerceSpawnArgs(args);
@@ -7777,7 +7795,7 @@ MyApplet.prototype = {
   },
 
   _clipboardPayloadSnapshotAsync: function(completionCallback) {
-    let complete = this._guardCallback("clipboard-query", completionCallback, this._clipboardUnknownPayloadSnapshot()) || function() {};
+    let complete = this._guardStateCallback("clipboard-query", completionCallback, this._clipboardUnknownPayloadSnapshot()) || function() {};
     let spec = this._clipboardProgramSpec();
     if (!spec) {
       complete(this._clipboardUnknownPayloadSnapshot());
@@ -8218,7 +8236,7 @@ MyApplet.prototype = {
     }
     let expected = String(expectedClipboardText);
     try {
-      this.clipboard.get_text(St.ClipboardType.CLIPBOARD, this._guardCallback("clipboard-read", (clipboard, clipboardText) => {
+      this.clipboard.get_text(St.ClipboardType.CLIPBOARD, this._guardStateCallback("clipboard-read", (clipboard, clipboardText) => {
         if (this.appletRemoved || !isCurrentOperation()) {
           if (typeof completionCallback === "function") {
             completionCallback(false);
@@ -8312,7 +8330,7 @@ MyApplet.prototype = {
     if (expectedClipboardText !== undefined && expectedClipboardText !== null) {
       let expected = String(expectedClipboardText);
       try {
-        this.clipboard.get_text(St.ClipboardType.CLIPBOARD, this._guardCallback("clipboard-read", (clipboard, clipboardText) => {
+      this.clipboard.get_text(St.ClipboardType.CLIPBOARD, this._guardStateCallback("clipboard-read", (clipboard, clipboardText) => {
           if (this.appletRemoved || !isCurrentOperation()) {
             if (typeof completionCallback === "function") {
               completionCallback(false);

@@ -1477,6 +1477,7 @@ class AppletStaticTest(unittest.TestCase):
             "_startLifecycle: function()",
             "_runGuarded: function(group, callback, fallback)",
             "_guardCallback: function(group, callback, fallback)",
+            "_guardStateCallback: function(group, callback, fallback)",
             "_handleInitializationFailure: function(error)",
             "_beginTeardown: function()",
             "_finishTeardown: function()",
@@ -1497,6 +1498,15 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn("connectionId = this._connectSafe(target, signal", source)
         self.assertIn("_trackMonitor: function(monitor)", source)
         self.assertIn("_removeHotkey: function(id)", source)
+
+    def test_state_callbacks_are_not_suppressed_by_disabled_error_groups(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_guardStateCallback: function(group, callback, fallback)")
+        end = source.index("\n  _handleInitializationFailure:", start)
+        block = source[start:end]
+        self.assertIn("if (!this._lifecycleAllowsWork())", block)
+        self.assertNotIn("_lifecycleGroupEnabled", block)
+        self.assertIn("this._recordLifecycleError(key, error);", block)
 
     def test_doctor_cannot_overwrite_an_active_recording_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2606,7 +2616,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (utf8ByteLength(output) > MAX_SPAWN_JSON_BYTES) {", source)
         self.assertIn("utf8ByteLength(output) > MAX_SPAWN_TEXT_BYTES", source)
         self.assertIn("if (!parsed || typeof parsed !== \"object\" || Array.isArray(parsed)) {", source)
-        self.assertIn('let callbackFn = this._guardCallback("backend-json", callback, undefined) || function() {};', source)
+        self.assertIn('let callbackFn = this._guardStateCallback("backend-json", callback, undefined) || function() {};', source)
         self.assertIn("let done = false;", source)
         self.assertIn("if (done) {", source)
         self.assertIn('callbackFn({ status: "error", error: "Backend response is too large" });', source)
