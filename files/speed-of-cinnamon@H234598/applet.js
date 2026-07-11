@@ -611,17 +611,29 @@ MyApplet.prototype = {
   },
 
   _disconnectAllSignals: function() {
-    let signals = this._resourceRegistry && Array.isArray(this._resourceRegistry.signals)
-      ? this._resourceRegistry.signals.splice(0)
-      : [];
-    for (let connection of signals) {
-      try {
-        if (connection && connection.target && connection.target.disconnect && connection.id) {
-          connection.target.disconnect(connection.id);
+    if (!this._resourceRegistry || !Array.isArray(this._resourceRegistry.signals)) {
+      return;
+    }
+    let signals = this._resourceRegistry.signals;
+    try {
+      for (let index = signals.length - 1; index >= 0; index--) {
+        let connection = signals[index];
+        try {
+          if (connection && connection.target && connection.target.disconnect && connection.id) {
+            connection.target.disconnect(connection.id);
+          }
+        } catch (error) {
+          this._recordLifecycleError("teardown-signals", error);
+          continue;
         }
-      } catch (error) {
-        this._recordLifecycleError("teardown-signals", error);
+        try {
+          signals.splice(index, 1);
+        } catch (error) {
+          this._recordLifecycleError("teardown-signals", error);
+        }
       }
+    } catch (error) {
+      this._recordLifecycleError("teardown-signals", error);
     }
   },
 
