@@ -3817,6 +3817,9 @@ MyApplet.prototype = {
   },
 
   _checkAlarms: function(manual) {
+    if (this.alarmCheckToken) {
+      return;
+    }
     let checkToken = {};
     this.alarmCheckToken = checkToken;
     this._spawnJson(this._alarmCheckArgs(), (payload) => {

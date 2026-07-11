@@ -684,6 +684,16 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.alarmMenuRefreshToken !== refreshToken", refresh_block)
         self.assertIn("!this._canMutateMenu(this.alarmItem)", refresh_block)
 
+    def test_alarm_checks_do_not_spawn_concurrent_backend_processes(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_checkAlarms: function(manual)")
+        end = source.index("\n  _refreshInputSourceMenu:", start)
+        block = source[start:end]
+        self.assertIn("if (this.alarmCheckToken)", block)
+        self.assertIn("let checkToken = {};", block)
+        self.assertLess(block.index("if (this.alarmCheckToken)"), block.index("let checkToken = {};"))
+
     def test_menu_payload_arrays_and_entries_are_shape_safe(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
