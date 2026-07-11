@@ -5319,7 +5319,7 @@ MyApplet.prototype = {
   },
 
   _safePayloadCount: function(value) {
-    let count = Number(value);
+    let count = typeof value === "number" ? value : NaN;
     if (!isFinite(count) || count < 0) {
       return 0;
     }
