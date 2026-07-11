@@ -3113,13 +3113,18 @@ MyApplet.prototype = {
     let statusRefreshToken = ++this._statusRefreshToken;
     try {
       this._spawnJson(this._statusArgs(), (payload) => {
+        let statusApplyFailed = false;
         try {
           this._applyPayload(payload, statusRefreshToken);
         } catch (err) {
+          statusApplyFailed = true;
           let safeError = this._sanitizeErrorMessage(err);
           this._setStatusPreservingRecording("error", _("Status refresh failed: ") + safeError, this.lastTranscript);
         } finally {
           this._statusCommandRunning = false;
+          if (statusApplyFailed && (this.status === "recording" || this.status === "processing")) {
+            this._scheduleStatusPoll();
+          }
         }
       }, { timeoutMs: STATUS_COMMAND_TIMEOUT_MS });
     } catch (err) {
