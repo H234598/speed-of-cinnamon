@@ -4873,11 +4873,22 @@ MyApplet.prototype = {
       if (typeof model.name !== "string") {
         continue;
       }
-      let name = this._coerceCliTextArg(model.name.trim(), "ollama model");
+      let name;
+      try {
+        name = this._coerceCliTextArg(model.name.trim(), "ollama model");
+      } catch (err) {
+        global.logError(err);
+        continue;
+      }
       if (name.trim() === "") {
         continue;
       }
-      let details = String(model.description || model.size_label || "").trim();
+      let details = "";
+      try {
+        details = this._coerceCliTextArg(String(model.description || model.size_label || "").trim(), "ollama model details").trim();
+      } catch (err) {
+        global.logError(err);
+      }
       let label = details ? name + " (" + details + ")" : name;
       args.push("SELECT:" + name, label);
     }

@@ -865,6 +865,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertLess(block.index("let installArgs;"), block.index("this.isCommandRunning = true;"))
         self.assertIn("this._spawnJson(installArgs,", block)
 
+    def test_invalid_ollama_choice_values_are_skipped_before_zenity_spawn(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_ollamaModelChoiceArgs: function(models)")
+        end = source.index("\n  _chooseOllamaTextModel:", start)
+        block = source[start:end]
+        self.assertIn("let name;", block)
+        self.assertIn("name = this._coerceCliTextArg(model.name.trim(), \"ollama model\");", block)
+        self.assertIn("global.logError(err);", block)
+        self.assertIn("continue;", block)
+        self.assertIn('"ollama model details"', block)
+
     def test_input_source_refresh_ignores_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
