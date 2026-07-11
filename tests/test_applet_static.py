@@ -3653,5 +3653,17 @@ class AppletStaticTest(unittest.TestCase):
             "benchmarkFlowToken",
             "settingsTransferToken",
             "setupDiagnosticsToken",
+            "doctorCommandToken",
         ]:
             self.assertIn(f"this.{token} = null;", helper_block)
+
+    def test_doctor_callback_cannot_overwrite_new_recording_status(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_runDoctor: function(startupCheck)")
+        end = source.index("\n  _applyDoctorPayload:", start)
+        block = source[start:end]
+        self.assertIn("let doctorToken = {};", block)
+        self.assertIn("this.doctorCommandToken = doctorToken;", block)
+        self.assertIn("if (this.doctorCommandToken !== doctorToken", block)
+        self.assertIn("this.doctorCommandToken = null;", block)

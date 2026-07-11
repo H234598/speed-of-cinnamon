@@ -432,6 +432,7 @@ MyApplet.prototype = {
     this.spawnGeneration = 0;
     this.targetWindowGeneration = 0;
     this.terminalWorkflowToken = null;
+    this.doctorCommandToken = null;
   },
 
   _lifecycleAllowsWork: function() {
@@ -1078,6 +1079,7 @@ MyApplet.prototype = {
     this._statusRefreshToken = 0;
     this._statusCommandRunning = false;
     this._doctorCommandRunning = false;
+    this.doctorCommandToken = null;
     this.microphoneLevel = null;
     this.doctorSummaryText = "";
     this.notificationSessionActive = false;
@@ -1832,6 +1834,8 @@ MyApplet.prototype = {
     this.alarmCheckToken = null;
     this.settingsTransferToken = null;
     this.setupDiagnosticsToken = null;
+    this.doctorCommandToken = null;
+    this._doctorCommandRunning = false;
     this._runTeardownGuarded("teardown-processes", () => this._terminateAllProcesses());
     this._runTeardownGuarded("teardown-cancellables", () => this._cancelAllCancellables());
     this._runTeardownGuarded("teardown-dialogs", () => this._destroyTrackedDialogs());
@@ -3078,6 +3082,8 @@ MyApplet.prototype = {
     this.benchmarkFlowToken = null;
     this.settingsTransferToken = null;
     this.setupDiagnosticsToken = null;
+    this.doctorCommandToken = null;
+    this._doctorCommandRunning = false;
   },
 
   _runDoctor: function(startupCheck) {
@@ -3096,12 +3102,17 @@ MyApplet.prototype = {
     if (!inputOption) {
       return;
     }
+    let doctorToken = {};
+    this.doctorCommandToken = doctorToken;
     this._doctorCommandRunning = true;
     if (!startupCheck) {
       this._setDoctorSummary(_("Doctor: checking..."));
       this._setStatus(this._hasActiveRecordingState() ? this.status : "processing", _("Doctor: checking..."), this.lastTranscript);
     }
     this._spawnJson(this._doctorArgs(), (payload) => {
+      if (this.doctorCommandToken !== doctorToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
       try {
         if (payload.error) {
           let message = _("Doctor failed: ") + this._sanitizeErrorMessage(payload.error);
@@ -3122,7 +3133,10 @@ MyApplet.prototype = {
         this._setStatus(startupCheck ? "setup" : "error", message, this.lastTranscript);
         this._presentDoctorResult(message, true, Boolean(startupCheck));
       } finally {
-        this._doctorCommandRunning = false;
+        if (this.doctorCommandToken === doctorToken) {
+          this.doctorCommandToken = null;
+          this._doctorCommandRunning = false;
+        }
       }
     }, {
       inputText: inputOption.inputText,
