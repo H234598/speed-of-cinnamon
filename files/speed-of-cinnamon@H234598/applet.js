@@ -2878,6 +2878,14 @@ MyApplet.prototype = {
     if (!this._ensureVoiceModelCompatibleWithCurrentLanguage(true)) {
       return;
     }
+    let toggleArgs;
+    try {
+      toggleArgs = this._baseArgs("toggle");
+    } catch (err) {
+      let safeError = this._sanitizeErrorMessage(err);
+      this._setStatus("error", _("Could not prepare recording command: ") + safeError, this.lastTranscript);
+      return;
+    }
     let manualRelistenStopRequested = Boolean(
       this.autoRelisten &&
       this.notificationSessionActive &&
@@ -2895,7 +2903,7 @@ MyApplet.prototype = {
     this.recordingMaxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
     this.isCommandRunning = true;
     this._setStatus("processing", _("Working..."), "");
-    this._spawnJson(this._baseArgs("toggle"), (payload) => {
+    this._spawnJson(toggleArgs, (payload) => {
       this.isCommandRunning = false;
       this._applyPayload(payload);
     });

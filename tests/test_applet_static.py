@@ -877,6 +877,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("continue;", block)
         self.assertIn('"ollama model details"', block)
 
+    def test_invalid_recording_settings_cannot_stick_toggle_busy_state(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_toggleRecording: function()")
+        end = source.index("\n  _restartApplet:", start)
+        block = source[start:end]
+        self.assertIn("let toggleArgs;", block)
+        self.assertIn('toggleArgs = this._baseArgs("toggle");', block)
+        self.assertIn('this._setStatus("error", _("Could not prepare recording command: ") + safeError', block)
+        self.assertLess(block.index("let toggleArgs;"), block.index("this.isCommandRunning = true;"))
+        self.assertIn("this._spawnJson(toggleArgs,", block)
+
     def test_input_source_refresh_ignores_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
