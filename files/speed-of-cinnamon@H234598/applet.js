@@ -8622,8 +8622,15 @@ MyApplet.prototype = {
       this._setStatus("error", _("Target window unavailable for automatic paste"), this.lastTranscript);
       return false;
     }
-    let hasXdotool = this._findTrustedProgramInPath("xdotool");
-    let hasWtype = this._findTrustedProgramInPath("wtype");
+    let hasXdotool;
+    let hasWtype;
+    try {
+      hasXdotool = this._findTrustedProgramInPath("xdotool");
+      hasWtype = this._findTrustedProgramInPath("wtype");
+    } catch (error) {
+      this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
+      return false;
+    }
     let args = null;
     let followUpArgs = null;
     if (hasXdotool) {
@@ -8657,7 +8664,13 @@ MyApplet.prototype = {
     if (typedText === null) {
       return false;
     }
-    let xdotool = this._findTrustedProgramInPath("xdotool");
+    let xdotool;
+    try {
+      xdotool = this._findTrustedProgramInPath("xdotool");
+    } catch (error) {
+      this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
+      return false;
+    }
     if (!xdotool) {
       return false;
     }

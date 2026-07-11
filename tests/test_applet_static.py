@@ -831,6 +831,20 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn("let failAsync = (error, message)", block)
             self.assertIn("failAsync(error);", block)
 
+    def test_keyboard_helper_probe_failures_complete_the_operation(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method in [
+            ("_pasteClipboardAfterFocus: function(", "\n  _typeTextAfterFocus:"),
+            ("_typeTextAfterFocus: function(", "\n  _coerceTypeText:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn("try {", block)
+            self.assertIn('this._findTrustedProgramInPath("xdotool")', block)
+            self.assertIn('this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);', block)
+            self.assertIn("return false;", block)
+
     def test_menu_payload_arrays_and_entries_are_shape_safe(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
@@ -3597,14 +3611,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);', source)
         self.assertIn('this._restoreTargetWindowForPaste((restored) => {', source)
         self.assertIn("_spawnKeyboardProcess: function(args, completionCallback)", source)
-        self.assertIn('let xdotool = this._findTrustedProgramInPath("xdotool");', source)
+        self.assertIn('let xdotool;', source)
+        self.assertIn('xdotool = this._findTrustedProgramInPath("xdotool");', source)
         self.assertIn('[xdotool, "type", "--clearmodifiers", "--delay", String(delay), "--", typedText]', source)
         self.assertIn("_isTerminalTargetWindow: function()", source)
         self.assertIn("let canPasteWithKeyboard = this._findTrustedProgramInPath(\"xdotool\") || this._findTrustedProgramInPath(\"wtype\");", source)
         self.assertIn('let submitWithReturn = autoPasteTarget && method === "clipboard-paste" && canPasteWithKeyboard;', source)
         self.assertIn('let terminalPaste = this._isTerminalTargetWindow();', source)
-        self.assertIn('let hasXdotool = this._findTrustedProgramInPath("xdotool");', source)
-        self.assertIn('let hasWtype = this._findTrustedProgramInPath("wtype");', source)
+        self.assertIn('let hasXdotool;', source)
+        self.assertIn('hasXdotool = this._findTrustedProgramInPath("xdotool");', source)
+        self.assertIn('let hasWtype;', source)
+        self.assertIn('hasWtype = this._findTrustedProgramInPath("wtype");', source)
         self.assertIn('if (!this._isUsableTargetWindow(this.targetWindow) && !this.targetWindowXClass && !this.targetWindowXTitle) {', source)
         self.assertIn('String(this.targetWindowXClass || "").toLowerCase()', source)
         self.assertIn('String(this.targetWindowXTitle || "").toLowerCase()', source)
