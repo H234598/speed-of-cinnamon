@@ -1148,23 +1148,27 @@ MyApplet.prototype = {
   },
 
   _terminateAllProcesses: function() {
-    let processes = this._resourceRegistry && this._resourceRegistry.processes
-      ? this._resourceRegistry.processes
-      : {};
-    for (let token in processes) {
-      if (Object.prototype.hasOwnProperty.call(processes, token)) {
-        try {
-          if (processes[token] && typeof processes[token].cancel === "function") {
-            processes[token].cancel();
-          } else if (processes[token]) {
-            this._terminateProcess(processes[token].process);
+    try {
+      let processes = this._resourceRegistry && this._resourceRegistry.processes
+        ? this._resourceRegistry.processes
+        : {};
+      for (let token in processes) {
+        if (Object.prototype.hasOwnProperty.call(processes, token)) {
+          try {
+            if (processes[token] && typeof processes[token].cancel === "function") {
+              processes[token].cancel();
+            } else if (processes[token]) {
+              this._terminateProcess(processes[token].process);
+            }
+          } catch (error) {
+            this._recordLifecycleError("process-cancel", error);
+          } finally {
+            this._unregisterProcess(token);
           }
-        } catch (error) {
-          this._recordLifecycleError("process-cancel", error);
-        } finally {
-          this._unregisterProcess(token);
         }
       }
+    } catch (error) {
+      this._recordLifecycleError("process-cancel", error);
     }
   },
 
@@ -1206,21 +1210,25 @@ MyApplet.prototype = {
   },
 
   _cancelAllCancellables: function() {
-    let cancellables = this._resourceRegistry && this._resourceRegistry.cancellables
-      ? this._resourceRegistry.cancellables
-      : {};
-    for (let token in cancellables) {
-      if (!Object.prototype.hasOwnProperty.call(cancellables, token)) {
-        continue;
-      }
-      try {
-        if (cancellables[token] && cancellables[token].cancel) {
-          cancellables[token].cancel();
+    try {
+      let cancellables = this._resourceRegistry && this._resourceRegistry.cancellables
+        ? this._resourceRegistry.cancellables
+        : {};
+      for (let token in cancellables) {
+        if (!Object.prototype.hasOwnProperty.call(cancellables, token)) {
+          continue;
         }
-      } catch (error) {
-        this._recordLifecycleError("teardown-cancellable", error);
+        try {
+          if (cancellables[token] && cancellables[token].cancel) {
+            cancellables[token].cancel();
+          }
+        } catch (error) {
+          this._recordLifecycleError("teardown-cancellable", error);
+        }
+        this._unregisterCancellable(token);
       }
-      this._unregisterCancellable(token);
+    } catch (error) {
+      this._recordLifecycleError("teardown-cancellable", error);
     }
   },
 
