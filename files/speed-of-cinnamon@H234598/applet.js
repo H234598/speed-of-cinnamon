@@ -4747,6 +4747,10 @@ MyApplet.prototype = {
 
   _openExternalApiEnvEditor: function(target) {
     this.externalApiEnvApplyTarget = target || "voice";
+    if (this.externalApiEnvApplyTarget === "text") {
+      this._cancelOllamaInstallWatch();
+      this._clearOllamaModelFlow();
+    }
     let path = this._ensureExternalApiEnvFile();
     if (this._applyExternalApiEnvFile(false)) {
       this._applyExternalApiEnvTarget(this.externalApiEnvApplyTarget);
@@ -4757,6 +4761,8 @@ MyApplet.prototype = {
 
   _applyExternalApiEnvTarget: function(target) {
     if (target === "text") {
+      this._cancelOllamaInstallWatch();
+      this._clearOllamaModelFlow();
       this.postProcessBackend = "openai-compatible";
       this.settings.setValue("post-process-backend", this.postProcessBackend);
       this._refreshTextModelMenuForBackend("openai-compatible");
@@ -5018,6 +5024,8 @@ MyApplet.prototype = {
   },
 
   _selectTextModelBackend: function(backend, model, message) {
+    this._cancelOllamaInstallWatch();
+    this._clearOllamaModelFlow();
     this.postProcessBackend = String(backend || "none");
     this.settings.setValue("post-process-backend", this.postProcessBackend);
     if (this.postProcessBackend === "ollama") {

@@ -1841,6 +1841,19 @@ class AppletStaticTest(unittest.TestCase):
         ]:
             self.assertIn(marker, source)
 
+    def test_text_backend_choices_invalidate_stale_ollama_flows(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method in [
+            ("_selectTextModelBackend: function(backend, model, message)", "\n  _activateOllamaTextModelFlow:"),
+            ("_openExternalApiEnvEditor: function(target)", "\n  _applyExternalApiEnvTarget:"),
+            ("_applyExternalApiEnvTarget: function(target)", "\n  _selectTextModelBackend:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn("this._cancelOllamaInstallWatch();", block)
+            self.assertIn("this._clearOllamaModelFlow();", block)
+
     def test_custom_limit_dialogs_ignore_stale_callbacks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
