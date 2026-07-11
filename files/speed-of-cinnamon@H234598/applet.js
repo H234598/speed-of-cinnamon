@@ -1516,11 +1516,11 @@ MyApplet.prototype = {
   },
 
   _selectionMenuItem: function(label) {
-    return this._styleMenuItemLabel(new PopupMenu.PopupMenuItem(String(label || "")));
+    return this._styleMenuItemLabel(new PopupMenu.PopupMenuItem(typeof label === "string" ? label : ""));
   },
 
   _selectionInfoItem: function(label) {
-    let item = this._styleMenuItemLabel(new PopupMenu.PopupMenuItem(String(label || "")), { wrap: true });
+    let item = this._styleMenuItemLabel(new PopupMenu.PopupMenuItem(typeof label === "string" ? label : ""), { wrap: true });
     item.setSensitive(false);
     return item;
   },
