@@ -3279,7 +3279,7 @@ MyApplet.prototype = {
   },
 
   _openProfanityFilterList: function() {
-    if (this.setupDiagnosticsToken) {
+    if (this.setupDiagnosticsToken || this._hasActiveRecordingState()) {
       return;
     }
     let inputOption = this._settingsSnapshotInputOptionOrNull(false);
@@ -3310,7 +3310,7 @@ MyApplet.prototype = {
   },
 
   _copySetupPlan: function() {
-    if (this.setupDiagnosticsToken) {
+    if (this.setupDiagnosticsToken || this._hasActiveRecordingState()) {
       return;
     }
     let inputOption = this._settingsSnapshotInputOptionOrNull(false);
@@ -3361,7 +3361,7 @@ MyApplet.prototype = {
   },
 
   _copySetupCommands: function() {
-    if (this.setupDiagnosticsToken) {
+    if (this.setupDiagnosticsToken || this._hasActiveRecordingState()) {
       return;
     }
     let inputOption = this._settingsSnapshotInputOptionOrNull(false);
@@ -3398,7 +3398,7 @@ MyApplet.prototype = {
   },
 
   _copyDiagnostics: function() {
-    if (this.setupDiagnosticsToken) {
+    if (this.setupDiagnosticsToken || this._hasActiveRecordingState()) {
       return;
     }
     let inputOption = this._settingsSnapshotInputOptionOrNull(true);
@@ -3427,7 +3427,7 @@ MyApplet.prototype = {
   },
 
   _saveDiagnostics: function() {
-    if (this.setupDiagnosticsToken) {
+    if (this.setupDiagnosticsToken || this._hasActiveRecordingState()) {
       return;
     }
     let inputOption = this._settingsSnapshotInputOptionOrNull(true);
