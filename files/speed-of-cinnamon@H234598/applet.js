@@ -4093,8 +4093,8 @@ MyApplet.prototype = {
 
   _populateExternalApiVoiceMenu: function(parentMenu) {
     let active = String(this.transcriber || "") === "openai-compatible";
-    let model = String(this.openaiCompatibleModel || "").trim();
-    let url = String(this.openaiCompatibleUrl || "").trim();
+    let model = this._shortMenuText(String(this.openaiCompatibleModel || "").trim(), 96);
+    let url = this._shortMenuText(String(this.openaiCompatibleUrl || "").trim(), 96);
     let useItem = new PopupMenu.PopupIconMenuItem((active ? "[x] " : "[ ] ") + _("Use OpenAI-compatible API"), "network-server-symbolic", St.IconType.SYMBOLIC);
     this._styleMenuItemLabel(useItem);
     this._connectSafe(useItem, "activate", () => this._openExternalApiEnvEditor("voice"));
@@ -4258,12 +4258,13 @@ MyApplet.prototype = {
     let backend = String(this.transcriber || "auto");
     let model = String(this.whisperModel || "").trim();
     if ((backend === "whisper-cpp" || backend === "faster-whisper") && model !== "") {
-      return GLib.path_get_basename(model);
+      return this._shortMenuText(GLib.path_get_basename(model), 96);
     }
     if (backend === "command") return _("custom command");
     if (backend === "whisper") return _("Whisper command");
     if (backend === "openai-compatible") {
-      return _("External API: ") + (String(this.openaiCompatibleModel || "").trim() || _("not configured"));
+      let externalModel = String(this.openaiCompatibleModel || "").trim() || _("not configured");
+      return _("External API: ") + this._shortMenuText(externalModel, 96);
     }
     if (backend === "whisper-cpp") return _("local model file");
     if (backend === "faster-whisper") return _("local model directory");
@@ -8716,12 +8717,13 @@ MyApplet.prototype = {
     let backend = String(this.transcriber || "auto");
     let model = String(this.whisperModel || "").trim();
     if ((backend === "whisper-cpp" || backend === "faster-whisper") && model !== "") {
-      return _("Voice: ") + GLib.path_get_basename(model);
+      return _("Voice: ") + this._shortMenuText(GLib.path_get_basename(model), 96);
     }
     if (backend === "command") return _("Voice: custom command");
     if (backend === "whisper") return _("Voice: Whisper command");
     if (backend === "openai-compatible") {
-      return _("Voice: External API ") + (String(this.openaiCompatibleModel || "").trim() || _("not configured"));
+      let externalModel = String(this.openaiCompatibleModel || "").trim() || _("not configured");
+      return _("Voice: External API ") + this._shortMenuText(externalModel, 96);
     }
     if (backend === "whisper-cpp") return _("Voice: local model file");
     if (backend === "faster-whisper") return _("Voice: local model directory");
@@ -8731,9 +8733,13 @@ MyApplet.prototype = {
   _textModelLabel: function() {
     let backend = String(this.postProcessBackend || "none");
     if (backend === "none") return _("Text model: disabled");
-    if (backend === "ollama") return _("Text model: ") + (String(this.ollamaModel || "").trim() || _("Ollama"));
+    if (backend === "ollama") {
+      let ollamaModel = String(this.ollamaModel || "").trim() || _("Ollama");
+      return _("Text model: ") + this._shortMenuText(ollamaModel, 96);
+    }
     if (backend === "openai-compatible") {
-      return _("Text model: ") + (String(this.openaiCompatibleTextModel || this.openaiCompatibleModel || "").trim() || _("OpenAI-compatible"));
+      let externalModel = String(this.openaiCompatibleTextModel || this.openaiCompatibleModel || "").trim() || _("OpenAI-compatible");
+      return _("Text model: ") + this._shortMenuText(externalModel, 96);
     }
     return _("Text model: custom command");
   },

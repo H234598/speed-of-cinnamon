@@ -194,7 +194,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.settings.setValue("whisper-model", this.whisperModel);', source)
         self.assertIn("_selectExternalApiVoiceBackend: function()", source)
         self.assertIn('this.transcriber = "openai-compatible";', source)
-        self.assertIn('return _("Voice: External API ") + (String(this.openaiCompatibleModel || "").trim() || _("not configured"));', source)
+        self.assertIn('return _("Voice: External API ") + this._shortMenuText(externalModel, 96);', source)
 
     def test_applet_exposes_artifact_encryption_submenu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -1816,6 +1816,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("models = models.slice(0, MAX_VOICE_MODEL_MENU_ENTRIES);", block)
         self.assertIn('_("Voice model list truncated for safety")', block)
 
+    def test_settings_derived_model_labels_are_bounded_before_cinnamon_display(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method in [
+            ("_activeVoiceModelSummary: function()", "\n  _whisperModelSupportsLanguage:"),
+            ("_populateExternalApiVoiceMenu: function(parentMenu)", "\n  _modelPathFromPayload:"),
+            ("_voiceBackendLabel: function()", "\n  _textModelLabel:"),
+            ("_textModelLabel: function()", "\n  _panelStyleClassForStatus:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn("this._shortMenuText", block)
+
     def test_transcript_list_command_respects_existing_busy_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_loadAllTranscriptsDocument: function()")
@@ -2215,7 +2228,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('_("Active: ") + this._activeVoiceModelSummary()', source)
         self.assertIn("_activeVoiceModelSummary: function()", source)
         self.assertIn('if (backend === "openai-compatible")', source)
-        self.assertIn('_("External API: ") + (String(this.openaiCompatibleModel || "").trim() || _("not configured"))', source)
+        self.assertIn('return _("External API: ") + this._shortMenuText(externalModel, 96);', source)
         self.assertIn('String(model || this._starterVoiceModelName())', source)
         self.assertIn("_voiceModelSupportsCurrentLanguage: function(model)", source)
         self.assertIn("English-only model cannot transcribe primary language", source)
