@@ -3491,3 +3491,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('set_applet_tooltip(tooltip + "\\n" + this._shortTranscript())', source)
         self.assertNotIn('let clean = this.lastTranscript.replace(/\\s+/g, " ").trim();', source)
         self.assertNotIn('clean.length > 80 ? clean.slice(0, 77) + "..." : clean;', source)
+
+        update_start = source.index("_updateAutoPasteItem: function()")
+        update_end = source.index("\n  _windowTitleMatchesAutoPaste:", update_start)
+        update_block = source[update_start:update_end]
+        self.assertIn("this.autoPasteItem.label.text = this._autoPasteLabel();", update_block)
+        self.assertNotIn("this._populateAutoPasteMenu();", update_block)

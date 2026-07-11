@@ -1713,6 +1713,7 @@ MyApplet.prototype = {
     this._populateArtifactEncryptionMenu();
     this._populateTextOptionsMenu();
     this._updateAutoPasteItem();
+    this._populateAutoPasteMenu();
     this._updatePanel();
   },
 
@@ -2723,7 +2724,6 @@ MyApplet.prototype = {
     if (this.autoPasteItem) {
       this.autoPasteItem.label.text = this._autoPasteLabel();
     }
-    this._populateAutoPasteMenu();
   },
 
   _windowTitleMatchesAutoPaste: function() {
@@ -6047,6 +6047,7 @@ MyApplet.prototype = {
     this._populateOutputMethodMenu();
     this._populateTextOptionsMenu();
     this._updateAutoPasteItem();
+    this._populateAutoPasteMenu();
     this._registerHotkeys();
     this._updatePanel();
     return applied;
