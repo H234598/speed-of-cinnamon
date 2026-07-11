@@ -1718,6 +1718,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!timerId && (this.status === \"recording\" || this.status === \"processing\"))", poll_block)
         self.assertIn('this._setStatusPreservingRecording("error", _("Status polling timer could not be scheduled")', poll_block)
 
+        display_start = source.index("_scheduleDisplayTick: function()")
+        display_end = source.index("\n  _isUsableTargetWindow:", display_start)
+        display_block = source[display_start:display_end]
+        self.assertIn('let timerId = this._scheduleTrackedTimer("display"', display_block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Recording display timer could not be scheduled")', display_block)
+
     def test_status_checks_use_spawn_json_timeout(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

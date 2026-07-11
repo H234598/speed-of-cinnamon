@@ -7312,7 +7312,7 @@ MyApplet.prototype = {
     if (this.status !== "recording") {
       return;
     }
-    this._scheduleTrackedTimer("display", 1, () => {
+    let timerId = this._scheduleTrackedTimer("display", 1, () => {
       if (this.status === "recording") {
         this._updatePanel();
         if (!this.appletRemoved) {
@@ -7321,6 +7321,9 @@ MyApplet.prototype = {
       }
       return false;
     }, true, "displayTimer");
+    if (!timerId && this._lifecycleAllowsWork() && this.status === "recording") {
+      this._setStatusPreservingRecording("error", _("Recording display timer could not be scheduled"), this.lastTranscript);
+    }
   },
 
   _isUsableTargetWindow: function(window) {
