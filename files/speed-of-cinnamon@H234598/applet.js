@@ -3108,6 +3108,7 @@ MyApplet.prototype = {
     this.textModelMenuRefreshToken = null;
     this.alarmMenuRefreshToken = null;
     this.alarmActionToken = null;
+    this.alarmCheckToken = null;
     this.benchmarkFlowToken = null;
     this.settingsTransferToken = null;
     this.setupDiagnosticsToken = null;

@@ -3674,6 +3674,7 @@ class AppletStaticTest(unittest.TestCase):
             "textModelMenuRefreshToken",
             "alarmMenuRefreshToken",
             "alarmActionToken",
+            "alarmCheckToken",
             "benchmarkFlowToken",
             "settingsTransferToken",
             "setupDiagnosticsToken",
