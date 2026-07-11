@@ -3320,7 +3320,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let complete = (result) =>", insert_block)
         self.assertIn("if (!this._typeTextAfterFocus(text, (completed) => {", source)
         self.assertIn('if (completed && isCurrentInsert())', source)
-        self.assertIn('if (!this._closeMenuForKeyboardInsert()) {\n          this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);\n          release();\n          return false;\n        }\n        this._restoreTargetWindowForPaste((restored) => {', source)
+        self.assertIn('if (!this._closeMenuForKeyboardInsert()) {', source)
+        self.assertIn('this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);', source)
+        self.assertIn('this._restoreTargetWindowForPaste((restored) => {', source)
         self.assertIn("_spawnKeyboardProcess: function(args, completionCallback)", source)
         self.assertIn('let xdotool = this._findTrustedProgramInPath("xdotool");', source)
         self.assertIn('[xdotool, "type", "--clearmodifiers", "--delay", String(delay), "--", typedText]', source)
@@ -3916,9 +3918,12 @@ class AppletStaticTest(unittest.TestCase):
         snapshot_block = block[snapshot_start - 20:]
         self.assertIn("try {", snapshot_block)
         self.assertIn("release();", snapshot_block)
-        self.assertIn('this._recordLifecycleError("text-insert", error);', snapshot_block)
-        self.assertIn('this._setStatusPreservingRecording("error", _("Could not prepare text insertion")', snapshot_block)
-        self.assertIn("return false;", snapshot_block)
+        self.assertIn('this._recordLifecycleError("text-insert", error);', block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Could not prepare text insertion")', block)
+        self.assertIn("return false;", block)
+        self.assertIn("let failPreparation = (error) => {", block)
+        self.assertIn("this.textInsertToken !== insertToken", block)
+        self.assertIn("try {\n        let result = this._copyAndMaybePasteTranscriptText", block)
 
     def test_dynamic_menu_errors_preserve_active_recording_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
