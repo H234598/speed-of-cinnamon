@@ -7318,10 +7318,13 @@ MyApplet.prototype = {
     if (this.status !== "recording" && this.status !== "processing") {
       return;
     }
-    this._scheduleTrackedTimer("status", 2, () => {
+    let timerId = this._scheduleTrackedTimer("status", 2, () => {
       this._refreshStatus();
       return false;
     }, true, "statusTimer");
+    if (!timerId && (this.status === "recording" || this.status === "processing")) {
+      this._setStatusPreservingRecording("error", _("Status polling timer could not be scheduled"), this.lastTranscript);
+    }
   },
 
   _scheduleDisplayTick: function() {

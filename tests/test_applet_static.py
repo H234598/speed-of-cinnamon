@@ -1709,6 +1709,13 @@ class AppletStaticTest(unittest.TestCase):
             set_status_block.index("let previousStatus = this.status;"),
         )
 
+        poll_start = source.index("_scheduleStatusPoll: function()")
+        poll_end = source.index("\n  _scheduleDisplayTick:", poll_start)
+        poll_block = source[poll_start:poll_end]
+        self.assertIn('let timerId = this._scheduleTrackedTimer("status"', poll_block)
+        self.assertIn("if (!timerId && (this.status === \"recording\" || this.status === \"processing\"))", poll_block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Status polling timer could not be scheduled")', poll_block)
+
     def test_status_checks_use_spawn_json_timeout(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
