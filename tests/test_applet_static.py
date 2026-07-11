@@ -776,6 +776,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('payload && typeof payload.language === "string"', language_block)
         self.assertIn('payload.language.trim().toLowerCase()', language_block)
         self.assertIn('if (LANGUAGE_CODES.indexOf(language) < 0)', language_block)
+        timing_start = source.index("_updateRecordingTiming: function(payload, status)")
+        timing_end = source.index("\n  _parseDateMs:", timing_start)
+        timing_block = source[timing_start:timing_end]
+        self.assertIn('typeof payload.max_seconds === "number" && isFinite(payload.max_seconds)', timing_block)
+        self.assertNotIn('let maxSeconds = Number(payload.max_seconds);', timing_block)
 
     def test_backend_boolean_fields_require_explicit_json_booleans(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

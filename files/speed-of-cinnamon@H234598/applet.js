@@ -6371,10 +6371,9 @@ MyApplet.prototype = {
     } else if (this.recordingStartedAtMs <= 0) {
       this.recordingStartedAtMs = Date.now();
     }
-    let maxSeconds = Number(payload.max_seconds);
-    if (!isFinite(maxSeconds)) {
-      maxSeconds = this.maxSeconds;
-    }
+    let maxSeconds = typeof payload.max_seconds === "number" && isFinite(payload.max_seconds)
+      ? payload.max_seconds
+      : this.maxSeconds;
     this.recordingMaxSeconds = this._normalizeRecordingLimit(maxSeconds);
   },
 
