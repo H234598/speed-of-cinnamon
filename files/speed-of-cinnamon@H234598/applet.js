@@ -3758,6 +3758,7 @@ MyApplet.prototype = {
     }
     sources = Array.isArray(sources) ? sources : [];
     sources = sources.filter((source) => source && typeof source === "object" && String(source.name || "").trim() !== "");
+    let messageText = typeof message === "string" ? message.trim() : "";
     this._clearMenuItems(this.inputSourceItem.menu);
     let current = String(this.inputDevice || "");
     let currentWasListed = current === "";
@@ -3777,9 +3778,9 @@ MyApplet.prototype = {
       currentWasListed = true;
     };
 
-    if (message) {
+    if (messageText !== "") {
       addCurrentCustomInput();
-      this.inputSourceItem.menu.addMenuItem(this._selectionInfoItem(message));
+      this.inputSourceItem.menu.addMenuItem(this._selectionInfoItem(messageText));
       return;
     }
     if (!sources || sources.length === 0) {
@@ -3856,6 +3857,7 @@ MyApplet.prototype = {
     }
     models = Array.isArray(models) ? models : [];
     models = models.filter((model) => model && typeof model === "object" && typeof model.name === "string" && model.name.trim() !== "" && this._modelPathFromPayload(model) !== "");
+    let messageText = typeof message === "string" ? message.trim() : "";
     this._clearMenuItems(this.modelItem.menu);
 
     let autoActive = String(this.transcriber || "auto") === "auto" && String(this.whisperModel || "") === "";
@@ -3904,8 +3906,8 @@ MyApplet.prototype = {
 
     this.modelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-    if (message) {
-      this.modelItem.menu.addMenuItem(this._selectionInfoItem(message));
+    if (messageText !== "") {
+      this.modelItem.menu.addMenuItem(this._selectionInfoItem(messageText));
       return;
     }
     if (!models || models.length === 0) {
@@ -4669,6 +4671,7 @@ MyApplet.prototype = {
     }
     models = Array.isArray(models) ? models : [];
     models = models.filter((model) => model && typeof model === "object" && typeof model.name === "string" && model.name.trim() !== "");
+    let messageText = typeof message === "string" ? message.trim() : "";
     this._clearMenuItems(this.textModelItem.menu);
     let backend = String(this.postProcessBackend || "none");
     let activeProvider = provider === "openai-compatible" || provider === "ollama"
@@ -4724,8 +4727,8 @@ MyApplet.prototype = {
 
     this.textModelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-    if (message) {
-      this.textModelItem.menu.addMenuItem(this._selectionInfoItem(message));
+    if (messageText !== "") {
+      this.textModelItem.menu.addMenuItem(this._selectionInfoItem(messageText));
       return;
     }
     if (!models || models.length === 0) {

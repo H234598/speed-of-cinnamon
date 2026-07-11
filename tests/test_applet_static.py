@@ -671,6 +671,17 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn(f"{variable} = {variable}.filter(", block)
             self.assertIn(f"if (!{variable[:-1] if variable.endswith('s') else variable} || typeof {variable[:-1] if variable.endswith('s') else variable} !== \"object\")", block)
 
+        for method, next_method in [
+            ("_populateInputSourceMenu: function(sources, message)", "\n  _selectInputSource:"),
+            ("_populateModelMenu: function(models, message)", "\n  _populateExternalApiVoiceMenu:"),
+            ("_populateTextModelMenu: function(models, message, provider)", "\n  _canMutateMenu:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn('let messageText = typeof message === "string" ? message.trim() : "";', block)
+            self.assertIn('if (messageText !== "")', block)
+
         for method, next_method, parameter in [
             ("_addAlarmMenuEntry: function(alarm)", "\n  _copyAlarmCommands:", "alarm"),
             ("_addModelMenuEntry: function(model, parentMenu)", "\n  _isEnglishLanguage:", "model"),
