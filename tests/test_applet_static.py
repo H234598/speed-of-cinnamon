@@ -332,6 +332,20 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("return false;", clear_block)
         self.assertLess(clear_block.index("this._untrackMonitor(monitor)"), clear_block.index("this.externalApiEnvMonitor = null;"))
 
+    def test_failed_dialog_untrack_does_not_escape_dialog_close(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_untrackDialog: function(dialog)")
+        end = source.index("\n  _trackMonitor:", start)
+        untrack_block = source[start:end]
+        self.assertIn('this._recordLifecycleError("dialog-untrack", error);', untrack_block)
+        self.assertIn("return false;", untrack_block)
+
+        start = source.index("_dialogClose: function(dialog, group)")
+        end = source.index("\n  _dialogOpen:", start)
+        close_block = source[start:end]
+        self.assertIn("this._untrackDialog(dialog);", close_block)
+        self.assertIn("this._runTeardownGuarded", close_block)
+
     def test_external_env_monitor_registration_failure_rolls_back_monitor(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_watchExternalApiEnvFile: function(path)")

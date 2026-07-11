@@ -698,11 +698,18 @@ MyApplet.prototype = {
 
   _untrackDialog: function(dialog) {
     if (!dialog || !this._resourceRegistry || !Array.isArray(this._resourceRegistry.dialogs)) {
-      return;
+      return true;
     }
     let index = this._resourceRegistry.dialogs.indexOf(dialog);
-    if (index >= 0) {
+    if (index < 0) {
+      return true;
+    }
+    try {
       this._resourceRegistry.dialogs.splice(index, 1);
+      return true;
+    } catch (error) {
+      this._recordLifecycleError("dialog-untrack", error);
+      return false;
     }
   },
 
