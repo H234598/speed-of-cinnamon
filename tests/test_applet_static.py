@@ -1865,8 +1865,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let removed = Mainloop.source_remove(sourceId);", block)
         self.assertIn('if (removed === false) {', block)
         self.assertIn('this._recordLifecycleError("timer-clear", error);', block)
-        self.assertIn("return;", block)
+        self.assertIn("return false;", block)
         self.assertLess(block.index("Mainloop.source_remove(sourceId)"), block.index("delete this._resourceRegistry.timers[key]"))
+
+    def test_timer_reschedule_aborts_when_previous_timer_cannot_be_removed(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName)")
+        end = source.index("\n  _init:", start)
+        block = source[start:end]
+        self.assertIn("if (this._clearTrackedTimer(key, propertyName) === false) {", block)
+        self.assertIn("return 0;", block)
+        self.assertLess(block.index("this._clearTrackedTimer(key, propertyName)"), block.index("let generation = this.spawnGeneration;"))
 
     def test_local_status_updates_invalidate_inflight_status_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

@@ -1011,7 +1011,7 @@ MyApplet.prototype = {
       if (propertyName) {
         this[propertyName] = 0;
       }
-      return;
+      return true;
     }
     try {
       let removed = Mainloop.source_remove(sourceId);
@@ -1020,7 +1020,7 @@ MyApplet.prototype = {
       }
     } catch (error) {
       this._recordLifecycleError("timer-clear", error);
-      return;
+      return false;
     }
     if (this._resourceRegistry && this._resourceRegistry.timers[key] === sourceId) {
       delete this._resourceRegistry.timers[key];
@@ -1028,6 +1028,7 @@ MyApplet.prototype = {
     if (propertyName && this[propertyName] === sourceId) {
       this[propertyName] = 0;
     }
+    return true;
   },
 
   _scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName) {
@@ -1035,7 +1036,9 @@ MyApplet.prototype = {
       return 0;
     }
     let key = String(name || propertyName || "timer");
-    this._clearTrackedTimer(key, propertyName);
+    if (this._clearTrackedTimer(key, propertyName) === false) {
+      return 0;
+    }
     let generation = this.spawnGeneration;
     let sourceId = 0;
     let timerCallback = () => {
