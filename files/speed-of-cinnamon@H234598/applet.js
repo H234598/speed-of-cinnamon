@@ -602,12 +602,13 @@ MyApplet.prototype = {
   },
 
   _connectSafe: function(target, signal, callback, group) {
-    if (!this._lifecycleAllowsWork() || !target || typeof target.connect !== "function") {
-      return 0;
-    }
-    let signalGroup = "signal-" + String(group || signal || "callback");
-    let connectionId = 0;
+    let signalGroup = "signal-callback";
     try {
+      if (!this._lifecycleAllowsWork() || !target || typeof target.connect !== "function") {
+        return 0;
+      }
+      signalGroup = "signal-" + String(group || signal || "callback");
+      let connectionId = 0;
       connectionId = target.connect(signal, this._guardStateCallback(signalGroup, callback, undefined));
       if (this._resourceRegistry && connectionId) {
         try {

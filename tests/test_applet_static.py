@@ -1790,6 +1790,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("target.disconnect(connectionId);", block)
         self.assertIn('this._recordLifecycleError("signal-disconnect", disconnectError);', block)
         self.assertIn("throw registryError;", block)
+        self.assertLess(block.index("try {"), block.index("target.connect(signal"))
 
     def test_state_callbacks_are_not_suppressed_by_disabled_error_groups(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
