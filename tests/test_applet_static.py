@@ -1755,6 +1755,20 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._runStateGuarded("menu-items"', block)
         self.assertNotIn('this._runGuarded("menu-items"', block)
 
+    def test_menu_item_collection_contains_invalid_and_cyclic_menu_guards(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_clearMenuItems: function(menu)")
+        end = source.index("\n  _trackDialog:", start)
+        block = source[start:end]
+
+        self.assertIn("let visited = [];", block)
+        self.assertIn("if (visited.indexOf(current) >= 0)", block)
+        self.assertIn("visited.push(current);", block)
+        self.assertIn("if (!Array.isArray(items))", block)
+        self.assertIn('throw new Error("Menu items are unavailable");', block)
+        self.assertIn('this._recordLifecycleError("menu-items", error);', block)
+        self.assertLess(block.index("try {"), block.index("for (let item of items)"))
+
     def test_dialog_construction_failure_cleans_up_created_dialog(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_newSafeDialog: function(group)")

@@ -693,6 +693,7 @@ MyApplet.prototype = {
       return;
     }
     let targets = [];
+    let visited = [];
     let addTarget = (target) => {
       if (target && targets.indexOf(target) < 0) {
         targets.push(target);
@@ -702,21 +703,27 @@ MyApplet.prototype = {
       if (!current) {
         return;
       }
+      if (visited.indexOf(current) >= 0) {
+        return;
+      }
+      visited.push(current);
       let items = [];
       try {
         if (current._getMenuItems) {
           items = current._getMenuItems();
         }
+        if (!Array.isArray(items)) {
+          throw new Error("Menu items are unavailable");
+        }
+        for (let item of items) {
+          addTarget(item);
+          if (item && item.menu) {
+            addTarget(item.menu);
+            collect(item.menu);
+          }
+        }
       } catch (error) {
         this._recordLifecycleError("menu-items", error);
-        return;
-      }
-      for (let item of items) {
-        addTarget(item);
-        if (item && item.menu) {
-          addTarget(item.menu);
-          collect(item.menu);
-        }
       }
     };
     collect(menu);
