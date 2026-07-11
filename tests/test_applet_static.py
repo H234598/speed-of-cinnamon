@@ -1853,6 +1853,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (closeSucceeded && destroySucceeded)", block)
         self.assertIn("this._untrackDialog(dialog);", block)
 
+    def test_dialog_child_preconditions_are_guarded(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_dialogAddChild: function(dialog, child, group)")
+        end = source.index("\n  _newSafeLabel:", start)
+        block = source[start:end]
+        self.assertLess(block.index("_runGuarded"), block.index("dialog.contentLayout"))
+
     def test_menu_teardown_retains_handles_after_cleanup_failures(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_destroyMenus: function()")

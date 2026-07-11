@@ -819,10 +819,10 @@ MyApplet.prototype = {
   },
 
   _dialogAddChild: function(dialog, child, group) {
-    if (!dialog || !child || !dialog.contentLayout || !dialog.contentLayout.add_child) {
-      return false;
-    }
     return this._runGuarded("dialog-" + String(group || "content"), () => {
+      if (!dialog || !child || !dialog.contentLayout || !dialog.contentLayout.add_child) {
+        return false;
+      }
       dialog.contentLayout.add_child(child);
       return true;
     }, false) === true;
