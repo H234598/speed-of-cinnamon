@@ -125,7 +125,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._toggleTextPolishingSafetyFlag("post-process-mask-sensitive-data", "postProcessMaskSensitiveData", _("Mask sensitive data"))', source)
         self.assertIn('this.postProcessBackend = "openai-compatible";', source)
         self.assertIn('this.settings.setValue("post-process-backend", this.postProcessBackend);', source)
-        self.assertIn('this._setStatus("ready", _("Text polishing: OpenAI-compatible API"), this.lastTranscript);', source)
+        self.assertIn('this._setStatusPreservingRecording("ready", _("Text polishing: OpenAI-compatible API"), this.lastTranscript);', source)
         self.assertIn("_refreshTextModelMenuForBackend: function(backendOverride)", source)
         self.assertIn('this._refreshTextModelMenuForBackend("openai-compatible");', source)
         self.assertIn('_("Loading OpenAI-compatible text models...")', source)
@@ -188,7 +188,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let customCommandLabel = _("Custom command") + (customCommandConfigured ? "" : _(" - configure in settings"));', source)
         self.assertIn('let customCommand = this._selectionMenuItem((customCommandActive ? "[x] " : "[ ] ") + customCommandLabel);', source)
         self.assertIn('this._openAppletSettings();', source)
-        self.assertIn('this._setStatus("ready", _("Configure custom voice command in applet settings"), this.lastTranscript);', source)
+        self.assertIn('this._setStatusPreservingRecording("ready", _("Configure custom voice command in applet settings"), this.lastTranscript);', source)
         self.assertIn("_selectStaticVoiceBackend: function(transcriber, message)", source)
         self.assertIn('this.settings.setValue("transcriber", this.transcriber);', source)
         self.assertIn('this.settings.setValue("whisper-model", this.whisperModel);', source)
@@ -237,7 +237,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_writeExternalApiEnvFile: function()", source)
         self.assertIn("_writeExternalApiEnvFileContents: function(path, content)", source)
         self.assertIn("this._writeExternalApiEnvFileContents(path, this._externalApiEnvContent());", source)
-        self.assertIn('this._setStatus("error", _("External API config file could not be written"), this.lastTranscript);', source)
+        self.assertIn('this._setStatusPreservingRecording("error", _("External API config file could not be written"), this.lastTranscript);', source)
         self.assertIn("_migrateExternalApiEnvFile: function(path)", source)
         self.assertIn('"OPENAI_COMPATIBLE_URL=" + LEGACY_OPENAI_COMPATIBLE_URL', source)
         self.assertIn('migrated.replace("OPENAI_COMPATIBLE_MODEL=", "OPENAI_COMPATIBLE_STT_MODEL=")', source)
@@ -248,7 +248,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_applyExternalApiEnvTarget: function(target)", source)
         self.assertIn('this._connectSafe(useItem, "activate", () => this._openExternalApiEnvEditor("voice"));', source)
         self.assertIn('this._connectSafe(openaiCompatible, "activate", () => this._openExternalApiEnvEditor("text"));', source)
-        self.assertIn('this._setStatus("ready", _("Text polishing: OpenAI-compatible API"), this.lastTranscript);', source)
+        self.assertIn('this._setStatusPreservingRecording("ready", _("Text polishing: OpenAI-compatible API"), this.lastTranscript);', source)
         self.assertIn('this._refreshTextModelMenuForBackend("openai-compatible");', source)
         self.assertIn("if (!this._writeExternalApiEnvFile()) {", source)
         self.assertIn("this._refreshTextModelMenu();\n        return;\n      }", source)
@@ -271,7 +271,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('must not contain userinfo', source)
         self.assertIn('must use https:// unless host is local loopback', source)
         self.assertIn('let config;\n    try {\n      config = this._validatedExternalApiConfig', source)
-        self.assertIn('this._setStatus("error", _("External API config contains invalid values"), this.lastTranscript);', source)
+        self.assertIn('this._setStatusPreservingRecording("error", _("External API config contains invalid values"), this.lastTranscript);', source)
         apply_index = source.index("_applyExternalApiEnvFile: function(showStatus)")
         set_index = source.index('this.settings.setValue("openai-compatible-url", this.openaiCompatibleUrl);', apply_index)
         validate_index = source.index("config = this._validatedExternalApiConfig", apply_index)
@@ -2124,7 +2124,7 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         self.assertIn("let safeModel;", block)
         self.assertIn('safeModel = this._coerceCliTextArg(model === undefined || model === null ? "" : model, "text model");', block)
-        self.assertIn('this._setStatus("error", _("Text model is invalid: ") + safeError', block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Text model is invalid: ") + safeError', block)
         self.assertIn("return false;", block)
         self.assertIn("this.ollamaModel = safeModel;", block)
         self.assertIn("this.openaiCompatibleTextModel = safeModel;", block)
@@ -3499,7 +3499,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_selectAutomaticVoiceBackend: function()", source)
         self.assertIn('this.settings.setValue("transcriber", this.transcriber)', source)
         self.assertIn('this.settings.setValue("whisper-model", this.whisperModel)', source)
-        self.assertIn('this._setStatus("ready", _("Voice model: automatic"), this.lastTranscript)', source)
+        self.assertIn('this._setStatusPreservingRecording("ready", _("Voice model: automatic"), this.lastTranscript)', source)
         self.assertIn("this._refreshModelMenu();", source)
 
     def test_voice_model_remove_status_does_not_render_backend_path_message(self) -> None:
@@ -3558,3 +3558,23 @@ class AppletStaticTest(unittest.TestCase):
         status_block = source[status_start:status_end]
         self.assertIn("if (!this._hasActiveRecordingState())", status_block)
         self.assertIn("this._updatePanel();", status_block)
+
+    def test_setting_choices_preserve_recorded_state(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        for method, next_method in [
+            ("_selectTranscriptStorageLimit: function(limit)", "\n  _customTranscriptLimitPromptArgs:"),
+            ("_selectArtifactEncryptionMode: function(mode)", "\n  _selectOutputMethod:"),
+            ("_selectOutputMethod: function(method)", "\n  _optionLabel:"),
+            ("_selectInputSource: function(name, label)", "\n  _selectDefaultInputSource:"),
+            ("_selectVoiceModel: function(model)", "\n  _selectAutomaticVoiceBackend:"),
+            ("_selectAutomaticVoiceBackend: function()", "\n  _selectStaticVoiceBackend:"),
+            ("_selectStaticVoiceBackend: function(transcriber, message)", "\n  _externalApiEnvPath:"),
+            ("_selectTextPolishingPreset: function(preset)", "\n  _populateTextPolishingSafetyMenu:"),
+            ("_toggleTextPolishingSafetyFlag: function(settingKey, propertyName, label)", "\n  _selectTextModelBackend:"),
+            ("_selectTextModelBackend: function(backend, model, message)", "\n  _activateOllamaTextModelFlow:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn("_setStatusPreservingRecording", block, method)

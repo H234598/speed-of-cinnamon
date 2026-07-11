@@ -2060,7 +2060,7 @@ MyApplet.prototype = {
       return this._textModelsArgs(backendOverride);
     } catch (err) {
       let safeError = this._sanitizeErrorMessage(err);
-      this._setStatus("error", _("Could not prepare text model request: ") + safeError, this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("Could not prepare text model request: ") + safeError, this.lastTranscript);
       return null;
     }
   },
@@ -2319,7 +2319,7 @@ MyApplet.prototype = {
     this.maxTranscriptFiles = this._normalizeTranscriptLimit(limit);
     this.settings.setValue("max-transcript-files", this.maxTranscriptFiles);
     this._populateTranscriptStorageMenu();
-    this._setStatus("ready", _("Keep a maximum of ") + String(this.maxTranscriptFiles) + _(" transcript files"), this.lastTranscript);
+    this._setStatusPreservingRecording("ready", _("Keep a maximum of ") + String(this.maxTranscriptFiles) + _(" transcript files"), this.lastTranscript);
   },
 
   _customTranscriptLimitPromptArgs: function() {
@@ -2520,12 +2520,7 @@ MyApplet.prototype = {
     this.settings.setValue("artifact-encryption", this.artifactEncryption);
     this._populateArtifactEncryptionMenu();
     let message = _("Encryption: ") + this._artifactEncryptionLabel(this.artifactEncryption);
-    if (this.status === "recording" || this.status === "processing") {
-      this.lastMessage = message;
-      this._updatePanel();
-      return;
-    }
-    this._setStatus("ready", message, this.lastTranscript);
+    this._setStatusPreservingRecording("ready", message, this.lastTranscript);
   },
 
   _selectOutputMethod: function(method) {
@@ -2533,12 +2528,7 @@ MyApplet.prototype = {
     this.settings.setValue("insert-method", this.insertMethod);
     this._populateOutputMethodMenu();
     let message = _("Output: ") + this._outputMethodLabel(this.insertMethod);
-    if (this.status === "recording" || this.status === "processing") {
-      this.lastMessage = message;
-      this._updatePanel();
-      return;
-    }
-    this._setStatus("ready", message, this.lastTranscript);
+    this._setStatusPreservingRecording("ready", message, this.lastTranscript);
   },
 
   _optionLabel: function(enabled, label) {
@@ -2564,7 +2554,7 @@ MyApplet.prototype = {
   },
 
   _setTextOptionStatus: function(message) {
-    if (this.status === "recording" || this.status === "processing") {
+    if (this._hasActiveRecordingState()) {
       this.lastMessage = this._uiMessageText(message);
       this._updatePanel();
       return;
@@ -4066,13 +4056,13 @@ MyApplet.prototype = {
 
   _selectInputSource: function(name, label) {
     if (typeof name !== "string") {
-      this._setStatus("error", _("Input source is invalid"), this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("Input source is invalid"), this.lastTranscript);
       return;
     }
     try {
       this.inputDevice = this._coerceCliTextArg(name, "input device");
     } catch (err) {
-      this._setStatus("error", _("Input source is invalid"), this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("Input source is invalid"), this.lastTranscript);
       return;
     }
     this.settings.setValue("input-device", this.inputDevice);
@@ -4081,12 +4071,12 @@ MyApplet.prototype = {
     let message = this.inputDevice === ""
       ? _("Input device: system default")
       : _("Input device: ") + safeLabel;
-    if (this.status === "recording" || this.status === "processing") {
+    if (this._hasActiveRecordingState()) {
       this.lastMessage = _("Input device for next recording: ") + safeLabel;
       this._updatePanel();
       return;
     }
-    this._setStatus("ready", message, this.lastTranscript);
+    this._setStatusPreservingRecording("ready", message, this.lastTranscript);
   },
 
   _selectDefaultInputSource: function() {
@@ -4114,7 +4104,7 @@ MyApplet.prototype = {
       if (payload.error) {
         let safeError = this._sanitizeErrorMessage(payload.error);
         this._populateModelMenu([], safeError);
-        this._setStatus("error", safeError, this.lastTranscript);
+        this._setStatusPreservingRecording("error", safeError, this.lastTranscript);
         return;
       }
       this._populateModelMenu(payload.models || []);
@@ -4155,7 +4145,7 @@ MyApplet.prototype = {
         return;
       }
       this._openAppletSettings();
-      this._setStatus("ready", _("Configure custom voice command in applet settings"), this.lastTranscript);
+      this._setStatusPreservingRecording("ready", _("Configure custom voice command in applet settings"), this.lastTranscript);
     });
     this.modelItem.menu.addMenuItem(customCommand);
 
@@ -4532,14 +4522,14 @@ MyApplet.prototype = {
       return false;
     }
     if (!this._voiceModelSupportsCurrentLanguage(model)) {
-      this._setStatus("error", _("English-only model cannot transcribe primary language: ") + this._voiceModelLanguage(), this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("English-only model cannot transcribe primary language: ") + this._voiceModelLanguage(), this.lastTranscript);
       return false;
     }
     this.transcriber = backend;
     this.whisperModel = path;
     this.settings.setValue("transcriber", this.transcriber);
     this.settings.setValue("whisper-model", this.whisperModel);
-    this._setStatus("ready", _("Voice model: ") + name, this.lastTranscript);
+    this._setStatusPreservingRecording("ready", _("Voice model: ") + name, this.lastTranscript);
     return true;
   },
 
@@ -4552,7 +4542,7 @@ MyApplet.prototype = {
     this.settings.setValue("transcriber", this.transcriber);
     this.settings.setValue("whisper-model", this.whisperModel);
     this._refreshModelMenu();
-    this._setStatus("ready", _("Voice model: automatic"), this.lastTranscript);
+    this._setStatusPreservingRecording("ready", _("Voice model: automatic"), this.lastTranscript);
   },
 
   _selectStaticVoiceBackend: function(transcriber, message) {
@@ -4564,7 +4554,7 @@ MyApplet.prototype = {
     this.settings.setValue("transcriber", this.transcriber);
     this.settings.setValue("whisper-model", this.whisperModel);
     this._refreshModelMenu();
-    this._setStatus("ready", message, this.lastTranscript);
+    this._setStatusPreservingRecording("ready", message, this.lastTranscript);
   },
 
   _externalApiEnvPath: function() {
@@ -4722,7 +4712,7 @@ MyApplet.prototype = {
       this._writeExternalApiEnvFileContents(path, this._externalApiEnvContent());
     } catch (err) {
       global.logError(err);
-      this._setStatus("error", _("External API config file could not be written"), this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("External API config file could not be written"), this.lastTranscript);
       return false;
     }
     return true;
@@ -4777,7 +4767,7 @@ MyApplet.prototype = {
       }
     } catch (err) {
       global.logError(err);
-      this._setStatus("error", _("External API config file could not be written"), this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("External API config file could not be written"), this.lastTranscript);
     }
     return path;
   },
@@ -4813,7 +4803,7 @@ MyApplet.prototype = {
         this._writeExternalApiEnvFileContents(path, migrated);
       } catch (err) {
         global.logError(err);
-        this._setStatus("error", _("External API config file could not be written"), this.lastTranscript);
+        this._setStatusPreservingRecording("error", _("External API config file could not be written"), this.lastTranscript);
       }
     }
   },
@@ -4862,7 +4852,7 @@ MyApplet.prototype = {
       });
     } catch (err) {
       global.logError(err);
-      this._setStatus("error", _("External API config contains invalid values"), this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("External API config contains invalid values"), this.lastTranscript);
       return false;
     }
     this.openaiCompatibleUrl = config.url;
@@ -4874,7 +4864,7 @@ MyApplet.prototype = {
     this.settings.setValue("openai-compatible-text-model", this.openaiCompatibleTextModel);
     this._clearPersistedOpenAiCompatibleApiKey();
     if (showStatus) {
-      this._setStatus("ready", _("External API config loaded: ") + (this.openaiCompatibleModel || _("not configured")), this.lastTranscript);
+      this._setStatusPreservingRecording("ready", _("External API config loaded: ") + (this.openaiCompatibleModel || _("not configured")), this.lastTranscript);
     }
     return true;
   },
@@ -4938,7 +4928,7 @@ MyApplet.prototype = {
       this.postProcessBackend = "openai-compatible";
       this.settings.setValue("post-process-backend", this.postProcessBackend);
       this._refreshTextModelMenuForBackend("openai-compatible");
-      this._setStatus("ready", _("Text polishing: OpenAI-compatible API"), this.lastTranscript);
+      this._setStatusPreservingRecording("ready", _("Text polishing: OpenAI-compatible API"), this.lastTranscript);
       return;
     }
     this._selectExternalApiVoiceBackend();
@@ -4955,10 +4945,10 @@ MyApplet.prototype = {
     this._refreshModelMenu();
     let model = String(this.openaiCompatibleModel || "").trim();
     if (model === "") {
-      this._setStatus("error", _("External API speech model is not configured"), this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("External API speech model is not configured"), this.lastTranscript);
       return;
     }
-    this._setStatus("ready", _("Voice model: External API ") + model, this.lastTranscript);
+    this._setStatusPreservingRecording("ready", _("Voice model: External API ") + model, this.lastTranscript);
   },
 
   _refreshTextModelMenu: function() {
@@ -5182,7 +5172,7 @@ MyApplet.prototype = {
     this.postProcessPreset = this._normalizeTextPolishingPreset(preset);
     this.settings.setValue("post-process-preset", this.postProcessPreset);
     this._refreshTextModelMenu();
-    this._setStatus("ready", _("Polishing preset: ") + this._textPolishingPresetLabel(this.postProcessPreset), this.lastTranscript);
+    this._setStatusPreservingRecording("ready", _("Polishing preset: ") + this._textPolishingPresetLabel(this.postProcessPreset), this.lastTranscript);
   },
 
   _populateTextPolishingSafetyMenu: function(parentMenu) {
@@ -5203,7 +5193,7 @@ MyApplet.prototype = {
     this[propertyName] = !Boolean(this[propertyName]);
     this.settings.setValue(settingKey, this[propertyName]);
     this._refreshTextModelMenu();
-    this._setStatus("ready", label + ": " + (this[propertyName] ? _("enabled") : _("disabled")), this.lastTranscript);
+    this._setStatusPreservingRecording("ready", label + ": " + (this[propertyName] ? _("enabled") : _("disabled")), this.lastTranscript);
   },
 
   _selectTextModelBackend: function(backend, model, message) {
@@ -5214,7 +5204,7 @@ MyApplet.prototype = {
       safeModel = this._coerceCliTextArg(model === undefined || model === null ? "" : model, "text model");
     } catch (err) {
       let safeError = this._sanitizeErrorMessage(err);
-      this._setStatus("error", _("Text model is invalid: ") + safeError, this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("Text model is invalid: ") + safeError, this.lastTranscript);
       return false;
     }
     this.postProcessBackend = String(backend || "none");
@@ -5232,7 +5222,7 @@ MyApplet.prototype = {
       }
     }
     this._refreshTextModelMenu();
-    this._setStatus("ready", message, this.lastTranscript);
+    this._setStatusPreservingRecording("ready", message, this.lastTranscript);
     return true;
   },
 
@@ -5900,7 +5890,7 @@ MyApplet.prototype = {
     this.settings.setValue("post-process-never-add-content", this.postProcessNeverAddContent);
     this.settings.setValue("post-process-mask-sensitive-data", this.postProcessMaskSensitiveData);
     this._refreshTextModelMenu();
-    this._setStatus("ready", _("Text polishing defaults restored"), this.lastTranscript);
+    this._setStatusPreservingRecording("ready", _("Text polishing defaults restored"), this.lastTranscript);
   },
 
   _previewCleanup: function() {
