@@ -1101,6 +1101,7 @@ MyApplet.prototype = {
     this.voiceModelActionToken = null;
     this.recordingStartedAtMs = 0;
     this.recordingMaxSeconds = 0;
+    this.transcriptWindowToken = null;
     this.targetWindow = null;
     this.targetWindowXid = "";
     this.targetWindowXTitle = "";
@@ -1829,6 +1830,7 @@ MyApplet.prototype = {
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
     this.transcriptListPromptToken = null;
+    this.transcriptWindowToken = null;
     this.textInsertToken = null;
     this.alarmActionToken = null;
     this.alarmCheckToken = null;
@@ -3084,6 +3086,8 @@ MyApplet.prototype = {
     this.setupDiagnosticsToken = null;
     this.doctorCommandToken = null;
     this._doctorCommandRunning = false;
+    this.transcriptListPromptToken = null;
+    this.transcriptWindowToken = null;
   },
 
   _runDoctor: function(startupCheck) {
@@ -5638,7 +5642,7 @@ MyApplet.prototype = {
     }
     if (!this._findTrustedProgramInPath("zenity")) {
       let message = _("Install zenity to show the transcript list without writing a plaintext file.");
-      this._setStatus("error", message, this.lastTranscript);
+      this._setStatusPreservingRecording("error", message, this.lastTranscript);
       this._notify(_("Speed of Cinnamon"), message, true);
       return;
     }
@@ -5676,7 +5680,7 @@ MyApplet.prototype = {
       "transcript-list"
     ), "transcript-list")) {
       this._dialogClose(dialog, "transcript-list");
-      this._setStatus("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);
       complete(false);
       return;
     }
@@ -5686,7 +5690,7 @@ MyApplet.prototype = {
         key: Clutter.KEY_Escape,
         action: function() {
           this._dialogClose(dialog, "transcript-list");
-          this._setStatus("ready", _("Transcript list cancelled"), this.lastTranscript);
+          this._setStatusPreservingRecording("ready", _("Transcript list cancelled"), this.lastTranscript);
           complete(false);
         }.bind(this),
       },
@@ -5699,13 +5703,13 @@ MyApplet.prototype = {
       }
     ], "transcript-list")) {
       this._dialogClose(dialog, "transcript-list");
-      this._setStatus("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);
       complete(false);
       return;
     }
     if (!this._dialogOpen(dialog, "transcript-list")) {
       this._dialogClose(dialog, "transcript-list");
-      this._setStatus("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);
       this._notify(_("Speed of Cinnamon"), _("Transcript list confirmation could not be opened"), true);
       complete(false);
     }
@@ -5733,10 +5737,21 @@ MyApplet.prototype = {
   },
 
   _showTranscriptsWindow: function(content, count, truncated) {
+    let windowToken = {};
+    this.transcriptWindowToken = windowToken;
+    let isCurrentWindow = () => this.transcriptWindowToken === windowToken && this._lifecycleAllowsWork();
+    let releaseWindow = () => {
+      if (this.transcriptWindowToken !== windowToken) {
+        return false;
+      }
+      this.transcriptWindowToken = null;
+      return true;
+    };
     let zenity = this._findTrustedProgramInPath("zenity");
     if (!zenity) {
+      releaseWindow();
       let message = _("Install zenity to show the transcript list without writing a plaintext file.");
-      this._setStatus("error", message, this.lastTranscript);
+      this._setStatusPreservingRecording("error", message, this.lastTranscript);
       this._notify(_("Speed of Cinnamon"), message, true);
       return;
     }
@@ -5754,8 +5769,12 @@ MyApplet.prototype = {
         maxStdoutBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
         maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
       }, (stdout, stderr, result) => {
+        if (!isCurrentWindow()) {
+          return;
+        }
+        releaseWindow();
         if (result && result.error && !result.cancelled) {
-          this._setStatus("error", _("Transcript list window closed unexpectedly"), this.lastTranscript);
+          this._setStatusPreservingRecording("error", _("Transcript list window closed unexpectedly"), this.lastTranscript);
         }
       });
       if (!handle) {
@@ -5770,10 +5789,14 @@ MyApplet.prototype = {
           false
         );
       }
-      this._setStatus("done", message, this.lastTranscript);
+      this._setStatusPreservingRecording("done", message, this.lastTranscript);
     } catch (err) {
+      if (!isCurrentWindow()) {
+        return;
+      }
+      releaseWindow();
       let safeError = this._sanitizeErrorMessage(String(err && err.message ? err.message : err));
-      this._setStatus("error", _("Could not open transcript list: ") + safeError, this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("Could not open transcript list: ") + safeError, this.lastTranscript);
       this._notify(_("Could not open transcript list"), safeError, true);
     }
   },
