@@ -3958,7 +3958,19 @@ MyApplet.prototype = {
     let refreshToken = {};
     this.alarmMenuRefreshToken = refreshToken;
     this._populateAlarmMenu([], _("Loading alarms..."));
-    this._spawnJson(this._alarmListArgs(), (payload) => {
+    let alarmListArgs;
+    try {
+      alarmListArgs = this._alarmListArgs();
+    } catch (error) {
+      if (this.alarmMenuRefreshToken === refreshToken) {
+        this.alarmMenuRefreshToken = null;
+      }
+      this._recordLifecycleError("alarm-refresh", error);
+      this._populateAlarmMenu([], "", _("Could not prepare alarm list"));
+      this._setAlarmErrorStatus(_("Could not prepare alarm list"));
+      return;
+    }
+    this._spawnJson(alarmListArgs, (payload) => {
       if (this.alarmMenuRefreshToken !== refreshToken) {
         return;
       }
@@ -4091,7 +4103,18 @@ MyApplet.prototype = {
     let actionToken = {};
     this.alarmActionToken = actionToken;
     this._setAlarmOptionStatus(enabled ? _("Enabling alarm...") : _("Disabling alarm..."));
-    this._spawnJson(this._alarmEnableArgs(id, enabled), (payload) => {
+    let alarmEnableArgs;
+    try {
+      alarmEnableArgs = this._alarmEnableArgs(id, enabled);
+    } catch (error) {
+      if (this.alarmActionToken === actionToken) {
+        this.alarmActionToken = null;
+      }
+      this._recordLifecycleError("alarm-action", error);
+      this._setAlarmErrorStatus(_("Could not prepare alarm update"));
+      return;
+    }
+    this._spawnJson(alarmEnableArgs, (payload) => {
       if (this.alarmActionToken !== actionToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -4115,7 +4138,18 @@ MyApplet.prototype = {
     let actionToken = {};
     this.alarmActionToken = actionToken;
     this._setAlarmOptionStatus(_("Removing alarm..."));
-    this._spawnJson(this._alarmRemoveArgs(id), (payload) => {
+    let alarmRemoveArgs;
+    try {
+      alarmRemoveArgs = this._alarmRemoveArgs(id);
+    } catch (error) {
+      if (this.alarmActionToken === actionToken) {
+        this.alarmActionToken = null;
+      }
+      this._recordLifecycleError("alarm-action", error);
+      this._setAlarmErrorStatus(_("Could not prepare alarm removal"));
+      return;
+    }
+    this._spawnJson(alarmRemoveArgs, (payload) => {
       if (this.alarmActionToken !== actionToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -4138,7 +4172,20 @@ MyApplet.prototype = {
     this.alarmMenuRefreshToken = null;
     let checkToken = {};
     this.alarmCheckToken = checkToken;
-    this._spawnJson(this._alarmCheckArgs(), (payload) => {
+    let alarmCheckArgs;
+    try {
+      alarmCheckArgs = this._alarmCheckArgs();
+    } catch (error) {
+      if (this.alarmCheckToken === checkToken) {
+        this.alarmCheckToken = null;
+      }
+      this._recordLifecycleError("alarm-check", error);
+      if (manual) {
+        this._setAlarmErrorStatus(_("Could not prepare alarm check"));
+      }
+      return;
+    }
+    this._spawnJson(alarmCheckArgs, (payload) => {
       if (this.alarmCheckToken !== checkToken || !this._lifecycleAllowsWork()) {
         return;
       }

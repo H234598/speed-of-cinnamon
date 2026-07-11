@@ -2482,6 +2482,23 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn('this.status === "recording" || this.status === "processing"', option_block)
         self.assertIn('this._setStatusPreservingRecording("error", message, this.lastTranscript);', error_block)
 
+    def test_alarm_tokens_release_when_argument_building_fails(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method, args_name, builder_name, token_name in [
+            ("_refreshAlarmMenu: function()", "\n  _populateAlarmMenu:", "alarmListArgs", "_alarmListArgs", "alarmMenuRefreshToken"),
+            ("_setAlarmEnabled: function(id, enabled)", "\n  _removeAlarm:", "alarmEnableArgs", "_alarmEnableArgs", "alarmActionToken"),
+            ("_removeAlarm: function(id)", "\n  _checkAlarms:", "alarmRemoveArgs", "_alarmRemoveArgs", "alarmActionToken"),
+            ("_checkAlarms: function(manual)", "\n  _refreshInputSourceMenu:", "alarmCheckArgs", "_alarmCheckArgs", "alarmCheckToken"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn(f"let {args_name};", block)
+            self.assertIn(f"{args_name} = this.{builder_name}", block)
+            self.assertIn(f"if (this.{token_name} ===", block)
+            self.assertIn(f"this.{token_name} = null;", block)
+            self.assertIn("this._recordLifecycleError(", block)
+
     def test_settings_transfers_ignore_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
