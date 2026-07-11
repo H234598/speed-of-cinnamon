@@ -1784,6 +1784,7 @@ MyApplet.prototype = {
     this._clearPasteTimer();
     this._terminateProcessesByGroup("keyboard");
     this._terminateProcessesByGroup("clipboard");
+    this._terminateProcessesByGroup("x11");
     if (this.autoRelistenPending) {
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
