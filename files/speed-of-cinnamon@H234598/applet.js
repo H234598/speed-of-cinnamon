@@ -629,20 +629,29 @@ MyApplet.prototype = {
     if (!target || !this._resourceRegistry || !Array.isArray(this._resourceRegistry.signals)) {
       return;
     }
-    let signals = this._resourceRegistry.signals.splice(0);
-    for (let connection of signals) {
-      if (!connection || connection.target !== target) {
-        this._resourceRegistry.signals.push(connection);
-        continue;
-      }
-      try {
-        if (target.disconnect && connection.id) {
-          target.disconnect(connection.id);
+    let signals = this._resourceRegistry.signals;
+    try {
+      for (let index = signals.length - 1; index >= 0; index--) {
+        let connection = signals[index];
+        if (!connection || connection.target !== target) {
+          continue;
         }
-      } catch (error) {
-        this._resourceRegistry.signals.push(connection);
-        this._recordLifecycleError("teardown-target-signals", error);
+        try {
+          if (target.disconnect && connection.id) {
+            target.disconnect(connection.id);
+          }
+        } catch (error) {
+          this._recordLifecycleError("teardown-target-signals", error);
+          continue;
+        }
+        try {
+          signals.splice(index, 1);
+        } catch (error) {
+          this._recordLifecycleError("teardown-target-signals", error);
+        }
       }
+    } catch (error) {
+      this._recordLifecycleError("teardown-target-signals", error);
     }
   },
 

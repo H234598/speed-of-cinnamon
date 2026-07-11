@@ -1763,8 +1763,9 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_disconnectTrackedSignalsForTarget: function(target)")
         end = source.index("\n  _clearMenuItems:", start)
         block = source[start:end]
-        self.assertIn("let signals = this._resourceRegistry.signals.splice(0);", block)
-        self.assertIn("this._resourceRegistry.signals.push(connection);", block)
+        self.assertIn("let signals = this._resourceRegistry.signals;", block)
+        self.assertIn("for (let index = signals.length - 1; index >= 0; index--)", block)
+        self.assertIn("signals.splice(index, 1);", block)
         self.assertIn('this._recordLifecycleError("teardown-target-signals", error);', block)
 
     def test_failed_dialog_close_remains_tracked(self) -> None:
