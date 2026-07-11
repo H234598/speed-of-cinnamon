@@ -6839,8 +6839,51 @@ MyApplet.prototype = {
   },
 
   _appletLifecycleDiagnostics: function() {
-    let registry = this._resourceRegistry || {};
-    let countEntries = (value) => value && typeof value === "object" ? Object.keys(value).length : 0;
+    let recordDiagnosticError = (error) => {
+      try {
+        this._recordLifecycleError("diagnostics", error);
+      } catch (ignored) {
+        this._safeLogError(error);
+      }
+    };
+    let registry = {};
+    try {
+      registry = this._resourceRegistry || {};
+    } catch (error) {
+      recordDiagnosticError(error);
+    }
+    let registryValue = (name, fallback) => {
+      try {
+        let value = registry && registry[name];
+        return value === undefined || value === null ? fallback : value;
+      } catch (error) {
+        recordDiagnosticError(error);
+        return fallback;
+      }
+    };
+    let timers = registryValue("timers", {});
+    let signals = registryValue("signals", []);
+    let hotkeys = registryValue("hotkeys", {});
+    let monitors = registryValue("monitors", []);
+    let dialogs = registryValue("dialogs", []);
+    let processes = registryValue("processes", {});
+    let cancellables = registryValue("cancellables", {});
+    let countEntries = (value) => {
+      try {
+        return value && typeof value === "object" ? Object.keys(value).length : 0;
+      } catch (error) {
+        recordDiagnosticError(error);
+        return 0;
+      }
+    };
+    let countArrayEntries = (value) => {
+      try {
+        return Array.isArray(value) ? value.length : 0;
+      } catch (error) {
+        recordDiagnosticError(error);
+        return 0;
+      }
+    };
     let errorCounts = {};
     for (let key in this._lifecycleErrorCounts || {}) {
       if (Object.prototype.hasOwnProperty.call(this._lifecycleErrorCounts, key)) {
@@ -6856,29 +6899,37 @@ MyApplet.prototype = {
     }
     disabledGroups = disabledGroups.filter((value, index, values) => value && values.indexOf(value) === index).sort().slice(0, 64);
     let processGroups = {};
-    for (let token in registry.processes || {}) {
-      if (!Object.prototype.hasOwnProperty.call(registry.processes, token)) {
-        continue;
+    try {
+      for (let token in processes || {}) {
+        try {
+          if (!Object.prototype.hasOwnProperty.call(processes, token)) {
+            continue;
+          }
+          let processEntry = processes[token];
+          if (!processEntry || typeof processEntry !== "object") {
+            continue;
+          }
+          let group = String(processEntry.group || "process").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || "process";
+          processGroups[group] = Number(processGroups[group] || 0) + 1;
+        } catch (error) {
+          recordDiagnosticError(error);
+        }
       }
-      let processEntry = registry.processes[token];
-      if (!processEntry || typeof processEntry !== "object") {
-        continue;
-      }
-      let group = String(processEntry.group || "process").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || "process";
-      processGroups[group] = Number(processGroups[group] || 0) + 1;
+    } catch (error) {
+      recordDiagnosticError(error);
     }
     return {
       state: String(this.lifecycleState || LIFECYCLE_INITIALIZING),
       error_counts: errorCounts,
       disabled_groups: disabledGroups,
       resources: {
-        timers: countEntries(registry.timers),
-        signals: Array.isArray(registry.signals) ? registry.signals.length : 0,
-        hotkeys: countEntries(registry.hotkeys),
-        monitors: Array.isArray(registry.monitors) ? registry.monitors.length : 0,
-        dialogs: Array.isArray(registry.dialogs) ? registry.dialogs.length : 0,
-        processes: countEntries(registry.processes),
-        cancellables: countEntries(registry.cancellables),
+        timers: countEntries(timers),
+        signals: countArrayEntries(signals),
+        hotkeys: countEntries(hotkeys),
+        monitors: countArrayEntries(monitors),
+        dialogs: countArrayEntries(dialogs),
+        processes: countEntries(processes),
+        cancellables: countEntries(cancellables),
       },
       process_groups: processGroups,
     };
