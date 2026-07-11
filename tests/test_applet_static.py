@@ -2305,6 +2305,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_profanityFilterDocumentArgs: function()", source)
         self.assertIn('return [this._cliCommand(), "profanity-filter-document", "--json"];', source)
         self.assertIn("_openProfanityFilterList: function()", source)
+        self.assertIn('let path = typeof payload.path === "string" ? payload.path.trim() : "";', source)
         self.assertIn("this._openFile(path, _(\"Opened profanity replacement list: \") + String(this._safePayloadCount(payload.entries)));", source)
         self.assertIn("show-profanity-filter-list", schema["layout"]["output-section"]["keys"])
         self.assertEqual(schema["show-profanity-filter-list"]["type"], "button")

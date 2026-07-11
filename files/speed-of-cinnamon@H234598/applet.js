@@ -3203,7 +3203,7 @@ MyApplet.prototype = {
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
-      let path = String(payload.path || "");
+      let path = typeof payload.path === "string" ? payload.path.trim() : "";
       if (path === "") {
         this.setupDiagnosticsToken = null;
         this._setStatus("error", _("Profanity replacement list was not generated"), this.lastTranscript);
