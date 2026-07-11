@@ -991,6 +991,9 @@ MyApplet.prototype = {
     let token = this._nextResourceToken("cancellable");
     if (this._resourceRegistry && cancellable) {
       this._resourceRegistry.cancellables[token] = cancellable;
+      if (this._resourceRegistry.cancellables[token] !== cancellable) {
+        throw new Error("Cancellable could not be registered");
+      }
     }
     return token;
   },
@@ -1004,11 +1007,15 @@ MyApplet.prototype = {
   _registerProcess: function(process, generation, group) {
     let token = this._nextResourceToken("process");
     if (this._resourceRegistry && process) {
-      this._resourceRegistry.processes[token] = {
+      let entry = {
         process: process,
         generation: generation,
         group: String(group || "process"),
       };
+      this._resourceRegistry.processes[token] = entry;
+      if (this._resourceRegistry.processes[token] !== entry) {
+        throw new Error("Process could not be registered");
+      }
     }
     return token;
   },

@@ -1625,6 +1625,23 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._unregisterProcess(processToken);", block)
         self.assertIn("this._terminateProcess(process);", block)
 
+    def test_process_and_cancellable_registration_verify_registry_writes(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_registerCancellable: function(cancellable)")
+        end = source.index("\n  _unregisterCancellable:", start)
+        cancellable_block = source[start:end]
+        self.assertIn("this._resourceRegistry.cancellables[token] = cancellable;", cancellable_block)
+        self.assertIn("this._resourceRegistry.cancellables[token] !== cancellable", cancellable_block)
+        self.assertIn('throw new Error("Cancellable could not be registered");', cancellable_block)
+
+        start = source.index("_registerProcess: function(process, generation, group)")
+        end = source.index("\n  _unregisterProcess:", start)
+        process_block = source[start:end]
+        self.assertIn("let entry = {", process_block)
+        self.assertIn("this._resourceRegistry.processes[token] = entry;", process_block)
+        self.assertIn("this._resourceRegistry.processes[token] !== entry", process_block)
+        self.assertIn('throw new Error("Process could not be registered");', process_block)
+
     def test_lifecycle_timers_ignore_removed_applet(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
