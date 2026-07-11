@@ -1080,6 +1080,7 @@ MyApplet.prototype = {
     this.autoRelistenSequence = 0;
     this.autoInsertFingerprint = "";
     this.autoInsertFingerprints = [];
+    this.textInsertToken = null;
     this.recordingStartedAtMs = 0;
     this.recordingMaxSeconds = 0;
     this.targetWindow = null;
@@ -1761,6 +1762,7 @@ MyApplet.prototype = {
     this.benchmarkFlowToken = null;
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
+    this.textInsertToken = null;
     this.alarmActionToken = null;
     this.alarmCheckToken = null;
     this.settingsTransferToken = null;
@@ -7603,61 +7605,94 @@ MyApplet.prototype = {
   },
 
   _insertTranscriptText: function(transcript, completionCallback) {
+    if (!this._lifecycleAllowsWork() || this.textInsertToken) {
+      return false;
+    }
     let method = this._normalizeOutputMethod(this.insertMethod);
     let autoPasteTarget = this._windowTitleMatchesAutoPaste();
     let canPasteWithKeyboard = this._findTrustedProgramInPath("xdotool") || this._findTrustedProgramInPath("wtype");
     let submitWithReturn = autoPasteTarget && method === "clipboard-paste" && canPasteWithKeyboard;
     let suppressAutoPasteEnter = method !== "clipboard-paste" || submitWithReturn;
     let text = this._preparedTranscriptText(transcript, suppressAutoPasteEnter);
+    let insertToken = {};
+    this.textInsertToken = insertToken;
+    let release = () => {
+      if (this.textInsertToken === insertToken) {
+        this.textInsertToken = null;
+        return true;
+      }
+      return false;
+    };
+    let complete = (result) => {
+      if (!release()) {
+        return;
+      }
+      if (typeof completionCallback === "function") {
+        completionCallback(result === true);
+      }
+    };
     if (method === "none") {
       this._setStatus("done", _("Insertion disabled"), transcript);
+      release();
       return true;
     }
     if (this._isEmptyTranscriptText(transcript) || this._isEmptyTranscriptText(text)) {
       this._setStatus("done", _("No transcript text to insert"), "");
+      release();
       return true;
     }
     if (method === "type") {
       if (this._findTrustedProgramInPath("xdotool")) {
         if (!this._closeMenuForKeyboardInsert()) {
           this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);
+          release();
           return false;
         }
         this._restoreTargetWindowForPaste((restored) => {
           if (!restored) {
             this._setStatus("error", _("Target window unavailable for direct typing"), transcript);
-            if (typeof completionCallback === "function") completionCallback(false);
+            complete(false);
             return;
           }
           if (!this._typeTextAfterFocus(text, (completed) => {
             if (completed) {
               this._setStatus("done", _("Typed into target window"), transcript);
             }
-            if (typeof completionCallback === "function") {
-              completionCallback(completed === true);
-            }
+            complete(completed === true);
           })) {
-            if (typeof completionCallback === "function") completionCallback(false);
+            complete(false);
           }
         });
         return null;
       } else {
         this._setStatus("error", _("Install xdotool for direct typing"), transcript);
       }
+      release();
       return false;
     }
     if (method === "clipboard-paste" && !canPasteWithKeyboard) {
       this._setStatus("error", _("Clipboard-paste requires a keyboard helper (xdotool or wtype)"), transcript);
+      release();
       return false;
     }
     if (method !== "clipboard-paste") {
-      return this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback);
+      let result = this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn, complete);
+      if (result !== null) {
+        release();
+      }
+      return result;
     }
     this._clipboardPayloadSnapshotAsync((clipboardSnapshot) => {
+      if (this.textInsertToken !== insertToken) {
+        return;
+      }
       if (clipboardSnapshot.hasNonTextPayload) {
         if (this._hasValidClipboardOverwriteApproval(clipboardSnapshot)) {
           this._clearClipboardOverwriteApproval();
-          this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback);
+          let result = this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn, complete);
+          if (result !== null) {
+            release();
+          }
           return;
         }
         this._clearClipboardOverwriteApproval();
@@ -7668,11 +7703,14 @@ MyApplet.prototype = {
           method,
           canPasteWithKeyboard,
           submitWithReturn,
-          completionCallback
+          complete
         );
         return;
       }
-      this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback);
+      let result = this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn, complete);
+      if (result !== null) {
+        release();
+      }
     });
     return null;
   },
