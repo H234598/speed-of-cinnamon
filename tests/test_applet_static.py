@@ -3563,6 +3563,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.autoInsertFingerprints.splice(index, 1);", block)
         self.assertIn('this._recordLifecycleError("auto-insert-fingerprint", error);', block)
         self.assertIn("return false;", block)
+        self.assertLess(block.index("try {"), block.index("let index = this.autoInsertFingerprints.indexOf(fingerprint);"))
 
     def test_auto_insert_fingerprint_reservation_contains_mutation_failures(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

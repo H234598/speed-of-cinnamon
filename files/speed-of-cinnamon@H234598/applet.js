@@ -9590,8 +9590,8 @@ MyApplet.prototype = {
     if (!fingerprint || !this.autoInsertFingerprints) {
       return;
     }
-    let index = this.autoInsertFingerprints.indexOf(fingerprint);
     try {
+      let index = this.autoInsertFingerprints.indexOf(fingerprint);
       if (index >= 0) {
         this.autoInsertFingerprints.splice(index, 1);
       }
