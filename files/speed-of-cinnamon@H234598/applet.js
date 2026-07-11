@@ -3757,7 +3757,7 @@ MyApplet.prototype = {
       return;
     }
     sources = Array.isArray(sources) ? sources : [];
-    sources = sources.filter((source) => source && typeof source === "object" && String(source.name || "").trim() !== "");
+    sources = sources.filter((source) => source && typeof source === "object" && typeof source.name === "string" && source.name.trim() !== "");
     let messageText = typeof message === "string" ? message.trim() : "";
     this._clearMenuItems(this.inputSourceItem.menu);
     let current = String(this.inputDevice || "");
@@ -3792,11 +3792,12 @@ MyApplet.prototype = {
       if (!source || typeof source !== "object") {
         continue;
       }
-      let sourceName = String(source.name || "");
+      let sourceName = source.name;
       if (sourceName === "") {
         continue;
       }
-      let label = source.description || sourceName;
+      let description = typeof source.description === "string" ? source.description.trim() : "";
+      let label = description || sourceName;
       if (source.default === true) {
         label += _(" (system default)");
       }

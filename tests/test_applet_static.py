@@ -864,6 +864,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('label += _(" - invalid metadata");', block)
         self.assertIn("useItem.setSensitive(!current && compatible && usable);", block)
 
+    def test_input_source_names_and_descriptions_are_string_checked(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_populateInputSourceMenu: function(sources, message)")
+        end = source.index("\n  _selectInputSource:", start)
+        block = source[start:end]
+        self.assertIn('typeof source.name === "string"', block)
+        self.assertIn("let sourceName = source.name;", block)
+        self.assertIn('typeof source.description === "string"', block)
+        self.assertIn("let label = description || sourceName;", block)
+
     def test_invalid_ollama_model_input_cannot_stick_command_running_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
