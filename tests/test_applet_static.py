@@ -903,6 +903,8 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_populateHistoryMenu: function(transcripts)")
         end = source.index("\n  _copyHistoryTranscript:", start)
         block = source[start:end]
+        self.assertIn('typeof transcript.preview === "string"', block)
+        self.assertIn('typeof transcript.name === "string"', block)
         self.assertIn('typeof transcript.text === "string"', block)
         self.assertIn("let hasTranscriptText = transcriptText !== \"\" && !this._isEmptyTranscriptText(transcriptText);", block)
         self.assertIn("insertItem.setSensitive(hasTranscriptText);", block)

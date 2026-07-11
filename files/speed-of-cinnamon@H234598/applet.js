@@ -8009,7 +8009,15 @@ MyApplet.prototype = {
       return;
     }
     transcripts = Array.isArray(transcripts) ? transcripts : [];
-    transcripts = transcripts.filter((transcript) => transcript && typeof transcript === "object" && String(transcript.preview || transcript.name || transcript.text || "").trim() !== "");
+    transcripts = transcripts.filter((transcript) => {
+      if (!transcript || typeof transcript !== "object") {
+        return false;
+      }
+      let preview = typeof transcript.preview === "string" ? transcript.preview.trim() : "";
+      let name = typeof transcript.name === "string" ? transcript.name.trim() : "";
+      let text = typeof transcript.text === "string" ? transcript.text.trim() : "";
+      return preview !== "" || name !== "" || text !== "";
+    });
     this._clearMenuItems(this.historyItem.menu);
     if (!transcripts || transcripts.length === 0) {
       let empty = new PopupMenu.PopupMenuItem(_("No transcripts yet"));
