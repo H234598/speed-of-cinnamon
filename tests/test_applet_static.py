@@ -1700,6 +1700,8 @@ class AppletStaticTest(unittest.TestCase):
         set_status_index = source.index("_setStatus: function(status, message, transcript)")
         set_status_end = source.index("\n  _maybeNotify:", set_status_index)
         set_status_block = source[set_status_index:set_status_end]
+        self.assertIn("try {", set_status_block)
+        self.assertIn('this._recordLifecycleError("status-update", error);', set_status_block)
         self.assertIn("this._statusRefreshToken++;", set_status_block)
         self.assertLess(
             set_status_block.index("this._statusRefreshToken++;"),

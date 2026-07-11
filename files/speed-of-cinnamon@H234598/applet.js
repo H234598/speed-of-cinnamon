@@ -9107,30 +9107,34 @@ MyApplet.prototype = {
     if (!this._lifecycleAllowsWork()) {
       return;
     }
-    // A local UI transition supersedes any status response that is still in flight.
-    this._statusRefreshToken++;
-    let previousStatus = this.status;
-    this.status = status;
-    let safeMessage = (typeof message === "string" ? message : "");
-    this.lastMessage = status === "error"
-      ? this._uiMessageText(this._sanitizeErrorMessage(safeMessage))
-      : this._uiMessageText(safeMessage);
-    if (typeof transcript === "string" && transcript !== "") {
-      this.lastTranscript = transcript;
+    try {
+      // A local UI transition supersedes any status response that is still in flight.
+      this._statusRefreshToken++;
+      let previousStatus = this.status;
+      this.status = status;
+      let safeMessage = (typeof message === "string" ? message : "");
+      this.lastMessage = status === "error"
+        ? this._uiMessageText(this._sanitizeErrorMessage(safeMessage))
+        : this._uiMessageText(safeMessage);
+      if (typeof transcript === "string" && transcript !== "") {
+        this.lastTranscript = transcript;
+      }
+      if (this.copyLastItem) {
+        this.copyLastItem.setSensitive(Boolean(this.lastTranscript));
+      }
+      if (this.insertLastItem) {
+        this.insertLastItem.setSensitive(Boolean(this.lastTranscript));
+      }
+      if (this.cancelItem) {
+        this.cancelItem.setSensitive(this._hasCancelableRecordingWork());
+      }
+      this._updatePanel();
+      this._maybeNotify(previousStatus, this.status, this.lastMessage);
+      this._scheduleStatusPoll();
+      this._scheduleDisplayTick();
+    } catch (error) {
+      this._recordLifecycleError("status-update", error);
     }
-    if (this.copyLastItem) {
-      this.copyLastItem.setSensitive(Boolean(this.lastTranscript));
-    }
-    if (this.insertLastItem) {
-      this.insertLastItem.setSensitive(Boolean(this.lastTranscript));
-    }
-    if (this.cancelItem) {
-      this.cancelItem.setSensitive(this._hasCancelableRecordingWork());
-    }
-    this._updatePanel();
-    this._maybeNotify(previousStatus, this.status, this.lastMessage);
-    this._scheduleStatusPoll();
-    this._scheduleDisplayTick();
   },
 
   _maybeNotify: function(previousStatus, status, message) {
