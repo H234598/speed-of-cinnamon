@@ -3695,6 +3695,9 @@ class AppletStaticTest(unittest.TestCase):
         status_end = source.index("\n  _setStatus: function", status_start)
         status_block = source[status_start:status_end]
         self.assertIn("if (!this._hasActiveRecordingState())", status_block)
+        self.assertIn("if (!this._lifecycleAllowsWork())", status_block)
+        self.assertIn("try {", status_block)
+        self.assertIn('this._recordLifecycleError("status-update", error);', status_block)
         self.assertIn("this._updatePanel();", status_block)
 
     def test_setting_choices_preserve_recorded_state(self) -> None:

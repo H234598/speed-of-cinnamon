@@ -9104,18 +9104,25 @@ MyApplet.prototype = {
   },
 
   _setStatusPreservingRecording: function(status, message, transcript) {
+    if (!this._lifecycleAllowsWork()) {
+      return;
+    }
     if (!this._hasActiveRecordingState()) {
       this._setStatus(status, message, transcript);
       return;
     }
-    let safeMessage = typeof message === "string" ? message : "";
-    this.lastMessage = status === "error"
-      ? this._uiMessageText(this._sanitizeErrorMessage(safeMessage))
-      : this._uiMessageText(safeMessage);
-    if (typeof transcript === "string" && transcript !== "") {
-      this.lastTranscript = transcript;
+    try {
+      let safeMessage = typeof message === "string" ? message : "";
+      this.lastMessage = status === "error"
+        ? this._uiMessageText(this._sanitizeErrorMessage(safeMessage))
+        : this._uiMessageText(safeMessage);
+      if (typeof transcript === "string" && transcript !== "") {
+        this.lastTranscript = transcript;
+      }
+      this._updatePanel();
+    } catch (error) {
+      this._recordLifecycleError("status-update", error);
     }
-    this._updatePanel();
   },
 
   _setStatus: function(status, message, transcript) {
