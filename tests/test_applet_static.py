@@ -1804,6 +1804,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("return;", block)
         self.assertLess(block.index("if (this.isCommandRunning)"), block.index("this.isCommandRunning = true;"))
 
+    def test_doctor_payload_processing_fails_closed_on_unexpected_exceptions(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_runDoctor: function(startupCheck)")
+        end = source.index("\n  _applyDoctorPayload:", start)
+        block = source[start:end]
+        self.assertIn("} catch (err) {", block)
+        self.assertIn('let message = _("Doctor failed: ") + safeError;', block)
+        self.assertIn("this._setStatus(startupCheck ? \"setup\" : \"error\", message", block)
+        self.assertIn("} finally {", block)
+        self.assertIn("this._doctorCommandRunning = false;", block)
+
     def test_custom_limit_dialogs_ignore_stale_callbacks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

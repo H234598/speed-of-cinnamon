@@ -3047,6 +3047,12 @@ MyApplet.prototype = {
           return;
         }
         this._applyLegacyDoctorPayload(payload, Boolean(startupCheck));
+      } catch (err) {
+        let safeError = this._sanitizeErrorMessage(err);
+        let message = _("Doctor failed: ") + safeError;
+        this._setDoctorSummary(message);
+        this._setStatus(startupCheck ? "setup" : "error", message, this.lastTranscript);
+        this._presentDoctorResult(message, true, Boolean(startupCheck));
       } finally {
         this._doctorCommandRunning = false;
       }
