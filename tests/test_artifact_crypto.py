@@ -576,6 +576,39 @@ class ArtifactCryptoTest(unittest.TestCase):
         self.assertTrue(getattr(fake_proc_holder["proc"], "killed"))
         self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 1)
 
+    def test_secret_tool_timeout_survives_kill_failure(self) -> None:
+        fake_proc_holder: dict[str, object] = {}
+
+        class FakePopen:
+            def __init__(self, command: list[str], **kwargs: object) -> None:
+                self.command = command
+                self.returncode = 0
+                self.wait_calls = 0
+                self.stdin = None
+                self.stdout = self_outer._pipe_reader(b"")
+                self.stderr = self_outer._pipe_reader(b"")
+                fake_proc_holder["proc"] = self
+
+            def wait(self, timeout: int | None = None) -> int:
+                self.wait_calls += 1
+                if self.wait_calls == 1:
+                    raise subprocess.TimeoutExpired(self.command, timeout)
+                return self.returncode
+
+            def kill(self) -> None:
+                raise ValueError("process already closed")
+
+        self_outer = self
+
+        with (
+            mock.patch("speed_of_cinnamon.artifact_crypto._secret_tool_path", return_value="/usr/bin/secret-tool"),
+            mock.patch("speed_of_cinnamon.artifact_crypto.subprocess.Popen", side_effect=FakePopen),
+        ):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "request timed out"):
+                artifact_crypto._run_secret_tool(["lookup", "application", "test"])
+
+        self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 2)
+
     def test_keyring_decryption_does_not_create_missing_keyring_key(self) -> None:
         key = bytes(range(32))
         with mock.patch("speed_of_cinnamon.artifact_crypto._load_keyring_key", return_value=key):

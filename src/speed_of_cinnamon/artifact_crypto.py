@@ -782,7 +782,8 @@ def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subpr
         try:
             returncode = proc.wait(timeout=_SECRET_TOOL_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired as exc:
-            proc.kill()
+            with suppress(Exception):
+                proc.kill()
             with suppress(Exception):
                 proc.wait(timeout=1)
             raise ArtifactCryptoError("Secret Service keyring request timed out") from exc
