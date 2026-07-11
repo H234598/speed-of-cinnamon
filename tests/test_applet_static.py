@@ -1684,6 +1684,15 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._destroyAppletTooltip();", source)
         self.assertNotIn("new Applet.AppletPopupMenu(this, this.orientation)", source)
 
+    def test_failed_target_signal_disconnect_remains_tracked(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_disconnectTrackedSignalsForTarget: function(target)")
+        end = source.index("\n  _clearMenuItems:", start)
+        block = source[start:end]
+        self.assertIn("let signals = this._resourceRegistry.signals.splice(0);", block)
+        self.assertIn("this._resourceRegistry.signals.push(connection);", block)
+        self.assertIn('this._recordLifecycleError("teardown-target-signals", error);', block)
+
     def test_applet_exposes_notification_options_submenu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))

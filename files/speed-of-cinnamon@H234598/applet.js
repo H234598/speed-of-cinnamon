@@ -626,6 +626,7 @@ MyApplet.prototype = {
           target.disconnect(connection.id);
         }
       } catch (error) {
+        this._resourceRegistry.signals.push(connection);
         this._recordLifecycleError("teardown-target-signals", error);
       }
     }
