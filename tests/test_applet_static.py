@@ -1451,7 +1451,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn('_selectionMenuItem(_("Install Ollama model"))', source)
         self.assertNotIn('new PopupMenu.PopupIconMenuItem(_("Install Ollama text model")', source)
         self.assertIn("_chooseOllamaTextModel: function()", source)
-        self.assertIn('_textModelsArgs("ollama")', source)
+        self.assertIn('_tryTextModelsArgs("ollama")', source)
+        self.assertIn("_tryTextModelsArgs: function(backendOverride)", source)
         self.assertIn("_activateOllamaTextModelFlow: function()", source)
         self.assertIn("this._connectSafe(ollama, \"activate\", () => this._activateOllamaTextModelFlow());", source)
         self.assertIn("this._installOllamaRuntime(true);", source)
@@ -1481,6 +1482,28 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._notify(_("Could not load Ollama models"), safeError, true)', source)
         self.assertNotIn('String(payload.error), true)', source)
         self.assertIn('this._notify(_("Ollama model installed"), installedModel, false)', source)
+
+    def test_text_model_requests_preflight_urls_before_flow_tokens(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        for method, next_method, token_assignment in [
+            ("_refreshTextModelMenuForBackend: function(backendOverride)", "\n  _populateTextModelMenu:", "let refreshToken = {};"),
+            ("_activateOllamaTextModelFlow: function()", "\n  _ollamaModelPromptArgs:", "let flowToken = {};"),
+            ("_chooseOllamaTextModel: function()", "\n  _promptChooseOllamaTextModel:", "let flowToken = {};"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn("this._tryTextModelsArgs", block)
+            self.assertIn("if (!textModelArgs)", block)
+            self.assertLess(block.index("this._tryTextModelsArgs"), block.index(token_assignment))
+
+        watch_start = source.index("_scheduleOllamaInstallWatchPoll: function(watchToken)")
+        watch_end = source.index("\n  _scheduleSetupCheck:", watch_start)
+        watch_block = source[watch_start:watch_end]
+        self.assertIn('this._tryTextModelsArgs("ollama")', watch_block)
+        self.assertIn("this.ollamaInstallWatchToken = null;", watch_block)
+        self.assertIn("return false;", watch_block)
 
     def test_ollama_model_dialogs_ignore_stale_callbacks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

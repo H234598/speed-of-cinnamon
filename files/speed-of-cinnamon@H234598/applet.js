@@ -1993,6 +1993,16 @@ MyApplet.prototype = {
     return args;
   },
 
+  _tryTextModelsArgs: function(backendOverride) {
+    try {
+      return this._textModelsArgs(backendOverride);
+    } catch (err) {
+      let safeError = this._sanitizeErrorMessage(err);
+      this._setStatus("error", _("Could not prepare text model request: ") + safeError, this.lastTranscript);
+      return null;
+    }
+  },
+
   _downloadModelArgs: function(model) {
     return [this._cliCommand(), "download-model", String(model || this._starterVoiceModelName()), "--json"];
   },
@@ -4625,6 +4635,10 @@ MyApplet.prototype = {
     if (!this._canMutateMenu(this.textModelItem)) {
       return;
     }
+    let textModelArgs = this._tryTextModelsArgs(backendOverride);
+    if (!textModelArgs) {
+      return;
+    }
     let refreshToken = {};
     this.textModelMenuRefreshToken = refreshToken;
     let backend = String(backendOverride || this.postProcessBackend || "");
@@ -4633,7 +4647,7 @@ MyApplet.prototype = {
       ? _("Loading OpenAI-compatible text models...")
       : _("Loading local text models...");
     this._populateTextModelMenu([], loadingMessage, provider);
-    this._spawnJson(this._textModelsArgs(backendOverride), (payload) => {
+    this._spawnJson(textModelArgs, (payload) => {
       if (this.textModelMenuRefreshToken !== refreshToken || !this._canMutateMenu(this.textModelItem)) {
         return;
       }
@@ -4845,11 +4859,15 @@ MyApplet.prototype = {
       this._setStatus("error", _("Install zenity to choose an Ollama model"), this.lastTranscript);
       return;
     }
+    let textModelArgs = this._tryTextModelsArgs("ollama");
+    if (!textModelArgs) {
+      return;
+    }
     this._cancelOllamaInstallWatch();
     let flowToken = {};
     this.ollamaModelFlowToken = flowToken;
     this._setStatus("processing", _("Checking Ollama..."), this.lastTranscript);
-    this._spawnJson(this._textModelsArgs("ollama"), (payload) => {
+    this._spawnJson(textModelArgs, (payload) => {
       if (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -4935,11 +4953,15 @@ MyApplet.prototype = {
       this._setStatus("error", _("Install zenity to choose an Ollama model"), this.lastTranscript);
       return;
     }
+    let textModelArgs = this._tryTextModelsArgs("ollama");
+    if (!textModelArgs) {
+      return;
+    }
     this._cancelOllamaInstallWatch();
     let flowToken = {};
     this.ollamaModelFlowToken = flowToken;
     this._setStatus("processing", _("Loading Ollama text models..."), this.lastTranscript);
-    this._spawnJson(this._textModelsArgs("ollama"), (payload) => {
+    this._spawnJson(textModelArgs, (payload) => {
       if (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -6372,7 +6394,12 @@ MyApplet.prototype = {
         return false;
       }
       this.ollamaInstallWatchPolls++;
-      this._spawnJson(this._textModelsArgs("ollama"), (payload) => {
+      let textModelArgs = this._tryTextModelsArgs("ollama");
+      if (!textModelArgs) {
+        this.ollamaInstallWatchToken = null;
+        return false;
+      }
+      this._spawnJson(textModelArgs, (payload) => {
         if (this.ollamaInstallWatchToken !== watchToken || !this._lifecycleAllowsWork()) {
           return;
         }
