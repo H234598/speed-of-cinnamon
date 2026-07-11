@@ -7063,6 +7063,9 @@ MyApplet.prototype = {
       );
     }
     this.targetWindow = null;
+    if (!preserveOnFailure) {
+      this._clearTargetWindowXid();
+    }
     this._rememberActiveXWindow((remembered) => {
       if (targetGeneration !== this.targetWindowGeneration) {
         return;

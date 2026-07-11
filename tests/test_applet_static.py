@@ -2179,6 +2179,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._terminateProcessesByGroup("keyboard", true);', remember_block)
         self.assertIn('this._terminateProcessesByGroup("x11", true);', remember_block)
         self.assertIn('this._terminateProcessesByGroup("clipboard", true);', remember_block)
+        self.assertIn('if (!preserveOnFailure) {\n      this._clearTargetWindowXid();\n    }', remember_block)
 
         snapshot_start = source.index("_targetXWindowSnapshot: function()")
         snapshot_end = source.index("\n  _targetXWindowMatchesSnapshot:", snapshot_start)
