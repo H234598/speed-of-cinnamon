@@ -470,7 +470,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._bindSetting(Settings.BindingDirection.IN, "recorder", "recorder", this._onRecorderSettingsChanged, null)', source)
         self.assertIn('this.settings.setValue("recorder", this.recorder)', source)
         self.assertIn('this.recorderItem.label.text = _("Recorder: ") + this._recorderLabel(this._normalizeRecorder(this.recorder))', source)
-        self.assertIn('this.lastMessage = _("Recorder for next recording: ") + label', source)
+        self.assertIn('this._setStatusPreservingRecording(this.status, _("Recorder for next recording: ") + label', source)
 
     def test_applet_exposes_recording_duration_submenu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -498,7 +498,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.settings.setValue("max-seconds", this.maxSeconds)', source)
         self.assertIn('"--max-seconds", String(this._normalizeRecordingLimit(this.maxSeconds))', source)
         self.assertIn('this.recordingLimitItem.label.text = _("Duration: ") + this._formatSeconds(this._normalizeRecordingLimit(this.maxSeconds))', source)
-        self.assertIn('this.lastMessage = _("Duration for next recording: ") + label', source)
+        self.assertIn('this._setStatusPreservingRecording(this.status, _("Duration for next recording: ") + label', source)
 
 
     def test_applet_exposes_auto_paste_title_marker(self) -> None:
@@ -854,11 +854,13 @@ class AppletStaticTest(unittest.TestCase):
             ("_populateAlarmMenu: function(alarms, summary, message)", "\n  _addAlarmMenuEntry:"),
             ("_addAlarmMenuEntry: function(alarm)", "\n  _copyAlarmCommands:"),
             ("_addModelMenuEntry: function(model, parentMenu)", "\n  _isEnglishLanguage:"),
-            ("_setTextOptionStatus: function(message)", "\n  _toggleAppendSpace:"),
         ]:
             start = source.index(method)
             end = source.index(next_method, start)
             self.assertIn("_uiMessageText", source[start:end])
+        text_status_start = source.index("_setTextOptionStatus: function(message)")
+        text_status_end = source.index("\n  _toggleAppendSpace:", text_status_start)
+        self.assertIn('this._setStatusPreservingRecording("ready", message, this.lastTranscript);', source[text_status_start:text_status_end])
 
     def test_nested_backend_payloads_are_shape_safe(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -3722,6 +3724,23 @@ class AppletStaticTest(unittest.TestCase):
             end = source.index(next_method, start)
             block = source[start:end]
             self.assertIn("_setStatusPreservingRecording", block, method)
+
+    def test_recording_option_status_helpers_use_safe_state_updates(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        for method, next_method, expected in [
+            ("_selectRecorder: function(method)", "\n  _normalizeRecordingLimit:", "this._setStatusPreservingRecording(this.status"),
+            ("_selectRecordingLimit: function(seconds)", "\n  _customRecordingLimitPromptArgs:", "this._setStatusPreservingRecording(this.status"),
+            ("_setRecordingOptionStatus: function(message)", "\n  _toggleAutoTranscribeTimeout:", "this._setStatusPreservingRecording(\"ready\""),
+            ("_setNotificationOptionStatus: function(message)", "\n  _toggleNotifyRecording:", "this._setStatusPreservingRecording(\"ready\""),
+            ("_setTextOptionStatus: function(message)", "\n  _toggleAppendSpace:", "this._setStatusPreservingRecording(\"ready\""),
+            ("_toggleOpenAiFlexProcessing: function()", "\n  _normalizeLanguage:", "this._setStatusPreservingRecording(this.status"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn(expected, block, method)
+            self.assertNotIn("this._uiMessageText(message)", block, method)
 
     def test_ollama_flows_are_cancelled_before_recording_starts(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

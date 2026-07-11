@@ -2277,8 +2277,7 @@ MyApplet.prototype = {
     this._populateRecorderMenu();
     let label = this._recorderLabel(this.recorder);
     if (this._hasActiveRecordingState()) {
-      this.lastMessage = _("Recorder for next recording: ") + label;
-      this._updatePanel();
+      this._setStatusPreservingRecording(this.status, _("Recorder for next recording: ") + label, this.lastTranscript);
       return;
     }
     this._setStatus("ready", _("Recorder: ") + label, this.lastTranscript);
@@ -2339,8 +2338,7 @@ MyApplet.prototype = {
     this._populateRecordingLimitMenu();
     let label = this._formatSeconds(this.maxSeconds);
     if (this._hasActiveRecordingState()) {
-      this.lastMessage = _("Duration for next recording: ") + label;
-      this._updatePanel();
+      this._setStatusPreservingRecording(this.status, _("Duration for next recording: ") + label, this.lastTranscript);
       return;
     }
     this._setStatus("ready", _("Duration: ") + label, this.lastTranscript);
@@ -2517,12 +2515,7 @@ MyApplet.prototype = {
   },
 
   _setRecordingOptionStatus: function(message) {
-    if (this._hasActiveRecordingState()) {
-      this.lastMessage = message;
-      this._updatePanel();
-      return;
-    }
-    this._setStatus("ready", message, this.lastTranscript);
+    this._setStatusPreservingRecording("ready", message, this.lastTranscript);
   },
 
   _toggleAutoTranscribeTimeout: function() {
@@ -2572,12 +2565,7 @@ MyApplet.prototype = {
   },
 
   _setNotificationOptionStatus: function(message) {
-    if (this._hasActiveRecordingState()) {
-      this.lastMessage = message;
-      this._updatePanel();
-      return;
-    }
-    this._setStatus("ready", message, this.lastTranscript);
+    this._setStatusPreservingRecording("ready", message, this.lastTranscript);
   },
 
   _toggleNotifyRecording: function() {
@@ -2675,12 +2663,7 @@ MyApplet.prototype = {
   },
 
   _setTextOptionStatus: function(message) {
-    if (this._hasActiveRecordingState()) {
-      this.lastMessage = this._uiMessageText(message);
-      this._updatePanel();
-      return;
-    }
-    this._setStatus("ready", message, this.lastTranscript);
+    this._setStatusPreservingRecording("ready", message, this.lastTranscript);
   },
 
   _toggleAppendSpace: function() {
@@ -2890,8 +2873,7 @@ MyApplet.prototype = {
       ? _("OpenAI Flex processing enabled")
       : _("OpenAI Flex processing disabled");
     if (this._hasActiveRecordingState()) {
-      this.lastMessage = message;
-      this._updatePanel();
+      this._setStatusPreservingRecording(this.status, message, this.lastTranscript);
       return;
     }
     this._setStatus("ready", message, this.lastTranscript);
