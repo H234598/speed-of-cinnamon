@@ -1080,7 +1080,7 @@ MyApplet.prototype = {
         } catch (error) {
           this._recordLifecycleError("process-cancel", error);
         } finally {
-          delete processes[token];
+          this._unregisterProcess(token);
         }
       }
     }
@@ -1104,7 +1104,7 @@ MyApplet.prototype = {
       } catch (error) {
         this._recordLifecycleError("process-cancel", error);
       } finally {
-        delete processes[token];
+        this._unregisterProcess(token);
       }
     }
   },
@@ -1124,7 +1124,7 @@ MyApplet.prototype = {
       } catch (error) {
         this._recordLifecycleError("teardown-cancellable", error);
       }
-      delete cancellables[token];
+      this._unregisterCancellable(token);
     }
   },
 
