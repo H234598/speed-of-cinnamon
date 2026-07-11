@@ -1711,6 +1711,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("suppressCallback || this.appletRemoved", bounded_block)
         self.assertIn("this._resourceRegistry.processes[processToken].cancel = (notifyCallback) => finish(", bounded_block)
         self.assertIn("notifyCallback === true ? false : true", bounded_block)
+        stdin_start = bounded_block.rindex("if (hasInput) {")
+        stdin_block = bounded_block[stdin_start:]
+        self.assertIn("try {", stdin_block)
+        self.assertIn("let stdin = process.get_stdin_pipe();", stdin_block)
+        self.assertIn("finish({ error: error }, true);", stdin_block)
 
         group_start = source.index("_terminateProcessesByGroup: function(group, notifyCallback)")
         group_end = source.index("\n  _cancelAllCancellables:", group_start)

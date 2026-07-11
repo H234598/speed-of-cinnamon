@@ -6066,9 +6066,9 @@ MyApplet.prototype = {
       finish({ error: error }, true);
     }
     if (hasInput) {
-      let stdin = process.get_stdin_pipe();
-      let inputBytes = ByteArray.fromString(options.inputText);
       try {
+        let stdin = process.get_stdin_pipe();
+        let inputBytes = ByteArray.fromString(options.inputText);
         if (stdin && stdin.write_all_async) {
           stdin.write_all_async(inputBytes, GLib.PRIORITY_DEFAULT, cancellable, (stream, result) => {
             try {
