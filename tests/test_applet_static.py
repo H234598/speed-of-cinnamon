@@ -1668,6 +1668,16 @@ class AppletStaticTest(unittest.TestCase):
         end = source.index("\n  _onHotkeyChanged:", start)
         self.assertIn('this._runStateGuarded("hotkeys"', source[start:end])
 
+    def test_hotkey_remove_failures_preserve_existing_definition(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_registerHotkey: function(id, binding, callback)")
+        end = source.index("\n  _removeHotkey:", start)
+        block = source[start:end]
+        self.assertIn("let removed = this._runStateGuarded(\"hotkeys\"", block)
+        self.assertIn("return true;", block)
+        self.assertIn("if (!removed) {", block)
+        self.assertIn("return;", block)
+
     def test_menu_toggle_remains_recoverable_after_guarded_failures(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("on_applet_clicked: function()")

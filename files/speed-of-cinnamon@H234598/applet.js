@@ -1669,12 +1669,16 @@ MyApplet.prototype = {
     let previous = this._hotkeyDefinitions && this._hotkeyDefinitions[name]
       ? this._hotkeyDefinitions[name]
       : null;
-    this._runStateGuarded("hotkeys", () => {
+    let removed = this._runStateGuarded("hotkeys", () => {
       Main.keybindingManager.removeHotKey(name);
       if (this._resourceRegistry) {
         delete this._resourceRegistry.hotkeys[name];
       }
-    }, undefined);
+      return true;
+    }, false) === true;
+    if (!removed) {
+      return;
+    }
     let accelerator = typeof binding === "string" ? binding.trim() : "";
     if (accelerator === "") {
       if (this._hotkeyDefinitions) {
@@ -1720,7 +1724,14 @@ MyApplet.prototype = {
 
   _removeHotkey: function(id) {
     let name = this._hotkeyName(id);
-    this._runTeardownGuarded("teardown-hotkeys", () => Main.keybindingManager.removeHotKey(name));
+    let removed = false;
+    this._runTeardownGuarded("teardown-hotkeys", () => {
+      Main.keybindingManager.removeHotKey(name);
+      removed = true;
+    });
+    if (!removed) {
+      return;
+    }
     if (this._resourceRegistry) {
       delete this._resourceRegistry.hotkeys[name];
     }
