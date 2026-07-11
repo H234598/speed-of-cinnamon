@@ -1769,6 +1769,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._runStateGuarded(key, () => callback.apply(this, args), fallback)", callback_block)
         self.assertIn("this._recordLifecycleError(key, error);", state_block)
 
+    def test_lifecycle_guards_contain_precondition_failures(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for marker, precondition in (
+            ("_runGuarded: function(group, callback, fallback)", "this._lifecycleAllowsWork()"),
+            ("_runStateGuarded: function(group, callback, fallback)", "this._lifecycleAllowsWork()"),
+        ):
+            with self.subTest(marker=marker):
+                start = source.index(marker)
+                end = source.find("\n  _", start + len(marker))
+                block = source[start:] if end == -1 else source[start:end]
+                self.assertLess(block.index("try {"), block.index(precondition))
+                self.assertIn("this._recordLifecycleError(key, error);", block)
+
     def test_menu_cleanup_is_not_suppressed_by_disabled_error_groups(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_clearMenuItems: function(menu)")

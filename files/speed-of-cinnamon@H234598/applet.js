@@ -512,11 +512,12 @@ MyApplet.prototype = {
   },
 
   _runGuarded: function(group, callback, fallback) {
-    let key = String(group || "unknown");
-    if (!this._lifecycleAllowsWork() || !this._lifecycleGroupEnabled(key) || typeof callback !== "function") {
-      return fallback;
-    }
+    let key = "unknown";
     try {
+      key = String(group || "unknown");
+      if (!this._lifecycleAllowsWork() || !this._lifecycleGroupEnabled(key) || typeof callback !== "function") {
+        return fallback;
+      }
       return callback();
     } catch (error) {
       this._recordLifecycleError(key, error);
@@ -525,11 +526,12 @@ MyApplet.prototype = {
   },
 
   _runStateGuarded: function(group, callback, fallback) {
-    let key = String(group || "state");
-    if (!this._lifecycleAllowsWork() || typeof callback !== "function") {
-      return fallback;
-    }
+    let key = "state";
     try {
+      key = String(group || "state");
+      if (!this._lifecycleAllowsWork() || typeof callback !== "function") {
+        return fallback;
+      }
       return callback();
     } catch (error) {
       this._recordLifecycleError(key, error);
