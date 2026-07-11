@@ -2211,6 +2211,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!this._hasCancelableRecordingWork())", source[cancel_index:cancel_end])
         self.assertIn("if (this.autoRelistenManualStopRequested) {\n      return;\n    }", source[ensure_index:ensure_end])
 
+    def test_cancel_menu_uses_same_work_predicate_as_cancel_action(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        status_start = source.index("_setStatus: function(status, message, transcript)")
+        status_end = source.index("\n  _maybeNotify:", status_start)
+        status_block = source[status_start:status_end]
+        cancel_start = source.index("_cancelRecording: function()")
+        cancel_end = source.index("\n  _runDoctor:", cancel_start)
+        cancel_block = source[cancel_start:cancel_end]
+
+        self.assertIn("this.cancelItem.setSensitive(this._hasCancelableRecordingWork());", status_block)
+        self.assertIn("if (!this._hasCancelableRecordingWork())", cancel_block)
+
     def test_cancel_pending_during_command_suppresses_done_transcript_insert(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         apply_index = source.index("_applyPayload: function(payload, statusRefreshToken)")

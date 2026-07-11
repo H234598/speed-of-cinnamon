@@ -8187,7 +8187,7 @@ MyApplet.prototype = {
       this.insertLastItem.setSensitive(Boolean(this.lastTranscript));
     }
     if (this.cancelItem) {
-      this.cancelItem.setSensitive(this.status === "recording" || this.status === "recorded");
+      this.cancelItem.setSensitive(this._hasCancelableRecordingWork());
     }
     this._updatePanel();
     this._maybeNotify(previousStatus, this.status, this.lastMessage);
