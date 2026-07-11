@@ -1357,6 +1357,31 @@ class AppletStaticTest(unittest.TestCase):
         self.assertLess(block.index("if (this.inputSourceMenuRefreshToken)"), block.index("let refreshToken = {};"))
         self.assertLess(block.index("this.inputSourceMenuRefreshToken = null;"), block.index("if (payload.error)"))
 
+    def test_menu_backend_tokens_release_when_argument_building_fails(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method, args_name, builder_name, token_name in [
+            ("_refreshInputSourceMenu: function()", "\n  _populateInputSourceMenu:", "inputSourceArgs", "_listInputsArgs", "inputSourceMenuRefreshToken"),
+            ("_refreshModelMenu: function()", "\n  _populateModelMenu:", "modelArgs", "_modelsArgs", "modelMenuRefreshToken"),
+            ("_downloadVoiceModel: function(model)", "\n  _removeVoiceModel:", "downloadArgs", "_downloadModelArgs", "voiceModelActionToken"),
+            ("_removeVoiceModel: function(model)", "\n  _selectVoiceModel:", "removeArgs", "_removeModelArgs", "voiceModelActionToken"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn(f"let {args_name};", block)
+            self.assertIn(f"{args_name} = this.{builder_name}", block)
+            self.assertIn(f"if (this.{token_name} ===", block)
+            self.assertIn(f"this.{token_name} = null;", block)
+            self.assertIn("this._recordLifecycleError(", block)
+        for method, next_method in [
+            ("_downloadVoiceModel: function(model)", "\n  _removeVoiceModel:"),
+            ("_removeVoiceModel: function(model)", "\n  _selectVoiceModel:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn("this.isCommandRunning = false;", block)
+
     def test_ollama_model_checks_ignore_stale_flow_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

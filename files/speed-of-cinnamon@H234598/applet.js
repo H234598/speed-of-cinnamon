@@ -4244,7 +4244,19 @@ MyApplet.prototype = {
     let refreshToken = {};
     this.inputSourceMenuRefreshToken = refreshToken;
     this._populateInputSourceMenu([], _("Loading input sources..."));
-    this._spawnJson(this._listInputsArgs(), (payload) => {
+    let inputSourceArgs;
+    try {
+      inputSourceArgs = this._listInputsArgs();
+    } catch (error) {
+      if (this.inputSourceMenuRefreshToken === refreshToken) {
+        this.inputSourceMenuRefreshToken = null;
+      }
+      this._recordLifecycleError("input-source-refresh", error);
+      this._populateInputSourceMenu([], _("Could not prepare input source list"));
+      this._setStatusPreservingRecording("error", _("Could not prepare input source list"), this.lastTranscript);
+      return;
+    }
+    this._spawnJson(inputSourceArgs, (payload) => {
       if (this.inputSourceMenuRefreshToken !== refreshToken) {
         return;
       }
@@ -4373,7 +4385,19 @@ MyApplet.prototype = {
     let refreshToken = {};
     this.modelMenuRefreshToken = refreshToken;
     this._populateModelMenu([], _("Loading voice models..."));
-    this._spawnJson(this._modelsArgs(), (payload) => {
+    let modelArgs;
+    try {
+      modelArgs = this._modelsArgs();
+    } catch (error) {
+      if (this.modelMenuRefreshToken === refreshToken) {
+        this.modelMenuRefreshToken = null;
+      }
+      this._recordLifecycleError("model-refresh", error);
+      this._populateModelMenu([], _("Could not prepare voice model list"));
+      this._setStatusPreservingRecording("error", _("Could not prepare voice model list"), this.lastTranscript);
+      return;
+    }
+    this._spawnJson(modelArgs, (payload) => {
       if (this.modelMenuRefreshToken !== refreshToken) {
         return;
       }
@@ -4729,7 +4753,19 @@ MyApplet.prototype = {
     this.voiceModelActionToken = actionToken;
     this.isCommandRunning = true;
     this._setStatus("processing", _("Downloading model: ") + name, this.lastTranscript);
-    this._spawnJson(this._downloadModelArgs(name), (payload) => {
+    let downloadArgs;
+    try {
+      downloadArgs = this._downloadModelArgs(name);
+    } catch (error) {
+      if (this.voiceModelActionToken === actionToken) {
+        this.voiceModelActionToken = null;
+      }
+      this.isCommandRunning = false;
+      this._recordLifecycleError("model-action", error);
+      this._setStatus("error", _("Could not prepare model download"), this.lastTranscript);
+      return;
+    }
+    this._spawnJson(downloadArgs, (payload) => {
       this.isCommandRunning = false;
       if (this.voiceModelActionToken !== actionToken || !this._lifecycleAllowsWork()) {
         return;
@@ -4764,7 +4800,19 @@ MyApplet.prototype = {
     this.voiceModelActionToken = actionToken;
     this.isCommandRunning = true;
     this._setStatus("processing", _("Removing model: ") + name, this.lastTranscript);
-    this._spawnJson(this._removeModelArgs(name), (payload) => {
+    let removeArgs;
+    try {
+      removeArgs = this._removeModelArgs(name);
+    } catch (error) {
+      if (this.voiceModelActionToken === actionToken) {
+        this.voiceModelActionToken = null;
+      }
+      this.isCommandRunning = false;
+      this._recordLifecycleError("model-action", error);
+      this._setStatus("error", _("Could not prepare model removal"), this.lastTranscript);
+      return;
+    }
+    this._spawnJson(removeArgs, (payload) => {
       this.isCommandRunning = false;
       if (this.voiceModelActionToken !== actionToken || !this._lifecycleAllowsWork()) {
         return;
