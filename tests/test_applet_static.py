@@ -1707,6 +1707,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._runStateGuarded("menu-items"', block)
         self.assertNotIn('this._runGuarded("menu-items"', block)
 
+    def test_dialog_construction_failure_cleans_up_created_dialog(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_newSafeDialog: function(group)")
+        end = source.index("\n  _dialogAddChild:", start)
+        block = source[start:end]
+        self.assertIn("let dialog = null;", block)
+        self.assertIn("dialog = new ModalDialog.ModalDialog();", block)
+        self.assertIn("if (dialog) {", block)
+        self.assertIn("if (dialog.close)", block)
+        self.assertIn("if (dialog.destroy)", block)
+        self.assertIn("if (closeSucceeded && destroySucceeded)", block)
+        self.assertIn("this._untrackDialog(dialog);", block)
+
     def test_hotkey_mutations_are_not_suppressed_by_disabled_error_groups(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_registerHotkey: function(id, binding, callback)")

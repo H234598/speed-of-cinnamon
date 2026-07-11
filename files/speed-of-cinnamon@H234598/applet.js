@@ -738,9 +738,30 @@ MyApplet.prototype = {
     if (!this._lifecycleAllowsWork()) {
       return null;
     }
+    let dialog = null;
     try {
-      return this._trackDialog(new ModalDialog.ModalDialog());
+      dialog = new ModalDialog.ModalDialog();
+      return this._trackDialog(dialog);
     } catch (error) {
+      if (dialog) {
+        let closeSucceeded = false;
+        this._runTeardownGuarded("dialog-" + String(group || "create") + "-cleanup", () => {
+          if (dialog.close) {
+            dialog.close();
+          }
+          closeSucceeded = true;
+        });
+        let destroySucceeded = false;
+        this._runTeardownGuarded("dialog-" + String(group || "create") + "-cleanup", () => {
+          if (dialog.destroy) {
+            dialog.destroy();
+          }
+          destroySucceeded = true;
+        });
+        if (closeSucceeded && destroySucceeded) {
+          this._untrackDialog(dialog);
+        }
+      }
       this._recordLifecycleError("dialog-" + String(group || "create"), error);
       return null;
     }
