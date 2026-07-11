@@ -4463,6 +4463,9 @@ MyApplet.prototype = {
   },
 
   _selectVoiceModel: function(model) {
+    if (this.voiceModelActionToken) {
+      return false;
+    }
     let path = this._modelPathFromPayload(model);
     let name = model && typeof model.name === "string" ? model.name.trim() : "";
     let backend = model && typeof model.backend === "string" ? model.backend.trim() : "";
@@ -4482,6 +4485,9 @@ MyApplet.prototype = {
   },
 
   _selectAutomaticVoiceBackend: function() {
+    if (this.voiceModelActionToken) {
+      return;
+    }
     this.transcriber = "auto";
     this.whisperModel = "";
     this.settings.setValue("transcriber", this.transcriber);
@@ -4491,6 +4497,9 @@ MyApplet.prototype = {
   },
 
   _selectStaticVoiceBackend: function(transcriber, message) {
+    if (this.voiceModelActionToken) {
+      return;
+    }
     this.transcriber = String(transcriber || "auto");
     this.whisperModel = "";
     this.settings.setValue("transcriber", this.transcriber);
@@ -4877,6 +4886,9 @@ MyApplet.prototype = {
   },
 
   _selectExternalApiVoiceBackend: function() {
+    if (this.voiceModelActionToken) {
+      return;
+    }
     this.transcriber = "openai-compatible";
     this.whisperModel = "";
     this.settings.setValue("transcriber", this.transcriber);

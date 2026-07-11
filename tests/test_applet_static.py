@@ -1010,6 +1010,21 @@ class AppletStaticTest(unittest.TestCase):
         input_end = source.index("\n  _onVoiceBackendSettingsChanged:", input_start)
         self.assertIn("this.inputSourceMenuRefreshToken = null;", source[input_start:input_end])
 
+    def test_voice_model_selection_cannot_mutate_during_model_action(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        for method, next_method, result in [
+            ("_selectVoiceModel: function(model)", "\n  _selectAutomaticVoiceBackend:", "return false;"),
+            ("_selectAutomaticVoiceBackend: function()", "\n  _selectStaticVoiceBackend:", "return;"),
+            ("_selectStaticVoiceBackend: function(transcriber, message)", "\n  _externalApiEnvPath:", "return;"),
+            ("_selectExternalApiVoiceBackend: function()", "\n  _refreshTextModelMenu:", "return;"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn("if (this.voiceModelActionToken)", block)
+            self.assertIn(result, block)
+
         voice_start = source.index("_onVoiceBackendSettingsChanged: function()")
         voice_end = source.index("\n  _onTextModelSettingsChanged:", voice_start)
         voice_block = source[voice_start:voice_end]
