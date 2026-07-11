@@ -81,6 +81,46 @@ class StateStoreTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "state lock directory must be private"):
                 store.write(RecordingState(status="idle"))
 
+    def test_state_lock_closes_parent_fd_when_directory_validation_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = StateStore(Path(tmp) / "state.json")
+            with (
+                mock.patch("speed_of_cinnamon.state.ensure_directory_without_following_symlinks", return_value=123),
+                mock.patch(
+                    "speed_of_cinnamon.state.assert_fd_is_private_directory",
+                    side_effect=RuntimeError("directory not private"),
+                ),
+                mock.patch("speed_of_cinnamon.state.os.close") as mocked_close,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "directory not private"):
+                    store.write(RecordingState())
+
+            mocked_close.assert_called_once_with(123)
+
+    def test_state_lock_closes_parent_fd_when_lock_fd_close_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = StateStore(Path(tmp) / "state.json")
+            close_calls: list[int] = []
+
+            def fail_lock_close(fd: int) -> None:
+                close_calls.append(fd)
+                if fd == 456:
+                    raise OSError("lock fd close failed")
+
+            with (
+                mock.patch("speed_of_cinnamon.state.ensure_directory_without_following_symlinks", return_value=123),
+                mock.patch("speed_of_cinnamon.state.assert_fd_is_private_directory"),
+                mock.patch("speed_of_cinnamon.state.assert_fd_is_regular_private_file"),
+                mock.patch("speed_of_cinnamon.state.os.open", return_value=456),
+                mock.patch("speed_of_cinnamon.state.fcntl.flock"),
+                mock.patch("speed_of_cinnamon.state.os.close", side_effect=fail_lock_close),
+            ):
+                with self.assertRaisesRegex(OSError, "lock fd close failed"):
+                    with store._locked():
+                        pass
+
+            self.assertEqual(close_calls, [456, 123])
+
     def test_write_and_update_are_persistent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")

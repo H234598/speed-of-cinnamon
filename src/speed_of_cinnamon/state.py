@@ -127,7 +127,10 @@ class StateStore:
         try:
             assert_fd_is_private_directory(parent_fd, field_name="state lock directory")
             fd = os.open(lock_path.name, os.O_RDWR | os.O_CREAT | nofollow_flag, 0o600, dir_fd=parent_fd)
-        except OSError as exc:
+        except RuntimeError:
+            os.close(parent_fd)
+            raise
+        except Exception as exc:
             os.close(parent_fd)
             raise RuntimeError("failed to open state lock file") from exc
         try:
@@ -141,8 +144,10 @@ class StateStore:
             try:
                 fcntl.flock(fd, fcntl.LOCK_UN)
             finally:
-                os.close(fd)
-                os.close(parent_fd)
+                try:
+                    os.close(fd)
+                finally:
+                    os.close(parent_fd)
 
     @staticmethod
     def _sanitize_text_field(
