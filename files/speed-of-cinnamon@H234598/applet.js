@@ -634,11 +634,11 @@ MyApplet.prototype = {
   },
 
   _disconnectAllSignals: function() {
-    if (!this._resourceRegistry || !Array.isArray(this._resourceRegistry.signals)) {
-      return;
-    }
-    let signals = this._resourceRegistry.signals;
     try {
+      if (!this._resourceRegistry || !Array.isArray(this._resourceRegistry.signals)) {
+        return;
+      }
+      let signals = this._resourceRegistry.signals;
       for (let index = signals.length - 1; index >= 0; index--) {
         let connection = signals[index];
         try {

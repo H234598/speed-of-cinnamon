@@ -1993,6 +1993,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("for (let index = signals.length - 1; index >= 0; index--)", block)
         self.assertIn("signals.splice(index, 1);", block)
         self.assertIn('this._recordLifecycleError("teardown-signals", error);', block)
+        self.assertLess(block.index("try {"), block.index("Array.isArray(this._resourceRegistry.signals)"))
 
     def test_failed_dialog_close_remains_tracked(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
