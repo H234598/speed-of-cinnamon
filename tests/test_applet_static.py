@@ -683,6 +683,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.alarmMenuRefreshToken = refreshToken;", refresh_block)
         self.assertIn("this.alarmMenuRefreshToken !== refreshToken", refresh_block)
         self.assertIn("!this._canMutateMenu(this.alarmItem)", refresh_block)
+        self.assertIn("if (this.alarmMenuRefreshToken)", refresh_block)
+        self.assertIn("this.alarmMenuRefreshToken = null;", refresh_block)
+        self.assertLess(refresh_block.index("if (this.alarmMenuRefreshToken)"), refresh_block.index("let refreshToken = {};"))
+        self.assertLess(refresh_block.index("this.alarmMenuRefreshToken = null;"), refresh_block.index("if (payload.error)"))
 
     def test_alarm_checks_do_not_spawn_concurrent_backend_processes(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2216,6 +2220,7 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn("this.alarmActionToken = actionToken;", block)
             self.assertIn("this.alarmActionToken !== actionToken", block)
             self.assertIn("!this._lifecycleAllowsWork()", block)
+            self.assertIn("this.alarmMenuRefreshToken = null;", block)
 
     def test_alarm_checks_ignore_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2227,6 +2232,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.alarmCheckToken = checkToken;", block)
         self.assertIn("this.alarmCheckToken !== checkToken", block)
         self.assertIn("!this._lifecycleAllowsWork()", block)
+        self.assertIn("this.alarmMenuRefreshToken = null;", block)
 
     def test_settings_transfers_ignore_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
