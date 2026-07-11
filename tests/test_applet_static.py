@@ -293,6 +293,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._readExternalApiEnvFile(path)", source)
         self.assertIn("ByteArray.toString(contents)", source)
 
+    def test_external_env_monitor_is_cleaned_when_signal_connection_fails(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_watchExternalApiEnvFile: function(path)")
+        end = source.index("\n  _openExternalApiEnvEditor:", start)
+        block = source[start:end]
+        self.assertIn("let monitor = this._trackMonitor(file.monitor_file", block)
+        self.assertIn("this.externalApiEnvMonitor = monitor;", block)
+        self.assertIn('let connectionId = this._connectSafe(monitor, "changed",', block)
+        self.assertIn("if (!connectionId) {\n        this._clearExternalApiEnvMonitor();", block)
+        self.assertIn("} catch (err) {\n      this._clearExternalApiEnvMonitor();", block)
+
     def test_error_status_displays_backend_error_message(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

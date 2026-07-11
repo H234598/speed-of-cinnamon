@@ -5077,8 +5077,9 @@ MyApplet.prototype = {
     this._clearExternalApiEnvMonitor();
     try {
       let file = Gio.File.new_for_path(path);
-      this.externalApiEnvMonitor = this._trackMonitor(file.monitor_file(Gio.FileMonitorFlags.NONE, null));
-      this._connectSafe(this.externalApiEnvMonitor, "changed", (monitor, fileObj, otherFile, eventType) => {
+      let monitor = this._trackMonitor(file.monitor_file(Gio.FileMonitorFlags.NONE, null));
+      this.externalApiEnvMonitor = monitor;
+      let connectionId = this._connectSafe(monitor, "changed", (monitor, fileObj, otherFile, eventType) => {
         if (this.appletRemoved) {
           return;
         }
@@ -5091,7 +5092,11 @@ MyApplet.prototype = {
           }
         }
       });
+      if (!connectionId) {
+        this._clearExternalApiEnvMonitor();
+      }
     } catch (err) {
+      this._clearExternalApiEnvMonitor();
       global.logError(err);
     }
   },
