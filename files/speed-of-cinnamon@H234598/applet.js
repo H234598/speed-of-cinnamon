@@ -3405,7 +3405,7 @@ MyApplet.prototype = {
     return [];
   },
 
-  _runTerminalWorkflow: function(title, command, openedMessage) {
+  _runTerminalWorkflow: function(title, command, openedMessage, cancelOllamaFlow, ollamaFlowToken) {
     let terminalArgs = this._terminalCommandArgs(title, command);
     if (terminalArgs.length === 0) {
       this._setStatus("error", _("No supported terminal found"), this.lastTranscript);
@@ -3419,6 +3419,10 @@ MyApplet.prototype = {
         maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
       }, (stdout, stderr, result) => {
         if (result && (result.error || result.timedOut || result.outputTooLarge)) {
+          if (cancelOllamaFlow === true && ollamaFlowToken && this.ollamaModelFlowToken === ollamaFlowToken) {
+            this._cancelOllamaInstallWatch();
+            this._clearOllamaModelFlow();
+          }
           this._setStatus("error", _("Terminal process exited unexpectedly"), this.lastTranscript);
         }
       });
@@ -3488,19 +3492,33 @@ MyApplet.prototype = {
   },
 
   _installOllamaRuntime: function(openChooserAfterInstall) {
+    let continueOllamaFlow = openChooserAfterInstall === true && Boolean(this.ollamaModelFlowToken);
+    let ollamaFlowToken = continueOllamaFlow ? this.ollamaModelFlowToken : null;
+    if (!continueOllamaFlow) {
+      this._cancelOllamaInstallWatch();
+      this._clearOllamaModelFlow();
+    }
     let opened = false;
     try {
-      opened = this._runTerminalWorkflow(_("Install Ollama"), this._installOllamaRuntimeCommand(), _("Ollama install terminal opened"));
+      opened = this._runTerminalWorkflow(_("Install Ollama"), this._installOllamaRuntimeCommand(), _("Ollama install terminal opened"), continueOllamaFlow, ollamaFlowToken);
     } catch (err) {
       global.logError(err);
       let safeError = this._sanitizeErrorMessage(String(err));
       this._setStatus("error", _("Could not start install terminal: ") + safeError, this.lastTranscript);
       this._notify(_("Could not start install terminal"), safeError, true);
-      return;
+      if (continueOllamaFlow) {
+        this._cancelOllamaInstallWatch();
+        this._clearOllamaModelFlow();
+      }
+      return false;
     }
-    if (opened && openChooserAfterInstall) {
+    if (opened && continueOllamaFlow) {
       this._watchOllamaInstallThenChoose();
+    } else if (continueOllamaFlow) {
+      this._cancelOllamaInstallWatch();
+      this._clearOllamaModelFlow();
     }
+    return opened;
   },
 
   _uninstallOllamaRuntime: function() {
@@ -4947,13 +4965,25 @@ MyApplet.prototype = {
     this._setStatus("ready", message, this.lastTranscript);
   },
 
+  _clearOllamaModelFlow: function(flowToken) {
+    if (flowToken && this.ollamaModelFlowToken !== flowToken) {
+      return false;
+    }
+    this.ollamaModelFlowToken = null;
+    return true;
+  },
+
   _activateOllamaTextModelFlow: function() {
     if (!this._findTrustedProgramInPath("zenity")) {
+      this._cancelOllamaInstallWatch();
+      this._clearOllamaModelFlow();
       this._setStatus("error", _("Install zenity to choose an Ollama model"), this.lastTranscript);
       return;
     }
     let textModelArgs = this._tryTextModelsArgs("ollama");
     if (!textModelArgs) {
+      this._cancelOllamaInstallWatch();
+      this._clearOllamaModelFlow();
       return;
     }
     this._cancelOllamaInstallWatch();
@@ -4966,6 +4996,7 @@ MyApplet.prototype = {
       }
       if (payload.error) {
         let safeError = this._sanitizeErrorMessage(payload.error);
+        this._clearOllamaModelFlow(flowToken);
         this._setStatus("error", safeError, this.lastTranscript);
         this._notify(_("Could not check Ollama"), safeError, true);
         return;
@@ -5046,11 +5077,15 @@ MyApplet.prototype = {
 
   _chooseOllamaTextModel: function() {
     if (!this._findTrustedProgramInPath("zenity")) {
+      this._cancelOllamaInstallWatch();
+      this._clearOllamaModelFlow();
       this._setStatus("error", _("Install zenity to choose an Ollama model"), this.lastTranscript);
       return;
     }
     let textModelArgs = this._tryTextModelsArgs("ollama");
     if (!textModelArgs) {
+      this._cancelOllamaInstallWatch();
+      this._clearOllamaModelFlow();
       return;
     }
     this._cancelOllamaInstallWatch();
@@ -5063,6 +5098,7 @@ MyApplet.prototype = {
       }
       if (payload.error) {
         let safeError = this._sanitizeErrorMessage(payload.error);
+        this._clearOllamaModelFlow(flowToken);
         this._setStatus("error", safeError, this.lastTranscript);
         this._notify(_("Could not load Ollama models"), safeError, true);
         return;
@@ -5093,7 +5129,7 @@ MyApplet.prototype = {
         return;
       }
       let finish = (message) => {
-        this.ollamaModelFlowToken = null;
+        this._clearOllamaModelFlow(flowToken);
         this._setStatus("ready", message, this.lastTranscript);
       };
       let choice = String(output || "").trim();
@@ -5122,6 +5158,7 @@ MyApplet.prototype = {
           }
         }
         if (model !== "" && knownModel) {
+          this._clearOllamaModelFlow(flowToken);
           this._selectTextModelBackend("ollama", model, _("Text model: ") + model);
           return;
         }
@@ -5131,11 +5168,12 @@ MyApplet.prototype = {
   },
 
   _promptInstallOllamaTextModel: function(flowToken) {
+    flowToken = flowToken || this.ollamaModelFlowToken || {};
     if (!this._findTrustedProgramInPath("zenity")) {
+      this._clearOllamaModelFlow(flowToken);
       this._setStatus("error", _("Install zenity to enter an Ollama model name"), this.lastTranscript);
       return;
     }
-    flowToken = flowToken || this.ollamaModelFlowToken || {};
     this.ollamaModelFlowToken = flowToken;
     this._setStatus("processing", _("Choose Ollama text model..."), this.lastTranscript);
     this._spawnText(this._ollamaModelPromptArgs(), (output) => {
@@ -5144,6 +5182,7 @@ MyApplet.prototype = {
       }
       let model = String(output || "").trim();
       if (model === "") {
+        this._clearOllamaModelFlow(flowToken);
         this._setStatus("ready", _("Ollama model installation cancelled"), this.lastTranscript);
         return;
       }
@@ -5152,7 +5191,10 @@ MyApplet.prototype = {
   },
 
   _installOllamaTextModel: function(model) {
+    let flowToken = this.ollamaModelFlowToken;
     if (this.isCommandRunning) {
+      this._clearOllamaModelFlow(flowToken);
+      this._setStatus("error", _("Another command is already running"), this.lastTranscript);
       return;
     }
     let installArgs;
@@ -5160,6 +5202,7 @@ MyApplet.prototype = {
       installArgs = this._installTextModelArgs(model);
     } catch (err) {
       let safeError = this._sanitizeErrorMessage(err);
+      this._clearOllamaModelFlow(flowToken);
       this._setStatus("error", _("Could not prepare Ollama model installation: ") + safeError, this.lastTranscript);
       return;
     }
@@ -5167,8 +5210,12 @@ MyApplet.prototype = {
     this._setStatus("processing", _("Installing Ollama model: ") + model, this.lastTranscript);
     this._spawnJson(installArgs, (payload) => {
       this.isCommandRunning = false;
+      if (flowToken && (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork())) {
+        return;
+      }
       if (payload.error) {
         let safeError = this._sanitizeErrorMessage(payload.error);
+        this._clearOllamaModelFlow(flowToken);
         this._setStatus("error", safeError, this.lastTranscript);
         this._notify(_("Ollama model installation failed"), safeError, true);
         this._refreshTextModelMenu();
@@ -5178,11 +5225,13 @@ MyApplet.prototype = {
         ? payload.model.trim()
         : String(model || "").trim();
       if (installedModel === "") {
+        this._clearOllamaModelFlow(flowToken);
         this._setStatus("error", _("Ollama installation returned no model name"), this.lastTranscript);
         this._refreshTextModelMenu();
         return;
       }
       let message = _("Ollama model installed: ") + installedModel;
+      this._clearOllamaModelFlow(flowToken);
       this._selectTextModelBackend("ollama", installedModel, message);
       this._notify(_("Ollama model installed"), installedModel, false);
     }, { timeoutMs: BENCHMARK_COMMAND_TIMEOUT_MS });
@@ -6573,6 +6622,7 @@ MyApplet.prototype = {
       let textModelArgs = this._tryTextModelsArgs("ollama");
       if (!textModelArgs) {
         this.ollamaInstallWatchToken = null;
+        this._clearOllamaModelFlow();
         return false;
       }
       this._spawnJson(textModelArgs, (payload) => {
@@ -6581,6 +6631,7 @@ MyApplet.prototype = {
         }
         if (payload.error) {
           this.ollamaInstallWatchToken = null;
+          this._clearOllamaModelFlow();
           this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
           return;
         }
@@ -6597,6 +6648,7 @@ MyApplet.prototype = {
         }
         if (this.ollamaInstallWatchPolls >= OLLAMA_INSTALL_MAX_POLLS) {
           this.ollamaInstallWatchToken = null;
+          this._clearOllamaModelFlow();
           this._setStatus("error", _("Ollama installation did not become reachable"), this.lastTranscript);
           this._notify(_("Ollama is not reachable"), _("Install finished or was cancelled, but 127.0.0.1:11434 is still unavailable."), true);
           return;

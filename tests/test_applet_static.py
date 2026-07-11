@@ -655,7 +655,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("result.error || result.timedOut || result.outputTooLarge", settings_block)
         self.assertNotIn("}, function() {});", settings_block)
 
-        terminal_start = source.index("_runTerminalWorkflow: function(title, command, openedMessage)")
+        terminal_start = source.index("_runTerminalWorkflow: function(title, command, openedMessage, cancelOllamaFlow, ollamaFlowToken)")
         terminal_end = source.index("\n  _terminalWorkflowScript:", terminal_start)
         terminal_block = source[terminal_start:terminal_end]
         self.assertIn('_("Terminal process exited unexpectedly")', terminal_block)
@@ -1700,6 +1700,36 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.ollamaModelFlowToken !== flowToken", install_block)
         self.assertIn("!this._lifecycleAllowsWork()", install_block)
 
+    def test_ollama_model_flow_clears_terminal_and_install_failure_states(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        helper_start = source.index("_clearOllamaModelFlow: function(flowToken)")
+        helper_end = source.index("\n  _activateOllamaTextModelFlow:", helper_start)
+        helper_block = source[helper_start:helper_end]
+        self.assertIn("if (flowToken && this.ollamaModelFlowToken !== flowToken)", helper_block)
+        self.assertIn("this.ollamaModelFlowToken = null;", helper_block)
+
+        runtime_start = source.index("_installOllamaRuntime: function(openChooserAfterInstall)")
+        runtime_end = source.index("\n  _uninstallOllamaRuntime:", runtime_start)
+        runtime_block = source[runtime_start:runtime_end]
+        self.assertIn("let continueOllamaFlow = openChooserAfterInstall === true && Boolean(this.ollamaModelFlowToken);", runtime_block)
+        self.assertIn("let ollamaFlowToken = continueOllamaFlow ? this.ollamaModelFlowToken : null;", runtime_block)
+        self.assertIn("this._clearOllamaModelFlow();", runtime_block)
+        self.assertIn("return opened;", runtime_block)
+
+        install_start = source.index("_installOllamaTextModel: function(model)")
+        install_end = source.index("\n  _refreshHistory:", install_start)
+        install_block = source[install_start:install_end]
+        self.assertIn("let flowToken = this.ollamaModelFlowToken;", install_block)
+        self.assertIn('_("Another command is already running")', install_block)
+        self.assertIn("this.ollamaModelFlowToken !== flowToken", install_block)
+        self.assertIn("this._clearOllamaModelFlow(flowToken);", install_block)
+
+        watch_start = source.index("_scheduleOllamaInstallWatchPoll: function(watchToken)")
+        watch_end = source.index("\n  _scheduleSetupCheck:", watch_start)
+        watch_block = source[watch_start:watch_end]
+        self.assertIn("this._clearOllamaModelFlow();", watch_block)
+
     def test_custom_limit_dialogs_ignore_stale_callbacks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
@@ -1953,7 +1983,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('"else",', source)
         self.assertIn('"fi",', source)
         self.assertIn("_terminalCommandArgs: function(title, command)", source)
-        self.assertIn("_runTerminalWorkflow: function(title, command, openedMessage)", source)
+        self.assertIn("_runTerminalWorkflow: function(title, command, openedMessage, cancelOllamaFlow, ollamaFlowToken)", source)
         self.assertIn("return true;", source)
         self.assertIn("return false;", source)
         self.assertIn("_installOllamaRuntimeCommand: function()", source)
