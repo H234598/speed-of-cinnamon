@@ -2976,6 +2976,10 @@ MyApplet.prototype = {
       }
       return;
     }
+    let inputOption = this._settingsSnapshotInputOptionOrNull(false, startupCheck ? "setup" : "error");
+    if (!inputOption) {
+      return;
+    }
     this._doctorCommandRunning = true;
     if (!startupCheck) {
       this._setDoctorSummary(_("Doctor: checking..."));
@@ -2998,7 +3002,10 @@ MyApplet.prototype = {
       } finally {
         this._doctorCommandRunning = false;
       }
-    }, { timeoutMs: DOCTOR_COMMAND_TIMEOUT_MS });
+    }, {
+      inputText: inputOption.inputText,
+      timeoutMs: DOCTOR_COMMAND_TIMEOUT_MS
+    });
   },
 
   _applyDoctorPayload: function(payload, startupCheck) {
@@ -3160,6 +3167,10 @@ MyApplet.prototype = {
   },
 
   _openProfanityFilterList: function() {
+    let inputOption = this._settingsSnapshotInputOptionOrNull(false);
+    if (!inputOption) {
+      return;
+    }
     let actionToken = {};
     this.setupDiagnosticsToken = actionToken;
     this._setStatus("processing", _("Preparing profanity replacement list..."), this.lastTranscript);
@@ -3180,10 +3191,14 @@ MyApplet.prototype = {
       }
       this.setupDiagnosticsToken = null;
       this._openFile(path, _("Opened profanity replacement list: ") + String(this._safePayloadCount(payload.entries)));
-    }, this._settingsSnapshotInputOption());
+    }, inputOption);
   },
 
   _copySetupPlan: function() {
+    let inputOption = this._settingsSnapshotInputOptionOrNull(false);
+    if (!inputOption) {
+      return;
+    }
     let actionToken = {};
     this.setupDiagnosticsToken = actionToken;
     this._spawnJson(this._setupArgs(), (payload) => {
@@ -3202,7 +3217,7 @@ MyApplet.prototype = {
       }
       this.setupDiagnosticsToken = null;
       this._setStatus("done", _("Copied setup plan"), this.lastTranscript);
-    }, this._settingsSnapshotInputOption());
+    }, inputOption);
   },
 
   _setupCommandsText: function(payload) {
@@ -3225,6 +3240,10 @@ MyApplet.prototype = {
   },
 
   _copySetupCommands: function() {
+    let inputOption = this._settingsSnapshotInputOptionOrNull(false);
+    if (!inputOption) {
+      return;
+    }
     let actionToken = {};
     this.setupDiagnosticsToken = actionToken;
     this._spawnJson(this._setupArgs(), (payload) => {
@@ -3251,10 +3270,14 @@ MyApplet.prototype = {
       }
       this.setupDiagnosticsToken = null;
       this._setStatus("done", _("Copied setup commands"), this.lastTranscript);
-    }, this._settingsSnapshotInputOption());
+    }, inputOption);
   },
 
   _copyDiagnostics: function() {
+    let inputOption = this._settingsSnapshotInputOptionOrNull(true);
+    if (!inputOption) {
+      return;
+    }
     let actionToken = {};
     this.setupDiagnosticsToken = actionToken;
     this._spawnJson(this._diagnosticsArgs(), (payload) => {
@@ -3273,10 +3296,14 @@ MyApplet.prototype = {
       }
       this.setupDiagnosticsToken = null;
       this._setStatus("done", _("Copied diagnostics"), this.lastTranscript);
-    }, this._settingsSnapshotInputOption(true));
+    }, inputOption);
   },
 
   _saveDiagnostics: function() {
+    let inputOption = this._settingsSnapshotInputOptionOrNull(true);
+    if (!inputOption) {
+      return;
+    }
     let actionToken = {};
     this.setupDiagnosticsToken = actionToken;
     this._spawnJson(this._diagnosticsSaveArgs(), (payload) => {
@@ -3290,7 +3317,7 @@ MyApplet.prototype = {
       }
       this.setupDiagnosticsToken = null;
       this._setStatus("done", _("Saved diagnostics"), this.lastTranscript);
-    }, this._settingsSnapshotInputOption(true));
+    }, inputOption);
   },
 
   _benchmarkAudioFileDialogArgs: function() {
@@ -5447,7 +5474,21 @@ MyApplet.prototype = {
     return { inputText: JSON.stringify(this._settingsSnapshotForCli(Boolean(includeLifecycle))) };
   },
 
+  _settingsSnapshotInputOptionOrNull: function(includeLifecycle, errorStatus) {
+    try {
+      return this._settingsSnapshotInputOption(Boolean(includeLifecycle));
+    } catch (err) {
+      let safeError = this._sanitizeErrorMessage(err);
+      this._setStatus(errorStatus || "error", _("Could not prepare settings for backend: ") + safeError, this.lastTranscript);
+      return null;
+    }
+  },
+
   _exportSettings: function() {
+    let inputOption = this._settingsSnapshotInputOptionOrNull(false);
+    if (!inputOption) {
+      return;
+    }
     let transferToken = {};
     this.settingsTransferToken = transferToken;
     this._setStatus("processing", _("Exporting settings..."), this.lastTranscript);
@@ -5462,7 +5503,7 @@ MyApplet.prototype = {
       }
       this.settingsTransferToken = null;
       this._setStatus("done", _("Exported settings"), this.lastTranscript);
-    }, { inputText: JSON.stringify(this._settingsSnapshotForCli()) });
+    }, inputOption);
   },
 
   _importSettings: function() {

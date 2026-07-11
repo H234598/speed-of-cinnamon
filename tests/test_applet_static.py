@@ -1262,7 +1262,8 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertIn("const DOCTOR_COMMAND_TIMEOUT_MS = 20000;", source)
         self.assertIn("_runDoctor: function(startupCheck) {", source)
-        self.assertIn("}, { timeoutMs: DOCTOR_COMMAND_TIMEOUT_MS });", source)
+        self.assertIn("inputText: inputOption.inputText", source)
+        self.assertIn("timeoutMs: DOCTOR_COMMAND_TIMEOUT_MS", source)
         self.assertIn('this.doctorSummaryItem = this._styleMenuItemLabel(new PopupMenu.PopupMenuItem(_("Doctor: not checked"))', source)
         self.assertIn('this.diagnosticsMenuItem.menu.addMenuItem(this.doctorSummaryItem)', source)
         self.assertIn('_setDoctorSummary(_("Doctor: checking..."))', source)
@@ -1350,15 +1351,36 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("disabled_groups: disabledGroups", source)
         self.assertIn("process_groups: processGroups", source)
         self.assertIn("_settingsSnapshotInputOption: function(includeLifecycle)", source)
+        self.assertIn("_settingsSnapshotInputOptionOrNull: function(includeLifecycle, errorStatus)", source)
         self.assertIn('snapshot["applet-lifecycle"] = this._appletLifecycleDiagnostics();', source)
         self.assertIn("this._spawnJson(this._doctorArgs(), (payload) => {", source)
-        self.assertIn("}, this._settingsSnapshotInputOption());", source)
-        self.assertIn("}, this._settingsSnapshotInputOption(true));", source)
-        self.assertIn('{ inputText: JSON.stringify(this._settingsSnapshotForCli()) }', source)
+        self.assertIn("let inputOption = this._settingsSnapshotInputOptionOrNull(false);", source)
+        self.assertIn("let inputOption = this._settingsSnapshotInputOptionOrNull(true);", source)
+        self.assertIn("}, inputOption);", source)
         self.assertIn("let hasInput = options.inputText !== null && options.inputText !== undefined;", source)
         self.assertIn("flags |= Gio.SubprocessFlags.STDIN_PIPE;", source)
         self.assertIn("stdin.write_all_async", source)
         self.assertIn("stream.write_all_finish(result);", source)
+
+    def test_snapshot_bound_actions_preflight_before_setting_action_tokens(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        methods = [
+            ("_runDoctor: function(startupCheck)", "this._doctorCommandRunning = true;"),
+            ("_openProfanityFilterList: function()", "this.setupDiagnosticsToken = actionToken;"),
+            ("_copySetupPlan: function()", "this.setupDiagnosticsToken = actionToken;"),
+            ("_copySetupCommands: function()", "this.setupDiagnosticsToken = actionToken;"),
+            ("_copyDiagnostics: function()", "this.setupDiagnosticsToken = actionToken;"),
+            ("_saveDiagnostics: function()", "this.setupDiagnosticsToken = actionToken;"),
+            ("_exportSettings: function()", "this.settingsTransferToken = transferToken;"),
+        ]
+        for index, (method, token_assignment) in enumerate(methods):
+            start = source.index(method)
+            end = source.index("\n  " + methods[index + 1][0].split(":", 1)[0] + ":" if index + 1 < len(methods) else "\n  _importSettings:", start)
+            block = source[start:end]
+            self.assertIn("_settingsSnapshotInputOptionOrNull", block)
+            self.assertIn("if (!inputOption)", block)
+            self.assertLess(block.index("_settingsSnapshotInputOptionOrNull"), block.index(token_assignment))
 
     def test_recording_status_shows_microphone_level(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
