@@ -3198,6 +3198,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._setStatus("ready", _("Auto Relisten cancelled"), this.lastTranscript);', cancel_block)
         self.assertIn("let effectiveStatus = typeof statusOverride === \"string\" ? statusOverride : this.status;", work_block)
 
+    def test_cancel_prepares_arguments_before_setting_busy_state(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_cancelRecording: function(statusOverride)")
+        end = source.index("\n  _runDoctor:", start)
+        block = source[start:end]
+        self.assertIn("let cancelArgs;", block)
+        self.assertIn("cancelArgs = this._cancelArgs();", block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Could not prepare cancellation command: ")', block)
+        self.assertIn("this._spawnJson(cancelArgs,", block)
+        self.assertLess(block.index("cancelArgs = this._cancelArgs();"), block.index("this.isCommandRunning = true;"))
+
     def test_async_keyboard_insert_reports_menu_close_failure(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

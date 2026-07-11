@@ -3217,6 +3217,14 @@ MyApplet.prototype = {
       this._setStatus("processing", _("Stopping Auto Relisten..."), this.lastTranscript);
       return;
     }
+    let cancelArgs;
+    try {
+      cancelArgs = this._cancelArgs();
+    } catch (error) {
+      let safeError = this._sanitizeErrorMessage(error);
+      this._setStatusPreservingRecording("error", _("Could not prepare cancellation command: ") + safeError, this.lastTranscript);
+      return;
+    }
     this.isCommandRunning = true;
     this.autoTranscribeRecordingKey = "";
     this.cancelPendingWhileCommandRunning = false;
@@ -3224,7 +3232,7 @@ MyApplet.prototype = {
     this.autoRelistenPendingToken = "";
     this.autoRelistenManualStopRequested = true;
     this._setStatus("processing", _("Cancelling..."), this.lastTranscript);
-    this._spawnJson(this._cancelArgs(), (payload) => {
+    this._spawnJson(cancelArgs, (payload) => {
       this.isCommandRunning = false;
       this._applyPayloadSafely(payload);
     });
