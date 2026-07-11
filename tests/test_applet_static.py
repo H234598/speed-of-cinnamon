@@ -2689,6 +2689,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._rememberActiveXWindow(function() {}, targetGeneration);", source)
         self.assertIn("_rememberActiveXWindow: function(completionCallback, expectedGeneration)", source)
         self.assertIn("_xdotoolOutput: function(args, maxBytes, completionCallback, timeoutMs)", source)
+        self.assertIn('this._runStateGuarded("x11-focus-callback", () => complete(true), undefined);', source)
+        self.assertNotIn('this._runGuarded("x11-focus-callback", () => complete(true), undefined);', source)
         self.assertIn('this._xdotoolOutput(["getactivewindow"], MAX_XDOTOOL_TARGET_OUTPUT_BYTES, (activeOutput) => {', source)
         self.assertIn('this._xdotoolOutput(["getwindowname", xid], MAX_XDOTOOL_TARGET_OUTPUT_BYTES, (titleOutput) => {', source)
         self.assertIn('this._xdotoolOutput(["getwindowclassname", xid], MAX_XDOTOOL_TARGET_OUTPUT_BYTES, (classOutput) => {', source)

@@ -7261,7 +7261,7 @@ MyApplet.prototype = {
         this._recordLifecycleError("x11-focus", err);
       }
       if (activated) {
-        this._runGuarded("x11-focus-callback", () => complete(true), undefined);
+        this._runStateGuarded("x11-focus-callback", () => complete(true), undefined);
         return true;
       }
     }
