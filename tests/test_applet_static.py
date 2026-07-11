@@ -1863,6 +1863,17 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn("this._cancelOllamaInstallWatch();", block)
             self.assertIn("this._clearOllamaModelFlow();", block)
 
+    def test_text_backend_persistence_validates_model_names(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_selectTextModelBackend: function(backend, model, message)")
+        end = source.index("\n  _activateOllamaTextModelFlow:", start)
+        block = source[start:end]
+        self.assertIn("let safeModel;", block)
+        self.assertIn('safeModel = this._coerceCliTextArg(model === undefined || model === null ? "" : model, "text model");', block)
+        self.assertIn('this._setStatus("error", _("Text model is invalid: ") + safeError', block)
+        self.assertIn("this.ollamaModel = safeModel;", block)
+        self.assertIn("this.openaiCompatibleTextModel = safeModel;", block)
+
     def test_custom_limit_dialogs_ignore_stale_callbacks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

@@ -5031,14 +5031,22 @@ MyApplet.prototype = {
   _selectTextModelBackend: function(backend, model, message) {
     this._cancelOllamaInstallWatch();
     this._clearOllamaModelFlow();
+    let safeModel;
+    try {
+      safeModel = this._coerceCliTextArg(model === undefined || model === null ? "" : model, "text model");
+    } catch (err) {
+      let safeError = this._sanitizeErrorMessage(err);
+      this._setStatus("error", _("Text model is invalid: ") + safeError, this.lastTranscript);
+      return;
+    }
     this.postProcessBackend = String(backend || "none");
     this.settings.setValue("post-process-backend", this.postProcessBackend);
     if (this.postProcessBackend === "ollama") {
-      this.ollamaModel = String(model || "");
+      this.ollamaModel = safeModel;
       this.settings.setValue("ollama-model", this.ollamaModel);
     }
     if (this.postProcessBackend === "openai-compatible") {
-      this.openaiCompatibleTextModel = String(model || "");
+      this.openaiCompatibleTextModel = safeModel;
       this.settings.setValue("openai-compatible-text-model", this.openaiCompatibleTextModel);
       if (!this._writeExternalApiEnvFile()) {
         this._refreshTextModelMenu();
