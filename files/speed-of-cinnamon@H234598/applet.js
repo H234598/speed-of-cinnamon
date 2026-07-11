@@ -4977,7 +4977,14 @@ MyApplet.prototype = {
         this._refreshTextModelMenu();
         return;
       }
-      let installedModel = String(payload.model || model);
+      let installedModel = payload && typeof payload.model === "string" && payload.model.trim() !== ""
+        ? payload.model.trim()
+        : String(model || "").trim();
+      if (installedModel === "") {
+        this._setStatus("error", _("Ollama installation returned no model name"), this.lastTranscript);
+        this._refreshTextModelMenu();
+        return;
+      }
       let message = _("Ollama model installed: ") + installedModel;
       this._selectTextModelBackend("ollama", installedModel, message);
       this._notify(_("Ollama model installed"), installedModel, false);

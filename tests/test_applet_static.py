@@ -823,6 +823,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let provider = backend === "openai-compatible" || backend === "ollama" ? backend : "";', entry_block)
         self.assertIn('if (provider === "")', entry_block)
 
+        install_start = source.index("_installOllamaTextModel: function(model)")
+        install_end = source.index("\n  _refreshHistory:", install_start)
+        install_block = source[install_start:install_end]
+        self.assertIn('typeof payload.model === "string"', install_block)
+        self.assertIn("payload.model.trim()", install_block)
+        self.assertIn('String(model || "").trim()', install_block)
+
     def test_input_source_refresh_ignores_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
@@ -1363,7 +1370,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("--entry-text=llama3.2:3b", source)
         self.assertIn("_installOllamaTextModel: function(model)", source)
         self.assertIn('"install-text-model", "--backend", "ollama", "--model", safeModel, "--json"', source)
-        self.assertIn('let installedModel = String(payload.model || model);', source)
+        self.assertIn('typeof payload.model === "string" && payload.model.trim() !== ""', source)
+        self.assertIn('let installedModel = payload && typeof payload.model === "string"', source)
+        self.assertIn('String(model || "").trim()', source)
         self.assertIn('this._selectTextModelBackend("ollama", installedModel, message);', source)
         self.assertIn('this._notify(_("Ollama model installation failed"), safeError, true)', source)
         self.assertIn('this._notify(_("Could not check Ollama"), safeError, true)', source)
