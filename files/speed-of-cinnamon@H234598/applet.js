@@ -1892,18 +1892,25 @@ MyApplet.prototype = {
   },
 
   _baseArgs: function(command) {
-    let safeInputDevice = this._coerceCliTextArg(this.inputDevice, "input device");
-    let safeTranscriberCommand = this._coerceCliTextArg(this.transcriberCommand, "transcriber command");
-    let safePostProcessCommand = this._coerceCliTextArg(this.postProcessCommand, "post-process command");
-    let safeOllamaUrl = this._coerceCliTextArg(this.ollamaUrl, "ollama URL");
-    let safeOllamaModel = this._coerceCliTextArg(this.ollamaModel, "ollama model");
-    let safeOpenAiCompatibleUrl = this._coerceCliTextArg(this.openaiCompatibleUrl, "openai-compatible URL");
-    let safeOpenAiCompatibleModel = this._coerceCliTextArg(this.openaiCompatibleModel, "openai-compatible model");
-    let safeOpenAiCompatibleTextModel = this._coerceCliTextArg(this.openaiCompatibleTextModel, "openai-compatible text model");
-    let safePostProcessPrompt = this._coerceCliTextArg(this._effectivePostProcessPrompt(), "post-process prompt");
-    let safeWhisperModel = this._coerceCliTextArg(this.whisperModel, "whisper model");
-    let safePersonalContext = this._coerceCliTextArg(this._singleLineCliTextValue(this.personalContext), "personal context");
-    let safeVocabulary = this._coerceCliTextArg(this._singleLineCliTextValue(this.vocabulary), "vocabulary");
+    let safeInputDevice = this._coerceCliTextArgOrFallback(this.inputDevice, "input device", "");
+    let safeTranscriberCommand = this._coerceCliTextArgOrFallback(this.transcriberCommand, "transcriber command", "");
+    let safePostProcessCommand = this._coerceCliTextArgOrFallback(this.postProcessCommand, "post-process command", "");
+    let safeOllamaUrl = this._coerceCliTextArgOrFallback(this.ollamaUrl, "ollama URL", "http://127.0.0.1:11434");
+    let safeOllamaModel = this._coerceCliTextArgOrFallback(this.ollamaModel, "ollama model", "");
+    let safeOpenAiCompatibleUrl = this._coerceCliTextArgOrFallback(this.openaiCompatibleUrl, "openai-compatible URL", DEFAULT_OPENAI_COMPATIBLE_URL);
+    let safeOpenAiCompatibleModel = this._coerceCliTextArgOrFallback(this.openaiCompatibleModel, "openai-compatible model", DEFAULT_OPENAI_COMPATIBLE_MODEL);
+    let safeOpenAiCompatibleTextModel = this._coerceCliTextArgOrFallback(this.openaiCompatibleTextModel, "openai-compatible text model", DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL);
+    let safePostProcessPrompt = this._coerceCliTextArgOrFallback(this._effectivePostProcessPrompt(), "post-process prompt", "");
+    let safeWhisperModel = this._coerceCliTextArgOrFallback(this.whisperModel, "whisper model", "");
+    let safePersonalContext = this._coerceCliTextArgOrFallback(this._singleLineCliTextValue(this.personalContext), "personal context", "");
+    let safeVocabulary = this._coerceCliTextArgOrFallback(this._singleLineCliTextValue(this.vocabulary), "vocabulary", "");
+    let safeRecorder = this._normalizeRecorder(this.recorder);
+    let safeTranscriber = TRANSCRIBER_METHODS.indexOf(String(this.transcriber || "")) >= 0
+      ? String(this.transcriber)
+      : "auto";
+    let safePostProcessBackend = POST_PROCESS_BACKENDS.indexOf(String(this.postProcessBackend || "")) >= 0
+      ? String(this.postProcessBackend)
+      : "none";
 
     let args = [
       this._cliCommand(),
@@ -1911,9 +1918,9 @@ MyApplet.prototype = {
       "--json",
       "--language", String(this._currentLanguage()),
       "--max-seconds", String(this._normalizeRecordingLimit(this.maxSeconds)),
-      "--recorder", String(this.recorder || "auto"),
-      "--transcriber", String(this.transcriber || "auto"),
-      "--post-process-backend", String(this.postProcessBackend || "none"),
+      "--recorder", safeRecorder,
+      "--transcriber", safeTranscriber,
+      "--post-process-backend", safePostProcessBackend,
       "--insert-method", "none",
       "--typing-delay-ms", String(this._normalizeTypingDelayMs(this.typingDelayMs))
     ];
@@ -2114,22 +2121,27 @@ MyApplet.prototype = {
   },
 
   _cliCommand: function() {
-    let configured = String(this.cliPath || "").trim();
-    if (configured !== "") {
-      if (configured.indexOf("~/") === 0) {
-        configured = GLib.build_filenamev([GLib.get_home_dir(), configured.substring(2)]);
+    try {
+      let configured = String(this.cliPath || "").trim();
+      if (configured !== "") {
+        if (configured.indexOf("~/") === 0) {
+          configured = GLib.build_filenamev([GLib.get_home_dir(), configured.substring(2)]);
+        }
+        if (configured.charAt(0) === "/" && GLib.file_test(configured, GLib.FileTest.IS_EXECUTABLE)) {
+          return configured;
+        }
       }
-      if (configured.charAt(0) === "/" && GLib.file_test(configured, GLib.FileTest.IS_EXECUTABLE)) {
-        return configured;
+      if (GLib.file_test(DEFAULT_CLI, GLib.FileTest.IS_EXECUTABLE)) {
+        return DEFAULT_CLI;
       }
+      if (GLib.file_test(SYSTEM_CLI, GLib.FileTest.IS_EXECUTABLE)) {
+        return SYSTEM_CLI;
+      }
+      return "";
+    } catch (err) {
+      this._logLifecycleError("cli-command", err);
+      return "";
     }
-    if (GLib.file_test(DEFAULT_CLI, GLib.FileTest.IS_EXECUTABLE)) {
-      return DEFAULT_CLI;
-    }
-    if (GLib.file_test(SYSTEM_CLI, GLib.FileTest.IS_EXECUTABLE)) {
-      return SYSTEM_CLI;
-    }
-    return "";
   },
 
   _outputMethodLabel: function(method) {
@@ -6298,6 +6310,15 @@ MyApplet.prototype = {
       throw new Error(String(fieldName || "value") + " is too long");
     }
     return normalized;
+  },
+
+  _coerceCliTextArgOrFallback: function(value, fieldName, fallback) {
+    try {
+      return this._coerceCliTextArg(value, fieldName);
+    } catch (err) {
+      this._logLifecycleError("settings-value", err);
+      return typeof fallback === "string" ? fallback : "";
+    }
   },
 
   _containsCliControlChars: function(value) {
