@@ -2126,6 +2126,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('new PopupMenu.PopupIconMenuItem(_("Basic setup")', source)
         self.assertIn("this._connectSafe(basicSetup, \"activate\", () => this._runBasicSetup());", source)
 
+        uninstall_start = source.index("_uninstallOllamaRuntime: function()")
+        uninstall_end = source.index("\n  _runBasicSetup:", uninstall_start)
+        uninstall_block = source[uninstall_start:uninstall_end]
+        self.assertIn("this._cancelOllamaInstallWatch();", uninstall_block)
+        self.assertIn("this._clearOllamaModelFlow();", uninstall_block)
+
     def test_terminal_workflow_preserves_shell_compound_syntax(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

@@ -3539,6 +3539,8 @@ MyApplet.prototype = {
   },
 
   _uninstallOllamaRuntime: function() {
+    this._cancelOllamaInstallWatch();
+    this._clearOllamaModelFlow();
     try {
       this._runTerminalWorkflow(_("Uninstall Ollama"), this._uninstallOllamaRuntimeCommand(), _("Ollama uninstall terminal opened"));
     } catch (err) {
