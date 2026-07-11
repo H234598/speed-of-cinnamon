@@ -5270,12 +5270,14 @@ MyApplet.prototype = {
         this._maybeWarnRejectedArtifactPassphrase(payload.error);
         return;
       }
-      let path = String(payload.path || "");
+      let path = typeof payload.path === "string" ? payload.path.trim() : "";
       if (path === "") {
         this._setStatus("error", _("Transcript export path is empty"), this.lastTranscript);
         return;
       }
-      if (payload.encrypted !== true || payload.plaintext !== false || String(payload.encryption || "") === "off") {
+      let encryptionMode = typeof payload.encryption === "string" ? payload.encryption.trim() : "";
+      let encryptedMode = encryptionMode === "keyring" || encryptionMode === "passphrase";
+      if (payload.encrypted !== true || payload.plaintext !== false || !encryptedMode) {
         let message = _("Transcript export was not encrypted");
         this._setStatus("error", message, this.lastTranscript);
         this._notify(_("Speed of Cinnamon transcript export"), message, true);
