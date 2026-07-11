@@ -2941,10 +2941,10 @@ MyApplet.prototype = {
 
   _copyShortcutReference: function() {
     if (!this._setClipboardText(this._shortcutReferenceText())) {
-      this._setStatus("error", _("Could not copy shortcut reference"), this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("Could not copy shortcut reference"), this.lastTranscript);
       return;
     }
-    this._setStatus("done", _("Copied shortcut reference"), this.lastTranscript);
+    this._setStatusPreservingRecording("done", _("Copied shortcut reference"), this.lastTranscript);
   },
 
   _openShortcutSettings: function() {
@@ -3211,7 +3211,7 @@ MyApplet.prototype = {
     let openedMessage = arguments.length > 0 ? String(arguments[0] || "") : _("Opened Cinnamon applet settings");
     let xletSettings = this._findTrustedProgramInPath("xlet-settings");
     if (!xletSettings) {
-      this._setStatus("error", _("xlet-settings command not found"), this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("xlet-settings command not found"), this.lastTranscript);
       return;
     }
     let args = [xletSettings, "applet", UUID];
@@ -3226,17 +3226,17 @@ MyApplet.prototype = {
         maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
       }, (stdout, stderr, result) => {
         if (result && (result.error || result.timedOut || result.outputTooLarge)) {
-          this._setStatus("error", _("Cinnamon applet settings process exited unexpectedly"), this.lastTranscript);
+          this._setStatusPreservingRecording("error", _("Cinnamon applet settings process exited unexpectedly"), this.lastTranscript);
         }
       });
       if (!handle) {
         throw new Error("xlet-settings process could not be started");
       }
     } catch (err) {
-      this._setStatus("error", this._sanitizeErrorMessage(err), this.lastTranscript);
+      this._setStatusPreservingRecording("error", this._sanitizeErrorMessage(err), this.lastTranscript);
       return;
     }
-    this._setStatus("ready", openedMessage, this.lastTranscript);
+    this._setStatusPreservingRecording("ready", openedMessage, this.lastTranscript);
   },
 
   _openSetupGuide: function() {
@@ -3246,10 +3246,10 @@ MyApplet.prototype = {
   _openUri: function(uri, successMessage) {
     try {
       Gio.AppInfo.launch_default_for_uri(uri, null);
-      this._setStatus("ready", successMessage, this.lastTranscript);
+      this._setStatusPreservingRecording("ready", successMessage, this.lastTranscript);
     } catch (err) {
       global.logError(err);
-      this._setStatus("error", _("Could not open link"), this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("Could not open link"), this.lastTranscript);
     }
   },
 
@@ -3853,10 +3853,10 @@ MyApplet.prototype = {
       "speed-of-cinnamon alarms check --mark --json"
     ].join("\n");
     if (!this._setClipboardText(text)) {
-      this._setStatus("error", _("Could not copy alarm commands"), this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("Could not copy alarm commands"), this.lastTranscript);
       return;
     }
-    this._setStatus("done", _("Copied alarm commands"), this.lastTranscript);
+    this._setStatusPreservingRecording("done", _("Copied alarm commands"), this.lastTranscript);
   },
 
   _setAlarmEnabled: function(id, enabled) {
@@ -8706,14 +8706,14 @@ MyApplet.prototype = {
 
   _copyLastTranscript: function() {
     if (!this.lastTranscript) {
-      this._setStatus(this.status, _("No transcript yet"), this.lastTranscript);
+      this._setStatusPreservingRecording(this.status, _("No transcript yet"), this.lastTranscript);
       return;
     }
     if (!this._setClipboardText(this._preparedTranscriptText(this.lastTranscript, true))) {
-      this._setStatus("error", _("Could not copy last transcript"), this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("Could not copy last transcript"), this.lastTranscript);
       return;
     }
-    this._setStatus("done", _("Copied last transcript"), this.lastTranscript);
+    this._setStatusPreservingRecording("done", _("Copied last transcript"), this.lastTranscript);
   },
 
   _insertLastTranscript: function() {
@@ -8784,10 +8784,10 @@ MyApplet.prototype = {
       return;
     }
     if (!this._setClipboardText(this._preparedTranscriptText(text, true))) {
-      this._setStatus("error", _("Could not copy transcript"), text);
+      this._setStatusPreservingRecording("error", _("Could not copy transcript"), text);
       return;
     }
-    this._setStatus("done", _("Copied transcript"), text);
+    this._setStatusPreservingRecording("done", _("Copied transcript"), text);
   },
 
   _insertHistoryTranscript: function(text) {
@@ -8795,6 +8795,21 @@ MyApplet.prototype = {
       return;
     }
     this._insertTranscriptText(text);
+  },
+
+  _setStatusPreservingRecording: function(status, message, transcript) {
+    if (!this._hasActiveRecordingState()) {
+      this._setStatus(status, message, transcript);
+      return;
+    }
+    let safeMessage = typeof message === "string" ? message : "";
+    this.lastMessage = status === "error"
+      ? this._uiMessageText(this._sanitizeErrorMessage(safeMessage))
+      : this._uiMessageText(safeMessage);
+    if (typeof transcript === "string" && transcript !== "") {
+      this.lastTranscript = transcript;
+    }
+    this._updatePanel();
   },
 
   _setStatus: function(status, message, transcript) {

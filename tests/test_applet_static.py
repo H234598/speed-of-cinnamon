@@ -348,7 +348,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn(': "";', source[source.index("safeLevel.detail = typeof safeLevel.detail"):source.index("safeLevel.detail = typeof safeLevel.detail") + 180])
         self.assertIn('_("Auto-Submit self-protection blocked a protected target")', source)
         self.assertNotIn('_("Auto-Submit self-protection blocked target: ") + detail', source)
-        self.assertIn('this._setStatus("error", _("Could not open link"), this.lastTranscript);', source)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Could not open link"), this.lastTranscript);', source)
         self.assertNotIn('_("Could not open link: ") + err.message', source)
         self.assertIn('this._setStatus("error", _("Could not restart applet"), this.lastTranscript);', source)
         self.assertNotIn('_("Could not restart applet: ") + String(err)', source)
@@ -642,7 +642,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_copyShortcutReference: function()", source)
         self.assertIn('new PopupMenu.PopupIconMenuItem(_("Copy shortcut reference"), "edit-copy-symbolic"', source)
         self.assertIn("this._setClipboardText(this._shortcutReferenceText())", source)
-        self.assertIn('this._setStatus("done", _("Copied shortcut reference"), this.lastTranscript)', source)
+        self.assertIn('this._setStatusPreservingRecording("done", _("Copied shortcut reference"), this.lastTranscript)', source)
         self.assertIn("this._populateShortcutMenu();", source)
 
     def test_ui_subprocess_launchers_handle_async_exit_failures(self) -> None:
@@ -3552,3 +3552,9 @@ class AppletStaticTest(unittest.TestCase):
         update_block = source[update_start:update_end]
         self.assertIn("this.autoPasteItem.label.text = this._autoPasteLabel();", update_block)
         self.assertNotIn("this._populateAutoPasteMenu();", update_block)
+
+        status_start = source.index("_setStatusPreservingRecording: function(status, message, transcript)")
+        status_end = source.index("\n  _setStatus: function", status_start)
+        status_block = source[status_start:status_end]
+        self.assertIn("if (!this._hasActiveRecordingState())", status_block)
+        self.assertIn("this._updatePanel();", status_block)
