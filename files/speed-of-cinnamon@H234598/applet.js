@@ -3220,7 +3220,10 @@ MyApplet.prototype = {
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         return;
       }
-      if (!this._setClipboardText(String(payload.text || JSON.stringify(payload, null, 2)))) {
+      let planText = typeof payload.text === "string" && payload.text.trim() !== ""
+        ? payload.text
+        : JSON.stringify(payload, null, 2);
+      if (!this._setClipboardText(planText)) {
         this.setupDiagnosticsToken = null;
         this._setStatus("error", _("Could not copy setup plan"), this.lastTranscript);
         return;
@@ -3239,7 +3242,7 @@ MyApplet.prototype = {
     let seen = {};
     let lines = [];
     for (let i = 0; i < commands.length; i++) {
-      let text = String(commands[i] || "").trim();
+      let text = typeof commands[i] === "string" ? commands[i].trim() : "";
       if (text === "" || seen[text]) {
         continue;
       }
