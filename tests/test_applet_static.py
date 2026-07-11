@@ -585,7 +585,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let text = this._preparedTranscriptText(transcript, suppressAutoPasteEnter);', source)
         self.assertIn('_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard)', source)
         self.assertIn('_pasteClipboardAfterFocus(submitWithReturn, text, (completed) => {', source)
-        self.assertIn('completionCallback(completed === true);', source)
+        self.assertIn('completeOnce(completed === true);', source)
         self.assertIn('_spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback)', source)
         self.assertIn('_spawnKeyboardWhenClipboardReady(args, followUpArgs, expectedClipboardText, Date.now() + CLIPBOARD_READY_TIMEOUT_MS, expectedTargetWindow, complete);', source)
         self.assertIn('_spawnKeyboardArgs: function(args, followUpArgs, expectedTargetWindow, expectedClipboardText, expectedClipboardDeadlineMs, completionCallback)', source)
@@ -2316,8 +2316,10 @@ class AppletStaticTest(unittest.TestCase):
         failure_end = block.index("return false;", failure)
 
         self.assertIn('this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);', block[failure:failure_end])
-        self.assertIn('if (typeof completionCallback === "function")', block[failure:failure_end])
-        self.assertIn("completionCallback(false);", block[failure:failure_end])
+        self.assertIn("completeOnce(false);", block[failure:failure_end])
+        self.assertIn("let completionFinished = false;", block)
+        self.assertIn("if (completionFinished)", block)
+        self.assertIn("completionFinished = true;", block)
 
     def test_x11_and_clipboard_wrappers_complete_when_subprocess_does_not_start(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2827,11 +2829,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn("this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);", fn_body)
         self.assertIn("this._setClipboardText(text)", fn_body[restore_index:paste_command_index])
         self.assertIn(
-            'if (!restored) {\n        this._setClipboardText(text);\n        this._setStatus("error", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);\n        if (typeof completionCallback === "function") completionCallback(false);\n        return;\n      }',
+            'if (!restored) {\n        this._setClipboardText(text);\n        this._setStatus("error", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);\n        completeOnce(false);\n        return;\n      }',
             fn_body,
         )
         self.assertIn(
-            'this._setStatus("error", _("Copied to clipboard; automatic paste command could not be started"), transcript);\n        if (typeof completionCallback === "function") completionCallback(false);',
+            'this._setStatus("error", _("Copied to clipboard; automatic paste command could not be started"), transcript);\n        completeOnce(false);',
             fn_body,
         )
 

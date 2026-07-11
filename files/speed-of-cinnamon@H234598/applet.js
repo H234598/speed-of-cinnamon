@@ -7397,14 +7397,24 @@ MyApplet.prototype = {
 
   _copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard) {
     let isCurrentOperation = typeof operationGuard === "function" ? operationGuard : function() { return true; };
+    let completionFinished = false;
+    let completeOnce = (result) => {
+      if (completionFinished) {
+        return;
+      }
+      completionFinished = true;
+      if (typeof completionCallback === "function") {
+        completionCallback(result === true);
+      }
+    };
     if (!isCurrentOperation()) {
-      if (typeof completionCallback === "function") completionCallback(false);
+      completeOnce(false);
       return false;
     }
     if (method === "clipboard") {
       if (!this._setClipboardText(text)) {
         this._setStatus("error", _("Could not copy to clipboard"), transcript);
-        if (typeof completionCallback === "function") completionCallback(false);
+        completeOnce(false);
         return false;
       }
       this._setStatus("done", _("Copied to clipboard"), transcript);
@@ -7413,7 +7423,7 @@ MyApplet.prototype = {
     if (!canPasteWithKeyboard) {
       if (!this._setClipboardText(text)) {
         this._setStatus("error", _("Could not copy to clipboard"), transcript);
-        if (typeof completionCallback === "function") completionCallback(false);
+        completeOnce(false);
         return false;
       }
       this._setStatus("done", _("Copied to clipboard; install xdotool or wtype for automatic paste"), transcript);
@@ -7421,45 +7431,41 @@ MyApplet.prototype = {
     }
     if (!this._closeMenuForKeyboardInsert()) {
       this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);
-      if (typeof completionCallback === "function") {
-        completionCallback(false);
-      }
+      completeOnce(false);
       return false;
     }
     this._restoreTargetWindowForPaste((restored) => {
       if (!isCurrentOperation()) {
-        if (typeof completionCallback === "function") completionCallback(false);
+        completeOnce(false);
         return;
       }
       if (!restored) {
         this._setClipboardText(text);
         this._setStatus("error", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);
-        if (typeof completionCallback === "function") completionCallback(false);
+        completeOnce(false);
         return;
       }
       if (!isCurrentOperation()) {
-        if (typeof completionCallback === "function") completionCallback(false);
+        completeOnce(false);
         return;
       }
       if (!this._setClipboardText(text)) {
         this._setStatus("error", _("Could not copy to clipboard"), transcript);
-        if (typeof completionCallback === "function") completionCallback(false);
+        completeOnce(false);
         return;
       }
       if (!this._pasteClipboardAfterFocus(submitWithReturn, text, (completed) => {
         if (!isCurrentOperation()) {
-          if (typeof completionCallback === "function") completionCallback(false);
+          completeOnce(false);
           return;
         }
         if (completed) {
           this._setStatus("done", _("Copied and pasted into target window"), transcript);
         }
-        if (typeof completionCallback === "function") {
-          completionCallback(completed === true);
-        }
+        completeOnce(completed === true);
       })) {
         this._setStatus("error", _("Copied to clipboard; automatic paste command could not be started"), transcript);
-        if (typeof completionCallback === "function") completionCallback(false);
+        completeOnce(false);
       }
     });
     return null;
