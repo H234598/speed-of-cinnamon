@@ -4421,7 +4421,7 @@ MyApplet.prototype = {
   },
 
   _removeVoiceModel: function(model) {
-    if (this.isCommandRunning) {
+    if (this.isCommandRunning || this.voiceModelActionToken) {
       return;
     }
     let name = model && typeof model.name === "string" ? model.name.trim() : "";
@@ -4429,10 +4429,16 @@ MyApplet.prototype = {
     if (name === "") {
       return;
     }
+    let actionToken = {};
+    this.voiceModelActionToken = actionToken;
     this.isCommandRunning = true;
     this._setStatus("processing", _("Removing model: ") + name, this.lastTranscript);
     this._spawnJson(this._removeModelArgs(name), (payload) => {
       this.isCommandRunning = false;
+      if (this.voiceModelActionToken !== actionToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
+      this.voiceModelActionToken = null;
       if (payload.error) {
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
         this._refreshModelMenu();

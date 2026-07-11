@@ -1105,6 +1105,11 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_removeVoiceModel: function(model)")
         end = source.index("\n  _selectVoiceModel:", start)
         block = source[start:end]
+        self.assertIn("if (this.isCommandRunning || this.voiceModelActionToken)", block)
+        self.assertIn("let actionToken = {};", block)
+        self.assertIn("this.voiceModelActionToken = actionToken;", block)
+        self.assertIn("this.voiceModelActionToken !== actionToken", block)
+        self.assertIn("this.voiceModelActionToken = null;", block)
         self.assertIn("if (payload.removed !== true)", block)
         self.assertIn('_("Model was not downloaded: ") + name', block)
         self.assertLess(block.index("if (payload.removed !== true)"), block.index("if (path !== \"\""))
