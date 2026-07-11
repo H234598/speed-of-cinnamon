@@ -658,6 +658,8 @@ class AppletStaticTest(unittest.TestCase):
         terminal_start = source.index("_runTerminalWorkflow: function(title, command, openedMessage, cancelOllamaFlow, ollamaFlowToken)")
         terminal_end = source.index("\n  _terminalWorkflowScript:", terminal_start)
         terminal_block = source[terminal_start:terminal_end]
+        self.assertIn("if (this._hasActiveRecordingState())", terminal_block)
+        self.assertIn('this._setStatus(this.status, _("Finish the current recording before starting a terminal workflow"), this.lastTranscript);', terminal_block)
         self.assertIn('_("Terminal process exited unexpectedly")', terminal_block)
         self.assertIn("result.error || result.timedOut || result.outputTooLarge", terminal_block)
         self.assertNotIn("}, function() {});", terminal_block)

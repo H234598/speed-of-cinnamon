@@ -3489,6 +3489,10 @@ MyApplet.prototype = {
   },
 
   _runTerminalWorkflow: function(title, command, openedMessage, cancelOllamaFlow, ollamaFlowToken) {
+    if (this._hasActiveRecordingState()) {
+      this._setStatus(this.status, _("Finish the current recording before starting a terminal workflow"), this.lastTranscript);
+      return false;
+    }
     if (this.terminalWorkflowRunning) {
       this._setStatus("error", _("Another terminal workflow is already running"), this.lastTranscript);
       return false;
