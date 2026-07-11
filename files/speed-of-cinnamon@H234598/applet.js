@@ -6006,7 +6006,7 @@ MyApplet.prototype = {
   },
 
   _exportSettings: function() {
-    if (this.settingsTransferToken) {
+    if (this.settingsTransferToken || this._hasActiveRecordingState()) {
       return;
     }
     let inputOption = this._settingsSnapshotInputOptionOrNull(false);
@@ -6031,7 +6031,7 @@ MyApplet.prototype = {
   },
 
   _importSettings: function() {
-    if (this.settingsTransferToken) {
+    if (this.settingsTransferToken || this._hasActiveRecordingState()) {
       return;
     }
     let transferToken = {};

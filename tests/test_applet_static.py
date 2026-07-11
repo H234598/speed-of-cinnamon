@@ -2283,8 +2283,8 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn("this.settingsTransferToken = transferToken;", block)
             self.assertIn("this.settingsTransferToken !== transferToken", block)
             self.assertIn("!this._lifecycleAllowsWork()", block)
-            self.assertIn("if (this.settingsTransferToken)", block)
-            self.assertLess(block.index("if (this.settingsTransferToken)"), block.index("let transferToken = {};"))
+            self.assertIn("if (this.settingsTransferToken || this._hasActiveRecordingState())", block)
+            self.assertLess(block.index("if (this.settingsTransferToken || this._hasActiveRecordingState())"), block.index("let transferToken = {};"))
 
         import_start = source.index("_importSettings: function()")
         import_end = source.index("\n  _applyImportedSettings:", import_start)
