@@ -6880,12 +6880,18 @@ MyApplet.prototype = {
     this._updateRecordingTiming(payload, status);
     this._applyMicrophoneLevel(payload.microphone_level, status);
     if (payload.error || status === "error") {
-      this.cancelPendingWhileCommandRunning = false;
-      this.autoTranscribeRecordingKey = "";
-      this.autoRelistenPending = false;
-      this.autoRelistenPendingToken = "";
       let errorMessage = this._payloadErrorMessage(payload, _("Backend reported an error"));
-      this._setStatus("error", errorMessage, this.lastTranscript);
+      let preserveActiveRecordingState = typeof statusRefreshToken === "number" && this._hasActiveRecordingState();
+      if (preserveActiveRecordingState) {
+        this._setStatusPreservingRecording("error", errorMessage, this.lastTranscript);
+        this._scheduleStatusPoll();
+      } else {
+        this.cancelPendingWhileCommandRunning = false;
+        this.autoTranscribeRecordingKey = "";
+        this.autoRelistenPending = false;
+        this.autoRelistenPendingToken = "";
+        this._setStatus("error", errorMessage, this.lastTranscript);
+      }
       this._maybeWarnRejectedArtifactPassphrase(errorMessage);
       return;
     }

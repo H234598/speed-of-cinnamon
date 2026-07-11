@@ -1656,6 +1656,27 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!this._isStatusCommandArgs(normalizedArgs)) {", source[spawn_index:spawn_end])
         self.assertIn("this._statusRefreshToken++;", source[spawn_index:spawn_end])
 
+    def test_status_refresh_errors_preserve_active_recording_state(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        apply_index = source.index("_applyPayload: function(payload, statusRefreshToken) {")
+        error_index = source.index('if (payload.error || status === "error") {', apply_index)
+        error_end = source.index("let hasTranscript", error_index)
+        error_block = source[error_index:error_end]
+
+        self.assertIn('let preserveActiveRecordingState = typeof statusRefreshToken === "number" && this._hasActiveRecordingState();', error_block)
+        self.assertIn('this._setStatusPreservingRecording("error", errorMessage, this.lastTranscript);', error_block)
+        self.assertIn("this._scheduleStatusPoll();", error_block)
+        self.assertIn('this._setStatus("error", errorMessage, this.lastTranscript);', error_block)
+        self.assertLess(
+            error_block.index("if (preserveActiveRecordingState)"),
+            error_block.index('this._setStatus("error", errorMessage, this.lastTranscript);')
+        )
+        self.assertLess(
+            error_block.index("if (preserveActiveRecordingState)"),
+            error_block.index("this.cancelPendingWhileCommandRunning = false;")
+        )
+
     def test_repeating_tracked_timers_remain_teardown_tracked(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName)")
