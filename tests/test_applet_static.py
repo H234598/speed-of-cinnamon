@@ -1332,6 +1332,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.ollamaInstallWatchToken !== watchToken", watch_block)
         self.assertIn("this._scheduleOllamaInstallWatchPoll(watchToken);", watch_block)
         self.assertIn("this.ollamaInstallWatchToken = null;", watch_block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Ollama status check failed: ") + safeError, this.lastTranscript);', watch_block)
 
     def test_recording_artifact_retention_is_optional(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
