@@ -2081,6 +2081,14 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._recordLifecycleError("timer-untrack", error);', block)
         self.assertIn("return false;", block)
 
+    def test_keyboard_menu_close_contains_logging_failures(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_closeMenuForKeyboardInsert: function()")
+        end = source.index("\n  _clearTargetWindowXid:", start)
+        block = source[start:end]
+        self.assertIn('this._recordLifecycleError("keyboard-menu-close", err);', block)
+        self.assertNotIn("global.logError(err);", block)
+
     def test_timer_reschedule_aborts_when_previous_timer_cannot_be_removed(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName)")

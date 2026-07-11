@@ -8019,7 +8019,7 @@ MyApplet.prototype = {
       }
       return true;
     } catch (err) {
-      global.logError(err);
+      this._recordLifecycleError("keyboard-menu-close", err);
       return false;
     }
   },
