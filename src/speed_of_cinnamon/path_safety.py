@@ -249,7 +249,7 @@ def _write_atomically_without_following_symlinks(
         os.replace(temp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         temp_name = ""
         os.fsync(parent_fd)
-    except OSError:
+    except Exception:
         cleanup_error: OSError | None = None
         if temp_name:
             try:

@@ -121,6 +121,15 @@ class PathSafetyTest(unittest.TestCase):
             self.assertFalse(target.exists())
             self.assertTrue(any(child.name.startswith(".settings.json.") and child.name.endswith(".tmp") for child in Path(tmp).iterdir()))
 
+    def test_atomic_text_write_removes_temp_file_when_encoding_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            with self.assertRaises(UnicodeEncodeError):
+                path_safety.write_text_atomically_without_following_symlinks(target, "\udcff")
+
+            self.assertFalse(target.exists())
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
     def test_read_text_without_following_symlinks_does_not_double_close_fd_on_read_error(self) -> None:
         class _FailingHandle:
             def __enter__(self):
