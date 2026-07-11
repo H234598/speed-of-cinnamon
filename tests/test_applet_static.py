@@ -733,6 +733,31 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let due = Array.isArray(payload.due)", check_block)
         self.assertIn('payload.due.filter((alarm) => alarm && typeof alarm === "object")', check_block)
 
+    def test_backend_text_is_bounded_before_ui_display(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn("const MAX_UI_MESSAGE_CHARS = 512;", source)
+        self.assertIn("_uiMessageText: function(value)", source)
+        status_start = source.index("_setStatus: function(status, message, transcript)")
+        status_end = source.index("\n  _maybeNotify:", status_start)
+        status_block = source[status_start:status_end]
+        self.assertIn("let safeMessage = (typeof message === \"string\" ? message : \"\");", status_block)
+        self.assertIn("this._uiMessageText(this._sanitizeErrorMessage(safeMessage))", status_block)
+        self.assertIn("this._uiMessageText(safeMessage)", status_block)
+
+        doctor_start = source.index("_setDoctorSummary: function(message)")
+        doctor_end = source.index("\n  _openAppletSettings:", doctor_start)
+        self.assertIn("this.doctorSummaryText = this._uiMessageText(String(message || \"\"));", source[doctor_start:doctor_end])
+
+        for method, next_method in [
+            ("_populateAlarmMenu: function(alarms, summary, message)", "\n  _addAlarmMenuEntry:"),
+            ("_addAlarmMenuEntry: function(alarm)", "\n  _copyAlarmCommands:"),
+            ("_addModelMenuEntry: function(model, parentMenu)", "\n  _isEnglishLanguage:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            self.assertIn("_uiMessageText", source[start:end])
+
     def test_nested_backend_payloads_are_shape_safe(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

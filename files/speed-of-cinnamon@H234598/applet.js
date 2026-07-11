@@ -56,6 +56,7 @@ const MAX_CLI_ARG_COUNT = 128;
 const MAX_CLI_COMMAND_BYTES = 32768;
 const MAX_TEXT_INSERT_CHARS = 120000;
 const MAX_SETTING_TEXT_CHARS = 4096;
+const MAX_UI_MESSAGE_CHARS = 512;
 const TRUSTED_SPAWN_DIRS = ["/usr/bin", "/usr/local/bin", "/bin"];
 const NUL_RE = /\u0000/g;
 const NON_ASCII_RE = /[^\u0000-\u007E]/g;
@@ -1534,6 +1535,10 @@ MyApplet.prototype = {
     let head = Math.max(8, Math.floor((limit - 3) * 0.55));
     let tail = Math.max(5, limit - 3 - head);
     return text.slice(0, head) + "..." + text.slice(text.length - tail);
+  },
+
+  _uiMessageText: function(value) {
+    return this._shortMenuText(typeof value === "string" ? value : "", MAX_UI_MESSAGE_CHARS);
   },
 
   _sanitizeErrorMessage: function(value) {
@@ -3112,7 +3117,7 @@ MyApplet.prototype = {
   },
 
   _setDoctorSummary: function(message) {
-    this.doctorSummaryText = String(message || "");
+    this.doctorSummaryText = this._uiMessageText(String(message || ""));
     if (this.doctorSummaryItem) {
       this.doctorSummaryItem.label.text = this.doctorSummaryText || _("Doctor: not checked");
     }
@@ -3573,7 +3578,7 @@ MyApplet.prototype = {
 
   _setAlarmOptionStatus: function(message) {
     if (this.status === "recording" || this.status === "processing") {
-      this.lastMessage = message;
+      this.lastMessage = this._uiMessageText(message);
       this._updatePanel();
       return;
     }
@@ -3611,6 +3616,7 @@ MyApplet.prototype = {
     let messageText = typeof message === "string" ? message.trim() : "";
     let summaryText = typeof summary === "string" ? summary.trim() : "";
     let summaryLabel = messageText || summaryText || _("No alarms configured");
+    summaryLabel = this._uiMessageText(summaryLabel);
     let summaryItem = new PopupMenu.PopupMenuItem(summaryLabel);
     summaryItem.setSensitive(false);
     this.alarmItem.menu.addMenuItem(summaryItem);
@@ -3670,10 +3676,11 @@ MyApplet.prototype = {
     if (summary !== "") {
       label += " - " + summary;
     }
+    label = this._uiMessageText(label);
     let entry = new PopupMenu.PopupSubMenuMenuItem(label);
     this.alarmItem.menu.addMenuItem(entry);
 
-    let details = new PopupMenu.PopupMenuItem(id);
+    let details = new PopupMenu.PopupMenuItem(this._uiMessageText(id));
     details.setSensitive(false);
     entry.menu.addMenuItem(details);
 
@@ -3806,6 +3813,7 @@ MyApplet.prototype = {
     sources = Array.isArray(sources) ? sources : [];
     sources = sources.filter((source) => source && typeof source === "object" && typeof source.name === "string" && source.name.trim() !== "");
     let messageText = typeof message === "string" ? message.trim() : "";
+    messageText = this._uiMessageText(messageText);
     this._clearMenuItems(this.inputSourceItem.menu);
     let current = String(this.inputDevice || "");
     let currentWasListed = current === "";
@@ -3878,11 +3886,12 @@ MyApplet.prototype = {
     }
     this.settings.setValue("input-device", this.inputDevice);
     this._refreshInputSourceMenu();
+    let safeLabel = this._uiMessageText(label);
     let message = this.inputDevice === ""
       ? _("Input device: system default")
-      : _("Input device: ") + label;
+      : _("Input device: ") + safeLabel;
     if (this.status === "recording" || this.status === "processing") {
-      this.lastMessage = _("Input device for next recording: ") + label;
+      this.lastMessage = _("Input device for next recording: ") + safeLabel;
       this._updatePanel();
       return;
     }
@@ -3921,6 +3930,7 @@ MyApplet.prototype = {
     models = Array.isArray(models) ? models : [];
     models = models.filter((model) => model && typeof model === "object" && typeof model.name === "string" && model.name.trim() !== "" && this._modelPathFromPayload(model) !== "");
     let messageText = typeof message === "string" ? message.trim() : "";
+    messageText = this._uiMessageText(messageText);
     this._clearMenuItems(this.modelItem.menu);
 
     let autoActive = String(this.transcriber || "auto") === "auto" && String(this.whisperModel || "") === "";
@@ -4088,6 +4098,7 @@ MyApplet.prototype = {
     let compatible = this._voiceModelSupportsCurrentLanguage(model);
     let size = typeof model.size === "string" ? model.size.trim() : "";
     let description = typeof model.description === "string" ? model.description.trim() : "";
+    description = this._uiMessageText(description);
     let label = (current ? "[x] " : "[ ] ") + name + " (" + (size || "?") + ")";
     if (!compatible) {
       label += _(" - English only");
@@ -4097,6 +4108,7 @@ MyApplet.prototype = {
     } else if (!usable) {
       label += _(" - invalid metadata");
     }
+    label = this._uiMessageText(label);
     let entry = new PopupMenu.PopupSubMenuMenuItem(label);
     this._styleMenuItemLabel(entry);
     this._styleSelectionSubmenu(entry);
@@ -4746,6 +4758,7 @@ MyApplet.prototype = {
     models = Array.isArray(models) ? models : [];
     models = models.filter((model) => model && typeof model === "object" && typeof model.name === "string" && model.name.trim() !== "");
     let messageText = typeof message === "string" ? message.trim() : "";
+    messageText = this._uiMessageText(messageText);
     this._clearMenuItems(this.textModelItem.menu);
     let backend = String(this.postProcessBackend || "none");
     let activeProvider = provider === "openai-compatible" || provider === "ollama"
@@ -8344,9 +8357,10 @@ MyApplet.prototype = {
     this._statusRefreshToken++;
     let previousStatus = this.status;
     this.status = status;
+    let safeMessage = (typeof message === "string" ? message : "");
     this.lastMessage = status === "error"
-      ? this._sanitizeErrorMessage(message)
-      : (typeof message === "string" ? message : "");
+      ? this._uiMessageText(this._sanitizeErrorMessage(safeMessage))
+      : this._uiMessageText(safeMessage);
     if (typeof transcript === "string" && transcript !== "") {
       this.lastTranscript = transcript;
     }
