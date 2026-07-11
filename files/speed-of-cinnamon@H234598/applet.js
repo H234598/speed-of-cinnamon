@@ -3064,7 +3064,7 @@ MyApplet.prototype = {
       toggleArgs = this._baseArgs("toggle");
     } catch (err) {
       let safeError = this._sanitizeErrorMessage(err);
-      this._setStatus("error", _("Could not prepare recording command: ") + safeError, this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("Could not prepare recording command: ") + safeError, this.lastTranscript);
       return;
     }
     let manualRelistenStopRequested = Boolean(
@@ -7105,7 +7105,7 @@ MyApplet.prototype = {
       stopArgs = this._baseArgs("stop");
     } catch (err) {
       let safeError = this._sanitizeErrorMessage(err);
-      this._setStatus("error", _("Could not prepare timed recording command: ") + safeError, this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("Could not prepare timed recording command: ") + safeError, this.lastTranscript);
       return;
     }
     this.autoTranscribeRecordingKey = recordingKey;

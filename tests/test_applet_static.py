@@ -1261,7 +1261,7 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         self.assertIn("let toggleArgs;", block)
         self.assertIn('toggleArgs = this._baseArgs("toggle");', block)
-        self.assertIn('this._setStatus("error", _("Could not prepare recording command: ") + safeError', block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Could not prepare recording command: ") + safeError', block)
         self.assertIn("_coerceCliTextArgOrFallback", source)
         self.assertIn("_appendCliOptionWithinBudget", source)
         self.assertIn("optional CLI setting exceeds command limit", source)
@@ -1291,7 +1291,7 @@ class AppletStaticTest(unittest.TestCase):
         auto_block = source[auto_start:auto_end]
         self.assertIn("let stopArgs;", auto_block)
         self.assertIn('stopArgs = this._baseArgs("stop");', auto_block)
-        self.assertIn('this._setStatus("error", _("Could not prepare timed recording command: ") + safeError', auto_block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Could not prepare timed recording command: ") + safeError', auto_block)
         self.assertLess(auto_block.index("let stopArgs;"), auto_block.index("this.isCommandRunning = true;"))
         self.assertIn("this._spawnJson(stopArgs,", auto_block)
 
