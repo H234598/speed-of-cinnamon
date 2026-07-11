@@ -5995,11 +5995,10 @@ MyApplet.prototype = {
             }
             let data = bytes && bytes.get_data ? bytes.get_data() : bytes;
             let chunk = ByteArray.toString(data || "");
-            let chunkBytes = utf8ByteLength(chunk);
             if (name === "stdout") {
-              stdoutBytes += chunkBytes;
+              stdoutBytes += size;
             } else {
-              stderrBytes += chunkBytes;
+              stderrBytes += size;
             }
             if ((name === "stdout" ? stdoutBytes : stderrBytes) > maxBytes) {
               finish({ outputTooLarge: true, stream: name }, true);
