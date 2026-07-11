@@ -1381,7 +1381,7 @@ MyApplet.prototype = {
     this.menu.actor.hide();
     this.menuManager.addMenu(this.menu);
     this._connectSafe(this.menu, "open-state-changed", (menu, open) => {
-      if (!this._applet_context_menu.isOpen) {
+      if (!this._applet_context_menu || !this._applet_context_menu.isOpen) {
         this.actor.change_style_pseudo_class("checked", open);
       }
     }, "menu-open-state");

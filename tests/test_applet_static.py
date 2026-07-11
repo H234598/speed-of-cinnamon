@@ -1734,6 +1734,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (cleanupMenu(contextMenu, \"context-menu\"))", block)
         self.assertIn("let cleanupManager = (manager, group) => {", block)
 
+    def test_menu_open_state_tolerates_missing_context_menu(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index('this._connectSafe(this.menu, "open-state-changed"')
+        end = source.index("\n    this._connectSafe(this, \"orientation-changed\"", start)
+        block = source[start:end]
+        self.assertIn("if (!this._applet_context_menu || !this._applet_context_menu.isOpen)", block)
+
     def test_tooltip_teardown_retains_handle_after_destroy_failure(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_destroyAppletTooltip: function()")
