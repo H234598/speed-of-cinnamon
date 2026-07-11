@@ -8037,7 +8037,9 @@ MyApplet.prototype = {
         key: Clutter.KEY_Escape,
         action: function() {
           this._dialogClose(dialog, "clipboard-overwrite");
-          this._setStatus("ready", _("Clipboard overwrite cancelled"), transcript);
+          if (isCurrentOperation()) {
+            this._setStatus("ready", _("Clipboard overwrite cancelled"), transcript);
+          }
           complete(false);
         }.bind(this),
       },

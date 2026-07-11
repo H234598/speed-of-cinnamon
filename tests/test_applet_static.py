@@ -3685,3 +3685,12 @@ class AppletStaticTest(unittest.TestCase):
             block.index("this._cancelTextInsertForSettingsChange();"),
             block.index("if (this.isCommandRunning)"),
         )
+
+    def test_clipboard_overwrite_cancel_respects_insert_token(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_confirmClipboardOverwriteForPaste: function(")
+        end = source.index("\n  _pasteClipboardAfterFocus:", start)
+        block = source[start:end]
+        cancel = block.index('this._setStatus("ready", _("Clipboard overwrite cancelled")')
+        self.assertIn("if (isCurrentOperation())", block[cancel - 80:cancel])
