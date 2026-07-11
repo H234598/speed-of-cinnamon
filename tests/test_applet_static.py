@@ -1589,7 +1589,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._statusCommandRunning = true;", source)
         self.assertIn("try {", source)
         self.assertIn("} catch (err) {", source)
-        self.assertIn('this._setStatus("error", _("Status refresh failed: ") + safeError', source)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Status refresh failed: ") + safeError', source)
         self.assertIn("} finally {", source)
         self.assertIn("this._statusCommandRunning = false;", source)
 
