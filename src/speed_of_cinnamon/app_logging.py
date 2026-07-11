@@ -680,7 +680,12 @@ def _copy_stream_capped(source: Any, output: Any, *, source_path: Path) -> None:
 
 def _copy_log_content(path: Path, output: gzip.GzipFile) -> None:
     fd = _open_log_source_file(path, field_name="log source file")
-    with os.fdopen(fd, "rb") as source_file:
+    try:
+        source_file = os.fdopen(fd, "rb")
+    except Exception:
+        os.close(fd)
+        raise
+    with source_file:
         if path.suffix == ".gz":
             with gzip.GzipFile(fileobj=source_file, mode="rb") as source:
                 _copy_stream_capped(source, output, source_path=path)

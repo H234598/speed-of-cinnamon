@@ -294,6 +294,17 @@ class AppLoggingTest(unittest.TestCase):
 
         self.assertEqual(stderr.getvalue(), "")
 
+    def test_copy_log_content_closes_source_fd_when_fdopen_fails(self) -> None:
+        with (
+            mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
+            mock.patch.object(app_logging.os, "fdopen", side_effect=ValueError("bad source fd")),
+            mock.patch.object(app_logging.os, "close") as mocked_close,
+        ):
+            with self.assertRaisesRegex(ValueError, "bad source fd"):
+                app_logging._copy_log_content(Path("/probe.log"), mock.Mock())
+
+        mocked_close.assert_called_once_with(123)
+
     def test_file_handler_transient_emit_failure_retries_after_temporary_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
