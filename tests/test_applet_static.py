@@ -2440,6 +2440,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let processes = registryValue("processes", {});', source)
         self.assertIn("let processEntry = processes[token];", source)
         self.assertIn('if (!processEntry || typeof processEntry !== "object")', source)
+        self.assertIn("let lifecycleErrorCounts = {};", source)
+        self.assertIn("let disabledErrorGroups = {};", source)
         self.assertIn('this._recordLifecycleError("diagnostics", error);', source)
         self.assertIn("let countArrayEntries = (value) =>", source)
         self.assertIn("_settingsSnapshotInputOption: function(includeLifecycle)", source)

@@ -6885,17 +6885,48 @@ MyApplet.prototype = {
       }
     };
     let errorCounts = {};
-    for (let key in this._lifecycleErrorCounts || {}) {
-      if (Object.prototype.hasOwnProperty.call(this._lifecycleErrorCounts, key)) {
-        let safeKey = String(key || "unknown").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
-        errorCounts[safeKey || "unknown"] = Math.max(0, Math.min(100000, Number(this._lifecycleErrorCounts[key] || 0)));
+    let lifecycleErrorCounts = {};
+    try {
+      lifecycleErrorCounts = this._lifecycleErrorCounts || {};
+    } catch (error) {
+      recordDiagnosticError(error);
+    }
+    try {
+      for (let key in lifecycleErrorCounts) {
+        try {
+          if (Object.prototype.hasOwnProperty.call(lifecycleErrorCounts, key)) {
+            let safeKey = String(key || "unknown").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
+            let count = Number(lifecycleErrorCounts[key] || 0);
+            errorCounts[safeKey || "unknown"] = isFinite(count)
+              ? Math.max(0, Math.min(100000, count))
+              : 0;
+          }
+        } catch (error) {
+          recordDiagnosticError(error);
+        }
       }
+    } catch (error) {
+      recordDiagnosticError(error);
     }
     let disabledGroups = [];
-    for (let key in this._disabledErrorGroups || {}) {
-      if (Object.prototype.hasOwnProperty.call(this._disabledErrorGroups, key) && this._disabledErrorGroups[key]) {
-        disabledGroups.push(String(key || "unknown").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64));
+    let disabledErrorGroups = {};
+    try {
+      disabledErrorGroups = this._disabledErrorGroups || {};
+    } catch (error) {
+      recordDiagnosticError(error);
+    }
+    try {
+      for (let key in disabledErrorGroups) {
+        try {
+          if (Object.prototype.hasOwnProperty.call(disabledErrorGroups, key) && disabledErrorGroups[key]) {
+            disabledGroups.push(String(key || "unknown").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64));
+          }
+        } catch (error) {
+          recordDiagnosticError(error);
+        }
       }
+    } catch (error) {
+      recordDiagnosticError(error);
     }
     disabledGroups = disabledGroups.filter((value, index, values) => value && values.indexOf(value) === index).sort().slice(0, 64);
     let processGroups = {};
