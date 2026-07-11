@@ -822,20 +822,37 @@ MyApplet.prototype = {
   },
 
   _destroyTrackedDialogs: function() {
-    let dialogs = this._resourceRegistry && Array.isArray(this._resourceRegistry.dialogs)
-      ? this._resourceRegistry.dialogs.splice(0)
-      : [];
-    for (let dialog of dialogs) {
-      this._runTeardownGuarded("teardown-dialog-close", () => {
-        if (dialog && dialog.close) {
-          dialog.close();
+    if (!this._resourceRegistry || !Array.isArray(this._resourceRegistry.dialogs)) {
+      return;
+    }
+    let dialogs = this._resourceRegistry.dialogs;
+    try {
+      for (let index = dialogs.length - 1; index >= 0; index--) {
+        let dialog = dialogs[index];
+        let closeSucceeded = false;
+        this._runTeardownGuarded("teardown-dialog-close", () => {
+          if (dialog && dialog.close) {
+            dialog.close();
+          }
+          closeSucceeded = true;
+        });
+        let destroySucceeded = false;
+        this._runTeardownGuarded("teardown-dialog-destroy", () => {
+          if (dialog && dialog.destroy) {
+            dialog.destroy();
+          }
+          destroySucceeded = true;
+        });
+        if (closeSucceeded && destroySucceeded) {
+          if (dialog) {
+            this._untrackDialog(dialog);
+          } else {
+            dialogs.splice(index, 1);
+          }
         }
-      });
-      this._runTeardownGuarded("teardown-dialog-destroy", () => {
-        if (dialog && dialog.destroy) {
-          dialog.destroy();
-        }
-      });
+      }
+    } catch (error) {
+      this._recordLifecycleError("teardown-dialogs", error);
     }
   },
 

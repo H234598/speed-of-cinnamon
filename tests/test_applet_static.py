@@ -1789,6 +1789,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (closed) {", block)
         self.assertIn("this._untrackDialog(dialog);", block)
 
+    def test_dialog_teardown_untracks_only_after_close_and_destroy(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_destroyTrackedDialogs: function()")
+        end = source.index("\n  _destroyMenus:", start)
+        block = source[start:end]
+        self.assertNotIn("dialogs.splice(0)", block)
+        self.assertIn("for (let index = dialogs.length - 1; index >= 0; index--)", block)
+        self.assertIn("let closeSucceeded = false;", block)
+        self.assertIn("let destroySucceeded = false;", block)
+        self.assertIn("if (closeSucceeded && destroySucceeded)", block)
+        self.assertIn("this._untrackDialog(dialog);", block)
+
     def test_applet_exposes_notification_options_submenu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
