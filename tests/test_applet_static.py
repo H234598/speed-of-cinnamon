@@ -2090,6 +2090,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("return false;", block)
         self.assertLess(block.index("Mainloop.source_remove(sourceId)"), block.index("delete this._resourceRegistry.timers[key]"))
 
+    def test_timer_cleanup_handles_missing_registry_map(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_clearTrackedTimer: function(name, propertyName)")
+        end = source.index("\n  _scheduleTrackedTimer:", start)
+        block = source[start:end]
+
+        self.assertIn('let key = "timer";', block)
+        self.assertIn("this._resourceRegistry && this._resourceRegistry.timers", block)
+        self.assertIn(": 0;", block)
+        self.assertIn('this._recordLifecycleError("timer-clear", error);', block)
+        self.assertLess(block.index("try {"), block.index("Mainloop.source_remove(sourceId)"))
+
     def test_timer_registry_delete_failures_do_not_escape_cleanup(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_clearTrackedTimer: function(name, propertyName)")

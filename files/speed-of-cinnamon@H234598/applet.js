@@ -1188,18 +1188,21 @@ MyApplet.prototype = {
   },
 
   _clearTrackedTimer: function(name, propertyName) {
-    let key = String(name || propertyName || "timer");
-    let sourceId = this._resourceRegistry && this._resourceRegistry.timers[key];
-    if (!sourceId && propertyName) {
-      sourceId = this[propertyName];
-    }
-    if (!sourceId) {
-      if (propertyName) {
-        this[propertyName] = 0;
-      }
-      return true;
-    }
+    let key = "timer";
     try {
+      key = String(name || propertyName || "timer");
+      let sourceId = this._resourceRegistry && this._resourceRegistry.timers
+        ? this._resourceRegistry.timers[key]
+        : 0;
+      if (!sourceId && propertyName) {
+        sourceId = this[propertyName];
+      }
+      if (!sourceId) {
+        if (propertyName) {
+          this[propertyName] = 0;
+        }
+        return true;
+      }
       let removed = Mainloop.source_remove(sourceId);
       if (removed === false) {
         throw new Error("Timer source could not be removed");
