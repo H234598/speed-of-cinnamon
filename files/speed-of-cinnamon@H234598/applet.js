@@ -5142,7 +5142,7 @@ MyApplet.prototype = {
         return;
       }
       this._openAppletSettings();
-      this._setStatus("ready", _("Configure custom text command in applet settings"), this.lastTranscript);
+      this._setStatusPreservingRecording("ready", _("Configure custom text command in applet settings"), this.lastTranscript);
     });
     this.textModelItem.menu.addMenuItem(custom);
 
