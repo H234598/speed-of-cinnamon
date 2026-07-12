@@ -11239,11 +11239,9 @@ MyApplet.prototype = {
       }
     };
     let failToOpen = () => {
-      let closed = this._dialogClose(dialog, "clipboard-overwrite");
+      this._dialogClose(dialog, "clipboard-overwrite");
       this._setStatus("error", _("Clipboard overwrite prompt could not be opened"), transcript);
-      if (closed) {
-        complete(false);
-      }
+      complete(false);
     };
     if (!dialog || !this._dialogAddChild(dialog, this._newSafeLabel(message, { x_expand: true }, "clipboard-overwrite"), "clipboard-overwrite") ||
       !this._dialogAddChild(dialog, this._newSafeLabel(_("Replace clipboard content and continue paste?"), { x_expand: true }, "clipboard-overwrite"), "clipboard-overwrite")) {

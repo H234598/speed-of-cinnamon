@@ -5645,16 +5645,17 @@ class AppletStaticTest(unittest.TestCase):
         )
         self.assertIn('this._setStatus("error", _("Clipboard overwrite prompt could not be closed"), transcript);', overwrite_block)
 
-    def test_clipboard_overwrite_prompt_stays_pending_when_open_cleanup_fails(self) -> None:
+    def test_clipboard_overwrite_prompt_releases_insert_when_open_cleanup_fails(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_confirmClipboardOverwriteForPaste: function(")
         end = source.index("\n  _pasteClipboardAfterFocus:", start)
         block = source[start:end]
         self.assertIn("let failToOpen = () => {", block)
-        self.assertIn('let closed = this._dialogClose(dialog, "clipboard-overwrite");', block)
-        self.assertIn("if (closed) {\n        complete(false);", block)
+        self.assertIn('this._dialogClose(dialog, "clipboard-overwrite");', block)
+        self.assertIn('this._setStatus("error", _("Clipboard overwrite prompt could not be opened"), transcript);\n      complete(false);', block)
+        fail_start = block.index("let failToOpen = () => {")
         open_failure = block.index('if (!this._dialogOpen(dialog, "clipboard-overwrite"))')
-        self.assertNotIn("complete(false);", block[open_failure:])
+        self.assertLess(block.index("complete(false);", fail_start), open_failure)
 
     def test_text_insert_releases_token_on_sync_snapshot_failure(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
