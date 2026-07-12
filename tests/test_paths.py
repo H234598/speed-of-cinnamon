@@ -172,6 +172,15 @@ class PathsTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "secure temporary directory open is not supported"):
                     paths.xdg_cache_home()
 
+    def test_private_temp_root_inspection_failure_is_controlled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch("speed_of_cinnamon.paths.tempfile.gettempdir", return_value=tmp),
+                mock.patch("speed_of_cinnamon.paths.os.fstat", side_effect=OSError("stat failed")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "temporary directory is not safe"):
+                    paths._private_runtime_temp_root()
+
     def test_xdg_paths_accept_absolute_non_symlink_roots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):

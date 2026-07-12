@@ -99,15 +99,18 @@ def _private_runtime_temp_root() -> Path:
     except OSError as exc:
         raise RuntimeError("temporary directory is not safe") from exc
     try:
-        file_stat = os.fstat(fd)
-        if not stat_module.S_ISDIR(file_stat.st_mode):
-            raise RuntimeError("temporary directory is not a directory")
-        if hasattr(os, "getuid") and file_stat.st_uid != os.getuid():
-            raise RuntimeError("temporary directory is not owned by the current user")
-        os.fchmod(fd, 0o700)
-        file_stat = os.fstat(fd)
-    finally:
-        os.close(fd)
+        try:
+            file_stat = os.fstat(fd)
+            if not stat_module.S_ISDIR(file_stat.st_mode):
+                raise RuntimeError("temporary directory is not a directory")
+            if hasattr(os, "getuid") and file_stat.st_uid != os.getuid():
+                raise RuntimeError("temporary directory is not owned by the current user")
+            os.fchmod(fd, 0o700)
+            file_stat = os.fstat(fd)
+        finally:
+            os.close(fd)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("temporary directory is not safe") from exc
     assert_no_symlink_ancestors(private_root, field_name="temporary directory")
     if file_stat.st_mode & 0o077:
         raise RuntimeError("temporary directory is not private")
