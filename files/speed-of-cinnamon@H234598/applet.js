@@ -1866,26 +1866,28 @@ MyApplet.prototype = {
   },
 
   _styleMenuItemLabel: function(item, options) {
-    options = options || {};
-    if (!item || !item.label) {
-      return item;
-    }
-    let maxWidth = Number(options.maxWidthEm || SELECTION_MENU_LABEL_WIDTH_EM);
-    if (item.label.set_style) {
-      item.label.set_style("max-width: " + String(maxWidth) + "em;");
-    }
-    try {
-      if (item.label.clutter_text) {
-        item.label.clutter_text.ellipsize = options.wrap ? Pango.EllipsizeMode.NONE : Pango.EllipsizeMode.END;
-        item.label.clutter_text.line_wrap = Boolean(options.wrap);
-        if (options.wrap) {
-          item.label.clutter_text.line_wrap_mode = Pango.WrapMode.WORD_CHAR;
-        }
+    return this._runGuarded("menu-style", () => {
+      options = options || {};
+      if (!item || !item.label) {
+        return item;
       }
-    } catch (err) {
-      this._safeLogError(err);
-    }
-    return item;
+      let maxWidth = Number(options.maxWidthEm || SELECTION_MENU_LABEL_WIDTH_EM);
+      if (item.label.set_style) {
+        item.label.set_style("max-width: " + String(maxWidth) + "em;");
+      }
+      try {
+        if (item.label.clutter_text) {
+          item.label.clutter_text.ellipsize = options.wrap ? Pango.EllipsizeMode.NONE : Pango.EllipsizeMode.END;
+          item.label.clutter_text.line_wrap = Boolean(options.wrap);
+          if (options.wrap) {
+            item.label.clutter_text.line_wrap_mode = Pango.WrapMode.WORD_CHAR;
+          }
+        }
+      } catch (err) {
+        this._safeLogError(err);
+      }
+      return item;
+    }, item);
   },
 
   _selectionMenuItem: function(label) {

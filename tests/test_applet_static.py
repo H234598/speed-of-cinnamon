@@ -2545,6 +2545,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('typeof text !== "string" || !this._lifecycleAllowsWork()', source)
         self.assertIn('typeof label === "string" ? label : ""', source)
         self.assertIn("item.label.clutter_text.ellipsize = options.wrap ? Pango.EllipsizeMode.NONE : Pango.EllipsizeMode.END", source)
+        style_start = source.index("_styleMenuItemLabel: function(item, options)")
+        style_end = source.index("\n  _selectionMenuItem:", style_start)
+        style_block = source[style_start:style_end]
+        self.assertLess(style_block.index("_runGuarded"), style_block.index("item.label"))
 
     def test_applet_adds_frontend_validation_for_long_or_invalid_text_fields(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
