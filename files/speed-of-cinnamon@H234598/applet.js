@@ -3230,12 +3230,14 @@ MyApplet.prototype = {
       if (this._orphanedHotkeys[index] !== key) {
         continue;
       }
+      let entry = this._orphanedHotkeys[index];
+      let removedFromArray = false;
       try {
-        let entry = this._orphanedHotkeys[index];
         let removed = this._orphanedHotkeys.splice(index, 1);
         if (!Array.isArray(removed) || removed.length !== 1 || removed[0] !== entry || this._orphanedHotkeys.indexOf(entry) >= 0) {
           throw new Error("Hotkey orphan entry could not be removed");
         }
+        removedFromArray = true;
         if (this._orphanedHotkeyStates && Object.prototype.hasOwnProperty.call(this._orphanedHotkeyStates, key)) {
           let deleted = delete this._orphanedHotkeyStates[key];
           if (deleted === false || Object.prototype.hasOwnProperty.call(this._orphanedHotkeyStates, key)) {
@@ -3243,6 +3245,19 @@ MyApplet.prototype = {
           }
         }
       } catch (error) {
+        if (removedFromArray) {
+          try {
+            if (this._orphanedHotkeys.indexOf(entry) < 0) {
+              let previousLength = this._orphanedHotkeys.length;
+              this._orphanedHotkeys.splice(index, 0, entry);
+              if (this._orphanedHotkeys.length !== previousLength + 1 || this._orphanedHotkeys[index] !== entry) {
+                throw new Error("Hotkey orphan rollback could not restore the entry");
+              }
+            }
+          } catch (rollbackError) {
+            this._recordLifecycleError("hotkey-orphan-rollback", rollbackError);
+          }
+        }
         this._recordLifecycleError("hotkey-orphan", error);
         success = false;
       }

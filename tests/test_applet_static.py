@@ -2410,9 +2410,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("Hotkey registry entry could not be removed during orphan cleanup", block)
         self.assertIn("Hotkey definition could not be removed during orphan cleanup", block)
         self.assertIn("let entry = this._orphanedHotkeys[index];", block)
+        self.assertIn("let removedFromArray = false;", block)
         self.assertIn("let removed = this._orphanedHotkeys.splice(index, 1);", block)
         self.assertIn("removed[0] !== entry", block)
+        self.assertIn("removedFromArray = true;", block)
         self.assertIn('throw new Error("Hotkey orphan entry could not be removed");', block)
+        self.assertIn('throw new Error("Hotkey orphan rollback could not restore the entry");', block)
+        self.assertIn('this._recordLifecycleError("hotkey-orphan-rollback", rollbackError);', block)
         self.assertIn("this._runTeardownOperation(", block)
         self.assertIn("this._retryOrphanedHotkeys()", source)
 
