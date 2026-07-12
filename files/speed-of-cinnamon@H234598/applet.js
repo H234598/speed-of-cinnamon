@@ -10119,6 +10119,7 @@ MyApplet.prototype = {
     let processWaitError = null;
     let cleanupComplete = false;
     let callbackDelivered = false;
+    let setupFailed = false;
 
     let cleanupResources = (timeoutCleanupSucceeded) => {
       if (cleanupComplete) {
@@ -10228,6 +10229,7 @@ MyApplet.prototype = {
 
     let readStream = (stream, name, maxBytes, chunks) => {
       if (done || !stream || !stream.read_bytes_async) {
+        setupFailed = true;
         finish({ error: "Subprocess output stream unavailable" }, true);
         return;
       }
@@ -10258,10 +10260,12 @@ MyApplet.prototype = {
             chunks.push(chunk);
             readStream(stream, name, maxBytes, chunks);
           } catch (error) {
+            setupFailed = true;
             finish({ error: error }, true);
           }
         });
       } catch (error) {
+        setupFailed = true;
         finish({ error: error }, true);
       }
     };
@@ -10276,6 +10280,7 @@ MyApplet.prototype = {
 
     try {
       if (!process.wait_check_async || !process.wait_check_finish) {
+        setupFailed = true;
         finish({ error: "Subprocess exit status API unavailable" }, true);
       } else {
         process.wait_check_async(cancellable, (source, result) => {
@@ -10296,6 +10301,7 @@ MyApplet.prototype = {
         });
       }
     } catch (error) {
+      setupFailed = true;
       processExited = true;
       processWaitError = error;
       finishWhenReady();
@@ -10305,6 +10311,7 @@ MyApplet.prototype = {
       readStream(process.get_stdout_pipe(), "stdout", maxStdoutBytes, stdoutParts);
       readStream(process.get_stderr_pipe(), "stderr", maxStderrBytes, stderrParts);
     } catch (error) {
+      setupFailed = true;
       finish({ error: error }, true);
     }
     if (hasInput) {
@@ -10331,6 +10338,7 @@ MyApplet.prototype = {
               assertInputWriteSucceeded(stream.write_all_finish(result));
               closeInput(stream);
             } catch (error) {
+              setupFailed = true;
               finish({ error: error }, true);
             }
           });
@@ -10338,11 +10346,16 @@ MyApplet.prototype = {
           assertInputWriteSucceeded(stdin.write_all(inputBytes, null));
           closeInput(stdin);
         } else {
+          setupFailed = true;
           finish({ error: "Subprocess input stream unavailable" }, true);
         }
       } catch (error) {
+        setupFailed = true;
         finish({ error: error }, true);
       }
+    }
+    if (setupFailed || done) {
+      return null;
     }
     return {
       token: processToken,

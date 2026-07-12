@@ -4162,6 +4162,8 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         self.assertIn("let cleanupComplete = false;", block)
         self.assertIn("let callbackDelivered = false;", block)
+        self.assertIn("let setupFailed = false;", block)
+        self.assertIn("if (setupFailed || done) {\n      return null;", block)
         self.assertIn("let cleanupResources = (timeoutCleanupSucceeded) =>", block)
         self.assertIn("if (done) {\n        return cleanupResources();", block)
         self.assertIn("if (!callbackDelivered)", block)
