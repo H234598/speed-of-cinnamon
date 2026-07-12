@@ -2050,6 +2050,8 @@ class AppletStaticTest(unittest.TestCase):
         end = source.index("\n  _newSafeLabel:", start)
         block = source[start:end]
         self.assertLess(block.index("_runGuarded"), block.index("dialog.contentLayout"))
+        self.assertIn("let result = dialog.contentLayout.add_child(child);", block)
+        self.assertIn('throw new Error("Dialog child could not be added");', block)
 
     def test_dialog_action_preconditions_are_guarded(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2057,6 +2059,8 @@ class AppletStaticTest(unittest.TestCase):
         buttons_end = source.index("\n  _dialogClose:", buttons_start)
         buttons_block = source[buttons_start:buttons_end]
         self.assertLess(buttons_block.index("_runGuarded"), buttons_block.index("dialog.setButtons"))
+        self.assertIn("let result = dialog.setButtons(safeButtons);", buttons_block)
+        self.assertIn('throw new Error("Dialog buttons could not be set");', buttons_block)
         open_start = source.index("_dialogOpen: function(dialog, group)")
         open_end = source.index("\n  _destroyTrackedDialogs:", open_start)
         open_block = source[open_start:open_end]

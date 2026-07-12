@@ -987,7 +987,10 @@ MyApplet.prototype = {
       if (!dialog || !child || !dialog.contentLayout || !dialog.contentLayout.add_child) {
         return false;
       }
-      dialog.contentLayout.add_child(child);
+      let result = dialog.contentLayout.add_child(child);
+      if (result === false) {
+        throw new Error("Dialog child could not be added");
+      }
       return true;
     }, false) === true;
   },
@@ -1021,7 +1024,10 @@ MyApplet.prototype = {
       if (typeof dialog.setButtons !== "function") {
         return false;
       }
-      dialog.setButtons(safeButtons);
+      let result = dialog.setButtons(safeButtons);
+      if (result === false) {
+        throw new Error("Dialog buttons could not be set");
+      }
       return true;
     }, false) === true;
   },
