@@ -426,6 +426,7 @@ MyApplet.prototype = {
       processes: {},
       cancellables: {},
     };
+    this._orphanedSignals = [];
     this._hotkeyDefinitions = {};
     this._teardownComplete = false;
     this._initFailed = false;
@@ -727,11 +728,16 @@ MyApplet.prototype = {
             }
           }
           try {
-            if (target.disconnect) {
-              target.disconnect(connectionId);
+            if (typeof target.disconnect !== "function") {
+              throw new Error("Signal rollback disconnect is unavailable");
+            }
+            let disconnectResult = target.disconnect(connectionId);
+            if (disconnectResult === false) {
+              throw new Error("Signal rollback disconnect failed");
             }
           } catch (disconnectError) {
             this._recordLifecycleError("signal-disconnect", disconnectError);
+            this._trackOrphanedSignal(target, connectionId);
           }
           throw registryError;
         }
@@ -743,9 +749,47 @@ MyApplet.prototype = {
     }
   },
 
+  _trackOrphanedSignal: function(target, id) {
+    try {
+      if (!Array.isArray(this._orphanedSignals)) {
+        this._orphanedSignals = [];
+      }
+      this._orphanedSignals.push({ target: target, id: id });
+      return true;
+    } catch (error) {
+      this._recordLifecycleError("signal-orphan", error);
+      return false;
+    }
+  },
+
+  _disconnectOrphanedSignals: function(target) {
+    if (!Array.isArray(this._orphanedSignals)) {
+      return true;
+    }
+    let success = true;
+    for (let index = this._orphanedSignals.length - 1; index >= 0; index--) {
+      let connection = this._orphanedSignals[index];
+      if (!connection || (target && connection.target !== target)) {
+        continue;
+      }
+      if (!this._runTeardownOperation("teardown-orphaned-signals", connection.target, "disconnect", [connection.id])) {
+        success = false;
+        continue;
+      }
+      try {
+        this._orphanedSignals.splice(index, 1);
+      } catch (error) {
+        this._recordLifecycleError("teardown-orphaned-signals", error);
+        success = false;
+      }
+    }
+    return success;
+  },
+
   _disconnectAllSignals: function() {
     try {
       if (!this._resourceRegistry || !Array.isArray(this._resourceRegistry.signals)) {
+        this._disconnectOrphanedSignals();
         return;
       }
       let signals = this._resourceRegistry.signals;
@@ -765,6 +809,7 @@ MyApplet.prototype = {
           this._recordLifecycleError("teardown-signals", error);
         }
       }
+      this._disconnectOrphanedSignals();
     } catch (error) {
       this._recordLifecycleError("teardown-signals", error);
     }
@@ -795,6 +840,9 @@ MyApplet.prototype = {
           this._recordLifecycleError("teardown-target-signals", error);
           success = false;
         }
+      }
+      if (!this._disconnectOrphanedSignals(target)) {
+        success = false;
       }
       return success;
     } catch (error) {

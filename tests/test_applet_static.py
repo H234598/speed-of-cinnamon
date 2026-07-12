@@ -1927,6 +1927,21 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("throw registryError;", block)
         self.assertLess(block.index("try {"), block.index("target.connect(signal"))
 
+    def test_signal_registration_tracks_failed_disconnect_rollbacks(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_connectSafe: function(target, signal, callback, group)")
+        end = source.index("\n  _trackOrphanedSignal:", start)
+        block = source[start:end]
+        self.assertIn('typeof target.disconnect !== "function"', block)
+        self.assertIn("let disconnectResult = target.disconnect(connectionId);", block)
+        self.assertIn("disconnectResult === false", block)
+        self.assertIn("this._trackOrphanedSignal(target, connectionId);", block)
+        orphan_start = source.index("_trackOrphanedSignal: function(target, id)")
+        orphan_end = source.index("\n  _disconnectOrphanedSignals:", orphan_start)
+        orphan_block = source[orphan_start:orphan_end]
+        self.assertIn("this._orphanedSignals.push({ target: target, id: id });", orphan_block)
+        self.assertIn("_disconnectOrphanedSignals", source)
+
     def test_state_callbacks_are_not_suppressed_by_disabled_error_groups(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         state_start = source.index("_runStateGuarded: function(group, callback, fallback)")
