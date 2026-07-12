@@ -128,6 +128,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.postProcessBackend = "openai-compatible";', source)
         self.assertIn('this.settings.setValue("post-process-backend", this.postProcessBackend);', source)
         self.assertIn('this._setStatusPreservingRecording("ready", _("Text polishing: OpenAI-compatible API"), this.lastTranscript);', source)
+        self.assertIn('this._commitSettingValue("postProcessPreset", "post-process-preset"', source)
+        self.assertIn("this._commitSettingValue(propertyName, settingKey, nextValue", source)
         self.assertIn("_refreshTextModelMenuForBackend: function(backendOverride)", source)
         self.assertIn('this._refreshTextModelMenuForBackend("openai-compatible");', source)
         self.assertIn('_("Loading OpenAI-compatible text models...")', source)

@@ -6253,8 +6253,10 @@ MyApplet.prototype = {
   },
 
   _selectTextPolishingPreset: function(preset) {
-    this.postProcessPreset = this._normalizeTextPolishingPreset(preset);
-    this.settings.setValue("post-process-preset", this.postProcessPreset);
+    let nextPreset = this._normalizeTextPolishingPreset(preset);
+    if (!this._commitSettingValue("postProcessPreset", "post-process-preset", nextPreset, "settings-text-polishing", _("Polishing preset could not be saved"))) {
+      return;
+    }
     this._refreshTextModelMenu();
     this._setStatusPreservingRecording("ready", _("Polishing preset: ") + this._textPolishingPresetLabel(this.postProcessPreset), this.lastTranscript);
   },
@@ -6274,8 +6276,10 @@ MyApplet.prototype = {
   },
 
   _toggleTextPolishingSafetyFlag: function(settingKey, propertyName, label) {
-    this[propertyName] = !Boolean(this[propertyName]);
-    this.settings.setValue(settingKey, this[propertyName]);
+    let nextValue = !Boolean(this[propertyName]);
+    if (!this._commitSettingValue(propertyName, settingKey, nextValue, "settings-text-polishing", label + _(" could not be saved"))) {
+      return;
+    }
     this._refreshTextModelMenu();
     this._setStatusPreservingRecording("ready", label + ": " + (this[propertyName] ? _("enabled") : _("disabled")), this.lastTranscript);
   },
