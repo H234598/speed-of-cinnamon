@@ -3569,6 +3569,28 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.ollamaModelFlowToken !== flowToken", install_block)
         self.assertIn("!this._lifecycleAllowsWork()", install_block)
 
+    def test_ollama_dialog_cleanup_failures_do_not_report_ready(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        choose_start = source.index("_promptChooseOllamaTextModel: function(models, flowToken)")
+        choose_end = source.index("\n  _promptInstallOllamaTextModel:", choose_start)
+        choose_block = source[choose_start:choose_end]
+        self.assertIn("let clearFlow = () =>", choose_block)
+        self.assertIn("if (this._clearOllamaModelFlow(flowToken))", choose_block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped")', choose_block)
+        self.assertLess(
+            choose_block.index('this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped")'),
+            choose_block.index('this._setStatus("ready", message')
+        )
+
+        install_start = source.index("_promptInstallOllamaTextModel: function(flowToken)")
+        install_end = source.index("\n  _installOllamaTextModel:", install_start)
+        install_block = source[install_start:install_end]
+        cancelled = install_block.index('if (model === "")')
+        cleanup = install_block.index("if (!this._clearOllamaModelFlow(flowToken))", cancelled)
+        ready = install_block.index('this._setStatus("ready", _("Ollama model installation cancelled")', cancelled)
+        self.assertLess(cleanup, ready)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped")', install_block)
+
     def test_stale_ollama_install_callback_cannot_clear_new_command_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_installOllamaTextModel: function(model)")

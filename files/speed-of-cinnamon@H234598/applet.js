@@ -8487,9 +8487,19 @@ MyApplet.prototype = {
       if (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
         return;
       }
+      let clearFlow = () => {
+        if (this._clearOllamaModelFlow(flowToken)) {
+          return true;
+        }
+        this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+        return false;
+      };
       let finish = (message) => {
-        this._clearOllamaModelFlow(flowToken);
+        if (!clearFlow()) {
+          return false;
+        }
         this._setStatus("ready", message, this.lastTranscript);
+        return true;
       };
       let choice = String(output || "").trim();
       if (choice === "") {
@@ -8517,7 +8527,9 @@ MyApplet.prototype = {
           }
         }
         if (model !== "" && knownModel) {
-          this._clearOllamaModelFlow(flowToken);
+          if (!clearFlow()) {
+            return;
+          }
           this._selectTextModelBackend("ollama", model, _("Text model: ") + model);
           return;
         }
@@ -8559,7 +8571,10 @@ MyApplet.prototype = {
       }
       let model = String(output || "").trim();
       if (model === "") {
-        this._clearOllamaModelFlow(flowToken);
+        if (!this._clearOllamaModelFlow(flowToken)) {
+          this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+          return;
+        }
         this._setStatus("ready", _("Ollama model installation cancelled"), this.lastTranscript);
         return;
       }
