@@ -8949,10 +8949,12 @@ MyApplet.prototype = {
         return true;
       }
       let cancellableCleanupSucceeded = this._unregisterCancellable(cancellableToken);
-      let processCleanupSucceeded = false;
-      if (cancellableCleanupSucceeded) {
-        processCleanupSucceeded = this._unregisterProcess(processToken);
+      if (!cancellableCleanupSucceeded) {
+        this._trackOrphanedCancellable(cancellableToken, true);
+      } else {
+        this._untrackOrphanedCancellable(cancellableToken);
       }
+      let processCleanupSucceeded = this._unregisterProcess(processToken);
       cleanupComplete = cancellableCleanupSucceeded && processCleanupSucceeded;
       return cleanupComplete;
     };

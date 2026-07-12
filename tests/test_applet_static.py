@@ -3547,7 +3547,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (done) {\n        return cleanupResources();", block)
         self.assertIn("if (!callbackDelivered)", block)
         self.assertIn("let cancellableCleanupSucceeded = this._unregisterCancellable(cancellableToken);", block)
-        self.assertIn("if (cancellableCleanupSucceeded) {\n        processCleanupSucceeded = this._unregisterProcess(processToken);", block)
+        self.assertIn("if (!cancellableCleanupSucceeded) {\n        this._trackOrphanedCancellable(cancellableToken, true);", block)
+        self.assertIn("let processCleanupSucceeded = this._unregisterProcess(processToken);", block)
 
     def test_teardown_uses_safe_process_and_cancellable_unregistration(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
