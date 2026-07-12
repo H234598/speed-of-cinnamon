@@ -712,6 +712,17 @@ MyApplet.prototype = {
       if (!this._resourceRegistry || !Array.isArray(this._resourceRegistry.signals)) {
         throw new Error("Signal registry is unavailable");
       }
+      if (!Array.isArray(this._orphanedSignals)) {
+        this._recordLifecycleError("signal-state", new Error("Signal orphan registry is unavailable"));
+        return 0;
+      }
+      if (this._orphanedSignals.length > 0) {
+        let orphanCleanupSucceeded = this._disconnectOrphanedSignals();
+        if (!orphanCleanupSucceeded || this._orphanedSignals.length > 0) {
+          this._recordLifecycleError("signal-state", new Error("An orphaned signal is still pending"));
+          return 0;
+        }
+      }
       let connectionId = 0;
       connectionId = target.connect(signal, this._guardStateCallback(signalGroup, callback, undefined));
       if (connectionId) {
@@ -787,6 +798,9 @@ MyApplet.prototype = {
 
   _trackOrphanedSignal: function(target, id, disconnected) {
     try {
+      if (!target || id === undefined || id === null) {
+        throw new Error("Signal orphan is invalid");
+      }
       if (!Array.isArray(this._orphanedSignals)) {
         this._orphanedSignals = [];
       }
@@ -844,7 +858,13 @@ MyApplet.prototype = {
     let success = true;
     for (let index = this._orphanedSignals.length - 1; index >= 0; index--) {
       let connection = this._orphanedSignals[index];
-      if (!connection || (target && connection.target !== target)) {
+      if (!connection || typeof connection !== "object" || !connection.target ||
+          connection.id === undefined || connection.id === null) {
+        this._recordLifecycleError("signal-orphan", new Error("Signal orphan entry is invalid"));
+        success = false;
+        continue;
+      }
+      if (target && connection.target !== target) {
         continue;
       }
       let disconnected = connection.disconnected === true;
@@ -867,11 +887,11 @@ MyApplet.prototype = {
   },
 
   _disconnectAllSignals: function() {
+    let success = true;
     try {
       if (!this._resourceRegistry || !Array.isArray(this._resourceRegistry.signals)) {
         this._recordLifecycleError("signal-state", new Error("Signal registry is unavailable"));
-        this._disconnectOrphanedSignals();
-        return;
+        return this._disconnectOrphanedSignals() === true;
       }
       let signals = this._resourceRegistry.signals;
       for (let index = signals.length - 1; index >= 0; index--) {
@@ -882,16 +902,30 @@ MyApplet.prototype = {
           "disconnect",
           [connection && connection.id]
         )) {
-          this._trackOrphanedSignal(connection && connection.target, connection && connection.id, false);
+          if (!this._trackOrphanedSignal(connection && connection.target, connection && connection.id, false)) {
+            success = false;
+          }
+          success = false;
           continue;
         }
         if (!this._untrackSignal(connection && connection.target, connection && connection.id, connection)) {
-          this._trackOrphanedSignal(connection && connection.target, connection && connection.id, true);
+          if (!this._trackOrphanedSignal(connection && connection.target, connection && connection.id, true)) {
+            success = false;
+          }
+          success = false;
         }
       }
-      this._disconnectOrphanedSignals();
+      if (!this._disconnectOrphanedSignals()) {
+        success = false;
+      }
+      if (Array.isArray(this._orphanedSignals) && this._orphanedSignals.length > 0) {
+        this._recordLifecycleError("signal-state", new Error("Orphaned signals remain after teardown"));
+        success = false;
+      }
+      return success;
     } catch (error) {
       this._recordLifecycleError("teardown-signals", error);
+      return false;
     }
   },
 

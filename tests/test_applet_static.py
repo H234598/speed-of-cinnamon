@@ -2385,6 +2385,7 @@ class AppletStaticTest(unittest.TestCase):
         orphan_start = source.index("_trackOrphanedSignal: function(target, id, disconnected)")
         orphan_end = source.index("\n  _disconnectOrphanedSignals:", orphan_start)
         orphan_block = source[orphan_start:orphan_end]
+        self.assertIn('throw new Error("Signal orphan is invalid");', orphan_block)
         self.assertIn("let entry = {", orphan_block)
         self.assertIn("this._orphanedSignals.push(entry);", orphan_block)
         self.assertIn('throw new Error("Signal orphan entry could not be tracked");', orphan_block)
@@ -2396,6 +2397,8 @@ class AppletStaticTest(unittest.TestCase):
         end = source.index("\n  _disconnectAllSignals:", start)
         orphan_block = source[start:end]
         self.assertIn('this._recordLifecycleError("signal-state", new Error("Signal orphan registry is unavailable"));', orphan_block)
+        self.assertIn('new Error("Signal orphan entry is invalid")', orphan_block)
+        self.assertIn("connection.id === undefined || connection.id === null", orphan_block)
         self.assertIn("return false;", orphan_block)
 
         start = source.index("_disconnectTrackedSignalsForTarget: function(target)")
@@ -2407,7 +2410,36 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_disconnectAllSignals: function()")
         end = source.index("\n  _disconnectTrackedSignalsForTarget:", start)
         all_block = source[start:end]
+        self.assertIn("let success = true;", all_block)
         self.assertIn('this._recordLifecycleError("signal-state", new Error("Signal registry is unavailable"));', all_block)
+        self.assertIn("return this._disconnectOrphanedSignals() === true;", all_block)
+        self.assertIn("if (!this._trackOrphanedSignal(connection && connection.target, connection && connection.id, false))", all_block)
+        self.assertIn("if (!this._disconnectOrphanedSignals())", all_block)
+        self.assertIn('this._recordLifecycleError("signal-state", new Error("Orphaned signals remain after teardown"));', all_block)
+        self.assertIn("return success;", all_block)
+
+    def test_signal_teardown_reports_partial_disconnect_failures(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_disconnectAllSignals: function()")
+        end = source.index("\n  _disconnectTrackedSignalsForTarget:", start)
+        block = source[start:end]
+        self.assertIn("success = false;", block)
+        self.assertIn("this._trackOrphanedSignal(connection && connection.target, connection && connection.id, true)", block)
+        self.assertIn('new Error("Orphaned signals remain after teardown")', block)
+        self.assertIn("return false;", block)
+
+    def test_signal_registration_blocks_pending_orphans(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_connectSafe: function(target, signal, callback, group)")
+        end = source.index("\n  _disconnectAllSignals:", start)
+        block = source[start:end]
+        self.assertIn("if (!Array.isArray(this._orphanedSignals))", block)
+        self.assertIn('this._recordLifecycleError("signal-state", new Error("Signal orphan registry is unavailable"));', block)
+        self.assertIn("if (this._orphanedSignals.length > 0)", block)
+        self.assertIn("let orphanCleanupSucceeded = this._disconnectOrphanedSignals();", block)
+        self.assertIn('this._recordLifecycleError("signal-state", new Error("An orphaned signal is still pending"));', block)
+        self.assertLess(block.index("let orphanCleanupSucceeded = this._disconnectOrphanedSignals();"), block.index("target.connect(signal"))
+        self.assertLess(block.index('new Error("An orphaned signal is still pending")'), block.index("target.connect(signal"))
 
     def test_signal_teardown_retries_disconnect_and_registry_failures(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2418,8 +2450,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("connection.disconnected === true", block)
         self.assertIn("this._untrackSignal(connection.target, connection.id)", block)
         self.assertIn("this._untrackOrphanedSignal(connection)", block)
-        self.assertIn("this._trackOrphanedSignal(connection && connection.target, connection && connection.id, false);", block)
-        self.assertIn("this._trackOrphanedSignal(connection && connection.target, connection && connection.id, true);", block)
+        self.assertIn("if (!this._trackOrphanedSignal(connection && connection.target, connection && connection.id, false))", block)
+        self.assertIn("if (!this._trackOrphanedSignal(connection && connection.target, connection && connection.id, true))", block)
         self.assertIn("_untrackSignal: function(target, id, connection)", block)
         self.assertIn("_untrackOrphanedSignal: function(connection)", block)
         self.assertIn("let removed = this._orphanedSignals.splice(index, 1);", block)
