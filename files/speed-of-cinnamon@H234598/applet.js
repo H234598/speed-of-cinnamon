@@ -756,13 +756,34 @@ MyApplet.prototype = {
       throw new Error("Dialog registry is unavailable");
     }
     let dialogs = this._resourceRegistry.dialogs;
-    if (dialogs.indexOf(dialog) < 0) {
-      dialogs.push(dialog);
+    let added = false;
+    try {
       if (dialogs.indexOf(dialog) < 0) {
-        throw new Error("Dialog could not be registered");
+        dialogs.push(dialog);
+        added = true;
+        if (dialogs.indexOf(dialog) < 0) {
+          throw new Error("Dialog could not be registered");
+        }
       }
+      return dialog;
+    } catch (error) {
+      if (added) {
+        try {
+          let lastIndex = dialogs.length - 1;
+          if (lastIndex >= 0 && dialogs[lastIndex] === dialog) {
+            dialogs.pop();
+          } else {
+            let index = dialogs.indexOf(dialog);
+            if (index >= 0) {
+              dialogs.splice(index, 1);
+            }
+          }
+        } catch (rollbackError) {
+          this._recordLifecycleError("dialog-registration-rollback", rollbackError);
+        }
+      }
+      throw error;
     }
-    return dialog;
   },
 
   _untrackDialog: function(dialog) {
