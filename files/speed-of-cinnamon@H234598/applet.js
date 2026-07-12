@@ -1356,11 +1356,15 @@ MyApplet.prototype = {
     };
     let menu = this.menu;
     if (cleanupMenu(menu, "menu", "menu")) {
-      this.menu = null;
+      if (!this._clearDestroyedMenuReference(menu, "menu", "teardown-menu")) {
+        this._trackOrphanedMenu(menu, "menu", "menu", false, true, true, true);
+      }
     }
     let contextMenu = this._applet_context_menu;
     if (cleanupMenu(contextMenu, "context-menu", "_applet_context_menu")) {
-      this._applet_context_menu = null;
+      if (!this._clearDestroyedMenuReference(contextMenu, "_applet_context_menu", "teardown-context-menu")) {
+        this._trackOrphanedMenu(contextMenu, "_applet_context_menu", "context-menu", false, true, true, true);
+      }
     }
     let cleanupManager = (manager, group, propertyName) => {
       if (!manager) {
@@ -1380,11 +1384,31 @@ MyApplet.prototype = {
     };
     let menuManager = this.menuManager;
     if (cleanupManager(menuManager, "menu-manager", "menuManager")) {
-      this.menuManager = null;
+      if (!this._clearDestroyedMenuReference(menuManager, "menuManager", "teardown-menu-manager")) {
+        this._trackOrphanedMenu(menuManager, "menuManager", "menu-manager", false, true, true, true);
+      }
     }
     let privateMenuManager = this._menuManager;
     if (cleanupManager(privateMenuManager, "private-menu-manager", "_menuManager")) {
-      this._menuManager = null;
+      if (!this._clearDestroyedMenuReference(privateMenuManager, "_menuManager", "teardown-private-menu-manager")) {
+        this._trackOrphanedMenu(privateMenuManager, "_menuManager", "private-menu-manager", false, true, true, true);
+      }
+    }
+  },
+
+  _clearDestroyedMenuReference: function(menu, propertyName, errorGroup) {
+    if (!menu || !propertyName || this[propertyName] !== menu) {
+      return true;
+    }
+    try {
+      this[propertyName] = null;
+      if (this[propertyName] === menu) {
+        throw new Error("Menu reference could not be cleared");
+      }
+      return true;
+    } catch (error) {
+      this._recordLifecycleError(errorGroup || "menu-orphan", error);
+      return false;
     }
   },
 
@@ -1487,17 +1511,9 @@ MyApplet.prototype = {
         success = false;
         continue;
       }
-      if (entry.propertyName && this[entry.propertyName] === entry.menu) {
-        try {
-          this[entry.propertyName] = null;
-          if (this[entry.propertyName] === entry.menu) {
-            throw new Error("Menu orphan property could not be cleared");
-          }
-        } catch (error) {
-          this._recordLifecycleError("menu-orphan", error);
-          success = false;
-          continue;
-        }
+      if (!this._clearDestroyedMenuReference(entry.menu, entry.propertyName, "menu-orphan")) {
+        success = false;
+        continue;
       }
       if (!this._untrackOrphanedMenu(entry.menu)) {
         success = false;

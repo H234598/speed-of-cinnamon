@@ -550,10 +550,15 @@ class AppletStaticTest(unittest.TestCase):
         retry_start = source.index("_retryOrphanedMenus: function()")
         retry_end = source.index("\n  _destroyAppletTooltip:", retry_start)
         retry_block = source[retry_start:retry_end]
-        self.assertIn('this[entry.propertyName] = null;', retry_block)
-        self.assertIn('throw new Error("Menu orphan property could not be cleared");', retry_block)
-        self.assertIn('this._recordLifecycleError("menu-orphan", error);', retry_block)
-        self.assertLess(retry_block.index("this[entry.propertyName] = null;"), retry_block.index("this._untrackOrphanedMenu(entry.menu)"))
+        self.assertIn("this._clearDestroyedMenuReference(entry.menu, entry.propertyName, \"menu-orphan\")", retry_block)
+        self.assertLess(retry_block.index("this._clearDestroyedMenuReference(entry.menu, entry.propertyName, \"menu-orphan\")"), retry_block.index("this._untrackOrphanedMenu(entry.menu)"))
+
+        reference_start = source.index("_clearDestroyedMenuReference: function(menu, propertyName, errorGroup)")
+        reference_end = source.index("\n  _trackOrphanedMenu:", reference_start)
+        reference_block = source[reference_start:reference_end]
+        self.assertIn("this[propertyName] = null;", reference_block)
+        self.assertIn('throw new Error("Menu reference could not be cleared");', reference_block)
+        self.assertIn('this._recordLifecycleError(errorGroup || "menu-orphan", error);', reference_block)
 
     def test_external_env_monitor_registration_failure_rolls_back_monitor(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
