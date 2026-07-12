@@ -5235,6 +5235,47 @@ MyApplet.prototype = {
     return this._voiceModelSupportsLanguage("", model, language);
   },
 
+  _commitVoiceBackendSettings: function(transcriber, whisperModel, group, errorMessage) {
+    let previousTranscriber = this.transcriber;
+    let previousWhisperModel = this.whisperModel;
+    let settingsWrites = [
+      ["transcriber", transcriber, previousTranscriber],
+      ["whisper-model", whisperModel, previousWhisperModel],
+    ];
+    let attemptedWrites = [];
+    try {
+      for (let setting of settingsWrites) {
+        attemptedWrites.push(setting);
+        let result = this.settings.setValue(setting[0], setting[1]);
+        if (result === false) {
+          throw new Error("Voice backend setting could not be saved");
+        }
+      }
+    } catch (err) {
+      for (let index = attemptedWrites.length - 1; index >= 0; index--) {
+        let setting = attemptedWrites[index];
+        try {
+          let rollbackResult = this.settings.setValue(setting[0], setting[2]);
+          if (rollbackResult === false) {
+            throw new Error("Voice backend setting rollback failed");
+          }
+        } catch (rollbackErr) {
+          this._safeLogError(rollbackErr);
+        }
+      }
+      this.transcriber = previousTranscriber;
+      this.whisperModel = previousWhisperModel;
+      this._recordLifecycleError(group || "voice-settings", err);
+      if (errorMessage) {
+        this._setStatusPreservingRecording("error", errorMessage, this.lastTranscript);
+      }
+      return false;
+    }
+    this.transcriber = transcriber;
+    this.whisperModel = whisperModel;
+    return true;
+  },
+
   _ensureVoiceModelCompatibleWithPrimaryLanguage: function(showStatus) {
     return this._ensureVoiceModelCompatibleForLanguage(this._voiceModelLanguage(), showStatus, _("primary language"));
   },
@@ -5247,10 +5288,14 @@ MyApplet.prototype = {
     if (this._whisperModelSupportsLanguage(language)) {
       return true;
     }
-    this.transcriber = "auto";
-    this.whisperModel = "";
-    this.settings.setValue("transcriber", this.transcriber);
-    this.settings.setValue("whisper-model", this.whisperModel);
+    if (!this._commitVoiceBackendSettings(
+      "auto",
+      "",
+      "voice-model-language",
+      _("Voice model settings could not be saved")
+    )) {
+      return false;
+    }
     this._refreshModelMenu();
     if (showStatus) {
       this._setStatus("error", _("English-only model was disabled because it does not support ") + label + ": " + language, this.lastTranscript);
@@ -5351,10 +5396,15 @@ MyApplet.prototype = {
         return;
       }
       if (path !== "" && path === String(this.whisperModel || "")) {
-        this.transcriber = "auto";
-        this.whisperModel = "";
-        this.settings.setValue("transcriber", this.transcriber);
-        this.settings.setValue("whisper-model", this.whisperModel);
+        if (!this._commitVoiceBackendSettings(
+          "auto",
+          "",
+          "voice-model-remove",
+          _("Removed model, but voice settings could not be updated")
+        )) {
+          this._refreshModelMenu();
+          return;
+        }
       }
       this._setStatus("done", _("Removed model: ") + name, this.lastTranscript);
       this._refreshModelMenu();
@@ -5375,10 +5425,14 @@ MyApplet.prototype = {
       this._setStatusPreservingRecording("error", _("English-only model cannot transcribe primary language: ") + this._voiceModelLanguage(), this.lastTranscript);
       return false;
     }
-    this.transcriber = backend;
-    this.whisperModel = path;
-    this.settings.setValue("transcriber", this.transcriber);
-    this.settings.setValue("whisper-model", this.whisperModel);
+    if (!this._commitVoiceBackendSettings(
+      backend,
+      path,
+      "voice-model-select",
+      _("Voice model settings could not be saved")
+    )) {
+      return false;
+    }
     this._setStatusPreservingRecording("ready", _("Voice model: ") + name, this.lastTranscript);
     return true;
   },
@@ -5387,24 +5441,34 @@ MyApplet.prototype = {
     if (this.voiceModelActionToken) {
       return;
     }
-    this.transcriber = "auto";
-    this.whisperModel = "";
-    this.settings.setValue("transcriber", this.transcriber);
-    this.settings.setValue("whisper-model", this.whisperModel);
+    if (!this._commitVoiceBackendSettings(
+      "auto",
+      "",
+      "voice-automatic",
+      _("Voice model settings could not be saved")
+    )) {
+      return false;
+    }
     this._refreshModelMenu();
     this._setStatusPreservingRecording("ready", _("Voice model: automatic"), this.lastTranscript);
+    return true;
   },
 
   _selectStaticVoiceBackend: function(transcriber, message) {
     if (this.voiceModelActionToken) {
       return;
     }
-    this.transcriber = String(transcriber || "auto");
-    this.whisperModel = "";
-    this.settings.setValue("transcriber", this.transcriber);
-    this.settings.setValue("whisper-model", this.whisperModel);
+    if (!this._commitVoiceBackendSettings(
+      String(transcriber || "auto"),
+      "",
+      "voice-static",
+      _("Voice model settings could not be saved")
+    )) {
+      return false;
+    }
     this._refreshModelMenu();
     this._setStatusPreservingRecording("ready", message, this.lastTranscript);
+    return true;
   },
 
   _externalApiEnvPath: function() {
@@ -5899,39 +5963,14 @@ MyApplet.prototype = {
     if (this.voiceModelActionToken) {
       return;
     }
-    let previousTranscriber = this.transcriber;
-    let previousWhisperModel = this.whisperModel;
-    let attemptedWrites = [];
-    let settingsWrites = [
-      ["transcriber", "openai-compatible", previousTranscriber],
-      ["whisper-model", "", previousWhisperModel],
-    ];
-    try {
-      for (let setting of settingsWrites) {
-        attemptedWrites.push(setting);
-        let result = this.settings.setValue(setting[0], setting[1]);
-        if (result === false) {
-          throw new Error("External API voice setting could not be saved");
-        }
-      }
-    } catch (err) {
-      for (let index = attemptedWrites.length - 1; index >= 0; index--) {
-        let setting = attemptedWrites[index];
-        try {
-          let rollbackResult = this.settings.setValue(setting[0], setting[2]);
-          if (rollbackResult === false) {
-            throw new Error("External API voice setting rollback failed");
-          }
-        } catch (rollbackErr) {
-          this._safeLogError(rollbackErr);
-        }
-      }
-      this._safeLogError(err);
-      this._setStatusPreservingRecording("error", _("External API voice backend could not be selected"), this.lastTranscript);
+    if (!this._commitVoiceBackendSettings(
+      "openai-compatible",
+      "",
+      "external-api-voice",
+      _("External API voice backend could not be selected")
+    )) {
       return false;
     }
-    this.transcriber = "openai-compatible";
-    this.whisperModel = "";
     this._refreshModelMenu();
     let model = String(this.openaiCompatibleModel || "").trim();
     if (model === "") {

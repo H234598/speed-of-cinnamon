@@ -194,10 +194,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._openAppletSettings();', source)
         self.assertIn('this._setStatusPreservingRecording("ready", _("Configure custom voice command in applet settings"), this.lastTranscript);', source)
         self.assertIn("_selectStaticVoiceBackend: function(transcriber, message)", source)
-        self.assertIn('this.settings.setValue("transcriber", this.transcriber);', source)
-        self.assertIn('this.settings.setValue("whisper-model", this.whisperModel);', source)
+        self.assertIn("_commitVoiceBackendSettings: function(transcriber, whisperModel, group, errorMessage)", source)
+        self.assertIn('"voice-static"', source)
         self.assertIn("_selectExternalApiVoiceBackend: function()", source)
-        self.assertIn('this.transcriber = "openai-compatible";', source)
+        self.assertIn('"external-api-voice"', source)
         self.assertIn('return _("Voice: External API ") + this._shortMenuText(externalModel, 96);', source)
 
     def test_applet_exposes_artifact_encryption_submenu(self) -> None:
@@ -309,13 +309,14 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (result === false)', target_block)
         self.assertIn("this.postProcessBackend = previousBackend;", target_block)
         self.assertIn("return false;", target_block)
-        voice_start = source.index("_selectExternalApiVoiceBackend: function()")
-        voice_end = source.index("\n  _refreshTextModelMenu:", voice_start)
+        voice_start = source.index("_commitVoiceBackendSettings: function(transcriber, whisperModel, group, errorMessage)")
+        voice_end = source.index("\n  _ensureVoiceModelCompatibleWithPrimaryLanguage:", voice_start)
         voice_block = source[voice_start:voice_end]
         self.assertIn("let previousTranscriber = this.transcriber;", voice_block)
         self.assertIn("let previousWhisperModel = this.whisperModel;", voice_block)
         self.assertIn("let attemptedWrites = [];", voice_block)
-        self.assertIn("this.transcriber = \"openai-compatible\";", voice_block)
+        self.assertIn("this.transcriber = transcriber;", voice_block)
+        self.assertIn("this.whisperModel = whisperModel;", voice_block)
         apply_index = source.index("_applyExternalApiEnvFile: function(showStatus)")
         set_index = source.index("let settingsWrites = [", apply_index)
         validate_index = source.index("config = this._validatedExternalApiConfig", apply_index)
@@ -4621,8 +4622,9 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertIn('_("Automatic voice model")', source)
         self.assertIn("_selectAutomaticVoiceBackend: function()", source)
-        self.assertIn('this.settings.setValue("transcriber", this.transcriber)', source)
-        self.assertIn('this.settings.setValue("whisper-model", this.whisperModel)', source)
+        self.assertIn('"voice-automatic"', source)
+        self.assertIn('"voice-static"', source)
+        self.assertIn('"external-api-voice"', source)
         self.assertIn('this._setStatusPreservingRecording("ready", _("Voice model: automatic"), this.lastTranscript)', source)
         self.assertIn("this._refreshModelMenu();", source)
 
