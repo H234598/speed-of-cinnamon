@@ -3187,7 +3187,12 @@ class AppletStaticTest(unittest.TestCase):
             guard_index = block.index(guard)
             reset_index = block.index("this.isCommandRunning = false;", guard_index)
             self.assertLess(guard_index, reset_index)
-            self.assertIn(f"if (!this.{token_name}) {{\n          this.isCommandRunning = false;\n        }}", block)
+            reset = (
+                f"if (!this.{token_name}) {{\n            this.isCommandRunning = false;\n          }}"
+                if token_name == "benchmarkFlowToken"
+                else f"if (!this.{token_name}) {{\n          this.isCommandRunning = false;\n        }}"
+            )
+            self.assertIn(reset, block)
 
     def test_saved_diagnostics_does_not_copy_or_display_full_path(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -4178,6 +4183,17 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertIn("this._spawnJson(setupArgs, (payload) => {\n      try {", block)
         self.assertIn('} catch (error) {\n        this._failSetupDiagnosticsAction(actionToken, error, _("Could not copy setup plan"));', block)
+
+    def test_benchmark_callback_releases_flow_when_processing_throws(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_benchmarkDownloadedModels: function(audioPath, flowToken)")
+        end = source.index("\n  _setAlarmOptionStatus:", start)
+        block = source[start:end]
+
+        self.assertIn("this._spawnJson(benchmarkArgs, (payload) => {\n      try {", block)
+        self.assertIn("if (this.benchmarkFlowToken === flowToken) {\n          this.benchmarkFlowToken = null;\n        }", block)
+        self.assertIn('this._recordLifecycleError("benchmark-flow", error);', block)
+        self.assertIn('this._setStatus("error", _("Could not complete benchmark")', block)
 
     def test_ollama_prompt_actions_release_flow_tokens_when_arguments_fail(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

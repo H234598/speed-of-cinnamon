@@ -6148,31 +6148,39 @@ MyApplet.prototype = {
     this.isCommandRunning = true;
     this._setStatus("processing", _("Benchmarking downloaded models..."), this.lastTranscript);
     this._spawnJson(benchmarkArgs, (payload) => {
-      if (this.benchmarkFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
-        if (!this.benchmarkFlowToken) {
-          this.isCommandRunning = false;
+      try {
+        if (this.benchmarkFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
+          if (!this.benchmarkFlowToken) {
+            this.isCommandRunning = false;
+          }
+          return;
         }
-        return;
-      }
-      this.isCommandRunning = false;
-      if (payload.error) {
+        this.isCommandRunning = false;
+        if (payload.error) {
+          this.benchmarkFlowToken = null;
+          this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          return;
+        }
+        let results = Array.isArray(payload.results) ? payload.results : [];
+        if (!this._setClipboardText(JSON.stringify(payload, null, 2))) {
+          this.benchmarkFlowToken = null;
+          this._setStatus("error", _("Could not copy benchmark results"), this.lastTranscript);
+          return;
+        }
+        let fastest = typeof payload.fastest_model === "string" ? payload.fastest_model.trim() : "";
+        let message = this._payloadMessage(payload, _("Benchmark complete"));
+        if (fastest !== "") {
+          message += "; " + _("fastest: ") + fastest;
+        }
         this.benchmarkFlowToken = null;
-        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
-        return;
+        this._setStatus("done", message + _("; copied results") + " (" + String(results.length) + ")", this.lastTranscript);
+      } catch (error) {
+        if (this.benchmarkFlowToken === flowToken) {
+          this.benchmarkFlowToken = null;
+        }
+        this._recordLifecycleError("benchmark-flow", error);
+        this._setStatus("error", _("Could not complete benchmark"), this.lastTranscript);
       }
-      let results = Array.isArray(payload.results) ? payload.results : [];
-      if (!this._setClipboardText(JSON.stringify(payload, null, 2))) {
-        this.benchmarkFlowToken = null;
-        this._setStatus("error", _("Could not copy benchmark results"), this.lastTranscript);
-        return;
-      }
-      let fastest = typeof payload.fastest_model === "string" ? payload.fastest_model.trim() : "";
-      let message = this._payloadMessage(payload, _("Benchmark complete"));
-      if (fastest !== "") {
-        message += "; " + _("fastest: ") + fastest;
-      }
-      this.benchmarkFlowToken = null;
-      this._setStatus("done", message + _("; copied results") + " (" + String(results.length) + ")", this.lastTranscript);
     }, { timeoutMs: BENCHMARK_COMMAND_TIMEOUT_MS });
   },
 
