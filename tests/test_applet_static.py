@@ -1488,6 +1488,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.voiceModelActionToken = actionToken;", block)
         self.assertIn("this.voiceModelActionToken !== actionToken", block)
         self.assertIn("this.voiceModelActionToken = null;", block)
+        self.assertIn('resourceGroup: "voice-model"', block)
 
         for method, next_method in [
             ("_onLanguageSettingsChanged: function()", "\n  _hasActiveRecordingState:"),
@@ -1497,6 +1498,11 @@ class AppletStaticTest(unittest.TestCase):
             settings_end = source.index(next_method, settings_start)
             settings_block = source[settings_start:settings_end]
             self.assertIn("this.voiceModelActionToken = null;", settings_block)
+            self.assertIn('this._terminateProcessesByGroup("voice-model")', settings_block)
+            self.assertLess(
+                settings_block.index("this.voiceModelActionToken = null;"),
+                settings_block.index('this._terminateProcessesByGroup("voice-model")')
+            )
 
         input_start = source.index("_onInputSourceSettingsChanged: function()")
         input_end = source.index("\n  _onVoiceBackendSettingsChanged:", input_start)

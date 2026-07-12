@@ -3813,10 +3813,21 @@ MyApplet.prototype = {
 
   _onVoiceBackendSettingsChanged: function() {
     this.modelMenuRefreshToken = null;
+    let hadVoiceModelAction = Boolean(this.voiceModelActionToken);
     this.voiceModelActionToken = null;
+    let voiceModelCleanupSucceeded = this._terminateProcessesByGroup("voice-model") !== false;
+    if (hadVoiceModelAction && voiceModelCleanupSucceeded) {
+      this.isCommandRunning = false;
+      if (this.status === "processing") {
+        this._setStatus("ready", _("Voice model operation cancelled by settings change"), this.lastTranscript);
+      }
+    }
     this._ensureVoiceModelCompatibleWithPrimaryLanguage(false);
     this._populateModelMenu([], _("Open menu to load voice models"));
     this._updatePanel();
+    if (!voiceModelCleanupSucceeded) {
+      this._setStatusPreservingRecording("error", _("Voice model operation could not be stopped"), this.lastTranscript);
+    }
   },
 
   _onTextModelSettingsChanged: function() {
@@ -5084,11 +5095,22 @@ MyApplet.prototype = {
     this.activeLanguageExplicit = false;
     this._syncActiveLanguage();
     this.modelMenuRefreshToken = null;
+    let hadVoiceModelAction = Boolean(this.voiceModelActionToken);
     this.voiceModelActionToken = null;
+    let voiceModelCleanupSucceeded = this._terminateProcessesByGroup("voice-model") !== false;
+    if (hadVoiceModelAction && voiceModelCleanupSucceeded) {
+      this.isCommandRunning = false;
+      if (this.status === "processing") {
+        this._setStatus("ready", _("Voice model operation cancelled by settings change"), this.lastTranscript);
+      }
+    }
     this._ensureVoiceModelCompatibleWithPrimaryLanguage(false);
     this._populateLanguageMenu();
     this._populateModelMenu([], _("Open menu to load voice models"));
     this._updatePanel();
+    if (!voiceModelCleanupSucceeded) {
+      this._setStatusPreservingRecording("error", _("Voice model operation could not be stopped"), this.lastTranscript);
+    }
   },
 
   _hasActiveRecordingState: function() {
@@ -7172,7 +7194,7 @@ MyApplet.prototype = {
         this._recordLifecycleError("model-action", error);
         this._setStatus("error", _("Could not complete model download"), this.lastTranscript);
       }
-    });
+    }, { resourceGroup: "voice-model" });
   },
 
   _removeVoiceModel: function(model) {
@@ -7242,7 +7264,7 @@ MyApplet.prototype = {
         this._recordLifecycleError("model-action", error);
         this._setStatus("error", _("Could not complete model removal"), this.lastTranscript);
       }
-    });
+    }, { resourceGroup: "voice-model" });
   },
 
   _selectVoiceModel: function(model) {
