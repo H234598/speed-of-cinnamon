@@ -3247,8 +3247,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let addPendingTimer = (name, sourceId, propertyName, sourceRemoved) =>", retry_block)
         self.assertIn("Timer orphan registry is unavailable", retry_block)
         self.assertIn("let timers = this._resourceRegistry && this._resourceRegistry.timers;", retry_block)
+        self.assertIn("let inTeardown = this.appletRemoved ||", retry_block)
+        self.assertIn("this.lifecycleState === LIFECYCLE_REMOVING ||", retry_block)
+        self.assertIn("this.lifecycleState === LIFECYCLE_REMOVED;", retry_block)
         self.assertIn("addPendingTimer(name, timers[name], \"\", false);", retry_block)
-        self.assertIn("if (!Array.isArray(this._orphanedTimers) && timers", retry_block)
+        self.assertIn("if ((!Array.isArray(this._orphanedTimers) || inTeardown) && timers", retry_block)
         self.assertIn("for (let index = pendingTimers.length - 1;", retry_block)
 
         start = source.index("_scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName)")

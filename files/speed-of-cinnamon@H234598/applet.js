@@ -2682,7 +2682,10 @@ MyApplet.prototype = {
       this._recordLifecycleError("timer-state", new Error("Timer orphan registry is unavailable"));
     }
     let timers = this._resourceRegistry && this._resourceRegistry.timers;
-    if (!Array.isArray(this._orphanedTimers) && timers && (typeof timers === "object" || typeof timers === "function")) {
+    let inTeardown = this.appletRemoved ||
+      this.lifecycleState === LIFECYCLE_REMOVING ||
+      this.lifecycleState === LIFECYCLE_REMOVED;
+    if ((!Array.isArray(this._orphanedTimers) || inTeardown) && timers && (typeof timers === "object" || typeof timers === "function")) {
       for (let name in timers) {
         if (!Object.prototype.hasOwnProperty.call(timers, name)) {
           continue;
