@@ -3962,7 +3962,10 @@ MyApplet.prototype = {
 
   _openUri: function(uri, successMessage) {
     try {
-      Gio.AppInfo.launch_default_for_uri(uri, null);
+      let opened = Gio.AppInfo.launch_default_for_uri(uri, null);
+      if (opened === false) {
+        throw new Error("URI could not be opened");
+      }
       this._setStatusPreservingRecording("ready", successMessage, this.lastTranscript);
     } catch (err) {
       this._safeLogError(err);

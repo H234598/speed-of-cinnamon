@@ -3968,6 +3968,8 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertIn("const Gio = imports.gi.Gio;", source)
         self.assertIn("Gio.AppInfo.launch_default_for_uri(uri, null)", source)
+        self.assertIn("let opened = Gio.AppInfo.launch_default_for_uri(uri, null);", source)
+        self.assertIn('throw new Error("URI could not be opened");', source)
         self.assertIn("GLib.filename_to_uri(path, null)", source)
         self.assertIn("GLib.mkdir_with_parents(path, 0o755)", source)
         self.assertIn("GLib.file_test(path, GLib.FileTest.IS_DIR)", source)
