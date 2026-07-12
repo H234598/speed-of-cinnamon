@@ -4245,6 +4245,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.alarmCheckToken !== checkToken", block)
         self.assertIn("!this._lifecycleAllowsWork()", block)
         self.assertIn("this.alarmMenuRefreshToken = null;", block)
+        self.assertIn('resourceGroup: "alarm-check"', block)
 
         error_start = source.index("_setAlarmErrorStatus: function(message)")
         error_end = source.index("\n  _refreshAlarmMenu:", error_start)
@@ -6023,13 +6024,14 @@ class AppletStaticTest(unittest.TestCase):
         ]:
             self.assertIn(f"this.{token} = null;", helper_block)
         self.assertIn('this._terminateProcessesByGroup("alarm-action")', helper_block)
+        self.assertIn('this._terminateProcessesByGroup("alarm-check")', helper_block)
         self.assertIn("let hadBenchmarkFlow = Boolean(this.benchmarkFlowToken);", helper_block)
         self.assertIn('this._terminateProcessesByGroup("benchmark")', helper_block)
         self.assertIn("if (hadBenchmarkFlow && !this._recordingCommandToken)", helper_block)
         self.assertIn('this._terminateProcessesByGroup("doctor")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("settings-transfer")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("setup-diagnostics")', helper_block)
-        self.assertIn("return alarmActionCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;", helper_block)
+        self.assertIn("return alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;", helper_block)
         self.assertNotIn("this.transcriptWindowToken = null;", helper_block)
         self.assertNotIn("this.settingsWindowToken = null;", helper_block)
 

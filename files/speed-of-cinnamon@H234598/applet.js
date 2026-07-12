@@ -5442,6 +5442,10 @@ MyApplet.prototype = {
       this._setStatusPreservingRecording("error", _("Alarm action could not be stopped"), this.lastTranscript);
     }
     this.alarmCheckToken = null;
+    let alarmCheckCleanupSucceeded = this._terminateProcessesByGroup("alarm-check") !== false;
+    if (!alarmCheckCleanupSucceeded) {
+      this._setStatusPreservingRecording("error", _("Alarm check could not be stopped"), this.lastTranscript);
+    }
     let hadBenchmarkFlow = Boolean(this.benchmarkFlowToken);
     this.benchmarkFlowToken = null;
     let benchmarkCleanupSucceeded = this._terminateProcessesByGroup("benchmark") !== false;
@@ -5470,7 +5474,7 @@ MyApplet.prototype = {
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
     this.transcriptListPromptToken = null;
-    return alarmActionCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;
+    return alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;
   },
 
   _runDoctor: function(startupCheck) {
@@ -6616,7 +6620,7 @@ MyApplet.prototype = {
           this._setAlarmErrorStatus(_("Could not complete alarm check"));
         }
       }
-    });
+    }, { resourceGroup: "alarm-check" });
   },
 
   _refreshInputSourceMenu: function() {
