@@ -4170,6 +4170,15 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn(f"this._spawnJson({args_name},", block)
             self.assertIn("this._failSetupDiagnosticsAction(actionToken, error", block)
 
+    def test_setup_plan_releases_token_when_callback_throws(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_copySetupPlan: function()")
+        end = source.index("\n  _setupCommandsText:", start)
+        block = source[start:end]
+
+        self.assertIn("this._spawnJson(setupArgs, (payload) => {\n      try {", block)
+        self.assertIn('} catch (error) {\n        this._failSetupDiagnosticsAction(actionToken, error, _("Could not copy setup plan"));', block)
+
     def test_ollama_prompt_actions_release_flow_tokens_when_arguments_fail(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         for method, next_method, args_name, builder_name, message in [

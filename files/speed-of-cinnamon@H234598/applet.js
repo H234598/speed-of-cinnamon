@@ -5719,24 +5719,28 @@ MyApplet.prototype = {
       return;
     }
     this._spawnJson(setupArgs, (payload) => {
-      if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
-        return;
-      }
-      if (payload.error) {
+      try {
+        if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
+          return;
+        }
+        if (payload.error) {
+          this.setupDiagnosticsToken = null;
+          this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          return;
+        }
+        let planText = typeof payload.text === "string" && payload.text.trim() !== ""
+          ? payload.text
+          : JSON.stringify(payload, null, 2);
+        if (!this._setClipboardText(planText)) {
+          this.setupDiagnosticsToken = null;
+          this._setStatus("error", _("Could not copy setup plan"), this.lastTranscript);
+          return;
+        }
         this.setupDiagnosticsToken = null;
-        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
-        return;
+        this._setStatus("done", _("Copied setup plan"), this.lastTranscript);
+      } catch (error) {
+        this._failSetupDiagnosticsAction(actionToken, error, _("Could not copy setup plan"));
       }
-      let planText = typeof payload.text === "string" && payload.text.trim() !== ""
-        ? payload.text
-        : JSON.stringify(payload, null, 2);
-      if (!this._setClipboardText(planText)) {
-        this.setupDiagnosticsToken = null;
-        this._setStatus("error", _("Could not copy setup plan"), this.lastTranscript);
-        return;
-      }
-      this.setupDiagnosticsToken = null;
-      this._setStatus("done", _("Copied setup plan"), this.lastTranscript);
     }, inputOption);
   },
 
