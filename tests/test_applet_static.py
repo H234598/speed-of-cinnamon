@@ -1871,6 +1871,13 @@ class AppletStaticTest(unittest.TestCase):
         open_block = source[open_start:open_end]
         self.assertLess(open_block.index("_runGuarded"), open_block.index("dialog.open"))
 
+    def test_clipboard_set_preconditions_are_guarded(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_setClipboardText: function(text)")
+        end = source.index("\n  _describeNonTextClipboardPayload:", start)
+        block = source[start:end]
+        self.assertLess(block.index("try {"), block.index("this.clipboard.set_text"))
+
     def test_menu_teardown_retains_handles_after_cleanup_failures(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_destroyMenus: function()")

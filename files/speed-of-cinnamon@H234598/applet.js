@@ -8992,10 +8992,13 @@ MyApplet.prototype = {
   },
 
   _setClipboardText: function(text) {
-    if (typeof text !== "string" || !this._lifecycleAllowsWork() || !this.clipboard || !this.clipboard.set_text) {
+    if (typeof text !== "string" || !this._lifecycleAllowsWork()) {
       return false;
     }
     try {
+      if (!this.clipboard || !this.clipboard.set_text) {
+        return false;
+      }
       this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
       return true;
     } catch (error) {
