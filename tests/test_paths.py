@@ -11,6 +11,22 @@ from speed_of_cinnamon import paths
 
 
 class PathsTest(unittest.TestCase):
+    def test_xdg_path_falls_back_when_home_expansion_fails(self) -> None:
+        fallback = Path("/safe/fallback")
+        with (
+            mock.patch.dict(paths.os.environ, {"XDG_DATA_HOME": "~/data"}, clear=False),
+            mock.patch.object(Path, "expanduser", side_effect=RuntimeError("home unavailable")),
+        ):
+            self.assertEqual(paths._xdg_path("XDG_DATA_HOME", fallback), fallback)
+
+    def test_safe_home_path_uses_private_fallback_when_home_lookup_fails(self) -> None:
+        fallback = Path("/tmp") / f"{paths.APP_ID}-fallback"
+        with (
+            mock.patch.object(Path, "home", side_effect=RuntimeError("home unavailable")),
+            mock.patch("speed_of_cinnamon.paths._private_runtime_temp_root", return_value=fallback),
+        ):
+            self.assertEqual(paths._safe_home_path(".local", "share"), fallback / ".local" / "share")
+
     def test_xdg_path_rejects_non_text_environment_values(self) -> None:
         with mock.patch("speed_of_cinnamon.paths.os.environ.__getitem__", return_value=123):
             self.assertEqual(paths.xdg_data_home(), Path.home() / ".local" / "share")

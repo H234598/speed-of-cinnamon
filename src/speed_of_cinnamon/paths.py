@@ -62,7 +62,10 @@ def _xdg_path(environment_variable: str, default: Path) -> Path:
         normalized, max_chars=MAX_XDG_PATH_CHARS
     ):
         return default
-    candidate = Path(normalized).expanduser()
+    try:
+        candidate = Path(normalized).expanduser()
+    except (OSError, RuntimeError):
+        return default
     if not candidate.is_absolute():
         return default
     try:
@@ -112,7 +115,10 @@ def _private_runtime_temp_root() -> Path:
 
 
 def _safe_home_path(*parts: str) -> Path:
-    candidate = Path.home().joinpath(*parts)
+    try:
+        candidate = Path.home().joinpath(*parts)
+    except (OSError, RuntimeError):
+        return _private_runtime_temp_root().joinpath(*parts)
     try:
         assert_no_symlink_ancestors(candidate, field_name="home path")
     except RuntimeError:
