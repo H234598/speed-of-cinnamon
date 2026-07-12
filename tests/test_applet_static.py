@@ -1686,9 +1686,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!this._resourceRegistry || !this._resourceRegistry.processes)", process_block)
         self.assertIn('throw new Error("Process registry is unavailable");', process_block)
         self.assertIn("let entry = {", process_block)
-        self.assertIn("this._resourceRegistry.processes[token] = entry;", process_block)
-        self.assertIn("this._resourceRegistry.processes[token] !== entry", process_block)
+        self.assertIn("registry[token] = entry;", process_block)
+        self.assertIn("registry[token] !== entry", process_block)
         self.assertIn('throw new Error("Process could not be registered");', process_block)
+        self.assertIn("let registry = null;", process_block)
+        self.assertIn("let deleted = delete registry[token];", process_block)
+        self.assertIn('this._recordLifecycleError("process-registration-rollback", rollbackError);', process_block)
 
     def test_process_group_cancellation_ignores_malformed_entries(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

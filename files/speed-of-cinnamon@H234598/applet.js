@@ -1122,19 +1122,37 @@ MyApplet.prototype = {
     if (!process) {
       return token;
     }
-    if (!this._resourceRegistry || !this._resourceRegistry.processes) {
-      throw new Error("Process registry is unavailable");
-    }
     let entry = {
       process: process,
       generation: generation,
       group: String(group || "process"),
     };
-    this._resourceRegistry.processes[token] = entry;
-    if (this._resourceRegistry.processes[token] !== entry) {
-      throw new Error("Process could not be registered");
+    let registry = null;
+    try {
+      if (!this._resourceRegistry || !this._resourceRegistry.processes) {
+        throw new Error("Process registry is unavailable");
+      }
+      registry = this._resourceRegistry.processes;
+      registry[token] = entry;
+      if (registry[token] !== entry) {
+        throw new Error("Process could not be registered");
+      }
+      return token;
+    } catch (error) {
+      if (registry) {
+        try {
+          if (Object.prototype.hasOwnProperty.call(registry, token)) {
+            let deleted = delete registry[token];
+            if (deleted === false || Object.prototype.hasOwnProperty.call(registry, token)) {
+              throw new Error("Process registration rollback failed");
+            }
+          }
+        } catch (rollbackError) {
+          this._recordLifecycleError("process-registration-rollback", rollbackError);
+        }
+      }
+      throw error;
     }
-    return token;
   },
 
   _unregisterProcess: function(token) {
