@@ -2290,6 +2290,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("removed[0] !== entry", orphan_block)
         self.assertIn('throw new Error("Cancellable orphan entry could not be removed");', orphan_block)
         self.assertIn("this._untrackOrphanedCancellable(entry.token)", orphan_block)
+        self.assertIn("if (entry.cancelSucceeded === true)", orphan_block)
+        self.assertIn('new Error("Orphaned cancellable is missing from registry")', orphan_block)
 
         start = source.index("_retryOrphanedProcesses: function()")
         end = source.index("\n  _terminateProcess: function(process)", start)

@@ -2142,7 +2142,12 @@ MyApplet.prototype = {
       }
       let cancellable = registry[entry.token];
       if (!cancellable) {
-        if (!this._untrackOrphanedCancellable(entry.token)) {
+        if (entry.cancelSucceeded === true) {
+          if (!this._untrackOrphanedCancellable(entry.token)) {
+            success = false;
+          }
+        } else {
+          this._recordLifecycleError("cancellable-state", new Error("Orphaned cancellable is missing from registry"));
           success = false;
         }
         continue;
