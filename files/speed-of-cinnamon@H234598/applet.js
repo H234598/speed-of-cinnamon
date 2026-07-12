@@ -5580,19 +5580,34 @@ MyApplet.prototype = {
       throw new Error("External API config file is too large");
     }
     GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o700);
+    let setPrivateMode = () => {
+      let modeResult = Gio.File.new_for_path(path).set_attribute_uint32(
+        "unix::mode",
+        0o600,
+        Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS,
+        null
+      );
+      if (modeResult === false) {
+        throw new Error("External API config file mode could not be secured");
+      }
+    };
     let info = this._externalApiEnvFileInfo(path, true);
     if (info) {
-      Gio.File.new_for_path(path).set_attribute_uint32("unix::mode", 0o600, Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
+      setPrivateMode();
     }
-    Gio.File.new_for_path(path).replace_contents(
+    let replaceResult = Gio.File.new_for_path(path).replace_contents(
       ByteArray.fromString(text),
       null,
       false,
       Gio.FileCreateFlags.PRIVATE | Gio.FileCreateFlags.REPLACE_DESTINATION,
       null
     );
+    let replaceSucceeded = Array.isArray(replaceResult) ? replaceResult[0] : replaceResult;
+    if (replaceSucceeded === false) {
+      throw new Error("External API config file could not be replaced");
+    }
     this._externalApiEnvFileInfo(path, false);
-    Gio.File.new_for_path(path).set_attribute_uint32("unix::mode", 0o600, Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
+    setPrivateMode();
   },
 
   _writeExternalApiEnvFile: function() {
