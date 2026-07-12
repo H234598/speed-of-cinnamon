@@ -1404,7 +1404,10 @@ MyApplet.prototype = {
         continue;
       }
       try {
-        this._orphanedMenus.splice(index, 1);
+        let removed = this._orphanedMenus.splice(index, 1);
+        if (!Array.isArray(removed) || removed.length !== 1 || removed[0] !== entry || this._orphanedMenus.indexOf(entry) >= 0) {
+          throw new Error("Menu orphan entry could not be removed");
+        }
       } catch (error) {
         this._recordLifecycleError("menu-orphan", error);
         success = false;

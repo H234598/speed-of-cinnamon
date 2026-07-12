@@ -535,6 +535,15 @@ class AppletStaticTest(unittest.TestCase):
         retry_block = source[retry_start:retry_end]
         self.assertIn("this._untrackOrphanedDialog(entry.dialog)", retry_block)
 
+    def test_menu_orphan_untracking_verifies_registry_removal(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_untrackOrphanedMenu: function(menu)")
+        end = source.index("\n  _retryOrphanedMenus:", start)
+        block = source[start:end]
+        self.assertIn("let removed = this._orphanedMenus.splice(index, 1);", block)
+        self.assertIn("removed[0] !== entry", block)
+        self.assertIn('throw new Error("Menu orphan entry could not be removed");', block)
+
     def test_external_env_monitor_registration_failure_rolls_back_monitor(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_watchExternalApiEnvFile: function(path)")
