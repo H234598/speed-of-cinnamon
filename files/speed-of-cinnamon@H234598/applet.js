@@ -5502,11 +5502,21 @@ MyApplet.prototype = {
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
     this.transcriptListPromptToken = null;
+    let textInsertProcessCleanupSucceeded = true;
+    for (let group of ["keyboard", "clipboard", "x11"]) {
+      if (this._terminateProcessesByGroup(group) === false) {
+        textInsertProcessCleanupSucceeded = false;
+      }
+    }
+    if (!textInsertProcessCleanupSucceeded) {
+      this.textInsertCancellationFailed = true;
+      this._setStatusPreservingRecording("error", _("Previous text insertion could not be stopped"), this.lastTranscript);
+    }
     let settingsPromptCleanupSucceeded = this._terminateProcessesByGroup("settings-prompt") !== false;
     if (!settingsPromptCleanupSucceeded) {
       this._setStatusPreservingRecording("error", _("Settings prompt could not be stopped"), this.lastTranscript);
     }
-    return historyRefreshCleanupSucceeded && inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && voiceModelCleanupSucceeded && textModelRefreshCleanupSucceeded && alarmMenuRefreshCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded && settingsPromptCleanupSucceeded;
+    return historyRefreshCleanupSucceeded && inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && voiceModelCleanupSucceeded && textModelRefreshCleanupSucceeded && alarmMenuRefreshCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded && textInsertProcessCleanupSucceeded && settingsPromptCleanupSucceeded;
   },
 
   _runDoctor: function(startupCheck) {
