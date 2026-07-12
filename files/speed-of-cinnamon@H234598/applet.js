@@ -5269,7 +5269,9 @@ MyApplet.prototype = {
     if (this.terminalWorkflowRunning || this.terminalWorkflowToken) {
       this.terminalWorkflowToken = null;
     }
-    this._invalidateBackgroundCallbacksForRecording();
+    if (!this._invalidateBackgroundCallbacksForRecording()) {
+      return;
+    }
     if (this.textInsertToken) {
       this._cancelTextInsertForSettingsChange();
     }
@@ -5441,9 +5443,15 @@ MyApplet.prototype = {
     this.setupDiagnosticsToken = null;
     this.doctorCommandToken = null;
     this._doctorCommandRunning = false;
+    let doctorCleanupSucceeded = this._terminateProcessesByGroup("doctor") !== false;
+    if (!doctorCleanupSucceeded) {
+      this._doctorCommandRunning = true;
+      this._setStatusPreservingRecording("error", _("Doctor could not be stopped"), this.lastTranscript);
+    }
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
     this.transcriptListPromptToken = null;
+    return doctorCleanupSucceeded;
   },
 
   _runDoctor: function(startupCheck) {
@@ -5514,7 +5522,8 @@ MyApplet.prototype = {
       }
     }, {
       inputText: inputOption.inputText,
-      timeoutMs: DOCTOR_COMMAND_TIMEOUT_MS
+      timeoutMs: DOCTOR_COMMAND_TIMEOUT_MS,
+      resourceGroup: "doctor"
     });
   },
 

@@ -5991,11 +5991,12 @@ class AppletStaticTest(unittest.TestCase):
         toggle_start = source.index("_toggleRecording: function()")
         toggle_end = source.index("\n  _restartApplet:", toggle_start)
         toggle_block = source[toggle_start:toggle_end]
-        self.assertIn("this._invalidateBackgroundCallbacksForRecording();", toggle_block)
+        self.assertIn("this._invalidateBackgroundCallbacksForRecording()", toggle_block)
         self.assertLess(
-            toggle_block.index("this._invalidateBackgroundCallbacksForRecording();"),
+            toggle_block.index("this._invalidateBackgroundCallbacksForRecording()"),
             toggle_block.index("if (this.isCommandRunning)"),
         )
+        self.assertIn("if (!this._invalidateBackgroundCallbacksForRecording())", toggle_block)
 
         helper_start = source.index("_invalidateBackgroundCallbacksForRecording: function()")
         helper_end = source.index("\n  _runDoctor:", helper_start)
@@ -6016,6 +6017,8 @@ class AppletStaticTest(unittest.TestCase):
             "autoPastePromptToken",
         ]:
             self.assertIn(f"this.{token} = null;", helper_block)
+        self.assertIn('this._terminateProcessesByGroup("doctor")', helper_block)
+        self.assertIn("return doctorCleanupSucceeded;", helper_block)
         self.assertNotIn("this.transcriptWindowToken = null;", helper_block)
         self.assertNotIn("this.settingsWindowToken = null;", helper_block)
 
@@ -6029,6 +6032,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.doctorCommandToken = doctorToken;", block)
         self.assertIn("if (this.doctorCommandToken !== doctorToken", block)
         self.assertIn("this.doctorCommandToken = null;", block)
+        self.assertIn('resourceGroup: "doctor"', block)
 
     def test_recording_start_cancels_stale_text_insert(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
