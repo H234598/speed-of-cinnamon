@@ -1761,7 +1761,10 @@ MyApplet.prototype = {
         continue;
       }
       try {
-        this._orphanedCancellables.splice(index, 1);
+        let removed = this._orphanedCancellables.splice(index, 1);
+        if (!Array.isArray(removed) || removed.length !== 1 || removed[0] !== entry || this._orphanedCancellables.indexOf(entry) >= 0) {
+          throw new Error("Cancellable orphan entry could not be removed");
+        }
       } catch (error) {
         this._recordLifecycleError("cancellable-orphan", error);
         success = false;
@@ -1786,10 +1789,7 @@ MyApplet.prototype = {
         ? this._resourceRegistry.cancellables[entry.token]
         : null;
       if (!cancellable) {
-        try {
-          this._orphanedCancellables.splice(index, 1);
-        } catch (error) {
-          this._recordLifecycleError("cancellable-orphan", error);
+        if (!this._untrackOrphanedCancellable(entry.token)) {
           success = false;
         }
         continue;
@@ -1816,10 +1816,7 @@ MyApplet.prototype = {
         success = false;
         continue;
       }
-      try {
-        this._orphanedCancellables.splice(index, 1);
-      } catch (error) {
-        this._recordLifecycleError("cancellable-orphan", error);
+      if (!this._untrackOrphanedCancellable(entry.token)) {
         success = false;
       }
     }

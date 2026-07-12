@@ -2011,7 +2011,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_retryOrphanedCancellables: function()", orphan_block)
         self.assertIn("let cancellable = this._resourceRegistry", orphan_block)
         self.assertIn("this._unregisterCancellable(entry.token)", orphan_block)
-        self.assertIn("this._orphanedCancellables.splice(index, 1);", orphan_block)
+        self.assertIn("let removed = this._orphanedCancellables.splice(index, 1);", orphan_block)
+        self.assertIn("removed[0] !== entry", orphan_block)
+        self.assertIn('throw new Error("Cancellable orphan entry could not be removed");', orphan_block)
+        self.assertIn("this._untrackOrphanedCancellable(entry.token)", orphan_block)
 
         start = source.index("_cancelAllCancellables: function()")
         end = source.index("\n  _trackTimer:", start)
