@@ -3808,12 +3808,12 @@ MyApplet.prototype = {
   },
 
   _onTextModelSettingsChanged: function() {
+    this.textModelMenuRefreshToken = null;
     this._cancelOllamaInstallWatch();
     if (!this._clearOllamaModelFlow()) {
       this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
       return;
     }
-    this.textModelMenuRefreshToken = null;
     this._populateTextModelMenu([], _("Open menu to load local text models"));
     this._updatePanel();
   },

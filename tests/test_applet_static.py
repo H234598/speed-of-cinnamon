@@ -3666,6 +3666,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!this._clearOllamaModelFlow())", editor_block)
         self.assertIn('this._setStatusPreservingRecording("error", _(', editor_block)
 
+    def test_text_model_settings_invalidate_refresh_before_ollama_cleanup(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_onTextModelSettingsChanged: function()")
+        end = source.index("\n  _onOpenAiFlexProcessingSettingsChanged:", start)
+        block = source[start:end]
+        self.assertIn("this.textModelMenuRefreshToken = null;", block)
+        self.assertIn("this._clearOllamaModelFlow()", block)
+        self.assertLess(
+            block.index("this.textModelMenuRefreshToken = null;"),
+            block.index("this._clearOllamaModelFlow()")
+        )
+
     def test_ollama_model_flow_clears_terminal_and_install_failure_states(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
