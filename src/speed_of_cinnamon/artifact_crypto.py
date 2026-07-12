@@ -814,6 +814,9 @@ def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subpr
         except subprocess.TimeoutExpired as exc:
             _stop_secret_tool_process(proc)
             raise ArtifactCryptoError("Secret Service keyring request timed out") from exc
+        except Exception as exc:
+            _stop_secret_tool_process(proc)
+            raise ArtifactCryptoError("Secret Service keyring helper could not be reaped safely") from exc
         stdout = _validate_secret_tool_output(stdout, field_name="stdout")
         stderr = _validate_secret_tool_output(stderr, field_name="stderr")
         return subprocess.CompletedProcess(command, returncode, stdout, stderr)

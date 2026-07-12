@@ -650,6 +650,38 @@ class ArtifactCryptoTest(unittest.TestCase):
 
         self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 2)
 
+    def test_secret_tool_wait_failure_is_controlled(self) -> None:
+        fake_proc_holder: dict[str, object] = {}
+
+        class FakePopen:
+            def __init__(self, command: list[str], **kwargs: object) -> None:
+                self.command = command
+                self.stdin = None
+                self.stdout = self_outer._pipe_reader(b"")
+                self.stderr = self_outer._pipe_reader(b"")
+                self.killed = False
+                self.wait_calls = 0
+                fake_proc_holder["proc"] = self
+
+            def wait(self, timeout: int | None = None) -> int:
+                self.wait_calls += 1
+                raise OSError("waitpid failed")
+
+            def kill(self) -> None:
+                self.killed = True
+
+        self_outer = self
+
+        with (
+            mock.patch("speed_of_cinnamon.artifact_crypto._secret_tool_path", return_value="/usr/bin/secret-tool"),
+            mock.patch("speed_of_cinnamon.artifact_crypto.subprocess.Popen", side_effect=FakePopen),
+        ):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "could not be reaped safely"):
+                artifact_crypto._run_secret_tool(["lookup", "application", "test"])
+
+        self.assertTrue(getattr(fake_proc_holder["proc"], "killed"))
+        self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 2)
+
     def test_keyring_decryption_does_not_create_missing_keyring_key(self) -> None:
         key = bytes(range(32))
         with mock.patch("speed_of_cinnamon.artifact_crypto._load_keyring_key", return_value=key):
