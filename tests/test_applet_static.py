@@ -5002,9 +5002,10 @@ class AppletStaticTest(unittest.TestCase):
             "doctorCommandToken",
             "customLimitPromptToken",
             "autoPastePromptToken",
-            "settingsWindowToken",
         ]:
             self.assertIn(f"this.{token} = null;", helper_block)
+        self.assertNotIn("this.transcriptWindowToken = null;", helper_block)
+        self.assertNotIn("this.settingsWindowToken = null;", helper_block)
 
     def test_doctor_callback_cannot_overwrite_new_recording_status(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

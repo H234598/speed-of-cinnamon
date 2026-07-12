@@ -3904,8 +3904,6 @@ MyApplet.prototype = {
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
     this.transcriptListPromptToken = null;
-    this.transcriptWindowToken = null;
-    this.settingsWindowToken = null;
   },
 
   _runDoctor: function(startupCheck) {
