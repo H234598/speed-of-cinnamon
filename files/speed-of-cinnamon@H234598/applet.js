@@ -5866,32 +5866,73 @@ MyApplet.prototype = {
 
   _applyExternalApiEnvTarget: function(target) {
     if (target === "text") {
+      let previousBackend = this.postProcessBackend;
+      try {
+        let result = this.settings.setValue("post-process-backend", "openai-compatible");
+        if (result === false) {
+          throw new Error("External API text backend setting could not be saved");
+        }
+      } catch (err) {
+        this.postProcessBackend = previousBackend;
+        this._safeLogError(err);
+        this._setStatusPreservingRecording("error", _("External API text backend could not be selected"), this.lastTranscript);
+        return false;
+      }
       this._cancelOllamaInstallWatch();
       this._clearOllamaModelFlow();
       this.postProcessBackend = "openai-compatible";
-      this.settings.setValue("post-process-backend", this.postProcessBackend);
       this._refreshTextModelMenuForBackend("openai-compatible");
       this._setStatusPreservingRecording("ready", _("Text polishing: OpenAI-compatible API"), this.lastTranscript);
-      return;
+      return true;
     }
-    this._selectExternalApiVoiceBackend();
+    return this._selectExternalApiVoiceBackend();
   },
 
   _selectExternalApiVoiceBackend: function() {
     if (this.voiceModelActionToken) {
       return;
     }
+    let previousTranscriber = this.transcriber;
+    let previousWhisperModel = this.whisperModel;
+    let attemptedWrites = [];
+    let settingsWrites = [
+      ["transcriber", "openai-compatible", previousTranscriber],
+      ["whisper-model", "", previousWhisperModel],
+    ];
+    try {
+      for (let setting of settingsWrites) {
+        attemptedWrites.push(setting);
+        let result = this.settings.setValue(setting[0], setting[1]);
+        if (result === false) {
+          throw new Error("External API voice setting could not be saved");
+        }
+      }
+    } catch (err) {
+      for (let index = attemptedWrites.length - 1; index >= 0; index--) {
+        let setting = attemptedWrites[index];
+        try {
+          let rollbackResult = this.settings.setValue(setting[0], setting[2]);
+          if (rollbackResult === false) {
+            throw new Error("External API voice setting rollback failed");
+          }
+        } catch (rollbackErr) {
+          this._safeLogError(rollbackErr);
+        }
+      }
+      this._safeLogError(err);
+      this._setStatusPreservingRecording("error", _("External API voice backend could not be selected"), this.lastTranscript);
+      return false;
+    }
     this.transcriber = "openai-compatible";
     this.whisperModel = "";
-    this.settings.setValue("transcriber", this.transcriber);
-    this.settings.setValue("whisper-model", this.whisperModel);
     this._refreshModelMenu();
     let model = String(this.openaiCompatibleModel || "").trim();
     if (model === "") {
       this._setStatusPreservingRecording("error", _("External API speech model is not configured"), this.lastTranscript);
-      return;
+      return true;
     }
     this._setStatusPreservingRecording("ready", _("Voice model: External API ") + model, this.lastTranscript);
+    return true;
   },
 
   _refreshTextModelMenu: function() {
