@@ -1190,7 +1190,7 @@ MyApplet.prototype = {
       this._recordLifecycleError("dialog-state", new Error("Dialog orphan registry is unavailable"));
     }
     let dialogs = this._resourceRegistry && this._resourceRegistry.dialogs;
-    if (Array.isArray(dialogs)) {
+    if (!Array.isArray(this._orphanedDialogs) && Array.isArray(dialogs)) {
       for (let dialog of dialogs) {
         if (!dialog) {
           invalidOrphanEntry = true;
@@ -1603,10 +1603,12 @@ MyApplet.prototype = {
     } else {
       this._recordLifecycleError("menu-state", new Error("Menu orphan registry is unavailable"));
     }
-    addPendingMenu(this.menu, "menu", "menu", true, false, false, false);
-    addPendingMenu(this._applet_context_menu, "_applet_context_menu", "context-menu", true, false, false, false);
-    addPendingMenu(this.menuManager, "menuManager", "menu-manager", false, false, true, false);
-    addPendingMenu(this._menuManager, "_menuManager", "private-menu-manager", false, false, true, false);
+    if (!Array.isArray(this._orphanedMenus)) {
+      addPendingMenu(this.menu, "menu", "menu", true, false, false, false);
+      addPendingMenu(this._applet_context_menu, "_applet_context_menu", "context-menu", true, false, false, false);
+      addPendingMenu(this.menuManager, "menuManager", "menu-manager", false, false, true, false);
+      addPendingMenu(this._menuManager, "_menuManager", "private-menu-manager", false, false, true, false);
+    }
     if (pendingMenus.length === 0) {
       return !invalidOrphanEntry && Array.isArray(this._orphanedMenus);
     }
@@ -1852,7 +1854,7 @@ MyApplet.prototype = {
       this._recordLifecycleError("monitor-state", new Error("Monitor orphan registry is unavailable"));
     }
     let monitors = this._resourceRegistry && this._resourceRegistry.monitors;
-    if (Array.isArray(monitors)) {
+    if (!Array.isArray(this._orphanedMonitors) && Array.isArray(monitors)) {
       for (let monitor of monitors) {
         if (!monitor) {
           invalidOrphanEntry = true;
@@ -1861,7 +1863,9 @@ MyApplet.prototype = {
         addPendingMonitor(monitor, false);
       }
     }
-    addPendingMonitor(this.externalApiEnvMonitor, this._externalApiEnvMonitorCancelSucceeded === true);
+    if (!Array.isArray(this._orphanedMonitors)) {
+      addPendingMonitor(this.externalApiEnvMonitor, this._externalApiEnvMonitorCancelSucceeded === true);
+    }
     if (pendingMonitors.length === 0) {
       return !invalidOrphanEntry && Array.isArray(this._orphanedMonitors);
     }
@@ -2566,7 +2570,7 @@ MyApplet.prototype = {
       this._recordLifecycleError("timer-state", new Error("Timer orphan registry is unavailable"));
     }
     let timers = this._resourceRegistry && this._resourceRegistry.timers;
-    if (timers && (typeof timers === "object" || typeof timers === "function")) {
+    if (!Array.isArray(this._orphanedTimers) && timers && (typeof timers === "object" || typeof timers === "function")) {
       for (let name in timers) {
         if (!Object.prototype.hasOwnProperty.call(timers, name)) {
           continue;

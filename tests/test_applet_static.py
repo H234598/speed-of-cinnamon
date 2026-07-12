@@ -469,6 +469,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let monitors = this._resourceRegistry && this._resourceRegistry.monitors;", block)
         self.assertIn("addPendingMonitor(monitor, false);", block)
         self.assertIn("addPendingMonitor(this.externalApiEnvMonitor", block)
+        self.assertIn("if (!Array.isArray(this._orphanedMonitors))", block)
         self.assertIn("for (let index = pendingMonitors.length - 1;", block)
 
     def test_external_env_monitor_cleanup_retries_cancel_and_registry_phases(self) -> None:
@@ -594,6 +595,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('addPendingMenu(this._applet_context_menu, "_applet_context_menu", "context-menu", true, false, false, false);', retry_block)
         self.assertIn('addPendingMenu(this.menuManager, "menuManager", "menu-manager", false, false, true, false);', retry_block)
         self.assertIn('addPendingMenu(this._menuManager, "_menuManager", "private-menu-manager", false, false, true, false);', retry_block)
+        self.assertIn('if (!Array.isArray(this._orphanedMenus)) {', retry_block)
         self.assertIn("for (let index = pendingMenus.length - 1;", retry_block)
 
         reference_start = source.index("_clearDestroyedMenuReference: function(menu, propertyName, errorGroup)")
@@ -2354,6 +2356,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let addPendingDialog = (dialog, group, closeSucceeded, destroySucceeded) =>", block)
         self.assertIn("Dialog orphan registry is unavailable", block)
         self.assertIn("let dialogs = this._resourceRegistry && this._resourceRegistry.dialogs;", block)
+        self.assertIn("if (!Array.isArray(this._orphanedDialogs) && Array.isArray(dialogs))", block)
         self.assertIn('addPendingDialog(dialog, "dialog-registry", false, false);', block)
         self.assertIn("for (let index = pendingDialogs.length - 1;", block)
         self.assertIn("this._untrackDialog(entry.dialog)", block)
@@ -2965,6 +2968,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("Timer orphan registry is unavailable", retry_block)
         self.assertIn("let timers = this._resourceRegistry && this._resourceRegistry.timers;", retry_block)
         self.assertIn("addPendingTimer(name, timers[name], \"\", false);", retry_block)
+        self.assertIn("if (!Array.isArray(this._orphanedTimers) && timers", retry_block)
         self.assertIn("for (let index = pendingTimers.length - 1;", retry_block)
 
         start = source.index("_scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName)")
