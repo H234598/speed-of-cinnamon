@@ -2239,6 +2239,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let collectionSucceeded = true;", block)
         self.assertIn("if (visited.indexOf(current) >= 0)", block)
         self.assertIn("visited.push(current);", block)
+        self.assertIn('typeof current._getMenuItems !== "function"', block)
+        self.assertIn('throw new Error("Menu item enumeration is unavailable");', block)
         self.assertIn("if (!Array.isArray(items))", block)
         self.assertIn('throw new Error("Menu items are unavailable");', block)
         self.assertIn('this._recordLifecycleError("menu-items", error);', block)

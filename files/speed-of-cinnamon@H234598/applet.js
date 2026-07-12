@@ -964,9 +964,10 @@ MyApplet.prototype = {
       visited.push(current);
       let items = [];
       try {
-        if (current._getMenuItems) {
-          items = current._getMenuItems();
+        if (typeof current._getMenuItems !== "function") {
+          throw new Error("Menu item enumeration is unavailable");
         }
+        items = current._getMenuItems();
         if (!Array.isArray(items)) {
           throw new Error("Menu items are unavailable");
         }
