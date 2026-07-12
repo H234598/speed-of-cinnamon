@@ -7986,6 +7986,15 @@ MyApplet.prototype = {
     let dialogs = registryValue("dialogs", []);
     let processes = registryValue("processes", {});
     let cancellables = registryValue("cancellables", {});
+    let orphanedResourceValues = {};
+    for (let name of ["signals", "hotkeys", "processes", "timers", "dialogs"]) {
+      try {
+        orphanedResourceValues[name] = this["_orphaned" + name.charAt(0).toUpperCase() + name.slice(1)];
+      } catch (error) {
+        recordDiagnosticError(error);
+        orphanedResourceValues[name] = [];
+      }
+    }
     let countEntries = (value) => {
       try {
         return value && typeof value === "object" ? Object.keys(value).length : 0;
@@ -8067,6 +8076,18 @@ MyApplet.prototype = {
     } catch (error) {
       recordDiagnosticError(error);
     }
+    let orphanedResourceCounts = {
+      signals: countArrayEntries(orphanedResourceValues.signals),
+      hotkeys: countArrayEntries(orphanedResourceValues.hotkeys),
+      processes: countArrayEntries(orphanedResourceValues.processes),
+      timers: countArrayEntries(orphanedResourceValues.timers),
+      dialogs: countArrayEntries(orphanedResourceValues.dialogs),
+    };
+    let orphanedTotal = orphanedResourceCounts.signals +
+      orphanedResourceCounts.hotkeys +
+      orphanedResourceCounts.processes +
+      orphanedResourceCounts.timers +
+      orphanedResourceCounts.dialogs;
     return {
       state: String(this.lifecycleState || LIFECYCLE_INITIALIZING),
       error_counts: errorCounts,
@@ -8079,6 +8100,12 @@ MyApplet.prototype = {
         dialogs: countArrayEntries(dialogs),
         processes: countEntries(processes),
         cancellables: countEntries(cancellables),
+        orphaned_signals: orphanedResourceCounts.signals,
+        orphaned_hotkeys: orphanedResourceCounts.hotkeys,
+        orphaned_processes: orphanedResourceCounts.processes,
+        orphaned_timers: orphanedResourceCounts.timers,
+        orphaned_dialogs: orphanedResourceCounts.dialogs,
+        orphaned_total: orphanedTotal,
       },
       process_groups: processGroups,
     };
