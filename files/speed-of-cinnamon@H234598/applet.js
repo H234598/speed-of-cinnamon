@@ -2139,11 +2139,13 @@ MyApplet.prototype = {
             }
           }
           if (cleanupSucceeded) {
-            if (!this._unregisterProcess(token)) {
-              this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, true);
-            } else {
-              this._untrackOrphanedProcess(entry.process);
+          if (!this._unregisterProcess(token)) {
+            this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, true);
+          } else {
+            if (!this._untrackOrphanedProcess(entry.process)) {
+              this._recordLifecycleError("process-cancel", new Error("Process orphan cleanup could not be completed"));
             }
+          }
           }
         }
       }
@@ -2195,7 +2197,9 @@ MyApplet.prototype = {
             allSucceeded = false;
             this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, true);
           } else {
-            this._untrackOrphanedProcess(entry.process);
+            if (!this._untrackOrphanedProcess(entry.process)) {
+              allSucceeded = false;
+            }
           }
         }
       }
@@ -2255,7 +2259,9 @@ MyApplet.prototype = {
           if (!this._unregisterCancellable(token)) {
             this._trackOrphanedCancellable(token, true);
           } else {
-            this._untrackOrphanedCancellable(token);
+            if (!this._untrackOrphanedCancellable(token)) {
+              this._recordLifecycleError("teardown-cancellable", new Error("Cancellable orphan cleanup could not be completed"));
+            }
           }
         } else {
           this._trackOrphanedCancellable(token, false);
@@ -9426,18 +9432,21 @@ MyApplet.prototype = {
         return true;
       }
       let cancellableCleanupSucceeded = this._unregisterCancellable(cancellableToken);
+      let cancellableOrphanCleanupSucceeded = true;
       if (!cancellableCleanupSucceeded) {
         this._trackOrphanedCancellable(cancellableToken, true);
       } else {
-        this._untrackOrphanedCancellable(cancellableToken);
+        cancellableOrphanCleanupSucceeded = this._untrackOrphanedCancellable(cancellableToken);
       }
       let processCleanupSucceeded = this._unregisterProcess(processToken);
+      let processOrphanCleanupSucceeded = true;
       if (!processCleanupSucceeded) {
         this._trackOrphanedProcess(process, generation, options.resourceGroup, processToken, true);
       } else {
-        this._untrackOrphanedProcess(process);
+        processOrphanCleanupSucceeded = this._untrackOrphanedProcess(process);
       }
-      cleanupComplete = cancellableCleanupSucceeded && processCleanupSucceeded;
+      cleanupComplete = cancellableCleanupSucceeded && cancellableOrphanCleanupSucceeded &&
+        processCleanupSucceeded && processOrphanCleanupSucceeded;
       return cleanupComplete;
     };
 

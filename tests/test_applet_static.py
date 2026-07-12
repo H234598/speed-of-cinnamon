@@ -2014,6 +2014,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let cleanupSucceeded = false;", block)
         self.assertIn("if (selected && cleanupSucceeded) {", block)
         self.assertIn("if (!this._unregisterProcess(token))", block)
+        self.assertIn("if (!this._untrackOrphanedProcess(entry.process))", block)
+        self.assertIn("allSucceeded = false;", block)
 
     def test_process_and_cancellable_unregistration_contains_delete_failures(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2057,7 +2059,7 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         self.assertIn("this._trackOrphanedCancellable(token, true);", block)
         self.assertIn("this._trackOrphanedCancellable(token, false);", block)
-        self.assertIn("this._untrackOrphanedCancellable(token);", block)
+        self.assertIn("if (!this._untrackOrphanedCancellable(token))", block)
         self.assertIn('this._runTeardownGuarded("teardown-orphaned-cancellables", () => this._retryOrphanedCancellables());', source)
 
     def test_lifecycle_timers_ignore_removed_applet(self) -> None:
@@ -3741,8 +3743,14 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (done) {\n        return cleanupResources();", block)
         self.assertIn("if (!callbackDelivered)", block)
         self.assertIn("let cancellableCleanupSucceeded = this._unregisterCancellable(cancellableToken);", block)
+        self.assertIn("let cancellableOrphanCleanupSucceeded = true;", block)
+        self.assertIn("cancellableOrphanCleanupSucceeded = this._untrackOrphanedCancellable(cancellableToken);", block)
         self.assertIn("if (!cancellableCleanupSucceeded) {\n        this._trackOrphanedCancellable(cancellableToken, true);", block)
         self.assertIn("let processCleanupSucceeded = this._unregisterProcess(processToken);", block)
+        self.assertIn("let processOrphanCleanupSucceeded = true;", block)
+        self.assertIn("processOrphanCleanupSucceeded = this._untrackOrphanedProcess(process);", block)
+        self.assertIn("cancellableOrphanCleanupSucceeded &&", block)
+        self.assertIn("processOrphanCleanupSucceeded", block)
 
     def test_teardown_uses_safe_process_and_cancellable_unregistration(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
