@@ -1916,6 +1916,27 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("return false;", process_block)
         self.assertLess(process_block.index("try {"), process_block.index("this._resourceRegistry.processes"))
 
+    def test_orphaned_cancellables_are_retried_after_cancel_or_unregister_failures(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_trackOrphanedCancellable: function(token, cancelSucceeded)")
+        end = source.index("\n  _registerProcess:", start)
+        orphan_block = source[start:end]
+        self.assertIn("this._orphanedCancellables = [];", orphan_block)
+        self.assertIn("entry.token === key", orphan_block)
+        self.assertIn("cancelSucceeded: cancelSucceeded === true", orphan_block)
+        self.assertIn("_retryOrphanedCancellables: function()", orphan_block)
+        self.assertIn("let cancellable = this._resourceRegistry", orphan_block)
+        self.assertIn("this._unregisterCancellable(entry.token)", orphan_block)
+        self.assertIn("this._orphanedCancellables.splice(index, 1);", orphan_block)
+
+        start = source.index("_cancelAllCancellables: function()")
+        end = source.index("\n  _trackTimer:", start)
+        block = source[start:end]
+        self.assertIn("this._trackOrphanedCancellable(token, true);", block)
+        self.assertIn("this._trackOrphanedCancellable(token, false);", block)
+        self.assertIn("this._untrackOrphanedCancellable(token);", block)
+        self.assertIn('this._runTeardownGuarded("teardown-orphaned-cancellables", () => this._retryOrphanedCancellables());', source)
+
     def test_lifecycle_timers_ignore_removed_applet(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
@@ -2922,6 +2943,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("orphaned_timers: orphanedResourceCounts.timers", source)
         self.assertIn("orphaned_dialogs: orphanedResourceCounts.dialogs", source)
         self.assertIn("orphaned_monitors: orphanedResourceCounts.monitors", source)
+        self.assertIn("orphaned_cancellables: orphanedResourceCounts.cancellables", source)
         self.assertIn("orphaned_total: orphanedTotal", source)
         self.assertIn("let registryValue = (name, fallback) =>", source)
         self.assertIn('let processes = registryValue("processes", {});', source)
@@ -3532,7 +3554,7 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_cancelAllCancellables: function()")
         end = source.index("\n  _trackTimer:", start)
         block = source[start:end]
-        self.assertIn("this._unregisterCancellable(token);", block)
+        self.assertIn("if (!this._unregisterCancellable(token))", block)
         self.assertNotIn("delete cancellables[token];", block)
         self.assertIn("let cleanupSucceeded = false;", block)
         self.assertIn('throw new Error("Cancellable cancellation is unavailable");', block)

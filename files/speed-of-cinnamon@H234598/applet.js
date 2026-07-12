@@ -432,6 +432,7 @@ MyApplet.prototype = {
     this._orphanedTimers = [];
     this._orphanedDialogs = [];
     this._orphanedMonitors = [];
+    this._orphanedCancellables = [];
     this._hotkeyDefinitions = {};
     this._teardownComplete = false;
     this._initFailed = false;
@@ -1548,6 +1549,110 @@ MyApplet.prototype = {
     }
   },
 
+  _trackOrphanedCancellable: function(token, cancelSucceeded) {
+    try {
+      if (!token) {
+        throw new Error("Cancellable orphan token is invalid");
+      }
+      if (!Array.isArray(this._orphanedCancellables)) {
+        this._orphanedCancellables = [];
+      }
+      let key = String(token);
+      let knownEntry = this._orphanedCancellables.find((entry) => entry && entry.token === key);
+      if (knownEntry) {
+        if (cancelSucceeded === true) {
+          knownEntry.cancelSucceeded = true;
+        }
+      } else {
+        this._orphanedCancellables.push({
+          token: key,
+          cancelSucceeded: cancelSucceeded === true,
+        });
+      }
+      return true;
+    } catch (error) {
+      this._recordLifecycleError("cancellable-orphan", error);
+      return false;
+    }
+  },
+
+  _untrackOrphanedCancellable: function(token) {
+    if (!Array.isArray(this._orphanedCancellables)) {
+      return true;
+    }
+    let success = true;
+    let key = String(token || "");
+    for (let index = this._orphanedCancellables.length - 1; index >= 0; index--) {
+      let entry = this._orphanedCancellables[index];
+      if (!entry || entry.token !== key) {
+        continue;
+      }
+      try {
+        this._orphanedCancellables.splice(index, 1);
+      } catch (error) {
+        this._recordLifecycleError("cancellable-orphan", error);
+        success = false;
+      }
+    }
+    return success;
+  },
+
+  _retryOrphanedCancellables: function() {
+    if (!Array.isArray(this._orphanedCancellables)) {
+      return true;
+    }
+    let success = true;
+    for (let index = this._orphanedCancellables.length - 1; index >= 0; index--) {
+      let entry = this._orphanedCancellables[index];
+      if (!entry || !entry.token) {
+        this._recordLifecycleError("cancellable-orphan", new Error("Cancellable orphan entry is invalid"));
+        success = false;
+        continue;
+      }
+      let cancellable = this._resourceRegistry && this._resourceRegistry.cancellables
+        ? this._resourceRegistry.cancellables[entry.token]
+        : null;
+      if (!cancellable) {
+        try {
+          this._orphanedCancellables.splice(index, 1);
+        } catch (error) {
+          this._recordLifecycleError("cancellable-orphan", error);
+          success = false;
+        }
+        continue;
+      }
+      let cancelSucceeded = entry.cancelSucceeded === true;
+      if (!cancelSucceeded) {
+        try {
+          if (typeof cancellable.cancel !== "function") {
+            throw new Error("Orphaned cancellable cancellation is unavailable");
+          }
+          let result = cancellable.cancel();
+          if (result === false) {
+            throw new Error("Orphaned cancellable cancellation failed");
+          }
+          entry.cancelSucceeded = true;
+          cancelSucceeded = true;
+        } catch (error) {
+          this._recordLifecycleError("cancellable-cancel", error);
+          success = false;
+          continue;
+        }
+      }
+      if (!cancelSucceeded || !this._unregisterCancellable(entry.token)) {
+        success = false;
+        continue;
+      }
+      try {
+        this._orphanedCancellables.splice(index, 1);
+      } catch (error) {
+        this._recordLifecycleError("cancellable-orphan", error);
+        success = false;
+      }
+    }
+    return success;
+  },
+
   _registerProcess: function(process, generation, group) {
     let token = this._nextResourceToken("process");
     if (!process) {
@@ -1830,7 +1935,13 @@ MyApplet.prototype = {
           this._recordLifecycleError("teardown-cancellable", error);
         }
         if (cleanupSucceeded) {
-          this._unregisterCancellable(token);
+          if (!this._unregisterCancellable(token)) {
+            this._trackOrphanedCancellable(token, true);
+          } else {
+            this._untrackOrphanedCancellable(token);
+          }
+        } else {
+          this._trackOrphanedCancellable(token, false);
         }
       }
     } catch (error) {
@@ -3117,6 +3228,7 @@ MyApplet.prototype = {
     this._runTeardownGuarded("teardown-processes", () => this._terminateAllProcesses());
     this._runTeardownGuarded("teardown-orphaned-processes", () => this._retryOrphanedProcesses());
     this._runTeardownGuarded("teardown-cancellables", () => this._cancelAllCancellables());
+    this._runTeardownGuarded("teardown-orphaned-cancellables", () => this._retryOrphanedCancellables());
     this._runTeardownGuarded("teardown-dialogs", () => this._destroyTrackedDialogs());
     this._runTeardownGuarded("teardown-orphaned-dialogs", () => this._retryOrphanedDialogs());
     this._runTeardownGuarded("teardown-timer", () => this._clearStatusTimer());
@@ -8227,7 +8339,7 @@ MyApplet.prototype = {
     let processes = registryValue("processes", {});
     let cancellables = registryValue("cancellables", {});
     let orphanedResourceValues = {};
-    for (let name of ["signals", "hotkeys", "processes", "timers", "dialogs", "monitors"]) {
+    for (let name of ["signals", "hotkeys", "processes", "timers", "dialogs", "monitors", "cancellables"]) {
       try {
         orphanedResourceValues[name] = this["_orphaned" + name.charAt(0).toUpperCase() + name.slice(1)];
       } catch (error) {
@@ -8323,13 +8435,15 @@ MyApplet.prototype = {
       timers: countArrayEntries(orphanedResourceValues.timers),
       dialogs: countArrayEntries(orphanedResourceValues.dialogs),
       monitors: countArrayEntries(orphanedResourceValues.monitors),
+      cancellables: countArrayEntries(orphanedResourceValues.cancellables),
     };
     let orphanedTotal = orphanedResourceCounts.signals +
       orphanedResourceCounts.hotkeys +
       orphanedResourceCounts.processes +
       orphanedResourceCounts.timers +
       orphanedResourceCounts.dialogs +
-      orphanedResourceCounts.monitors;
+      orphanedResourceCounts.monitors +
+      orphanedResourceCounts.cancellables;
     return {
       state: String(this.lifecycleState || LIFECYCLE_INITIALIZING),
       error_counts: errorCounts,
@@ -8348,6 +8462,7 @@ MyApplet.prototype = {
         orphaned_timers: orphanedResourceCounts.timers,
         orphaned_dialogs: orphanedResourceCounts.dialogs,
         orphaned_monitors: orphanedResourceCounts.monitors,
+        orphaned_cancellables: orphanedResourceCounts.cancellables,
         orphaned_total: orphanedTotal,
       },
       process_groups: processGroups,
