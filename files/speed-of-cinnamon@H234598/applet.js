@@ -625,6 +625,25 @@ MyApplet.prototype = {
     return this.settings.bindProperty(direction, key, propertyName, safeCallback, callbackThis);
   },
 
+  _commitSettingValue: function(propertyName, key, value, group, errorMessage) {
+    let previous = this[propertyName];
+    try {
+      let result = this.settings.setValue(key, value);
+      if (result === false) {
+        throw new Error("Setting could not be saved");
+      }
+      this[propertyName] = value;
+      return true;
+    } catch (err) {
+      this[propertyName] = previous;
+      this._recordLifecycleError(group || "settings", err);
+      if (errorMessage) {
+        this._setStatusPreservingRecording("error", errorMessage, this.lastTranscript);
+      }
+      return false;
+    }
+  },
+
   _connectSafe: function(target, signal, callback, group) {
     let signalGroup = "signal-callback";
     try {
@@ -2732,8 +2751,10 @@ MyApplet.prototype = {
   },
 
   _selectRecorder: function(method) {
-    this.recorder = this._normalizeRecorder(method);
-    this.settings.setValue("recorder", this.recorder);
+    let nextRecorder = this._normalizeRecorder(method);
+    if (!this._commitSettingValue("recorder", "recorder", nextRecorder, "settings-recorder", _("Recorder setting could not be saved"))) {
+      return;
+    }
     this._populateRecorderMenu();
     let label = this._recorderLabel(this.recorder);
     if (this._hasActiveRecordingState()) {
@@ -2793,8 +2814,10 @@ MyApplet.prototype = {
   },
 
   _selectRecordingLimit: function(seconds) {
-    this.maxSeconds = this._normalizeRecordingLimit(seconds);
-    this.settings.setValue("max-seconds", this.maxSeconds);
+    let nextSeconds = this._normalizeRecordingLimit(seconds);
+    if (!this._commitSettingValue("maxSeconds", "max-seconds", nextSeconds, "settings-recording-limit", _("Recording duration setting could not be saved"))) {
+      return;
+    }
     this._populateRecordingLimitMenu();
     let label = this._formatSeconds(this.maxSeconds);
     if (this._hasActiveRecordingState()) {
@@ -2906,8 +2929,10 @@ MyApplet.prototype = {
   },
 
   _selectTranscriptStorageLimit: function(limit) {
-    this.maxTranscriptFiles = this._normalizeTranscriptLimit(limit);
-    this.settings.setValue("max-transcript-files", this.maxTranscriptFiles);
+    let nextLimit = this._normalizeTranscriptLimit(limit);
+    if (!this._commitSettingValue("maxTranscriptFiles", "max-transcript-files", nextLimit, "settings-transcript-limit", _("Transcript storage setting could not be saved"))) {
+      return;
+    }
     this._populateTranscriptStorageMenu();
     this._setStatusPreservingRecording("ready", _("Keep a maximum of ") + String(this.maxTranscriptFiles) + _(" transcript files"), this.lastTranscript);
   },
@@ -3001,8 +3026,10 @@ MyApplet.prototype = {
   },
 
   _toggleAutoTranscribeTimeout: function() {
-    this.autoTranscribeTimeout = !Boolean(this.autoTranscribeTimeout);
-    this.settings.setValue("auto-transcribe-timeout", this.autoTranscribeTimeout);
+    let nextValue = !Boolean(this.autoTranscribeTimeout);
+    if (!this._commitSettingValue("autoTranscribeTimeout", "auto-transcribe-timeout", nextValue, "settings-recording-options", _("Recording option could not be saved"))) {
+      return;
+    }
     this._populateRecordingOptionsMenu();
     this._setRecordingOptionStatus(
       this.autoTranscribeTimeout ? _("Auto-transcribe at time limit enabled") : _("Auto-transcribe at time limit disabled")
@@ -3010,8 +3037,10 @@ MyApplet.prototype = {
   },
 
   _toggleAutoRelisten: function() {
-    this.autoRelisten = !Boolean(this.autoRelisten);
-    this.settings.setValue("auto-relisten", this.autoRelisten);
+    let nextValue = !Boolean(this.autoRelisten);
+    if (!this._commitSettingValue("autoRelisten", "auto-relisten", nextValue, "settings-recording-options", _("Recording option could not be saved"))) {
+      return;
+    }
     this._populateRecordingOptionsMenu();
     this._setRecordingOptionStatus(
       this.autoRelisten ? _("Auto Relisten enabled") : _("Auto Relisten disabled")
@@ -3019,8 +3048,10 @@ MyApplet.prototype = {
   },
 
   _toggleKeepRecordingArtifacts: function() {
-    this.keepRecordingArtifacts = !Boolean(this.keepRecordingArtifacts);
-    this.settings.setValue("keep-recording-artifacts", this.keepRecordingArtifacts);
+    let nextValue = !Boolean(this.keepRecordingArtifacts);
+    if (!this._commitSettingValue("keepRecordingArtifacts", "keep-recording-artifacts", nextValue, "settings-recording-options", _("Recording option could not be saved"))) {
+      return;
+    }
     this._populateRecordingOptionsMenu();
     this._setRecordingOptionStatus(
       this.keepRecordingArtifacts ? _("Recording files will be kept") : _("Recording files will be discarded")
@@ -3051,8 +3082,10 @@ MyApplet.prototype = {
   },
 
   _toggleNotifyRecording: function() {
-    this.notifyRecording = !Boolean(this.notifyRecording);
-    this.settings.setValue("notify-recording", this.notifyRecording);
+    let nextValue = !Boolean(this.notifyRecording);
+    if (!this._commitSettingValue("notifyRecording", "notify-recording", nextValue, "settings-notifications", _("Notification option could not be saved"))) {
+      return;
+    }
     this._populateNotificationOptionsMenu();
     this._setNotificationOptionStatus(
       this.notifyRecording ? _("Recording notifications enabled") : _("Recording notifications disabled")
@@ -3060,8 +3093,10 @@ MyApplet.prototype = {
   },
 
   _toggleNotifyComplete: function() {
-    this.notifyComplete = !Boolean(this.notifyComplete);
-    this.settings.setValue("notify-complete", this.notifyComplete);
+    let nextValue = !Boolean(this.notifyComplete);
+    if (!this._commitSettingValue("notifyComplete", "notify-complete", nextValue, "settings-notifications", _("Notification option could not be saved"))) {
+      return;
+    }
     this._populateNotificationOptionsMenu();
     this._setNotificationOptionStatus(
       this.notifyComplete ? _("Completion notifications enabled") : _("Completion notifications disabled")
@@ -3069,8 +3104,10 @@ MyApplet.prototype = {
   },
 
   _toggleNotifyError: function() {
-    this.notifyError = !Boolean(this.notifyError);
-    this.settings.setValue("notify-error", this.notifyError);
+    let nextValue = !Boolean(this.notifyError);
+    if (!this._commitSettingValue("notifyError", "notify-error", nextValue, "settings-notifications", _("Notification option could not be saved"))) {
+      return;
+    }
     this._populateNotificationOptionsMenu();
     this._setNotificationOptionStatus(
       this.notifyError ? _("Error notifications enabled") : _("Error notifications disabled")
@@ -3107,16 +3144,20 @@ MyApplet.prototype = {
   },
 
   _selectArtifactEncryptionMode: function(mode) {
-    this.artifactEncryption = this._normalizeArtifactEncryption(mode);
-    this.settings.setValue("artifact-encryption", this.artifactEncryption);
+    let nextMode = this._normalizeArtifactEncryption(mode);
+    if (!this._commitSettingValue("artifactEncryption", "artifact-encryption", nextMode, "settings-encryption", _("Encryption setting could not be saved"))) {
+      return;
+    }
     this._populateArtifactEncryptionMenu();
     let message = _("Encryption: ") + this._artifactEncryptionLabel(this.artifactEncryption);
     this._setStatusPreservingRecording("ready", message, this.lastTranscript);
   },
 
   _selectOutputMethod: function(method) {
-    this.insertMethod = this._normalizeOutputMethod(method);
-    this.settings.setValue("insert-method", this.insertMethod);
+    let nextMethod = this._normalizeOutputMethod(method);
+    if (!this._commitSettingValue("insertMethod", "insert-method", nextMethod, "settings-output", _("Output setting could not be saved"))) {
+      return;
+    }
     this._populateOutputMethodMenu();
     let message = _("Output: ") + this._outputMethodLabel(this.insertMethod);
     this._setStatusPreservingRecording("ready", message, this.lastTranscript);
@@ -3149,15 +3190,19 @@ MyApplet.prototype = {
   },
 
   _toggleAppendSpace: function() {
-    this.appendSpace = !Boolean(this.appendSpace);
-    this.settings.setValue("append-space", this.appendSpace);
+    let nextValue = !Boolean(this.appendSpace);
+    if (!this._commitSettingValue("appendSpace", "append-space", nextValue, "settings-text-options", _("Text option could not be saved"))) {
+      return;
+    }
     this._populateTextOptionsMenu();
     this._setTextOptionStatus(this.appendSpace ? _("Append trailing space enabled") : _("Append trailing space disabled"));
   },
 
   _toggleSanitizeSpecialChars: function() {
-    this.sanitizeSpecialChars = !Boolean(this.sanitizeSpecialChars);
-    this.settings.setValue("sanitize-special-chars", this.sanitizeSpecialChars);
+    let nextValue = !Boolean(this.sanitizeSpecialChars);
+    if (!this._commitSettingValue("sanitizeSpecialChars", "sanitize-special-chars", nextValue, "settings-text-options", _("Text option could not be saved"))) {
+      return;
+    }
     this._populateTextOptionsMenu();
     this._setTextOptionStatus(
       this.sanitizeSpecialChars ? _("Accent replacement enabled") : _("Accent replacement disabled")
@@ -3165,8 +3210,10 @@ MyApplet.prototype = {
   },
 
   _toggleSoftenProfanity: function() {
-    this.softenProfanity = !Boolean(this.softenProfanity);
-    this.settings.setValue("soften-profanity", this.softenProfanity);
+    let nextValue = !Boolean(this.softenProfanity);
+    if (!this._commitSettingValue("softenProfanity", "soften-profanity", nextValue, "settings-text-options", _("Text option could not be saved"))) {
+      return;
+    }
     this._populateTextOptionsMenu();
     this._setTextOptionStatus(
       this.softenProfanity ? _("Profanity replacement enabled") : _("Profanity replacement disabled")
@@ -3252,8 +3299,10 @@ MyApplet.prototype = {
   },
 
   _setAutoPasteTitles: function(values) {
-    this.autoPasteWindowTitle = this._normalizeAutoPasteTitle((values || []).join(", "));
-    this.settings.setValue("auto-paste-window-title", this.autoPasteWindowTitle);
+    let nextTitle = this._normalizeAutoPasteTitle((values || []).join(", "));
+    if (!this._commitSettingValue("autoPasteWindowTitle", "auto-paste-window-title", nextTitle, "settings-auto-paste", _("Auto-Submit setting could not be saved"))) {
+      return;
+    }
     this._populateAutoPasteMenu();
     let message = this._autoPasteEnabled()
       ? _("Auto-Submit targets: ") + this.autoPasteWindowTitle
@@ -3359,8 +3408,10 @@ MyApplet.prototype = {
   },
 
   _toggleOpenAiFlexProcessing: function() {
-    this.openaiCompatibleFlexProcessing = !Boolean(this.openaiCompatibleFlexProcessing);
-    this.settings.setValue("openai-compatible-flex-processing", this.openaiCompatibleFlexProcessing);
+    let nextValue = !Boolean(this.openaiCompatibleFlexProcessing);
+    if (!this._commitSettingValue("openaiCompatibleFlexProcessing", "openai-compatible-flex-processing", nextValue, "settings-openai-flex", _("OpenAI Flex setting could not be saved"))) {
+      return;
+    }
     this._updateOpenAiFlexProcessingItem();
     let message = this.openaiCompatibleFlexProcessing
       ? _("OpenAI Flex processing enabled")
@@ -4874,13 +4925,16 @@ MyApplet.prototype = {
       this._setStatusPreservingRecording("error", _("Input source is invalid"), this.lastTranscript);
       return;
     }
+    let nextInputDevice;
     try {
-      this.inputDevice = this._coerceCliTextArg(name, "input device");
+      nextInputDevice = this._coerceCliTextArg(name, "input device");
     } catch (err) {
       this._setStatusPreservingRecording("error", _("Input source is invalid"), this.lastTranscript);
       return;
     }
-    this.settings.setValue("input-device", this.inputDevice);
+    if (!this._commitSettingValue("inputDevice", "input-device", nextInputDevice, "settings-input-source", _("Input source setting could not be saved"))) {
+      return;
+    }
     this._refreshInputSourceMenu();
     let safeLabel = typeof label === "string" ? label : "";
     let message = this.inputDevice === ""

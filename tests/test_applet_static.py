@@ -214,7 +214,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_populateArtifactEncryptionMenu: function()", source)
         self.assertIn("_artifactEncryptionLabel: function(method)", source)
         self.assertIn("_selectArtifactEncryptionMode: function(mode)", source)
-        self.assertIn('this.settings.setValue("artifact-encryption", this.artifactEncryption);', source)
+        self.assertIn('this._commitSettingValue("artifactEncryption", "artifact-encryption"', source)
         self.assertIn('args.push("--artifact-encryption", this._normalizeArtifactEncryption(this.artifactEncryption));', source)
         self.assertIn("this._populateArtifactEncryptionMenu();", source)
 
@@ -628,7 +628,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_recorderLabel: function(method)", source)
         self.assertIn("_selectRecorder: function(method)", source)
         self.assertIn('this._bindSetting(Settings.BindingDirection.IN, "recorder", "recorder", this._onRecorderSettingsChanged, null)', source)
-        self.assertIn('this.settings.setValue("recorder", this.recorder)', source)
+        self.assertIn('this._commitSettingValue("recorder", "recorder"', source)
         self.assertIn('this.recorderItem.label.text = _("Recorder: ") + this._recorderLabel(this._normalizeRecorder(this.recorder))', source)
         self.assertIn('this._setStatusPreservingRecording(this.status, _("Recorder for next recording: ") + label', source)
 
@@ -655,7 +655,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.lastMessage = _("Duration must be whole seconds.")', source)
         self.assertIn('this.lastMessage = _("Duration must be between 0 and 3600 seconds.")', source)
         self.assertIn('this._bindSetting(Settings.BindingDirection.IN, "max-seconds", "maxSeconds", this._onRecordingLimitSettingsChanged, null)', source)
-        self.assertIn('this.settings.setValue("max-seconds", this.maxSeconds)', source)
+        self.assertIn('this._commitSettingValue("maxSeconds", "max-seconds"', source)
         self.assertIn('"--max-seconds", String(this._normalizeRecordingLimit(this.maxSeconds))', source)
         self.assertIn('this.recordingLimitItem.label.text = _("Duration: ") + this._formatSeconds(this._normalizeRecordingLimit(this.maxSeconds))', source)
         self.assertIn('this._setStatusPreservingRecording(this.status, _("Duration for next recording: ") + label', source)
@@ -1390,7 +1390,8 @@ class AppletStaticTest(unittest.TestCase):
         select_end = source.index("\n  _selectDefaultInputSource:", select_start)
         select_block = source[select_start:select_end]
         self.assertIn('if (typeof name !== "string")', select_block)
-        self.assertIn('this.inputDevice = this._coerceCliTextArg(name, "input device");', select_block)
+        self.assertIn('nextInputDevice = this._coerceCliTextArg(name, "input device");', select_block)
+        self.assertIn('this._commitSettingValue("inputDevice", "input-device"', select_block)
 
     def test_optional_model_metadata_is_string_checked_before_display(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -1614,9 +1615,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._bindSetting(Settings.BindingDirection.IN, "auto-transcribe-timeout", "autoTranscribeTimeout", this._onRecordingOptionsChanged, null)', source)
         self.assertIn('this._bindSetting(Settings.BindingDirection.IN, "auto-relisten", "autoRelisten", this._onRecordingOptionsChanged, null)', source)
         self.assertIn('this._bindSetting(Settings.BindingDirection.IN, "keep-recording-artifacts", "keepRecordingArtifacts", this._onRecordingOptionsChanged, null)', source)
-        self.assertIn('this.settings.setValue("auto-transcribe-timeout", this.autoTranscribeTimeout)', source)
-        self.assertIn('this.settings.setValue("auto-relisten", this.autoRelisten)', source)
-        self.assertIn('this.settings.setValue("keep-recording-artifacts", this.keepRecordingArtifacts)', source)
+        self.assertIn('this._commitSettingValue("autoTranscribeTimeout", "auto-transcribe-timeout"', source)
+        self.assertIn('this._commitSettingValue("autoRelisten", "auto-relisten"', source)
+        self.assertIn('this._commitSettingValue("keepRecordingArtifacts", "keep-recording-artifacts"', source)
         self.assertIn('args.push("--skip-silent-auto-relisten");', source)
         self.assertIn('_("Auto-transcribe at time limit")', source)
         self.assertIn('_("Auto Relisten")', source)
@@ -2155,9 +2156,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._bindSetting(Settings.BindingDirection.IN, "notify-recording", "notifyRecording", this._onNotificationSettingsChanged, null)', source)
         self.assertIn('this._bindSetting(Settings.BindingDirection.IN, "notify-complete", "notifyComplete", this._onNotificationSettingsChanged, null)', source)
         self.assertIn('this._bindSetting(Settings.BindingDirection.IN, "notify-error", "notifyError", this._onNotificationSettingsChanged, null)', source)
-        self.assertIn('this.settings.setValue("notify-recording", this.notifyRecording)', source)
-        self.assertIn('this.settings.setValue("notify-complete", this.notifyComplete)', source)
-        self.assertIn('this.settings.setValue("notify-error", this.notifyError)', source)
+        self.assertIn('this._commitSettingValue("notifyRecording", "notify-recording"', source)
+        self.assertIn('this._commitSettingValue("notifyComplete", "notify-complete"', source)
+        self.assertIn('this._commitSettingValue("notifyError", "notify-error"', source)
         self.assertIn('_("Recording start and limit")', source)
         self.assertIn('_("Dictation complete")', source)
         self.assertIn('_("Dictation errors")', source)
@@ -2560,6 +2561,31 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('throw new Error("Imported setting rollback failed");', block)
         self.assertIn("this[item.prop] = item.value;", block)
         self.assertLess(block.index("let result = this.settings.setValue"), block.index("this[item.prop] = item.value;"))
+
+    def test_simple_setting_choices_commit_before_local_mutation(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        helper_start = source.index("_commitSettingValue: function(propertyName, key, value, group, errorMessage)")
+        helper_end = source.index("\n  _connectSafe:", helper_start)
+        helper = source[helper_start:helper_end]
+        self.assertIn("let previous = this[propertyName];", helper)
+        self.assertIn("let result = this.settings.setValue(key, value);", helper)
+        self.assertIn("this[propertyName] = value;", helper)
+        self.assertIn("this[propertyName] = previous;", helper)
+        self.assertIn("if (result === false)", helper)
+
+        for method, next_method, property_name in [
+            ("_selectRecorder: function(method)", "\n  _normalizeRecordingLimit:", "recorder"),
+            ("_selectRecordingLimit: function(seconds)", "\n  _customRecordingLimitPromptArgs:", "maxSeconds"),
+            ("_selectTranscriptStorageLimit: function(limit)", "\n  _customTranscriptLimitPromptArgs:", "maxTranscriptFiles"),
+            ("_selectInputSource: function(name, label)", "\n  _selectDefaultInputSource:", "inputDevice"),
+            ("_selectOutputMethod: function(method)", "\n  _optionLabel:", "insertMethod"),
+            ("_setAutoPasteTitles: function(values)", "\n  _toggleAutoPasteTitle:", "autoPasteWindowTitle"),
+            ("_toggleOpenAiFlexProcessing: function()", "\n  _normalizeLanguage:", "openaiCompatibleFlexProcessing"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn(f'this._commitSettingValue("{property_name}"', block)
 
     def test_settings_export_uses_stdin_not_process_arguments_for_snapshot(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -4112,7 +4138,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('return OUTPUT_METHODS.indexOf(value) >= 0 ? value : "none";', source)
         self.assertNotIn('return OUTPUT_METHODS.indexOf(value) >= 0 ? value : "clipboard-paste";', source)
         self.assertIn('_selectOutputMethod: function(method)', source)
-        self.assertIn('this.settings.setValue("insert-method", this.insertMethod)', source)
+        self.assertIn('this._commitSettingValue("insertMethod", "insert-method"', source)
         self.assertIn('this._bindSetting(Settings.BindingDirection.IN, "insert-method", "insertMethod", this._onOutputSettingsChanged, null)', source)
         self.assertIn('this.outputMethodItem.label.text = _("Output: ") + this._outputMethodLabel(this._normalizeOutputMethod(this.insertMethod))', source)
         self.assertIn('"--insert-method", "none"', source)
@@ -4127,9 +4153,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_toggleAppendSpace: function()", source)
         self.assertIn("_toggleSanitizeSpecialChars: function()", source)
         self.assertIn("_toggleSoftenProfanity: function()", source)
-        self.assertIn('this.settings.setValue("append-space", this.appendSpace)', source)
-        self.assertIn('this.settings.setValue("sanitize-special-chars", this.sanitizeSpecialChars)', source)
-        self.assertIn('this.settings.setValue("soften-profanity", this.softenProfanity)', source)
+        self.assertIn('this._commitSettingValue("appendSpace", "append-space"', source)
+        self.assertIn('this._commitSettingValue("sanitizeSpecialChars", "sanitize-special-chars"', source)
+        self.assertIn('this._commitSettingValue("softenProfanity", "soften-profanity"', source)
         self.assertIn('this._bindSetting(Settings.BindingDirection.IN, "append-space", "appendSpace", this._onTextOutputSettingsChanged, null)', source)
         self.assertIn('this._bindSetting(Settings.BindingDirection.IN, "sanitize-special-chars", "sanitizeSpecialChars", this._onTextOutputSettingsChanged, null)', source)
         self.assertIn('this._bindSetting(Settings.BindingDirection.IN, "soften-profanity", "softenProfanity", this._onTextOutputSettingsChanged, null)', source)
