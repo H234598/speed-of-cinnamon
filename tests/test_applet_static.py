@@ -2758,6 +2758,23 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.benchmarkFlowToken = null;", block)
         self.assertIn('this._recordLifecycleError("benchmark-flow", error);', block)
 
+    def test_stale_model_and_benchmark_callbacks_preserve_new_command_state(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method, token_name, token_value in [
+            ("_benchmarkDownloadedModels: function(audioPath, flowToken)", "\n  _setAlarmOptionStatus:", "benchmarkFlowToken", "flowToken"),
+            ("_downloadVoiceModel: function(model)", "\n  _removeVoiceModel:", "voiceModelActionToken", "actionToken"),
+            ("_removeVoiceModel: function(model)", "\n  _selectVoiceModel:", "voiceModelActionToken", "actionToken"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            guard = f"if (this.{token_name} !== {token_value} || !this._lifecycleAllowsWork())"
+            self.assertIn(guard, block)
+            guard_index = block.index(guard)
+            reset_index = block.index("this.isCommandRunning = false;", guard_index)
+            self.assertLess(guard_index, reset_index)
+            self.assertIn(f"if (!this.{token_name}) {{\n          this.isCommandRunning = false;\n        }}", block)
+
     def test_saved_diagnostics_does_not_copy_or_display_full_path(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

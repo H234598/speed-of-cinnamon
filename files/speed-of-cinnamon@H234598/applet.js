@@ -5105,10 +5105,13 @@ MyApplet.prototype = {
     this.isCommandRunning = true;
     this._setStatus("processing", _("Benchmarking downloaded models..."), this.lastTranscript);
     this._spawnJson(benchmarkArgs, (payload) => {
-      this.isCommandRunning = false;
       if (this.benchmarkFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
+        if (!this.benchmarkFlowToken) {
+          this.isCommandRunning = false;
+        }
         return;
       }
+      this.isCommandRunning = false;
       if (payload.error) {
         this.benchmarkFlowToken = null;
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
@@ -6011,10 +6014,13 @@ MyApplet.prototype = {
       return;
     }
     this._spawnJson(downloadArgs, (payload) => {
-      this.isCommandRunning = false;
       if (this.voiceModelActionToken !== actionToken || !this._lifecycleAllowsWork()) {
+        if (!this.voiceModelActionToken) {
+          this.isCommandRunning = false;
+        }
         return;
       }
+      this.isCommandRunning = false;
       this.voiceModelActionToken = null;
       if (payload.error) {
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
@@ -6058,10 +6064,13 @@ MyApplet.prototype = {
       return;
     }
     this._spawnJson(removeArgs, (payload) => {
-      this.isCommandRunning = false;
       if (this.voiceModelActionToken !== actionToken || !this._lifecycleAllowsWork()) {
+        if (!this.voiceModelActionToken) {
+          this.isCommandRunning = false;
+        }
         return;
       }
+      this.isCommandRunning = false;
       this.voiceModelActionToken = null;
       if (payload.error) {
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
