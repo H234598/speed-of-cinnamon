@@ -8754,18 +8754,27 @@ MyApplet.prototype = {
       if (this._cleanupCommandToken !== cleanupToken || !this._lifecycleAllowsWork()) {
         return;
       }
-      this._cleanupCommandToken = null;
-      this.isCommandRunning = false;
-      if (payload.error) {
-        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
-        return;
+      try {
+        this._cleanupCommandToken = null;
+        this.isCommandRunning = false;
+        if (payload.error) {
+          this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          return;
+        }
+        let content = typeof payload.content === "string" ? payload.content : "";
+        if (content.trim() === "") {
+          this._setStatus("error", _("Transcript list is empty"), this.lastTranscript);
+          return;
+        }
+        this._showTranscriptsWindow(content, this._safePayloadCount(payload.transcripts), payload.truncated === true);
+      } catch (error) {
+        if (this._cleanupCommandToken === cleanupToken) {
+          this._cleanupCommandToken = null;
+        }
+        this.isCommandRunning = false;
+        this._recordLifecycleError("maintenance-command", error);
+        this._setStatus("error", _("Could not complete transcript list"), this.lastTranscript);
       }
-      let content = typeof payload.content === "string" ? payload.content : "";
-      if (content.trim() === "") {
-        this._setStatus("error", _("Transcript list is empty"), this.lastTranscript);
-        return;
-      }
-      this._showTranscriptsWindow(content, this._safePayloadCount(payload.transcripts), payload.truncated === true);
     });
   },
 
@@ -8866,30 +8875,39 @@ MyApplet.prototype = {
       if (this._cleanupCommandToken !== cleanupToken || !this._lifecycleAllowsWork()) {
         return;
       }
-      this._cleanupCommandToken = null;
-      this.isCommandRunning = false;
-      if (payload.error) {
-        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
-        this._maybeWarnRejectedArtifactPassphrase(payload.error);
-        return;
+      try {
+        this._cleanupCommandToken = null;
+        this.isCommandRunning = false;
+        if (payload.error) {
+          this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          this._maybeWarnRejectedArtifactPassphrase(payload.error);
+          return;
+        }
+        let path = typeof payload.path === "string" ? payload.path.trim() : "";
+        if (path === "") {
+          this._setStatus("error", _("Transcript export path is empty"), this.lastTranscript);
+          return;
+        }
+        let encryptionMode = typeof payload.encryption === "string" ? payload.encryption.trim() : "";
+        let encryptedMode = encryptionMode === "keyring" || encryptionMode === "passphrase";
+        if (payload.encrypted !== true || payload.plaintext !== false || !encryptedMode) {
+          let message = _("Transcript export was not encrypted");
+          this._setStatus("error", message, this.lastTranscript);
+          this._notify(_("Speed of Cinnamon transcript export"), message, true);
+          return;
+        }
+        let message = _("Exported encrypted transcript bundle");
+        this._setStatus("done", message, this.lastTranscript);
+        this._notify(_("Speed of Cinnamon transcript export"), message, false);
+        this._openFolder(GLib.path_get_dirname(path), _("Opened transcript export folder"));
+      } catch (error) {
+        if (this._cleanupCommandToken === cleanupToken) {
+          this._cleanupCommandToken = null;
+        }
+        this.isCommandRunning = false;
+        this._recordLifecycleError("maintenance-command", error);
+        this._setStatus("error", _("Could not complete transcript export"), this.lastTranscript);
       }
-      let path = typeof payload.path === "string" ? payload.path.trim() : "";
-      if (path === "") {
-        this._setStatus("error", _("Transcript export path is empty"), this.lastTranscript);
-        return;
-      }
-      let encryptionMode = typeof payload.encryption === "string" ? payload.encryption.trim() : "";
-      let encryptedMode = encryptionMode === "keyring" || encryptionMode === "passphrase";
-      if (payload.encrypted !== true || payload.plaintext !== false || !encryptedMode) {
-        let message = _("Transcript export was not encrypted");
-        this._setStatus("error", message, this.lastTranscript);
-        this._notify(_("Speed of Cinnamon transcript export"), message, true);
-        return;
-      }
-      let message = _("Exported encrypted transcript bundle");
-      this._setStatus("done", message, this.lastTranscript);
-      this._notify(_("Speed of Cinnamon transcript export"), message, false);
-      this._openFolder(GLib.path_get_dirname(path), _("Opened transcript export folder"));
     });
   },
 
@@ -9082,14 +9100,23 @@ MyApplet.prototype = {
       if (this._cleanupCommandToken !== cleanupToken || !this._lifecycleAllowsWork()) {
         return;
       }
-      this._cleanupCommandToken = null;
-      this.isCommandRunning = false;
-      if (payload.error) {
-        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
-        return;
+      try {
+        this._cleanupCommandToken = null;
+        this.isCommandRunning = false;
+        if (payload.error) {
+          this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          return;
+        }
+        this._setStatus("ready", _("Cleanup preview: ") + String(this._cleanupCount(payload, true)), this.lastTranscript);
+        this._showCleanupPreviewDialog(payload);
+      } catch (error) {
+        if (this._cleanupCommandToken === cleanupToken) {
+          this._cleanupCommandToken = null;
+        }
+        this.isCommandRunning = false;
+        this._recordLifecycleError("maintenance-command", error);
+        this._setStatus("error", _("Could not complete cleanup preview"), this.lastTranscript);
       }
-      this._setStatus("ready", _("Cleanup preview: ") + String(this._cleanupCount(payload, true)), this.lastTranscript);
-      this._showCleanupPreviewDialog(payload);
     });
   },
 
@@ -9112,15 +9139,24 @@ MyApplet.prototype = {
       if (this._cleanupCommandToken !== cleanupToken || !this._lifecycleAllowsWork()) {
         return;
       }
-      this._cleanupCommandToken = null;
-      this.isCommandRunning = false;
-      if (payload.error) {
-        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
-        return;
+      try {
+        this._cleanupCommandToken = null;
+        this.isCommandRunning = false;
+        if (payload.error) {
+          this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          return;
+        }
+        let deleted = this._cleanupCount(payload, false);
+        this._setStatus("done", _("Cleaned old files: ") + String(deleted), this.lastTranscript);
+        this._refreshHistory();
+      } catch (error) {
+        if (this._cleanupCommandToken === cleanupToken) {
+          this._cleanupCommandToken = null;
+        }
+        this.isCommandRunning = false;
+        this._recordLifecycleError("maintenance-command", error);
+        this._setStatus("error", _("Could not complete cleanup"), this.lastTranscript);
       }
-      let deleted = this._cleanupCount(payload, false);
-      this._setStatus("done", _("Cleaned old files: ") + String(deleted), this.lastTranscript);
-      this._refreshHistory();
     });
   },
 

@@ -3789,6 +3789,23 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn("this._cleanupCommandToken !== cleanupToken", block)
             self.assertIn("!this._lifecycleAllowsWork()", block)
 
+    def test_maintenance_callbacks_fail_closed_on_processing_exceptions(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method, args_name, message in [
+            ("_loadAllTranscriptsDocument: function()", "\n  _showTranscriptsWindow:", "historyDocumentArgs", "Could not complete transcript list"),
+            ("_exportAllTranscripts: function()", "\n  _safePayloadCount:", "exportArgs", "Could not complete transcript export"),
+            ("_previewCleanup: function()", "\n  _cleanupOldFiles:", "cleanupPreviewArgs", "Could not complete cleanup preview"),
+            ("_cleanupOldFiles: function()", "\n  _settingsSnapshot:", "cleanupArgs", "Could not complete cleanup"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn(f"this._spawnJson({args_name}, (payload) => {{", block)
+            self.assertIn("try {\n        this._cleanupCommandToken = null;", block)
+            self.assertIn("if (this._cleanupCommandToken === cleanupToken) {", block)
+            self.assertIn('this._recordLifecycleError("maintenance-command", error);', block)
+            self.assertIn(f'_("{message}")', block)
+
     def test_doctor_payload_processing_fails_closed_on_unexpected_exceptions(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_runDoctor: function(startupCheck)")
