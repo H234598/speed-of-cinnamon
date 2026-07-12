@@ -1487,12 +1487,21 @@ MyApplet.prototype = {
         success = false;
         continue;
       }
+      if (entry.propertyName && this[entry.propertyName] === entry.menu) {
+        try {
+          this[entry.propertyName] = null;
+          if (this[entry.propertyName] === entry.menu) {
+            throw new Error("Menu orphan property could not be cleared");
+          }
+        } catch (error) {
+          this._recordLifecycleError("menu-orphan", error);
+          success = false;
+          continue;
+        }
+      }
       if (!this._untrackOrphanedMenu(entry.menu)) {
         success = false;
         continue;
-      }
-      if (entry.propertyName && this[entry.propertyName] === entry.menu) {
-        this[entry.propertyName] = null;
       }
     }
     return success;

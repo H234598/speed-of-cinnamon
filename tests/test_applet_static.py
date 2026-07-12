@@ -544,6 +544,14 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("removed[0] !== entry", block)
         self.assertIn('throw new Error("Menu orphan entry could not be removed");', block)
 
+        retry_start = source.index("_retryOrphanedMenus: function()")
+        retry_end = source.index("\n  _destroyAppletTooltip:", retry_start)
+        retry_block = source[retry_start:retry_end]
+        self.assertIn('this[entry.propertyName] = null;', retry_block)
+        self.assertIn('throw new Error("Menu orphan property could not be cleared");', retry_block)
+        self.assertIn('this._recordLifecycleError("menu-orphan", error);', retry_block)
+        self.assertLess(retry_block.index("this[entry.propertyName] = null;"), retry_block.index("this._untrackOrphanedMenu(entry.menu)"))
+
     def test_external_env_monitor_registration_failure_rolls_back_monitor(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_watchExternalApiEnvFile: function(path)")
