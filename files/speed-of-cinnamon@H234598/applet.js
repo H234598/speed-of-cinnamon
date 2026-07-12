@@ -9651,21 +9651,24 @@ MyApplet.prototype = {
         label: _("Cancel"),
         key: Clutter.KEY_Escape,
         action: function() {
-          try {
-            this._dialogClose(dialog, "clipboard-overwrite");
-            if (isCurrentOperation()) {
-              this._setStatus("ready", _("Clipboard overwrite cancelled"), transcript);
-            }
-          } finally {
-            complete(false);
+          if (!this._dialogClose(dialog, "clipboard-overwrite")) {
+            this._setStatus("error", _("Clipboard overwrite prompt could not be closed"), transcript);
+            return;
           }
+          if (isCurrentOperation()) {
+            this._setStatus("ready", _("Clipboard overwrite cancelled"), transcript);
+          }
+          complete(false);
         }.bind(this),
       },
       {
         label: _("Overwrite clipboard"),
         action: function() {
           try {
-            this._dialogClose(dialog, "clipboard-overwrite");
+            if (!this._dialogClose(dialog, "clipboard-overwrite")) {
+              this._setStatus("error", _("Clipboard overwrite prompt could not be closed"), transcript);
+              return;
+            }
             if (!isCurrentOperation()) {
               complete(false);
               return;

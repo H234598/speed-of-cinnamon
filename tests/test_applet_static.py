@@ -4942,8 +4942,26 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         cancel = block.index('this._setStatus("ready", _("Clipboard overwrite cancelled")')
         self.assertIn("if (isCurrentOperation())", block[cancel - 80:cancel])
-        self.assertIn("} finally {\n            complete(false);", block)
+        self.assertIn('if (!this._dialogClose(dialog, "clipboard-overwrite"))', block)
+        self.assertIn('this._setStatus("error", _("Clipboard overwrite prompt could not be closed"), transcript);', block)
+        overwrite = block.index('label: _("Overwrite clipboard")')
+        overwrite_block = block[overwrite:]
+        self.assertIn('if (!this._dialogClose(dialog, "clipboard-overwrite"))', overwrite_block)
+        self.assertIn('return;\n            }\n            if (!isCurrentOperation())', overwrite_block)
         self.assertIn('this._recordLifecycleError("clipboard-overwrite", error);', block)
+
+    def test_clipboard_overwrite_does_not_continue_when_dialog_close_fails(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_confirmClipboardOverwriteForPaste: function(")
+        end = source.index("\n  _pasteClipboardAfterFocus:", start)
+        block = source[start:end]
+        overwrite = block.index('label: _("Overwrite clipboard")')
+        overwrite_block = block[overwrite:]
+        self.assertLess(
+            overwrite_block.index('if (!this._dialogClose(dialog, "clipboard-overwrite"))'),
+            overwrite_block.index("this._clipboardPayloadSnapshotAsync"),
+        )
+        self.assertIn('this._setStatus("error", _("Clipboard overwrite prompt could not be closed"), transcript);', overwrite_block)
 
     def test_text_insert_releases_token_on_sync_snapshot_failure(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
