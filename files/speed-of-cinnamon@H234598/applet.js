@@ -5600,15 +5600,17 @@ MyApplet.prototype = {
     }
     let hasLegacyApiKey = String(this.openaiCompatibleApiKey || "").trim() !== "";
     if (GLib.file_test(this._externalApiEnvPath(), GLib.FileTest.EXISTS)) {
-      this._ensureExternalApiEnvFile();
-      this._applyExternalApiEnvFile(false);
-      this._clearPersistedOpenAiCompatibleApiKey();
+      let envPath = this._ensureExternalApiEnvFile();
+      if (envPath && this._applyExternalApiEnvFile(false)) {
+        this._clearPersistedOpenAiCompatibleApiKey();
+      }
       return;
     }
     if (changed || hasLegacyApiKey) {
-      this._ensureExternalApiEnvFile();
-      this._applyExternalApiEnvFile(false);
-      this._clearPersistedOpenAiCompatibleApiKey();
+      let envPath = this._ensureExternalApiEnvFile();
+      if (envPath && this._applyExternalApiEnvFile(false)) {
+        this._clearPersistedOpenAiCompatibleApiKey();
+      }
     }
   },
 
@@ -5625,9 +5627,13 @@ MyApplet.prototype = {
   },
 
   _ensureExternalApiEnvFile: function() {
-    let path = this._externalApiEnvPath();
+    let path;
     try {
-      GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o700);
+      path = this._externalApiEnvPath();
+      let mkdirResult = GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o700);
+      if (mkdirResult !== 0) {
+        throw new Error("External API config directory could not be created");
+      }
       if (!GLib.file_test(path, GLib.FileTest.EXISTS)) {
         this._writeExternalApiEnvFileContents(path, this._externalApiEnvContent());
       } else {
@@ -5636,6 +5642,7 @@ MyApplet.prototype = {
     } catch (err) {
       this._safeLogError(err);
       this._setStatusPreservingRecording("error", _("External API config file could not be written"), this.lastTranscript);
+      return null;
     }
     return path;
   },
@@ -5799,6 +5806,9 @@ MyApplet.prototype = {
       this._clearOllamaModelFlow();
     }
     let path = this._ensureExternalApiEnvFile();
+    if (!path) {
+      return;
+    }
     if (this._applyExternalApiEnvFile(false)) {
       this._applyExternalApiEnvTarget(this.externalApiEnvApplyTarget);
     }
