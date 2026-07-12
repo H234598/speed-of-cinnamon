@@ -10035,6 +10035,13 @@ MyApplet.prototype = {
         return null;
       }
     }
+    if (Array.isArray(this._orphanedCancellables) && this._orphanedCancellables.length > 0) {
+      let orphanCancellableCleanupSucceeded = this._retryOrphanedCancellables();
+      if (!orphanCancellableCleanupSucceeded || this._orphanedCancellables.length > 0) {
+        this._recordLifecycleError("cancellable-state", new Error("An orphaned cancellable is still pending"));
+        return null;
+      }
+    }
     let hasInput = options.inputText !== null && options.inputText !== undefined;
     if (hasInput && typeof options.inputText !== "string") {
       throw new Error("Subprocess input must be text");

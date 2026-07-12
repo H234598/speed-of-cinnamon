@@ -2138,6 +2138,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let orphanCleanupSucceeded = this._retryOrphanedProcesses();", bounded_block)
         self.assertIn('this._recordLifecycleError("process-state", new Error("An orphaned process is still pending"));', bounded_block)
         self.assertIn("return null;", bounded_block)
+        self.assertIn("let orphanCancellableCleanupSucceeded = this._retryOrphanedCancellables();", bounded_block)
+        self.assertIn('this._recordLifecycleError("cancellable-state", new Error("An orphaned cancellable is still pending"));', bounded_block)
         self.assertIn('this._runTeardownGuarded("teardown-orphaned-processes", () => this._retryOrphanedProcesses());', source)
 
     def test_process_and_cancellable_registration_verify_registry_writes(self) -> None:
