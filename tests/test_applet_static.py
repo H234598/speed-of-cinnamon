@@ -523,6 +523,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._runTeardownGuarded", close_block)
         self.assertIn('this._recordLifecycleError("dialog-close", error);', close_block)
 
+        orphan_start = source.index("_untrackOrphanedDialog: function(dialog)")
+        orphan_end = source.index("\n  _retryOrphanedDialogs:", orphan_start)
+        orphan_block = source[orphan_start:orphan_end]
+        self.assertIn("let removed = this._orphanedDialogs.splice(index, 1);", orphan_block)
+        self.assertIn("removed[0] !== entry", orphan_block)
+        self.assertIn('throw new Error("Dialog orphan entry could not be removed");', orphan_block)
+
+        retry_start = source.index("_retryOrphanedDialogs: function()")
+        retry_end = source.index("\n  _newSafeDialog:", retry_start)
+        retry_block = source[retry_start:retry_end]
+        self.assertIn("this._untrackOrphanedDialog(entry.dialog)", retry_block)
+
     def test_external_env_monitor_registration_failure_rolls_back_monitor(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_watchExternalApiEnvFile: function(path)")

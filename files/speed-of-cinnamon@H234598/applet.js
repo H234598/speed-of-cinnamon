@@ -1081,7 +1081,10 @@ MyApplet.prototype = {
         continue;
       }
       try {
-        this._orphanedDialogs.splice(index, 1);
+        let removed = this._orphanedDialogs.splice(index, 1);
+        if (!Array.isArray(removed) || removed.length !== 1 || removed[0] !== entry || this._orphanedDialogs.indexOf(entry) >= 0) {
+          throw new Error("Dialog orphan entry could not be removed");
+        }
       } catch (error) {
         this._recordLifecycleError("dialog-orphan", error);
         success = false;
@@ -1132,10 +1135,7 @@ MyApplet.prototype = {
         success = false;
         continue;
       }
-      try {
-        this._orphanedDialogs.splice(index, 1);
-      } catch (error) {
-        this._recordLifecycleError("dialog-orphan", error);
+      if (!this._untrackOrphanedDialog(entry.dialog)) {
         success = false;
       }
     }
