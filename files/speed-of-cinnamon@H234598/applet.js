@@ -2011,13 +2011,17 @@ MyApplet.prototype = {
           knownEntry.terminationSucceeded = true;
         }
       } else {
-        this._orphanedProcesses.push({
+        let entry = {
           process: process,
           generation: generation,
           group: String(group || "process"),
           registryToken: key,
           terminationSucceeded: terminationSucceeded === true,
-        });
+        };
+        this._orphanedProcesses.push(entry);
+        if (this._orphanedProcesses.indexOf(entry) < 0) {
+          throw new Error("Process orphan entry could not be tracked");
+        }
       }
       return true;
     } catch (error) {

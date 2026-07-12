@@ -1952,7 +1952,9 @@ class AppletStaticTest(unittest.TestCase):
         orphan_block = source[start:end]
         self.assertIn("this._orphanedProcesses = [];", orphan_block)
         self.assertIn("entry.process === process", orphan_block)
-        self.assertIn("this._orphanedProcesses.push({", orphan_block)
+        self.assertIn("let entry = {", orphan_block)
+        self.assertIn("this._orphanedProcesses.push(entry);", orphan_block)
+        self.assertIn('throw new Error("Process orphan entry could not be tracked");', orphan_block)
         self.assertIn("registryToken: key", orphan_block)
         self.assertIn("terminationSucceeded: terminationSucceeded === true", orphan_block)
         self.assertIn("_retryOrphanedProcesses: function()", orphan_block)
