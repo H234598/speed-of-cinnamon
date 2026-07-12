@@ -1673,9 +1673,12 @@ class AppletStaticTest(unittest.TestCase):
         cancellable_block = source[start:end]
         self.assertIn("if (!this._resourceRegistry || !this._resourceRegistry.cancellables)", cancellable_block)
         self.assertIn('throw new Error("Cancellable registry is unavailable");', cancellable_block)
-        self.assertIn("this._resourceRegistry.cancellables[token] = cancellable;", cancellable_block)
-        self.assertIn("this._resourceRegistry.cancellables[token] !== cancellable", cancellable_block)
+        self.assertIn("registry[token] = cancellable;", cancellable_block)
+        self.assertIn("registry[token] !== cancellable", cancellable_block)
         self.assertIn('throw new Error("Cancellable could not be registered");', cancellable_block)
+        self.assertIn("let registry = null;", cancellable_block)
+        self.assertIn("let deleted = delete registry[token];", cancellable_block)
+        self.assertIn('this._recordLifecycleError("cancellable-registration-rollback", rollbackError);', cancellable_block)
 
         start = source.index("_registerProcess: function(process, generation, group)")
         end = source.index("\n  _unregisterProcess:", start)

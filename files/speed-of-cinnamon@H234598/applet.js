@@ -1067,14 +1067,32 @@ MyApplet.prototype = {
     if (!cancellable) {
       return token;
     }
-    if (!this._resourceRegistry || !this._resourceRegistry.cancellables) {
-      throw new Error("Cancellable registry is unavailable");
+    let registry = null;
+    try {
+      if (!this._resourceRegistry || !this._resourceRegistry.cancellables) {
+        throw new Error("Cancellable registry is unavailable");
+      }
+      registry = this._resourceRegistry.cancellables;
+      registry[token] = cancellable;
+      if (registry[token] !== cancellable) {
+        throw new Error("Cancellable could not be registered");
+      }
+      return token;
+    } catch (error) {
+      if (registry) {
+        try {
+          if (Object.prototype.hasOwnProperty.call(registry, token)) {
+            let deleted = delete registry[token];
+            if (deleted === false || Object.prototype.hasOwnProperty.call(registry, token)) {
+              throw new Error("Cancellable registration rollback failed");
+            }
+          }
+        } catch (rollbackError) {
+          this._recordLifecycleError("cancellable-registration-rollback", rollbackError);
+        }
+      }
+      throw error;
     }
-    this._resourceRegistry.cancellables[token] = cancellable;
-    if (this._resourceRegistry.cancellables[token] !== cancellable) {
-      throw new Error("Cancellable could not be registered");
-    }
-    return token;
   },
 
   _unregisterCancellable: function(token) {
