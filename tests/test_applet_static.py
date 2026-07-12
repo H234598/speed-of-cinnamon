@@ -2506,7 +2506,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let hasInput = options.inputText !== null && options.inputText !== undefined;", source)
         self.assertIn("flags |= Gio.SubprocessFlags.STDIN_PIPE;", source)
         self.assertIn("stdin.write_all_async", source)
-        self.assertIn("stream.write_all_finish(result);", source)
+        self.assertIn("let assertInputWriteSucceeded = (writeResult) =>", source)
+        self.assertIn("assertInputWriteSucceeded(stream.write_all_finish(result));", source)
+        self.assertIn("assertInputWriteSucceeded(stdin.write_all(inputBytes, null));", source)
 
     def test_snapshot_bound_actions_preflight_before_setting_action_tokens(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
