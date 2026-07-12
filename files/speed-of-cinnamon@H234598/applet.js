@@ -8409,8 +8409,9 @@ MyApplet.prototype = {
     if (!this.ollamaModelFlowToken && !this.ollamaInstallWatchToken && !this.ollamaModelInstallRunning && !this.ollamaModelCleanupFailed) {
       return false;
     }
-    this._cancelOllamaInstallWatch();
-    return this._clearOllamaModelFlow();
+    let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;
+    let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();
+    return ollamaWatchCleanupSucceeded && ollamaFlowCleanupSucceeded;
   },
 
   _activateOllamaTextModelFlow: function() {
@@ -8424,18 +8425,28 @@ MyApplet.prototype = {
       return;
     }
     if (!this._findTrustedProgramInPath("zenity")) {
-      this._cancelOllamaInstallWatch();
-      this._clearOllamaModelFlow();
+      let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;
+      let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();
+      if (!ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded) {
+        this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+        return;
+      }
       this._setStatus("error", _("Install zenity to choose an Ollama model"), this.lastTranscript);
       return;
     }
     let textModelArgs = this._tryTextModelsArgs("ollama");
     if (!textModelArgs) {
-      this._cancelOllamaInstallWatch();
-      this._clearOllamaModelFlow();
+      let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;
+      let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();
+      if (!ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded) {
+        this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+      }
       return;
     }
-    this._cancelOllamaInstallWatch();
+    if (this._cancelOllamaInstallWatch() === false) {
+      this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+      return;
+    }
     let flowToken = {};
     this.ollamaModelFlowToken = flowToken;
     this._setStatus("processing", _("Checking Ollama..."), this.lastTranscript);
@@ -8576,18 +8587,28 @@ MyApplet.prototype = {
       return;
     }
     if (!this._findTrustedProgramInPath("zenity")) {
-      this._cancelOllamaInstallWatch();
-      this._clearOllamaModelFlow();
+      let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;
+      let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();
+      if (!ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded) {
+        this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+        return;
+      }
       this._setStatus("error", _("Install zenity to choose an Ollama model"), this.lastTranscript);
       return;
     }
     let textModelArgs = this._tryTextModelsArgs("ollama");
     if (!textModelArgs) {
-      this._cancelOllamaInstallWatch();
-      this._clearOllamaModelFlow();
+      let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;
+      let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();
+      if (!ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded) {
+        this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+      }
       return;
     }
-    this._cancelOllamaInstallWatch();
+    if (this._cancelOllamaInstallWatch() === false) {
+      this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+      return;
+    }
     let flowToken = {};
     this.ollamaModelFlowToken = flowToken;
     this._setStatus("processing", _("Loading Ollama text models..."), this.lastTranscript);

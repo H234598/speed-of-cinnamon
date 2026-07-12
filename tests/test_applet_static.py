@@ -4000,7 +4000,10 @@ class AppletStaticTest(unittest.TestCase):
             start = source.index(method)
             end = source.index(next_method, start)
             block = source[start:end]
-            self.assertIn("this._cancelOllamaInstallWatch();", block)
+            if method == "_selectTextModelBackend: function(backend, model, message)":
+                self.assertIn("this._cancelOllamaInstallWatch() !== false;", block)
+            else:
+                self.assertIn("this._cancelOllamaInstallWatch();", block)
             self.assertIn("this._clearOllamaModelFlow", block)
 
     def test_text_backend_changes_abort_when_ollama_cleanup_fails(self) -> None:
@@ -5991,7 +5994,9 @@ class AppletStaticTest(unittest.TestCase):
         cancel_start = source.index("_cancelOllamaFlowForRecording: function()")
         cancel_end = source.index("\n  _activateOllamaTextModelFlow:", cancel_start)
         cancel_block = source[cancel_start:cancel_end]
-        self.assertIn("return this._clearOllamaModelFlow();", cancel_block)
+        self.assertIn("let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;", cancel_block)
+        self.assertIn("let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();", cancel_block)
+        self.assertIn("return ollamaWatchCleanupSucceeded && ollamaFlowCleanupSucceeded;", cancel_block)
         self.assertIn("this.ollamaModelInstallRunning", cancel_block)
 
         self.assertIn('}, { resourceGroup: "ollama" });', source)
