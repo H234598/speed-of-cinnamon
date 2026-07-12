@@ -441,7 +441,10 @@ def _read_private_passphrase_file(
     allow_default_generation: bool = False,
     rotate_weak_default: bool = False,
 ) -> str:
-    path = path.expanduser()
+    try:
+        path = path.expanduser()
+    except (OSError, RuntimeError) as exc:
+        raise ArtifactCryptoError("artifact encryption passphrase file path could not be resolved") from exc
     default_path = default_passphrase_file()
     is_default_path = path == default_path
     if is_default_path and allow_default_generation and not path.exists() and not path.is_symlink():
@@ -506,7 +509,10 @@ def _explicit_passphrase_file() -> Path | None:
         field_name="artifact encryption passphrase file path",
     ) > MAX_PASSPHRASE_FILE_PATH_CHARS:
         raise ArtifactCryptoError("artifact encryption passphrase file path is too large")
-    path = Path(normalized).expanduser()
+    try:
+        path = Path(normalized).expanduser()
+    except (OSError, RuntimeError) as exc:
+        raise ArtifactCryptoError("artifact encryption passphrase file path could not be resolved") from exc
     if not path.is_absolute():
         raise ArtifactCryptoError("artifact encryption passphrase file path must be absolute")
     try:

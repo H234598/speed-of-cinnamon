@@ -721,6 +721,23 @@ class ArtifactCryptoTest(unittest.TestCase):
                 artifact_crypto.read_private_bytes(path, field_name="artifact")
             self.assertNotIn(str(path), str(raised.exception))
 
+    def test_explicit_passphrase_path_home_resolution_failure_is_controlled(self) -> None:
+        with (
+            mock.patch.dict(
+                os.environ,
+                {artifact_crypto.PASSPHRASE_FILE_ENV: "~/passphrase.key"},
+                clear=False,
+            ),
+            mock.patch.object(Path, "expanduser", side_effect=RuntimeError("home unavailable")),
+        ):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "path could not be resolved"):
+                artifact_crypto._explicit_passphrase_file()
+
+    def test_private_passphrase_home_resolution_failure_is_controlled(self) -> None:
+        with mock.patch.object(Path, "expanduser", side_effect=RuntimeError("home unavailable")):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "path could not be resolved"):
+                artifact_crypto._read_private_passphrase_file(Path("~/passphrase.key"))
+
     def test_read_private_bytes_io_error_does_not_leak_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "secret-artifact.socenc"
