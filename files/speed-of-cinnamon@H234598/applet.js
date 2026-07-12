@@ -1515,29 +1515,45 @@ MyApplet.prototype = {
     }
     let destroyed = this._runTeardownOperation("teardown-tooltip", tooltip, "destroy");
     if (destroyed) {
-      this._applet_tooltip = null;
-      this._orphanedTooltip = false;
-      return true;
+      return this._clearDestroyedTooltip(tooltip);
     }
     this._orphanedTooltip = true;
     return false;
+  },
+
+  _clearDestroyedTooltip: function(tooltip) {
+    try {
+      this._applet_tooltip = null;
+      if (this._applet_tooltip === tooltip) {
+        throw new Error("Tooltip reference could not be cleared");
+      }
+      this._orphanedTooltip = false;
+      return true;
+    } catch (error) {
+      this._recordLifecycleError("teardown-tooltip", error);
+      try {
+        this._orphanedTooltip = true;
+      } catch (stateError) {
+        this._recordLifecycleError("teardown-tooltip", stateError);
+      }
+      return false;
+    }
   },
 
   _retryOrphanedTooltip: function() {
     if (!this._orphanedTooltip) {
       return true;
     }
-    if (!this._applet_tooltip) {
+    let tooltip = this._applet_tooltip;
+    if (!tooltip) {
       this._orphanedTooltip = false;
       return true;
     }
-    let destroyed = this._runTeardownOperation("teardown-orphaned-tooltip", this._applet_tooltip, "destroy");
+    let destroyed = this._runTeardownOperation("teardown-orphaned-tooltip", tooltip, "destroy");
     if (!destroyed) {
       return false;
     }
-    this._applet_tooltip = null;
-    this._orphanedTooltip = false;
-    return true;
+    return this._clearDestroyedTooltip(tooltip);
   },
 
   _trackMonitor: function(monitor) {

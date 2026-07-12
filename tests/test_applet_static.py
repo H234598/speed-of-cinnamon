@@ -2349,6 +2349,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let destroyed = this._runTeardownOperation(\"teardown-tooltip\"", block)
         self.assertIn("if (destroyed)", block)
         self.assertIn("this._applet_tooltip = null;", block)
+        self.assertIn("_clearDestroyedTooltip: function(tooltip)", block)
+        self.assertIn('throw new Error("Tooltip reference could not be cleared");', block)
+        self.assertIn('this._recordLifecycleError("teardown-tooltip", error);', block)
         self.assertIn("this._orphanedTooltip = true;", block)
         self.assertIn('this._runTeardownGuarded("teardown-orphaned-tooltip", () => this._retryOrphanedTooltip());', source)
 
