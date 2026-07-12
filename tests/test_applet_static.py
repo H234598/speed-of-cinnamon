@@ -831,6 +831,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('_("Cinnamon applet settings process exited unexpectedly")', settings_block)
         self.assertIn("result.error || result.timedOut || result.outputTooLarge", settings_block)
         self.assertIn("let settingsToken = {};", settings_block)
+        self.assertIn("if (this.settingsWindowToken)", settings_block)
         self.assertIn("this.settingsWindowToken !== settingsToken", settings_block)
         self.assertNotIn("}, function() {});", settings_block)
 
@@ -3043,6 +3044,7 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_showTranscriptsWindow: function(content, count, truncated)")
         end = source.index("\n  _exportAllTranscripts:", start)
         block = source[start:end]
+        self.assertIn("if (this.transcriptWindowToken)", block)
         self.assertIn("let windowToken = {};", block)
         self.assertIn("let zenity;", block)
         self.assertIn('zenity = this._findTrustedProgramInPath("zenity");', block)
@@ -3746,7 +3748,7 @@ class AppletStaticTest(unittest.TestCase):
         list_start = source.index("_listAllTranscripts: function()")
         list_end = source.index("\n  _confirmPlaintextTranscriptList:", list_start)
         list_block = source[list_start:list_end]
-        self.assertIn("if (this.isCommandRunning || this._hasActiveRecordingState() || this.transcriptListPromptToken)", list_block)
+        self.assertIn("this.transcriptListPromptToken || this.transcriptWindowToken", list_block)
         self.assertIn("this._hasActiveRecordingState()", list_block)
 
         prompt_start = source.index("_confirmPlaintextTranscriptList: function(completionCallback)")

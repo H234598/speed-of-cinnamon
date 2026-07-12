@@ -4073,6 +4073,9 @@ MyApplet.prototype = {
   },
 
   _openAppletSettings: function() {
+    if (this.settingsWindowToken) {
+      return;
+    }
     let openedMessage = arguments.length > 0 ? String(arguments[0] || "") : _("Opened Cinnamon applet settings");
     let xletSettings = this._findTrustedProgramInPath("xlet-settings");
     if (!xletSettings) {
@@ -6937,7 +6940,7 @@ MyApplet.prototype = {
   },
 
   _listAllTranscripts: function() {
-    if (this.isCommandRunning || this._hasActiveRecordingState() || this.transcriptListPromptToken) {
+    if (this.isCommandRunning || this._hasActiveRecordingState() || this.transcriptListPromptToken || this.transcriptWindowToken) {
       return;
     }
     if (!this._findTrustedProgramInPath("zenity")) {
@@ -7064,6 +7067,9 @@ MyApplet.prototype = {
   },
 
   _showTranscriptsWindow: function(content, count, truncated) {
+    if (this.transcriptWindowToken) {
+      return;
+    }
     let windowToken = {};
     this.transcriptWindowToken = windowToken;
     let isCurrentWindow = () => this.transcriptWindowToken === windowToken && this._lifecycleAllowsWork();
