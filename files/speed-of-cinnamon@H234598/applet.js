@@ -2514,6 +2514,10 @@ MyApplet.prototype = {
     if (this.autoRelisten) {
       args.push("--skip-silent-auto-relisten");
     }
+    if (!Boolean(this.openaiCompatibleFlexProcessing) &&
+      !this._appendCliFlagWithinBudget(args, "--no-openai-compatible-flex-processing")) {
+      throw new Error("OpenAI-compatible Flex setting exceeds command limit");
+    }
     let transcriberCommandIncluded = safeTranscriberCommand.trim() === "";
     let postProcessCommandIncluded = safePostProcessCommand.trim() === "";
     let ollamaModelIncluded = safeOllamaModel.trim() === "";
@@ -2553,9 +2557,6 @@ MyApplet.prototype = {
       } else {
         openAiCompatibleTextModelIncluded = this._appendCliOptionWithinBudget(args, "--openai-compatible-text-model", safeOpenAiCompatibleTextModel);
       }
-    }
-    if (!Boolean(this.openaiCompatibleFlexProcessing)) {
-      args.push("--no-openai-compatible-flex-processing");
     }
     if (safePostProcessPrompt.trim() !== "") {
       this._appendCliOptionWithinBudget(args, "--post-process-prompt", safePostProcessPrompt);
@@ -2612,6 +2613,27 @@ MyApplet.prototype = {
       return false;
     }
     args.push(flag, value);
+    return true;
+  },
+
+  _appendCliFlagWithinBudget: function(args, flag) {
+    if (!Array.isArray(args) || typeof flag !== "string") {
+      return false;
+    }
+    let flagBytes = utf8ByteLength(flag);
+    if (flagBytes > MAX_CLI_ARG_BYTES) {
+      this._logLifecycleError("settings-value", new Error("optional CLI flag exceeds argument limit"));
+      return false;
+    }
+    let totalBytes = 0;
+    for (let arg of args) {
+      totalBytes += utf8ByteLength(arg);
+    }
+    if (totalBytes + flagBytes > MAX_CLI_COMMAND_BYTES) {
+      this._logLifecycleError("settings-value", new Error("optional CLI flag exceeds command limit"));
+      return false;
+    }
+    args.push(flag);
     return true;
   },
 
