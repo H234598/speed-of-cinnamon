@@ -3537,6 +3537,20 @@ class AppletStaticTest(unittest.TestCase):
         self.assertLess(guard, reset)
         self.assertLess(reset, block.index("if (!flowToken || this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork())"))
 
+    def test_ollama_model_checks_release_flow_when_processing_throws(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method, message in [
+            ("_activateOllamaTextModelFlow: function()", "\n  _ollamaModelPromptArgs:", "Could not check Ollama"),
+            ("_chooseOllamaTextModel: function()", "\n  _promptChooseOllamaTextModel:", "Could not load Ollama models"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn("this._spawnJson(textModelArgs, (payload) => {\n      try {", block)
+            self.assertIn("if (this.ollamaModelFlowToken === flowToken) {\n          this.ollamaModelFlowToken = null;", block)
+            self.assertIn('this._recordLifecycleError("ollama-flow", error);', block)
+            self.assertIn(f'this._setStatus("error", _("{message}")', block)
+
     def test_failed_ollama_install_cancellation_keeps_command_busy(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_clearOllamaModelFlow: function(flowToken)")

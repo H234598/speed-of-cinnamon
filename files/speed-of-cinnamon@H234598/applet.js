@@ -8233,30 +8233,38 @@ MyApplet.prototype = {
     this.ollamaModelFlowToken = flowToken;
     this._setStatus("processing", _("Checking Ollama..."), this.lastTranscript);
     this._spawnJson(textModelArgs, (payload) => {
-      if (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
-        return;
+      try {
+        if (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
+          return;
+        }
+        if (payload.error) {
+          let safeError = this._sanitizeErrorMessage(payload.error);
+          this._clearOllamaModelFlow(flowToken);
+          this._setStatus("error", safeError, this.lastTranscript);
+          this._notify(_("Could not check Ollama"), safeError, true);
+          return;
+        }
+        let models = Array.isArray(payload.models) ? payload.models : [];
+        if (payload.available !== true) {
+          let safeMessage = payload.available === false
+            ? this._payloadMessage(payload, _("Ollama is not installed or not reachable"))
+            : _("Ollama is not installed or not reachable");
+          this._setStatus("processing", safeMessage + "; " + _("opening installer..."), this.lastTranscript);
+          this._installOllamaRuntime(true);
+          return;
+        }
+        if (models.length === 0) {
+          this._promptInstallOllamaTextModel(flowToken);
+          return;
+        }
+        this._promptChooseOllamaTextModel(models, flowToken);
+      } catch (error) {
+        if (this.ollamaModelFlowToken === flowToken) {
+          this.ollamaModelFlowToken = null;
+        }
+        this._recordLifecycleError("ollama-flow", error);
+        this._setStatus("error", _("Could not check Ollama"), this.lastTranscript);
       }
-      if (payload.error) {
-        let safeError = this._sanitizeErrorMessage(payload.error);
-        this._clearOllamaModelFlow(flowToken);
-        this._setStatus("error", safeError, this.lastTranscript);
-        this._notify(_("Could not check Ollama"), safeError, true);
-        return;
-      }
-      let models = Array.isArray(payload.models) ? payload.models : [];
-      if (payload.available !== true) {
-        let safeMessage = payload.available === false
-          ? this._payloadMessage(payload, _("Ollama is not installed or not reachable"))
-          : _("Ollama is not installed or not reachable");
-        this._setStatus("processing", safeMessage + "; " + _("opening installer..."), this.lastTranscript);
-        this._installOllamaRuntime(true);
-        return;
-      }
-      if (models.length === 0) {
-        this._promptInstallOllamaTextModel(flowToken);
-        return;
-      }
-      this._promptChooseOllamaTextModel(models, flowToken);
     }, { resourceGroup: "ollama" });
   },
 
@@ -8377,30 +8385,38 @@ MyApplet.prototype = {
     this.ollamaModelFlowToken = flowToken;
     this._setStatus("processing", _("Loading Ollama text models..."), this.lastTranscript);
     this._spawnJson(textModelArgs, (payload) => {
-      if (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
-        return;
+      try {
+        if (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
+          return;
+        }
+        if (payload.error) {
+          let safeError = this._sanitizeErrorMessage(payload.error);
+          this._clearOllamaModelFlow(flowToken);
+          this._setStatus("error", safeError, this.lastTranscript);
+          this._notify(_("Could not load Ollama models"), safeError, true);
+          return;
+        }
+        if (payload.available !== true) {
+          let safeMessage = payload.available === false
+            ? this._payloadMessage(payload, _("Ollama is not installed or not reachable"))
+            : _("Ollama is not installed or not reachable");
+          this._setStatus("processing", safeMessage + "; " + _("opening installer..."), this.lastTranscript);
+          this._installOllamaRuntime(true);
+          return;
+        }
+        let models = Array.isArray(payload.models) ? payload.models : [];
+        if (models.length === 0) {
+          this._promptInstallOllamaTextModel(flowToken);
+          return;
+        }
+        this._promptChooseOllamaTextModel(models, flowToken);
+      } catch (error) {
+        if (this.ollamaModelFlowToken === flowToken) {
+          this.ollamaModelFlowToken = null;
+        }
+        this._recordLifecycleError("ollama-flow", error);
+        this._setStatus("error", _("Could not load Ollama models"), this.lastTranscript);
       }
-      if (payload.error) {
-        let safeError = this._sanitizeErrorMessage(payload.error);
-        this._clearOllamaModelFlow(flowToken);
-        this._setStatus("error", safeError, this.lastTranscript);
-        this._notify(_("Could not load Ollama models"), safeError, true);
-        return;
-      }
-      if (payload.available !== true) {
-        let safeMessage = payload.available === false
-          ? this._payloadMessage(payload, _("Ollama is not installed or not reachable"))
-          : _("Ollama is not installed or not reachable");
-        this._setStatus("processing", safeMessage + "; " + _("opening installer..."), this.lastTranscript);
-        this._installOllamaRuntime(true);
-        return;
-      }
-      let models = Array.isArray(payload.models) ? payload.models : [];
-      if (models.length === 0) {
-        this._promptInstallOllamaTextModel(flowToken);
-        return;
-      }
-      this._promptChooseOllamaTextModel(models, flowToken);
     }, { resourceGroup: "ollama" });
   },
 
