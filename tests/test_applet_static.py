@@ -479,8 +479,9 @@ class AppletStaticTest(unittest.TestCase):
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
 
         self.assertIn("on_applet_clicked: function()", source)
-        self.assertIn('if (!this._lifecycleAllowsWork() || !this.menu || typeof this.menu.toggle !== "function") {', source)
         self.assertIn('this._runStateGuarded("menu-toggle", () => {', source)
+        self.assertIn("let menu = this.menu;", source)
+        self.assertNotIn('if (!this._lifecycleAllowsWork() || !this.menu || typeof this.menu.toggle !== "function") {', source)
         self.assertIn("if (!menu.isOpen) {", source)
         self.assertIn("this._rememberFocusedWindow();", source)
         activation_keys = schema["layout"]["activation-section"]["keys"]

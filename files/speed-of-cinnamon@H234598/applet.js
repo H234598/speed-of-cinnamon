@@ -2227,11 +2227,11 @@ MyApplet.prototype = {
   },
 
   on_applet_clicked: function() {
-    if (!this._lifecycleAllowsWork() || !this.menu || typeof this.menu.toggle !== "function") {
-      return;
-    }
-    let menu = this.menu;
-    this._runStateGuarded("menu-toggle", () => {
+    return this._runStateGuarded("menu-toggle", () => {
+      let menu = this.menu;
+      if (!menu || typeof menu.toggle !== "function") {
+        return;
+      }
       if (!menu.isOpen) {
         this._rememberFocusedWindow();
       }
