@@ -790,6 +790,29 @@ MyApplet.prototype = {
     }
   },
 
+  _untrackOrphanedSignal: function(connection) {
+    if (!Array.isArray(this._orphanedSignals)) {
+      return true;
+    }
+    let success = true;
+    for (let index = this._orphanedSignals.length - 1; index >= 0; index--) {
+      let entry = this._orphanedSignals[index];
+      if (!entry || entry !== connection) {
+        continue;
+      }
+      try {
+        let removed = this._orphanedSignals.splice(index, 1);
+        if (!Array.isArray(removed) || removed.length !== 1 || removed[0] !== entry || this._orphanedSignals.indexOf(entry) >= 0) {
+          throw new Error("Signal orphan entry could not be removed");
+        }
+      } catch (error) {
+        this._recordLifecycleError("signal-orphan", error);
+        success = false;
+      }
+    }
+    return success;
+  },
+
   _disconnectOrphanedSignals: function(target) {
     if (!Array.isArray(this._orphanedSignals)) {
       return true;
@@ -812,10 +835,7 @@ MyApplet.prototype = {
         success = false;
         continue;
       }
-      try {
-        this._orphanedSignals.splice(index, 1);
-      } catch (error) {
-        this._recordLifecycleError("teardown-orphaned-signals", error);
+      if (!this._untrackOrphanedSignal(connection)) {
         success = false;
       }
     }
