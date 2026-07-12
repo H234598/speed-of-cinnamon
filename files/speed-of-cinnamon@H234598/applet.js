@@ -5514,6 +5514,7 @@ MyApplet.prototype = {
     if (!settingsPromptCleanupSucceeded) {
       this._setStatusPreservingRecording("error", _("Settings prompt could not be stopped"), this.lastTranscript);
     }
+    let ollamaWatchTimerCleanupSucceeded = this._clearOllamaInstallWatchTimer() !== false;
     let ollamaCleanupSucceeded = this._terminateProcessesByGroup("ollama") !== false;
     if (!ollamaCleanupSucceeded) {
       this.ollamaModelCleanupFailed = true;
@@ -5525,7 +5526,11 @@ MyApplet.prototype = {
       this.ollamaModelInstallRunning = false;
       this.ollamaModelCleanupFailed = false;
     }
-    return historyRefreshCleanupSucceeded && inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && voiceModelCleanupSucceeded && textModelRefreshCleanupSucceeded && alarmMenuRefreshCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded && textInsertProcessCleanupSucceeded && settingsPromptCleanupSucceeded && ollamaCleanupSucceeded;
+    if (!ollamaWatchTimerCleanupSucceeded) {
+      this.ollamaModelCleanupFailed = true;
+      this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+    }
+    return historyRefreshCleanupSucceeded && inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && voiceModelCleanupSucceeded && textModelRefreshCleanupSucceeded && alarmMenuRefreshCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded && textInsertProcessCleanupSucceeded && settingsPromptCleanupSucceeded && ollamaWatchTimerCleanupSucceeded && ollamaCleanupSucceeded;
   },
 
   _runDoctor: function(startupCheck) {

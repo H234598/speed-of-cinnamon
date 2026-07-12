@@ -6058,10 +6058,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('for (let group of ["keyboard", "clipboard", "x11"])', helper_block)
         self.assertIn("this._terminateProcessesByGroup(group) === false", helper_block)
         self.assertIn("this.textInsertCancellationFailed = true;", helper_block)
+        self.assertIn('let ollamaWatchTimerCleanupSucceeded = this._clearOllamaInstallWatchTimer() !== false;', helper_block)
         self.assertIn('this._terminateProcessesByGroup("ollama")', helper_block)
         self.assertIn("this.ollamaModelCleanupFailed = true;", helper_block)
         self.assertIn("this.ollamaModelInstallToken = null;", helper_block)
-        self.assertIn("return historyRefreshCleanupSucceeded && inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && voiceModelCleanupSucceeded && textModelRefreshCleanupSucceeded && alarmMenuRefreshCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded && textInsertProcessCleanupSucceeded && settingsPromptCleanupSucceeded && ollamaCleanupSucceeded;", helper_block)
+        self.assertIn("if (!ollamaWatchTimerCleanupSucceeded)", helper_block)
+        self.assertIn("ollamaWatchTimerCleanupSucceeded && ollamaCleanupSucceeded", helper_block)
         self.assertNotIn("this.transcriptWindowToken = null;", helper_block)
         self.assertNotIn("this.settingsWindowToken = null;", helper_block)
 
