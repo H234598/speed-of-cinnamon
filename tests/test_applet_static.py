@@ -574,6 +574,14 @@ class AppletStaticTest(unittest.TestCase):
         retry_block = source[retry_start:retry_end]
         self.assertIn("this._clearDestroyedMenuReference(entry.menu, entry.propertyName, \"menu-orphan\")", retry_block)
         self.assertLess(retry_block.index("this._clearDestroyedMenuReference(entry.menu, entry.propertyName, \"menu-orphan\")"), retry_block.index("this._untrackOrphanedMenu(entry.menu)"))
+        self.assertIn("let pendingMenus = [];", retry_block)
+        self.assertIn("let addPendingMenu = (menu, propertyName, group, needsClose, signalsSucceeded, closeSucceeded, destroySucceeded) =>", retry_block)
+        self.assertIn("Menu orphan registry is unavailable", retry_block)
+        self.assertIn('addPendingMenu(this.menu, "menu", "menu", true, false, false, false);', retry_block)
+        self.assertIn('addPendingMenu(this._applet_context_menu, "_applet_context_menu", "context-menu", true, false, false, false);', retry_block)
+        self.assertIn('addPendingMenu(this.menuManager, "menuManager", "menu-manager", false, false, true, false);', retry_block)
+        self.assertIn('addPendingMenu(this._menuManager, "_menuManager", "private-menu-manager", false, false, true, false);', retry_block)
+        self.assertIn("for (let index = pendingMenus.length - 1;", retry_block)
 
         reference_start = source.index("_clearDestroyedMenuReference: function(menu, propertyName, errorGroup)")
         reference_end = source.index("\n  _trackOrphanedMenu:", reference_start)

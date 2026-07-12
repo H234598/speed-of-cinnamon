@@ -1549,17 +1549,70 @@ MyApplet.prototype = {
   },
 
   _retryOrphanedMenus: function() {
-    if (!Array.isArray(this._orphanedMenus)) {
-      return true;
-    }
-    let success = true;
-    for (let index = this._orphanedMenus.length - 1; index >= 0; index--) {
-      let entry = this._orphanedMenus[index];
-      if (!entry || !entry.menu) {
-        this._recordLifecycleError("menu-orphan", new Error("Menu orphan entry is invalid"));
-        success = false;
-        continue;
+    let pendingMenus = [];
+    let addPendingMenu = (menu, propertyName, group, needsClose, signalsSucceeded, closeSucceeded, destroySucceeded) => {
+      if (!menu) {
+        return;
       }
+      let knownEntry = pendingMenus.find((entry) => entry && entry.menu === menu);
+      if (knownEntry) {
+        if (propertyName && !knownEntry.propertyName) {
+          knownEntry.propertyName = propertyName;
+        }
+        if (needsClose === true) {
+          knownEntry.needsClose = true;
+        }
+        if (signalsSucceeded === true) {
+          knownEntry.signalsSucceeded = true;
+        }
+        if (closeSucceeded === true) {
+          knownEntry.closeSucceeded = true;
+        }
+        if (destroySucceeded === true) {
+          knownEntry.destroySucceeded = true;
+        }
+        return;
+      }
+      pendingMenus.push({
+        menu: menu,
+        propertyName: String(propertyName || ""),
+        group: String(group || "menu"),
+        needsClose: needsClose === true,
+        signalsSucceeded: signalsSucceeded === true,
+        closeSucceeded: closeSucceeded === true,
+        destroySucceeded: destroySucceeded === true,
+      });
+    };
+    let invalidOrphanEntry = false;
+    if (Array.isArray(this._orphanedMenus)) {
+      for (let entry of this._orphanedMenus) {
+        if (!entry || !entry.menu) {
+          invalidOrphanEntry = true;
+          continue;
+        }
+        addPendingMenu(
+          entry.menu,
+          entry.propertyName,
+          entry.group,
+          entry.needsClose,
+          entry.signalsSucceeded,
+          entry.closeSucceeded,
+          entry.destroySucceeded
+        );
+      }
+    } else {
+      this._recordLifecycleError("menu-state", new Error("Menu orphan registry is unavailable"));
+    }
+    addPendingMenu(this.menu, "menu", "menu", true, false, false, false);
+    addPendingMenu(this._applet_context_menu, "_applet_context_menu", "context-menu", true, false, false, false);
+    addPendingMenu(this.menuManager, "menuManager", "menu-manager", false, false, true, false);
+    addPendingMenu(this._menuManager, "_menuManager", "private-menu-manager", false, false, true, false);
+    if (pendingMenus.length === 0) {
+      return !invalidOrphanEntry && Array.isArray(this._orphanedMenus);
+    }
+    let success = !invalidOrphanEntry;
+    for (let index = pendingMenus.length - 1; index >= 0; index--) {
+      let entry = pendingMenus[index];
       let signalsSucceeded = entry.signalsSucceeded === true;
       if (!signalsSucceeded) {
         signalsSucceeded = this._runTeardownOperation("teardown-orphaned-menus", entry.menu, "disconnectAllSignals", [], true);
