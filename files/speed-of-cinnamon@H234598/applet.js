@@ -611,12 +611,34 @@ MyApplet.prototype = {
       let connectionId = 0;
       connectionId = target.connect(signal, this._guardStateCallback(signalGroup, callback, undefined));
       if (this._resourceRegistry && connectionId) {
+        let signalEntry = { target: target, id: connectionId };
+        let registryWriteAttempted = false;
         try {
           if (!Array.isArray(this._resourceRegistry.signals)) {
             throw new Error("Signal registry is unavailable");
           }
-          this._resourceRegistry.signals.push({ target: target, id: connectionId });
+          registryWriteAttempted = true;
+          this._resourceRegistry.signals.push(signalEntry);
+          if (this._resourceRegistry.signals.indexOf(signalEntry) < 0) {
+            throw new Error("Signal could not be registered");
+          }
         } catch (registryError) {
+          if (registryWriteAttempted) {
+            try {
+              let signals = this._resourceRegistry.signals;
+              let lastIndex = signals.length - 1;
+              if (lastIndex >= 0 && signals[lastIndex] === signalEntry) {
+                signals.pop();
+              } else {
+                let index = signals.indexOf(signalEntry);
+                if (index >= 0) {
+                  signals.splice(index, 1);
+                }
+              }
+            } catch (rollbackError) {
+              this._recordLifecycleError("signal-registration-rollback", rollbackError);
+            }
+          }
           try {
             if (target.disconnect) {
               target.disconnect(connectionId);
