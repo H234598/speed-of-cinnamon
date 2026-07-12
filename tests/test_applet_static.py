@@ -547,6 +547,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("removed[0] !== entry", block)
         self.assertIn('throw new Error("Menu orphan entry could not be removed");', block)
 
+        track_start = source.index("_trackOrphanedMenu: function(menu, propertyName, group, needsClose, signalsSucceeded, closeSucceeded, destroySucceeded)")
+        track_end = source.index("\n  _untrackOrphanedMenu:", track_start)
+        track_block = source[track_start:track_end]
+        self.assertIn("let entry = {", track_block)
+        self.assertIn("this._orphanedMenus.push(entry);", track_block)
+        self.assertIn('throw new Error("Menu orphan entry could not be tracked");', track_block)
+
         retry_start = source.index("_retryOrphanedMenus: function()")
         retry_end = source.index("\n  _destroyAppletTooltip:", retry_start)
         retry_block = source[retry_start:retry_end]

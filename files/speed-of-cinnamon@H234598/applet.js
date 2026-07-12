@@ -1432,7 +1432,7 @@ MyApplet.prototype = {
           knownEntry.destroySucceeded = true;
         }
       } else {
-        this._orphanedMenus.push({
+        let entry = {
           menu: menu,
           propertyName: String(propertyName || ""),
           group: String(group || "menu"),
@@ -1440,7 +1440,11 @@ MyApplet.prototype = {
           signalsSucceeded: signalsSucceeded === true,
           closeSucceeded: closeSucceeded === true,
           destroySucceeded: destroySucceeded === true,
-        });
+        };
+        this._orphanedMenus.push(entry);
+        if (this._orphanedMenus.indexOf(entry) < 0) {
+          throw new Error("Menu orphan entry could not be tracked");
+        }
       }
       return true;
     } catch (error) {
