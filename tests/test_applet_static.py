@@ -3156,6 +3156,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.isCommandRunning = false;", benchmark_block)
         self.assertIn("this.benchmarkFlowToken = null;", benchmark_block)
         self.assertIn("this.benchmarkFlowToken !== flowToken", benchmark_block)
+        self.assertIn("if (!this.benchmarkFlowToken && !this._recordingCommandToken)", benchmark_block)
         self.assertIn("this.benchmarkFlowToken = null;", benchmark_block)
         self.assertIn('let fastest = typeof payload.fastest_model === "string" ? payload.fastest_model.trim() : "";', benchmark_block)
         self.assertNotIn('let fastest = String(payload.fastest_model || "").trim();', benchmark_block)
@@ -3188,7 +3189,8 @@ class AppletStaticTest(unittest.TestCase):
             reset_index = block.index("this.isCommandRunning = false;", guard_index)
             self.assertLess(guard_index, reset_index)
             reset = (
-                f"if (!this.{token_name}) {{\n            this.isCommandRunning = false;\n          }}"
+                "if (!this.benchmarkFlowToken && !this._recordingCommandToken) {\n"
+                "            this.isCommandRunning = false;\n          }"
                 if token_name == "benchmarkFlowToken"
                 else f"if (!this.{token_name}) {{\n          this.isCommandRunning = false;\n        }}"
             )

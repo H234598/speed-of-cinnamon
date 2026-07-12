@@ -6150,7 +6150,7 @@ MyApplet.prototype = {
     this._spawnJson(benchmarkArgs, (payload) => {
       try {
         if (this.benchmarkFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
-          if (!this.benchmarkFlowToken) {
+          if (!this.benchmarkFlowToken && !this._recordingCommandToken) {
             this.isCommandRunning = false;
           }
           return;
