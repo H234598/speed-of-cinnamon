@@ -1519,11 +1519,17 @@ MyApplet.prototype = {
         try {
           let lastIndex = monitors.length - 1;
           if (lastIndex >= 0 && monitors[lastIndex] === monitor) {
-            monitors.pop();
+            let removed = monitors.pop();
+            if (removed !== monitor || monitors.indexOf(monitor) >= 0) {
+              throw new Error("Monitor registry rollback did not remove the entry");
+            }
           } else {
             let index = monitors.indexOf(monitor);
             if (index >= 0) {
-              monitors.splice(index, 1);
+              let removed = monitors.splice(index, 1);
+              if (!Array.isArray(removed) || removed.length !== 1 || monitors.indexOf(monitor) >= 0) {
+                throw new Error("Monitor registry rollback did not remove the entry");
+              }
             }
           }
         } catch (rollbackError) {
@@ -1594,7 +1600,10 @@ MyApplet.prototype = {
         continue;
       }
       try {
-        this._orphanedMonitors.splice(index, 1);
+        let removed = this._orphanedMonitors.splice(index, 1);
+        if (!Array.isArray(removed) || removed.length !== 1 || removed[0] !== entry || this._orphanedMonitors.indexOf(entry) >= 0) {
+          throw new Error("Monitor orphan entry could not be removed");
+        }
       } catch (error) {
         this._recordLifecycleError("monitor-orphan", error);
         success = false;
@@ -1638,15 +1647,13 @@ MyApplet.prototype = {
         success = false;
         continue;
       }
+      if (!this._untrackOrphanedMonitor(entry.monitor)) {
+        success = false;
+        continue;
+      }
       if (this.externalApiEnvMonitor === entry.monitor) {
         this.externalApiEnvMonitor = null;
         this._externalApiEnvMonitorCancelSucceeded = false;
-      }
-      try {
-        this._orphanedMonitors.splice(index, 1);
-      } catch (error) {
-        this._recordLifecycleError("monitor-orphan", error);
-        success = false;
       }
     }
     return success;
@@ -7244,12 +7251,12 @@ MyApplet.prototype = {
       return false;
     }
     let orphanUntracked = this._untrackOrphanedMonitor(monitor);
-    this.externalApiEnvMonitor = null;
-    this._externalApiEnvMonitorCancelSucceeded = false;
     if (!orphanUntracked) {
       this._trackOrphanedMonitor(monitor, true);
       return false;
     }
+    this.externalApiEnvMonitor = null;
+    this._externalApiEnvMonitorCancelSucceeded = false;
     return true;
   },
 

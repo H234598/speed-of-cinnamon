@@ -477,6 +477,26 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('throw new Error("Monitor registry entry could not be removed");', untrack_block)
         self.assertIn("this._resourceRegistry.monitors.indexOf(monitor) >= 0", untrack_block)
         self.assertIn("return false;", untrack_block)
+
+        track_start = source.index("_trackMonitor: function(monitor)")
+        track_end = source.index("\n  _untrackMonitor:", track_start)
+        track_block = source[track_start:track_end]
+        self.assertIn("let removed = monitors.pop();", track_block)
+        self.assertIn("let removed = monitors.splice(index, 1);", track_block)
+        self.assertIn('throw new Error("Monitor registry rollback did not remove the entry");', track_block)
+
+        orphan_start = source.index("_untrackOrphanedMonitor: function(monitor)")
+        orphan_end = source.index("\n  _retryOrphanedMonitors:", orphan_start)
+        orphan_block = source[orphan_start:orphan_end]
+        self.assertIn("let removed = this._orphanedMonitors.splice(index, 1);", orphan_block)
+        self.assertIn("removed[0] !== entry", orphan_block)
+        self.assertIn('throw new Error("Monitor orphan entry could not be removed");', orphan_block)
+
+        retry_start = source.index("_retryOrphanedMonitors: function()")
+        retry_end = source.index("\n  _nextResourceToken:", retry_start)
+        retry_block = source[retry_start:retry_end]
+        self.assertIn("this._untrackOrphanedMonitor(entry.monitor)", retry_block)
+        self.assertLess(retry_block.index("this._untrackOrphanedMonitor(entry.monitor)"), retry_block.index("this.externalApiEnvMonitor === entry.monitor"))
         self.assertLess(untrack_block.index("try {"), untrack_block.index("this._resourceRegistry.monitors.indexOf(monitor)"))
 
         start = source.index("_clearExternalApiEnvMonitor: function()")
@@ -485,6 +505,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("!this._untrackMonitor(monitor)", clear_block)
         self.assertIn("return false;", clear_block)
         self.assertLess(clear_block.index("this._untrackMonitor(monitor)"), clear_block.index("this.externalApiEnvMonitor = null;"))
+        self.assertLess(clear_block.index("this._untrackOrphanedMonitor(monitor)"), clear_block.index("this.externalApiEnvMonitor = null;"))
 
     def test_failed_dialog_untrack_does_not_escape_dialog_close(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
