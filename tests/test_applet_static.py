@@ -2561,9 +2561,14 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let addPendingName = (value) =>", block)
         self.assertIn("let collectPendingNames = (values) =>", block)
         self.assertIn("Hotkey orphan registry is unavailable", block)
+        self.assertIn("if (!Array.isArray(this._orphanedHotkeys))", block)
         self.assertIn("collectPendingNames(this._orphanedHotkeyStates);", block)
         self.assertIn("collectPendingNames(this._resourceRegistry && this._resourceRegistry.hotkeys);", block)
         self.assertIn("collectPendingNames(this._hotkeyDefinitions);", block)
+        self.assertLess(
+            block.index("if (!Array.isArray(this._orphanedHotkeys))"),
+            block.index("collectPendingNames(this._orphanedHotkeyStates);"),
+        )
         self.assertIn("for (let index = pendingNames.length - 1;", block)
 
     def test_hotkey_teardown_registry_failures_do_not_escape(self) -> None:

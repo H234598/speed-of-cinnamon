@@ -3598,12 +3598,13 @@ MyApplet.prototype = {
       for (let name of this._orphanedHotkeys) {
         addPendingName(name);
       }
-    } else {
-      this._recordLifecycleError("hotkey-state", new Error("Hotkey orphan registry is unavailable"));
     }
-    collectPendingNames(this._orphanedHotkeyStates);
-    collectPendingNames(this._resourceRegistry && this._resourceRegistry.hotkeys);
-    collectPendingNames(this._hotkeyDefinitions);
+    if (!Array.isArray(this._orphanedHotkeys)) {
+      this._recordLifecycleError("hotkey-state", new Error("Hotkey orphan registry is unavailable"));
+      collectPendingNames(this._orphanedHotkeyStates);
+      collectPendingNames(this._resourceRegistry && this._resourceRegistry.hotkeys);
+      collectPendingNames(this._hotkeyDefinitions);
+    }
     if (pendingNames.length === 0) {
       return true;
     }
