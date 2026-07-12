@@ -362,6 +362,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._readExternalApiEnvFile(path)", source)
         self.assertIn("ByteArray.toString(contents)", source)
 
+    def test_external_api_env_rejects_symlinked_directory_ancestors(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_assertExternalApiEnvDirectoryChainSafe: function(path)")
+        end = source.index("\n  _externalApiEnvContent:", start)
+        block = source[start:end]
+        self.assertIn("Gio.File.new_for_path(GLib.path_get_dirname(path))", block)
+        self.assertIn("Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS", block)
+        self.assertIn("Gio.FileType.SYMBOLIC_LINK", block)
+        self.assertIn("current = current.get_parent();", block)
+        self.assertIn("this._assertExternalApiEnvDirectoryChainSafe(path);", source)
+
     def test_external_api_urls_reject_out_of_range_ports_and_fake_loopback(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_validateExternalApiUrl: function(value, fieldName)")

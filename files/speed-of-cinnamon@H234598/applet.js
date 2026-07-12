@@ -5787,6 +5787,20 @@ MyApplet.prototype = {
     return { url: url, model: model, textModel: textModel, apiKey: apiKey };
   },
 
+  _assertExternalApiEnvDirectoryChainSafe: function(path) {
+    let current = Gio.File.new_for_path(GLib.path_get_dirname(path));
+    while (current) {
+      let info = current.query_info("standard::type", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
+      if (!info || info.get_file_type() === Gio.FileType.SYMBOLIC_LINK) {
+        throw new Error("External API config directory must not use symlinks");
+      }
+      if (info.get_file_type() !== Gio.FileType.DIRECTORY) {
+        throw new Error("External API config path ancestor is not a directory");
+      }
+      current = current.get_parent();
+    }
+  },
+
   _externalApiEnvContent: function() {
     let config = this._validatedExternalApiConfig({
       url: this.openaiCompatibleUrl,
@@ -5845,6 +5859,7 @@ MyApplet.prototype = {
     if (mkdirResult !== 0) {
       throw new Error("External API config directory could not be created");
     }
+    this._assertExternalApiEnvDirectoryChainSafe(path);
     let setPrivateMode = () => {
       let modeResult = Gio.File.new_for_path(path).set_attribute_uint32(
         "unix::mode",
@@ -5954,6 +5969,7 @@ MyApplet.prototype = {
       if (mkdirResult !== 0) {
         throw new Error("External API config directory could not be created");
       }
+      this._assertExternalApiEnvDirectoryChainSafe(path);
       let info = this._externalApiEnvFileInfo(path, true);
       if (!info) {
         this._writeExternalApiEnvFileContents(path, this._externalApiEnvContent());
