@@ -11778,7 +11778,11 @@ MyApplet.prototype = {
     try {
       let index = this.autoInsertFingerprints.indexOf(fingerprint);
       if (index >= 0) {
-        this.autoInsertFingerprints.splice(index, 1);
+        let entry = this.autoInsertFingerprints[index];
+        let removed = this.autoInsertFingerprints.splice(index, 1);
+        if (!Array.isArray(removed) || removed.length !== 1 || removed[0] !== entry || this.autoInsertFingerprints.indexOf(entry) >= 0) {
+          throw new Error("Auto-insert fingerprint could not be removed");
+        }
       }
       if (this.autoInsertFingerprint === fingerprint) {
         this.autoInsertFingerprint = this.autoInsertFingerprints.length > 0

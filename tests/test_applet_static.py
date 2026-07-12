@@ -4443,7 +4443,10 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
 
         self.assertIn("try {", block)
-        self.assertIn("this.autoInsertFingerprints.splice(index, 1);", block)
+        self.assertIn("let entry = this.autoInsertFingerprints[index];", block)
+        self.assertIn("let removed = this.autoInsertFingerprints.splice(index, 1);", block)
+        self.assertIn("removed[0] !== entry", block)
+        self.assertIn('throw new Error("Auto-insert fingerprint could not be removed");', block)
         self.assertIn('this._recordLifecycleError("auto-insert-fingerprint", error);', block)
         self.assertIn("return false;", block)
         self.assertLess(block.index("try {"), block.index("let index = this.autoInsertFingerprints.indexOf(fingerprint);"))
