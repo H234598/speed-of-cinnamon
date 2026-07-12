@@ -2318,12 +2318,16 @@ MyApplet.prototype = {
           knownEntry.propertyName = propertyName;
         }
       } else {
-        this._orphanedTimers.push({
+        let entry = {
           name: key,
           sourceId: sourceId,
           propertyName: propertyName || "",
           sourceRemoved: sourceRemoved === true,
-        });
+        };
+        this._orphanedTimers.push(entry);
+        if (this._orphanedTimers.indexOf(entry) < 0) {
+          throw new Error("Timer orphan entry could not be tracked");
+        }
       }
       return true;
     } catch (error) {

@@ -2838,7 +2838,9 @@ class AppletStaticTest(unittest.TestCase):
         orphan_block = source[start:end]
         self.assertIn("this._orphanedTimers = [];", orphan_block)
         self.assertIn("entry.sourceId === sourceId", orphan_block)
-        self.assertIn("this._orphanedTimers.push({", orphan_block)
+        self.assertIn("let entry = {", orphan_block)
+        self.assertIn("this._orphanedTimers.push(entry);", orphan_block)
+        self.assertIn('throw new Error("Timer orphan entry could not be tracked");', orphan_block)
         self.assertIn("sourceRemoved: sourceRemoved === true", orphan_block)
         self.assertIn("_retryOrphanedTimers: function()", orphan_block)
         self.assertIn("Mainloop.source_remove(entry.sourceId)", orphan_block)
