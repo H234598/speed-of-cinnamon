@@ -8485,39 +8485,47 @@ MyApplet.prototype = {
     this.ollamaModelInstallToken = installToken;
     this._setStatus("processing", _("Installing Ollama model: ") + model, this.lastTranscript);
     this._spawnJson(installArgs, (payload) => {
-      if (this.ollamaModelInstallToken !== installToken) {
-        return;
-      }
-      this.ollamaModelInstallToken = null;
-      this.isCommandRunning = false;
-      this.ollamaModelInstallRunning = false;
-      if (!flowToken || this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
-        return;
-      }
-      if (payload.error) {
-        let safeError = this._sanitizeErrorMessage(payload.error);
+      try {
+        if (this.ollamaModelInstallToken !== installToken) {
+          return;
+        }
+        this.ollamaModelInstallToken = null;
+        this.isCommandRunning = false;
+        this.ollamaModelInstallRunning = false;
+        if (!flowToken || this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
+          return;
+        }
+        if (payload.error) {
+          let safeError = this._sanitizeErrorMessage(payload.error);
+          this._clearOllamaModelFlow(flowToken);
+          this._setStatus("error", safeError, this.lastTranscript);
+          this._notify(_("Ollama model installation failed"), safeError, true);
+          this._refreshTextModelMenu();
+          return;
+        }
+        let installedModel = payload && typeof payload.model === "string" && payload.model.trim() !== ""
+          ? payload.model.trim()
+          : String(model || "").trim();
+        if (installedModel === "") {
+          this._clearOllamaModelFlow(flowToken);
+          this._setStatus("error", _("Ollama installation returned no model name"), this.lastTranscript);
+          this._refreshTextModelMenu();
+          return;
+        }
+        let message = _("Ollama model installed: ") + installedModel;
         this._clearOllamaModelFlow(flowToken);
-        this._setStatus("error", safeError, this.lastTranscript);
-        this._notify(_("Ollama model installation failed"), safeError, true);
-        this._refreshTextModelMenu();
-        return;
+        if (!this._selectTextModelBackend("ollama", installedModel, message)) {
+          this._refreshTextModelMenu();
+          return;
+        }
+        this._notify(_("Ollama model installed"), installedModel, false);
+      } catch (error) {
+        if (this.ollamaModelFlowToken === flowToken) {
+          this.ollamaModelFlowToken = null;
+        }
+        this._recordLifecycleError("ollama-flow", error);
+        this._setStatus("error", _("Could not complete Ollama model installation"), this.lastTranscript);
       }
-      let installedModel = payload && typeof payload.model === "string" && payload.model.trim() !== ""
-        ? payload.model.trim()
-        : String(model || "").trim();
-      if (installedModel === "") {
-        this._clearOllamaModelFlow(flowToken);
-        this._setStatus("error", _("Ollama installation returned no model name"), this.lastTranscript);
-        this._refreshTextModelMenu();
-        return;
-      }
-      let message = _("Ollama model installed: ") + installedModel;
-      this._clearOllamaModelFlow(flowToken);
-      if (!this._selectTextModelBackend("ollama", installedModel, message)) {
-        this._refreshTextModelMenu();
-        return;
-      }
-      this._notify(_("Ollama model installed"), installedModel, false);
     }, { timeoutMs: BENCHMARK_COMMAND_TIMEOUT_MS, resourceGroup: "ollama" });
   },
 
