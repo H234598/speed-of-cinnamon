@@ -3817,6 +3817,7 @@ MyApplet.prototype = {
 
   _onVoiceBackendSettingsChanged: function() {
     this.modelMenuRefreshToken = null;
+    let modelMenuCleanupSucceeded = this._terminateProcessesByGroup("model-menu-refresh") !== false;
     let hadVoiceModelAction = Boolean(this.voiceModelActionToken);
     this.voiceModelActionToken = null;
     let voiceModelCleanupSucceeded = this._terminateProcessesByGroup("voice-model") !== false;
@@ -3831,6 +3832,9 @@ MyApplet.prototype = {
     this._updatePanel();
     if (!voiceModelCleanupSucceeded) {
       this._setStatusPreservingRecording("error", _("Voice model operation could not be stopped"), this.lastTranscript);
+    }
+    if (!modelMenuCleanupSucceeded) {
+      this._setStatusPreservingRecording("error", _("Voice model list refresh could not be stopped"), this.lastTranscript);
     }
   },
 
@@ -5099,6 +5103,7 @@ MyApplet.prototype = {
     this.activeLanguageExplicit = false;
     this._syncActiveLanguage();
     this.modelMenuRefreshToken = null;
+    let modelMenuCleanupSucceeded = this._terminateProcessesByGroup("model-menu-refresh") !== false;
     let hadVoiceModelAction = Boolean(this.voiceModelActionToken);
     this.voiceModelActionToken = null;
     let voiceModelCleanupSucceeded = this._terminateProcessesByGroup("voice-model") !== false;
@@ -5114,6 +5119,9 @@ MyApplet.prototype = {
     this._updatePanel();
     if (!voiceModelCleanupSucceeded) {
       this._setStatusPreservingRecording("error", _("Voice model operation could not be stopped"), this.lastTranscript);
+    }
+    if (!modelMenuCleanupSucceeded) {
+      this._setStatusPreservingRecording("error", _("Voice model list refresh could not be stopped"), this.lastTranscript);
     }
   },
 
@@ -6768,7 +6776,7 @@ MyApplet.prototype = {
         this._recordLifecycleError("menu-refresh", error);
         this._setStatusPreservingRecording("error", _("Could not refresh voice model list"), this.lastTranscript);
       }
-    });
+    }, { resourceGroup: "model-menu-refresh" });
   },
 
   _populateModelMenu: function(models, message) {
