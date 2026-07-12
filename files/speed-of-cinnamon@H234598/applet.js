@@ -3572,12 +3572,13 @@ MyApplet.prototype = {
     this._clearClipboardOverwriteApproval();
     let hadInsertToken = Boolean(this.textInsertToken);
     let pendingInsertFingerprint = String(this.autoInsertPendingFingerprint || "");
+    let fingerprintCleanupSucceeded = true;
     if (hadInsertToken) {
       this.textInsertToken = null;
     }
     if (pendingInsertFingerprint !== "") {
-      this._forgetAutoInsertFingerprint(pendingInsertFingerprint);
-      if (this.autoInsertPendingFingerprint === pendingInsertFingerprint) {
+      fingerprintCleanupSucceeded = this._forgetAutoInsertFingerprint(pendingInsertFingerprint) !== false;
+      if (fingerprintCleanupSucceeded && this.autoInsertPendingFingerprint === pendingInsertFingerprint) {
         this.autoInsertPendingFingerprint = "";
       }
     }
@@ -3590,6 +3591,9 @@ MyApplet.prototype = {
       cancellationSucceeded = false;
     }
     if (this._terminateProcessesByGroup("x11") === false) {
+      cancellationSucceeded = false;
+    }
+    if (!fingerprintCleanupSucceeded) {
       cancellationSucceeded = false;
     }
     this.textInsertCancellationFailed = !cancellationSucceeded;
