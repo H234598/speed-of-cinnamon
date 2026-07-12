@@ -9985,7 +9985,10 @@ MyApplet.prototype = {
       if (!this.clipboard || !this.clipboard.set_text) {
         return false;
       }
-      this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
+      let result = this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
+      if (result === false) {
+        throw new Error("Clipboard text could not be set");
+      }
       return true;
     } catch (error) {
       this._recordLifecycleError("clipboard-set", error);

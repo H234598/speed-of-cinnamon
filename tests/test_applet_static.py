@@ -2073,6 +2073,8 @@ class AppletStaticTest(unittest.TestCase):
         end = source.index("\n  _describeNonTextClipboardPayload:", start)
         block = source[start:end]
         self.assertLess(block.index("try {"), block.index("this.clipboard.set_text"))
+        self.assertIn("let result = this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);", block)
+        self.assertIn('throw new Error("Clipboard text could not be set");', block)
 
     def test_menu_teardown_retains_handles_after_cleanup_failures(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
