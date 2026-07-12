@@ -2442,6 +2442,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._orphanedHotkeys = [];", block)
         self.assertIn("this._orphanedHotkeyStates = {};", block)
         self.assertIn("this._orphanedHotkeys.indexOf(key)", block)
+        self.assertIn('throw new Error("Hotkey orphan entry could not be tracked");', block)
         self.assertIn("externallyRemoved === true", block)
         self.assertIn('"teardown-orphaned-hotkeys"', block)
         self.assertIn('"removeHotKey"', block)

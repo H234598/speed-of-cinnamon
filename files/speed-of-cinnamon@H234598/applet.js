@@ -3293,6 +3293,9 @@ MyApplet.prototype = {
       }
       if (this._orphanedHotkeys.indexOf(key) < 0) {
         this._orphanedHotkeys.push(key);
+        if (this._orphanedHotkeys.indexOf(key) < 0) {
+          throw new Error("Hotkey orphan entry could not be tracked");
+        }
       }
       if (externallyRemoved === true) {
         this._orphanedHotkeyStates[key] = true;
