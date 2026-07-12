@@ -6378,18 +6378,26 @@ MyApplet.prototype = {
       return;
     }
     this._spawnJson(alarmEnableArgs, (payload) => {
-      if (this.alarmActionToken !== actionToken || !this._lifecycleAllowsWork()) {
-        return;
-      }
-      if (payload.error) {
+      try {
+        if (this.alarmActionToken !== actionToken || !this._lifecycleAllowsWork()) {
+          return;
+        }
+        if (payload.error) {
+          this.alarmActionToken = null;
+          this._setAlarmErrorStatus(this._sanitizeErrorMessage(payload.error));
+          return;
+        }
         this.alarmActionToken = null;
-        this._setAlarmErrorStatus(this._sanitizeErrorMessage(payload.error));
-        return;
+        this.alarmMenuRefreshToken = null;
+        this._setAlarmOptionStatus(enabled ? _("Alarm enabled") : _("Alarm disabled"));
+        this._refreshAlarmMenu();
+      } catch (error) {
+        if (this.alarmActionToken === actionToken) {
+          this.alarmActionToken = null;
+        }
+        this._recordLifecycleError("alarm-action", error);
+        this._setAlarmErrorStatus(_("Could not complete alarm update"));
       }
-      this.alarmActionToken = null;
-      this.alarmMenuRefreshToken = null;
-      this._setAlarmOptionStatus(enabled ? _("Alarm enabled") : _("Alarm disabled"));
-      this._refreshAlarmMenu();
     });
   },
 
@@ -6413,18 +6421,26 @@ MyApplet.prototype = {
       return;
     }
     this._spawnJson(alarmRemoveArgs, (payload) => {
-      if (this.alarmActionToken !== actionToken || !this._lifecycleAllowsWork()) {
-        return;
-      }
-      if (payload.error) {
+      try {
+        if (this.alarmActionToken !== actionToken || !this._lifecycleAllowsWork()) {
+          return;
+        }
+        if (payload.error) {
+          this.alarmActionToken = null;
+          this._setAlarmErrorStatus(this._sanitizeErrorMessage(payload.error));
+          return;
+        }
         this.alarmActionToken = null;
-        this._setAlarmErrorStatus(this._sanitizeErrorMessage(payload.error));
-        return;
+        this.alarmMenuRefreshToken = null;
+        this._setAlarmOptionStatus(payload.removed === true ? _("Alarm removed") : _("Alarm not found"));
+        this._refreshAlarmMenu();
+      } catch (error) {
+        if (this.alarmActionToken === actionToken) {
+          this.alarmActionToken = null;
+        }
+        this._recordLifecycleError("alarm-action", error);
+        this._setAlarmErrorStatus(_("Could not complete alarm removal"));
       }
-      this.alarmActionToken = null;
-      this.alarmMenuRefreshToken = null;
-      this._setAlarmOptionStatus(payload.removed === true ? _("Alarm removed") : _("Alarm not found"));
-      this._refreshAlarmMenu();
     });
   },
 
@@ -6449,50 +6465,60 @@ MyApplet.prototype = {
       return;
     }
     this._spawnJson(alarmCheckArgs, (payload) => {
-      if (this.alarmCheckToken !== checkToken || !this._lifecycleAllowsWork()) {
-        return;
-      }
-      if (payload.error) {
-        this.alarmCheckToken = null;
-        if (manual) {
-          this._setAlarmErrorStatus(this._sanitizeErrorMessage(payload.error));
+      try {
+        if (this.alarmCheckToken !== checkToken || !this._lifecycleAllowsWork()) {
+          return;
         }
-        return;
-      }
-      this.alarmCheckToken = null;
-      let due = Array.isArray(payload.due)
-        ? payload.due.filter((alarm) => alarm && typeof alarm === "object")
-        : [];
-      let dueCount = due.length;
-      let dueWasTruncated = dueCount > MAX_ALARM_NOTIFICATIONS;
-      if (dueWasTruncated) {
-        due = due.slice(0, MAX_ALARM_NOTIFICATIONS);
-      }
-      for (let alarm of due) {
-        if (alarm.notify !== true) {
-          continue;
-        }
-        let body = typeof alarm.body === "string" ? alarm.body.trim() : "";
-        let label = typeof alarm.label === "string" ? alarm.label.trim() : "";
-        this._notify(_("Speed of Cinnamon alarm"), body || label || _("Alarm due"), alarm.critical === true);
-      }
-      if (due.length > 0) {
-        let first = due[0] || {};
-        if (manual || this.status === "idle" || this.status === "ready" || this.status === "done") {
-          let firstLabel = typeof first.label === "string" ? first.label.trim() : "";
-          let firstTime = typeof first.time === "string" ? first.time.trim() : "";
-          let alarmStatusLabel = firstLabel || firstTime || String(dueCount);
-          if (dueWasTruncated) {
-            alarmStatusLabel += " (" + _("some notifications suppressed for safety") + ")";
+        if (payload.error) {
+          this.alarmCheckToken = null;
+          if (manual) {
+            this._setAlarmErrorStatus(this._sanitizeErrorMessage(payload.error));
           }
-          this._setAlarmOptionStatus(_("Alarm: ") + alarmStatusLabel);
+          return;
         }
-      } else if (manual) {
-        this._setAlarmOptionStatus(_("No alarms due"));
-      }
-      if (manual) {
-        this.alarmMenuRefreshToken = null;
-        this._refreshAlarmMenu();
+        this.alarmCheckToken = null;
+        let due = Array.isArray(payload.due)
+          ? payload.due.filter((alarm) => alarm && typeof alarm === "object")
+          : [];
+        let dueCount = due.length;
+        let dueWasTruncated = dueCount > MAX_ALARM_NOTIFICATIONS;
+        if (dueWasTruncated) {
+          due = due.slice(0, MAX_ALARM_NOTIFICATIONS);
+        }
+        for (let alarm of due) {
+          if (alarm.notify !== true) {
+            continue;
+          }
+          let body = typeof alarm.body === "string" ? alarm.body.trim() : "";
+          let label = typeof alarm.label === "string" ? alarm.label.trim() : "";
+          this._notify(_("Speed of Cinnamon alarm"), body || label || _("Alarm due"), alarm.critical === true);
+        }
+        if (due.length > 0) {
+          let first = due[0] || {};
+          if (manual || this.status === "idle" || this.status === "ready" || this.status === "done") {
+            let firstLabel = typeof first.label === "string" ? first.label.trim() : "";
+            let firstTime = typeof first.time === "string" ? first.time.trim() : "";
+            let alarmStatusLabel = firstLabel || firstTime || String(dueCount);
+            if (dueWasTruncated) {
+              alarmStatusLabel += " (" + _("some notifications suppressed for safety") + ")";
+            }
+            this._setAlarmOptionStatus(_("Alarm: ") + alarmStatusLabel);
+          }
+        } else if (manual) {
+          this._setAlarmOptionStatus(_("No alarms due"));
+        }
+        if (manual) {
+          this.alarmMenuRefreshToken = null;
+          this._refreshAlarmMenu();
+        }
+      } catch (error) {
+        if (this.alarmCheckToken === checkToken) {
+          this.alarmCheckToken = null;
+        }
+        this._recordLifecycleError("alarm-check", error);
+        if (manual) {
+          this._setAlarmErrorStatus(_("Could not complete alarm check"));
+        }
       }
     });
   },

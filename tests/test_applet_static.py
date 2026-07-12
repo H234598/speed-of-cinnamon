@@ -4089,6 +4089,21 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn(f"this.{token_name} = null;", block)
             self.assertIn("this._recordLifecycleError(", block)
 
+    def test_alarm_callbacks_release_tokens_when_processing_throws(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method, args_name, token_name, group, message in [
+            ("_setAlarmEnabled: function(id, enabled)", "\n  _removeAlarm:", "alarmEnableArgs", "alarmActionToken", "alarm-action", "Could not complete alarm update"),
+            ("_removeAlarm: function(id)", "\n  _checkAlarms:", "alarmRemoveArgs", "alarmActionToken", "alarm-action", "Could not complete alarm removal"),
+            ("_checkAlarms: function(manual)", "\n  _refreshInputSourceMenu:", "alarmCheckArgs", "alarmCheckToken", "alarm-check", "Could not complete alarm check"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn(f"this._spawnJson({args_name}, (payload) => {{\n      try {{", block)
+            self.assertIn(f"if (this.{token_name} ===", block)
+            self.assertIn(f'this._recordLifecycleError("{group}", error);', block)
+            self.assertIn(f'this._setAlarmErrorStatus(_("{message}"));', block)
+
     def test_settings_transfers_ignore_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
