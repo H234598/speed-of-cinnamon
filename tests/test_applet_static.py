@@ -6023,6 +6023,7 @@ class AppletStaticTest(unittest.TestCase):
             "autoPastePromptToken",
         ]:
             self.assertIn(f"this.{token} = null;", helper_block)
+        self.assertIn('this._terminateProcessesByGroup("history-refresh")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("input-source-refresh")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("model-menu-refresh")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("text-model-refresh")', helper_block)
@@ -6035,7 +6036,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._terminateProcessesByGroup("doctor")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("settings-transfer")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("setup-diagnostics")', helper_block)
-        self.assertIn("return inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && textModelRefreshCleanupSucceeded && alarmMenuRefreshCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;", helper_block)
+        self.assertIn("return historyRefreshCleanupSucceeded && inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && textModelRefreshCleanupSucceeded && alarmMenuRefreshCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;", helper_block)
         self.assertNotIn("this.transcriptWindowToken = null;", helper_block)
         self.assertNotIn("this.settingsWindowToken = null;", helper_block)
 

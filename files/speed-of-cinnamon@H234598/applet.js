@@ -5432,6 +5432,10 @@ MyApplet.prototype = {
 
   _invalidateBackgroundCallbacksForRecording: function() {
     this.historyRefreshToken = null;
+    let historyRefreshCleanupSucceeded = this._terminateProcessesByGroup("history-refresh") !== false;
+    if (!historyRefreshCleanupSucceeded) {
+      this._setStatusPreservingRecording("error", _("History refresh could not be stopped"), this.lastTranscript);
+    }
     this.inputSourceMenuRefreshToken = null;
     let inputSourceRefreshCleanupSucceeded = this._terminateProcessesByGroup("input-source-refresh") !== false;
     if (!inputSourceRefreshCleanupSucceeded) {
@@ -5490,7 +5494,7 @@ MyApplet.prototype = {
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
     this.transcriptListPromptToken = null;
-    return inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && textModelRefreshCleanupSucceeded && alarmMenuRefreshCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;
+    return historyRefreshCleanupSucceeded && inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && textModelRefreshCleanupSucceeded && alarmMenuRefreshCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;
   },
 
   _runDoctor: function(startupCheck) {
