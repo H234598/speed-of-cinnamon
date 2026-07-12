@@ -2348,6 +2348,8 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_closeMenuForKeyboardInsert: function()")
         end = source.index("\n  _clearTargetWindowXid:", start)
         block = source[start:end]
+        self.assertIn("let result = this.menu.close();", block)
+        self.assertIn('throw new Error("Applet menu could not be closed");', block)
         self.assertIn('this._recordLifecycleError("keyboard-menu-close", err);', block)
         self.assertNotIn("global.logError(err);", block)
 

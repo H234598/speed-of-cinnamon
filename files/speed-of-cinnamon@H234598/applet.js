@@ -8728,7 +8728,10 @@ MyApplet.prototype = {
   _closeMenuForKeyboardInsert: function() {
     try {
       if (this.menu && this.menu.isOpen) {
-        this.menu.close();
+        let result = this.menu.close();
+        if (result === false) {
+          throw new Error("Applet menu could not be closed");
+        }
       }
       return true;
     } catch (err) {
