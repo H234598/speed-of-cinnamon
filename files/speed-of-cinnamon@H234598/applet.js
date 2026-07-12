@@ -948,6 +948,7 @@ MyApplet.prototype = {
     }
     let targets = [];
     let visited = [];
+    let collectionSucceeded = true;
     let addTarget = (target) => {
       if (target && targets.indexOf(target) < 0) {
         targets.push(target);
@@ -978,9 +979,13 @@ MyApplet.prototype = {
         }
       } catch (error) {
         this._recordLifecycleError("menu-items", error);
+        collectionSucceeded = false;
       }
     };
     collect(menu);
+    if (!collectionSucceeded) {
+      return false;
+    }
     let signalsCleanupSucceeded = true;
     for (let target of targets) {
       if (!this._disconnectTrackedSignalsForTarget(target)) {

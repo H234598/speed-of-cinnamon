@@ -2236,11 +2236,14 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
 
         self.assertIn("let visited = [];", block)
+        self.assertIn("let collectionSucceeded = true;", block)
         self.assertIn("if (visited.indexOf(current) >= 0)", block)
         self.assertIn("visited.push(current);", block)
         self.assertIn("if (!Array.isArray(items))", block)
         self.assertIn('throw new Error("Menu items are unavailable");', block)
         self.assertIn('this._recordLifecycleError("menu-items", error);', block)
+        self.assertIn("collectionSucceeded = false;", block)
+        self.assertIn("if (!collectionSucceeded) {\n      return false;", block)
         self.assertIn('typeof menu.removeAll !== "function"', block)
         self.assertIn("let result = menu.removeAll();", block)
         self.assertIn('throw new Error("Menu items could not be removed");', block)
