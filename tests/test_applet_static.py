@@ -1760,6 +1760,7 @@ class AppletStaticTest(unittest.TestCase):
             "_beginTeardown: function()",
             "_finishTeardown: function()",
             "this._recordLifecycleError(\"init\", error);",
+            'this._runTeardownGuarded("init-teardown", () => this.on_applet_removed_from_panel());',
             "return !this._initFailed &&",
             "this._disabledErrorGroups[key] = true;",
             "this.lifecycleState = LIFECYCLE_DEGRADED;",

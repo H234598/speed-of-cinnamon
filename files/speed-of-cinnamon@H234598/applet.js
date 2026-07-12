@@ -569,6 +569,7 @@ MyApplet.prototype = {
     this._initFailed = true;
     this._recordLifecycleError("init", error);
     this.lifecycleState = LIFECYCLE_DEGRADED;
+    this._runTeardownGuarded("init-teardown", () => this.on_applet_removed_from_panel());
     try {
       if (this.set_applet_label) {
         this.set_applet_label("ERR");
