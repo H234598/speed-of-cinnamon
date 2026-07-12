@@ -4152,7 +4152,7 @@ class AppletStaticTest(unittest.TestCase):
         import_start = source.index("_importSettings: function()")
         import_end = source.index("\n  _applyImportedSettings:", import_start)
         import_block = source[import_start:import_end]
-        self.assertIn("try {\n        let applied = this._applyImportedSettings(payload.settings || {});", import_block)
+        self.assertIn("try {\n          let applied = this._applyImportedSettings(payload.settings || {});", import_block)
         self.assertIn('this._setStatus("error", _("Could not apply imported settings: ") + safeError', import_block)
 
     def test_settings_transfers_release_tokens_when_argument_building_fails(self) -> None:
@@ -4172,6 +4172,21 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn("if (this.settingsTransferToken === transferToken) {", block)
             self.assertIn("this.settingsTransferToken = null;", block)
             self.assertIn('this._recordLifecycleError("settings-transfer", error);', block)
+
+    def test_settings_transfer_callbacks_release_tokens_when_processing_throws(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method, args_name, message in [
+            ("_exportSettings: function()", "\n  _importSettings:", "exportArgs", "Could not complete settings export"),
+            ("_importSettings: function()", "\n  _applyImportedSettings:", "importArgs", "Could not complete settings import"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn(f"this._spawnJson({args_name}, (payload) => {{", block)
+            self.assertIn("try {\n        if (payload.error) {", block)
+            self.assertIn("if (this.settingsTransferToken === transferToken) {", block)
+            self.assertIn('this._recordLifecycleError("settings-transfer", error);', block)
+            self.assertIn(f'_("{message}")', block)
 
     def test_history_refresh_releases_token_when_argument_building_fails(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

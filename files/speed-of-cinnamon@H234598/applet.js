@@ -9357,13 +9357,21 @@ MyApplet.prototype = {
       if (this.settingsTransferToken !== transferToken || !this._lifecycleAllowsWork()) {
         return;
       }
-      if (payload.error) {
+      try {
+        if (payload.error) {
+          this.settingsTransferToken = null;
+          this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          return;
+        }
         this.settingsTransferToken = null;
-        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
-        return;
+        this._setStatus("done", _("Exported settings"), this.lastTranscript);
+      } catch (error) {
+        if (this.settingsTransferToken === transferToken) {
+          this.settingsTransferToken = null;
+        }
+        this._recordLifecycleError("settings-transfer", error);
+        this._setStatus("error", _("Could not complete settings export"), this.lastTranscript);
       }
-      this.settingsTransferToken = null;
-      this._setStatus("done", _("Exported settings"), this.lastTranscript);
     }, inputOption);
   },
 
@@ -9389,18 +9397,26 @@ MyApplet.prototype = {
       if (this.settingsTransferToken !== transferToken || !this._lifecycleAllowsWork()) {
         return;
       }
-      if (payload.error) {
-        this.settingsTransferToken = null;
-        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
-        return;
-      }
-      this.settingsTransferToken = null;
       try {
-        let applied = this._applyImportedSettings(payload.settings || {});
-        this._setStatus("done", _("Imported settings: ") + String(applied), this.lastTranscript);
-      } catch (err) {
-        let safeError = this._sanitizeErrorMessage(err);
-        this._setStatus("error", _("Could not apply imported settings: ") + safeError, this.lastTranscript);
+        if (payload.error) {
+          this.settingsTransferToken = null;
+          this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          return;
+        }
+        this.settingsTransferToken = null;
+        try {
+          let applied = this._applyImportedSettings(payload.settings || {});
+          this._setStatus("done", _("Imported settings: ") + String(applied), this.lastTranscript);
+        } catch (err) {
+          let safeError = this._sanitizeErrorMessage(err);
+          this._setStatus("error", _("Could not apply imported settings: ") + safeError, this.lastTranscript);
+        }
+      } catch (error) {
+        if (this.settingsTransferToken === transferToken) {
+          this.settingsTransferToken = null;
+        }
+        this._recordLifecycleError("settings-transfer", error);
+        this._setStatus("error", _("Could not complete settings import"), this.lastTranscript);
       }
     });
   },
