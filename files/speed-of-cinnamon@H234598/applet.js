@@ -1843,10 +1843,14 @@ MyApplet.prototype = {
           knownEntry.cancelSucceeded = true;
         }
       } else {
-        this._orphanedCancellables.push({
+        let entry = {
           token: key,
           cancelSucceeded: cancelSucceeded === true,
-        });
+        };
+        this._orphanedCancellables.push(entry);
+        if (this._orphanedCancellables.indexOf(entry) < 0) {
+          throw new Error("Cancellable orphan entry could not be tracked");
+        }
       }
       return true;
     } catch (error) {
