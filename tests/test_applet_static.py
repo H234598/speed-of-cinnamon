@@ -1777,6 +1777,18 @@ class AppletStaticTest(unittest.TestCase):
                 block.index("this.isCommandRunning = false;")
             )
 
+    def test_relisten_restart_callback_fails_closed_on_processing_exceptions(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_restartRelistenRecording: function()")
+        end = source.index("\n  _preparedTranscriptText:", start)
+        block = source[start:end]
+        self.assertIn("this._spawnJson(startArgs, (payload) => {", block)
+        self.assertIn("try {\n        this._recordingCommandToken = null;", block)
+        self.assertIn("if (this._recordingCommandToken === recordingCommandToken) {", block)
+        self.assertIn('this._recordLifecycleError("recording-relisten", error);', block)
+        self.assertIn('_("Could not start next recording")', block)
+        self.assertIn('this.autoRelistenPendingToken = "";', block)
+
     def test_auto_recording_commands_validate_settings_before_busy_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
@@ -5085,7 +5097,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("} else if (shouldRelisten) {\n      this.autoRelistenPending = false;", block)
         self.assertIn('this.autoRelistenPendingToken = "";', block)
         self.assertNotIn("} else if (!shouldRelisten) {", block)
-        self.assertIn("if (payload.error) {\n        this.autoRelistenPending = false;", restart_block)
+        self.assertIn("if (payload.error) {\n          this.autoRelistenPending = false;", restart_block)
         self.assertIn('nextStatus === "recording" || nextStatus === "recorded"', restart_block)
         self.assertIn('this.autoRelistenPendingToken = "";', restart_block)
         apply_index = restart_block.index("this._applyPayloadSafely(payload);")

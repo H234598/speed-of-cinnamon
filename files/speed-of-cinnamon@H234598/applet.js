@@ -12621,20 +12621,31 @@ MyApplet.prototype = {
       if (this._recordingCommandToken !== recordingCommandToken || !this._lifecycleAllowsWork()) {
         return;
       }
-      this._recordingCommandToken = null;
-      this.isCommandRunning = false;
-      if (payload.error) {
+      try {
+        this._recordingCommandToken = null;
+        this.isCommandRunning = false;
+        if (payload.error) {
+          this.autoRelistenPending = false;
+          this.autoRelistenPendingToken = "";
+          this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          return;
+        }
+        let nextStatus = this._normalizePayloadStatus(payload && payload.status, Boolean(payload && payload.error));
+        if (nextStatus === "recording" || nextStatus === "recorded") {
+          this.autoRelistenPending = false;
+          this.autoRelistenPendingToken = "";
+        }
+        this._applyPayloadSafely(payload);
+      } catch (error) {
+        if (this._recordingCommandToken === recordingCommandToken) {
+          this._recordingCommandToken = null;
+        }
+        this.isCommandRunning = false;
         this.autoRelistenPending = false;
         this.autoRelistenPendingToken = "";
-        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
-        return;
+        this._recordLifecycleError("recording-relisten", error);
+        this._setStatus("error", _("Could not start next recording"), this.lastTranscript);
       }
-      let nextStatus = this._normalizePayloadStatus(payload && payload.status, Boolean(payload && payload.error));
-      if (nextStatus === "recording" || nextStatus === "recorded") {
-        this.autoRelistenPending = false;
-        this.autoRelistenPendingToken = "";
-      }
-      this._applyPayloadSafely(payload);
     });
     return true;
   },
