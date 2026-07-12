@@ -10042,6 +10042,13 @@ MyApplet.prototype = {
         return null;
       }
     }
+    if (Array.isArray(this._orphanedTimers) && this._orphanedTimers.length > 0) {
+      let orphanTimerCleanupSucceeded = this._retryOrphanedTimers();
+      if (!orphanTimerCleanupSucceeded || this._orphanedTimers.length > 0) {
+        this._recordLifecycleError("timer-state", new Error("An orphaned timer is still pending"));
+        return null;
+      }
+    }
     let hasInput = options.inputText !== null && options.inputText !== undefined;
     if (hasInput && typeof options.inputText !== "string") {
       throw new Error("Subprocess input must be text");
