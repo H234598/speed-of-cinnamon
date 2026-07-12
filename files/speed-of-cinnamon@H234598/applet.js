@@ -3807,8 +3807,12 @@ MyApplet.prototype = {
 
   _onInputSourceSettingsChanged: function() {
     this.inputSourceMenuRefreshToken = null;
+    let inputSourceCleanupSucceeded = this._terminateProcessesByGroup("input-source-refresh") !== false;
     this._populateInputSourceMenu([], _("Open menu to load input sources"));
     this._updatePanel();
+    if (!inputSourceCleanupSucceeded) {
+      this._setStatusPreservingRecording("error", _("Input source refresh could not be stopped"), this.lastTranscript);
+    }
   },
 
   _onVoiceBackendSettingsChanged: function() {
@@ -6609,7 +6613,7 @@ MyApplet.prototype = {
         this._recordLifecycleError("menu-refresh", error);
         this._setStatusPreservingRecording("error", _("Could not refresh input source list"), this.lastTranscript);
       }
-    });
+    }, { resourceGroup: "input-source-refresh" });
   },
 
   _populateInputSourceMenu: function(sources, message) {

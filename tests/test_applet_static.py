@@ -1506,7 +1506,17 @@ class AppletStaticTest(unittest.TestCase):
 
         input_start = source.index("_onInputSourceSettingsChanged: function()")
         input_end = source.index("\n  _onVoiceBackendSettingsChanged:", input_start)
-        self.assertIn("this.inputSourceMenuRefreshToken = null;", source[input_start:input_end])
+        input_block = source[input_start:input_end]
+        self.assertIn("this.inputSourceMenuRefreshToken = null;", input_block)
+        self.assertIn('this._terminateProcessesByGroup("input-source-refresh")', input_block)
+        self.assertLess(
+            input_block.index("this.inputSourceMenuRefreshToken = null;"),
+            input_block.index('this._terminateProcessesByGroup("input-source-refresh")')
+        )
+
+        input_refresh_start = source.index("_refreshInputSourceMenu: function()")
+        input_refresh_end = source.index("\n  _populateInputSourceMenu:", input_refresh_start)
+        self.assertIn('resourceGroup: "input-source-refresh"', source[input_refresh_start:input_refresh_end])
 
     def test_voice_model_callbacks_fail_closed_on_processing_exceptions(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
