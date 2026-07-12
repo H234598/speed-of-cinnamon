@@ -434,6 +434,7 @@ MyApplet.prototype = {
     this._orphanedMonitors = [];
     this._orphanedCancellables = [];
     this._hotkeyDefinitions = {};
+    this._orphanedHotkeyStates = {};
     this._teardownComplete = false;
     this._initFailed = false;
     this.appletRemoved = false;
@@ -2861,8 +2862,8 @@ MyApplet.prototype = {
       return true;
     }, false) === true;
     if (!removed) {
-      if (removeAttemptFailed) {
-        this._trackOrphanedHotkey(name);
+      if (removeAttemptFailed || removedExternally) {
+        this._trackOrphanedHotkey(name, removedExternally);
       }
       if (removedExternally && previous) {
         this._runStateGuarded("hotkeys", () => {
@@ -2983,7 +2984,7 @@ MyApplet.prototype = {
     }
   },
 
-  _trackOrphanedHotkey: function(name) {
+  _trackOrphanedHotkey: function(name, externallyRemoved) {
     try {
       let key = String(name || "").trim();
       if (key === "") {
@@ -2992,8 +2993,16 @@ MyApplet.prototype = {
       if (!Array.isArray(this._orphanedHotkeys)) {
         this._orphanedHotkeys = [];
       }
+      if (!this._orphanedHotkeyStates || typeof this._orphanedHotkeyStates !== "object") {
+        this._orphanedHotkeyStates = {};
+      }
       if (this._orphanedHotkeys.indexOf(key) < 0) {
         this._orphanedHotkeys.push(key);
+      }
+      if (externallyRemoved === true) {
+        this._orphanedHotkeyStates[key] = true;
+      } else if (!Object.prototype.hasOwnProperty.call(this._orphanedHotkeyStates, key)) {
+        this._orphanedHotkeyStates[key] = false;
       }
       return true;
     } catch (error) {
@@ -3014,6 +3023,12 @@ MyApplet.prototype = {
       }
       try {
         this._orphanedHotkeys.splice(index, 1);
+        if (this._orphanedHotkeyStates && Object.prototype.hasOwnProperty.call(this._orphanedHotkeyStates, key)) {
+          let deleted = delete this._orphanedHotkeyStates[key];
+          if (deleted === false || Object.prototype.hasOwnProperty.call(this._orphanedHotkeyStates, key)) {
+            throw new Error("Hotkey orphan state could not be removed");
+          }
+        }
       } catch (error) {
         this._recordLifecycleError("hotkey-orphan", error);
         success = false;
@@ -3029,17 +3044,40 @@ MyApplet.prototype = {
     let success = true;
     for (let index = this._orphanedHotkeys.length - 1; index >= 0; index--) {
       let name = this._orphanedHotkeys[index];
-      if (!this._runTeardownOperation(
-        "teardown-orphaned-hotkeys",
-        Main && Main.keybindingManager,
-        "removeHotKey",
-        [name]
-      )) {
-        success = false;
-        continue;
+      let externallyRemoved = this._orphanedHotkeyStates && this._orphanedHotkeyStates[name] === true;
+      if (!externallyRemoved) {
+        if (!this._runTeardownOperation(
+          "teardown-orphaned-hotkeys",
+          Main && Main.keybindingManager,
+          "removeHotKey",
+          [name]
+        )) {
+          success = false;
+          continue;
+        }
+        this._trackOrphanedHotkey(name, true);
       }
       try {
-        this._orphanedHotkeys.splice(index, 1);
+        if (this._resourceRegistry) {
+          if (!this._resourceRegistry.hotkeys) {
+            throw new Error("Hotkey registry is unavailable");
+          }
+          if (Object.prototype.hasOwnProperty.call(this._resourceRegistry.hotkeys, name)) {
+            let deleted = delete this._resourceRegistry.hotkeys[name];
+            if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.hotkeys, name)) {
+              throw new Error("Hotkey registry entry could not be removed during orphan cleanup");
+            }
+          }
+        }
+        if (this._hotkeyDefinitions && Object.prototype.hasOwnProperty.call(this._hotkeyDefinitions, name)) {
+          let deleted = delete this._hotkeyDefinitions[name];
+          if (deleted === false || Object.prototype.hasOwnProperty.call(this._hotkeyDefinitions, name)) {
+            throw new Error("Hotkey definition could not be removed during orphan cleanup");
+          }
+        }
+        if (!this._untrackOrphanedHotkey(name)) {
+          throw new Error("Hotkey orphan state could not be completed");
+        }
       } catch (error) {
         this._recordLifecycleError("teardown-orphaned-hotkeys", error);
         success = false;
@@ -3057,27 +3095,42 @@ MyApplet.prototype = {
         throw new Error("Hotkey removal failed during teardown");
       }
       removed = true;
-      this._untrackOrphanedHotkey(name);
     });
     if (!removed) {
-      this._trackOrphanedHotkey(name);
+      this._trackOrphanedHotkey(name, false);
       return;
     }
+    let registryCleanupSucceeded = true;
     if (this._resourceRegistry) {
-      this._runTeardownGuarded("teardown-hotkeys", () => {
+      try {
+        if (!this._resourceRegistry.hotkeys) {
+          throw new Error("Hotkey registry is unavailable");
+        }
         let deleted = delete this._resourceRegistry.hotkeys[name];
         if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.hotkeys, name)) {
           throw new Error("Hotkey registry entry could not be removed during teardown");
         }
-      });
+      } catch (error) {
+        this._recordLifecycleError("teardown-hotkeys", error);
+        registryCleanupSucceeded = false;
+      }
     }
+    let definitionCleanupSucceeded = true;
     if (this._hotkeyDefinitions) {
-      this._runTeardownGuarded("teardown-hotkeys", () => {
+      try {
         let deleted = delete this._hotkeyDefinitions[name];
         if (deleted === false || Object.prototype.hasOwnProperty.call(this._hotkeyDefinitions, name)) {
           throw new Error("Hotkey definition could not be removed during teardown");
         }
-      });
+      } catch (error) {
+        this._recordLifecycleError("teardown-hotkeys", error);
+        definitionCleanupSucceeded = false;
+      }
+    }
+    if (!registryCleanupSucceeded || !definitionCleanupSucceeded) {
+      this._trackOrphanedHotkey(name, true);
+    } else if (!this._untrackOrphanedHotkey(name)) {
+      this._trackOrphanedHotkey(name, true);
     }
   },
 

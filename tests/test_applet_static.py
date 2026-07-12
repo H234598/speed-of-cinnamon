@@ -2296,13 +2296,17 @@ class AppletStaticTest(unittest.TestCase):
 
     def test_orphaned_hotkeys_are_retried_during_teardown(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
-        start = source.index("_trackOrphanedHotkey: function(name)")
+        start = source.index("_trackOrphanedHotkey: function(name, externallyRemoved)")
         end = source.index("\n  _removeHotkey:", start)
         block = source[start:end]
         self.assertIn("this._orphanedHotkeys = [];", block)
+        self.assertIn("this._orphanedHotkeyStates = {};", block)
         self.assertIn("this._orphanedHotkeys.indexOf(key)", block)
+        self.assertIn("externallyRemoved === true", block)
         self.assertIn('"teardown-orphaned-hotkeys"', block)
         self.assertIn('"removeHotKey"', block)
+        self.assertIn("Hotkey registry entry could not be removed during orphan cleanup", block)
+        self.assertIn("Hotkey definition could not be removed during orphan cleanup", block)
         self.assertIn("this._orphanedHotkeys.splice(index, 1);", block)
         self.assertIn("this._runTeardownOperation(", block)
         self.assertIn("this._retryOrphanedHotkeys()", source)
