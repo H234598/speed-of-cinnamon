@@ -434,6 +434,7 @@ MyApplet.prototype = {
     this._orphanedMonitors = [];
     this._orphanedCancellables = [];
     this._orphanedTooltip = false;
+    this._orphanedMenus = [];
     this._hotkeyDefinitions = {};
     this._orphanedHotkeyStates = {};
     this._teardownComplete = false;
@@ -1301,39 +1302,162 @@ MyApplet.prototype = {
   },
 
   _destroyMenus: function() {
-    let cleanupMenu = (menu, group) => {
+    let cleanupMenu = (menu, group, propertyName) => {
       if (!menu) {
         return true;
       }
       let signalsSucceeded = this._runTeardownOperation("teardown-" + group + "-signals", menu, "disconnectAllSignals", [], true);
       let closeSucceeded = this._runTeardownOperation("teardown-" + group + "-close", menu, "close", [false]);
       let destroySucceeded = this._runTeardownOperation("teardown-" + group + "-destroy", menu, "destroy");
-      return signalsSucceeded && closeSucceeded && destroySucceeded;
+      if (signalsSucceeded && closeSucceeded && destroySucceeded) {
+        if (!this._untrackOrphanedMenu(menu)) {
+          this._trackOrphanedMenu(menu, propertyName, group, true, true, true, true);
+          return false;
+        }
+        return true;
+      }
+      this._trackOrphanedMenu(menu, propertyName, group, true, signalsSucceeded, closeSucceeded, destroySucceeded);
+      return false;
     };
     let menu = this.menu;
-    if (cleanupMenu(menu, "menu")) {
+    if (cleanupMenu(menu, "menu", "menu")) {
       this.menu = null;
     }
     let contextMenu = this._applet_context_menu;
-    if (cleanupMenu(contextMenu, "context-menu")) {
+    if (cleanupMenu(contextMenu, "context-menu", "_applet_context_menu")) {
       this._applet_context_menu = null;
     }
-    let cleanupManager = (manager, group) => {
+    let cleanupManager = (manager, group, propertyName) => {
       if (!manager) {
         return true;
       }
       let signalsSucceeded = this._runTeardownOperation("teardown-" + group + "-signals", manager, "disconnectAllSignals", [], true);
       let destroySucceeded = this._runTeardownOperation("teardown-" + group + "-destroy", manager, "destroy");
-      return signalsSucceeded && destroySucceeded;
+      if (signalsSucceeded && destroySucceeded) {
+        if (!this._untrackOrphanedMenu(manager)) {
+          this._trackOrphanedMenu(manager, propertyName, group, false, true, true, true);
+          return false;
+        }
+        return true;
+      }
+      this._trackOrphanedMenu(manager, propertyName, group, false, signalsSucceeded, true, destroySucceeded);
+      return false;
     };
     let menuManager = this.menuManager;
-    if (cleanupManager(menuManager, "menu-manager")) {
+    if (cleanupManager(menuManager, "menu-manager", "menuManager")) {
       this.menuManager = null;
     }
     let privateMenuManager = this._menuManager;
-    if (cleanupManager(privateMenuManager, "private-menu-manager")) {
+    if (cleanupManager(privateMenuManager, "private-menu-manager", "_menuManager")) {
       this._menuManager = null;
     }
+  },
+
+  _trackOrphanedMenu: function(menu, propertyName, group, needsClose, signalsSucceeded, closeSucceeded, destroySucceeded) {
+    try {
+      if (!menu) {
+        throw new Error("Menu orphan is invalid");
+      }
+      if (!Array.isArray(this._orphanedMenus)) {
+        this._orphanedMenus = [];
+      }
+      let knownEntry = this._orphanedMenus.find((entry) => entry && entry.menu === menu);
+      if (knownEntry) {
+        if (signalsSucceeded === true) {
+          knownEntry.signalsSucceeded = true;
+        }
+        if (closeSucceeded === true) {
+          knownEntry.closeSucceeded = true;
+        }
+        if (destroySucceeded === true) {
+          knownEntry.destroySucceeded = true;
+        }
+      } else {
+        this._orphanedMenus.push({
+          menu: menu,
+          propertyName: String(propertyName || ""),
+          group: String(group || "menu"),
+          needsClose: needsClose === true,
+          signalsSucceeded: signalsSucceeded === true,
+          closeSucceeded: closeSucceeded === true,
+          destroySucceeded: destroySucceeded === true,
+        });
+      }
+      return true;
+    } catch (error) {
+      this._recordLifecycleError("menu-orphan", error);
+      return false;
+    }
+  },
+
+  _untrackOrphanedMenu: function(menu) {
+    if (!Array.isArray(this._orphanedMenus)) {
+      return true;
+    }
+    let success = true;
+    for (let index = this._orphanedMenus.length - 1; index >= 0; index--) {
+      let entry = this._orphanedMenus[index];
+      if (!entry || entry.menu !== menu) {
+        continue;
+      }
+      try {
+        this._orphanedMenus.splice(index, 1);
+      } catch (error) {
+        this._recordLifecycleError("menu-orphan", error);
+        success = false;
+      }
+    }
+    return success;
+  },
+
+  _retryOrphanedMenus: function() {
+    if (!Array.isArray(this._orphanedMenus)) {
+      return true;
+    }
+    let success = true;
+    for (let index = this._orphanedMenus.length - 1; index >= 0; index--) {
+      let entry = this._orphanedMenus[index];
+      if (!entry || !entry.menu) {
+        this._recordLifecycleError("menu-orphan", new Error("Menu orphan entry is invalid"));
+        success = false;
+        continue;
+      }
+      let signalsSucceeded = entry.signalsSucceeded === true;
+      if (!signalsSucceeded) {
+        signalsSucceeded = this._runTeardownOperation("teardown-orphaned-menus", entry.menu, "disconnectAllSignals", [], true);
+        if (signalsSucceeded) {
+          entry.signalsSucceeded = true;
+        }
+      }
+      let closeSucceeded = entry.closeSucceeded === true;
+      if (entry.needsClose && !closeSucceeded && signalsSucceeded) {
+        closeSucceeded = this._runTeardownOperation("teardown-orphaned-menus", entry.menu, "close", [false]);
+        if (closeSucceeded) {
+          entry.closeSucceeded = true;
+        }
+      } else if (!entry.needsClose) {
+        closeSucceeded = true;
+      }
+      let destroySucceeded = entry.destroySucceeded === true;
+      if (signalsSucceeded && closeSucceeded && !destroySucceeded) {
+        destroySucceeded = this._runTeardownOperation("teardown-orphaned-menus", entry.menu, "destroy");
+        if (destroySucceeded) {
+          entry.destroySucceeded = true;
+        }
+      }
+      if (!signalsSucceeded || !closeSucceeded || !destroySucceeded) {
+        success = false;
+        continue;
+      }
+      if (!this._untrackOrphanedMenu(entry.menu)) {
+        success = false;
+        continue;
+      }
+      if (entry.propertyName && this[entry.propertyName] === entry.menu) {
+        this[entry.propertyName] = null;
+      }
+    }
+    return success;
   },
 
   _destroyAppletTooltip: function() {
@@ -3374,6 +3498,7 @@ MyApplet.prototype = {
     if (this.settings) {
       this._runTeardownGuarded("teardown-settings", () => this.settings.finalize());
     }
+    this._runTeardownGuarded("teardown-orphaned-menus", () => this._retryOrphanedMenus());
     this._finishTeardown();
     this._destroyAppletTooltip();
     this._runTeardownGuarded("teardown-orphaned-tooltip", () => this._retryOrphanedTooltip());
@@ -8458,7 +8583,7 @@ MyApplet.prototype = {
     let processes = registryValue("processes", {});
     let cancellables = registryValue("cancellables", {});
     let orphanedResourceValues = {};
-    for (let name of ["signals", "hotkeys", "processes", "timers", "dialogs", "monitors", "cancellables"]) {
+    for (let name of ["signals", "hotkeys", "processes", "timers", "dialogs", "monitors", "cancellables", "menus"]) {
       try {
         orphanedResourceValues[name] = this["_orphaned" + name.charAt(0).toUpperCase() + name.slice(1)];
       } catch (error) {
@@ -8555,6 +8680,7 @@ MyApplet.prototype = {
       dialogs: countArrayEntries(orphanedResourceValues.dialogs),
       monitors: countArrayEntries(orphanedResourceValues.monitors),
       cancellables: countArrayEntries(orphanedResourceValues.cancellables),
+      menus: countArrayEntries(orphanedResourceValues.menus),
     };
     let orphanedTooltip = false;
     try {
@@ -8569,6 +8695,7 @@ MyApplet.prototype = {
       orphanedResourceCounts.dialogs +
       orphanedResourceCounts.monitors +
       orphanedResourceCounts.cancellables +
+      orphanedResourceCounts.menus +
       (orphanedTooltip ? 1 : 0);
     return {
       state: String(this.lifecycleState || LIFECYCLE_INITIALIZING),
@@ -8589,6 +8716,7 @@ MyApplet.prototype = {
         orphaned_dialogs: orphanedResourceCounts.dialogs,
         orphaned_monitors: orphanedResourceCounts.monitors,
         orphaned_cancellables: orphanedResourceCounts.cancellables,
+        orphaned_menus: orphanedResourceCounts.menus,
         orphaned_tooltip: orphanedTooltip ? 1 : 0,
         orphaned_total: orphanedTotal,
       },

@@ -2188,14 +2188,16 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_destroyMenus: function()")
         end = source.index("\n  _destroyAppletTooltip:", start)
         block = source[start:end]
-        self.assertIn("let cleanupMenu = (menu, group) => {", block)
+        self.assertIn("let cleanupMenu = (menu, group, propertyName) => {", block)
         self.assertIn("this._runTeardownOperation(\"teardown-\" + group + \"-signals\", menu, \"disconnectAllSignals\", [], true)", block)
         self.assertIn("this._runTeardownOperation(\"teardown-\" + group + \"-close\"", block)
         self.assertIn("this._runTeardownOperation(\"teardown-\" + group + \"-destroy\"", block)
-        self.assertIn("return signalsSucceeded && closeSucceeded && destroySucceeded;", block)
-        self.assertIn("if (cleanupMenu(menu, \"menu\"))", block)
-        self.assertIn("if (cleanupMenu(contextMenu, \"context-menu\"))", block)
-        self.assertIn("let cleanupManager = (manager, group) => {", block)
+        self.assertIn("this._trackOrphanedMenu(menu, propertyName, group, true, signalsSucceeded, closeSucceeded, destroySucceeded);", block)
+        self.assertIn("if (cleanupMenu(menu, \"menu\", \"menu\"))", block)
+        self.assertIn("if (cleanupMenu(contextMenu, \"context-menu\", \"_applet_context_menu\"))", block)
+        self.assertIn("let cleanupManager = (manager, group, propertyName) => {", block)
+        self.assertIn("_retryOrphanedMenus: function()", block)
+        self.assertIn("this._runTeardownGuarded(\"teardown-orphaned-menus\", () => this._retryOrphanedMenus());", source)
 
     def test_teardown_operations_fail_closed_on_false_or_missing_methods(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
