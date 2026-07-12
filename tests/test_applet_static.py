@@ -2457,6 +2457,15 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._orphanedTooltip = true;", block)
         self.assertIn('this._runTeardownGuarded("teardown-orphaned-tooltip", () => this._retryOrphanedTooltip());', source)
 
+    def test_tooltip_retry_uses_existing_reference_even_without_orphan_flag(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_retryOrphanedTooltip: function()")
+        end = source.index("\n  _trackMonitor:", start)
+        block = source[start:end]
+        self.assertIn("let tooltip = this._applet_tooltip;", block)
+        self.assertIn("if (!this._orphanedTooltip && !tooltip)", block)
+        self.assertIn('this._runTeardownOperation("teardown-orphaned-tooltip", tooltip, "destroy")', block)
+
     def test_hotkey_mutations_are_not_suppressed_by_disabled_error_groups(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_registerHotkey: function(id, binding, callback)")

@@ -1686,10 +1686,10 @@ MyApplet.prototype = {
   },
 
   _retryOrphanedTooltip: function() {
-    if (!this._orphanedTooltip) {
+    let tooltip = this._applet_tooltip;
+    if (!this._orphanedTooltip && !tooltip) {
       return true;
     }
-    let tooltip = this._applet_tooltip;
     if (!tooltip) {
       this._orphanedTooltip = false;
       return true;
