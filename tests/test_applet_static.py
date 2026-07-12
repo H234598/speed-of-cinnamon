@@ -2549,6 +2549,10 @@ class AppletStaticTest(unittest.TestCase):
         style_end = source.index("\n  _selectionMenuItem:", style_start)
         style_block = source[style_start:style_end]
         self.assertLess(style_block.index("_runGuarded"), style_block.index("item.label"))
+        submenu_start = source.index("_styleSelectionSubmenu: function(menuItem)")
+        submenu_end = source.index("\n  _styleMenuItemLabel:", submenu_start)
+        submenu_block = source[submenu_start:submenu_end]
+        self.assertLess(submenu_block.index("_runGuarded"), submenu_block.index("menuItem.menu"))
 
     def test_applet_adds_frontend_validation_for_long_or_invalid_text_fields(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

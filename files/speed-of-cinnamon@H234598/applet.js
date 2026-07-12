@@ -1853,16 +1853,18 @@ MyApplet.prototype = {
   },
 
   _styleSelectionSubmenu: function(menuItem) {
-    if (!menuItem || !menuItem.menu) {
-      return;
-    }
-    let style = "min-width: " + String(SELECTION_MENU_MIN_WIDTH_EM) + "em;";
-    if (menuItem.menu.box && menuItem.menu.box.set_style) {
-      menuItem.menu.box.set_style(style);
-    }
-    if (menuItem.menu.actor && menuItem.menu.actor.set_style) {
-      menuItem.menu.actor.set_style(style);
-    }
+    return this._runGuarded("menu-style", () => {
+      if (!menuItem || !menuItem.menu) {
+        return;
+      }
+      let style = "min-width: " + String(SELECTION_MENU_MIN_WIDTH_EM) + "em;";
+      if (menuItem.menu.box && menuItem.menu.box.set_style) {
+        menuItem.menu.box.set_style(style);
+      }
+      if (menuItem.menu.actor && menuItem.menu.actor.set_style) {
+        menuItem.menu.actor.set_style(style);
+      }
+    }, undefined);
   },
 
   _styleMenuItemLabel: function(item, options) {
