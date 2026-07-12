@@ -393,6 +393,8 @@ class ArtifactCryptoTest(unittest.TestCase):
                 artifact_crypto._run_secret_tool(["lookup", "application", "test"])
 
     def test_secret_tool_closed_pipe_failure_is_controlled(self) -> None:
+        fake_proc_holder: dict[str, object] = {}
+
         class BrokenStream:
             def fileno(self) -> int:
                 raise ValueError("closed pipe")
@@ -407,6 +409,16 @@ class ArtifactCryptoTest(unittest.TestCase):
                 self.stdin = None
                 self.stdout = BrokenStream()
                 self.stderr = BrokenStream()
+                self.killed = False
+                self.wait_calls = 0
+                fake_proc_holder["proc"] = self
+
+            def kill(self) -> None:
+                self.killed = True
+
+            def wait(self, timeout: int | None = None) -> int:
+                self.wait_calls += 1
+                return self.returncode
 
         with (
             mock.patch("speed_of_cinnamon.artifact_crypto._secret_tool_path", return_value="/usr/bin/secret-tool"),
@@ -414,6 +426,9 @@ class ArtifactCryptoTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "output could not be captured safely"):
                 artifact_crypto._run_secret_tool(["lookup", "application", "test"])
+
+        self.assertTrue(getattr(fake_proc_holder["proc"], "killed"))
+        self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 1)
 
     def test_secret_tool_input_failure_is_controlled(self) -> None:
         class BrokenInput:
