@@ -2512,6 +2512,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let assertInputWriteSucceeded = (writeResult) =>", source)
         self.assertIn("assertInputWriteSucceeded(stream.write_all_finish(result));", source)
         self.assertIn("assertInputWriteSucceeded(stdin.write_all(inputBytes, null));", source)
+        self.assertIn("let closeInput = (stream) =>", source)
+        self.assertIn('throw new Error("Subprocess input close failed");', source)
 
     def test_snapshot_bound_actions_preflight_before_setting_action_tokens(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

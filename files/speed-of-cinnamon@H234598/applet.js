@@ -7669,22 +7669,28 @@ MyApplet.prototype = {
             throw new Error("Subprocess input write failed");
           }
         };
+        let closeInput = (stream) => {
+          if (!stream || !stream.close) {
+            return;
+          }
+          if (stream.close(null) === false) {
+            throw new Error("Subprocess input close failed");
+          }
+        };
         let stdin = process.get_stdin_pipe();
         let inputBytes = ByteArray.fromString(options.inputText);
         if (stdin && stdin.write_all_async) {
           stdin.write_all_async(inputBytes, GLib.PRIORITY_DEFAULT, cancellable, (stream, result) => {
             try {
               assertInputWriteSucceeded(stream.write_all_finish(result));
-              if (stream.close) {
-                stream.close(null);
-              }
+              closeInput(stream);
             } catch (error) {
               finish({ error: error }, true);
             }
           });
         } else if (stdin && stdin.write_all) {
           assertInputWriteSucceeded(stdin.write_all(inputBytes, null));
-          stdin.close(null);
+          closeInput(stdin);
         } else {
           finish({ error: "Subprocess input stream unavailable" }, true);
         }
