@@ -2443,17 +2443,59 @@ MyApplet.prototype = {
   },
 
   _retryOrphanedTimers: function() {
-    if (!Array.isArray(this._orphanedTimers)) {
-      return true;
-    }
-    let success = true;
-    for (let index = this._orphanedTimers.length - 1; index >= 0; index--) {
-      let entry = this._orphanedTimers[index];
-      if (!entry || !entry.sourceId) {
-        this._recordLifecycleError("timer-orphan", new Error("Timer orphan entry is invalid"));
-        success = false;
-        continue;
+    let pendingTimers = [];
+    let addPendingTimer = (name, sourceId, propertyName, sourceRemoved) => {
+      if (!sourceId) {
+        return;
       }
+      let knownEntry = pendingTimers.find((entry) => entry && entry.sourceId === sourceId);
+      if (knownEntry) {
+        if (propertyName && !knownEntry.propertyName) {
+          knownEntry.propertyName = propertyName;
+        }
+        if (sourceRemoved === true) {
+          knownEntry.sourceRemoved = true;
+        }
+        return;
+      }
+      pendingTimers.push({
+        name: String(name || propertyName || "timer"),
+        sourceId: sourceId,
+        propertyName: propertyName || "",
+        sourceRemoved: sourceRemoved === true,
+      });
+    };
+    let invalidOrphanEntry = false;
+    if (Array.isArray(this._orphanedTimers)) {
+      for (let entry of this._orphanedTimers) {
+        if (!entry || !entry.sourceId) {
+          invalidOrphanEntry = true;
+          continue;
+        }
+        addPendingTimer(entry.name, entry.sourceId, entry.propertyName, entry.sourceRemoved);
+      }
+    } else {
+      this._recordLifecycleError("timer-state", new Error("Timer orphan registry is unavailable"));
+    }
+    let timers = this._resourceRegistry && this._resourceRegistry.timers;
+    if (timers && (typeof timers === "object" || typeof timers === "function")) {
+      for (let name in timers) {
+        if (!Object.prototype.hasOwnProperty.call(timers, name)) {
+          continue;
+        }
+        if (!timers[name]) {
+          invalidOrphanEntry = true;
+          continue;
+        }
+        addPendingTimer(name, timers[name], "", false);
+      }
+    }
+    if (pendingTimers.length === 0) {
+      return !invalidOrphanEntry && Array.isArray(this._orphanedTimers);
+    }
+    let success = !invalidOrphanEntry;
+    for (let index = pendingTimers.length - 1; index >= 0; index--) {
+      let entry = pendingTimers[index];
       try {
         if (entry.sourceRemoved !== true) {
           let result = Mainloop.source_remove(entry.sourceId);
