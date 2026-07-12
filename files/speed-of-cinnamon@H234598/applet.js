@@ -431,6 +431,7 @@ MyApplet.prototype = {
     this._orphanedProcesses = [];
     this._orphanedTimers = [];
     this._orphanedDialogs = [];
+    this._orphanedMonitors = [];
     this._hotkeyDefinitions = {};
     this._teardownComplete = false;
     this._initFailed = false;
@@ -440,6 +441,7 @@ MyApplet.prototype = {
     this.terminalWorkflowToken = null;
     this.doctorCommandToken = null;
     this.settingsWindowToken = null;
+    this._externalApiEnvMonitorCancelSucceeded = false;
   },
 
   _lifecycleAllowsWork: function() {
@@ -1345,6 +1347,101 @@ MyApplet.prototype = {
       this._recordLifecycleError("monitor-untrack", error);
       return false;
     }
+  },
+
+  _trackOrphanedMonitor: function(monitor, cancelSucceeded) {
+    try {
+      if (!monitor) {
+        throw new Error("Monitor orphan is invalid");
+      }
+      if (!Array.isArray(this._orphanedMonitors)) {
+        this._orphanedMonitors = [];
+      }
+      let knownEntry = this._orphanedMonitors.find((entry) => entry && entry.monitor === monitor);
+      if (knownEntry) {
+        if (cancelSucceeded === true) {
+          knownEntry.cancelSucceeded = true;
+        }
+      } else {
+        this._orphanedMonitors.push({
+          monitor: monitor,
+          cancelSucceeded: cancelSucceeded === true,
+        });
+      }
+      return true;
+    } catch (error) {
+      this._recordLifecycleError("monitor-orphan", error);
+      return false;
+    }
+  },
+
+  _untrackOrphanedMonitor: function(monitor) {
+    if (!Array.isArray(this._orphanedMonitors)) {
+      return true;
+    }
+    let success = true;
+    for (let index = this._orphanedMonitors.length - 1; index >= 0; index--) {
+      let entry = this._orphanedMonitors[index];
+      if (!entry || entry.monitor !== monitor) {
+        continue;
+      }
+      try {
+        this._orphanedMonitors.splice(index, 1);
+      } catch (error) {
+        this._recordLifecycleError("monitor-orphan", error);
+        success = false;
+      }
+    }
+    return success;
+  },
+
+  _retryOrphanedMonitors: function() {
+    if (!Array.isArray(this._orphanedMonitors)) {
+      return true;
+    }
+    let success = true;
+    for (let index = this._orphanedMonitors.length - 1; index >= 0; index--) {
+      let entry = this._orphanedMonitors[index];
+      if (!entry || !entry.monitor) {
+        this._recordLifecycleError("monitor-orphan", new Error("Monitor orphan entry is invalid"));
+        success = false;
+        continue;
+      }
+      let cancelSucceeded = entry.cancelSucceeded === true;
+      if (!cancelSucceeded) {
+        if (!this._disconnectTrackedSignalsForTarget(entry.monitor)) {
+          success = false;
+          continue;
+        }
+        try {
+          let result = entry.monitor.cancel();
+          if (result === false) {
+            throw new Error("Orphaned monitor could not be cancelled");
+          }
+          entry.cancelSucceeded = true;
+          cancelSucceeded = true;
+        } catch (error) {
+          this._recordLifecycleError("monitor-cancel", error);
+          success = false;
+          continue;
+        }
+      }
+      if (!cancelSucceeded || !this._untrackMonitor(entry.monitor)) {
+        success = false;
+        continue;
+      }
+      if (this.externalApiEnvMonitor === entry.monitor) {
+        this.externalApiEnvMonitor = null;
+        this._externalApiEnvMonitorCancelSucceeded = false;
+      }
+      try {
+        this._orphanedMonitors.splice(index, 1);
+      } catch (error) {
+        this._recordLifecycleError("monitor-orphan", error);
+        success = false;
+      }
+    }
+    return success;
   },
 
   _nextResourceToken: function(prefix) {
@@ -2988,6 +3085,7 @@ MyApplet.prototype = {
     this._runTeardownGuarded("teardown-orphaned-timers", () => this._retryOrphanedTimers());
     this._runTeardownGuarded("teardown-monitor", () => this._clearExternalApiEnvMonitor());
     this._runTeardownGuarded("teardown-signals", () => this._disconnectAllSignals());
+    this._runTeardownGuarded("teardown-orphaned-monitors", () => this._retryOrphanedMonitors());
     this._runTeardownGuarded("teardown-applet-signals", () => {
       if (this.disconnectAllSignals) {
         this.disconnectAllSignals();
@@ -6687,25 +6785,39 @@ MyApplet.prototype = {
 
   _clearExternalApiEnvMonitor: function() {
     if (!this.externalApiEnvMonitor) {
-      return true;
+      return this._retryOrphanedMonitors();
     }
     let monitor = this.externalApiEnvMonitor;
-    if (!this._disconnectTrackedSignalsForTarget(monitor)) {
-      return false;
-    }
-    try {
-      let result = monitor.cancel();
-      if (result === false) {
-        throw new Error("External API monitor could not be cancelled");
+    let cancelSucceeded = this._externalApiEnvMonitorCancelSucceeded === true;
+    if (!cancelSucceeded) {
+      if (!this._disconnectTrackedSignalsForTarget(monitor)) {
+        this._trackOrphanedMonitor(monitor, false);
+        return false;
       }
-    } catch (err) {
-      this._recordLifecycleError("monitor-cancel", err);
+      try {
+        let result = monitor.cancel();
+        if (result === false) {
+          throw new Error("External API monitor could not be cancelled");
+        }
+        this._externalApiEnvMonitorCancelSucceeded = true;
+        cancelSucceeded = true;
+      } catch (err) {
+        this._recordLifecycleError("monitor-cancel", err);
+        this._trackOrphanedMonitor(monitor, false);
+        return false;
+      }
+    }
+    if (!cancelSucceeded || !this._untrackMonitor(monitor)) {
+      this._trackOrphanedMonitor(monitor, true);
       return false;
     }
-    if (!this._untrackMonitor(monitor)) {
-      return false;
-    }
+    let orphanUntracked = this._untrackOrphanedMonitor(monitor);
     this.externalApiEnvMonitor = null;
+    this._externalApiEnvMonitorCancelSucceeded = false;
+    if (!orphanUntracked) {
+      this._trackOrphanedMonitor(monitor, true);
+      return false;
+    }
     return true;
   },
 
@@ -6713,10 +6825,15 @@ MyApplet.prototype = {
     if (!this._clearExternalApiEnvMonitor()) {
       return;
     }
+    if (Array.isArray(this._orphanedMonitors) && this._orphanedMonitors.length > 0) {
+      this._recordLifecycleError("monitor-state", new Error("An orphaned monitor is still pending"));
+      return;
+    }
     try {
       let file = Gio.File.new_for_path(path);
       let monitor = file.monitor_file(Gio.FileMonitorFlags.NONE, null);
       this.externalApiEnvMonitor = monitor;
+      this._externalApiEnvMonitorCancelSucceeded = false;
       this._trackMonitor(monitor);
       let connectionId = this._connectSafe(monitor, "changed", (monitor, fileObj, otherFile, eventType) => {
         if (this.appletRemoved) {
@@ -8066,7 +8183,7 @@ MyApplet.prototype = {
     let processes = registryValue("processes", {});
     let cancellables = registryValue("cancellables", {});
     let orphanedResourceValues = {};
-    for (let name of ["signals", "hotkeys", "processes", "timers", "dialogs"]) {
+    for (let name of ["signals", "hotkeys", "processes", "timers", "dialogs", "monitors"]) {
       try {
         orphanedResourceValues[name] = this["_orphaned" + name.charAt(0).toUpperCase() + name.slice(1)];
       } catch (error) {
@@ -8161,12 +8278,14 @@ MyApplet.prototype = {
       processes: countArrayEntries(orphanedResourceValues.processes),
       timers: countArrayEntries(orphanedResourceValues.timers),
       dialogs: countArrayEntries(orphanedResourceValues.dialogs),
+      monitors: countArrayEntries(orphanedResourceValues.monitors),
     };
     let orphanedTotal = orphanedResourceCounts.signals +
       orphanedResourceCounts.hotkeys +
       orphanedResourceCounts.processes +
       orphanedResourceCounts.timers +
-      orphanedResourceCounts.dialogs;
+      orphanedResourceCounts.dialogs +
+      orphanedResourceCounts.monitors;
     return {
       state: String(this.lifecycleState || LIFECYCLE_INITIALIZING),
       error_counts: errorCounts,
@@ -8184,6 +8303,7 @@ MyApplet.prototype = {
         orphaned_processes: orphanedResourceCounts.processes,
         orphaned_timers: orphanedResourceCounts.timers,
         orphaned_dialogs: orphanedResourceCounts.dialogs,
+        orphaned_monitors: orphanedResourceCounts.monitors,
         orphaned_total: orphanedTotal,
       },
       process_groups: processGroups,

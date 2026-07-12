@@ -446,6 +446,27 @@ class AppletStaticTest(unittest.TestCase):
             monitor_block.index("monitor.cancel()"),
         )
 
+    def test_external_env_monitor_cleanup_retries_cancel_and_registry_phases(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_trackOrphanedMonitor: function(monitor, cancelSucceeded)")
+        end = source.index("\n  _nextResourceToken:", start)
+        block = source[start:end]
+        self.assertIn("this._orphanedMonitors = [];", block)
+        self.assertIn("entry.cancelSucceeded === true", block)
+        self.assertIn("entry.monitor.cancel()", block)
+        self.assertIn("this._untrackMonitor(entry.monitor)", block)
+        self.assertIn("this._orphanedMonitors.splice(index, 1);", block)
+
+        clear_start = source.index("_clearExternalApiEnvMonitor: function()")
+        clear_end = source.index("\n  _watchExternalApiEnvFile:", clear_start)
+        clear_block = source[clear_start:clear_end]
+        self.assertIn("this._externalApiEnvMonitorCancelSucceeded === true", clear_block)
+        self.assertIn("this._trackOrphanedMonitor(monitor, false);", clear_block)
+        self.assertIn("this._trackOrphanedMonitor(monitor, true);", clear_block)
+        self.assertIn("this._untrackOrphanedMonitor(monitor)", clear_block)
+
+        self.assertIn('this._runTeardownGuarded("teardown-orphaned-monitors", () => this._retryOrphanedMonitors());', source)
+
     def test_failed_external_env_monitor_untrack_remains_tracked(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_untrackMonitor: function(monitor)")
@@ -458,7 +479,7 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_clearExternalApiEnvMonitor: function()")
         end = source.index("\n  _watchExternalApiEnvFile:", start)
         clear_block = source[start:end]
-        self.assertIn("if (!this._untrackMonitor(monitor)) {", clear_block)
+        self.assertIn("!this._untrackMonitor(monitor)", clear_block)
         self.assertIn("return false;", clear_block)
         self.assertLess(clear_block.index("this._untrackMonitor(monitor)"), clear_block.index("this.externalApiEnvMonitor = null;"))
 
@@ -2893,6 +2914,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("orphaned_processes: orphanedResourceCounts.processes", source)
         self.assertIn("orphaned_timers: orphanedResourceCounts.timers", source)
         self.assertIn("orphaned_dialogs: orphanedResourceCounts.dialogs", source)
+        self.assertIn("orphaned_monitors: orphanedResourceCounts.monitors", source)
         self.assertIn("orphaned_total: orphanedTotal", source)
         self.assertIn("let registryValue = (name, fallback) =>", source)
         self.assertIn('let processes = registryValue("processes", {});', source)
