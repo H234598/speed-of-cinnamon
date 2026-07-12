@@ -1576,7 +1576,7 @@ class AppletStaticTest(unittest.TestCase):
         text_start = source.index("_onTextModelSettingsChanged: function()")
         text_end = source.index("\n  _onOpenAiFlexProcessingSettingsChanged:", text_start)
         text_block = source[text_start:text_end]
-        self.assertIn("this._cancelOllamaInstallWatch();", text_block)
+        self.assertIn("this._cancelOllamaInstallWatch() !== false;", text_block)
         self.assertIn("this._clearOllamaModelFlow", text_block)
         self.assertIn("this.textModelMenuRefreshToken = null;", text_block)
         self.assertIn('this._terminateProcessesByGroup("text-model-refresh")', text_block)
@@ -4006,13 +4006,27 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_selectTextModelBackend: function(backend, model, message)")
         end = source.index("\n  _activateOllamaTextModelFlow:", start)
         block = source[start:end]
-        self.assertIn("if (!this._clearOllamaModelFlow())", block)
+        self.assertIn("let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;", block)
+        self.assertIn("let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();", block)
+        self.assertIn("if (!ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded)", block)
         self.assertIn("this._rollbackSettingsBatch(settingsWrites);", block)
         self.assertIn("this.postProcessBackend = previousBackend;", block)
         self.assertIn("this.ollamaModel = previousOllamaModel;", block)
         self.assertIn("this.openaiCompatibleTextModel = previousExternalTextModel;", block)
         self.assertIn('this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped")', block)
         self.assertIn("return false;", block)
+
+        settings_start = source.index("_onTextModelSettingsChanged: function()")
+        settings_end = source.index("\n  _onOpenAiFlexProcessingSettingsChanged:", settings_start)
+        settings_block = source[settings_start:settings_end]
+        self.assertIn("let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;", settings_block)
+        self.assertIn("let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();", settings_block)
+        self.assertIn("if (!ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded)", settings_block)
+
+        watch_start = source.index("_cancelOllamaInstallWatch: function()")
+        watch_end = source.index("\n  _watchOllamaInstallThenChoose:", watch_start)
+        watch_block = source[watch_start:watch_end]
+        self.assertIn("return this._clearOllamaInstallWatchTimer();", watch_block)
 
     def test_text_backend_persistence_validates_model_names(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

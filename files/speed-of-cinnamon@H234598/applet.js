@@ -3841,8 +3841,9 @@ MyApplet.prototype = {
   _onTextModelSettingsChanged: function() {
     this.textModelMenuRefreshToken = null;
     let textModelRefreshCleanupSucceeded = this._terminateProcessesByGroup("text-model-refresh") !== false;
-    this._cancelOllamaInstallWatch();
-    if (!this._clearOllamaModelFlow()) {
+    let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;
+    let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();
+    if (!ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded) {
       this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
       return;
     }
@@ -8329,8 +8330,9 @@ MyApplet.prototype = {
     if (!this._commitSettingsBatch(settingsWrites, "settings-text-model", _("Text model settings could not be saved"))) {
       return false;
     }
-    this._cancelOllamaInstallWatch();
-    if (!this._clearOllamaModelFlow()) {
+    let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;
+    let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();
+    if (!ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded) {
       this._rollbackSettingsBatch(settingsWrites);
       this.postProcessBackend = previousBackend;
       this.ollamaModel = previousOllamaModel;
@@ -10713,7 +10715,7 @@ MyApplet.prototype = {
 
   _cancelOllamaInstallWatch: function() {
     this.ollamaInstallWatchToken = null;
-    this._clearOllamaInstallWatchTimer();
+    return this._clearOllamaInstallWatchTimer();
   },
 
   _watchOllamaInstallThenChoose: function() {
