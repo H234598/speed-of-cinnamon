@@ -2252,7 +2252,9 @@ class AppletStaticTest(unittest.TestCase):
         orphan_block = source[start:end]
         self.assertIn("this._orphanedDialogs = [];", orphan_block)
         self.assertIn("entry.dialog === dialog", orphan_block)
-        self.assertIn("this._orphanedDialogs.push({", orphan_block)
+        self.assertIn("let entry = {", orphan_block)
+        self.assertIn("this._orphanedDialogs.push(entry);", orphan_block)
+        self.assertIn('throw new Error("Dialog orphan entry could not be tracked");', orphan_block)
         self.assertIn("closeSucceeded: closeSucceeded === true", orphan_block)
         self.assertIn("destroySucceeded: destroySucceeded === true", orphan_block)
         self.assertIn("_retryOrphanedDialogs: function()", orphan_block)

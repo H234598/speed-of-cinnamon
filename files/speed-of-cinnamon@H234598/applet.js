@@ -1088,12 +1088,16 @@ MyApplet.prototype = {
           knownEntry.destroySucceeded = true;
         }
       } else {
-        this._orphanedDialogs.push({
+        let entry = {
           dialog: dialog,
           group: String(group || "dialog"),
           closeSucceeded: closeSucceeded === true,
           destroySucceeded: destroySucceeded === true,
-        });
+        };
+        this._orphanedDialogs.push(entry);
+        if (this._orphanedDialogs.indexOf(entry) < 0) {
+          throw new Error("Dialog orphan entry could not be tracked");
+        }
       }
       return true;
     } catch (error) {
