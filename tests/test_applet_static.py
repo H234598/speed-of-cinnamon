@@ -453,6 +453,9 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         self.assertIn("this._orphanedMonitors = [];", block)
         self.assertIn("entry.cancelSucceeded === true", block)
+        self.assertIn("let entry = {", block)
+        self.assertIn("this._orphanedMonitors.push(entry);", block)
+        self.assertIn('throw new Error("Monitor orphan entry could not be tracked");', block)
         self.assertIn("entry.monitor.cancel()", block)
         self.assertIn("this._untrackMonitor(entry.monitor)", block)
         self.assertIn("this._orphanedMonitors.splice(index, 1);", block)

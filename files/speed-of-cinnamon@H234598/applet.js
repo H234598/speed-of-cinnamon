@@ -1665,10 +1665,14 @@ MyApplet.prototype = {
           knownEntry.cancelSucceeded = true;
         }
       } else {
-        this._orphanedMonitors.push({
+        let entry = {
           monitor: monitor,
           cancelSucceeded: cancelSucceeded === true,
-        });
+        };
+        this._orphanedMonitors.push(entry);
+        if (this._orphanedMonitors.indexOf(entry) < 0) {
+          throw new Error("Monitor orphan entry could not be tracked");
+        }
       }
       return true;
     } catch (error) {
