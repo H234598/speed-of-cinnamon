@@ -2149,7 +2149,9 @@ class AppletStaticTest(unittest.TestCase):
         orphan_start = source.index("_trackOrphanedSignal: function(target, id, disconnected)")
         orphan_end = source.index("\n  _disconnectOrphanedSignals:", orphan_start)
         orphan_block = source[orphan_start:orphan_end]
-        self.assertIn("this._orphanedSignals.push({", orphan_block)
+        self.assertIn("let entry = {", orphan_block)
+        self.assertIn("this._orphanedSignals.push(entry);", orphan_block)
+        self.assertIn('throw new Error("Signal orphan entry could not be tracked");', orphan_block)
         self.assertIn("_disconnectOrphanedSignals", source)
 
     def test_signal_teardown_retries_disconnect_and_registry_failures(self) -> None:

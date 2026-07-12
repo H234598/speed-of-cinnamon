@@ -777,11 +777,15 @@ MyApplet.prototype = {
           knownEntry.disconnected = true;
         }
       } else {
-        this._orphanedSignals.push({
+        let entry = {
           target: target,
           id: id,
           disconnected: disconnected === true,
-        });
+        };
+        this._orphanedSignals.push(entry);
+        if (this._orphanedSignals.indexOf(entry) < 0) {
+          throw new Error("Signal orphan entry could not be tracked");
+        }
       }
       return true;
     } catch (error) {
