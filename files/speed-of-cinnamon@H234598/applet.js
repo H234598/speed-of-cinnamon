@@ -1323,6 +1323,7 @@ MyApplet.prototype = {
   _terminateProcessesByGroup: function(group, notifyCallback) {
     let wanted = String(group || "process");
     let processes = {};
+    let allSucceeded = true;
     try {
       processes = this._resourceRegistry && this._resourceRegistry.processes
         ? this._resourceRegistry.processes
@@ -1350,15 +1351,20 @@ MyApplet.prototype = {
           }
           cleanupSucceeded = true;
         } catch (error) {
+          allSucceeded = false;
           this._recordLifecycleError("process-cancel", error);
         }
         if (selected && cleanupSucceeded) {
-          this._unregisterProcess(token);
+          if (!this._unregisterProcess(token)) {
+            allSucceeded = false;
+          }
         }
       }
     } catch (error) {
+      allSucceeded = false;
       this._recordLifecycleError("process-cancel", error);
     }
+    return allSucceeded;
   },
 
   _cancelAllCancellables: function() {
@@ -1624,6 +1630,7 @@ MyApplet.prototype = {
     this.ollamaInstallWatchTimer = 0;
     this.ollamaInstallWatchPolls = 0;
     this.ollamaModelInstallRunning = false;
+    this.ollamaModelInstallToken = null;
     this.externalApiEnvMonitor = null;
     this.externalApiEnvApplyTarget = "voice";
     this.set_applet_icon_path(this.metadata.path + "/icon.svg");
@@ -2410,6 +2417,7 @@ MyApplet.prototype = {
     this.ollamaModelFlowToken = null;
     this.ollamaInstallWatchToken = null;
     this.ollamaModelInstallRunning = false;
+    this.ollamaModelInstallToken = null;
     this.benchmarkFlowToken = null;
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
@@ -6444,11 +6452,22 @@ MyApplet.prototype = {
       return false;
     }
     let hadOllamaModelInstall = Boolean(this.ollamaModelInstallRunning);
+    let installToken = this.ollamaModelInstallToken;
     this.ollamaModelFlowToken = null;
-    this._terminateProcessesByGroup("ollama", true);
-    this.ollamaModelInstallRunning = false;
     if (hadOllamaModelInstall) {
-      this.isCommandRunning = false;
+      let terminationSucceeded = this._terminateProcessesByGroup("ollama", true);
+      if (this.ollamaModelInstallToken === installToken) {
+        if (terminationSucceeded) {
+          this.ollamaModelInstallToken = null;
+          this.ollamaModelInstallRunning = false;
+          this.isCommandRunning = false;
+        } else {
+          this.ollamaModelInstallRunning = true;
+          this.isCommandRunning = true;
+        }
+      }
+    } else {
+      this._terminateProcessesByGroup("ollama", true);
     }
     return true;
   },
@@ -6774,13 +6793,19 @@ MyApplet.prototype = {
     }
     this.isCommandRunning = true;
     this.ollamaModelInstallRunning = true;
+    let installToken = {};
+    this.ollamaModelInstallToken = installToken;
     this._setStatus("processing", _("Installing Ollama model: ") + model, this.lastTranscript);
     this._spawnJson(installArgs, (payload) => {
+      if (this.ollamaModelInstallToken !== installToken) {
+        return;
+      }
+      this.ollamaModelInstallToken = null;
+      this.isCommandRunning = false;
+      this.ollamaModelInstallRunning = false;
       if (!flowToken || this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
         return;
       }
-      this.isCommandRunning = false;
-      this.ollamaModelInstallRunning = false;
       if (payload.error) {
         let safeError = this._sanitizeErrorMessage(payload.error);
         this._clearOllamaModelFlow(flowToken);

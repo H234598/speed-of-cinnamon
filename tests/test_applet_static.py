@@ -1775,7 +1775,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (!entry || typeof entry !== "object" || String(entry.group || "process") !== wanted)', block)
         self.assertIn('this._recordLifecycleError("process-cancel", error);', block)
         self.assertIn("let cleanupSucceeded = false;", block)
-        self.assertIn("if (selected && cleanupSucceeded) {\n          this._unregisterProcess(token);", block)
+        self.assertIn("if (selected && cleanupSucceeded) {", block)
+        self.assertIn("if (!this._unregisterProcess(token))", block)
 
     def test_process_and_cancellable_unregistration_contains_delete_failures(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2872,10 +2873,23 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_installOllamaTextModel: function(model)")
         end = source.index("\n  _refreshHistory:", start)
         block = source[start:end]
-        guard = block.index("if (!flowToken || this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork())")
+        self.assertIn("let installToken = {};", block)
+        self.assertIn("this.ollamaModelInstallToken = installToken;", block)
+        guard = block.index("if (this.ollamaModelInstallToken !== installToken)")
         reset = block.index("this.isCommandRunning = false;", guard)
         self.assertLess(guard, reset)
-        self.assertLess(reset, block.index("if (payload.error)"))
+        self.assertLess(reset, block.index("if (!flowToken || this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork())"))
+
+    def test_failed_ollama_install_cancellation_keeps_command_busy(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_clearOllamaModelFlow: function(flowToken)")
+        end = source.index("\n  _cancelOllamaFlowForRecording:", start)
+        block = source[start:end]
+        self.assertIn("let installToken = this.ollamaModelInstallToken;", block)
+        self.assertIn("let terminationSucceeded = this._terminateProcessesByGroup(\"ollama\", true);", block)
+        self.assertIn("if (this.ollamaModelInstallToken === installToken)", block)
+        self.assertIn("this.ollamaModelInstallRunning = true;", block)
+        self.assertIn("this.isCommandRunning = true;", block)
 
     def test_ollama_model_flow_clears_terminal_and_install_failure_states(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2908,7 +2922,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.ollamaModelInstallRunning = true;", install_block)
         self.assertIn("this.ollamaModelInstallRunning = false;", install_block)
         self.assertIn("this._clearOllamaModelFlow(flowToken);", install_block)
-        callback_guard = install_block.index("if (!flowToken || this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork())")
+        callback_guard = install_block.index("if (this.ollamaModelInstallToken !== installToken)")
         callback_reset = install_block.index("this.isCommandRunning = false;", callback_guard)
         self.assertLess(callback_guard, callback_reset)
 
