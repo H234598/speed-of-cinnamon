@@ -437,6 +437,7 @@ MyApplet.prototype = {
     this._orphanedMenus = [];
     this._hotkeyDefinitions = {};
     this._orphanedHotkeyStates = {};
+    this.autoInsertPendingFingerprint = "";
     this._teardownComplete = false;
     this._initFailed = false;
     this.appletRemoved = false;
@@ -2464,6 +2465,7 @@ MyApplet.prototype = {
     this.autoRelistenSequence = 0;
     this.autoInsertFingerprint = "";
     this.autoInsertFingerprints = [];
+    this.autoInsertPendingFingerprint = "";
     this.transcriptListPromptToken = null;
     this.textInsertToken = null;
     this.voiceModelActionToken = null;
@@ -3402,8 +3404,15 @@ MyApplet.prototype = {
   _cancelTextInsertForSettingsChange: function() {
     this._clearClipboardOverwriteApproval();
     let hadInsertToken = Boolean(this.textInsertToken);
+    let pendingInsertFingerprint = String(this.autoInsertPendingFingerprint || "");
     if (hadInsertToken) {
       this.textInsertToken = null;
+    }
+    if (pendingInsertFingerprint !== "") {
+      this._forgetAutoInsertFingerprint(pendingInsertFingerprint);
+      if (this.autoInsertPendingFingerprint === pendingInsertFingerprint) {
+        this.autoInsertPendingFingerprint = "";
+      }
     }
     this._clearPasteTimer();
     let cancellationSucceeded = true;
@@ -3464,6 +3473,7 @@ MyApplet.prototype = {
     this.transcriptWindowToken = null;
     this.cleanupPreviewDialogToken = null;
     this.textInsertToken = null;
+    this.autoInsertPendingFingerprint = "";
     this.settingsWindowToken = null;
     this.alarmActionToken = null;
     this.alarmCheckToken = null;
@@ -11547,26 +11557,35 @@ MyApplet.prototype = {
       this._finishPendingRelisten();
       return;
     }
+    let clearPendingFingerprint = () => {
+      if (this.autoInsertPendingFingerprint === insertFingerprint) {
+        this.autoInsertPendingFingerprint = "";
+      }
+    };
     let inserted = false;
     if (payload.inserted === true) {
       inserted = true;
       this._setStatus("done", this._payloadMessage(payload, _("Transcript already inserted by backend")), transcript);
     } else {
       let result;
+      this.autoInsertPendingFingerprint = insertFingerprint;
       try {
         result = this._insertTranscriptText(transcript, (completed) => {
           if (!completed) {
             this._forgetAutoInsertFingerprint(insertFingerprint);
+            clearPendingFingerprint();
             this.autoRelistenPending = false;
             this.autoRelistenPendingToken = "";
             this.autoRelistenManualStopRequested = true;
             return;
           }
+          clearPendingFingerprint();
           this._finishPendingRelisten();
         });
       } catch (error) {
         this._recordLifecycleError("payload-insert", error);
         this._forgetAutoInsertFingerprint(insertFingerprint);
+        clearPendingFingerprint();
         this.autoRelistenPending = false;
         this.autoRelistenPendingToken = "";
         this.autoRelistenManualStopRequested = true;
@@ -11576,17 +11595,20 @@ MyApplet.prototype = {
       if (result === null) {
         return;
       }
+      clearPendingFingerprint();
       if (result) {
         inserted = true;
       }
     }
     if (!inserted) {
       this._forgetAutoInsertFingerprint(insertFingerprint);
+      clearPendingFingerprint();
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
       this.autoRelistenManualStopRequested = true;
       return;
     }
+    clearPendingFingerprint();
     this._finishPendingRelisten();
   },
 

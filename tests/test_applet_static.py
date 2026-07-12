@@ -1012,6 +1012,9 @@ class AppletStaticTest(unittest.TestCase):
         cancel_end = source.index("\n  on_applet_clicked:", cancel_start)
         cancel_block = source[cancel_start:cancel_end]
         self.assertIn("this.textInsertToken = null;", cancel_block)
+        self.assertIn('let pendingInsertFingerprint = String(this.autoInsertPendingFingerprint || "");', cancel_block)
+        self.assertIn("this._forgetAutoInsertFingerprint(pendingInsertFingerprint);", cancel_block)
+        self.assertIn('this.autoInsertPendingFingerprint = "";', cancel_block)
         self.assertIn("this._clearClipboardOverwriteApproval();", cancel_block)
         self.assertIn("this._clearPasteTimer();", cancel_block)
         self.assertIn('this._terminateProcessesByGroup("keyboard") === false', cancel_block)
@@ -1022,6 +1025,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (hadInsertToken && this.autoRelistenPending)", cancel_block)
         self.assertIn("this.autoRelistenPendingToken = \"\";", cancel_block)
         self.assertIn("this.autoRelistenManualStopRequested = true;", cancel_block)
+
+        finish_start = source.index("_finishAppletTextInsert: function(payload)")
+        finish_end = source.index("\n  _ensureAutoRelistenPendingForDonePayload:", finish_start)
+        finish_block = source[finish_start:finish_end]
+        self.assertIn("this.autoInsertPendingFingerprint = insertFingerprint;", finish_block)
+        self.assertIn("let clearPendingFingerprint = () =>", finish_block)
+        self.assertIn("clearPendingFingerprint();", finish_block)
 
     def test_failed_text_insert_cancellation_blocks_new_insertions(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
