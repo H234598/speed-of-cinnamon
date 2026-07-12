@@ -1898,7 +1898,7 @@ MyApplet.prototype = {
       this._recordLifecycleError("monitor-state", new Error("Monitor orphan registry is unavailable"));
     }
     let monitors = this._resourceRegistry && this._resourceRegistry.monitors;
-    if (!Array.isArray(this._orphanedMonitors) && Array.isArray(monitors)) {
+    if (Array.isArray(monitors)) {
       for (let monitor of monitors) {
         if (!monitor) {
           invalidOrphanEntry = true;
@@ -1907,9 +1907,7 @@ MyApplet.prototype = {
         addPendingMonitor(monitor, false);
       }
     }
-    if (!Array.isArray(this._orphanedMonitors)) {
-      addPendingMonitor(this.externalApiEnvMonitor, this._externalApiEnvMonitorCancelSucceeded === true);
-    }
+    addPendingMonitor(this.externalApiEnvMonitor, this._externalApiEnvMonitorCancelSucceeded === true);
     if (pendingMonitors.length === 0) {
       return !invalidOrphanEntry && Array.isArray(this._orphanedMonitors);
     }

@@ -472,8 +472,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let monitors = this._resourceRegistry && this._resourceRegistry.monitors;", block)
         self.assertIn("addPendingMonitor(monitor, false);", block)
         self.assertIn("addPendingMonitor(this.externalApiEnvMonitor", block)
-        self.assertIn("if (!Array.isArray(this._orphanedMonitors))", block)
+        self.assertIn("if (Array.isArray(monitors))", block)
         self.assertIn("for (let index = pendingMonitors.length - 1;", block)
+
+    def test_monitor_retry_reconciles_registry_with_existing_orphan_list(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_retryOrphanedMonitors: function()")
+        end = source.index("\n  _clearExternalApiEnvMonitorReference:", start)
+        block = source[start:end]
+        self.assertIn("let monitors = this._resourceRegistry && this._resourceRegistry.monitors;", block)
+        self.assertIn("if (Array.isArray(monitors))", block)
+        self.assertNotIn("if (!Array.isArray(this._orphanedMonitors) && Array.isArray(monitors))", block)
+        self.assertLess(block.index("if (Array.isArray(monitors))"), block.index("if (pendingMonitors.length === 0)"))
 
     def test_external_env_monitor_cleanup_retries_cancel_and_registry_phases(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
