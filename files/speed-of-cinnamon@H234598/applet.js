@@ -430,6 +430,7 @@ MyApplet.prototype = {
     this._orphanedHotkeys = [];
     this._orphanedProcesses = [];
     this._orphanedTimers = [];
+    this._orphanedDialogs = [];
     this._hotkeyDefinitions = {};
     this._teardownComplete = false;
     this._initFailed = false;
@@ -966,9 +967,91 @@ MyApplet.prototype = {
     }
   },
 
+  _trackOrphanedDialog: function(dialog, group) {
+    try {
+      if (!dialog) {
+        throw new Error("Dialog orphan is invalid");
+      }
+      if (!Array.isArray(this._orphanedDialogs)) {
+        this._orphanedDialogs = [];
+      }
+      let known = this._orphanedDialogs.some((entry) => entry && entry.dialog === dialog);
+      if (!known) {
+        this._orphanedDialogs.push({ dialog: dialog, group: String(group || "dialog") });
+      }
+      return true;
+    } catch (error) {
+      this._recordLifecycleError("dialog-orphan", error);
+      return false;
+    }
+  },
+
+  _untrackOrphanedDialog: function(dialog) {
+    if (!Array.isArray(this._orphanedDialogs)) {
+      return true;
+    }
+    let success = true;
+    for (let index = this._orphanedDialogs.length - 1; index >= 0; index--) {
+      let entry = this._orphanedDialogs[index];
+      if (!entry || entry.dialog !== dialog) {
+        continue;
+      }
+      try {
+        this._orphanedDialogs.splice(index, 1);
+      } catch (error) {
+        this._recordLifecycleError("dialog-orphan", error);
+        success = false;
+      }
+    }
+    return success;
+  },
+
+  _retryOrphanedDialogs: function() {
+    if (!Array.isArray(this._orphanedDialogs)) {
+      return true;
+    }
+    let success = true;
+    for (let index = this._orphanedDialogs.length - 1; index >= 0; index--) {
+      let entry = this._orphanedDialogs[index];
+      if (!entry || !entry.dialog) {
+        this._recordLifecycleError("dialog-orphan", new Error("Dialog orphan entry is invalid"));
+        success = false;
+        continue;
+      }
+      let closeSucceeded = this._runTeardownOperation(
+        "teardown-orphaned-dialogs",
+        entry.dialog,
+        "close"
+      );
+      let destroySucceeded = this._runTeardownOperation(
+        "teardown-orphaned-dialogs",
+        entry.dialog,
+        "destroy"
+      );
+      if (!closeSucceeded || !destroySucceeded) {
+        success = false;
+        continue;
+      }
+      try {
+        this._orphanedDialogs.splice(index, 1);
+      } catch (error) {
+        this._recordLifecycleError("dialog-orphan", error);
+        success = false;
+      }
+    }
+    return success;
+  },
+
   _newSafeDialog: function(group) {
     if (!this._lifecycleAllowsWork()) {
       return null;
+    }
+    if (Array.isArray(this._orphanedDialogs) && this._orphanedDialogs.length > 0) {
+      let orphanCleanupSucceeded = this._retryOrphanedDialogs();
+      if (!orphanCleanupSucceeded || this._orphanedDialogs.length > 0) {
+        this._recordLifecycleError("dialog-state", new Error("An orphaned dialog is still pending"));
+        return null;
+      }
     }
     let dialog = null;
     try {
@@ -981,6 +1064,8 @@ MyApplet.prototype = {
         let destroySucceeded = this._runTeardownOperation(cleanupGroup, dialog, "destroy");
         if (closeSucceeded && destroySucceeded) {
           this._untrackDialog(dialog);
+        } else {
+          this._trackOrphanedDialog(dialog, group);
         }
       }
       this._recordLifecycleError("dialog-" + String(group || "create"), error);
@@ -1065,6 +1150,7 @@ MyApplet.prototype = {
     });
     if (closed) {
       this._untrackDialog(dialog);
+      this._untrackOrphanedDialog(dialog);
     }
     return closed;
   },
@@ -1094,6 +1180,7 @@ MyApplet.prototype = {
         if (closeSucceeded && destroySucceeded) {
           if (dialog) {
             this._untrackDialog(dialog);
+            this._untrackOrphanedDialog(dialog);
           } else {
             dialogs.splice(index, 1);
           }
@@ -2811,6 +2898,7 @@ MyApplet.prototype = {
     this._runTeardownGuarded("teardown-orphaned-processes", () => this._retryOrphanedProcesses());
     this._runTeardownGuarded("teardown-cancellables", () => this._cancelAllCancellables());
     this._runTeardownGuarded("teardown-dialogs", () => this._destroyTrackedDialogs());
+    this._runTeardownGuarded("teardown-orphaned-dialogs", () => this._retryOrphanedDialogs());
     this._runTeardownGuarded("teardown-timer", () => this._clearStatusTimer());
     this._runTeardownGuarded("teardown-timer", () => this._clearDisplayTimer());
     this._runTeardownGuarded("teardown-timer", () => this._clearSetupCheckTimer());

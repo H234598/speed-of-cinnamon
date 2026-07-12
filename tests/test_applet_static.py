@@ -2053,6 +2053,29 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._runTeardownOperation(cleanupGroup, dialog, \"destroy\")", block)
         self.assertIn("if (closeSucceeded && destroySucceeded)", block)
         self.assertIn("this._untrackDialog(dialog);", block)
+        self.assertIn("this._trackOrphanedDialog(dialog, group);", block)
+
+    def test_orphaned_dialog_cleanup_is_retried_and_blocks_new_dialogs(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_trackOrphanedDialog: function(dialog, group)")
+        end = source.index("\n  _newSafeDialog:", start)
+        orphan_block = source[start:end]
+        self.assertIn("this._orphanedDialogs = [];", orphan_block)
+        self.assertIn("entry.dialog === dialog", orphan_block)
+        self.assertIn("this._orphanedDialogs.push({", orphan_block)
+        self.assertIn("_retryOrphanedDialogs: function()", orphan_block)
+        self.assertIn('"close"', orphan_block)
+        self.assertIn('"destroy"', orphan_block)
+        self.assertIn("this._orphanedDialogs.splice(index, 1);", orphan_block)
+
+        start = source.index("_newSafeDialog: function(group)")
+        end = source.index("\n  _dialogAddChild:", start)
+        block = source[start:end]
+        self.assertIn("Array.isArray(this._orphanedDialogs)", block)
+        self.assertIn("let orphanCleanupSucceeded = this._retryOrphanedDialogs();", block)
+        self.assertIn('this._recordLifecycleError("dialog-state", new Error("An orphaned dialog is still pending"));', block)
+        self.assertIn("return null;", block)
+        self.assertIn('this._runTeardownGuarded("teardown-orphaned-dialogs", () => this._retryOrphanedDialogs());', source)
 
     def test_dialog_child_preconditions_are_guarded(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
