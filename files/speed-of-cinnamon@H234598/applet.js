@@ -550,6 +550,29 @@ MyApplet.prototype = {
     }
   },
 
+  _runTeardownOperation: function(group, target, method, args, allowMissing) {
+    let succeeded = false;
+    this._runTeardownGuarded(group, () => {
+      if (!target) {
+        throw new Error("Teardown operation target is unavailable");
+      }
+      let operation = target[method];
+      if (typeof operation !== "function") {
+        if (allowMissing === true) {
+          succeeded = true;
+          return;
+        }
+        throw new Error("Teardown operation is unavailable");
+      }
+      let result = operation.apply(target, Array.isArray(args) ? args : []);
+      if (result === false) {
+        throw new Error("Teardown operation failed");
+      }
+      succeeded = true;
+    });
+    return succeeded;
+  },
+
   _guardCallback: function(group, callback, fallback) {
     if (typeof callback !== "function") {
       return null;
@@ -665,12 +688,12 @@ MyApplet.prototype = {
       let signals = this._resourceRegistry.signals;
       for (let index = signals.length - 1; index >= 0; index--) {
         let connection = signals[index];
-        try {
-          if (connection && connection.target && connection.target.disconnect && connection.id) {
-            connection.target.disconnect(connection.id);
-          }
-        } catch (error) {
-          this._recordLifecycleError("teardown-signals", error);
+        if (!this._runTeardownOperation(
+          "teardown-signals",
+          connection && connection.target,
+          "disconnect",
+          [connection && connection.id]
+        )) {
           continue;
         }
         try {
@@ -699,12 +722,7 @@ MyApplet.prototype = {
         if (!connection || connection.target !== target) {
           continue;
         }
-        try {
-          if (target.disconnect && connection.id) {
-            target.disconnect(connection.id);
-          }
-        } catch (error) {
-          this._recordLifecycleError("teardown-target-signals", error);
+        if (!this._runTeardownOperation("teardown-target-signals", target, "disconnect", [connection.id])) {
           success = false;
           continue;
         }
@@ -839,20 +857,9 @@ MyApplet.prototype = {
       return this._trackDialog(dialog);
     } catch (error) {
       if (dialog) {
-        let closeSucceeded = false;
-        this._runTeardownGuarded("dialog-" + String(group || "create") + "-cleanup", () => {
-          if (dialog.close) {
-            dialog.close();
-          }
-          closeSucceeded = true;
-        });
-        let destroySucceeded = false;
-        this._runTeardownGuarded("dialog-" + String(group || "create") + "-cleanup", () => {
-          if (dialog.destroy) {
-            dialog.destroy();
-          }
-          destroySucceeded = true;
-        });
+        let cleanupGroup = "dialog-" + String(group || "create") + "-cleanup";
+        let closeSucceeded = this._runTeardownOperation(cleanupGroup, dialog, "close");
+        let destroySucceeded = this._runTeardownOperation(cleanupGroup, dialog, "destroy");
         if (closeSucceeded && destroySucceeded) {
           this._untrackDialog(dialog);
         }
@@ -956,20 +963,8 @@ MyApplet.prototype = {
       let dialogs = this._resourceRegistry.dialogs;
       for (let index = dialogs.length - 1; index >= 0; index--) {
         let dialog = dialogs[index];
-        let closeSucceeded = false;
-        this._runTeardownGuarded("teardown-dialog-close", () => {
-          if (dialog && dialog.close) {
-            dialog.close();
-          }
-          closeSucceeded = true;
-        });
-        let destroySucceeded = false;
-        this._runTeardownGuarded("teardown-dialog-destroy", () => {
-          if (dialog && dialog.destroy) {
-            dialog.destroy();
-          }
-          destroySucceeded = true;
-        });
+        let closeSucceeded = !dialog || this._runTeardownOperation("teardown-dialog-close", dialog, "close");
+        let destroySucceeded = !dialog || this._runTeardownOperation("teardown-dialog-destroy", dialog, "destroy");
         if (closeSucceeded && destroySucceeded) {
           if (dialog) {
             this._untrackDialog(dialog);
@@ -988,27 +983,9 @@ MyApplet.prototype = {
       if (!menu) {
         return true;
       }
-      let signalsSucceeded = false;
-      this._runTeardownGuarded("teardown-" + group + "-signals", () => {
-        if (menu.disconnectAllSignals) {
-          menu.disconnectAllSignals();
-        }
-        signalsSucceeded = true;
-      });
-      let closeSucceeded = false;
-      this._runTeardownGuarded("teardown-" + group + "-close", () => {
-        if (menu.close) {
-          menu.close(false);
-        }
-        closeSucceeded = true;
-      });
-      let destroySucceeded = false;
-      this._runTeardownGuarded("teardown-" + group + "-destroy", () => {
-        if (menu.destroy) {
-          menu.destroy();
-        }
-        destroySucceeded = true;
-      });
+      let signalsSucceeded = this._runTeardownOperation("teardown-" + group + "-signals", menu, "disconnectAllSignals", [], true);
+      let closeSucceeded = this._runTeardownOperation("teardown-" + group + "-close", menu, "close", [false]);
+      let destroySucceeded = this._runTeardownOperation("teardown-" + group + "-destroy", menu, "destroy");
       return signalsSucceeded && closeSucceeded && destroySucceeded;
     };
     let menu = this.menu;
@@ -1023,20 +1000,8 @@ MyApplet.prototype = {
       if (!manager) {
         return true;
       }
-      let signalsSucceeded = false;
-      this._runTeardownGuarded("teardown-" + group + "-signals", () => {
-        if (manager.disconnectAllSignals) {
-          manager.disconnectAllSignals();
-        }
-        signalsSucceeded = true;
-      });
-      let destroySucceeded = false;
-      this._runTeardownGuarded("teardown-" + group + "-destroy", () => {
-        if (manager.destroy) {
-          manager.destroy();
-        }
-        destroySucceeded = true;
-      });
+      let signalsSucceeded = this._runTeardownOperation("teardown-" + group + "-signals", manager, "disconnectAllSignals", [], true);
+      let destroySucceeded = this._runTeardownOperation("teardown-" + group + "-destroy", manager, "destroy");
       return signalsSucceeded && destroySucceeded;
     };
     let menuManager = this.menuManager;
@@ -1051,13 +1016,7 @@ MyApplet.prototype = {
 
   _destroyAppletTooltip: function() {
     let tooltip = this._applet_tooltip;
-    let destroyed = false;
-    this._runTeardownGuarded("teardown-tooltip", () => {
-      if (tooltip && tooltip.destroy) {
-        tooltip.destroy();
-      }
-      destroyed = true;
-    });
+    let destroyed = !tooltip || this._runTeardownOperation("teardown-tooltip", tooltip, "destroy");
     if (destroyed) {
       this._applet_tooltip = null;
     }

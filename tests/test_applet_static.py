@@ -1873,8 +1873,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let dialog = null;", block)
         self.assertIn("dialog = new ModalDialog.ModalDialog();", block)
         self.assertIn("if (dialog) {", block)
-        self.assertIn("if (dialog.close)", block)
-        self.assertIn("if (dialog.destroy)", block)
+        self.assertIn("this._runTeardownOperation(cleanupGroup, dialog, \"close\")", block)
+        self.assertIn("this._runTeardownOperation(cleanupGroup, dialog, \"destroy\")", block)
         self.assertIn("if (closeSucceeded && destroySucceeded)", block)
         self.assertIn("this._untrackDialog(dialog);", block)
 
@@ -1910,13 +1910,39 @@ class AppletStaticTest(unittest.TestCase):
         end = source.index("\n  _destroyAppletTooltip:", start)
         block = source[start:end]
         self.assertIn("let cleanupMenu = (menu, group) => {", block)
-        self.assertIn("let signalsSucceeded = false;", block)
-        self.assertIn("let closeSucceeded = false;", block)
-        self.assertIn("let destroySucceeded = false;", block)
+        self.assertIn("this._runTeardownOperation(\"teardown-\" + group + \"-signals\", menu, \"disconnectAllSignals\", [], true)", block)
+        self.assertIn("this._runTeardownOperation(\"teardown-\" + group + \"-close\"", block)
+        self.assertIn("this._runTeardownOperation(\"teardown-\" + group + \"-destroy\"", block)
         self.assertIn("return signalsSucceeded && closeSucceeded && destroySucceeded;", block)
         self.assertIn("if (cleanupMenu(menu, \"menu\"))", block)
         self.assertIn("if (cleanupMenu(contextMenu, \"context-menu\"))", block)
         self.assertIn("let cleanupManager = (manager, group) => {", block)
+
+    def test_teardown_operations_fail_closed_on_false_or_missing_methods(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        helper_start = source.index("_runTeardownOperation: function(group, target, method, args, allowMissing)")
+        helper_end = source.index("\n  _guardCallback:", helper_start)
+        helper = source[helper_start:helper_end]
+        self.assertIn("typeof operation !== \"function\"", helper)
+        self.assertIn("allowMissing === true", helper)
+        self.assertIn("if (result === false)", helper)
+        self.assertIn("return succeeded;", helper)
+
+        signal_start = source.index("_disconnectAllSignals: function()")
+        signal_end = source.index("\n  _disconnectTrackedSignalsForTarget:", signal_start)
+        signal_block = source[signal_start:signal_end]
+        self.assertIn("_runTeardownOperation", signal_block)
+        self.assertIn("continue;", signal_block)
+
+        dialog_start = source.index("_destroyTrackedDialogs: function()")
+        dialog_end = source.index("\n  _destroyMenus:", dialog_start)
+        dialog_block = source[dialog_start:dialog_end]
+        self.assertIn("!dialog || this._runTeardownOperation", dialog_block)
+
+        tooltip_start = source.index("_destroyAppletTooltip: function()")
+        tooltip_end = source.index("\n  _trackMonitor:", tooltip_start)
+        tooltip_block = source[tooltip_start:tooltip_end]
+        self.assertIn("!tooltip || this._runTeardownOperation", tooltip_block)
 
     def test_menu_open_state_tolerates_missing_context_menu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -1930,8 +1956,7 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_destroyAppletTooltip: function()")
         end = source.index("\n  _trackMonitor:", start)
         block = source[start:end]
-        self.assertIn("let destroyed = false;", block)
-        self.assertIn("destroyed = true;", block)
+        self.assertIn("let destroyed = !tooltip || this._runTeardownOperation", block)
         self.assertIn("if (destroyed)", block)
         self.assertIn("this._applet_tooltip = null;", block)
 
@@ -2066,8 +2091,8 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         self.assertNotIn("dialogs.splice(0)", block)
         self.assertIn("for (let index = dialogs.length - 1; index >= 0; index--)", block)
-        self.assertIn("let closeSucceeded = false;", block)
-        self.assertIn("let destroySucceeded = false;", block)
+        self.assertIn("!dialog || this._runTeardownOperation(\"teardown-dialog-close\"", block)
+        self.assertIn("!dialog || this._runTeardownOperation(\"teardown-dialog-destroy\"", block)
         self.assertIn("if (closeSucceeded && destroySucceeded)", block)
         self.assertIn("this._untrackDialog(dialog);", block)
         self.assertLess(block.index("try {"), block.index("Array.isArray(this._resourceRegistry.dialogs)"))
