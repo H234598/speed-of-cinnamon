@@ -889,6 +889,16 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._setStatus(this.status, _("Finish the current recording before starting a terminal workflow"), this.lastTranscript);', terminal_block)
         self.assertIn('_("Terminal process exited unexpectedly")', terminal_block)
         self.assertIn("result.error || result.timedOut || result.outputTooLarge", terminal_block)
+        self.assertIn(
+            "if (this.terminalWorkflowToken !== terminalWorkflowToken) {\n"
+            "          if (!this.terminalWorkflowToken) {\n"
+            "            this.terminalWorkflowRunning = false;\n"
+            "          }\n"
+            "          return;\n"
+            "        }\n"
+            "        this.terminalWorkflowRunning = false;",
+            terminal_block,
+        )
         self.assertNotIn("}, function() {});", terminal_block)
 
     def test_history_refresh_ignores_stale_backend_responses(self) -> None:

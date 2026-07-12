@@ -4897,10 +4897,13 @@ MyApplet.prototype = {
         maxStdoutBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
         maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
       }, (stdout, stderr, result) => {
-        this.terminalWorkflowRunning = false;
         if (this.terminalWorkflowToken !== terminalWorkflowToken) {
+          if (!this.terminalWorkflowToken) {
+            this.terminalWorkflowRunning = false;
+          }
           return;
         }
+        this.terminalWorkflowRunning = false;
         this.terminalWorkflowToken = null;
         if (cancelOllamaFlow === true && (!ollamaFlowToken || this.ollamaModelFlowToken !== ollamaFlowToken)) {
           return;
