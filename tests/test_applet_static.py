@@ -2545,6 +2545,21 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (typeof value !== "string")', source)
         self.assertIn("_coerceImportedEnumSetting: function(value, allowedValues, fallback)", source)
 
+    def test_imported_settings_commit_persistently_before_local_mutation(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_applyImportedSettings: function(settings)")
+        end = source.index("\n  _coerceSpawnArgs:", start)
+        block = source[start:end]
+        self.assertIn('settings = settings && typeof settings === "object" ? settings : {};', block)
+        self.assertIn("let pending = [];", block)
+        self.assertIn("let attemptedWrites = [];", block)
+        self.assertIn("let result = this.settings.setValue(item.key, item.value);", block)
+        self.assertIn('throw new Error("Imported setting could not be saved");', block)
+        self.assertIn("let rollbackResult = this.settings.setValue(item.key, item.previous);", block)
+        self.assertIn('throw new Error("Imported setting rollback failed");', block)
+        self.assertIn("this[item.prop] = item.value;", block)
+        self.assertLess(block.index("let result = this.settings.setValue"), block.index("this[item.prop] = item.value;"))
+
     def test_settings_export_uses_stdin_not_process_arguments_for_snapshot(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

@@ -7276,16 +7276,46 @@ MyApplet.prototype = {
   },
 
   _applyImportedSettings: function(settings) {
-    let applied = 0;
+    settings = settings && typeof settings === "object" ? settings : {};
+    let pending = [];
     for (let item of EXPORTABLE_SETTINGS) {
       let key = item[0];
       let prop = item[1];
       if (!Object.prototype.hasOwnProperty.call(settings, key)) {
         continue;
       }
-      this[prop] = this._coerceImportedSetting(key, settings[key], this[prop]);
-      this.settings.setValue(key, this[prop]);
-      applied++;
+      pending.push({
+        key: key,
+        prop: prop,
+        value: this._coerceImportedSetting(key, settings[key], this[prop]),
+        previous: this[prop],
+      });
+    }
+    let attemptedWrites = [];
+    try {
+      for (let item of pending) {
+        attemptedWrites.push(item);
+        let result = this.settings.setValue(item.key, item.value);
+        if (result === false) {
+          throw new Error("Imported setting could not be saved");
+        }
+      }
+    } catch (err) {
+      for (let index = attemptedWrites.length - 1; index >= 0; index--) {
+        let item = attemptedWrites[index];
+        try {
+          let rollbackResult = this.settings.setValue(item.key, item.previous);
+          if (rollbackResult === false) {
+            throw new Error("Imported setting rollback failed");
+          }
+        } catch (rollbackErr) {
+          this._safeLogError(rollbackErr);
+        }
+      }
+      throw err;
+    }
+    for (let item of pending) {
+      this[item.prop] = item.value;
     }
     this._syncActiveLanguage();
     this.recorder = this._normalizeRecorder(this.recorder);
@@ -7307,7 +7337,7 @@ MyApplet.prototype = {
     this._populateAutoPasteMenu();
     this._registerHotkeys();
     this._updatePanel();
-    return applied;
+    return pending.length;
   },
 
   _coerceSpawnArgs: function(args) {
