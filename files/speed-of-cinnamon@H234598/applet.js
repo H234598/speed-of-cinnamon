@@ -1313,7 +1313,11 @@ MyApplet.prototype = {
               this._trackOrphanedDialog(dialog, "teardown", true, true);
             }
           } else {
-            dialogs.splice(index, 1);
+            let previousLength = dialogs.length;
+            let removed = dialogs.splice(index, 1);
+            if (!Array.isArray(removed) || removed.length !== 1 || removed[0] !== dialog || dialogs.length !== previousLength - 1) {
+              throw new Error("Dialog registry invalid entry could not be removed");
+            }
           }
         } else if (dialog) {
           this._trackOrphanedDialog(dialog, "teardown", closeSucceeded, destroySucceeded);

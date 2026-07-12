@@ -2311,6 +2311,9 @@ class AppletStaticTest(unittest.TestCase):
         dialog_end = source.index("\n  _destroyMenus:", dialog_start)
         dialog_block = source[dialog_start:dialog_end]
         self.assertIn("!dialog || this._runTeardownOperation", dialog_block)
+        self.assertIn("let previousLength = dialogs.length;", dialog_block)
+        self.assertIn("let removed = dialogs.splice(index, 1);", dialog_block)
+        self.assertIn('throw new Error("Dialog registry invalid entry could not be removed");', dialog_block)
 
         tooltip_start = source.index("_destroyAppletTooltip: function()")
         tooltip_end = source.index("\n  _trackMonitor:", tooltip_start)
@@ -2535,6 +2538,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("!dialog || this._runTeardownOperation(\"teardown-dialog-destroy\"", block)
         self.assertIn("if (closeSucceeded && destroySucceeded)", block)
         self.assertIn("this._untrackDialog(dialog);", block)
+        self.assertIn("dialogs.length !== previousLength - 1", block)
         self.assertIn('this._trackOrphanedDialog(dialog, "teardown", true, true);', block)
         self.assertIn('this._trackOrphanedDialog(dialog, "teardown", closeSucceeded, destroySucceeded);', block)
         self.assertLess(block.index("try {"), block.index("Array.isArray(this._resourceRegistry.dialogs)"))
