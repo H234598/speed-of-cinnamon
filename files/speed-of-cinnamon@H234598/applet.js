@@ -11873,9 +11873,16 @@ MyApplet.prototype = {
       }
       if (this.autoInsertFingerprints.indexOf(fingerprint) < 0) {
         this.autoInsertFingerprints.push(fingerprint);
+        if (this.autoInsertFingerprints.indexOf(fingerprint) < 0) {
+          throw new Error("Auto-insert fingerprint could not be remembered");
+        }
       }
       while (this.autoInsertFingerprints.length > 20) {
+        let previousLength = this.autoInsertFingerprints.length;
         this.autoInsertFingerprints.shift();
+        if (this.autoInsertFingerprints.length !== previousLength - 1) {
+          throw new Error("Auto-insert fingerprint history could not be bounded");
+        }
       }
       return true;
     } catch (error) {
