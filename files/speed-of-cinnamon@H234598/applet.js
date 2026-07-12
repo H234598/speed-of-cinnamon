@@ -1015,7 +1015,10 @@ MyApplet.prototype = {
       if (index < 0) {
         return true;
       }
-      this._resourceRegistry.dialogs.splice(index, 1);
+      let removed = this._resourceRegistry.dialogs.splice(index, 1);
+      if (!Array.isArray(removed) || removed.length !== 1 || this._resourceRegistry.dialogs.indexOf(dialog) >= 0) {
+        throw new Error("Dialog registry entry could not be removed");
+      }
       return true;
     } catch (error) {
       this._recordLifecycleError("dialog-untrack", error);
@@ -1023,7 +1026,7 @@ MyApplet.prototype = {
     }
   },
 
-  _trackOrphanedDialog: function(dialog, group) {
+  _trackOrphanedDialog: function(dialog, group, closeSucceeded, destroySucceeded) {
     try {
       if (!dialog) {
         throw new Error("Dialog orphan is invalid");
@@ -1031,9 +1034,21 @@ MyApplet.prototype = {
       if (!Array.isArray(this._orphanedDialogs)) {
         this._orphanedDialogs = [];
       }
-      let known = this._orphanedDialogs.some((entry) => entry && entry.dialog === dialog);
-      if (!known) {
-        this._orphanedDialogs.push({ dialog: dialog, group: String(group || "dialog") });
+      let knownEntry = this._orphanedDialogs.find((entry) => entry && entry.dialog === dialog);
+      if (knownEntry) {
+        if (closeSucceeded === true) {
+          knownEntry.closeSucceeded = true;
+        }
+        if (destroySucceeded === true) {
+          knownEntry.destroySucceeded = true;
+        }
+      } else {
+        this._orphanedDialogs.push({
+          dialog: dialog,
+          group: String(group || "dialog"),
+          closeSucceeded: closeSucceeded === true,
+          destroySucceeded: destroySucceeded === true,
+        });
       }
       return true;
     } catch (error) {
@@ -1074,17 +1089,33 @@ MyApplet.prototype = {
         success = false;
         continue;
       }
-      let closeSucceeded = this._runTeardownOperation(
-        "teardown-orphaned-dialogs",
-        entry.dialog,
-        "close"
-      );
-      let destroySucceeded = this._runTeardownOperation(
-        "teardown-orphaned-dialogs",
-        entry.dialog,
-        "destroy"
-      );
+      let closeSucceeded = entry.closeSucceeded === true;
+      if (!closeSucceeded) {
+        closeSucceeded = this._runTeardownOperation(
+          "teardown-orphaned-dialogs",
+          entry.dialog,
+          "close"
+        );
+        if (closeSucceeded) {
+          entry.closeSucceeded = true;
+        }
+      }
+      let destroySucceeded = entry.destroySucceeded === true;
+      if (closeSucceeded && !destroySucceeded) {
+        destroySucceeded = this._runTeardownOperation(
+          "teardown-orphaned-dialogs",
+          entry.dialog,
+          "destroy"
+        );
+        if (destroySucceeded) {
+          entry.destroySucceeded = true;
+        }
+      }
       if (!closeSucceeded || !destroySucceeded) {
+        success = false;
+        continue;
+      }
+      if (!this._untrackDialog(entry.dialog)) {
         success = false;
         continue;
       }
@@ -1119,9 +1150,11 @@ MyApplet.prototype = {
         let closeSucceeded = this._runTeardownOperation(cleanupGroup, dialog, "close");
         let destroySucceeded = this._runTeardownOperation(cleanupGroup, dialog, "destroy");
         if (closeSucceeded && destroySucceeded) {
-          this._untrackDialog(dialog);
+          if (!this._untrackDialog(dialog)) {
+            this._trackOrphanedDialog(dialog, group, true, true);
+          }
         } else {
-          this._trackOrphanedDialog(dialog, group);
+          this._trackOrphanedDialog(dialog, group, closeSucceeded, destroySucceeded);
         }
       }
       this._recordLifecycleError("dialog-" + String(group || "create"), error);
@@ -1204,11 +1237,17 @@ MyApplet.prototype = {
       }
       closed = true;
     });
-    if (closed) {
-      this._untrackDialog(dialog);
-      this._untrackOrphanedDialog(dialog);
+    if (!closed) {
+      this._trackOrphanedDialog(dialog, group, false, false);
+      return false;
     }
-    return closed;
+    let untracked = this._untrackDialog(dialog);
+    let orphanUntracked = this._untrackOrphanedDialog(dialog);
+    if (!untracked || !orphanUntracked) {
+      this._trackOrphanedDialog(dialog, group, true, false);
+      return false;
+    }
+    return true;
   },
 
   _dialogOpen: function(dialog, group) {
@@ -1235,11 +1274,16 @@ MyApplet.prototype = {
         let destroySucceeded = !dialog || this._runTeardownOperation("teardown-dialog-destroy", dialog, "destroy");
         if (closeSucceeded && destroySucceeded) {
           if (dialog) {
-            this._untrackDialog(dialog);
-            this._untrackOrphanedDialog(dialog);
+            let untracked = this._untrackDialog(dialog);
+            let orphanUntracked = this._untrackOrphanedDialog(dialog);
+            if (!untracked || !orphanUntracked) {
+              this._trackOrphanedDialog(dialog, "teardown", true, true);
+            }
           } else {
             dialogs.splice(index, 1);
           }
+        } else if (dialog) {
+          this._trackOrphanedDialog(dialog, "teardown", closeSucceeded, destroySucceeded);
         }
       }
     } catch (error) {

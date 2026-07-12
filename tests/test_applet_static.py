@@ -2099,20 +2099,23 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._runTeardownOperation(cleanupGroup, dialog, \"close\")", block)
         self.assertIn("this._runTeardownOperation(cleanupGroup, dialog, \"destroy\")", block)
         self.assertIn("if (closeSucceeded && destroySucceeded)", block)
-        self.assertIn("this._untrackDialog(dialog);", block)
-        self.assertIn("this._trackOrphanedDialog(dialog, group);", block)
+        self.assertIn("if (!this._untrackDialog(dialog))", block)
+        self.assertIn("this._trackOrphanedDialog(dialog, group, closeSucceeded, destroySucceeded);", block)
 
     def test_orphaned_dialog_cleanup_is_retried_and_blocks_new_dialogs(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
-        start = source.index("_trackOrphanedDialog: function(dialog, group)")
+        start = source.index("_trackOrphanedDialog: function(dialog, group, closeSucceeded, destroySucceeded)")
         end = source.index("\n  _newSafeDialog:", start)
         orphan_block = source[start:end]
         self.assertIn("this._orphanedDialogs = [];", orphan_block)
         self.assertIn("entry.dialog === dialog", orphan_block)
         self.assertIn("this._orphanedDialogs.push({", orphan_block)
+        self.assertIn("closeSucceeded: closeSucceeded === true", orphan_block)
+        self.assertIn("destroySucceeded: destroySucceeded === true", orphan_block)
         self.assertIn("_retryOrphanedDialogs: function()", orphan_block)
         self.assertIn('"close"', orphan_block)
         self.assertIn('"destroy"', orphan_block)
+        self.assertIn("this._untrackDialog(entry.dialog)", orphan_block)
         self.assertIn("this._orphanedDialogs.splice(index, 1);", orphan_block)
 
         start = source.index("_newSafeDialog: function(group)")
@@ -2361,9 +2364,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let closed = false;", block)
         self.assertIn("let result = dialog.close();", block)
         self.assertIn('if (result === false)', block)
-        self.assertIn("if (closed) {", block)
+        self.assertIn("if (!closed) {", block)
         self.assertIn("this._untrackDialog(dialog);", block)
-        self.assertIn("return closed;", block)
+        self.assertIn("this._trackOrphanedDialog(dialog, group, true, false);", block)
+        self.assertIn("this._trackOrphanedDialog(dialog, group, false, false);", block)
+        self.assertIn("return true;", block)
         self.assertLess(block.index("try {"), block.index("Array.isArray(this._resourceRegistry.dialogs)"))
 
     def test_transcript_confirmation_does_not_advance_when_close_fails(self) -> None:
@@ -2391,6 +2396,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("!dialog || this._runTeardownOperation(\"teardown-dialog-destroy\"", block)
         self.assertIn("if (closeSucceeded && destroySucceeded)", block)
         self.assertIn("this._untrackDialog(dialog);", block)
+        self.assertIn('this._trackOrphanedDialog(dialog, "teardown", true, true);', block)
+        self.assertIn('this._trackOrphanedDialog(dialog, "teardown", closeSucceeded, destroySucceeded);', block)
         self.assertLess(block.index("try {"), block.index("Array.isArray(this._resourceRegistry.dialogs)"))
 
     def test_applet_exposes_notification_options_submenu(self) -> None:
