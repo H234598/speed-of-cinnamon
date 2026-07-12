@@ -381,6 +381,17 @@ class ArtifactCryptoTest(unittest.TestCase):
         self.assertEqual(mocked_popen.call_args.kwargs["stdin"], None)
         self.assertFalse(mocked_popen.call_args.kwargs["shell"])
 
+    def test_secret_tool_start_value_error_is_controlled(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.artifact_crypto._secret_tool_path", return_value="/usr/bin/secret-tool"),
+            mock.patch(
+                "speed_of_cinnamon.artifact_crypto.subprocess.Popen",
+                side_effect=ValueError("bad process arguments"),
+            ),
+        ):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "helper could not be started"):
+                artifact_crypto._run_secret_tool(["lookup", "application", "test"])
+
     def test_secret_tool_closed_pipe_failure_is_controlled(self) -> None:
         class BrokenStream:
             def fileno(self) -> int:

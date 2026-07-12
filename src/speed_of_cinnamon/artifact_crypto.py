@@ -762,14 +762,17 @@ def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subpr
     env = _filtered_environment()
     proc: subprocess.Popen[bytes] | None = None
     try:
-        proc = subprocess.Popen(  # nosec B603
-            command,
-            stdin=subprocess.PIPE if input_text is not None else None,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            shell=False,
-            env=env,
-        )
+        try:
+            proc = subprocess.Popen(  # nosec B603
+                command,
+                stdin=subprocess.PIPE if input_text is not None else None,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                shell=False,
+                env=env,
+            )
+        except (OSError, ValueError) as exc:
+            raise ArtifactCryptoError("Secret Service keyring helper could not be started") from exc
         if input_text is not None:
             if proc.stdin is None:
                 raise ArtifactCryptoError("Secret Service keyring helper input could not be sent safely")
@@ -790,8 +793,6 @@ def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subpr
         stdout = _validate_secret_tool_output(stdout, field_name="stdout")
         stderr = _validate_secret_tool_output(stderr, field_name="stderr")
         return subprocess.CompletedProcess(command, returncode, stdout, stderr)
-    except OSError as exc:
-        raise ArtifactCryptoError("Secret Service keyring helper could not be started") from exc
     finally:
         if proc is not None:
             for stream in (proc.stdin, proc.stdout, proc.stderr):
