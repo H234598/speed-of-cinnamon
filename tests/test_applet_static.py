@@ -4140,9 +4140,11 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         self.assertIn("let cleanupComplete = false;", block)
         self.assertIn("let callbackDelivered = false;", block)
-        self.assertIn("let cleanupResources = () =>", block)
+        self.assertIn("let cleanupResources = (timeoutCleanupSucceeded) =>", block)
         self.assertIn("if (done) {\n        return cleanupResources();", block)
         self.assertIn("if (!callbackDelivered)", block)
+        self.assertIn("if (timeoutCleanupSucceeded === undefined) {\n        timeoutCleanupSucceeded = this._clearTrackedTimer(timeoutKey) !== false;", block)
+        self.assertIn("let timeoutCleanupSucceeded = this._clearTrackedTimer(timeoutKey) !== false;", block)
         self.assertIn("let cancellableCleanupSucceeded = this._unregisterCancellable(cancellableToken);", block)
         self.assertIn("let cancellableOrphanCleanupSucceeded = true;", block)
         self.assertIn("cancellableOrphanCleanupSucceeded = this._untrackOrphanedCancellable(cancellableToken);", block)
@@ -4150,8 +4152,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let processCleanupSucceeded = this._unregisterProcess(processToken);", block)
         self.assertIn("let processOrphanCleanupSucceeded = true;", block)
         self.assertIn("processOrphanCleanupSucceeded = this._untrackOrphanedProcess(process);", block)
-        self.assertIn("cancellableOrphanCleanupSucceeded &&", block)
+        self.assertIn("timeoutCleanupSucceeded && cancellableCleanupSucceeded && cancellableOrphanCleanupSucceeded &&", block)
         self.assertIn("processOrphanCleanupSucceeded", block)
+        self.assertIn("let cleanupSucceeded = cleanupResources(timeoutCleanupSucceeded);", block)
         self.assertIn('let callbackResult = cleanupSucceeded ? (result || {}) : { error: "Subprocess cleanup failed" };', block)
         self.assertIn("callback(stdoutParts.join(\"\"), stderrParts.join(\"\"), callbackResult);", block)
 

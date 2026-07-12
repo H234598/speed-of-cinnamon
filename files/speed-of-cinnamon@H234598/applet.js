@@ -10090,9 +10090,12 @@ MyApplet.prototype = {
     let cleanupComplete = false;
     let callbackDelivered = false;
 
-    let cleanupResources = () => {
+    let cleanupResources = (timeoutCleanupSucceeded) => {
       if (cleanupComplete) {
         return true;
+      }
+      if (timeoutCleanupSucceeded === undefined) {
+        timeoutCleanupSucceeded = this._clearTrackedTimer(timeoutKey) !== false;
       }
       let cancellableCleanupSucceeded = this._unregisterCancellable(cancellableToken);
       let cancellableOrphanCleanupSucceeded = true;
@@ -10108,7 +10111,7 @@ MyApplet.prototype = {
       } else {
         processOrphanCleanupSucceeded = this._untrackOrphanedProcess(process);
       }
-      cleanupComplete = cancellableCleanupSucceeded && cancellableOrphanCleanupSucceeded &&
+      cleanupComplete = timeoutCleanupSucceeded && cancellableCleanupSucceeded && cancellableOrphanCleanupSucceeded &&
         processCleanupSucceeded && processOrphanCleanupSucceeded;
       return cleanupComplete;
     };
@@ -10120,7 +10123,7 @@ MyApplet.prototype = {
       if (done) {
         return cleanupResources();
       }
-      this._clearTrackedTimer(timeoutKey);
+      let timeoutCleanupSucceeded = this._clearTrackedTimer(timeoutKey) !== false;
       let terminationSucceeded = true;
       if (terminate) {
         terminationSucceeded = this._terminateProcess(process);
@@ -10139,7 +10142,7 @@ MyApplet.prototype = {
         return false;
       }
       done = true;
-      let cleanupSucceeded = cleanupResources();
+      let cleanupSucceeded = cleanupResources(timeoutCleanupSucceeded);
       let callbackResult = cleanupSucceeded ? (result || {}) : { error: "Subprocess cleanup failed" };
       if (suppressCallback || this.appletRemoved || this.spawnGeneration !== generation || typeof callback !== "function") {
         return cleanupSucceeded;
