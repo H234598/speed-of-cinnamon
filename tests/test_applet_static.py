@@ -3416,13 +3416,17 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn(f'_("{message}")', block)
             self.assertLess(block.index(f"{args_name} = this.{builder_name}();"), block.index("this.isCommandRunning = true;"))
 
-        preview_start = source.index("_previewCleanup: function()")
-        preview_end = source.index("\n  _cleanupOldFiles:", preview_start)
-        preview_block = source[preview_start:preview_end]
-        cleanup_start = source.index("_cleanupOldFiles: function()")
-        cleanup_end = source.index("\n  _settingsSnapshot:", cleanup_start)
-        cleanup_block = source[cleanup_start:cleanup_end]
-        for block in (preview_block, cleanup_block):
+        maintenance_blocks = []
+        for method, next_method in (
+            ("_loadAllTranscriptsDocument: function()", "\n  _showTranscriptsWindow:"),
+            ("_exportAllTranscripts: function()", "\n  _safePayloadCount:"),
+            ("_previewCleanup: function()", "\n  _cleanupOldFiles:"),
+            ("_cleanupOldFiles: function()", "\n  _settingsSnapshot:"),
+        ):
+            start = source.index(method)
+            end = source.index(next_method, start)
+            maintenance_blocks.append(source[start:end])
+        for block in maintenance_blocks:
             self.assertIn("let cleanupToken = {};", block)
             self.assertIn("this._cleanupCommandToken = cleanupToken;", block)
             self.assertIn("this._cleanupCommandToken !== cleanupToken", block)

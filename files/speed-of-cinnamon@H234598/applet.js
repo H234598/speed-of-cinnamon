@@ -8198,8 +8198,14 @@ MyApplet.prototype = {
       return;
     }
     this.isCommandRunning = true;
+    let cleanupToken = {};
+    this._cleanupCommandToken = cleanupToken;
     this._setStatus("processing", _("Preparing transcript list..."), this.lastTranscript);
     this._spawnJson(historyDocumentArgs, (payload) => {
+      if (this._cleanupCommandToken !== cleanupToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
+      this._cleanupCommandToken = null;
       this.isCommandRunning = false;
       if (payload.error) {
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
@@ -8304,8 +8310,14 @@ MyApplet.prototype = {
       return;
     }
     this.isCommandRunning = true;
+    let cleanupToken = {};
+    this._cleanupCommandToken = cleanupToken;
     this._setStatus("processing", _("Exporting transcripts..."), this.lastTranscript);
     this._spawnJson(exportArgs, (payload) => {
+      if (this._cleanupCommandToken !== cleanupToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
+      this._cleanupCommandToken = null;
       this.isCommandRunning = false;
       if (payload.error) {
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
