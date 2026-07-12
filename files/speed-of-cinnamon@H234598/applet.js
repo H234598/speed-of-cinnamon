@@ -1021,11 +1021,19 @@ MyApplet.prototype = {
         try {
           let lastIndex = dialogs.length - 1;
           if (lastIndex >= 0 && dialogs[lastIndex] === dialog) {
-            dialogs.pop();
+            let previousLength = dialogs.length;
+            let removed = dialogs.pop();
+            if (removed !== dialog || dialogs.length !== previousLength - 1) {
+              throw new Error("Dialog registry rollback did not remove the entry");
+            }
           } else {
             let index = dialogs.indexOf(dialog);
             if (index >= 0) {
-              dialogs.splice(index, 1);
+              let previousLength = dialogs.length;
+              let removed = dialogs.splice(index, 1);
+              if (!Array.isArray(removed) || removed.length !== 1 || removed[0] !== dialog || dialogs.length !== previousLength - 1) {
+                throw new Error("Dialog registry rollback did not remove the entry");
+              }
             }
           }
         } catch (rollbackError) {

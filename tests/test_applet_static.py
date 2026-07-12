@@ -567,6 +567,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('throw new Error("Dialog could not be registered");', dialog_block)
         self.assertIn("let added = false;", dialog_block)
         self.assertIn("dialogs.pop();", dialog_block)
+        self.assertIn("let previousLength = dialogs.length;", dialog_block)
+        self.assertIn('throw new Error("Dialog registry rollback did not remove the entry");', dialog_block)
         self.assertIn('this._recordLifecycleError("dialog-registration-rollback", rollbackError);', dialog_block)
 
         start = source.index("_trackMonitor: function(monitor)")
