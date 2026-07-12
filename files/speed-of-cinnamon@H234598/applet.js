@@ -3404,12 +3404,39 @@ MyApplet.prototype = {
   },
 
   _retryOrphanedHotkeys: function() {
-    if (!Array.isArray(this._orphanedHotkeys)) {
+    let pendingNames = [];
+    let addPendingName = (value) => {
+      let name = String(value || "").trim();
+      if (name !== "" && pendingNames.indexOf(name) < 0) {
+        pendingNames.push(name);
+      }
+    };
+    let collectPendingNames = (values) => {
+      if (!values || (typeof values !== "object" && typeof values !== "function")) {
+        return;
+      }
+      for (let name in values) {
+        if (Object.prototype.hasOwnProperty.call(values, name)) {
+          addPendingName(name);
+        }
+      }
+    };
+    if (Array.isArray(this._orphanedHotkeys)) {
+      for (let name of this._orphanedHotkeys) {
+        addPendingName(name);
+      }
+    } else {
+      this._recordLifecycleError("hotkey-state", new Error("Hotkey orphan registry is unavailable"));
+    }
+    collectPendingNames(this._orphanedHotkeyStates);
+    collectPendingNames(this._resourceRegistry && this._resourceRegistry.hotkeys);
+    collectPendingNames(this._hotkeyDefinitions);
+    if (pendingNames.length === 0) {
       return true;
     }
     let success = true;
-    for (let index = this._orphanedHotkeys.length - 1; index >= 0; index--) {
-      let name = this._orphanedHotkeys[index];
+    for (let index = pendingNames.length - 1; index >= 0; index--) {
+      let name = pendingNames[index];
       let externallyRemoved = this._orphanedHotkeyStates && this._orphanedHotkeyStates[name] === true;
       if (!externallyRemoved) {
         if (!this._runTeardownOperation(

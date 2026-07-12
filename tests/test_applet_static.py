@@ -2506,6 +2506,20 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._runTeardownOperation(", block)
         self.assertIn("this._retryOrphanedHotkeys()", source)
 
+    def test_hotkey_retry_reconstructs_pending_names_from_authoritative_state(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_retryOrphanedHotkeys: function()")
+        end = source.index("\n  _removeHotkey: function(id)", start)
+        block = source[start:end]
+        self.assertIn("let pendingNames = [];", block)
+        self.assertIn("let addPendingName = (value) =>", block)
+        self.assertIn("let collectPendingNames = (values) =>", block)
+        self.assertIn("Hotkey orphan registry is unavailable", block)
+        self.assertIn("collectPendingNames(this._orphanedHotkeyStates);", block)
+        self.assertIn("collectPendingNames(this._resourceRegistry && this._resourceRegistry.hotkeys);", block)
+        self.assertIn("collectPendingNames(this._hotkeyDefinitions);", block)
+        self.assertIn("for (let index = pendingNames.length - 1;", block)
+
     def test_hotkey_teardown_registry_failures_do_not_escape(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_removeHotkey: function(id)")
