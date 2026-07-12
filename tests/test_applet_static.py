@@ -6067,8 +6067,8 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_toggleRecording: function()")
         end = source.index("\n  _restartApplet:", start)
         block = source[start:end]
-        self.assertIn("if (this.textInsertToken)", block)
         self.assertIn("this._cancelTextInsertForSettingsChange();", block)
+        self.assertNotIn("if (this.textInsertToken)", block)
         self.assertLess(
             block.index("this._cancelTextInsertForSettingsChange();"),
             block.index("if (this.isCommandRunning)"),

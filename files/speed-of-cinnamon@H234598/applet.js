@@ -5272,9 +5272,7 @@ MyApplet.prototype = {
     if (!this._invalidateBackgroundCallbacksForRecording()) {
       return;
     }
-    if (this.textInsertToken) {
-      this._cancelTextInsertForSettingsChange();
-    }
+    this._cancelTextInsertForSettingsChange();
     if (this.isCommandRunning) {
       if (this.autoRelisten && this.notificationSessionActive) {
         this.autoRelistenManualStopRequested = true;
