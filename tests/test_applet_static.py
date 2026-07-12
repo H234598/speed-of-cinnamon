@@ -4372,6 +4372,7 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn("this.setupDiagnosticsToken = actionToken;", block)
             self.assertIn("this.setupDiagnosticsToken !== actionToken", block)
             self.assertIn("!this._lifecycleAllowsWork()", block)
+            self.assertIn('inputOption.resourceGroup = "setup-diagnostics";', block)
 
     def test_setup_actions_release_tokens_when_argument_building_fails(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -6018,7 +6019,8 @@ class AppletStaticTest(unittest.TestCase):
         ]:
             self.assertIn(f"this.{token} = null;", helper_block)
         self.assertIn('this._terminateProcessesByGroup("doctor")', helper_block)
-        self.assertIn("return doctorCleanupSucceeded;", helper_block)
+        self.assertIn('this._terminateProcessesByGroup("setup-diagnostics")', helper_block)
+        self.assertIn("return setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;", helper_block)
         self.assertNotIn("this.transcriptWindowToken = null;", helper_block)
         self.assertNotIn("this.settingsWindowToken = null;", helper_block)
 

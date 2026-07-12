@@ -5441,6 +5441,10 @@ MyApplet.prototype = {
     this.benchmarkFlowToken = null;
     this.settingsTransferToken = null;
     this.setupDiagnosticsToken = null;
+    let setupDiagnosticsCleanupSucceeded = this._terminateProcessesByGroup("setup-diagnostics") !== false;
+    if (!setupDiagnosticsCleanupSucceeded) {
+      this._setStatusPreservingRecording("error", _("Setup diagnostics action could not be stopped"), this.lastTranscript);
+    }
     this.doctorCommandToken = null;
     this._doctorCommandRunning = false;
     let doctorCleanupSucceeded = this._terminateProcessesByGroup("doctor") !== false;
@@ -5451,7 +5455,7 @@ MyApplet.prototype = {
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
     this.transcriptListPromptToken = null;
-    return doctorCleanupSucceeded;
+    return setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;
   },
 
   _runDoctor: function(startupCheck) {
@@ -5730,6 +5734,7 @@ MyApplet.prototype = {
     if (!inputOption) {
       return;
     }
+    inputOption.resourceGroup = "setup-diagnostics";
     let actionToken = {};
     this.setupDiagnosticsToken = actionToken;
     this._setStatus("processing", _("Preparing profanity replacement list..."), this.lastTranscript);
@@ -5772,6 +5777,7 @@ MyApplet.prototype = {
     if (!inputOption) {
       return;
     }
+    inputOption.resourceGroup = "setup-diagnostics";
     let actionToken = {};
     this.setupDiagnosticsToken = actionToken;
     let setupArgs;
@@ -5834,6 +5840,7 @@ MyApplet.prototype = {
     if (!inputOption) {
       return;
     }
+    inputOption.resourceGroup = "setup-diagnostics";
     let actionToken = {};
     this.setupDiagnosticsToken = actionToken;
     let setupArgs;
@@ -5882,6 +5889,7 @@ MyApplet.prototype = {
     if (!inputOption) {
       return;
     }
+    inputOption.resourceGroup = "setup-diagnostics";
     let actionToken = {};
     this.setupDiagnosticsToken = actionToken;
     let diagnosticsArgs;
@@ -5922,6 +5930,7 @@ MyApplet.prototype = {
     if (!inputOption) {
       return;
     }
+    inputOption.resourceGroup = "setup-diagnostics";
     let actionToken = {};
     this.setupDiagnosticsToken = actionToken;
     let diagnosticsSaveArgs;
