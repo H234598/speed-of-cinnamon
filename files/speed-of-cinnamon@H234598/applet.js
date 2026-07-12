@@ -753,8 +753,27 @@ MyApplet.prototype = {
           } catch (disconnectError) {
             this._recordLifecycleError("signal-disconnect", disconnectError);
           }
+          let orphanTracked = true;
           if (!registryEntryRemovalSucceeded || !signalDisconnected) {
-            this._trackOrphanedSignal(target, connectionId, signalDisconnected);
+            orphanTracked = this._trackOrphanedSignal(target, connectionId, signalDisconnected) === true;
+          }
+          if (!signalDisconnected && !orphanTracked) {
+            try {
+              let signals = this._resourceRegistry && this._resourceRegistry.signals;
+              if (!Array.isArray(signals)) {
+                throw new Error("Signal registry fallback is unavailable");
+              }
+              let signalIndex = signals.indexOf(signalEntry);
+              if (signalIndex < 0) {
+                let restoreIndex = signals.length;
+                signals[restoreIndex] = signalEntry;
+                if (signals[restoreIndex] !== signalEntry) {
+                  throw new Error("Signal registry fallback could not be restored");
+                }
+              }
+            } catch (fallbackError) {
+              this._recordLifecycleError("signal-registration-rollback", fallbackError);
+            }
           }
           throw registryError;
         }

@@ -415,6 +415,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!connectionId) {\n        this._clearExternalApiEnvMonitor();", block)
         self.assertIn("} catch (err) {\n      this._clearExternalApiEnvMonitor();", block)
 
+    def test_signal_rollback_restores_registry_when_orphan_tracking_fails(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_connectSafe: function(target, signal, callback, group)")
+        end = source.index("\n  _trackOrphanedSignal:", start)
+        block = source[start:end]
+        self.assertIn("let orphanTracked = true;", block)
+        self.assertIn("this._trackOrphanedSignal(target, connectionId, signalDisconnected) === true", block)
+        self.assertIn("if (!signalDisconnected && !orphanTracked)", block)
+        self.assertIn("let signalIndex = signals.indexOf(signalEntry);", block)
+        self.assertIn("signals[restoreIndex] = signalEntry;", block)
+        self.assertIn('this._recordLifecycleError("signal-registration-rollback", fallbackError);', block)
+
     def test_failed_external_env_monitor_cancel_remains_tracked(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_clearExternalApiEnvMonitor: function()")
@@ -2178,7 +2190,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('typeof target.disconnect !== "function"', block)
         self.assertIn("let disconnectResult = target.disconnect(connectionId);", block)
         self.assertIn("disconnectResult === false", block)
-        self.assertIn("this._trackOrphanedSignal(target, connectionId, signalDisconnected);", block)
+        self.assertIn("this._trackOrphanedSignal(target, connectionId, signalDisconnected) === true", block)
+        self.assertIn("if (!signalDisconnected && !orphanTracked)", block)
+        self.assertIn("signals[restoreIndex] = signalEntry;", block)
         orphan_start = source.index("_trackOrphanedSignal: function(target, id, disconnected)")
         orphan_end = source.index("\n  _disconnectOrphanedSignals:", orphan_start)
         orphan_block = source[orphan_start:orphan_end]
