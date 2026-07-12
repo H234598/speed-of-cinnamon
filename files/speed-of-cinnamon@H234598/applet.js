@@ -8713,6 +8713,11 @@ MyApplet.prototype = {
     if (this.historyRefreshToken) {
       return;
     }
+    if (this._terminateProcessesByGroup("history-refresh") === false) {
+      this._populateHistoryMenu([]);
+      this._setStatusPreservingRecording("error", _("History refresh could not be stopped"), this.lastTranscript);
+      return;
+    }
     let refreshToken = {};
     this.historyRefreshToken = refreshToken;
     let historyArgs;
@@ -8749,7 +8754,7 @@ MyApplet.prototype = {
         this._recordLifecycleError("menu-refresh", error);
         this._setStatusPreservingRecording("error", _("Could not refresh transcript history"), this.lastTranscript);
       }
-    });
+    }, { resourceGroup: "history-refresh" });
   },
 
   _listAllTranscripts: function() {

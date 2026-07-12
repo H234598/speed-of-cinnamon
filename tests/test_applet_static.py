@@ -1043,6 +1043,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.historyRefreshToken = refreshToken;", refresh_block)
         self.assertIn("this.historyRefreshToken !== refreshToken", refresh_block)
         self.assertIn("!this._canMutateMenu(this.historyItem)", refresh_block)
+        self.assertIn('this._terminateProcessesByGroup("history-refresh")', refresh_block)
+        self.assertIn('resourceGroup: "history-refresh"', refresh_block)
+        self.assertLess(
+            refresh_block.index('this._terminateProcessesByGroup("history-refresh")'),
+            refresh_block.index("let refreshToken = {};")
+        )
 
     def test_alarm_refresh_ignores_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
