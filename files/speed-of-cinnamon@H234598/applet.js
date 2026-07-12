@@ -952,8 +952,14 @@ MyApplet.prototype = {
       }
     };
     collect(menu);
+    let signalsCleanupSucceeded = true;
     for (let target of targets) {
-      this._disconnectTrackedSignalsForTarget(target);
+      if (!this._disconnectTrackedSignalsForTarget(target)) {
+        signalsCleanupSucceeded = false;
+      }
+    }
+    if (!signalsCleanupSucceeded) {
+      return false;
     }
     return this._runStateGuarded("menu-items", () => {
       if (typeof menu.removeAll !== "function") {

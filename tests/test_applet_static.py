@@ -2372,6 +2372,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertLess(block.index("try {"), block.index("Array.isArray(this._resourceRegistry.signals)"))
         self.assertIn('this._recordLifecycleError("teardown-target-signals", error);', block)
 
+    def test_menu_items_are_not_removed_when_signal_cleanup_fails(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_clearMenuItems: function(menu)")
+        end = source.index("\n  _trackDialog:", start)
+        block = source[start:end]
+        self.assertIn("let signalsCleanupSucceeded = true;", block)
+        self.assertIn("if (!this._disconnectTrackedSignalsForTarget(target))", block)
+        self.assertIn("signalsCleanupSucceeded = false;", block)
+        self.assertIn("if (!signalsCleanupSucceeded) {\n      return false;", block)
+        self.assertLess(block.index("if (!signalsCleanupSucceeded)"), block.index("menu.removeAll()"))
+
     def test_failed_signal_teardown_remains_tracked(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_disconnectAllSignals: function()")
