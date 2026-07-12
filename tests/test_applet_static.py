@@ -1291,7 +1291,7 @@ class AppletStaticTest(unittest.TestCase):
         text_end = source.index("\n  _onOpenAiFlexProcessingSettingsChanged:", text_start)
         text_block = source[text_start:text_end]
         self.assertIn("this._cancelOllamaInstallWatch();", text_block)
-        self.assertIn("this._clearOllamaModelFlow();", text_block)
+        self.assertIn("this._clearOllamaModelFlow", text_block)
         self.assertIn("this.textModelMenuRefreshToken = null;", text_block)
 
     def test_text_model_payload_names_must_be_strings(self) -> None:
@@ -2903,10 +2903,11 @@ class AppletStaticTest(unittest.TestCase):
         end = source.index("\n  _cancelOllamaFlowForRecording:", start)
         block = source[start:end]
         self.assertIn("let installToken = this.ollamaModelInstallToken;", block)
-        self.assertIn("let terminationSucceeded = this._terminateProcessesByGroup(\"ollama\", true);", block)
+        self.assertIn("terminationSucceeded = this._terminateProcessesByGroup(\"ollama\", true);", block)
         self.assertIn("if (this.ollamaModelInstallToken === installToken)", block)
         self.assertIn("this.ollamaModelInstallRunning = true;", block)
         self.assertIn("this.isCommandRunning = true;", block)
+        self.assertIn("return terminationSucceeded;", block)
 
     def test_ollama_model_flow_clears_terminal_and_install_failure_states(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2918,6 +2919,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let hadOllamaModelInstall = Boolean(this.ollamaModelInstallRunning);", helper_block)
         self.assertIn("this.ollamaModelFlowToken = null;", helper_block)
         self.assertIn('this._terminateProcessesByGroup("ollama", true);', helper_block)
+        self.assertIn("let terminationSucceeded = true;", helper_block)
+        self.assertIn("return terminationSucceeded;", helper_block)
         self.assertIn("this.ollamaModelInstallRunning = false;", helper_block)
         self.assertIn("if (hadOllamaModelInstall)", helper_block)
 
@@ -3106,7 +3109,20 @@ class AppletStaticTest(unittest.TestCase):
             end = source.index(next_method, start)
             block = source[start:end]
             self.assertIn("this._cancelOllamaInstallWatch();", block)
-            self.assertIn("this._clearOllamaModelFlow();", block)
+            self.assertIn("this._clearOllamaModelFlow", block)
+
+    def test_text_backend_changes_abort_when_ollama_cleanup_fails(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_selectTextModelBackend: function(backend, model, message)")
+        end = source.index("\n  _activateOllamaTextModelFlow:", start)
+        block = source[start:end]
+        self.assertIn("if (!this._clearOllamaModelFlow())", block)
+        self.assertIn("this._rollbackSettingsBatch(settingsWrites);", block)
+        self.assertIn("this.postProcessBackend = previousBackend;", block)
+        self.assertIn("this.ollamaModel = previousOllamaModel;", block)
+        self.assertIn("this.openaiCompatibleTextModel = previousExternalTextModel;", block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped")', block)
+        self.assertIn("return false;", block)
 
     def test_text_backend_persistence_validates_model_names(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -4917,14 +4933,14 @@ class AppletStaticTest(unittest.TestCase):
         toggle_end = source.index("\n  _restartApplet:", toggle_start)
         toggle_block = source[toggle_start:toggle_end]
         self.assertLess(
-            toggle_block.index("this._cancelOllamaFlowForRecording();"),
+            toggle_block.index("this._cancelOllamaFlowForRecording()"),
             toggle_block.index("if (this.isCommandRunning)"),
         )
 
         cancel_start = source.index("_cancelOllamaFlowForRecording: function()")
         cancel_end = source.index("\n  _activateOllamaTextModelFlow:", cancel_start)
         cancel_block = source[cancel_start:cancel_end]
-        self.assertIn('this._terminateProcessesByGroup("ollama");', cancel_block)
+        self.assertIn("return this._clearOllamaModelFlow();", cancel_block)
         self.assertIn("this.ollamaModelInstallRunning", cancel_block)
 
         self.assertIn('}, { resourceGroup: "ollama" });', source)

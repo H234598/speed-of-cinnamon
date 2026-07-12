@@ -2384,7 +2384,10 @@ MyApplet.prototype = {
 
   _onTextModelSettingsChanged: function() {
     this._cancelOllamaInstallWatch();
-    this._clearOllamaModelFlow();
+    if (!this._clearOllamaModelFlow()) {
+      this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+      return;
+    }
     this.textModelMenuRefreshToken = null;
     this._populateTextModelMenu([], _("Open menu to load local text models"));
     this._updatePanel();
@@ -3732,8 +3735,11 @@ MyApplet.prototype = {
   },
 
   _toggleRecording: function() {
-    if (this.ollamaModelFlowToken || this.ollamaInstallWatchToken) {
-      this._cancelOllamaFlowForRecording();
+    if (this.ollamaModelFlowToken || this.ollamaInstallWatchToken || this.ollamaModelInstallRunning) {
+      if (!this._cancelOllamaFlowForRecording()) {
+        this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+        return;
+      }
     }
     if (this.terminalWorkflowRunning || this.terminalWorkflowToken) {
       this.terminalWorkflowToken = null;
@@ -6163,7 +6169,19 @@ MyApplet.prototype = {
         return false;
       }
       this._cancelOllamaInstallWatch();
-      this._clearOllamaModelFlow();
+      if (!this._clearOllamaModelFlow()) {
+        try {
+          let rollbackResult = this.settings.setValue("post-process-backend", previousBackend);
+          if (rollbackResult === false) {
+            throw new Error("External API text backend rollback failed");
+          }
+        } catch (rollbackError) {
+          this._safeLogError(rollbackError);
+        }
+        this.postProcessBackend = previousBackend;
+        this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+        return false;
+      }
       this.postProcessBackend = "openai-compatible";
       this._refreshTextModelMenuForBackend("openai-compatible");
       this._setStatusPreservingRecording("ready", _("Text polishing: OpenAI-compatible API"), this.lastTranscript);
@@ -6467,7 +6485,14 @@ MyApplet.prototype = {
       return false;
     }
     this._cancelOllamaInstallWatch();
-    this._clearOllamaModelFlow();
+    if (!this._clearOllamaModelFlow()) {
+      this._rollbackSettingsBatch(settingsWrites);
+      this.postProcessBackend = previousBackend;
+      this.ollamaModel = previousOllamaModel;
+      this.openaiCompatibleTextModel = previousExternalTextModel;
+      this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+      return false;
+    }
     this.postProcessBackend = nextBackend;
     if (nextBackend === "ollama") {
       this.ollamaModel = safeModel;
@@ -6494,9 +6519,10 @@ MyApplet.prototype = {
     }
     let hadOllamaModelInstall = Boolean(this.ollamaModelInstallRunning);
     let installToken = this.ollamaModelInstallToken;
+    let terminationSucceeded = true;
     this.ollamaModelFlowToken = null;
     if (hadOllamaModelInstall) {
-      let terminationSucceeded = this._terminateProcessesByGroup("ollama", true);
+      terminationSucceeded = this._terminateProcessesByGroup("ollama", true);
       if (this.ollamaModelInstallToken === installToken) {
         if (terminationSucceeded) {
           this.ollamaModelInstallToken = null;
@@ -6508,9 +6534,9 @@ MyApplet.prototype = {
         }
       }
     } else {
-      this._terminateProcessesByGroup("ollama", true);
+      terminationSucceeded = this._terminateProcessesByGroup("ollama", true);
     }
-    return true;
+    return terminationSucceeded;
   },
 
   _cancelOllamaFlowForRecording: function() {
@@ -6518,9 +6544,7 @@ MyApplet.prototype = {
       return false;
     }
     this._cancelOllamaInstallWatch();
-    this._clearOllamaModelFlow();
-    this._terminateProcessesByGroup("ollama");
-    return true;
+    return this._clearOllamaModelFlow();
   },
 
   _activateOllamaTextModelFlow: function() {
