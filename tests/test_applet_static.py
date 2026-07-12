@@ -2428,6 +2428,9 @@ class AppletStaticTest(unittest.TestCase):
         end = source.index("\n  _disconnectAllSignals:", start)
         orphan_block = source[start:end]
         self.assertIn('this._recordLifecycleError("signal-state", new Error("Signal orphan registry is unavailable"));', orphan_block)
+        self.assertIn("this.lifecycleState === LIFECYCLE_REMOVING ||", orphan_block)
+        self.assertIn("this.lifecycleState === LIFECYCLE_REMOVED);", orphan_block)
+        self.assertIn('this._trackOrphanedSignal(connection.target, connection.id, false)', orphan_block)
         self.assertIn('new Error("Signal orphan entry is invalid")', orphan_block)
         self.assertIn("connection.id === undefined || connection.id === null", orphan_block)
         self.assertIn("return false;", orphan_block)

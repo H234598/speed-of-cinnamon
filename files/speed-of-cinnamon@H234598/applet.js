@@ -851,11 +851,33 @@ MyApplet.prototype = {
   },
 
   _disconnectOrphanedSignals: function(target) {
+    let success = true;
+    let inTeardown = !target && (this.appletRemoved ||
+      this.lifecycleState === LIFECYCLE_REMOVING ||
+      this.lifecycleState === LIFECYCLE_REMOVED);
+    if (inTeardown) {
+      let signals = this._resourceRegistry && this._resourceRegistry.signals;
+      if (!Array.isArray(signals)) {
+        this._recordLifecycleError("signal-state", new Error("Signal registry is unavailable"));
+        success = false;
+      } else {
+        for (let connection of signals) {
+          if (!connection || typeof connection !== "object" || !connection.target ||
+              connection.id === undefined || connection.id === null) {
+            this._recordLifecycleError("signal-state", new Error("Signal registry entry is invalid"));
+            success = false;
+            continue;
+          }
+          if (!this._trackOrphanedSignal(connection.target, connection.id, false)) {
+            success = false;
+          }
+        }
+      }
+    }
     if (!Array.isArray(this._orphanedSignals)) {
       this._recordLifecycleError("signal-state", new Error("Signal orphan registry is unavailable"));
       return false;
     }
-    let success = true;
     for (let index = this._orphanedSignals.length - 1; index >= 0; index--) {
       let connection = this._orphanedSignals[index];
       if (!connection || typeof connection !== "object" || !connection.target ||
