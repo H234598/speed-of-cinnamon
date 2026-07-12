@@ -4731,6 +4731,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('"else",', source)
         self.assertIn('"fi",', source)
         self.assertIn("_terminalCommandArgs: function(title, command)", source)
+        self.assertIn('return ["gnome-terminal", "--wait", "--title=" + terminalTitle', source)
         self.assertIn("_runTerminalWorkflow: function(title, command, openedMessage, cancelOllamaFlow, ollamaFlowToken)", source)
         self.assertIn("this.terminalWorkflowRunning = true;", source)
         self.assertIn("this.terminalWorkflowRunning = false;", source)

@@ -6169,7 +6169,7 @@ MyApplet.prototype = {
   _terminalCommandArgs: function(title, command) {
     let terminalTitle = String(title || "Speed of Cinnamon");
     if (this._findTrustedProgramInPath("gnome-terminal")) {
-      return ["gnome-terminal", "--title=" + terminalTitle, "--", "bash", "-lc", command];
+      return ["gnome-terminal", "--wait", "--title=" + terminalTitle, "--", "bash", "-lc", command];
     }
     if (this._findTrustedProgramInPath("x-terminal-emulator")) {
       return ["x-terminal-emulator", "-e", "bash", "-lc", command];
