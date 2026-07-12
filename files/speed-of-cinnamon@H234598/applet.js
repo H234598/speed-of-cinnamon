@@ -6234,17 +6234,25 @@ MyApplet.prototype = {
       if (this.alarmMenuRefreshToken !== refreshToken) {
         return;
       }
-      this.alarmMenuRefreshToken = null;
-      if (!this._canMutateMenu(this.alarmItem)) {
-        return;
+      try {
+        this.alarmMenuRefreshToken = null;
+        if (!this._canMutateMenu(this.alarmItem)) {
+          return;
+        }
+        if (payload.error) {
+          let safeError = this._sanitizeErrorMessage(payload.error);
+          this._populateAlarmMenu([], safeError);
+          this._setAlarmErrorStatus(safeError);
+          return;
+        }
+        this._populateAlarmMenu(payload.alarms || [], payload.summary || "");
+      } catch (error) {
+        if (this.alarmMenuRefreshToken === refreshToken) {
+          this.alarmMenuRefreshToken = null;
+        }
+        this._recordLifecycleError("menu-refresh", error);
+        this._setAlarmErrorStatus(_("Could not refresh alarm list"));
       }
-      if (payload.error) {
-        let safeError = this._sanitizeErrorMessage(payload.error);
-        this._populateAlarmMenu([], safeError);
-        this._setAlarmErrorStatus(safeError);
-        return;
-      }
-      this._populateAlarmMenu(payload.alarms || [], payload.summary || "");
     });
   },
 
@@ -6549,16 +6557,24 @@ MyApplet.prototype = {
       if (this.inputSourceMenuRefreshToken !== refreshToken) {
         return;
       }
-      this.inputSourceMenuRefreshToken = null;
-      if (!this._canMutateMenu(this.inputSourceItem)) {
-        return;
+      try {
+        this.inputSourceMenuRefreshToken = null;
+        if (!this._canMutateMenu(this.inputSourceItem)) {
+          return;
+        }
+        if (payload.error) {
+          this._populateInputSourceMenu([], this._sanitizeErrorMessage(payload.error));
+          this._setStatusPreservingRecording("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          return;
+        }
+        this._populateInputSourceMenu(payload.sources || []);
+      } catch (error) {
+        if (this.inputSourceMenuRefreshToken === refreshToken) {
+          this.inputSourceMenuRefreshToken = null;
+        }
+        this._recordLifecycleError("menu-refresh", error);
+        this._setStatusPreservingRecording("error", _("Could not refresh input source list"), this.lastTranscript);
       }
-      if (payload.error) {
-        this._populateInputSourceMenu([], this._sanitizeErrorMessage(payload.error));
-        this._setStatusPreservingRecording("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
-        return;
-      }
-      this._populateInputSourceMenu(payload.sources || []);
     });
   },
 
@@ -6695,17 +6711,25 @@ MyApplet.prototype = {
       if (this.modelMenuRefreshToken !== refreshToken) {
         return;
       }
-      this.modelMenuRefreshToken = null;
-      if (!this._canMutateMenu(this.modelItem)) {
-        return;
+      try {
+        this.modelMenuRefreshToken = null;
+        if (!this._canMutateMenu(this.modelItem)) {
+          return;
+        }
+        if (payload.error) {
+          let safeError = this._sanitizeErrorMessage(payload.error);
+          this._populateModelMenu([], safeError);
+          this._setStatusPreservingRecording("error", safeError, this.lastTranscript);
+          return;
+        }
+        this._populateModelMenu(payload.models || []);
+      } catch (error) {
+        if (this.modelMenuRefreshToken === refreshToken) {
+          this.modelMenuRefreshToken = null;
+        }
+        this._recordLifecycleError("menu-refresh", error);
+        this._setStatusPreservingRecording("error", _("Could not refresh voice model list"), this.lastTranscript);
       }
-      if (payload.error) {
-        let safeError = this._sanitizeErrorMessage(payload.error);
-        this._populateModelMenu([], safeError);
-        this._setStatusPreservingRecording("error", safeError, this.lastTranscript);
-        return;
-      }
-      this._populateModelMenu(payload.models || []);
     });
   },
 
@@ -7899,19 +7923,27 @@ MyApplet.prototype = {
       if (this.textModelMenuRefreshToken !== refreshToken) {
         return;
       }
-      this.textModelMenuRefreshToken = null;
-      if (!this._canMutateMenu(this.textModelItem)) {
-        return;
+      try {
+        this.textModelMenuRefreshToken = null;
+        if (!this._canMutateMenu(this.textModelItem)) {
+          return;
+        }
+        if (payload.error) {
+          this._populateTextModelMenu([], this._sanitizeErrorMessage(payload.error), provider);
+          return;
+        }
+        let available = payload.available === true;
+        let availabilityMessage = available
+          ? ""
+          : this._payloadMessage(payload, _("Text model backend is unavailable"));
+        this._populateTextModelMenu(payload.models || [], availabilityMessage, provider);
+      } catch (error) {
+        if (this.textModelMenuRefreshToken === refreshToken) {
+          this.textModelMenuRefreshToken = null;
+        }
+        this._recordLifecycleError("menu-refresh", error);
+        this._setStatusPreservingRecording("error", _("Could not refresh text model list"), this.lastTranscript);
       }
-      if (payload.error) {
-        this._populateTextModelMenu([], this._sanitizeErrorMessage(payload.error), provider);
-        return;
-      }
-      let available = payload.available === true;
-      let availabilityMessage = available
-        ? ""
-        : this._payloadMessage(payload, _("Text model backend is unavailable"));
-      this._populateTextModelMenu(payload.models || [], availabilityMessage, provider);
     });
   },
 
@@ -8630,16 +8662,24 @@ MyApplet.prototype = {
       if (this.historyRefreshToken !== refreshToken) {
         return;
       }
-      this.historyRefreshToken = null;
-      if (!this._canMutateMenu(this.historyItem)) {
-        return;
+      try {
+        this.historyRefreshToken = null;
+        if (!this._canMutateMenu(this.historyItem)) {
+          return;
+        }
+        if (payload.error) {
+          this._populateHistoryMenu([]);
+          this._setStatusPreservingRecording("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          return;
+        }
+        this._populateHistoryMenu(payload.transcripts || []);
+      } catch (error) {
+        if (this.historyRefreshToken === refreshToken) {
+          this.historyRefreshToken = null;
+        }
+        this._recordLifecycleError("menu-refresh", error);
+        this._setStatusPreservingRecording("error", _("Could not refresh transcript history"), this.lastTranscript);
       }
-      if (payload.error) {
-        this._populateHistoryMenu([]);
-        this._setStatusPreservingRecording("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
-        return;
-      }
-      this._populateHistoryMenu(payload.transcripts || []);
     });
   },
 

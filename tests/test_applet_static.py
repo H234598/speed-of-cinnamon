@@ -1820,6 +1820,24 @@ class AppletStaticTest(unittest.TestCase):
         self.assertLess(block.index("if (this.inputSourceMenuRefreshToken)"), block.index("let refreshToken = {};"))
         self.assertLess(block.index("this.inputSourceMenuRefreshToken = null;"), block.index("if (payload.error)"))
 
+    def test_menu_refresh_callbacks_fail_closed_on_processing_exceptions(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method, args_name, token_name, message in [
+            ("_refreshAlarmMenu: function()", "\n  _populateAlarmMenu:", "alarmListArgs", "alarmMenuRefreshToken", "Could not refresh alarm list"),
+            ("_refreshInputSourceMenu: function()", "\n  _populateInputSourceMenu:", "inputSourceArgs", "inputSourceMenuRefreshToken", "Could not refresh input source list"),
+            ("_refreshModelMenu: function()", "\n  _populateModelMenu:", "modelArgs", "modelMenuRefreshToken", "Could not refresh voice model list"),
+            ("_refreshTextModelMenuForBackend: function(backendOverride)", "\n  _populateTextModelMenu:", "textModelArgs", "textModelMenuRefreshToken", "Could not refresh text model list"),
+            ("_refreshHistory: function()", "\n  _listAllTranscripts:", "historyArgs", "historyRefreshToken", "Could not refresh transcript history"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn(f"this._spawnJson({args_name}, (payload) => {{", block)
+            self.assertIn("try {\n        this.", block)
+            self.assertIn(f"if (this.{token_name} === refreshToken) {{", block)
+            self.assertIn('this._recordLifecycleError("menu-refresh", error);', block)
+            self.assertIn(f'_("{message}")', block)
+
     def test_menu_backend_tokens_release_when_argument_building_fails(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         for method, next_method, args_name, builder_name, token_name in [
