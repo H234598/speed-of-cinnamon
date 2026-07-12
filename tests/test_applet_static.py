@@ -1895,6 +1895,7 @@ class AppletStaticTest(unittest.TestCase):
         open_end = source.index("\n  _destroyTrackedDialogs:", open_start)
         open_block = source[open_start:open_end]
         self.assertLess(open_block.index("_runGuarded"), open_block.index("dialog.open"))
+        self.assertIn("return dialog.open() !== false;", open_block)
 
     def test_clipboard_set_preconditions_are_guarded(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

@@ -944,8 +944,7 @@ MyApplet.prototype = {
       if (typeof dialog.open !== "function") {
         return false;
       }
-      dialog.open();
-      return true;
+      return dialog.open() !== false;
     }, false) === true;
   },
 
