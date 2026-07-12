@@ -243,8 +243,8 @@ def _write_atomically_without_following_symlinks(
         with handle:
             try:
                 os.fchmod(handle.fileno(), 0o600)
-            except OSError:
-                pass
+            except OSError as exc:
+                raise OSError(f"{field_name} temporary file could not be made private") from exc
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())

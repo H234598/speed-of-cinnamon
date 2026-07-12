@@ -94,6 +94,16 @@ class PathSafetyTest(unittest.TestCase):
             self.assertEqual(target.read_text(encoding="utf-8"), "{}")
             self.assertGreaterEqual(mocked_fsync.call_count, 2)
 
+    def test_atomic_write_fails_closed_when_temp_file_cannot_be_made_private(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            with mock.patch.object(path_safety.os, "fchmod", side_effect=OSError("chmod denied")):
+                with self.assertRaisesRegex(OSError, "temporary file could not be made private"):
+                    path_safety.write_text_atomically_without_following_symlinks(target, "{}")
+
+            self.assertFalse(target.exists())
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
     def test_atomic_write_removes_temp_file_when_file_fsync_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "settings.json"
