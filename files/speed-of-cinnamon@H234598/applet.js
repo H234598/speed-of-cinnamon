@@ -5837,6 +5837,7 @@ MyApplet.prototype = {
   },
 
   _readExternalApiEnvFile: function(path) {
+    this._assertExternalApiEnvDirectoryChainSafe(path);
     this._externalApiEnvFileInfo(path, false);
     let ok;
     let contents;

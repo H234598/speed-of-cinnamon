@@ -372,6 +372,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("Gio.FileType.SYMBOLIC_LINK", block)
         self.assertIn("current = current.get_parent();", block)
         self.assertIn("this._assertExternalApiEnvDirectoryChainSafe(path);", source)
+        read_start = source.index("_readExternalApiEnvFile: function(path)")
+        read_end = source.index("\n  _writeExternalApiEnvFileContents:", read_start)
+        self.assertIn("this._assertExternalApiEnvDirectoryChainSafe(path);", source[read_start:read_end])
 
     def test_external_api_urls_reject_out_of_range_ports_and_fake_loopback(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
