@@ -1178,6 +1178,11 @@ class AppletStaticTest(unittest.TestCase):
         text_output_block = source[text_output_start:text_output_end]
         self.assertIn("this._cancelTextInsertForSettingsChange();", text_output_block)
         self.assertIn("this.autoPastePromptToken = null;", text_output_block)
+        self.assertIn('this._terminateProcessesByGroup("settings-prompt")', text_output_block)
+        self.assertLess(
+            text_output_block.index("this.autoPastePromptToken = null;"),
+            text_output_block.index('this._terminateProcessesByGroup("settings-prompt")')
+        )
 
         for method, next_method in [
             ("_onRecordingLimitSettingsChanged: function()", "\n  _onRecordingOptionsChanged:"),
@@ -1185,7 +1190,25 @@ class AppletStaticTest(unittest.TestCase):
         ]:
             start = source.index(method)
             end = source.index(next_method, start)
-            self.assertIn("this.customLimitPromptToken = null;", source[start:end])
+            block = source[start:end]
+            self.assertIn("this.customLimitPromptToken = null;", block)
+            self.assertIn('this._terminateProcessesByGroup("settings-prompt")', block)
+            self.assertLess(
+                block.index("this.customLimitPromptToken = null;"),
+                block.index('this._terminateProcessesByGroup("settings-prompt")')
+            )
+
+    def test_settings_prompts_use_a_shared_cancellable_process_group(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method in [
+            ("_promptCustomRecordingLimit: function()", "\n  _parseCustomRecordingLimit:"),
+            ("_promptCustomTranscriptLimit: function()", "\n  _parseCustomTranscriptLimit:"),
+            ("_configureAutoPaste: function()", "\n  _setAutoPasteTitles:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn('resourceGroup: "settings-prompt"', block)
 
     def test_clipboard_keyboard_chain_honors_insert_operation_guard(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

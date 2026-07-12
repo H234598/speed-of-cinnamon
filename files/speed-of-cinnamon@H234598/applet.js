@@ -3752,8 +3752,9 @@ MyApplet.prototype = {
   },
 
   _onTextOutputSettingsChanged: function() {
-    this._cancelTextInsertForSettingsChange();
     this.autoPastePromptToken = null;
+    let promptCleanupSucceeded = this._terminateProcessesByGroup("settings-prompt") !== false;
+    this._cancelTextInsertForSettingsChange();
     this.typingDelayMs = this._normalizeTypingDelayMs(this.typingDelayMs);
     this.artifactEncryption = this._normalizeArtifactEncryption(this.artifactEncryption);
     this._populateArtifactEncryptionMenu();
@@ -3761,13 +3762,20 @@ MyApplet.prototype = {
     this._updateAutoPasteItem();
     this._populateAutoPasteMenu();
     this._updatePanel();
+    if (!promptCleanupSucceeded) {
+      this._setStatusPreservingRecording("error", _("Settings prompt could not be stopped"), this.lastTranscript);
+    }
   },
 
   _onTranscriptRetentionSettingsChanged: function() {
     this.customLimitPromptToken = null;
+    let promptCleanupSucceeded = this._terminateProcessesByGroup("settings-prompt") !== false;
     this.maxTranscriptFiles = this._normalizeTranscriptLimit(this.maxTranscriptFiles);
     this._populateTranscriptStorageMenu();
     this._updatePanel();
+    if (!promptCleanupSucceeded) {
+      this._setStatusPreservingRecording("error", _("Settings prompt could not be stopped"), this.lastTranscript);
+    }
   },
 
   _onRecorderSettingsChanged: function() {
@@ -3778,9 +3786,13 @@ MyApplet.prototype = {
 
   _onRecordingLimitSettingsChanged: function() {
     this.customLimitPromptToken = null;
+    let promptCleanupSucceeded = this._terminateProcessesByGroup("settings-prompt") !== false;
     this.maxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
     this._populateRecordingLimitMenu();
     this._updatePanel();
+    if (!promptCleanupSucceeded) {
+      this._setStatusPreservingRecording("error", _("Settings prompt could not be stopped"), this.lastTranscript);
+    }
   },
 
   _onRecordingOptionsChanged: function() {
@@ -4471,7 +4483,7 @@ MyApplet.prototype = {
         return;
       }
       this._selectRecordingLimit(seconds);
-    });
+    }, { resourceGroup: "settings-prompt" });
   },
 
   _parseCustomRecordingLimit: function(value) {
@@ -4583,7 +4595,7 @@ MyApplet.prototype = {
         return;
       }
       this._selectTranscriptStorageLimit(limit);
-    });
+    }, { resourceGroup: "settings-prompt" });
   },
 
   _parseCustomTranscriptLimit: function(value) {
@@ -4908,7 +4920,7 @@ MyApplet.prototype = {
       }
       this.autoPastePromptToken = null;
       this._setAutoPasteTitles(this._autoPasteTitleValues(output));
-    }, { timeoutMs: 0 });
+    }, { timeoutMs: 0, resourceGroup: "settings-prompt" });
   },
 
   _setAutoPasteTitles: function(values) {
