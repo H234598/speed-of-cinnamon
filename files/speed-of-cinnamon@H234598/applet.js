@@ -855,7 +855,7 @@ MyApplet.prototype = {
 
   _clearMenuItems: function(menu) {
     if (!menu) {
-      return;
+      return false;
     }
     let targets = [];
     let visited = [];
@@ -895,11 +895,16 @@ MyApplet.prototype = {
     for (let target of targets) {
       this._disconnectTrackedSignalsForTarget(target);
     }
-    this._runStateGuarded("menu-items", () => {
-      if (menu.removeAll) {
-        menu.removeAll();
+    return this._runStateGuarded("menu-items", () => {
+      if (typeof menu.removeAll !== "function") {
+        throw new Error("Menu remove operation is unavailable");
       }
-    }, undefined);
+      let result = menu.removeAll();
+      if (result === false) {
+        throw new Error("Menu items could not be removed");
+      }
+      return true;
+    }, false) === true;
   },
 
   _trackDialog: function(dialog) {
@@ -3131,7 +3136,9 @@ MyApplet.prototype = {
     if (!this.recorderItem) {
       return;
     }
-    this._clearMenuItems(this.recorderItem.menu);
+    if (!this._clearMenuItems(this.recorderItem.menu)) {
+      return;
+    }
     let current = this._normalizeRecorder(this.recorder);
     for (let method of RECORDER_METHODS) {
       let label = (current === method ? "[x] " : "[ ] ") + this._recorderLabel(method);
@@ -3183,7 +3190,9 @@ MyApplet.prototype = {
     if (!this.recordingLimitItem) {
       return;
     }
-    this._clearMenuItems(this.recordingLimitItem.menu);
+    if (!this._clearMenuItems(this.recordingLimitItem.menu)) {
+      return;
+    }
     let current = this._normalizeRecordingLimit(this.maxSeconds);
     let hasPreset = RECORDING_LIMIT_SECONDS.indexOf(current) >= 0;
     if (!hasPreset) {
@@ -3297,7 +3306,9 @@ MyApplet.prototype = {
     if (!this.transcriptStorageItem) {
       return;
     }
-    this._clearMenuItems(this.transcriptStorageItem.menu);
+    if (!this._clearMenuItems(this.transcriptStorageItem.menu)) {
+      return;
+    }
     let current = this._normalizeTranscriptLimit(this.maxTranscriptFiles);
     let hasPreset = TRANSCRIPT_STORAGE_LIMITS.indexOf(current) >= 0;
     if (!hasPreset) {
@@ -3397,7 +3408,9 @@ MyApplet.prototype = {
     if (!this.recordingOptionsItem) {
       return;
     }
-    this._clearMenuItems(this.recordingOptionsItem.menu);
+    if (!this._clearMenuItems(this.recordingOptionsItem.menu)) {
+      return;
+    }
 
     let autoTranscribe = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.autoTranscribeTimeout), _("Auto-transcribe at time limit")));
     this._connectSafe(autoTranscribe, "activate", () => this._toggleAutoTranscribeTimeout());
@@ -3453,7 +3466,9 @@ MyApplet.prototype = {
     if (!this.notificationOptionsItem) {
       return;
     }
-    this._clearMenuItems(this.notificationOptionsItem.menu);
+    if (!this._clearMenuItems(this.notificationOptionsItem.menu)) {
+      return;
+    }
 
     let recording = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.notifyRecording), _("Recording start and limit")));
     this._connectSafe(recording, "activate", () => this._toggleNotifyRecording());
@@ -3509,7 +3524,9 @@ MyApplet.prototype = {
     if (!this.outputMethodItem) {
       return;
     }
-    this._clearMenuItems(this.outputMethodItem.menu);
+    if (!this._clearMenuItems(this.outputMethodItem.menu)) {
+      return;
+    }
     let current = this._normalizeOutputMethod(this.insertMethod);
     for (let method of OUTPUT_METHODS) {
       let label = (current === method ? "[x] " : "[ ] ") + this._outputMethodLabel(method);
@@ -3525,7 +3542,9 @@ MyApplet.prototype = {
     }
     this.artifactEncryption = this._normalizeArtifactEncryption(this.artifactEncryption);
     this.artifactEncryptionItem.label.text = _("Encryption: ") + this._artifactEncryptionLabel(this.artifactEncryption);
-    this._clearMenuItems(this.artifactEncryptionItem.menu);
+    if (!this._clearMenuItems(this.artifactEncryptionItem.menu)) {
+      return;
+    }
     for (let mode of ARTIFACT_ENCRYPTION_MODES) {
       let label = (this.artifactEncryption === mode ? "[x] " : "[ ] ") + this._artifactEncryptionLabel(mode);
       let item = this._selectionMenuItem(label);
@@ -3562,7 +3581,9 @@ MyApplet.prototype = {
     if (!this.textOptionsItem) {
       return;
     }
-    this._clearMenuItems(this.textOptionsItem.menu);
+    if (!this._clearMenuItems(this.textOptionsItem.menu)) {
+      return;
+    }
     let append = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.appendSpace), _("Append trailing space")));
     this._connectSafe(append, "activate", () => this._toggleAppendSpace());
     this.textOptionsItem.menu.addMenuItem(append);
@@ -3727,7 +3748,9 @@ MyApplet.prototype = {
     if (!this.autoPasteItem) {
       return;
     }
-    this._clearMenuItems(this.autoPasteItem.menu);
+    if (!this._clearMenuItems(this.autoPasteItem.menu)) {
+      return;
+    }
     let currentValues = this._autoPasteTitleValues(this.autoPasteWindowTitle);
     let current = {};
     for (let value of currentValues) {
@@ -3894,7 +3917,9 @@ MyApplet.prototype = {
     if (!this.languageItem) {
       return;
     }
-    this._clearMenuItems(this.languageItem.menu);
+    if (!this._clearMenuItems(this.languageItem.menu)) {
+      return;
+    }
     let primary = this._primaryLanguage();
     let secondary = this._secondaryLanguage();
     let current = this._currentLanguage();
@@ -3946,7 +3971,9 @@ MyApplet.prototype = {
     if (!this.shortcutItem) {
       return;
     }
-    this._clearMenuItems(this.shortcutItem.menu);
+    if (!this._clearMenuItems(this.shortcutItem.menu)) {
+      return;
+    }
     for (let row of this._shortcutRows()) {
       let item = new PopupMenu.PopupMenuItem(row[0] + ": " + row[1]);
       item.setSensitive(false);
@@ -4981,7 +5008,9 @@ MyApplet.prototype = {
     if (alarmsWereTruncated) {
       alarms = alarms.slice(0, MAX_ALARM_MENU_ENTRIES);
     }
-    this._clearMenuItems(this.alarmItem.menu);
+    if (!this._clearMenuItems(this.alarmItem.menu)) {
+      return;
+    }
 
     let messageText = typeof message === "string" ? message.trim() : "";
     let summaryText = typeof summary === "string" ? summary.trim() : "";
@@ -5269,7 +5298,9 @@ MyApplet.prototype = {
     }
     let messageText = typeof message === "string" ? message.trim() : "";
     messageText = this._uiMessageText(messageText);
-    this._clearMenuItems(this.inputSourceItem.menu);
+    if (!this._clearMenuItems(this.inputSourceItem.menu)) {
+      return;
+    }
     let current = String(this.inputDevice || "");
     let currentWasListed = current === "";
     let defaultLabel = (current === "" ? "[x] " : "[ ] ") + _("System default");
@@ -5414,7 +5445,9 @@ MyApplet.prototype = {
     }
     let messageText = typeof message === "string" ? message.trim() : "";
     messageText = this._uiMessageText(messageText);
-    this._clearMenuItems(this.modelItem.menu);
+    if (!this._clearMenuItems(this.modelItem.menu)) {
+      return;
+    }
 
     let autoActive = String(this.transcriber || "auto") === "auto" && String(this.whisperModel || "") === "";
     let automatic = this._selectionMenuItem((autoActive ? "[x] " : "[ ] ") + _("Automatic voice model"));
@@ -6573,7 +6606,9 @@ MyApplet.prototype = {
     }
     let messageText = typeof message === "string" ? message.trim() : "";
     messageText = this._uiMessageText(messageText);
-    this._clearMenuItems(this.textModelItem.menu);
+    if (!this._clearMenuItems(this.textModelItem.menu)) {
+      return;
+    }
     let backend = String(this.postProcessBackend || "none");
     let activeProvider = provider === "openai-compatible" || provider === "ollama"
       ? provider
@@ -11093,7 +11128,9 @@ MyApplet.prototype = {
     if (historyWasTruncated) {
       transcripts = transcripts.slice(0, MAX_HISTORY_MENU_ENTRIES);
     }
-    this._clearMenuItems(this.historyItem.menu);
+    if (!this._clearMenuItems(this.historyItem.menu)) {
+      return;
+    }
     if (!transcripts || transcripts.length === 0) {
       let empty = new PopupMenu.PopupMenuItem(_("No transcripts yet"));
       empty.setSensitive(false);

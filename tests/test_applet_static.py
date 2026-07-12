@@ -286,7 +286,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_disconnectTrackedSignalsForTarget: function(target)", source)
         self.assertIn("this._disconnectTrackedSignalsForTarget(monitor)", source)
         self.assertIn("_clearMenuItems: function(menu)", source)
-        self.assertIn("this._clearMenuItems(this.recorderItem.menu);", source)
+        self.assertIn("if (!this._clearMenuItems(this.recorderItem.menu))", source)
         self.assertIn("addTarget(item);", source)
         self.assertIn("addTarget(item.menu);", source)
         self.assertIn("Gio.FileMonitorEvent.CHANGES_DONE_HINT", source)
@@ -2029,7 +2029,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!Array.isArray(items))", block)
         self.assertIn('throw new Error("Menu items are unavailable");', block)
         self.assertIn('this._recordLifecycleError("menu-items", error);', block)
+        self.assertIn('typeof menu.removeAll !== "function"', block)
+        self.assertIn("let result = menu.removeAll();", block)
+        self.assertIn('throw new Error("Menu items could not be removed");', block)
         self.assertLess(block.index("try {"), block.index("for (let item of items)"))
+
+    def test_menu_refreshes_abort_when_menu_reset_fails(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for line in source.splitlines():
+            if "_clearMenuItems(" not in line or "function(menu)" in line:
+                continue
+            self.assertIn("if (!this._clearMenuItems(", line)
 
     def test_dialog_construction_failure_cleans_up_created_dialog(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
