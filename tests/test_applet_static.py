@@ -1479,6 +1479,20 @@ class AppletStaticTest(unittest.TestCase):
         input_end = source.index("\n  _onVoiceBackendSettingsChanged:", input_start)
         self.assertIn("this.inputSourceMenuRefreshToken = null;", source[input_start:input_end])
 
+    def test_voice_model_callbacks_fail_closed_on_processing_exceptions(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method, args_name, message in [
+            ("_downloadVoiceModel: function(model)", "\n  _removeVoiceModel:", "downloadArgs", "Could not complete model download"),
+            ("_removeVoiceModel: function(model)", "\n  _selectVoiceModel:", "removeArgs", "Could not complete model removal"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn(f"this._spawnJson({args_name}, (payload) => {{", block)
+            self.assertIn("try {\n        this.isCommandRunning = false;", block)
+            self.assertIn('this._recordLifecycleError("model-action", error);', block)
+            self.assertIn(f'_("{message}")', block)
+
     def test_voice_model_selection_cannot_mutate_during_model_action(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

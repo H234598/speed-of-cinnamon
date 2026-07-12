@@ -7113,20 +7113,29 @@ MyApplet.prototype = {
         }
         return;
       }
-      this.isCommandRunning = false;
-      this.voiceModelActionToken = null;
-      if (payload.error) {
-        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+      try {
+        this.isCommandRunning = false;
+        this.voiceModelActionToken = null;
+        if (payload.error) {
+          this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          this._refreshModelMenu();
+          return;
+        }
+        if (!this._isUsableVoiceModelPayload(payload)) {
+          this._setStatus("error", _("Downloaded model response was invalid"), this.lastTranscript);
+          this._refreshModelMenu();
+          return;
+        }
+        this._selectVoiceModel(payload);
         this._refreshModelMenu();
-        return;
+      } catch (error) {
+        this.isCommandRunning = false;
+        if (this.voiceModelActionToken === actionToken) {
+          this.voiceModelActionToken = null;
+        }
+        this._recordLifecycleError("model-action", error);
+        this._setStatus("error", _("Could not complete model download"), this.lastTranscript);
       }
-      if (!this._isUsableVoiceModelPayload(payload)) {
-        this._setStatus("error", _("Downloaded model response was invalid"), this.lastTranscript);
-        this._refreshModelMenu();
-        return;
-      }
-      this._selectVoiceModel(payload);
-      this._refreshModelMenu();
     });
   },
 
@@ -7163,31 +7172,40 @@ MyApplet.prototype = {
         }
         return;
       }
-      this.isCommandRunning = false;
-      this.voiceModelActionToken = null;
-      if (payload.error) {
-        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
-        this._refreshModelMenu();
-        return;
-      }
-      if (payload.removed !== true) {
-        this._setStatus("ready", _("Model was not downloaded: ") + name, this.lastTranscript);
-        this._refreshModelMenu();
-        return;
-      }
-      if (path !== "" && path === String(this.whisperModel || "")) {
-        if (!this._commitVoiceBackendSettings(
-          "auto",
-          "",
-          "voice-model-remove",
-          _("Removed model, but voice settings could not be updated")
-        )) {
+      try {
+        this.isCommandRunning = false;
+        this.voiceModelActionToken = null;
+        if (payload.error) {
+          this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
           this._refreshModelMenu();
           return;
         }
+        if (payload.removed !== true) {
+          this._setStatus("ready", _("Model was not downloaded: ") + name, this.lastTranscript);
+          this._refreshModelMenu();
+          return;
+        }
+        if (path !== "" && path === String(this.whisperModel || "")) {
+          if (!this._commitVoiceBackendSettings(
+            "auto",
+            "",
+            "voice-model-remove",
+            _("Removed model, but voice settings could not be updated")
+          )) {
+            this._refreshModelMenu();
+            return;
+          }
+        }
+        this._setStatus("done", _("Removed model: ") + name, this.lastTranscript);
+        this._refreshModelMenu();
+      } catch (error) {
+        this.isCommandRunning = false;
+        if (this.voiceModelActionToken === actionToken) {
+          this.voiceModelActionToken = null;
+        }
+        this._recordLifecycleError("model-action", error);
+        this._setStatus("error", _("Could not complete model removal"), this.lastTranscript);
       }
-      this._setStatus("done", _("Removed model: ") + name, this.lastTranscript);
-      this._refreshModelMenu();
     });
   },
 
