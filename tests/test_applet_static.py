@@ -2324,6 +2324,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("return null;", block)
         self.assertIn('this._runTeardownGuarded("teardown-orphaned-dialogs", () => this._retryOrphanedDialogs());', source)
 
+    def test_dialog_retry_reconstructs_pending_entries_from_registry(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_retryOrphanedDialogs: function()")
+        end = source.index("\n  _newSafeDialog: function(group)", start)
+        block = source[start:end]
+        self.assertIn("let pendingDialogs = [];", block)
+        self.assertIn("let addPendingDialog = (dialog, group, closeSucceeded, destroySucceeded) =>", block)
+        self.assertIn("Dialog orphan registry is unavailable", block)
+        self.assertIn("let dialogs = this._resourceRegistry && this._resourceRegistry.dialogs;", block)
+        self.assertIn('addPendingDialog(dialog, "dialog-registry", false, false);', block)
+        self.assertIn("for (let index = pendingDialogs.length - 1;", block)
+        self.assertIn("this._untrackDialog(entry.dialog)", block)
+
     def test_dialog_child_preconditions_are_guarded(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_dialogAddChild: function(dialog, child, group)")

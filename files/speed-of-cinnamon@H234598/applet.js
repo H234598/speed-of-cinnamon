@@ -1155,17 +1155,56 @@ MyApplet.prototype = {
   },
 
   _retryOrphanedDialogs: function() {
-    if (!Array.isArray(this._orphanedDialogs)) {
-      return true;
-    }
-    let success = true;
-    for (let index = this._orphanedDialogs.length - 1; index >= 0; index--) {
-      let entry = this._orphanedDialogs[index];
-      if (!entry || !entry.dialog) {
-        this._recordLifecycleError("dialog-orphan", new Error("Dialog orphan entry is invalid"));
-        success = false;
-        continue;
+    let pendingDialogs = [];
+    let addPendingDialog = (dialog, group, closeSucceeded, destroySucceeded) => {
+      if (!dialog) {
+        return;
       }
+      let knownEntry = pendingDialogs.find((entry) => entry && entry.dialog === dialog);
+      if (knownEntry) {
+        if (closeSucceeded === true) {
+          knownEntry.closeSucceeded = true;
+        }
+        if (destroySucceeded === true) {
+          knownEntry.destroySucceeded = true;
+        }
+        return;
+      }
+      pendingDialogs.push({
+        dialog: dialog,
+        group: String(group || "dialog"),
+        closeSucceeded: closeSucceeded === true,
+        destroySucceeded: destroySucceeded === true,
+      });
+    };
+    let invalidOrphanEntry = false;
+    if (Array.isArray(this._orphanedDialogs)) {
+      for (let entry of this._orphanedDialogs) {
+        if (!entry || !entry.dialog) {
+          invalidOrphanEntry = true;
+          continue;
+        }
+        addPendingDialog(entry.dialog, entry.group, entry.closeSucceeded, entry.destroySucceeded);
+      }
+    } else {
+      this._recordLifecycleError("dialog-state", new Error("Dialog orphan registry is unavailable"));
+    }
+    let dialogs = this._resourceRegistry && this._resourceRegistry.dialogs;
+    if (Array.isArray(dialogs)) {
+      for (let dialog of dialogs) {
+        if (!dialog) {
+          invalidOrphanEntry = true;
+          continue;
+        }
+        addPendingDialog(dialog, "dialog-registry", false, false);
+      }
+    }
+    if (pendingDialogs.length === 0) {
+      return !invalidOrphanEntry && Array.isArray(this._orphanedDialogs);
+    }
+    let success = !invalidOrphanEntry;
+    for (let index = pendingDialogs.length - 1; index >= 0; index--) {
+      let entry = pendingDialogs[index];
       let closeSucceeded = entry.closeSucceeded === true;
       if (!closeSucceeded) {
         closeSucceeded = this._runTeardownOperation(
