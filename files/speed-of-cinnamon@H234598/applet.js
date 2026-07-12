@@ -708,6 +708,7 @@ MyApplet.prototype = {
       if (connectionId) {
         let signalEntry = { target: target, id: connectionId };
         let registryWriteAttempted = false;
+        let registryEntryRemovalSucceeded = false;
         try {
           registryWriteAttempted = true;
           this._resourceRegistry.signals.push(signalEntry);
@@ -718,19 +719,19 @@ MyApplet.prototype = {
           if (registryWriteAttempted) {
             try {
               let signals = this._resourceRegistry.signals;
-              let lastIndex = signals.length - 1;
-              if (lastIndex >= 0 && signals[lastIndex] === signalEntry) {
-                signals.pop();
-              } else {
-                let index = signals.indexOf(signalEntry);
-                if (index >= 0) {
-                  signals.splice(index, 1);
+              let index = signals.indexOf(signalEntry);
+              if (index >= 0) {
+                let removed = signals.splice(index, 1);
+                if (!Array.isArray(removed) || removed.length !== 1 || signals.indexOf(signalEntry) >= 0) {
+                  throw new Error("Signal registry rollback did not remove the entry");
                 }
               }
+              registryEntryRemovalSucceeded = true;
             } catch (rollbackError) {
               this._recordLifecycleError("signal-registration-rollback", rollbackError);
             }
           }
+          let signalDisconnected = false;
           try {
             if (typeof target.disconnect !== "function") {
               throw new Error("Signal rollback disconnect is unavailable");
@@ -739,9 +740,12 @@ MyApplet.prototype = {
             if (disconnectResult === false) {
               throw new Error("Signal rollback disconnect failed");
             }
+            signalDisconnected = true;
           } catch (disconnectError) {
             this._recordLifecycleError("signal-disconnect", disconnectError);
-            this._trackOrphanedSignal(target, connectionId);
+          }
+          if (!registryEntryRemovalSucceeded || !signalDisconnected) {
+            this._trackOrphanedSignal(target, connectionId, signalDisconnected);
           }
           throw registryError;
         }
@@ -753,12 +757,23 @@ MyApplet.prototype = {
     }
   },
 
-  _trackOrphanedSignal: function(target, id) {
+  _trackOrphanedSignal: function(target, id, disconnected) {
     try {
       if (!Array.isArray(this._orphanedSignals)) {
         this._orphanedSignals = [];
       }
-      this._orphanedSignals.push({ target: target, id: id });
+      let knownEntry = this._orphanedSignals.find((entry) => entry && entry.target === target && entry.id === id);
+      if (knownEntry) {
+        if (disconnected === true) {
+          knownEntry.disconnected = true;
+        }
+      } else {
+        this._orphanedSignals.push({
+          target: target,
+          id: id,
+          disconnected: disconnected === true,
+        });
+      }
       return true;
     } catch (error) {
       this._recordLifecycleError("signal-orphan", error);
@@ -776,7 +791,15 @@ MyApplet.prototype = {
       if (!connection || (target && connection.target !== target)) {
         continue;
       }
-      if (!this._runTeardownOperation("teardown-orphaned-signals", connection.target, "disconnect", [connection.id])) {
+      let disconnected = connection.disconnected === true;
+      if (!disconnected) {
+        disconnected = this._runTeardownOperation("teardown-orphaned-signals", connection.target, "disconnect", [connection.id]);
+      }
+      if (!disconnected) {
+        success = false;
+        continue;
+      }
+      if (!this._untrackSignal(connection.target, connection.id)) {
         success = false;
         continue;
       }
@@ -805,12 +828,11 @@ MyApplet.prototype = {
           "disconnect",
           [connection && connection.id]
         )) {
+          this._trackOrphanedSignal(connection && connection.target, connection && connection.id, false);
           continue;
         }
-        try {
-          signals.splice(index, 1);
-        } catch (error) {
-          this._recordLifecycleError("teardown-signals", error);
+        if (!this._untrackSignal(connection && connection.target, connection && connection.id, connection)) {
+          this._trackOrphanedSignal(connection && connection.target, connection && connection.id, true);
         }
       }
       this._disconnectOrphanedSignals();
@@ -835,13 +857,12 @@ MyApplet.prototype = {
           continue;
         }
         if (!this._runTeardownOperation("teardown-target-signals", target, "disconnect", [connection.id])) {
+          this._trackOrphanedSignal(target, connection.id, false);
           success = false;
           continue;
         }
-        try {
-          signals.splice(index, 1);
-        } catch (error) {
-          this._recordLifecycleError("teardown-target-signals", error);
+        if (!this._untrackSignal(target, connection.id, connection)) {
+          this._trackOrphanedSignal(target, connection.id, true);
           success = false;
         }
       }
@@ -851,6 +872,39 @@ MyApplet.prototype = {
       return success;
     } catch (error) {
       this._recordLifecycleError("teardown-target-signals", error);
+      return false;
+    }
+  },
+
+  _untrackSignal: function(target, id, connection) {
+    if (!this._resourceRegistry) {
+      return true;
+    }
+    try {
+      if (!Array.isArray(this._resourceRegistry.signals)) {
+        return true;
+      }
+      let signals = this._resourceRegistry.signals;
+      let success = true;
+      for (let index = signals.length - 1; index >= 0; index--) {
+        let entry = signals[index];
+        if (!entry || (connection && entry !== connection) || (target && entry.target !== target) ||
+            (id !== undefined && entry.id !== id)) {
+          continue;
+        }
+        try {
+          let removed = signals.splice(index, 1);
+          if (!Array.isArray(removed) || removed.length !== 1 || signals.indexOf(entry) >= 0) {
+            throw new Error("Signal registry entry could not be removed");
+          }
+        } catch (error) {
+          this._recordLifecycleError("signal-untrack", error);
+          success = false;
+        }
+      }
+      return success;
+    } catch (error) {
+      this._recordLifecycleError("signal-untrack", error);
       return false;
     }
   },

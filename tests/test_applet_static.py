@@ -1971,7 +1971,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('throw new Error("Signal registry is unavailable");', block)
         self.assertIn("let signalEntry = { target: target, id: connectionId };", block)
         self.assertIn("this._resourceRegistry.signals.indexOf(signalEntry)", block)
-        self.assertIn("signals.pop();", block)
+        self.assertIn("let removed = signals.splice(index, 1);", block)
+        self.assertIn("registryEntryRemovalSucceeded = true;", block)
+        self.assertIn("signalDisconnected = true;", block)
         self.assertIn("target.disconnect(connectionId);", block)
         self.assertIn('this._recordLifecycleError("signal-disconnect", disconnectError);', block)
         self.assertIn('this._recordLifecycleError("signal-registration-rollback", rollbackError);', block)
@@ -1986,12 +1988,26 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('typeof target.disconnect !== "function"', block)
         self.assertIn("let disconnectResult = target.disconnect(connectionId);", block)
         self.assertIn("disconnectResult === false", block)
-        self.assertIn("this._trackOrphanedSignal(target, connectionId);", block)
-        orphan_start = source.index("_trackOrphanedSignal: function(target, id)")
+        self.assertIn("this._trackOrphanedSignal(target, connectionId, signalDisconnected);", block)
+        orphan_start = source.index("_trackOrphanedSignal: function(target, id, disconnected)")
         orphan_end = source.index("\n  _disconnectOrphanedSignals:", orphan_start)
         orphan_block = source[orphan_start:orphan_end]
-        self.assertIn("this._orphanedSignals.push({ target: target, id: id });", orphan_block)
+        self.assertIn("this._orphanedSignals.push({", orphan_block)
         self.assertIn("_disconnectOrphanedSignals", source)
+
+    def test_signal_teardown_retries_disconnect_and_registry_failures(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_trackOrphanedSignal: function(target, id, disconnected)")
+        end = source.index("\n  _clearMenuItems:", start)
+        block = source[start:end]
+        self.assertIn("disconnected: disconnected === true", block)
+        self.assertIn("connection.disconnected === true", block)
+        self.assertIn("this._untrackSignal(connection.target, connection.id)", block)
+        self.assertIn("this._trackOrphanedSignal(connection && connection.target, connection && connection.id, false);", block)
+        self.assertIn("this._trackOrphanedSignal(connection && connection.target, connection && connection.id, true);", block)
+        self.assertIn("_untrackSignal: function(target, id, connection)", block)
+        self.assertIn("let removed = signals.splice(index, 1);", block)
+        self.assertIn('this._recordLifecycleError("signal-untrack", error);', block)
 
     def test_state_callbacks_are_not_suppressed_by_disabled_error_groups(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2300,7 +2316,7 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         self.assertIn("let signals = this._resourceRegistry.signals;", block)
         self.assertIn("for (let index = signals.length - 1; index >= 0; index--)", block)
-        self.assertIn("signals.splice(index, 1);", block)
+        self.assertIn("this._untrackSignal(target, connection.id, connection)", block)
         self.assertLess(block.index("try {"), block.index("Array.isArray(this._resourceRegistry.signals)"))
         self.assertIn('this._recordLifecycleError("teardown-target-signals", error);', block)
 
@@ -2311,7 +2327,7 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         self.assertIn("let signals = this._resourceRegistry.signals;", block)
         self.assertIn("for (let index = signals.length - 1; index >= 0; index--)", block)
-        self.assertIn("signals.splice(index, 1);", block)
+        self.assertIn("this._untrackSignal(connection && connection.target, connection && connection.id, connection)", block)
         self.assertIn('this._recordLifecycleError("teardown-signals", error);', block)
         self.assertLess(block.index("try {"), block.index("Array.isArray(this._resourceRegistry.signals)"))
 
