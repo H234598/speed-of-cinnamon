@@ -6033,6 +6033,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (this.terminalWorkflowToken !== terminalWorkflowToken)", workflow_block)
         self.assertIn("this.terminalWorkflowToken = null;", workflow_block)
 
+    def test_terminal_ollama_cleanup_failures_are_preserved(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_runTerminalWorkflow: function(")
+        end = source.index("\n  _terminalWorkflowScript:", start)
+        block = source[start:end]
+        self.assertIn("let ollamaCleanupFailed = false;", block)
+        self.assertIn("let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;", block)
+        self.assertIn("let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();", block)
+        self.assertIn("ollamaCleanupFailed = !ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded;", block)
+        self.assertIn("if (ollamaCleanupFailed)", block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped")', block)
+
     def test_recording_start_invalidates_stale_background_callbacks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

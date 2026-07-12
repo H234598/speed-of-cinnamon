@@ -6112,11 +6112,16 @@ MyApplet.prototype = {
           return;
         }
         if (result && (result.error || result.timedOut || result.outputTooLarge)) {
+          let ollamaCleanupFailed = false;
           if (cancelOllamaFlow === true && ollamaFlowToken && this.ollamaModelFlowToken === ollamaFlowToken) {
-            this._cancelOllamaInstallWatch();
-            this._clearOllamaModelFlow();
+            let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;
+            let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();
+            ollamaCleanupFailed = !ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded;
           }
           this._setStatus("error", _("Terminal process exited unexpectedly"), this.lastTranscript);
+          if (ollamaCleanupFailed) {
+            this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+          }
         } else if (cancelOllamaFlow !== true && this._lifecycleAllowsWork()) {
           this._setStatus("ready", _("Terminal workflow finished"), this.lastTranscript);
         }
@@ -6208,16 +6213,22 @@ MyApplet.prototype = {
       this._setStatus("error", _("Could not start install terminal: ") + safeError, this.lastTranscript);
       this._notify(_("Could not start install terminal"), safeError, true);
       if (continueOllamaFlow) {
-        this._cancelOllamaInstallWatch();
-        this._clearOllamaModelFlow();
+        let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;
+        let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();
+        if (!ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded) {
+          this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+        }
       }
       return false;
     }
     if (opened && continueOllamaFlow) {
       this._watchOllamaInstallThenChoose();
     } else if (continueOllamaFlow) {
-      this._cancelOllamaInstallWatch();
-      this._clearOllamaModelFlow();
+      let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;
+      let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();
+      if (!ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded) {
+        this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+      }
     }
     return opened;
   },
