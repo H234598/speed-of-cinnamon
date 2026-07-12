@@ -2790,14 +2790,25 @@ MyApplet.prototype = {
     let generation = this.spawnGeneration;
     let sourceId = 0;
     let sourceRemovalSucceeded = false;
+    let retireTimer = () => {
+      let registryUntracked = this._untrackTimer(key, sourceId, propertyName);
+      let orphanUntracked = this._untrackOrphanedTimer(key, sourceId);
+      if (registryUntracked && orphanUntracked) {
+        return true;
+      }
+      if (!this._trackOrphanedTimer(key, sourceId, propertyName, true)) {
+        this._recordLifecycleError("timer-state", new Error("Expired timer cleanup could not be tracked"));
+      }
+      return false;
+    };
     let timerCallback = () => {
       if (this.appletRemoved || this.spawnGeneration !== generation) {
-        this._untrackTimer(key, sourceId, propertyName);
+        retireTimer();
         return false;
       }
     let keepTimer = this._runStateGuarded("timer-" + key, callback, false) === true;
       if (!keepTimer) {
-        this._untrackTimer(key, sourceId, propertyName);
+        retireTimer();
       }
       return keepTimer;
     };

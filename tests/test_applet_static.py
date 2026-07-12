@@ -3100,7 +3100,12 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         self.assertIn("let keepTimer = this._runStateGuarded(\"timer-\" + key, callback, false) === true;", block)
         self.assertIn("if (!keepTimer) {", block)
-        self.assertIn("this._untrackTimer(key, sourceId, propertyName);", block)
+        self.assertIn("let retireTimer = () => {", block)
+        self.assertIn("let registryUntracked = this._untrackTimer(key, sourceId, propertyName);", block)
+        self.assertIn("let orphanUntracked = this._untrackOrphanedTimer(key, sourceId);", block)
+        self.assertIn("this._trackOrphanedTimer(key, sourceId, propertyName, true)", block)
+        self.assertIn('this._recordLifecycleError("timer-state", new Error("Expired timer cleanup could not be tracked"));', block)
+        self.assertIn("retireTimer();", block)
         self.assertLess(block.index("let keepTimer"), block.index("if (!keepTimer)"))
         self.assertIn("let deleted = delete this._resourceRegistry.timers[key];", block)
         self.assertIn("Timer rollback registry entry could not be removed", block)
