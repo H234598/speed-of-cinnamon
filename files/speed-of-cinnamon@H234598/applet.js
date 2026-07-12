@@ -11294,30 +11294,41 @@ MyApplet.prototype = {
   },
 
   _setClipboardOverwriteApproval: function(snapshot) {
-    if (!snapshot || snapshot.signature === "unknown" || snapshot.payloadFingerprint === "unknown") {
+    let signature = snapshot && typeof snapshot.signature === "string" ? snapshot.signature.trim() : "";
+    let payloadFingerprint = snapshot && typeof snapshot.payloadFingerprint === "string" ? snapshot.payloadFingerprint.trim() : "";
+    if (signature === "" || payloadFingerprint === "" || signature === "unknown" || payloadFingerprint === "unknown") {
       return;
     }
     this._clipboardOverwriteApproval = {
-      signature: String(snapshot.signature || ""),
-      payloadFingerprint: String(snapshot.payloadFingerprint || ""),
+      signature: signature,
+      payloadFingerprint: payloadFingerprint,
       expiresAtMs: Date.now() + CLIPBOARD_OVERWRITE_APPROVAL_TTL_MS,
     };
   },
 
   _hasValidClipboardOverwriteApproval: function(snapshot) {
-    if (!this._clipboardOverwriteApproval) {
+    let approval = this._clipboardOverwriteApproval;
+    if (!approval) {
       return false;
     }
-    if (Date.now() > this._clipboardOverwriteApproval.expiresAtMs) {
+    let expiresAtMs = Number(approval.expiresAtMs);
+    if (!isFinite(expiresAtMs) || Date.now() > expiresAtMs) {
       this._clearClipboardOverwriteApproval();
       return false;
     }
-    if (!snapshot || snapshot.signature === "unknown" || snapshot.payloadFingerprint === "unknown") {
+    let approvalSignature = typeof approval.signature === "string" ? approval.signature.trim() : "";
+    let approvalPayloadFingerprint = typeof approval.payloadFingerprint === "string" ? approval.payloadFingerprint.trim() : "";
+    let snapshotSignature = snapshot && typeof snapshot.signature === "string" ? snapshot.signature.trim() : "";
+    let snapshotPayloadFingerprint = snapshot && typeof snapshot.payloadFingerprint === "string" ? snapshot.payloadFingerprint.trim() : "";
+    if (approvalSignature === "" || approvalPayloadFingerprint === "" ||
+      snapshotSignature === "" || snapshotPayloadFingerprint === "" ||
+      approvalSignature === "unknown" || approvalPayloadFingerprint === "unknown" ||
+      snapshotSignature === "unknown" || snapshotPayloadFingerprint === "unknown") {
       return false;
     }
     return (
-      String(this._clipboardOverwriteApproval.signature) === String(snapshot.signature) &&
-      String(this._clipboardOverwriteApproval.payloadFingerprint) === String(snapshot.payloadFingerprint)
+      approvalSignature === snapshotSignature &&
+      approvalPayloadFingerprint === snapshotPayloadFingerprint
     );
   },
 

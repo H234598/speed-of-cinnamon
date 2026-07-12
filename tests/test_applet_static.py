@@ -5268,6 +5268,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (this._hasValidClipboardOverwriteApproval(clipboardSnapshot)) {", source)
         self.assertIn("this._clearClipboardOverwriteApproval();", source)
 
+    def test_clipboard_overwrite_approval_rejects_empty_or_invalid_fingerprints(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_setClipboardOverwriteApproval: function(snapshot)")
+        end = source.index("\n  _setClipboardText:", start)
+        block = source[start:end]
+        self.assertIn('let signature = snapshot && typeof snapshot.signature === "string" ? snapshot.signature.trim() : "";', block)
+        self.assertIn('let payloadFingerprint = snapshot && typeof snapshot.payloadFingerprint === "string" ? snapshot.payloadFingerprint.trim() : "";', block)
+        self.assertIn('signature === "" || payloadFingerprint === ""', block)
+        self.assertIn("let expiresAtMs = Number(approval.expiresAtMs);", block)
+        self.assertIn("!isFinite(expiresAtMs)", block)
+        self.assertIn("approvalSignature === \"\" || approvalPayloadFingerprint === \"\"", block)
+
     def test_applet_tracks_non_text_payload_fingerprint_beyond_targets(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
