@@ -11929,10 +11929,17 @@ MyApplet.prototype = {
   },
 
   _forgetAutoInsertFingerprint: function(fingerprint) {
-    if (!fingerprint || !this.autoInsertFingerprints) {
-      return;
+    if (!fingerprint) {
+      return true;
     }
     try {
+      if (!Array.isArray(this.autoInsertFingerprints)) {
+        this.autoInsertFingerprints = [];
+        if (this.autoInsertFingerprint === fingerprint) {
+          this.autoInsertFingerprint = "";
+        }
+        return true;
+      }
       let index = this.autoInsertFingerprints.indexOf(fingerprint);
       if (index >= 0) {
         let entry = this.autoInsertFingerprints[index];

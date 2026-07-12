@@ -4531,6 +4531,9 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
 
         self.assertIn("try {", block)
+        self.assertIn("if (!Array.isArray(this.autoInsertFingerprints))", block)
+        self.assertIn('this.autoInsertFingerprints = [];', block)
+        self.assertIn('this.autoInsertFingerprint = "";', block)
         self.assertIn("let entry = this.autoInsertFingerprints[index];", block)
         self.assertIn("let removed = this.autoInsertFingerprints.splice(index, 1);", block)
         self.assertIn("removed[0] !== entry", block)
