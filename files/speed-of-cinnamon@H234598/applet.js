@@ -838,7 +838,8 @@ MyApplet.prototype = {
 
   _disconnectOrphanedSignals: function(target) {
     if (!Array.isArray(this._orphanedSignals)) {
-      return true;
+      this._recordLifecycleError("signal-state", new Error("Signal orphan registry is unavailable"));
+      return false;
     }
     let success = true;
     for (let index = this._orphanedSignals.length - 1; index >= 0; index--) {
@@ -868,6 +869,7 @@ MyApplet.prototype = {
   _disconnectAllSignals: function() {
     try {
       if (!this._resourceRegistry || !Array.isArray(this._resourceRegistry.signals)) {
+        this._recordLifecycleError("signal-state", new Error("Signal registry is unavailable"));
         this._disconnectOrphanedSignals();
         return;
       }
@@ -894,13 +896,18 @@ MyApplet.prototype = {
   },
 
   _disconnectTrackedSignalsForTarget: function(target) {
-    if (!target || !this._resourceRegistry) {
+    if (!target) {
       return true;
+    }
+    if (!this._resourceRegistry) {
+      this._recordLifecycleError("signal-state", new Error("Signal registry is unavailable"));
+      return false;
     }
     let success = true;
     try {
       if (!Array.isArray(this._resourceRegistry.signals)) {
-        return true;
+        this._recordLifecycleError("signal-state", new Error("Signal registry is unavailable"));
+        return false;
       }
       let signals = this._resourceRegistry.signals;
       for (let index = signals.length - 1; index >= 0; index--) {

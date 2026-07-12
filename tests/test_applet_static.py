@@ -2224,6 +2224,25 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('throw new Error("Signal orphan entry could not be tracked");', orphan_block)
         self.assertIn("_disconnectOrphanedSignals", source)
 
+    def test_signal_cleanup_fails_closed_when_registry_is_unavailable(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_disconnectOrphanedSignals: function(target)")
+        end = source.index("\n  _disconnectAllSignals:", start)
+        orphan_block = source[start:end]
+        self.assertIn('this._recordLifecycleError("signal-state", new Error("Signal orphan registry is unavailable"));', orphan_block)
+        self.assertIn("return false;", orphan_block)
+
+        start = source.index("_disconnectTrackedSignalsForTarget: function(target)")
+        end = source.index("\n  _untrackSignal:", start)
+        tracked_block = source[start:end]
+        self.assertIn('this._recordLifecycleError("signal-state", new Error("Signal registry is unavailable"));', tracked_block)
+        self.assertIn("return false;", tracked_block)
+
+        start = source.index("_disconnectAllSignals: function()")
+        end = source.index("\n  _disconnectTrackedSignalsForTarget:", start)
+        all_block = source[start:end]
+        self.assertIn('this._recordLifecycleError("signal-state", new Error("Signal registry is unavailable"));', all_block)
+
     def test_signal_teardown_retries_disconnect_and_registry_failures(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_trackOrphanedSignal: function(target, id, disconnected)")
