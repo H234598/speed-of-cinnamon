@@ -295,6 +295,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (result === false)", source)
         self.assertIn("let rollbackResult = this.settings.setValue(setting[0], setting[2]);", source)
         self.assertIn('this._setStatusPreservingRecording("error", _("External API settings could not be saved"), this.lastTranscript);', source)
+        clear_start = source.index("_clearPersistedOpenAiCompatibleApiKey: function()")
+        clear_end = source.index("\n  _ensureExternalApiEnvFile:", clear_start)
+        clear_block = source[clear_start:clear_end]
+        self.assertIn("let previousApiKey = this.openaiCompatibleApiKey;", clear_block)
+        self.assertIn('this.settings.setValue("openai-compatible-api-key", "")', clear_block)
+        self.assertIn("this.openaiCompatibleApiKey = previousApiKey;", clear_block)
+        self.assertIn("return false;", clear_block)
         target_start = source.index("_applyExternalApiEnvTarget: function(target)")
         target_end = source.index("\n  _selectExternalApiVoiceBackend:", target_start)
         target_block = source[target_start:target_end]

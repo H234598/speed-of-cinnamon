@@ -5616,13 +5616,20 @@ MyApplet.prototype = {
 
   _clearPersistedOpenAiCompatibleApiKey: function() {
     if (String(this.openaiCompatibleApiKey || "").trim() === "") {
-      return;
+      return true;
     }
-    this.openaiCompatibleApiKey = "";
+    let previousApiKey = this.openaiCompatibleApiKey;
     try {
-      this.settings.setValue("openai-compatible-api-key", "");
+      let result = this.settings.setValue("openai-compatible-api-key", "");
+      if (result === false) {
+        throw new Error("Persisted External API key could not be cleared");
+      }
+      this.openaiCompatibleApiKey = "";
+      return true;
     } catch (err) {
+      this.openaiCompatibleApiKey = previousApiKey;
       this._safeLogError(err);
+      return false;
     }
   },
 
