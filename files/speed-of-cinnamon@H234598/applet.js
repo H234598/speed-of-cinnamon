@@ -9481,13 +9481,14 @@ MyApplet.prototype = {
       }
       done = true;
       let cleanupSucceeded = cleanupResources();
+      let callbackResult = cleanupSucceeded ? (result || {}) : { error: "Subprocess cleanup failed" };
       if (suppressCallback || this.appletRemoved || this.spawnGeneration !== generation || typeof callback !== "function") {
         return cleanupSucceeded;
       }
       if (!callbackDelivered) {
         callbackDelivered = true;
         try {
-          callback(stdoutParts.join(""), stderrParts.join(""), result || {});
+          callback(stdoutParts.join(""), stderrParts.join(""), callbackResult);
         } catch (error) {
           this._recordLifecycleError("process-callback", error);
         }

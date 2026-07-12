@@ -3757,6 +3757,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("processOrphanCleanupSucceeded = this._untrackOrphanedProcess(process);", block)
         self.assertIn("cancellableOrphanCleanupSucceeded &&", block)
         self.assertIn("processOrphanCleanupSucceeded", block)
+        self.assertIn('let callbackResult = cleanupSucceeded ? (result || {}) : { error: "Subprocess cleanup failed" };', block)
+        self.assertIn("callback(stdoutParts.join(\"\"), stderrParts.join(\"\"), callbackResult);", block)
 
     def test_teardown_uses_safe_process_and_cancellable_unregistration(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
