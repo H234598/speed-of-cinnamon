@@ -2936,7 +2936,7 @@ class AppletStaticTest(unittest.TestCase):
         runtime_block = source[runtime_start:runtime_end]
         self.assertIn("let continueOllamaFlow = openChooserAfterInstall === true && Boolean(this.ollamaModelFlowToken);", runtime_block)
         self.assertIn("let ollamaFlowToken = continueOllamaFlow ? this.ollamaModelFlowToken : null;", runtime_block)
-        self.assertIn("this._clearOllamaModelFlow();", runtime_block)
+        self.assertIn("if (!this._clearOllamaModelFlow())", runtime_block)
         self.assertIn("return opened;", runtime_block)
 
         install_start = source.index("_installOllamaTextModel: function(model)")
@@ -3570,13 +3570,15 @@ class AppletStaticTest(unittest.TestCase):
         uninstall_end = source.index("\n  _runBasicSetup:", uninstall_start)
         uninstall_block = source[uninstall_start:uninstall_end]
         self.assertIn("this._cancelOllamaInstallWatch();", uninstall_block)
-        self.assertIn("this._clearOllamaModelFlow();", uninstall_block)
+        self.assertIn("if (!this._clearOllamaModelFlow())", uninstall_block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped")', uninstall_block)
 
         setup_start = source.index("_runBasicSetup: function()")
         setup_end = source.index("\n  _selectBenchmarkAudioFile:", setup_start)
         setup_block = source[setup_start:setup_end]
         self.assertIn("this._cancelOllamaInstallWatch();", setup_block)
-        self.assertIn("this._clearOllamaModelFlow();", setup_block)
+        self.assertIn("if (!this._clearOllamaModelFlow())", setup_block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped")', setup_block)
 
     def test_terminal_workflow_preserves_shell_compound_syntax(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

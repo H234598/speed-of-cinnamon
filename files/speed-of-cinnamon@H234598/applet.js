@@ -4538,7 +4538,10 @@ MyApplet.prototype = {
     let ollamaFlowToken = continueOllamaFlow ? this.ollamaModelFlowToken : null;
     if (!continueOllamaFlow) {
       this._cancelOllamaInstallWatch();
-      this._clearOllamaModelFlow();
+      if (!this._clearOllamaModelFlow()) {
+        this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+        return false;
+      }
     }
     let opened = false;
     try {
@@ -4565,7 +4568,10 @@ MyApplet.prototype = {
 
   _uninstallOllamaRuntime: function() {
     this._cancelOllamaInstallWatch();
-    this._clearOllamaModelFlow();
+    if (!this._clearOllamaModelFlow()) {
+      this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+      return;
+    }
     try {
       this._runTerminalWorkflow(_("Uninstall Ollama"), this._uninstallOllamaRuntimeCommand(), _("Ollama uninstall terminal opened"));
     } catch (err) {
@@ -4578,7 +4584,10 @@ MyApplet.prototype = {
 
   _runBasicSetup: function() {
     this._cancelOllamaInstallWatch();
-    this._clearOllamaModelFlow();
+    if (!this._clearOllamaModelFlow()) {
+      this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+      return;
+    }
     try {
       this._runTerminalWorkflow(_("Speed of Cinnamon basic setup"), this._basicSetupCommand(), _("Basic setup terminal opened"));
     } catch (err) {
