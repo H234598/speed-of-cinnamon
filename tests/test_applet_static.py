@@ -539,7 +539,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let safeError = this._sanitizeErrorMessage(payload.error);", source)
         self.assertIn("this._populateModelMenu([], safeError);", source)
         self.assertNotIn("this._populateModelMenu([], payload.error);", source)
-        self.assertIn("this._populateAlarmMenu([], this._sanitizeErrorMessage(payload.error));", source)
+        self.assertIn("this._populateAlarmMenu([], safeError);", source)
         self.assertIn("this._populateInputSourceMenu([], this._sanitizeErrorMessage(payload.error));", source)
         self.assertNotIn("this._populateAlarmMenu([], payload.error);", source)
         self.assertNotIn("this._populateInputSourceMenu([], payload.error);", source)
@@ -5226,7 +5226,7 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         for method, next_method, expected in [
-            ("_refreshAlarmMenu: function()", "\n  _populateAlarmMenu:", "this._setAlarmErrorStatus(payload.error);"),
+            ("_refreshAlarmMenu: function()", "\n  _populateAlarmMenu:", "this._setAlarmErrorStatus(safeError);"),
             ("_refreshInputSourceMenu: function()", "\n  _populateInputSourceMenu:", "this._setStatusPreservingRecording"),
             ("_refreshHistory: function()", "\n  _listAllTranscripts:", "this._setStatusPreservingRecording"),
         ]:
@@ -5234,3 +5234,14 @@ class AppletStaticTest(unittest.TestCase):
             end = source.index(next_method, start)
             block = source[start:end]
             self.assertIn(expected, block, method)
+
+        for method, next_method in [
+            ("_setAlarmEnabled: function(id, enabled)", "\n  _removeAlarm:"),
+            ("_removeAlarm: function(id)", "\n  _checkAlarms:"),
+            ("_checkAlarms: function(manual)", "\n  _refreshInputSourceMenu:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertNotIn("this._setAlarmErrorStatus(payload.error);", block)
+            self.assertIn("this._sanitizeErrorMessage(payload.error)", block)

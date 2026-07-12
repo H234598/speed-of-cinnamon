@@ -4767,8 +4767,9 @@ MyApplet.prototype = {
         return;
       }
       if (payload.error) {
-        this._populateAlarmMenu([], this._sanitizeErrorMessage(payload.error));
-        this._setAlarmErrorStatus(payload.error);
+        let safeError = this._sanitizeErrorMessage(payload.error);
+        this._populateAlarmMenu([], safeError);
+        this._setAlarmErrorStatus(safeError);
         return;
       }
       this._populateAlarmMenu(payload.alarms || [], payload.summary || "");
@@ -4908,7 +4909,7 @@ MyApplet.prototype = {
       }
       if (payload.error) {
         this.alarmActionToken = null;
-        this._setAlarmErrorStatus(payload.error);
+        this._setAlarmErrorStatus(this._sanitizeErrorMessage(payload.error));
         return;
       }
       this.alarmActionToken = null;
@@ -4943,7 +4944,7 @@ MyApplet.prototype = {
       }
       if (payload.error) {
         this.alarmActionToken = null;
-        this._setAlarmErrorStatus(payload.error);
+        this._setAlarmErrorStatus(this._sanitizeErrorMessage(payload.error));
         return;
       }
       this.alarmActionToken = null;
@@ -4980,7 +4981,7 @@ MyApplet.prototype = {
       if (payload.error) {
         this.alarmCheckToken = null;
         if (manual) {
-          this._setAlarmErrorStatus(payload.error);
+          this._setAlarmErrorStatus(this._sanitizeErrorMessage(payload.error));
         }
         return;
       }
