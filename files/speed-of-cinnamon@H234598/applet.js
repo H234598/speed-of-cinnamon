@@ -1713,7 +1713,7 @@ MyApplet.prototype = {
     }
   },
 
-  _trackOrphanedProcess: function(process, generation, group) {
+  _trackOrphanedProcess: function(process, generation, group, registryToken, terminationSucceeded) {
     try {
       if (!process) {
         throw new Error("Process orphan is invalid");
@@ -1721,12 +1721,22 @@ MyApplet.prototype = {
       if (!Array.isArray(this._orphanedProcesses)) {
         this._orphanedProcesses = [];
       }
-      let known = this._orphanedProcesses.some((entry) => entry && entry.process === process);
-      if (!known) {
+      let key = registryToken ? String(registryToken) : "";
+      let knownEntry = this._orphanedProcesses.find((entry) => entry && entry.process === process);
+      if (knownEntry) {
+        if (key && !knownEntry.registryToken) {
+          knownEntry.registryToken = key;
+        }
+        if (terminationSucceeded === true) {
+          knownEntry.terminationSucceeded = true;
+        }
+      } else {
         this._orphanedProcesses.push({
           process: process,
           generation: generation,
           group: String(group || "process"),
+          registryToken: key,
+          terminationSucceeded: terminationSucceeded === true,
         });
       }
       return true;
@@ -1768,7 +1778,16 @@ MyApplet.prototype = {
         success = false;
         continue;
       }
-      if (!this._terminateProcess(entry.process)) {
+      let terminationSucceeded = entry.terminationSucceeded === true;
+      if (!terminationSucceeded) {
+        if (!this._terminateProcess(entry.process)) {
+          success = false;
+          continue;
+        }
+        entry.terminationSucceeded = true;
+        terminationSucceeded = true;
+      }
+      if (entry.registryToken && !this._unregisterProcess(entry.registryToken)) {
         success = false;
         continue;
       }
@@ -1817,6 +1836,9 @@ MyApplet.prototype = {
           let entry = null;
           try {
             entry = processes[token];
+            if (!entry || typeof entry !== "object" || !entry.process) {
+              throw new Error("Process registry entry is unavailable");
+            }
             if (entry && typeof entry.cancel === "function") {
               let result = entry.cancel();
               if (result === false) {
@@ -1828,10 +1850,16 @@ MyApplet.prototype = {
             cleanupSucceeded = true;
           } catch (error) {
             this._recordLifecycleError("process-cancel", error);
+            if (entry && entry.process) {
+              this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, false);
+            }
           }
           if (cleanupSucceeded) {
-            this._untrackOrphanedProcess(entry && entry.process);
-            this._unregisterProcess(token);
+            if (!this._unregisterProcess(token)) {
+              this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, true);
+            } else {
+              this._untrackOrphanedProcess(entry.process);
+            }
           }
         }
       }
@@ -1874,11 +1902,16 @@ MyApplet.prototype = {
         } catch (error) {
           allSucceeded = false;
           this._recordLifecycleError("process-cancel", error);
+          if (selected && entry && entry.process) {
+            this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, false);
+          }
         }
         if (selected && cleanupSucceeded) {
-          this._untrackOrphanedProcess(entry && entry.process);
           if (!this._unregisterProcess(token)) {
             allSucceeded = false;
+            this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, true);
+          } else {
+            this._untrackOrphanedProcess(entry.process);
           }
         }
       }
@@ -8924,10 +8957,16 @@ MyApplet.prototype = {
       cancellable = new Gio.Cancellable();
       cancellableToken = this._registerCancellable(cancellable);
     } catch (error) {
-      this._unregisterCancellable(cancellableToken);
+      if (!this._unregisterCancellable(cancellableToken)) {
+        this._trackOrphanedCancellable(cancellableToken, false);
+      }
       let processTerminated = this._terminateProcess(process);
       if (processTerminated) {
-        this._unregisterProcess(processToken);
+        if (!this._unregisterProcess(processToken)) {
+          this._trackOrphanedProcess(process, generation, options.resourceGroup, processToken, true);
+        }
+      } else {
+        this._trackOrphanedProcess(process, generation, options.resourceGroup, processToken, false);
       }
       throw error;
     }
@@ -8955,6 +8994,11 @@ MyApplet.prototype = {
         this._untrackOrphanedCancellable(cancellableToken);
       }
       let processCleanupSucceeded = this._unregisterProcess(processToken);
+      if (!processCleanupSucceeded) {
+        this._trackOrphanedProcess(process, generation, options.resourceGroup, processToken, true);
+      } else {
+        this._untrackOrphanedProcess(process);
+      }
       cleanupComplete = cancellableCleanupSucceeded && processCleanupSucceeded;
       return cleanupComplete;
     };
