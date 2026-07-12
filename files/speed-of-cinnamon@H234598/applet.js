@@ -1822,17 +1822,52 @@ MyApplet.prototype = {
   },
 
   _retryOrphanedMonitors: function() {
-    if (!Array.isArray(this._orphanedMonitors)) {
-      return true;
-    }
-    let success = true;
-    for (let index = this._orphanedMonitors.length - 1; index >= 0; index--) {
-      let entry = this._orphanedMonitors[index];
-      if (!entry || !entry.monitor) {
-        this._recordLifecycleError("monitor-orphan", new Error("Monitor orphan entry is invalid"));
-        success = false;
-        continue;
+    let pendingMonitors = [];
+    let addPendingMonitor = (monitor, cancelSucceeded) => {
+      if (!monitor) {
+        return;
       }
+      let knownEntry = pendingMonitors.find((entry) => entry && entry.monitor === monitor);
+      if (knownEntry) {
+        if (cancelSucceeded === true) {
+          knownEntry.cancelSucceeded = true;
+        }
+        return;
+      }
+      pendingMonitors.push({
+        monitor: monitor,
+        cancelSucceeded: cancelSucceeded === true,
+      });
+    };
+    let invalidOrphanEntry = false;
+    if (Array.isArray(this._orphanedMonitors)) {
+      for (let entry of this._orphanedMonitors) {
+        if (!entry || !entry.monitor) {
+          invalidOrphanEntry = true;
+          continue;
+        }
+        addPendingMonitor(entry.monitor, entry.cancelSucceeded);
+      }
+    } else {
+      this._recordLifecycleError("monitor-state", new Error("Monitor orphan registry is unavailable"));
+    }
+    let monitors = this._resourceRegistry && this._resourceRegistry.monitors;
+    if (Array.isArray(monitors)) {
+      for (let monitor of monitors) {
+        if (!monitor) {
+          invalidOrphanEntry = true;
+          continue;
+        }
+        addPendingMonitor(monitor, false);
+      }
+    }
+    addPendingMonitor(this.externalApiEnvMonitor, this._externalApiEnvMonitorCancelSucceeded === true);
+    if (pendingMonitors.length === 0) {
+      return !invalidOrphanEntry && Array.isArray(this._orphanedMonitors);
+    }
+    let success = !invalidOrphanEntry;
+    for (let index = pendingMonitors.length - 1; index >= 0; index--) {
+      let entry = pendingMonitors[index];
       let cancelSucceeded = entry.cancelSucceeded === true;
       if (!cancelSucceeded) {
         if (!this._disconnectTrackedSignalsForTarget(entry.monitor)) {

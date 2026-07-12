@@ -458,6 +458,19 @@ class AppletStaticTest(unittest.TestCase):
             monitor_block.index("monitor.cancel()"),
         )
 
+    def test_monitor_retry_reconstructs_pending_entries_from_registry_and_reference(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_retryOrphanedMonitors: function()")
+        end = source.index("\n  _clearExternalApiEnvMonitorReference:", start)
+        block = source[start:end]
+        self.assertIn("let pendingMonitors = [];", block)
+        self.assertIn("let addPendingMonitor = (monitor, cancelSucceeded) =>", block)
+        self.assertIn("Monitor orphan registry is unavailable", block)
+        self.assertIn("let monitors = this._resourceRegistry && this._resourceRegistry.monitors;", block)
+        self.assertIn("addPendingMonitor(monitor, false);", block)
+        self.assertIn("addPendingMonitor(this.externalApiEnvMonitor", block)
+        self.assertIn("for (let index = pendingMonitors.length - 1;", block)
+
     def test_external_env_monitor_cleanup_retries_cancel_and_registry_phases(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_trackOrphanedMonitor: function(monitor, cancelSucceeded)")
