@@ -431,6 +431,8 @@ class ArtifactCryptoTest(unittest.TestCase):
         self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 1)
 
     def test_secret_tool_input_failure_is_controlled(self) -> None:
+        fake_proc_holder: dict[str, object] = {}
+
         class BrokenInput:
             def write(self, _payload: bytes) -> None:
                 raise ValueError("closed stdin")
@@ -449,6 +451,16 @@ class ArtifactCryptoTest(unittest.TestCase):
                 self.stdin = BrokenInput()
                 self.stdout = DummyStream()
                 self.stderr = DummyStream()
+                self.killed = False
+                self.wait_calls = 0
+                fake_proc_holder["proc"] = self
+
+            def kill(self) -> None:
+                self.killed = True
+
+            def wait(self, timeout: int | None = None) -> int:
+                self.wait_calls += 1
+                return self.returncode
 
         with (
             mock.patch("speed_of_cinnamon.artifact_crypto._secret_tool_path", return_value="/usr/bin/secret-tool"),
@@ -456,6 +468,9 @@ class ArtifactCryptoTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "input could not be sent safely"):
                 artifact_crypto._run_secret_tool(["store", "application", "test"], input_text="secret")
+
+        self.assertTrue(getattr(fake_proc_holder["proc"], "killed"))
+        self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 1)
 
     def test_secret_tool_environment_skips_control_character_values(self) -> None:
         with mock.patch.dict(

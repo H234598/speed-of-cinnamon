@@ -794,12 +794,19 @@ def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subpr
         except (OSError, ValueError) as exc:
             raise ArtifactCryptoError("Secret Service keyring helper could not be started") from exc
         if input_text is not None:
-            if proc.stdin is None:
+            try:
+                stdin = proc.stdin
+            except Exception as exc:
+                _stop_secret_tool_process(proc)
+                raise ArtifactCryptoError("Secret Service keyring helper input could not be sent safely") from exc
+            if stdin is None:
+                _stop_secret_tool_process(proc)
                 raise ArtifactCryptoError("Secret Service keyring helper input could not be sent safely")
             try:
-                proc.stdin.write(input_text.encode("utf-8"))
-                proc.stdin.close()
+                stdin.write(input_text.encode("utf-8"))
+                stdin.close()
             except Exception as exc:
+                _stop_secret_tool_process(proc)
                 raise ArtifactCryptoError("Secret Service keyring helper input could not be sent safely") from exc
         stdout, stderr = _read_secret_tool_pipes_bounded(proc)
         try:
