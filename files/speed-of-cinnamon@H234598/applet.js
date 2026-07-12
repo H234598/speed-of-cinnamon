@@ -7445,11 +7445,15 @@ MyApplet.prototype = {
       if (!processEntry) {
         throw new Error("Process registry entry is unavailable");
       }
-      processEntry.cancel = (notifyCallback) => finish(
+      let cancelCallback = (notifyCallback) => finish(
           { cancelled: true },
           true,
           notifyCallback === true ? false : true
         );
+      processEntry.cancel = cancelCallback;
+      if (processEntry.cancel !== cancelCallback) {
+        throw new Error("Process cancellation callback could not be registered");
+      }
     } catch (error) {
       this._runTeardownGuarded("process-cancel-registration", () => this._recordLifecycleError("process-cancel-registration", error));
       finish({ error: error }, true, true);
