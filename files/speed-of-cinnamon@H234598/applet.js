@@ -644,6 +644,50 @@ MyApplet.prototype = {
     }
   },
 
+  _rollbackSettingsBatch: function(writes) {
+    if (!Array.isArray(writes)) {
+      return;
+    }
+    for (let index = writes.length - 1; index >= 0; index--) {
+      let setting = writes[index];
+      try {
+        let result = this.settings.setValue(setting[0], setting[2]);
+        if (result === false) {
+          throw new Error("Setting rollback failed");
+        }
+      } catch (err) {
+        this._safeLogError(err);
+      }
+    }
+  },
+
+  _commitSettingsBatch: function(writes, group, errorMessage) {
+    if (!Array.isArray(writes)) {
+      return false;
+    }
+    let attemptedWrites = [];
+    try {
+      for (let setting of writes) {
+        if (!Array.isArray(setting) || setting.length < 3) {
+          throw new Error("Setting batch is invalid");
+        }
+        attemptedWrites.push(setting);
+        let result = this.settings.setValue(setting[0], setting[1]);
+        if (result === false) {
+          throw new Error("Setting batch could not be saved");
+        }
+      }
+      return true;
+    } catch (err) {
+      this._rollbackSettingsBatch(attemptedWrites);
+      this._recordLifecycleError(group || "settings-batch", err);
+      if (errorMessage) {
+        this._setStatusPreservingRecording("error", errorMessage, this.lastTranscript);
+      }
+      return false;
+    }
+  },
+
   _connectSafe: function(target, signal, callback, group) {
     let signalGroup = "signal-callback";
     try {
@@ -6285,8 +6329,6 @@ MyApplet.prototype = {
   },
 
   _selectTextModelBackend: function(backend, model, message) {
-    this._cancelOllamaInstallWatch();
-    this._clearOllamaModelFlow();
     let safeModel;
     try {
       safeModel = this._coerceCliTextArg(model === undefined || model === null ? "" : model, "text model");
@@ -6295,16 +6337,33 @@ MyApplet.prototype = {
       this._setStatusPreservingRecording("error", _("Text model is invalid: ") + safeError, this.lastTranscript);
       return false;
     }
-    this.postProcessBackend = String(backend || "none");
-    this.settings.setValue("post-process-backend", this.postProcessBackend);
-    if (this.postProcessBackend === "ollama") {
-      this.ollamaModel = safeModel;
-      this.settings.setValue("ollama-model", this.ollamaModel);
+    let nextBackend = String(backend || "none");
+    let previousBackend = this.postProcessBackend;
+    let previousOllamaModel = this.ollamaModel;
+    let previousExternalTextModel = this.openaiCompatibleTextModel;
+    let settingsWrites = [["post-process-backend", nextBackend, previousBackend]];
+    if (nextBackend === "ollama") {
+      settingsWrites.push(["ollama-model", safeModel, previousOllamaModel]);
     }
-    if (this.postProcessBackend === "openai-compatible") {
+    if (nextBackend === "openai-compatible") {
+      settingsWrites.push(["openai-compatible-text-model", safeModel, previousExternalTextModel]);
+    }
+    if (!this._commitSettingsBatch(settingsWrites, "settings-text-model", _("Text model settings could not be saved"))) {
+      return false;
+    }
+    this._cancelOllamaInstallWatch();
+    this._clearOllamaModelFlow();
+    this.postProcessBackend = nextBackend;
+    if (nextBackend === "ollama") {
+      this.ollamaModel = safeModel;
+    }
+    if (nextBackend === "openai-compatible") {
       this.openaiCompatibleTextModel = safeModel;
-      this.settings.setValue("openai-compatible-text-model", this.openaiCompatibleTextModel);
       if (!this._writeExternalApiEnvFile()) {
+        this.postProcessBackend = previousBackend;
+        this.ollamaModel = previousOllamaModel;
+        this.openaiCompatibleTextModel = previousExternalTextModel;
+        this._rollbackSettingsBatch(settingsWrites);
         this._refreshTextModelMenu();
         return false;
       }
@@ -7072,16 +7131,28 @@ MyApplet.prototype = {
   },
 
   _resetTextPolishingDefaults: function() {
+    let previousValues = {
+      preset: this.postProcessPreset,
+      prompt: this.postProcessPrompt,
+      preserveCode: this.postProcessPreserveCode,
+      neverAddContent: this.postProcessNeverAddContent,
+      maskSensitiveData: this.postProcessMaskSensitiveData,
+    };
+    let settingsWrites = [
+      ["post-process-preset", TEXT_POLISHING_SAFE_PRESET, previousValues.preset],
+      ["post-process-prompt", "", previousValues.prompt],
+      ["post-process-preserve-code", true, previousValues.preserveCode],
+      ["post-process-never-add-content", true, previousValues.neverAddContent],
+      ["post-process-mask-sensitive-data", false, previousValues.maskSensitiveData],
+    ];
+    if (!this._commitSettingsBatch(settingsWrites, "settings-text-polishing", _("Text polishing defaults could not be saved"))) {
+      return;
+    }
     this.postProcessPreset = TEXT_POLISHING_SAFE_PRESET;
     this.postProcessPrompt = "";
     this.postProcessPreserveCode = true;
     this.postProcessNeverAddContent = true;
     this.postProcessMaskSensitiveData = false;
-    this.settings.setValue("post-process-preset", this.postProcessPreset);
-    this.settings.setValue("post-process-prompt", this.postProcessPrompt);
-    this.settings.setValue("post-process-preserve-code", this.postProcessPreserveCode);
-    this.settings.setValue("post-process-never-add-content", this.postProcessNeverAddContent);
-    this.settings.setValue("post-process-mask-sensitive-data", this.postProcessMaskSensitiveData);
     this._refreshTextModelMenu();
     this._setStatusPreservingRecording("ready", _("Text polishing defaults restored"), this.lastTranscript);
   },
