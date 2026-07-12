@@ -1695,12 +1695,29 @@ MyApplet.prototype = {
         success = false;
         continue;
       }
-      if (this.externalApiEnvMonitor === entry.monitor) {
-        this.externalApiEnvMonitor = null;
-        this._externalApiEnvMonitorCancelSucceeded = false;
+      if (!this._clearExternalApiEnvMonitorReference(entry.monitor)) {
+        this._trackOrphanedMonitor(entry.monitor, true);
+        success = false;
       }
     }
     return success;
+  },
+
+  _clearExternalApiEnvMonitorReference: function(monitor) {
+    if (this.externalApiEnvMonitor !== monitor) {
+      return true;
+    }
+    try {
+      this.externalApiEnvMonitor = null;
+      if (this.externalApiEnvMonitor === monitor) {
+        throw new Error("External API monitor reference could not be cleared");
+      }
+      this._externalApiEnvMonitorCancelSucceeded = false;
+      return true;
+    } catch (error) {
+      this._recordLifecycleError("monitor-orphan", error);
+      return false;
+    }
   },
 
   _nextResourceToken: function(prefix) {
@@ -7320,8 +7337,10 @@ MyApplet.prototype = {
       this._trackOrphanedMonitor(monitor, true);
       return false;
     }
-    this.externalApiEnvMonitor = null;
-    this._externalApiEnvMonitorCancelSucceeded = false;
+    if (!this._clearExternalApiEnvMonitorReference(monitor)) {
+      this._trackOrphanedMonitor(monitor, true);
+      return false;
+    }
     return true;
   },
 

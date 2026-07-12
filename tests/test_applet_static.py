@@ -425,7 +425,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._recordLifecycleError("monitor-cancel", err);', block)
         self.assertIn("return false;", block)
         self.assertIn("this._untrackMonitor(monitor)", block)
-        self.assertIn("this.externalApiEnvMonitor = null;", block)
+        self.assertIn("this._clearExternalApiEnvMonitorReference(monitor)", block)
 
     def test_failed_external_env_monitor_signal_disconnect_remains_tracked(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -496,16 +496,19 @@ class AppletStaticTest(unittest.TestCase):
         retry_end = source.index("\n  _nextResourceToken:", retry_start)
         retry_block = source[retry_start:retry_end]
         self.assertIn("this._untrackOrphanedMonitor(entry.monitor)", retry_block)
-        self.assertLess(retry_block.index("this._untrackOrphanedMonitor(entry.monitor)"), retry_block.index("this.externalApiEnvMonitor === entry.monitor"))
+        self.assertIn("this._clearExternalApiEnvMonitorReference(entry.monitor)", retry_block)
+        self.assertIn("this._trackOrphanedMonitor(entry.monitor, true);", retry_block)
         self.assertLess(untrack_block.index("try {"), untrack_block.index("this._resourceRegistry.monitors.indexOf(monitor)"))
 
         start = source.index("_clearExternalApiEnvMonitor: function()")
         end = source.index("\n  _watchExternalApiEnvFile:", start)
         clear_block = source[start:end]
         self.assertIn("!this._untrackMonitor(monitor)", clear_block)
+        self.assertIn("this._clearExternalApiEnvMonitorReference(monitor)", clear_block)
+        self.assertIn("this._trackOrphanedMonitor(monitor, true);", clear_block)
         self.assertIn("return false;", clear_block)
-        self.assertLess(clear_block.index("this._untrackMonitor(monitor)"), clear_block.index("this.externalApiEnvMonitor = null;"))
-        self.assertLess(clear_block.index("this._untrackOrphanedMonitor(monitor)"), clear_block.index("this.externalApiEnvMonitor = null;"))
+        self.assertLess(clear_block.index("this._untrackMonitor(monitor)"), clear_block.index("this._clearExternalApiEnvMonitorReference(monitor)"))
+        self.assertLess(clear_block.index("this._untrackOrphanedMonitor(monitor)"), clear_block.index("this._clearExternalApiEnvMonitorReference(monitor)"))
 
     def test_failed_dialog_untrack_does_not_escape_dialog_close(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
