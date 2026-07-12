@@ -10162,6 +10162,8 @@ MyApplet.prototype = {
         this._recordLifecycleError("process-cancel", error);
       }
       if (!terminationSucceeded || !cancellationSucceeded) {
+        this._trackOrphanedProcess(process, generation, options.resourceGroup, processToken, terminationSucceeded);
+        this._trackOrphanedCancellable(cancellableToken, cancellationSucceeded);
         return false;
       }
       done = true;

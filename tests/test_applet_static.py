@@ -4125,6 +4125,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("processEntry.cancel = cancelCallback;", bounded_block)
         self.assertIn("processEntry.cancel !== cancelCallback", bounded_block)
         self.assertIn("notifyCallback === true ? false : true", bounded_block)
+        self.assertIn("this._trackOrphanedProcess(process, generation, options.resourceGroup, processToken, terminationSucceeded);", bounded_block)
+        self.assertIn("this._trackOrphanedCancellable(cancellableToken, cancellationSucceeded);", bounded_block)
         self.assertIn('"process-cancel-registration"', bounded_block)
         stdin_start = bounded_block.rindex("if (hasInput) {")
         stdin_block = bounded_block[stdin_start:]
