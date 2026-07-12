@@ -2580,8 +2580,9 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_confirmPlaintextTranscriptList: function(completionCallback)")
         end = source.index("\n  _loadAllTranscriptsDocument:", start)
         block = source[start:end]
-        self.assertIn('let closed = this._dialogClose(dialog, "transcript-list");', block)
-        self.assertIn('if (closed) {\n        complete(false);', block)
+        self.assertIn("let failToOpen = () => {", block)
+        self.assertIn('this._dialogClose(dialog, "transcript-list");', block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);\n      complete(false);', block)
         self.assertIn('if (!closed) {\n              releasePrompt = false;', block)
         self.assertIn('this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be closed")', block)
         show_index = block.index('label: _("Show transcripts")')
@@ -5358,6 +5359,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (this.cleanupPreviewDialogToken)", preview_dialog_block)
         self.assertIn("let releaseDialog = () =>", preview_dialog_block)
         self.assertIn("if (closed) {\n        releaseDialog();", preview_dialog_block)
+        self.assertIn("let failToOpen = () =>", preview_dialog_block)
+        self.assertIn('this._dialogClose(dialog, "cleanup-preview");\n      releaseDialog();', preview_dialog_block)
         self.assertIn('payload.would_delete_paths.filter((path) => typeof path === "string" && path.trim() !== "")', source)
         self.assertIn("let hiddenPathCount = this._safePayloadCount(payload.would_delete_path_count) + this._safePayloadCount(payload.failed_path_count) + this._safePayloadCount(payload.skipped_active_path_count);", source)
         self.assertIn("_safePayloadCount: function(value)", source)
@@ -5656,6 +5659,18 @@ class AppletStaticTest(unittest.TestCase):
         fail_start = block.index("let failToOpen = () => {")
         open_failure = block.index('if (!this._dialogOpen(dialog, "clipboard-overwrite"))')
         self.assertLess(block.index("complete(false);", fail_start), open_failure)
+
+    def test_transcript_list_prompt_releases_token_when_open_cleanup_fails(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_confirmPlaintextTranscriptList: function(completionCallback)")
+        end = source.index("\n  _loadAllTranscriptsDocument:", start)
+        block = source[start:end]
+        self.assertIn("let failToOpen = () => {", block)
+        self.assertIn('this._dialogClose(dialog, "transcript-list");', block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);\n      complete(false);', block)
+        self.assertIn("failToOpen();", block)
+        open_failure = block.index('if (!this._dialogOpen(dialog, "transcript-list"))')
+        self.assertLess(block.index("complete(false);", block.index("let failToOpen")), open_failure)
 
     def test_text_insert_releases_token_on_sync_snapshot_failure(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

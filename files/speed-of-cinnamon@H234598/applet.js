@@ -8329,17 +8329,18 @@ MyApplet.prototype = {
         completionCallback(result === true);
       }
     };
+    let failToOpen = () => {
+      this._dialogClose(dialog, "transcript-list");
+      this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);
+      complete(false);
+    };
     if (!dialog || !this._dialogAddChild(dialog, this._newSafeLabel(_("List all transcripts?"), { x_expand: true }, "transcript-list"), "transcript-list") ||
       !this._dialogAddChild(dialog, this._newSafeLabel(
       _("This shows complete transcript contents in a plaintext window. Continue only if your screen and session are trusted."),
       { x_expand: true },
       "transcript-list"
     ), "transcript-list")) {
-      let closed = this._dialogClose(dialog, "transcript-list");
-      this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);
-      if (closed) {
-        complete(false);
-      }
+      failToOpen();
       return;
     }
     if (!this._dialogSetButtons(dialog, [
@@ -8373,20 +8374,12 @@ MyApplet.prototype = {
         }.bind(this),
       }
     ], "transcript-list")) {
-      let closed = this._dialogClose(dialog, "transcript-list");
-      this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);
-      if (closed) {
-        complete(false);
-      }
+      failToOpen();
       return;
     }
     if (!this._dialogOpen(dialog, "transcript-list")) {
-      let closed = this._dialogClose(dialog, "transcript-list");
-      this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);
+      failToOpen();
       this._notify(_("Speed of Cinnamon"), _("Transcript list confirmation could not be opened"), true);
-      if (closed) {
-        complete(false);
-      }
     }
   },
 
@@ -8627,6 +8620,11 @@ MyApplet.prototype = {
       return closed;
     };
     let dialog = this._newSafeDialog("cleanup-preview");
+    let failToOpen = () => {
+      this._dialogClose(dialog, "cleanup-preview");
+      releaseDialog();
+      this._notify(_("Speed of Cinnamon"), _("Cleanup preview: ") + String(this._cleanupCount(payload, true)), false);
+    };
     if (!dialog || !this._dialogAddChild(dialog, this._newSafeLabel(this._cleanupPreviewText(payload), { x_expand: true }, "cleanup-preview"), "cleanup-preview") ||
       !this._dialogSetButtons(dialog, [
       {
@@ -8637,13 +8635,11 @@ MyApplet.prototype = {
         }.bind(this),
       }
     ], "cleanup-preview")) {
-      closeDialog(dialog);
-      this._notify(_("Speed of Cinnamon"), _("Cleanup preview: ") + String(this._cleanupCount(payload, true)), false);
+      failToOpen();
       return;
     }
     if (!this._dialogOpen(dialog, "cleanup-preview")) {
-      closeDialog(dialog);
-      this._notify(_("Speed of Cinnamon"), _("Cleanup preview: ") + String(this._cleanupCount(payload, true)), false);
+      failToOpen();
     }
   },
 
