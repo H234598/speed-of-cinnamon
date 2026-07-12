@@ -1231,7 +1231,10 @@ MyApplet.prototype = {
       this._recordLifecycleError("dialog-state", new Error("Dialog orphan registry is unavailable"));
     }
     let dialogs = this._resourceRegistry && this._resourceRegistry.dialogs;
-    if (!Array.isArray(this._orphanedDialogs) && Array.isArray(dialogs)) {
+    let inTeardown = this.appletRemoved ||
+      this.lifecycleState === LIFECYCLE_REMOVING ||
+      this.lifecycleState === LIFECYCLE_REMOVED;
+    if ((!Array.isArray(this._orphanedDialogs) || inTeardown) && Array.isArray(dialogs)) {
       for (let dialog of dialogs) {
         if (!dialog) {
           invalidOrphanEntry = true;
