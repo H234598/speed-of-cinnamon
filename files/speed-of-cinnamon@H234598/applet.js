@@ -446,6 +446,7 @@ MyApplet.prototype = {
     this.doctorCommandToken = null;
     this.settingsWindowToken = null;
     this._cleanupCommandToken = null;
+    this._recordingCommandToken = null;
     this._externalApiEnvMonitorCancelSucceeded = false;
   },
 
@@ -2471,6 +2472,7 @@ MyApplet.prototype = {
     this.transcriptWindowToken = null;
     this.cleanupPreviewDialogToken = null;
     this._cleanupCommandToken = null;
+    this._recordingCommandToken = null;
     this.targetWindow = null;
     this.targetWindowXid = "";
     this.targetWindowXTitle = "";
@@ -3470,6 +3472,7 @@ MyApplet.prototype = {
     this.doctorCommandToken = null;
     this._doctorCommandRunning = false;
     this._cleanupCommandToken = null;
+    this._recordingCommandToken = null;
     this.isCommandRunning = false;
     this._runTeardownGuarded("teardown-processes", () => this._terminateAllProcesses());
     this._runTeardownGuarded("teardown-orphaned-processes", () => this._retryOrphanedProcesses());
@@ -4817,9 +4820,15 @@ MyApplet.prototype = {
     this.recordingStartedAtMs = 0;
     this.recordingMaxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
     this.cancelPendingWhileCommandRunning = false;
+    let recordingCommandToken = {};
+    this._recordingCommandToken = recordingCommandToken;
     this.isCommandRunning = true;
     this._setStatus("processing", _("Working..."), "");
     this._spawnJson(toggleArgs, (payload) => {
+      if (this._recordingCommandToken !== recordingCommandToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
+      this._recordingCommandToken = null;
       this.isCommandRunning = false;
       this._applyPayloadSafely(payload);
     });
@@ -4907,6 +4916,8 @@ MyApplet.prototype = {
       this._setStatusPreservingRecording("error", _("Could not prepare cancellation command: ") + safeError, this.lastTranscript);
       return;
     }
+    let recordingCommandToken = {};
+    this._recordingCommandToken = recordingCommandToken;
     this.isCommandRunning = true;
     this.autoTranscribeRecordingKey = "";
     this.cancelPendingWhileCommandRunning = false;
@@ -4915,6 +4926,10 @@ MyApplet.prototype = {
     this.autoRelistenManualStopRequested = true;
     this._setStatus("processing", _("Cancelling..."), this.lastTranscript);
     this._spawnJson(cancelArgs, (payload) => {
+      if (this._recordingCommandToken !== recordingCommandToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
+      this._recordingCommandToken = null;
       this.isCommandRunning = false;
       this._applyPayloadSafely(payload);
     });
@@ -9843,9 +9858,15 @@ MyApplet.prototype = {
     }
     this.autoRelistenPending = Boolean(relistenToken);
     this.autoRelistenPendingToken = relistenToken;
+    let recordingCommandToken = {};
+    this._recordingCommandToken = recordingCommandToken;
     this.isCommandRunning = true;
     this._setStatus("processing", _("Transcribing timed-out recording..."), this.lastTranscript);
     this._spawnJson(stopArgs, (nextPayload) => {
+      if (this._recordingCommandToken !== recordingCommandToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
+      this._recordingCommandToken = null;
       if (relistenToken && this.autoRelistenPendingToken !== relistenToken) {
         this.isCommandRunning = false;
         if (this.cancelPendingWhileCommandRunning) {
@@ -11898,12 +11919,18 @@ MyApplet.prototype = {
       this._setStatus("error", _("Could not prepare relisten command: ") + safeError, this.lastTranscript);
       return false;
     }
-    this.isCommandRunning = true;
     this.autoTranscribeRecordingKey = "";
     this.recordingStartedAtMs = 0;
     this.recordingMaxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
+    let recordingCommandToken = {};
+    this._recordingCommandToken = recordingCommandToken;
+    this.isCommandRunning = true;
     this._setStatus("processing", _("Starting next recording..."), this.lastTranscript);
     this._spawnJson(startArgs, (payload) => {
+      if (this._recordingCommandToken !== recordingCommandToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
+      this._recordingCommandToken = null;
       this.isCommandRunning = false;
       if (payload.error) {
         this.autoRelistenPending = false;

@@ -1604,6 +1604,32 @@ class AppletStaticTest(unittest.TestCase):
         self.assertLess(block.index("let toggleArgs;"), block.index("this.isCommandRunning = true;"))
         self.assertIn("this._spawnJson(toggleArgs,", block)
 
+    def test_recording_command_callbacks_ignore_stale_responses(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        self.assertIn("this._recordingCommandToken = null;", source)
+
+        recording_blocks = []
+        for method, next_method in (
+            ("_toggleRecording: function()", "\n  _restartApplet:"),
+            ("_cancelRecording: function(statusOverride)", "\n  _invalidateBackgroundCallbacksForRecording:"),
+            ("_maybeAutoTranscribeRecorded: function(payload, statusOverride)", "\n  _clearStatusTimer:"),
+            ("_restartRelistenRecording: function()", "\n  _preparedTranscriptText:"),
+        ):
+            start = source.index(method)
+            end = source.index(next_method, start)
+            recording_blocks.append(source[start:end])
+
+        for block in recording_blocks:
+            self.assertIn("let recordingCommandToken = {};", block)
+            self.assertIn("this._recordingCommandToken = recordingCommandToken;", block)
+            self.assertIn("this._recordingCommandToken !== recordingCommandToken", block)
+            self.assertIn("!this._lifecycleAllowsWork()", block)
+            self.assertIn("this._recordingCommandToken = null;", block)
+            self.assertLess(
+                block.index("if (this._recordingCommandToken !== recordingCommandToken"),
+                block.index("this.isCommandRunning = false;")
+            )
+
     def test_auto_recording_commands_validate_settings_before_busy_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
