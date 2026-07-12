@@ -5436,6 +5436,10 @@ MyApplet.prototype = {
     this.modelMenuRefreshToken = null;
     this.textModelMenuRefreshToken = null;
     this.alarmMenuRefreshToken = null;
+    let alarmMenuRefreshCleanupSucceeded = this._terminateProcessesByGroup("alarm-menu-refresh") !== false;
+    if (!alarmMenuRefreshCleanupSucceeded) {
+      this._setStatusPreservingRecording("error", _("Alarm menu refresh could not be stopped"), this.lastTranscript);
+    }
     this.alarmActionToken = null;
     let alarmActionCleanupSucceeded = this._terminateProcessesByGroup("alarm-action") !== false;
     if (!alarmActionCleanupSucceeded) {
@@ -5474,7 +5478,7 @@ MyApplet.prototype = {
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
     this.transcriptListPromptToken = null;
-    return alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;
+    return alarmMenuRefreshCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;
   },
 
   _runDoctor: function(startupCheck) {
