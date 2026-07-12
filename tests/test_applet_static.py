@@ -2867,6 +2867,16 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.ollamaModelFlowToken !== flowToken", install_block)
         self.assertIn("!this._lifecycleAllowsWork()", install_block)
 
+    def test_stale_ollama_install_callback_cannot_clear_new_command_state(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_installOllamaTextModel: function(model)")
+        end = source.index("\n  _refreshHistory:", start)
+        block = source[start:end]
+        guard = block.index("if (!flowToken || this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork())")
+        reset = block.index("this.isCommandRunning = false;", guard)
+        self.assertLess(guard, reset)
+        self.assertLess(reset, block.index("if (payload.error)"))
+
     def test_ollama_model_flow_clears_terminal_and_install_failure_states(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
@@ -2898,6 +2908,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.ollamaModelInstallRunning = true;", install_block)
         self.assertIn("this.ollamaModelInstallRunning = false;", install_block)
         self.assertIn("this._clearOllamaModelFlow(flowToken);", install_block)
+        callback_guard = install_block.index("if (!flowToken || this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork())")
+        callback_reset = install_block.index("this.isCommandRunning = false;", callback_guard)
+        self.assertLess(callback_guard, callback_reset)
 
         watch_start = source.index("_scheduleOllamaInstallWatchPoll: function(watchToken)")
         watch_end = source.index("\n  _scheduleSetupCheck:", watch_start)

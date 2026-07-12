@@ -6776,11 +6776,11 @@ MyApplet.prototype = {
     this.ollamaModelInstallRunning = true;
     this._setStatus("processing", _("Installing Ollama model: ") + model, this.lastTranscript);
     this._spawnJson(installArgs, (payload) => {
-      this.isCommandRunning = false;
-      this.ollamaModelInstallRunning = false;
       if (!flowToken || this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
         return;
       }
+      this.isCommandRunning = false;
+      this.ollamaModelInstallRunning = false;
       if (payload.error) {
         let safeError = this._sanitizeErrorMessage(payload.error);
         this._clearOllamaModelFlow(flowToken);
