@@ -1385,7 +1385,8 @@ MyApplet.prototype = {
   _destroyTrackedDialogs: function() {
     try {
       if (!this._resourceRegistry || !Array.isArray(this._resourceRegistry.dialogs)) {
-        return;
+        this._recordLifecycleError("dialog-state", new Error("Dialog registry is unavailable"));
+        return false;
       }
       let dialogs = this._resourceRegistry.dialogs;
       for (let index = dialogs.length - 1; index >= 0; index--) {
@@ -1410,8 +1411,10 @@ MyApplet.prototype = {
           this._trackOrphanedDialog(dialog, "teardown", closeSucceeded, destroySucceeded);
         }
       }
+      return true;
     } catch (error) {
       this._recordLifecycleError("teardown-dialogs", error);
+      return false;
     }
   },
 

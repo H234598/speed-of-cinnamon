@@ -2082,6 +2082,15 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("return false;", block)
         self.assertIn("let cancellables = this._resourceRegistry.cancellables;", block)
 
+    def test_dialog_teardown_fails_closed_when_registry_is_unavailable(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_destroyTrackedDialogs: function()")
+        end = source.index("\n  _destroyMenus:", start)
+        block = source[start:end]
+        self.assertIn('this._recordLifecycleError("dialog-state", new Error("Dialog registry is unavailable"));', block)
+        self.assertIn("return false;", block)
+        self.assertIn("let dialogs = this._resourceRegistry.dialogs;", block)
+
     def test_process_and_cancellable_unregistration_contains_delete_failures(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_unregisterCancellable: function(token)")
