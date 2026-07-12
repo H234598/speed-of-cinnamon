@@ -1930,7 +1930,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_retryOrphanedProcesses: function()", orphan_block)
         self.assertIn("this._terminateProcess(entry.process)", orphan_block)
         self.assertIn("this._unregisterProcess(entry.registryToken)", orphan_block)
-        self.assertIn("this._orphanedProcesses.splice(index, 1);", orphan_block)
+        self.assertIn("let removed = this._orphanedProcesses.splice(index, 1);", orphan_block)
+        self.assertIn("removed[0] !== entry", orphan_block)
+        self.assertIn('throw new Error("Process orphan entry could not be removed");', orphan_block)
+        self.assertIn("this._untrackOrphanedProcess(entry.process)", orphan_block)
 
         bounded_start = source.index("_runBoundedSubprocess: function(args, env, options, callback)")
         bounded_end = source.index("\n  _spawnJsonWithBackendEnvironment:", bounded_start)
