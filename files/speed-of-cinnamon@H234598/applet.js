@@ -3573,6 +3573,7 @@ MyApplet.prototype = {
     let hadInsertToken = Boolean(this.textInsertToken);
     let pendingInsertFingerprint = String(this.autoInsertPendingFingerprint || "");
     let fingerprintCleanupSucceeded = true;
+    let pasteTimerCleanupSucceeded = this._clearPasteTimer() !== false;
     if (hadInsertToken) {
       this.textInsertToken = null;
     }
@@ -3582,7 +3583,6 @@ MyApplet.prototype = {
         this.autoInsertPendingFingerprint = "";
       }
     }
-    this._clearPasteTimer();
     let cancellationSucceeded = true;
     if (this._terminateProcessesByGroup("keyboard") === false) {
       cancellationSucceeded = false;
@@ -3594,6 +3594,9 @@ MyApplet.prototype = {
       cancellationSucceeded = false;
     }
     if (!fingerprintCleanupSucceeded) {
+      cancellationSucceeded = false;
+    }
+    if (!pasteTimerCleanupSucceeded) {
       cancellationSucceeded = false;
     }
     this.textInsertCancellationFailed = !cancellationSucceeded;
@@ -11968,7 +11971,20 @@ MyApplet.prototype = {
       return false;
     }
     if (this.textInsertCancellationFailed) {
-      let cancellationStillPending = ["keyboard", "clipboard", "x11"].some((group) => this._hasTrackedProcessGroup(group));
+      let timerCleanupStillPending = false;
+      try {
+        if (Array.isArray(this._orphanedTimers) && this._orphanedTimers.length > 0) {
+          let orphanCleanupSucceeded = this._retryOrphanedTimers();
+          timerCleanupStillPending = !orphanCleanupSucceeded || this._orphanedTimers.length > 0;
+        }
+        let timers = this._resourceRegistry && this._resourceRegistry.timers;
+        timerCleanupStillPending = timerCleanupStillPending || Boolean(this.pasteTimer) || Boolean(timers && timers.paste);
+      } catch (error) {
+        this._recordLifecycleError("timer-state", error);
+        timerCleanupStillPending = true;
+      }
+      let cancellationStillPending = timerCleanupStillPending ||
+        ["keyboard", "clipboard", "x11"].some((group) => this._hasTrackedProcessGroup(group));
       if (cancellationStillPending) {
         this._setStatusPreservingRecording("error", _("Previous text insertion is still stopping; try again shortly"), this.lastTranscript);
         return false;
