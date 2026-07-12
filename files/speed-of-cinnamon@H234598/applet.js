@@ -1417,6 +1417,7 @@ MyApplet.prototype = {
   },
 
   _destroyTrackedDialogs: function() {
+    let success = true;
     try {
       if (!this._resourceRegistry || !Array.isArray(this._resourceRegistry.dialogs)) {
         this._recordLifecycleError("dialog-state", new Error("Dialog registry is unavailable"));
@@ -1432,7 +1433,10 @@ MyApplet.prototype = {
             let untracked = this._untrackDialog(dialog);
             let orphanUntracked = this._untrackOrphanedDialog(dialog);
             if (!untracked || !orphanUntracked) {
-              this._trackOrphanedDialog(dialog, "teardown", true, true);
+              if (!this._trackOrphanedDialog(dialog, "teardown", true, true)) {
+                success = false;
+              }
+              success = false;
             }
           } else {
             let previousLength = dialogs.length;
@@ -1442,10 +1446,13 @@ MyApplet.prototype = {
             }
           }
         } else if (dialog) {
-          this._trackOrphanedDialog(dialog, "teardown", closeSucceeded, destroySucceeded);
+          if (!this._trackOrphanedDialog(dialog, "teardown", closeSucceeded, destroySucceeded)) {
+            success = false;
+          }
+          success = false;
         }
       }
-      return true;
+      return success;
     } catch (error) {
       this._recordLifecycleError("teardown-dialogs", error);
       return false;

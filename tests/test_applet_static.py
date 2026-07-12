@@ -2240,6 +2240,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("return false;", block)
         self.assertIn("let dialogs = this._resourceRegistry.dialogs;", block)
 
+    def test_dialog_teardown_reports_partial_cleanup_failures(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_destroyTrackedDialogs: function()")
+        end = source.index("\n  _destroyMenus:", start)
+        block = source[start:end]
+        self.assertIn("let success = true;", block)
+        self.assertIn("success = false;", block)
+        self.assertIn("if (!this._trackOrphanedDialog(dialog, \"teardown\", closeSucceeded, destroySucceeded))", block)
+        self.assertIn("return success;", block)
+        self.assertIn("return false;", block)
+
     def test_process_and_cancellable_unregistration_contains_delete_failures(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_unregisterCancellable: function(token)")
@@ -2935,8 +2946,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (closeSucceeded && destroySucceeded)", block)
         self.assertIn("this._untrackDialog(dialog);", block)
         self.assertIn("dialogs.length !== previousLength - 1", block)
-        self.assertIn('this._trackOrphanedDialog(dialog, "teardown", true, true);', block)
-        self.assertIn('this._trackOrphanedDialog(dialog, "teardown", closeSucceeded, destroySucceeded);', block)
+        self.assertIn('if (!this._trackOrphanedDialog(dialog, "teardown", true, true))', block)
+        self.assertIn('if (!this._trackOrphanedDialog(dialog, "teardown", closeSucceeded, destroySucceeded))', block)
         self.assertLess(block.index("try {"), block.index("Array.isArray(this._resourceRegistry.dialogs)"))
 
     def test_applet_exposes_notification_options_submenu(self) -> None:
