@@ -1639,6 +1639,7 @@ MyApplet.prototype = {
     this.recordingStartedAtMs = 0;
     this.recordingMaxSeconds = 0;
     this.transcriptWindowToken = null;
+    this.cleanupPreviewDialogToken = null;
     this.targetWindow = null;
     this.targetWindowXid = "";
     this.targetWindowXTitle = "";
@@ -2461,6 +2462,7 @@ MyApplet.prototype = {
     this.autoPastePromptToken = null;
     this.transcriptListPromptToken = null;
     this.transcriptWindowToken = null;
+    this.cleanupPreviewDialogToken = null;
     this.textInsertToken = null;
     this.settingsWindowToken = null;
     this.alarmActionToken = null;
@@ -7243,6 +7245,23 @@ MyApplet.prototype = {
   },
 
   _showCleanupPreviewDialog: function(payload) {
+    if (this.cleanupPreviewDialogToken) {
+      return;
+    }
+    let dialogToken = {};
+    this.cleanupPreviewDialogToken = dialogToken;
+    let releaseDialog = () => {
+      if (this.cleanupPreviewDialogToken === dialogToken) {
+        this.cleanupPreviewDialogToken = null;
+      }
+    };
+    let closeDialog = (dialog) => {
+      let closed = this._dialogClose(dialog, "cleanup-preview");
+      if (closed) {
+        releaseDialog();
+      }
+      return closed;
+    };
     let dialog = this._newSafeDialog("cleanup-preview");
     if (!dialog || !this._dialogAddChild(dialog, this._newSafeLabel(this._cleanupPreviewText(payload), { x_expand: true }, "cleanup-preview"), "cleanup-preview") ||
       !this._dialogSetButtons(dialog, [
@@ -7250,16 +7269,16 @@ MyApplet.prototype = {
         label: _("Close"),
         key: Clutter.KEY_Escape,
         action: function() {
-          this._dialogClose(dialog, "cleanup-preview");
+          closeDialog(dialog);
         }.bind(this),
       }
     ], "cleanup-preview")) {
-      this._dialogClose(dialog, "cleanup-preview");
+      closeDialog(dialog);
       this._notify(_("Speed of Cinnamon"), _("Cleanup preview: ") + String(this._cleanupCount(payload, true)), false);
       return;
     }
     if (!this._dialogOpen(dialog, "cleanup-preview")) {
-      this._dialogClose(dialog, "cleanup-preview");
+      closeDialog(dialog);
       this._notify(_("Speed of Cinnamon"), _("Cleanup preview: ") + String(this._cleanupCount(payload, true)), false);
     }
   },
@@ -7333,7 +7352,7 @@ MyApplet.prototype = {
   },
 
   _previewCleanup: function() {
-    if (this.isCommandRunning || this._hasActiveRecordingState()) {
+    if (this.isCommandRunning || this._hasActiveRecordingState() || this.cleanupPreviewDialogToken) {
       return;
     }
     let cleanupPreviewArgs;
