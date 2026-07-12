@@ -2221,7 +2221,8 @@ class AppletStaticTest(unittest.TestCase):
         tooltip_start = source.index("_destroyAppletTooltip: function()")
         tooltip_end = source.index("\n  _trackMonitor:", tooltip_start)
         tooltip_block = source[tooltip_start:tooltip_end]
-        self.assertIn("!tooltip || this._runTeardownOperation", tooltip_block)
+        self.assertIn("this._runTeardownOperation(\"teardown-tooltip\"", tooltip_block)
+        self.assertIn("this._runTeardownOperation(\"teardown-orphaned-tooltip\"", tooltip_block)
 
     def test_menu_open_state_tolerates_missing_context_menu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2235,9 +2236,11 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_destroyAppletTooltip: function()")
         end = source.index("\n  _trackMonitor:", start)
         block = source[start:end]
-        self.assertIn("let destroyed = !tooltip || this._runTeardownOperation", block)
+        self.assertIn("let destroyed = this._runTeardownOperation(\"teardown-tooltip\"", block)
         self.assertIn("if (destroyed)", block)
         self.assertIn("this._applet_tooltip = null;", block)
+        self.assertIn("this._orphanedTooltip = true;", block)
+        self.assertIn('this._runTeardownGuarded("teardown-orphaned-tooltip", () => this._retryOrphanedTooltip());', source)
 
     def test_hotkey_mutations_are_not_suppressed_by_disabled_error_groups(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2962,6 +2965,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("orphaned_dialogs: orphanedResourceCounts.dialogs", source)
         self.assertIn("orphaned_monitors: orphanedResourceCounts.monitors", source)
         self.assertIn("orphaned_cancellables: orphanedResourceCounts.cancellables", source)
+        self.assertIn("orphaned_tooltip: orphanedTooltip ? 1 : 0", source)
         self.assertIn("orphaned_total: orphanedTotal", source)
         self.assertIn("let registryValue = (name, fallback) =>", source)
         self.assertIn('let processes = registryValue("processes", {});', source)

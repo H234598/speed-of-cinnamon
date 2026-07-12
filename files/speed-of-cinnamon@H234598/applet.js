@@ -433,6 +433,7 @@ MyApplet.prototype = {
     this._orphanedDialogs = [];
     this._orphanedMonitors = [];
     this._orphanedCancellables = [];
+    this._orphanedTooltip = false;
     this._hotkeyDefinitions = {};
     this._orphanedHotkeyStates = {};
     this._teardownComplete = false;
@@ -1337,10 +1338,35 @@ MyApplet.prototype = {
 
   _destroyAppletTooltip: function() {
     let tooltip = this._applet_tooltip;
-    let destroyed = !tooltip || this._runTeardownOperation("teardown-tooltip", tooltip, "destroy");
+    if (!tooltip) {
+      this._orphanedTooltip = false;
+      return true;
+    }
+    let destroyed = this._runTeardownOperation("teardown-tooltip", tooltip, "destroy");
     if (destroyed) {
       this._applet_tooltip = null;
+      this._orphanedTooltip = false;
+      return true;
     }
+    this._orphanedTooltip = true;
+    return false;
+  },
+
+  _retryOrphanedTooltip: function() {
+    if (!this._orphanedTooltip) {
+      return true;
+    }
+    if (!this._applet_tooltip) {
+      this._orphanedTooltip = false;
+      return true;
+    }
+    let destroyed = this._runTeardownOperation("teardown-orphaned-tooltip", this._applet_tooltip, "destroy");
+    if (!destroyed) {
+      return false;
+    }
+    this._applet_tooltip = null;
+    this._orphanedTooltip = false;
+    return true;
   },
 
   _trackMonitor: function(monitor) {
@@ -3350,6 +3376,7 @@ MyApplet.prototype = {
     }
     this._finishTeardown();
     this._destroyAppletTooltip();
+    this._runTeardownGuarded("teardown-orphaned-tooltip", () => this._retryOrphanedTooltip());
   },
 
   _baseArgs: function(command) {
@@ -8529,13 +8556,20 @@ MyApplet.prototype = {
       monitors: countArrayEntries(orphanedResourceValues.monitors),
       cancellables: countArrayEntries(orphanedResourceValues.cancellables),
     };
+    let orphanedTooltip = false;
+    try {
+      orphanedTooltip = this._orphanedTooltip === true;
+    } catch (error) {
+      recordDiagnosticError(error);
+    }
     let orphanedTotal = orphanedResourceCounts.signals +
       orphanedResourceCounts.hotkeys +
       orphanedResourceCounts.processes +
       orphanedResourceCounts.timers +
       orphanedResourceCounts.dialogs +
       orphanedResourceCounts.monitors +
-      orphanedResourceCounts.cancellables;
+      orphanedResourceCounts.cancellables +
+      (orphanedTooltip ? 1 : 0);
     return {
       state: String(this.lifecycleState || LIFECYCLE_INITIALIZING),
       error_counts: errorCounts,
@@ -8555,6 +8589,7 @@ MyApplet.prototype = {
         orphaned_dialogs: orphanedResourceCounts.dialogs,
         orphaned_monitors: orphanedResourceCounts.monitors,
         orphaned_cancellables: orphanedResourceCounts.cancellables,
+        orphaned_tooltip: orphanedTooltip ? 1 : 0,
         orphaned_total: orphanedTotal,
       },
       process_groups: processGroups,
