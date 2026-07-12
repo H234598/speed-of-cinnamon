@@ -181,6 +181,14 @@ class PathsTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "temporary directory is not safe"):
                     paths._private_runtime_temp_root()
 
+    def test_private_temp_root_file_collision_is_controlled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            collision = Path(tmp) / f"{paths.APP_ID}-{os.getuid()}"
+            collision.write_text("not a directory", encoding="utf-8")
+            with mock.patch("speed_of_cinnamon.paths.tempfile.gettempdir", return_value=tmp):
+                with self.assertRaisesRegex(RuntimeError, "temporary directory is not safe"):
+                    paths._private_runtime_temp_root()
+
     def test_xdg_paths_accept_absolute_non_symlink_roots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):

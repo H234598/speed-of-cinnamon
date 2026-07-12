@@ -89,7 +89,10 @@ def _private_runtime_temp_root() -> Path:
     private_root = temp_root / f"{APP_ID}-{uid}"
     if private_root.is_symlink():
         raise RuntimeError("temporary directory must not be a symlink")
-    private_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        private_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError("temporary directory is not safe") from exc
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
         raise RuntimeError("secure temporary directory open is not supported on this platform")
