@@ -4251,6 +4251,12 @@ class AppletStaticTest(unittest.TestCase):
         restart_start = source.index("_restartApplet: function()")
         restart_end = source.index("\n  _refreshStatus:", restart_start)
         restart_block = source[restart_start:restart_end]
+        self.assertIn('if (this._terminateProcessesByGroup("keyboard") === false)', restart_block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Could not stop keyboard insertion before restarting applet")', restart_block)
+        self.assertLess(
+            restart_block.index('if (this._terminateProcessesByGroup("keyboard") === false)'),
+            restart_block.index('Extension.reloadExtension(UUID, Extension.Type.APPLET)'),
+        )
         self.assertIn('this._setStatusPreservingRecording("processing", _("Restarting applet..."), this.lastTranscript);', restart_block)
         self.assertIn('this._setStatusPreservingRecording("error", _("Could not restart applet"), this.lastTranscript);', restart_block)
 

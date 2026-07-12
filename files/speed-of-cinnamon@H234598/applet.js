@@ -5019,7 +5019,10 @@ MyApplet.prototype = {
   },
 
   _restartApplet: function() {
-    this._terminateProcessesByGroup("keyboard");
+    if (this._terminateProcessesByGroup("keyboard") === false) {
+      this._setStatusPreservingRecording("error", _("Could not stop keyboard insertion before restarting applet"), this.lastTranscript);
+      return;
+    }
     this._setStatusPreservingRecording("processing", _("Restarting applet..."), this.lastTranscript);
     try {
       Extension.reloadExtension(UUID, Extension.Type.APPLET);
