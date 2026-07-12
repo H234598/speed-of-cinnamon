@@ -2288,6 +2288,7 @@ MyApplet.prototype = {
   },
 
   _terminateAllProcesses: function() {
+    let allSucceeded = true;
     try {
       if (!this._resourceRegistry || !this._resourceRegistry.processes) {
         this._recordLifecycleError("process-state", new Error("Process registry is unavailable"));
@@ -2313,23 +2314,30 @@ MyApplet.prototype = {
             }
             cleanupSucceeded = true;
           } catch (error) {
+            allSucceeded = false;
             this._recordLifecycleError("process-cancel", error);
             if (entry && entry.process) {
-              this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, false);
+              if (!this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, false)) {
+                allSucceeded = false;
+              }
             }
           }
           if (cleanupSucceeded) {
-          if (!this._unregisterProcess(token)) {
-            this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, true);
-          } else {
-            if (!this._untrackOrphanedProcess(entry.process)) {
-              this._recordLifecycleError("process-cancel", new Error("Process orphan cleanup could not be completed"));
+            if (!this._unregisterProcess(token)) {
+              allSucceeded = false;
+              if (!this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, true)) {
+                allSucceeded = false;
+              }
+            } else {
+              if (!this._untrackOrphanedProcess(entry.process)) {
+                allSucceeded = false;
+                this._recordLifecycleError("process-cancel", new Error("Process orphan cleanup could not be completed"));
+              }
             }
-          }
           }
         }
       }
-      return true;
+      return allSucceeded;
     } catch (error) {
       this._recordLifecycleError("process-cancel", error);
       return false;
@@ -2415,6 +2423,7 @@ MyApplet.prototype = {
   },
 
   _cancelAllCancellables: function() {
+    let allSucceeded = true;
     try {
       if (!this._resourceRegistry || !this._resourceRegistry.cancellables) {
         this._recordLifecycleError("cancellable-state", new Error("Cancellable registry is unavailable"));
@@ -2437,21 +2446,28 @@ MyApplet.prototype = {
           }
           cleanupSucceeded = true;
         } catch (error) {
+          allSucceeded = false;
           this._recordLifecycleError("teardown-cancellable", error);
         }
         if (cleanupSucceeded) {
           if (!this._unregisterCancellable(token)) {
-            this._trackOrphanedCancellable(token, true);
+            allSucceeded = false;
+            if (!this._trackOrphanedCancellable(token, true)) {
+              allSucceeded = false;
+            }
           } else {
             if (!this._untrackOrphanedCancellable(token)) {
+              allSucceeded = false;
               this._recordLifecycleError("teardown-cancellable", new Error("Cancellable orphan cleanup could not be completed"));
             }
           }
         } else {
-          this._trackOrphanedCancellable(token, false);
+          if (!this._trackOrphanedCancellable(token, false)) {
+            allSucceeded = false;
+          }
         }
       }
-      return true;
+      return allSucceeded;
     } catch (error) {
       this._recordLifecycleError("teardown-cancellable", error);
       return false;

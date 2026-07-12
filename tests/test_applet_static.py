@@ -2192,6 +2192,22 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("return false;", block)
         self.assertIn("let processes = this._resourceRegistry.processes;", block)
 
+    def test_process_and_cancellable_teardown_report_partial_failures(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_terminateAllProcesses: function()")
+        end = source.index("\n  _terminateProcessesByGroup:", start)
+        process_block = source[start:end]
+        self.assertIn("let allSucceeded = true;", process_block)
+        self.assertIn("allSucceeded = false;", process_block)
+        self.assertIn("return allSucceeded;", process_block)
+
+        start = source.index("_cancelAllCancellables: function()")
+        end = source.index("\n  _trackTimer:", start)
+        cancellable_block = source[start:end]
+        self.assertIn("let allSucceeded = true;", cancellable_block)
+        self.assertIn("allSucceeded = false;", cancellable_block)
+        self.assertIn("return allSucceeded;", cancellable_block)
+
     def test_cancellable_teardown_fails_closed_when_registry_is_unavailable(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_cancelAllCancellables: function()")
@@ -2261,8 +2277,8 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_cancelAllCancellables: function()")
         end = source.index("\n  _trackTimer:", start)
         block = source[start:end]
-        self.assertIn("this._trackOrphanedCancellable(token, true);", block)
-        self.assertIn("this._trackOrphanedCancellable(token, false);", block)
+        self.assertIn("if (!this._trackOrphanedCancellable(token, true))", block)
+        self.assertIn("if (!this._trackOrphanedCancellable(token, false))", block)
         self.assertIn("if (!this._untrackOrphanedCancellable(token))", block)
         self.assertIn('this._runTeardownGuarded("teardown-orphaned-cancellables", () => this._retryOrphanedCancellables());', source)
 
@@ -4130,7 +4146,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let cleanupSucceeded = false;", all_block)
         self.assertIn("if (cleanupSucceeded) {", all_block)
         self.assertIn("if (!this._unregisterProcess(token))", all_block)
-        self.assertIn("this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, true);", all_block)
+        self.assertIn("if (!this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, true))", all_block)
         self.assertIn('if (result === false) {\n                throw new Error("Process cancellation failed");', all_block)
 
     def test_bounded_subprocess_retries_registry_cleanup_after_callback(self) -> None:
