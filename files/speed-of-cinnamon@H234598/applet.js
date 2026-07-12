@@ -5927,7 +5927,8 @@ MyApplet.prototype = {
       if (mkdirResult !== 0) {
         throw new Error("External API config directory could not be created");
       }
-      if (!GLib.file_test(path, GLib.FileTest.EXISTS)) {
+      let info = this._externalApiEnvFileInfo(path, true);
+      if (!info) {
         this._writeExternalApiEnvFileContents(path, this._externalApiEnvContent());
       } else {
         this._migrateExternalApiEnvFile(path);
