@@ -695,15 +695,15 @@ MyApplet.prototype = {
         return 0;
       }
       signalGroup = "signal-" + String(group || signal || "callback");
+      if (!this._resourceRegistry || !Array.isArray(this._resourceRegistry.signals)) {
+        throw new Error("Signal registry is unavailable");
+      }
       let connectionId = 0;
       connectionId = target.connect(signal, this._guardStateCallback(signalGroup, callback, undefined));
-      if (this._resourceRegistry && connectionId) {
+      if (connectionId) {
         let signalEntry = { target: target, id: connectionId };
         let registryWriteAttempted = false;
         try {
-          if (!Array.isArray(this._resourceRegistry.signals)) {
-            throw new Error("Signal registry is unavailable");
-          }
           registryWriteAttempted = true;
           this._resourceRegistry.signals.push(signalEntry);
           if (this._resourceRegistry.signals.indexOf(signalEntry) < 0) {

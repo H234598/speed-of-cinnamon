@@ -1884,7 +1884,8 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_connectSafe: function(target, signal, callback, group)")
         end = source.index("\n  _disconnectAllSignals:", start)
         block = source[start:end]
-        self.assertIn("if (!Array.isArray(this._resourceRegistry.signals))", block)
+        self.assertIn("if (!this._resourceRegistry || !Array.isArray(this._resourceRegistry.signals))", block)
+        self.assertIn('throw new Error("Signal registry is unavailable");', block)
         self.assertIn("let signalEntry = { target: target, id: connectionId };", block)
         self.assertIn("this._resourceRegistry.signals.indexOf(signalEntry)", block)
         self.assertIn("signals.pop();", block)
