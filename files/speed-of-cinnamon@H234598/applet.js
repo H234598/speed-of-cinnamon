@@ -9395,7 +9395,12 @@ MyApplet.prototype = {
               complete("unknown");
               return;
             }
-            fingerprints.push(this._clipboardPayloadFingerprintFromText(String(payload), targetName));
+            let fingerprint = this._clipboardPayloadFingerprintFromText(String(payload), targetName);
+            if (fingerprint === "unknown") {
+              complete("unknown");
+              return;
+            }
+            fingerprints.push(fingerprint);
             readNext(index + 1);
           } catch (error) {
             fail(error);
@@ -9415,9 +9420,13 @@ MyApplet.prototype = {
   _clipboardPayloadFingerprintFromText: function(payload, targetLabel) {
     let data = String(payload || "");
     try {
-      return String(targetLabel || "") + ":sha256:" + String(GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, data, -1));
+      let digest = GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, data, -1);
+      if (typeof digest !== "string" || digest.trim() === "") {
+        return "unknown";
+      }
+      return String(targetLabel || "") + ":sha256:" + digest;
     } catch (err) {
-      return String(targetLabel || "") + ":unavailable";
+      return "unknown";
     }
   },
 

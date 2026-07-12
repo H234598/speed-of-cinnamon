@@ -4485,13 +4485,16 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("sortedTargets = nonTextTargets.slice().sort().slice(0, CLIPBOARD_MAX_TARGETS);", source)
         self.assertIn("let readNext = (index) => {", source)
         self.assertIn('complete(fingerprints.join("|"));', source)
+        self.assertIn('if (fingerprint === "unknown") {\n              complete("unknown");', source)
         self.assertNotIn("let sampleTarget = String(nonTextTargets[0]);", source)
         self.assertIn('let data = String(payload || "");', source)
+        self.assertIn('if (typeof digest !== "string" || digest.trim() === "") {\n        return "unknown";', source)
         self.assertIn("GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, data, -1)", source)
         self.assertIn(
-            'return String(targetLabel || "") + ":sha256:" + String(GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, data, -1));',
+            'return String(targetLabel || "") + ":sha256:" + digest;',
             source,
         )
+        self.assertNotIn(':unavailable";', source)
         self.assertNotIn("step = Math.max(1", source)
         self.assertNotIn("rollingHash = ((rollingHash * 31) + data[i]) >>> 0;", source)
 
