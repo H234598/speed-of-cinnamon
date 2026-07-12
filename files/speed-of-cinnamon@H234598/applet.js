@@ -5443,6 +5443,10 @@ MyApplet.prototype = {
       this._setStatusPreservingRecording("error", _("Voice model list refresh could not be stopped"), this.lastTranscript);
     }
     this.textModelMenuRefreshToken = null;
+    let textModelRefreshCleanupSucceeded = this._terminateProcessesByGroup("text-model-refresh") !== false;
+    if (!textModelRefreshCleanupSucceeded) {
+      this._setStatusPreservingRecording("error", _("Text model list refresh could not be stopped"), this.lastTranscript);
+    }
     this.alarmMenuRefreshToken = null;
     let alarmMenuRefreshCleanupSucceeded = this._terminateProcessesByGroup("alarm-menu-refresh") !== false;
     if (!alarmMenuRefreshCleanupSucceeded) {
@@ -5486,7 +5490,7 @@ MyApplet.prototype = {
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
     this.transcriptListPromptToken = null;
-    return inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && alarmMenuRefreshCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;
+    return inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && textModelRefreshCleanupSucceeded && alarmMenuRefreshCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;
   },
 
   _runDoctor: function(startupCheck) {
