@@ -1325,9 +1325,10 @@ MyApplet.prototype = {
     let processes = {};
     let allSucceeded = true;
     try {
-      processes = this._resourceRegistry && this._resourceRegistry.processes
-        ? this._resourceRegistry.processes
-        : {};
+      if (!this._resourceRegistry || !this._resourceRegistry.processes) {
+        throw new Error("Process registry is unavailable");
+      }
+      processes = this._resourceRegistry.processes;
       for (let token in processes) {
         if (!Object.prototype.hasOwnProperty.call(processes, token)) {
           continue;
@@ -1742,7 +1743,9 @@ MyApplet.prototype = {
 
     this.toggleItem = new PopupMenu.PopupIconMenuItem(_("Start dictation"), "audio-input-microphone-symbolic", St.IconType.SYMBOLIC);
     this._connectSafe(this.toggleItem, "activate", () => {
-      this._rememberFocusedWindow(true);
+      if (!this._hasActiveRecordingState() && !this.isCommandRunning && !this._rememberFocusedWindow(true)) {
+        return;
+      }
       this._toggleRecording();
     });
     this.menu.addMenuItem(this.toggleItem);
@@ -2294,15 +2297,15 @@ MyApplet.prototype = {
   _registerHotkeys: function() {
     this._runStateGuarded("hotkeys", () => {
       this._registerHotkey(HOTKEY_ID, this.toggleKeybinding, () => {
-        this._rememberFocusedWindow();
+        if (!this._hasActiveRecordingState() && !this.isCommandRunning && !this._rememberFocusedWindow()) {
+          return;
+        }
         this._toggleRecording();
       });
       this._registerHotkey(PRIMARY_HOTKEY_ID, this.primaryLanguageKeybinding, () => {
-        this._rememberFocusedWindow();
         this._startWithLanguage(this._primaryLanguage());
       });
       this._registerHotkey(SECONDARY_HOTKEY_ID, this.secondaryLanguageKeybinding, () => {
-        this._rememberFocusedWindow();
         this._startWithLanguage(this._secondaryLanguage());
       });
       this._registerHotkey(CANCEL_HOTKEY_ID, this.cancelKeybinding, () => {
@@ -3627,7 +3630,9 @@ MyApplet.prototype = {
 
   _startWithLanguage: function(language, preserveTargetOnFailure) {
     if (!this._hasActiveRecordingState()) {
-      this._rememberFocusedWindow(Boolean(preserveTargetOnFailure));
+      if (!this._rememberFocusedWindow(Boolean(preserveTargetOnFailure))) {
+        return;
+      }
       this.activeLanguage = this._normalizeLanguage(language, this._primaryLanguage());
       this.activeLanguageExplicit = true;
       this._updatePanel();
@@ -8748,9 +8753,19 @@ MyApplet.prototype = {
   _rememberFocusedWindow: function(preserveOnFailure) {
     this.targetWindowGeneration = Number(this.targetWindowGeneration || 0) + 1;
     let targetGeneration = this.targetWindowGeneration;
-    this._terminateProcessesByGroup("keyboard", true);
-    this._terminateProcessesByGroup("x11", true);
-    this._terminateProcessesByGroup("clipboard", true);
+    let processCleanupSucceeded = true;
+    for (let group of ["keyboard", "x11", "clipboard"]) {
+      if (this._terminateProcessesByGroup(group, true) === false) {
+        processCleanupSucceeded = false;
+      }
+    }
+    if (!processCleanupSucceeded) {
+      this.textInsertCancellationFailed = true;
+      this.targetWindow = null;
+      this._clearTargetWindowXid();
+      this._setStatusPreservingRecording("error", _("Previous text insertion could not be stopped"), this.lastTranscript);
+      return false;
+    }
     let window = global.display ? global.display.focus_window : null;
     if (this._isUsableTargetWindow(window)) {
       this.targetWindow = window;

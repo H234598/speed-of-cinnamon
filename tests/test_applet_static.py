@@ -1788,6 +1788,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let entry = null;", block)
         self.assertIn("let selected = false;", block)
         self.assertIn('if (!entry || typeof entry !== "object" || String(entry.group || "process") !== wanted)', block)
+        self.assertIn('throw new Error("Process registry is unavailable");', block)
         self.assertIn('this._recordLifecycleError("process-cancel", error);', block)
         self.assertIn("let cleanupSucceeded = false;", block)
         self.assertIn("if (selected && cleanupSucceeded) {", block)
@@ -3225,10 +3226,35 @@ class AppletStaticTest(unittest.TestCase):
         keyboard_end = source.index("\n  _spawnKeyboardArgs:", keyboard_start)
         keyboard_block = source[keyboard_start:keyboard_end]
 
-        self.assertIn('this._terminateProcessesByGroup("keyboard", true);', remember_block)
+        self.assertIn('for (let group of ["keyboard", "x11", "clipboard"])', remember_block)
+        self.assertIn('this._terminateProcessesByGroup(group, true) === false', remember_block)
         self.assertIn("let completeOnce = (result) =>", keyboard_block)
         self.assertIn("if (!handle) {\n        completeOnce(false);", keyboard_block)
         self.assertIn("result.cancelled", keyboard_block)
+
+    def test_target_capture_fails_closed_when_insert_cleanup_fails(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        remember_start = source.index("_rememberFocusedWindow: function(preserveOnFailure)")
+        remember_end = source.index("\n  _closeMenuForKeyboardInsert:", remember_start)
+        remember_block = source[remember_start:remember_end]
+        self.assertIn("let processCleanupSucceeded = true;", remember_block)
+        self.assertIn("if (!processCleanupSucceeded) {", remember_block)
+        self.assertIn("this.textInsertCancellationFailed = true;", remember_block)
+        self.assertIn("this.targetWindow = null;", remember_block)
+        self.assertIn("return false;", remember_block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Previous text insertion could not be stopped")', remember_block)
+
+        hotkey_start = source.index('this._registerHotkey(HOTKEY_ID, this.toggleKeybinding, () => {')
+        hotkey_end = source.index('this._registerHotkey(PRIMARY_HOTKEY_ID', hotkey_start)
+        hotkey_block = source[hotkey_start:hotkey_end]
+        self.assertIn('!this._hasActiveRecordingState() && !this.isCommandRunning && !this._rememberFocusedWindow()', hotkey_block)
+        self.assertIn("return;", hotkey_block)
+
+        language_start = source.index("_startWithLanguage: function(language, preserveTargetOnFailure)")
+        language_end = source.index("\n  _populateLanguageMenu:", language_start)
+        language_block = source[language_start:language_end]
+        self.assertIn("if (!this._rememberFocusedWindow(Boolean(preserveTargetOnFailure)))", language_block)
+        self.assertIn("return;", language_block)
 
     def test_target_window_generation_invalidates_stale_insert_resources(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -3236,9 +3262,8 @@ class AppletStaticTest(unittest.TestCase):
         remember_start = source.index("_rememberFocusedWindow: function(preserveOnFailure)")
         remember_end = source.index("\n  _closeMenuForKeyboardInsert:", remember_start)
         remember_block = source[remember_start:remember_end]
-        self.assertIn('this._terminateProcessesByGroup("keyboard", true);', remember_block)
-        self.assertIn('this._terminateProcessesByGroup("x11", true);', remember_block)
-        self.assertIn('this._terminateProcessesByGroup("clipboard", true);', remember_block)
+        self.assertIn('for (let group of ["keyboard", "x11", "clipboard"])', remember_block)
+        self.assertIn('this._terminateProcessesByGroup(group, true) === false', remember_block)
         self.assertIn('if (!preserveOnFailure) {\n      this._clearTargetWindowXid();\n    }', remember_block)
 
         snapshot_start = source.index("_targetXWindowSnapshot: function()")
@@ -3788,8 +3813,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.selfProtectionNoticeKey = "";', source)
         self.assertIn("this.selfProtectionNoticeAtMs = 0;", source)
         self.assertIn('this._registerHotkey(HOTKEY_ID, this.toggleKeybinding, () => {', source)
-        self.assertIn('this._rememberFocusedWindow();\n        this._toggleRecording();', source)
-        self.assertIn('this._connectSafe(this.toggleItem, "activate", () => {\n      this._rememberFocusedWindow(true);\n      this._toggleRecording();\n    });', source)
+        self.assertIn('if (!this._hasActiveRecordingState() && !this.isCommandRunning && !this._rememberFocusedWindow()) {', source)
+        self.assertIn('if (!this._hasActiveRecordingState() && !this.isCommandRunning && !this._rememberFocusedWindow(true)) {', source)
         self.assertIn('this._connectSafe(startPrimary, "activate", () => this._startWithLanguage(primary, true));', source)
         self.assertIn('this._connectSafe(startSecondary, "activate", () => this._startWithLanguage(secondary, true));', source)
         self.assertIn("_startWithLanguage: function(language, preserveTargetOnFailure)", source)
