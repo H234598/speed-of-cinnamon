@@ -4186,6 +4186,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('throw new Error("folder could not be created");', source)
         self.assertIn('throw new Error("External API config directory could not be created");', source)
         self.assertIn("GLib.file_test(path, GLib.FileTest.IS_DIR)", source)
+        self.assertIn('query_info("standard::type", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null)', source)
+        self.assertIn("info.get_file_type() !== Gio.FileType.REGULAR", source)
         self.assertIn('this._openUri(RUNBOOK_URL, _("Opened setup guide"))', source)
         self.assertIn('this._openFolder(GLib.build_filenamev([GLib.get_user_state_dir(), "speed-of-cinnamon", "transcripts"])', source)
         self.assertIn('this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon", "models", "whisper.cpp"])', source)
@@ -4198,6 +4200,16 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._setStatusPreservingRecording("error", _("Could not open file"), this.lastTranscript);', source)
         self.assertNotIn('_("Could not open folder: ") + err.message', source)
         self.assertNotIn('_("Could not open file: ") + err.message', source)
+
+    def test_open_file_rejects_directories_and_symlinks(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_openFile: function(path, successMessage)")
+        end = source.index("\n  _failSetupDiagnosticsAction:", start)
+        block = source[start:end]
+        self.assertIn("let file = Gio.File.new_for_path(path);", block)
+        self.assertIn('file.query_info("standard::type", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null)', block)
+        self.assertIn("info.get_file_type() !== Gio.FileType.REGULAR", block)
+        self.assertNotIn("GLib.FileTest.EXISTS", block)
 
     def test_applet_copies_setup_commands_without_installing_packages(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

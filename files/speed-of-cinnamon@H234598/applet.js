@@ -4138,8 +4138,10 @@ MyApplet.prototype = {
 
   _openFile: function(path, successMessage) {
     try {
-      if (!GLib.file_test(path, GLib.FileTest.EXISTS)) {
-        throw new Error("file is not available: " + path);
+      let file = Gio.File.new_for_path(path);
+      let info = file.query_info("standard::type", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
+      if (!info || info.get_file_type() !== Gio.FileType.REGULAR) {
+        throw new Error("path is not a regular file");
       }
       this._openUri(GLib.filename_to_uri(path, null), successMessage);
     } catch (err) {
