@@ -9350,8 +9350,7 @@ MyApplet.prototype = {
       message || _("Keyboard insert failed"),
       error
     );
-    if (!isCurrentOperation() || !this._lifecycleAllowsWork() ||
-      (expectedClipboardText !== undefined && expectedClipboardText !== null && (!this.clipboard || !this.clipboard.get_text))) {
+    if (!isCurrentOperation() || !this._lifecycleAllowsWork()) {
       if (typeof completionCallback === "function") completionCallback(false);
       return;
     }
@@ -9365,6 +9364,10 @@ MyApplet.prototype = {
     }
     let expected = String(expectedClipboardText);
     try {
+      if (!this.clipboard || !this.clipboard.get_text) {
+        if (typeof completionCallback === "function") completionCallback(false);
+        return;
+      }
       this.clipboard.get_text(St.ClipboardType.CLIPBOARD, this._guardStateCallback("clipboard-read", (clipboard, clipboardText) => {
         try {
           if (this.appletRemoved || !isCurrentOperation()) {
@@ -9462,14 +9465,17 @@ MyApplet.prototype = {
       message || _("Keyboard insert failed"),
       error
     );
-    if (!isCurrentOperation() || !this._lifecycleAllowsWork() ||
-      (expectedClipboardText !== undefined && expectedClipboardText !== null && (!this.clipboard || !this.clipboard.get_text))) {
+    if (!isCurrentOperation() || !this._lifecycleAllowsWork()) {
       if (typeof completionCallback === "function") completionCallback(false);
       return;
     }
     if (expectedClipboardText !== undefined && expectedClipboardText !== null) {
       let expected = String(expectedClipboardText);
       try {
+        if (!this.clipboard || !this.clipboard.get_text) {
+          if (typeof completionCallback === "function") completionCallback(false);
+          return;
+        }
         this.clipboard.get_text(St.ClipboardType.CLIPBOARD, this._guardStateCallback("clipboard-read", (clipboard, clipboardText) => {
           try {
             if (this.appletRemoved || !isCurrentOperation()) {
