@@ -2559,6 +2559,30 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("throw new Error(\"Timer could not be registered\");", block)
         self.assertIn("let removed = Mainloop.source_remove(sourceId);", block)
         self.assertIn('this._recordLifecycleError("timer-cleanup", cleanupError);', block)
+        self.assertIn("let sourceRemovalSucceeded = false;", block)
+        self.assertIn("if (!sourceRemovalSucceeded)", block)
+        self.assertIn("this._trackOrphanedTimer(key, sourceId, propertyName);", block)
+
+    def test_orphaned_timer_cleanup_is_retried_and_blocks_new_schedules(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_trackOrphanedTimer: function(name, sourceId, propertyName)")
+        end = source.index("\n  _clearTrackedTimer:", start)
+        orphan_block = source[start:end]
+        self.assertIn("this._orphanedTimers = [];", orphan_block)
+        self.assertIn("entry.sourceId === sourceId", orphan_block)
+        self.assertIn("this._orphanedTimers.push({", orphan_block)
+        self.assertIn("_retryOrphanedTimers: function()", orphan_block)
+        self.assertIn("Mainloop.source_remove(entry.sourceId)", orphan_block)
+        self.assertIn("this._orphanedTimers.splice(index, 1);", orphan_block)
+
+        start = source.index("_scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName)")
+        end = source.index("\n  _init:", start)
+        block = source[start:end]
+        self.assertIn("Array.isArray(this._orphanedTimers)", block)
+        self.assertIn("let orphanCleanupSucceeded = this._retryOrphanedTimers();", block)
+        self.assertIn('this._recordLifecycleError("timer-state", new Error("An orphaned timer is still pending"));', block)
+        self.assertIn("return 0;", block)
+        self.assertIn('this._runTeardownGuarded("teardown-orphaned-timers", () => this._retryOrphanedTimers());', source)
 
     def test_local_status_updates_invalidate_inflight_status_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

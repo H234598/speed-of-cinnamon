@@ -429,6 +429,7 @@ MyApplet.prototype = {
     this._orphanedSignals = [];
     this._orphanedHotkeys = [];
     this._orphanedProcesses = [];
+    this._orphanedTimers = [];
     this._hotkeyDefinitions = {};
     this._teardownComplete = false;
     this._initFailed = false;
@@ -1589,6 +1590,79 @@ MyApplet.prototype = {
     }
   },
 
+  _trackOrphanedTimer: function(name, sourceId, propertyName) {
+    try {
+      if (!sourceId) {
+        throw new Error("Timer orphan source is invalid");
+      }
+      if (!Array.isArray(this._orphanedTimers)) {
+        this._orphanedTimers = [];
+      }
+      let known = this._orphanedTimers.some((entry) => entry && entry.sourceId === sourceId);
+      if (!known) {
+        this._orphanedTimers.push({
+          name: String(name || propertyName || "timer"),
+          sourceId: sourceId,
+          propertyName: propertyName || "",
+        });
+      }
+      return true;
+    } catch (error) {
+      this._recordLifecycleError("timer-orphan", error);
+      return false;
+    }
+  },
+
+  _untrackOrphanedTimer: function(name, sourceId) {
+    if (!Array.isArray(this._orphanedTimers)) {
+      return true;
+    }
+    let success = true;
+    let key = String(name || "");
+    for (let index = this._orphanedTimers.length - 1; index >= 0; index--) {
+      let entry = this._orphanedTimers[index];
+      if (!entry || (sourceId && entry.sourceId !== sourceId) || (key && entry.name !== key)) {
+        continue;
+      }
+      try {
+        this._orphanedTimers.splice(index, 1);
+      } catch (error) {
+        this._recordLifecycleError("timer-orphan", error);
+        success = false;
+      }
+    }
+    return success;
+  },
+
+  _retryOrphanedTimers: function() {
+    if (!Array.isArray(this._orphanedTimers)) {
+      return true;
+    }
+    let success = true;
+    for (let index = this._orphanedTimers.length - 1; index >= 0; index--) {
+      let entry = this._orphanedTimers[index];
+      if (!entry || !entry.sourceId) {
+        this._recordLifecycleError("timer-orphan", new Error("Timer orphan entry is invalid"));
+        success = false;
+        continue;
+      }
+      try {
+        let result = Mainloop.source_remove(entry.sourceId);
+        if (result === false) {
+          throw new Error("Timer orphan removal failed");
+        }
+        if (entry.propertyName && this[entry.propertyName] === entry.sourceId) {
+          this[entry.propertyName] = 0;
+        }
+        this._orphanedTimers.splice(index, 1);
+      } catch (error) {
+        this._recordLifecycleError("timer-orphan", error);
+        success = false;
+      }
+    }
+    return success;
+  },
+
   _clearTrackedTimer: function(name, propertyName) {
     let key = "timer";
     try {
@@ -1609,6 +1683,7 @@ MyApplet.prototype = {
       if (removed === false) {
         throw new Error("Timer source could not be removed");
       }
+      this._untrackOrphanedTimer(key, sourceId);
       if (this._resourceRegistry && this._resourceRegistry.timers[key] === sourceId) {
         let deleted = delete this._resourceRegistry.timers[key];
         if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.timers, key)) {
@@ -1630,11 +1705,19 @@ MyApplet.prototype = {
       return 0;
     }
     let key = String(name || propertyName || "timer");
+    if (Array.isArray(this._orphanedTimers) && this._orphanedTimers.length > 0) {
+      let orphanCleanupSucceeded = this._retryOrphanedTimers();
+      if (!orphanCleanupSucceeded || this._orphanedTimers.length > 0) {
+        this._recordLifecycleError("timer-state", new Error("An orphaned timer is still pending"));
+        return 0;
+      }
+    }
     if (this._clearTrackedTimer(key, propertyName) === false) {
       return 0;
     }
     let generation = this.spawnGeneration;
     let sourceId = 0;
+    let sourceRemovalSucceeded = false;
     let timerCallback = () => {
       if (this.appletRemoved || this.spawnGeneration !== generation) {
         this._untrackTimer(key, sourceId, propertyName);
@@ -1665,6 +1748,8 @@ MyApplet.prototype = {
           if (removed === false) {
             throw new Error("Timer rollback could not remove source");
           }
+          sourceRemovalSucceeded = true;
+          this._untrackOrphanedTimer(key, sourceId);
           if (this._resourceRegistry && this._resourceRegistry.timers && this._resourceRegistry.timers[key] === sourceId) {
             let deleted = delete this._resourceRegistry.timers[key];
             if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.timers, key)) {
@@ -1675,6 +1760,9 @@ MyApplet.prototype = {
             this[propertyName] = 0;
           }
         } catch (cleanupError) {
+          if (!sourceRemovalSucceeded) {
+            this._trackOrphanedTimer(key, sourceId, propertyName);
+          }
           this._recordLifecycleError("timer-cleanup", cleanupError);
         }
       }
@@ -2730,6 +2818,7 @@ MyApplet.prototype = {
     this._runTeardownGuarded("teardown-clipboard", () => this._clearClipboardOverwriteApproval());
     this._runTeardownGuarded("teardown-timer", () => this._clearAlarmTimer());
     this._runTeardownGuarded("teardown-timer", () => this._clearOllamaInstallWatchTimer());
+    this._runTeardownGuarded("teardown-orphaned-timers", () => this._retryOrphanedTimers());
     this._runTeardownGuarded("teardown-monitor", () => this._clearExternalApiEnvMonitor());
     this._runTeardownGuarded("teardown-signals", () => this._disconnectAllSignals());
     this._runTeardownGuarded("teardown-applet-signals", () => {
