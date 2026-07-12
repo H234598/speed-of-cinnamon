@@ -5438,7 +5438,14 @@ MyApplet.prototype = {
     this.alarmMenuRefreshToken = null;
     this.alarmActionToken = null;
     this.alarmCheckToken = null;
+    let hadBenchmarkFlow = Boolean(this.benchmarkFlowToken);
     this.benchmarkFlowToken = null;
+    let benchmarkCleanupSucceeded = this._terminateProcessesByGroup("benchmark") !== false;
+    if (!benchmarkCleanupSucceeded) {
+      this._setStatusPreservingRecording("error", _("Benchmark could not be stopped"), this.lastTranscript);
+    } else if (hadBenchmarkFlow && !this._recordingCommandToken) {
+      this.isCommandRunning = false;
+    }
     this.settingsTransferToken = null;
     let settingsTransferCleanupSucceeded = this._terminateProcessesByGroup("settings-transfer") !== false;
     if (!settingsTransferCleanupSucceeded) {
@@ -5459,7 +5466,7 @@ MyApplet.prototype = {
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
     this.transcriptListPromptToken = null;
-    return settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;
+    return benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;
   },
 
   _runDoctor: function(startupCheck) {
@@ -6214,7 +6221,7 @@ MyApplet.prototype = {
         return;
       }
       this._benchmarkDownloadedModels(audioPath, flowToken);
-    }, { timeoutMs: 0 });
+    }, { timeoutMs: 0, resourceGroup: "benchmark" });
   },
 
   _benchmarkDownloadedModels: function(audioPath, flowToken) {
@@ -6269,7 +6276,7 @@ MyApplet.prototype = {
         this._recordLifecycleError("benchmark-flow", error);
         this._setStatus("error", _("Could not complete benchmark"), this.lastTranscript);
       }
-    }, { timeoutMs: BENCHMARK_COMMAND_TIMEOUT_MS });
+    }, { timeoutMs: BENCHMARK_COMMAND_TIMEOUT_MS, resourceGroup: "benchmark" });
   },
 
   _setAlarmOptionStatus: function(message) {

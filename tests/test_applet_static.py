@@ -3258,6 +3258,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.benchmarkFlowToken = flowToken;", select_block)
         self.assertIn("this.benchmarkFlowToken !== flowToken", select_block)
         self.assertIn("this._benchmarkDownloadedModels(audioPath, flowToken);", select_block)
+        self.assertIn('resourceGroup: "benchmark"', select_block)
 
         benchmark_start = source.index("_benchmarkDownloadedModels: function(audioPath, flowToken)")
         benchmark_end = source.index("\n  _setAlarmOptionStatus:", benchmark_start)
@@ -3271,6 +3272,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.benchmarkFlowToken = null;", benchmark_block)
         self.assertIn("this.benchmarkFlowToken !== flowToken", benchmark_block)
         self.assertIn("if (!this.benchmarkFlowToken && !this._recordingCommandToken)", benchmark_block)
+        self.assertIn('resourceGroup: "benchmark"', benchmark_block)
         self.assertIn("this.benchmarkFlowToken = null;", benchmark_block)
         self.assertIn('let fastest = typeof payload.fastest_model === "string" ? payload.fastest_model.trim() : "";', benchmark_block)
         self.assertNotIn('let fastest = String(payload.fastest_model || "").trim();', benchmark_block)
@@ -6019,10 +6021,13 @@ class AppletStaticTest(unittest.TestCase):
             "autoPastePromptToken",
         ]:
             self.assertIn(f"this.{token} = null;", helper_block)
+        self.assertIn("let hadBenchmarkFlow = Boolean(this.benchmarkFlowToken);", helper_block)
+        self.assertIn('this._terminateProcessesByGroup("benchmark")', helper_block)
+        self.assertIn("if (hadBenchmarkFlow && !this._recordingCommandToken)", helper_block)
         self.assertIn('this._terminateProcessesByGroup("doctor")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("settings-transfer")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("setup-diagnostics")', helper_block)
-        self.assertIn("return settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;", helper_block)
+        self.assertIn("return benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;", helper_block)
         self.assertNotIn("this.transcriptWindowToken = null;", helper_block)
         self.assertNotIn("this.settingsWindowToken = null;", helper_block)
 
