@@ -2069,6 +2069,14 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('throw new Error("Cancellable orphan entry could not be removed");', orphan_block)
         self.assertIn("this._untrackOrphanedCancellable(entry.token)", orphan_block)
 
+        start = source.index("_retryOrphanedProcesses: function()")
+        end = source.index("\n  _terminateProcess: function(process)", start)
+        process_orphan_block = source[start:end]
+        self.assertIn("let registry = this._resourceRegistry && this._resourceRegistry.processes;", process_orphan_block)
+        self.assertIn("if (!registry)", process_orphan_block)
+        self.assertIn('this._recordLifecycleError("process-state", new Error("Process registry is unavailable"));', process_orphan_block)
+        self.assertIn("this._unregisterProcess(entry.registryToken)", process_orphan_block)
+
         start = source.index("_cancelAllCancellables: function()")
         end = source.index("\n  _trackTimer:", start)
         block = source[start:end]

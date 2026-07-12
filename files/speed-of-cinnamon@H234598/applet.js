@@ -2084,9 +2084,17 @@ MyApplet.prototype = {
         entry.terminationSucceeded = true;
         terminationSucceeded = true;
       }
-      if (entry.registryToken && !this._unregisterProcess(entry.registryToken)) {
-        success = false;
-        continue;
+      if (entry.registryToken) {
+        let registry = this._resourceRegistry && this._resourceRegistry.processes;
+        if (!registry) {
+          this._recordLifecycleError("process-state", new Error("Process registry is unavailable"));
+          success = false;
+          continue;
+        }
+        if (!this._unregisterProcess(entry.registryToken)) {
+          success = false;
+          continue;
+        }
       }
       if (!this._untrackOrphanedProcess(entry.process)) {
         success = false;
