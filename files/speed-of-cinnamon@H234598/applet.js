@@ -6265,6 +6265,11 @@ MyApplet.prototype = {
     if (this.alarmMenuRefreshToken) {
       return;
     }
+    if (this._terminateProcessesByGroup("alarm-menu-refresh") === false) {
+      this._populateAlarmMenu([], "", _("Alarm menu refresh could not be stopped"));
+      this._setAlarmErrorStatus(_("Alarm menu refresh could not be stopped"));
+      return;
+    }
     let refreshToken = {};
     this.alarmMenuRefreshToken = refreshToken;
     this._populateAlarmMenu([], _("Loading alarms..."));
@@ -6303,7 +6308,7 @@ MyApplet.prototype = {
         this._recordLifecycleError("menu-refresh", error);
         this._setAlarmErrorStatus(_("Could not refresh alarm list"));
       }
-    });
+    }, { resourceGroup: "alarm-menu-refresh" });
   },
 
   _populateAlarmMenu: function(alarms, summary, message) {

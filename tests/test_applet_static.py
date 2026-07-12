@@ -1060,6 +1060,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.alarmMenuRefreshToken = refreshToken;", refresh_block)
         self.assertIn("this.alarmMenuRefreshToken !== refreshToken", refresh_block)
         self.assertIn("!this._canMutateMenu(this.alarmItem)", refresh_block)
+        self.assertIn('this._terminateProcessesByGroup("alarm-menu-refresh")', refresh_block)
+        self.assertIn('resourceGroup: "alarm-menu-refresh"', refresh_block)
+        self.assertLess(
+            refresh_block.index('this._terminateProcessesByGroup("alarm-menu-refresh")'),
+            refresh_block.index("let refreshToken = {};")
+        )
         self.assertIn("if (this.alarmMenuRefreshToken)", refresh_block)
         self.assertIn("this.alarmMenuRefreshToken = null;", refresh_block)
         self.assertLess(refresh_block.index("if (this.alarmMenuRefreshToken)"), refresh_block.index("let refreshToken = {};"))
