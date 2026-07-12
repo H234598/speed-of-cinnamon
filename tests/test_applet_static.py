@@ -2431,6 +2431,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("Object.prototype.hasOwnProperty.call(this._resourceRegistry.hotkeys, name)", block)
         self.assertIn("Object.prototype.hasOwnProperty.call(this._hotkeyDefinitions, name)", block)
         self.assertIn('throw new Error("Hotkey rollback removal failed");', block)
+        self.assertIn('throw new Error("Hotkey rollback orphan cleanup failed");', block)
+        self.assertIn('throw new Error("Previous hotkey rollback orphan cleanup failed");', block)
+        self.assertIn('throw new Error("Existing hotkey orphan cleanup failed");', block)
         self.assertIn('throw new Error("Previous hotkey could not be restored");', block)
         self.assertIn("this._trackOrphanedHotkey(name);", block)
 

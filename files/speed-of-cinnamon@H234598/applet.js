@@ -3147,7 +3147,9 @@ MyApplet.prototype = {
         throw error;
       }
       removedExternally = true;
-      this._untrackOrphanedHotkey(name);
+      if (!this._untrackOrphanedHotkey(name)) {
+        throw new Error("Existing hotkey orphan cleanup failed");
+      }
       if (this._resourceRegistry) {
         let deleted = delete this._resourceRegistry.hotkeys[name];
         if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.hotkeys, name)) {
@@ -3214,7 +3216,9 @@ MyApplet.prototype = {
         if (removeResult === false) {
           throw new Error("Hotkey rollback removal failed");
         }
-        this._untrackOrphanedHotkey(name);
+        if (!this._untrackOrphanedHotkey(name)) {
+          throw new Error("Hotkey rollback orphan cleanup failed");
+        }
         return true;
       }, false) === true;
       if (!rollbackRemoved) {
@@ -3253,7 +3257,9 @@ MyApplet.prototype = {
           if (removeResult === false) {
             throw new Error("Previous hotkey rollback removal failed");
           }
-          this._untrackOrphanedHotkey(name);
+          if (!this._untrackOrphanedHotkey(name)) {
+            throw new Error("Previous hotkey rollback orphan cleanup failed");
+          }
           return true;
         }, false) === true;
         if (!rollbackRemoved) {
