@@ -8115,10 +8115,28 @@ MyApplet.prototype = {
     let processExited = false;
     let processSuccessful = false;
     let processWaitError = null;
+    let cleanupComplete = false;
+    let callbackDelivered = false;
+
+    let cleanupResources = () => {
+      if (cleanupComplete) {
+        return true;
+      }
+      let cancellableCleanupSucceeded = this._unregisterCancellable(cancellableToken);
+      let processCleanupSucceeded = false;
+      if (cancellableCleanupSucceeded) {
+        processCleanupSucceeded = this._unregisterProcess(processToken);
+      }
+      cleanupComplete = cancellableCleanupSucceeded && processCleanupSucceeded;
+      return cleanupComplete;
+    };
 
     let finish = (result, terminate, suppressCallback) => {
-      if (done) {
+      if (cleanupComplete) {
         return true;
+      }
+      if (done) {
+        return cleanupResources();
       }
       this._clearTrackedTimer(timeoutKey);
       let terminationSucceeded = true;
@@ -8139,16 +8157,17 @@ MyApplet.prototype = {
         return false;
       }
       done = true;
-      let processCleanupSucceeded = this._unregisterProcess(processToken);
-      let cancellableCleanupSucceeded = this._unregisterCancellable(cancellableToken);
-      let cleanupSucceeded = processCleanupSucceeded && cancellableCleanupSucceeded;
+      let cleanupSucceeded = cleanupResources();
       if (suppressCallback || this.appletRemoved || this.spawnGeneration !== generation || typeof callback !== "function") {
         return cleanupSucceeded;
       }
-      try {
-        callback(stdoutParts.join(""), stderrParts.join(""), result || {});
-      } catch (error) {
-        this._recordLifecycleError("process-callback", error);
+      if (!callbackDelivered) {
+        callbackDelivered = true;
+        try {
+          callback(stdoutParts.join(""), stderrParts.join(""), result || {});
+        } catch (error) {
+          this._recordLifecycleError("process-callback", error);
+        }
       }
       return cleanupSucceeded;
     };

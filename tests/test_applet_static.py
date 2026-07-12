@@ -3296,6 +3296,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (cleanupSucceeded) {\n            this._unregisterProcess(token);", all_block)
         self.assertIn('if (result === false) {\n                throw new Error("Process cancellation failed");', all_block)
 
+    def test_bounded_subprocess_retries_registry_cleanup_after_callback(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_runBoundedSubprocess: function(args, env, options, callback)")
+        end = source.index("\n  _spawnJsonWithBackendEnvironment:", start)
+        block = source[start:end]
+        self.assertIn("let cleanupComplete = false;", block)
+        self.assertIn("let callbackDelivered = false;", block)
+        self.assertIn("let cleanupResources = () =>", block)
+        self.assertIn("if (done) {\n        return cleanupResources();", block)
+        self.assertIn("if (!callbackDelivered)", block)
+        self.assertIn("let cancellableCleanupSucceeded = this._unregisterCancellable(cancellableToken);", block)
+        self.assertIn("if (cancellableCleanupSucceeded) {\n        processCleanupSucceeded = this._unregisterProcess(processToken);", block)
+
     def test_teardown_uses_safe_process_and_cancellable_unregistration(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_cancelAllCancellables: function()")
