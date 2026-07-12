@@ -2504,8 +2504,12 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_clearTrackedTimer: function(name, propertyName)")
         end = source.index("\n  _scheduleTrackedTimer:", start)
         block = source[start:end]
+        self.assertIn("let sourceId = 0;", block)
+        self.assertIn("let sourceRemovalSucceeded = false;", block)
         self.assertIn("let removed = Mainloop.source_remove(sourceId);", block)
         self.assertIn('if (removed === false) {', block)
+        self.assertIn("if (sourceId)", block)
+        self.assertIn("this._trackOrphanedTimer(key, sourceId, propertyName, sourceRemovalSucceeded);", block)
         self.assertIn('this._recordLifecycleError("timer-clear", error);', block)
         self.assertIn("return false;", block)
         self.assertLess(block.index("Mainloop.source_remove(sourceId)"), block.index("delete this._resourceRegistry.timers[key]"))
@@ -2593,19 +2597,22 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let removed = Mainloop.source_remove(sourceId);", block)
         self.assertIn('this._recordLifecycleError("timer-cleanup", cleanupError);', block)
         self.assertIn("let sourceRemovalSucceeded = false;", block)
-        self.assertIn("if (!sourceRemovalSucceeded)", block)
-        self.assertIn("this._trackOrphanedTimer(key, sourceId, propertyName);", block)
+        self.assertIn("if (sourceId)", block)
+        self.assertIn("this._trackOrphanedTimer(key, sourceId, propertyName, sourceRemovalSucceeded);", block)
 
     def test_orphaned_timer_cleanup_is_retried_and_blocks_new_schedules(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
-        start = source.index("_trackOrphanedTimer: function(name, sourceId, propertyName)")
+        start = source.index("_trackOrphanedTimer: function(name, sourceId, propertyName, sourceRemoved)")
         end = source.index("\n  _clearTrackedTimer:", start)
         orphan_block = source[start:end]
         self.assertIn("this._orphanedTimers = [];", orphan_block)
         self.assertIn("entry.sourceId === sourceId", orphan_block)
         self.assertIn("this._orphanedTimers.push({", orphan_block)
+        self.assertIn("sourceRemoved: sourceRemoved === true", orphan_block)
         self.assertIn("_retryOrphanedTimers: function()", orphan_block)
         self.assertIn("Mainloop.source_remove(entry.sourceId)", orphan_block)
+        self.assertIn("if (entry.sourceRemoved !== true)", orphan_block)
+        self.assertIn("let untracked = this._untrackTimer(entry.name, entry.sourceId, entry.propertyName);", orphan_block)
         self.assertIn("this._orphanedTimers.splice(index, 1);", orphan_block)
 
         start = source.index("_scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName)")

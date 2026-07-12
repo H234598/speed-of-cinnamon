@@ -1677,7 +1677,7 @@ MyApplet.prototype = {
     }
   },
 
-  _trackOrphanedTimer: function(name, sourceId, propertyName) {
+  _trackOrphanedTimer: function(name, sourceId, propertyName, sourceRemoved) {
     try {
       if (!sourceId) {
         throw new Error("Timer orphan source is invalid");
@@ -1685,12 +1685,21 @@ MyApplet.prototype = {
       if (!Array.isArray(this._orphanedTimers)) {
         this._orphanedTimers = [];
       }
-      let known = this._orphanedTimers.some((entry) => entry && entry.sourceId === sourceId);
-      if (!known) {
+      let key = String(name || propertyName || "timer");
+      let knownEntry = this._orphanedTimers.find((entry) => entry && entry.sourceId === sourceId);
+      if (knownEntry) {
+        if (sourceRemoved === true) {
+          knownEntry.sourceRemoved = true;
+        }
+        if (propertyName && !knownEntry.propertyName) {
+          knownEntry.propertyName = propertyName;
+        }
+      } else {
         this._orphanedTimers.push({
-          name: String(name || propertyName || "timer"),
+          name: key,
           sourceId: sourceId,
           propertyName: propertyName || "",
+          sourceRemoved: sourceRemoved === true,
         });
       }
       return true;
@@ -1734,12 +1743,16 @@ MyApplet.prototype = {
         continue;
       }
       try {
-        let result = Mainloop.source_remove(entry.sourceId);
-        if (result === false) {
-          throw new Error("Timer orphan removal failed");
+        if (entry.sourceRemoved !== true) {
+          let result = Mainloop.source_remove(entry.sourceId);
+          if (result === false) {
+            throw new Error("Timer orphan removal failed");
+          }
+          entry.sourceRemoved = true;
         }
-        if (entry.propertyName && this[entry.propertyName] === entry.sourceId) {
-          this[entry.propertyName] = 0;
+        let untracked = this._untrackTimer(entry.name, entry.sourceId, entry.propertyName);
+        if (untracked === false) {
+          throw new Error("Timer orphan registry cleanup failed");
         }
         this._orphanedTimers.splice(index, 1);
       } catch (error) {
@@ -1752,9 +1765,11 @@ MyApplet.prototype = {
 
   _clearTrackedTimer: function(name, propertyName) {
     let key = "timer";
+    let sourceId = 0;
+    let sourceRemovalSucceeded = false;
     try {
       key = String(name || propertyName || "timer");
-      let sourceId = this._resourceRegistry && this._resourceRegistry.timers
+      sourceId = this._resourceRegistry && this._resourceRegistry.timers
         ? this._resourceRegistry.timers[key]
         : 0;
       if (!sourceId && propertyName) {
@@ -1770,7 +1785,11 @@ MyApplet.prototype = {
       if (removed === false) {
         throw new Error("Timer source could not be removed");
       }
-      this._untrackOrphanedTimer(key, sourceId);
+      sourceRemovalSucceeded = true;
+      let orphanUntracked = this._untrackOrphanedTimer(key, sourceId);
+      if (orphanUntracked === false) {
+        throw new Error("Timer orphan registry entry could not be removed");
+      }
       if (this._resourceRegistry && this._resourceRegistry.timers[key] === sourceId) {
         let deleted = delete this._resourceRegistry.timers[key];
         if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.timers, key)) {
@@ -1782,6 +1801,9 @@ MyApplet.prototype = {
       }
       return true;
     } catch (error) {
+      if (sourceId) {
+        this._trackOrphanedTimer(key, sourceId, propertyName, sourceRemovalSucceeded);
+      }
       this._recordLifecycleError("timer-clear", error);
       return false;
     }
@@ -1836,7 +1858,10 @@ MyApplet.prototype = {
             throw new Error("Timer rollback could not remove source");
           }
           sourceRemovalSucceeded = true;
-          this._untrackOrphanedTimer(key, sourceId);
+          let orphanUntracked = this._untrackOrphanedTimer(key, sourceId);
+          if (orphanUntracked === false) {
+            throw new Error("Timer rollback orphan entry could not be removed");
+          }
           if (this._resourceRegistry && this._resourceRegistry.timers && this._resourceRegistry.timers[key] === sourceId) {
             let deleted = delete this._resourceRegistry.timers[key];
             if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.timers, key)) {
@@ -1847,8 +1872,8 @@ MyApplet.prototype = {
             this[propertyName] = 0;
           }
         } catch (cleanupError) {
-          if (!sourceRemovalSucceeded) {
-            this._trackOrphanedTimer(key, sourceId, propertyName);
+          if (sourceId) {
+            this._trackOrphanedTimer(key, sourceId, propertyName, sourceRemovalSucceeded);
           }
           this._recordLifecycleError("timer-cleanup", cleanupError);
         }
