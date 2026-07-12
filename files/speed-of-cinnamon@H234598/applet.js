@@ -8712,7 +8712,10 @@ MyApplet.prototype = {
     if (this._isUsableTargetWindow(this.targetWindow)) {
       let activated = false;
       try {
-        Main.activateWindow(this.targetWindow, global.get_current_time());
+        let result = Main.activateWindow(this.targetWindow, global.get_current_time());
+        if (result === false) {
+          throw new Error("Target window could not be activated");
+        }
         activated = true;
       } catch (err) {
         this._recordLifecycleError("x11-focus", err);

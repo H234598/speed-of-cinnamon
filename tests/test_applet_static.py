@@ -3792,6 +3792,8 @@ class AppletStaticTest(unittest.TestCase):
             source,
         )
         self.assertIn('this._setStatus("error", _("Target window unavailable for direct typing"), transcript);', source)
+        self.assertIn("let result = Main.activateWindow(this.targetWindow, global.get_current_time());", source)
+        self.assertIn('throw new Error("Target window could not be activated");', source)
         self.assertIn('this._setStatus("done", _("No transcript text to insert"), "");', source)
         self.assertIn('this._scheduleTrackedTimer("paste", PASTE_SUBMIT_DELAY_MS', source)
         self.assertIn("Copied and pasted into target window", source)
