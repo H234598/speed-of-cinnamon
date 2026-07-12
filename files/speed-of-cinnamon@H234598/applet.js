@@ -10120,6 +10120,7 @@ MyApplet.prototype = {
     let cleanupComplete = false;
     let callbackDelivered = false;
     let setupFailed = false;
+    let inputPending = hasInput;
 
     let cleanupResources = (timeoutCleanupSucceeded) => {
       if (cleanupComplete) {
@@ -10213,7 +10214,7 @@ MyApplet.prototype = {
     }
 
     let finishWhenReady = () => {
-      if (!processExited || !ended.stdout || !ended.stderr) {
+      if (!processExited || !ended.stdout || !ended.stderr || inputPending) {
         return;
       }
       if (processWaitError) {
@@ -10337,7 +10338,10 @@ MyApplet.prototype = {
             try {
               assertInputWriteSucceeded(stream.write_all_finish(result));
               closeInput(stream);
+              inputPending = false;
+              finishWhenReady();
             } catch (error) {
+              inputPending = false;
               setupFailed = true;
               finish({ error: error }, true);
             }
@@ -10345,11 +10349,15 @@ MyApplet.prototype = {
         } else if (stdin && stdin.write_all) {
           assertInputWriteSucceeded(stdin.write_all(inputBytes, null));
           closeInput(stdin);
+          inputPending = false;
+          finishWhenReady();
         } else {
+          inputPending = false;
           setupFailed = true;
           finish({ error: "Subprocess input stream unavailable" }, true);
         }
       } catch (error) {
+        inputPending = false;
         setupFailed = true;
         finish({ error: error }, true);
       }

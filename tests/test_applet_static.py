@@ -4134,6 +4134,8 @@ class AppletStaticTest(unittest.TestCase):
         stdin_block = bounded_block[stdin_start:]
         self.assertIn("try {", stdin_block)
         self.assertIn("let stdin = process.get_stdin_pipe();", stdin_block)
+        self.assertIn("inputPending = false;", stdin_block)
+        self.assertIn("finishWhenReady();", stdin_block)
         self.assertIn("finish({ error: error }, true);", stdin_block)
 
         group_start = source.index("_terminateProcessesByGroup: function(group, notifyCallback)")
@@ -4163,6 +4165,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let cleanupComplete = false;", block)
         self.assertIn("let callbackDelivered = false;", block)
         self.assertIn("let setupFailed = false;", block)
+        self.assertIn("let inputPending = hasInput;", block)
+        self.assertIn("!ended.stdout || !ended.stderr || inputPending", block)
         self.assertIn("if (setupFailed || done) {\n      return null;", block)
         self.assertIn("let cleanupResources = (timeoutCleanupSucceeded) =>", block)
         self.assertIn("if (done) {\n        return cleanupResources();", block)
