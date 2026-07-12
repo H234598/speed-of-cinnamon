@@ -1367,6 +1367,28 @@ MyApplet.prototype = {
     return allSucceeded;
   },
 
+  _hasTrackedProcessGroup: function(group) {
+    let wanted = String(group || "process");
+    try {
+      if (!this._resourceRegistry || !this._resourceRegistry.processes) {
+        throw new Error("Process registry is unavailable");
+      }
+      for (let token in this._resourceRegistry.processes) {
+        if (!Object.prototype.hasOwnProperty.call(this._resourceRegistry.processes, token)) {
+          continue;
+        }
+        let entry = this._resourceRegistry.processes[token];
+        if (entry && typeof entry === "object" && String(entry.group || "process") === wanted) {
+          return true;
+        }
+      }
+      return false;
+    } catch (error) {
+      this._recordLifecycleError("process-state", error);
+      return true;
+    }
+  },
+
   _cancelAllCancellables: function() {
     try {
       let cancellables = this._resourceRegistry && this._resourceRegistry.cancellables
@@ -1631,6 +1653,7 @@ MyApplet.prototype = {
     this.ollamaInstallWatchPolls = 0;
     this.ollamaModelInstallRunning = false;
     this.ollamaModelInstallToken = null;
+    this.textInsertCancellationFailed = false;
     this.externalApiEnvMonitor = null;
     this.externalApiEnvApplyTarget = "voice";
     this.set_applet_icon_path(this.metadata.path + "/icon.svg");
@@ -2372,15 +2395,23 @@ MyApplet.prototype = {
 
   _cancelTextInsertForSettingsChange: function() {
     this._clearClipboardOverwriteApproval();
-    if (!this.textInsertToken) {
-      return;
+    let hadInsertToken = Boolean(this.textInsertToken);
+    if (hadInsertToken) {
+      this.textInsertToken = null;
     }
-    this.textInsertToken = null;
     this._clearPasteTimer();
-    this._terminateProcessesByGroup("keyboard");
-    this._terminateProcessesByGroup("clipboard");
-    this._terminateProcessesByGroup("x11");
-    if (this.autoRelistenPending) {
+    let cancellationSucceeded = true;
+    if (this._terminateProcessesByGroup("keyboard") === false) {
+      cancellationSucceeded = false;
+    }
+    if (this._terminateProcessesByGroup("clipboard") === false) {
+      cancellationSucceeded = false;
+    }
+    if (this._terminateProcessesByGroup("x11") === false) {
+      cancellationSucceeded = false;
+    }
+    this.textInsertCancellationFailed = !cancellationSucceeded;
+    if (hadInsertToken && this.autoRelistenPending) {
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
       this.autoRelistenManualStopRequested = true;
@@ -2418,6 +2449,7 @@ MyApplet.prototype = {
     this.ollamaInstallWatchToken = null;
     this.ollamaModelInstallRunning = false;
     this.ollamaModelInstallToken = null;
+    this.textInsertCancellationFailed = false;
     this.benchmarkFlowToken = null;
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
@@ -10368,6 +10400,14 @@ MyApplet.prototype = {
   _insertTranscriptText: function(transcript, completionCallback) {
     if (!this._lifecycleAllowsWork() || this.textInsertToken) {
       return false;
+    }
+    if (this.textInsertCancellationFailed) {
+      let cancellationStillPending = ["keyboard", "clipboard", "x11"].some((group) => this._hasTrackedProcessGroup(group));
+      if (cancellationStillPending) {
+        this._setStatusPreservingRecording("error", _("Previous text insertion is still stopping; try again shortly"), this.lastTranscript);
+        return false;
+      }
+      this.textInsertCancellationFailed = false;
     }
     let method = this._normalizeOutputMethod(this.insertMethod);
     let autoPasteTarget = this._windowTitleMatchesAutoPaste();

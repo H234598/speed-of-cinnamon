@@ -935,12 +935,27 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.textInsertToken = null;", cancel_block)
         self.assertIn("this._clearClipboardOverwriteApproval();", cancel_block)
         self.assertIn("this._clearPasteTimer();", cancel_block)
-        self.assertIn('this._terminateProcessesByGroup("keyboard");', cancel_block)
-        self.assertIn('this._terminateProcessesByGroup("clipboard");', cancel_block)
-        self.assertIn('this._terminateProcessesByGroup("x11");', cancel_block)
-        self.assertIn("if (this.autoRelistenPending)", cancel_block)
+        self.assertIn('this._terminateProcessesByGroup("keyboard") === false', cancel_block)
+        self.assertIn('this._terminateProcessesByGroup("clipboard") === false', cancel_block)
+        self.assertIn('this._terminateProcessesByGroup("x11") === false', cancel_block)
+        self.assertIn("let cancellationSucceeded = true;", cancel_block)
+        self.assertIn("this.textInsertCancellationFailed = !cancellationSucceeded;", cancel_block)
+        self.assertIn("if (hadInsertToken && this.autoRelistenPending)", cancel_block)
         self.assertIn("this.autoRelistenPendingToken = \"\";", cancel_block)
         self.assertIn("this.autoRelistenManualStopRequested = true;", cancel_block)
+
+    def test_failed_text_insert_cancellation_blocks_new_insertions(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        helper_start = source.index("_hasTrackedProcessGroup: function(group)")
+        helper_end = source.index("\n  _cancelAllCancellables:", helper_start)
+        helper_block = source[helper_start:helper_end]
+        self.assertIn('this._recordLifecycleError("process-state", error);', helper_block)
+        insert_start = source.index("_insertTranscriptText: function(transcript, completionCallback)")
+        insert_end = source.index("\n  _restartRelistenRecording:", insert_start)
+        insert_block = source[insert_start:insert_end]
+        self.assertIn("if (this.textInsertCancellationFailed)", insert_block)
+        self.assertIn("let cancellationStillPending = [\"keyboard\", \"clipboard\", \"x11\"]", insert_block)
+        self.assertIn('_("Previous text insertion is still stopping; try again shortly")', insert_block)
 
         output_start = source.index("_onOutputSettingsChanged: function()")
         output_end = source.index("\n  _onTextOutputSettingsChanged:", output_start)
