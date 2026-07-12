@@ -387,6 +387,22 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("Number(ipv4Loopback[index]) > 255", block)
         self.assertIn("let validIpv4Loopback = Boolean(ipv4Loopback);", block)
 
+    def test_openai_compatible_settings_urls_are_validated_before_cli_spawn(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        self.assertIn("_validatedExternalApiUrlOrFallback: function(value, fieldName, fallback)", source)
+        helper_start = source.index("_validatedExternalApiUrlOrFallback: function(value, fieldName, fallback)")
+        helper_end = source.index("\n  _validatedExternalApiConfig:", helper_start)
+        helper_block = source[helper_start:helper_end]
+        self.assertIn("this._validateExternalApiUrl(value, fieldName)", helper_block)
+        self.assertIn('this._recordLifecycleError("settings-url", error);', helper_block)
+        self.assertIn("return safeFallback;", helper_block)
+        base_start = source.index("_baseArgs: function(command)")
+        base_end = source.index("\n  _appendCliOptionWithinBudget:", base_start)
+        self.assertIn('this._validatedExternalApiUrlOrFallback(this.openaiCompatibleUrl, "openai-compatible URL", DEFAULT_OPENAI_COMPATIBLE_URL)', source[base_start:base_end])
+        models_start = source.index("_textModelsArgs: function(backendOverride)")
+        models_end = source.index("\n  _tryTextModelsArgs:", models_start)
+        self.assertIn('this._validatedExternalApiUrlOrFallback(this.openaiCompatibleUrl, "openai-compatible URL", DEFAULT_OPENAI_COMPATIBLE_URL)', source[models_start:models_end])
+
     def test_external_env_monitor_is_cleaned_when_signal_connection_fails(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_watchExternalApiEnvFile: function(path)")
@@ -2817,12 +2833,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let normalized = typeof value === "string" ? value : "";', source)
         self.assertIn('"personal-context": "personal context"', source)
         self.assertIn('"vocabulary": "vocabulary"', source)
-        self.assertIn('let safeOpenAiCompatibleUrl = this._coerceCliTextArgOrFallback(this.openaiCompatibleUrl, "openai-compatible URL", DEFAULT_OPENAI_COMPATIBLE_URL);', source)
+        self.assertIn('let safeOpenAiCompatibleUrl = this._validatedExternalApiUrlOrFallback(this.openaiCompatibleUrl, "openai-compatible URL", DEFAULT_OPENAI_COMPATIBLE_URL);', source)
         self.assertIn('let safePersonalContext = this._coerceCliTextArgOrFallback(this._singleLineCliTextValue(this.personalContext), "personal context", "");', source)
         self.assertIn('let safeVocabulary = this._coerceCliTextArgOrFallback(this._singleLineCliTextValue(this.vocabulary), "vocabulary", "");', source)
         self.assertIn("for (let key in CLI_TEXT_SETTINGS)", source)
         self.assertIn('let safeOllamaUrl = this._coerceCliTextArgOrFallback(this.ollamaUrl, "ollama URL", DEFAULT_OLLAMA_URL);', source)
-        self.assertIn('let safeOpenAiCompatibleUrl = this._coerceCliTextArgOrFallback(this.openaiCompatibleUrl, "openai-compatible URL", DEFAULT_OPENAI_COMPATIBLE_URL);', source)
+        self.assertIn('let safeOpenAiCompatibleUrl = this._validatedExternalApiUrlOrFallback(this.openaiCompatibleUrl, "openai-compatible URL", DEFAULT_OPENAI_COMPATIBLE_URL);', source)
         self.assertIn("_coerceImportedSetting: function(key, value, fallback)", source)
 
     def test_text_model_menu_can_install_ollama_model(self) -> None:

@@ -2556,7 +2556,7 @@ MyApplet.prototype = {
     let safePostProcessCommand = this._coerceCliTextArgOrFallback(this.postProcessCommand, "post-process command", "");
     let safeOllamaUrl = this._coerceCliTextArgOrFallback(this.ollamaUrl, "ollama URL", DEFAULT_OLLAMA_URL);
     let safeOllamaModel = this._coerceCliTextArgOrFallback(this.ollamaModel, "ollama model", "");
-    let safeOpenAiCompatibleUrl = this._coerceCliTextArgOrFallback(this.openaiCompatibleUrl, "openai-compatible URL", DEFAULT_OPENAI_COMPATIBLE_URL);
+    let safeOpenAiCompatibleUrl = this._validatedExternalApiUrlOrFallback(this.openaiCompatibleUrl, "openai-compatible URL", DEFAULT_OPENAI_COMPATIBLE_URL);
     let safeOpenAiCompatibleModel = this._coerceCliTextArgOrFallback(this.openaiCompatibleModel, "openai-compatible model", DEFAULT_OPENAI_COMPATIBLE_MODEL);
     let safeOpenAiCompatibleTextModel = this._coerceCliTextArgOrFallback(this.openaiCompatibleTextModel, "openai-compatible text model", DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL);
     let safePostProcessPrompt = this._coerceCliTextArgOrFallback(this._effectivePostProcessPrompt(), "post-process prompt", "");
@@ -2828,7 +2828,7 @@ MyApplet.prototype = {
 
   _textModelsArgs: function(backendOverride) {
     let safeOllamaUrl = this._coerceCliTextArg(this.ollamaUrl, "ollama URL");
-    let safeOpenAiCompatibleUrl = this._coerceCliTextArg(this.openaiCompatibleUrl, "openai-compatible URL");
+    let safeOpenAiCompatibleUrl = this._validatedExternalApiUrlOrFallback(this.openaiCompatibleUrl, "openai-compatible URL", DEFAULT_OPENAI_COMPATIBLE_URL);
 
     let args = [this._cliCommand(), "text-models", "--json"];
     let backend = String(backendOverride || this.postProcessBackend || "");
@@ -5812,6 +5812,16 @@ MyApplet.prototype = {
       throw new Error(field + " must use https:// unless host is local loopback");
     }
     return normalized;
+  },
+
+  _validatedExternalApiUrlOrFallback: function(value, fieldName, fallback) {
+    let safeFallback = typeof fallback === "string" ? fallback : DEFAULT_OPENAI_COMPATIBLE_URL;
+    try {
+      return this._validateExternalApiUrl(value, fieldName);
+    } catch (error) {
+      this._recordLifecycleError("settings-url", error);
+      return safeFallback;
+    }
   },
 
   _validatedExternalApiConfig: function(values) {
