@@ -837,7 +837,7 @@ MyApplet.prototype = {
   },
 
   _dialogSetButtons: function(dialog, buttons, group) {
-    if (!dialog || !dialog.setButtons || !Array.isArray(buttons)) {
+    if (!dialog || !Array.isArray(buttons)) {
       return false;
     }
     let safeButtons;
@@ -854,6 +854,9 @@ MyApplet.prototype = {
       return false;
     }
     return this._runGuarded("dialog-" + String(group || "buttons"), () => {
+      if (typeof dialog.setButtons !== "function") {
+        return false;
+      }
       dialog.setButtons(safeButtons);
       return true;
     }, false) === true;
@@ -890,10 +893,13 @@ MyApplet.prototype = {
   },
 
   _dialogOpen: function(dialog, group) {
-    if (!dialog || !dialog.open || !this._lifecycleAllowsWork()) {
+    if (!dialog || !this._lifecycleAllowsWork()) {
       return false;
     }
     return this._runGuarded("dialog-" + String(group || "open"), () => {
+      if (typeof dialog.open !== "function") {
+        return false;
+      }
       dialog.open();
       return true;
     }, false) === true;

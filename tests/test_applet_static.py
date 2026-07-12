@@ -1860,6 +1860,17 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         self.assertLess(block.index("_runGuarded"), block.index("dialog.contentLayout"))
 
+    def test_dialog_action_preconditions_are_guarded(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        buttons_start = source.index("_dialogSetButtons: function(dialog, buttons, group)")
+        buttons_end = source.index("\n  _dialogClose:", buttons_start)
+        buttons_block = source[buttons_start:buttons_end]
+        self.assertLess(buttons_block.index("_runGuarded"), buttons_block.index("dialog.setButtons"))
+        open_start = source.index("_dialogOpen: function(dialog, group)")
+        open_end = source.index("\n  _destroyTrackedDialogs:", open_start)
+        open_block = source[open_start:open_end]
+        self.assertLess(open_block.index("_runGuarded"), open_block.index("dialog.open"))
+
     def test_menu_teardown_retains_handles_after_cleanup_failures(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_destroyMenus: function()")
