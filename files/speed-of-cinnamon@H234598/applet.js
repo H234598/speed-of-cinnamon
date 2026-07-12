@@ -5446,6 +5446,14 @@ MyApplet.prototype = {
     if (!modelMenuRefreshCleanupSucceeded) {
       this._setStatusPreservingRecording("error", _("Voice model list refresh could not be stopped"), this.lastTranscript);
     }
+    let hadVoiceModelAction = Boolean(this.voiceModelActionToken);
+    this.voiceModelActionToken = null;
+    let voiceModelCleanupSucceeded = this._terminateProcessesByGroup("voice-model") !== false;
+    if (!voiceModelCleanupSucceeded) {
+      this._setStatusPreservingRecording("error", _("Voice model operation could not be stopped"), this.lastTranscript);
+    } else if (hadVoiceModelAction && !this._recordingCommandToken) {
+      this.isCommandRunning = false;
+    }
     this.textModelMenuRefreshToken = null;
     let textModelRefreshCleanupSucceeded = this._terminateProcessesByGroup("text-model-refresh") !== false;
     if (!textModelRefreshCleanupSucceeded) {
@@ -5494,7 +5502,7 @@ MyApplet.prototype = {
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
     this.transcriptListPromptToken = null;
-    return historyRefreshCleanupSucceeded && inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && textModelRefreshCleanupSucceeded && alarmMenuRefreshCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;
+    return historyRefreshCleanupSucceeded && inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && voiceModelCleanupSucceeded && textModelRefreshCleanupSucceeded && alarmMenuRefreshCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;
   },
 
   _runDoctor: function(startupCheck) {

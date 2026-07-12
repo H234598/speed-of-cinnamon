@@ -6011,6 +6011,7 @@ class AppletStaticTest(unittest.TestCase):
             "historyRefreshToken",
             "inputSourceMenuRefreshToken",
             "modelMenuRefreshToken",
+            "voiceModelActionToken",
             "textModelMenuRefreshToken",
             "alarmMenuRefreshToken",
             "alarmActionToken",
@@ -6026,6 +6027,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._terminateProcessesByGroup("history-refresh")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("input-source-refresh")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("model-menu-refresh")', helper_block)
+        self.assertIn('this._terminateProcessesByGroup("voice-model")', helper_block)
+        self.assertIn("let hadVoiceModelAction = Boolean(this.voiceModelActionToken);", helper_block)
+        self.assertIn("if (hadVoiceModelAction && !this._recordingCommandToken)", helper_block)
         self.assertIn('this._terminateProcessesByGroup("text-model-refresh")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("alarm-menu-refresh")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("alarm-action")', helper_block)
@@ -6036,7 +6040,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._terminateProcessesByGroup("doctor")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("settings-transfer")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("setup-diagnostics")', helper_block)
-        self.assertIn("return historyRefreshCleanupSucceeded && inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && textModelRefreshCleanupSucceeded && alarmMenuRefreshCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;", helper_block)
+        self.assertIn("return historyRefreshCleanupSucceeded && inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && voiceModelCleanupSucceeded && textModelRefreshCleanupSucceeded && alarmMenuRefreshCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;", helper_block)
         self.assertNotIn("this.transcriptWindowToken = null;", helper_block)
         self.assertNotIn("this.settingsWindowToken = null;", helper_block)
 
