@@ -1567,6 +1567,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._cancelOllamaInstallWatch();", text_block)
         self.assertIn("this._clearOllamaModelFlow", text_block)
         self.assertIn("this.textModelMenuRefreshToken = null;", text_block)
+        self.assertIn('this._terminateProcessesByGroup("text-model-refresh")', text_block)
+        self.assertLess(
+            text_block.index("this.textModelMenuRefreshToken = null;"),
+            text_block.index('this._terminateProcessesByGroup("text-model-refresh")')
+        )
 
     def test_text_model_payload_names_must_be_strings(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -1897,6 +1902,8 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn(f"if (this.{token_name} === refreshToken) {{", block)
             self.assertIn('this._recordLifecycleError("menu-refresh", error);', block)
             self.assertIn(f'_("{message}")', block)
+            if method == "_refreshTextModelMenuForBackend: function(backendOverride)":
+                self.assertIn('resourceGroup: "text-model-refresh"', block)
 
     def test_menu_backend_tokens_release_when_argument_building_fails(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -3590,6 +3597,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertLess(refresh_block.index("if (this.textModelMenuRefreshToken && !backendOverride)"), refresh_block.index("let refreshToken = {};"))
         self.assertIn("this.textModelMenuRefreshToken = null;", refresh_block)
         self.assertLess(refresh_block.index("this.textModelMenuRefreshToken = null;"), refresh_block.index("this._tryTextModelsArgs"))
+        self.assertIn('this._terminateProcessesByGroup("text-model-refresh")', refresh_block)
+        self.assertLess(
+            refresh_block.index('this._terminateProcessesByGroup("text-model-refresh")'),
+            refresh_block.index("this._tryTextModelsArgs")
+        )
 
         watch_start = source.index("_scheduleOllamaInstallWatchPoll: function(watchToken)")
         watch_end = source.index("\n  _scheduleSetupCheck:", watch_start)

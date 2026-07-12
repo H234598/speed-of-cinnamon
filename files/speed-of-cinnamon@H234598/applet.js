@@ -3840,6 +3840,7 @@ MyApplet.prototype = {
 
   _onTextModelSettingsChanged: function() {
     this.textModelMenuRefreshToken = null;
+    let textModelRefreshCleanupSucceeded = this._terminateProcessesByGroup("text-model-refresh") !== false;
     this._cancelOllamaInstallWatch();
     if (!this._clearOllamaModelFlow()) {
       this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
@@ -3847,6 +3848,9 @@ MyApplet.prototype = {
     }
     this._populateTextModelMenu([], _("Open menu to load local text models"));
     this._updatePanel();
+    if (!textModelRefreshCleanupSucceeded) {
+      this._setStatusPreservingRecording("error", _("Text model list refresh could not be stopped"), this.lastTranscript);
+    }
   },
 
   _onOpenAiFlexProcessingSettingsChanged: function() {
@@ -7953,6 +7957,10 @@ MyApplet.prototype = {
       return;
     }
     this.textModelMenuRefreshToken = null;
+    if (this._terminateProcessesByGroup("text-model-refresh") === false) {
+      this._setStatusPreservingRecording("error", _("Text model list refresh could not be stopped"), this.lastTranscript);
+      return;
+    }
     let textModelArgs = this._tryTextModelsArgs(backendOverride);
     if (!textModelArgs) {
       return;
@@ -7990,7 +7998,7 @@ MyApplet.prototype = {
         this._recordLifecycleError("menu-refresh", error);
         this._setStatusPreservingRecording("error", _("Could not refresh text model list"), this.lastTranscript);
       }
-    });
+    }, { resourceGroup: "text-model-refresh" });
   },
 
   _populateTextModelMenu: function(models, message, provider) {
