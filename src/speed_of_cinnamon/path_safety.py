@@ -209,10 +209,12 @@ def _write_atomically_without_following_symlinks(
     if not isinstance(path, Path):
         raise RuntimeError(f"{field_name} must be a path")
     assert_safe_path_components(path, field_name=field_name)
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise OSError(f"secure atomic write is not supported for {field_name}")
     parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name=f"{field_name} directory")
     temp_name = ""
     try:
-        nofollow_flag = getattr(os, "O_NOFOLLOW", 0)
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag
         try:
             target_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)

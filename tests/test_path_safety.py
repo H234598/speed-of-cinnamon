@@ -20,6 +20,13 @@ class PathSafetyTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "must be absolute"):
             path_safety.write_text_atomically_without_following_symlinks(Path("settings.json"), "{}")
 
+    def test_atomic_write_fails_closed_without_nofollow(self) -> None:
+        with (
+            mock.patch.object(path_safety.os, "O_NOFOLLOW", None, create=True),
+            self.assertRaisesRegex(OSError, "secure atomic write is not supported"),
+        ):
+            path_safety.write_text_atomically_without_following_symlinks(Path("/tmp/settings.json"), "{}")
+
     def test_atomic_write_creates_parent_without_pathlib_mkdir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "nested" / "settings.json"
