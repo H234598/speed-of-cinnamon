@@ -473,6 +473,9 @@ class AppletStaticTest(unittest.TestCase):
         end = source.index("\n  _nextResourceToken:", start)
         untrack_block = source[start:end]
         self.assertIn('this._recordLifecycleError("monitor-untrack", error);', untrack_block)
+        self.assertIn("let removed = this._resourceRegistry.monitors.splice(index, 1);", untrack_block)
+        self.assertIn('throw new Error("Monitor registry entry could not be removed");', untrack_block)
+        self.assertIn("this._resourceRegistry.monitors.indexOf(monitor) >= 0", untrack_block)
         self.assertIn("return false;", untrack_block)
         self.assertLess(untrack_block.index("try {"), untrack_block.index("this._resourceRegistry.monitors.indexOf(monitor)"))
 

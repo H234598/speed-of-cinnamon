@@ -1546,7 +1546,10 @@ MyApplet.prototype = {
       if (index < 0) {
         return true;
       }
-      this._resourceRegistry.monitors.splice(index, 1);
+      let removed = this._resourceRegistry.monitors.splice(index, 1);
+      if (!Array.isArray(removed) || removed.length !== 1 || this._resourceRegistry.monitors.indexOf(monitor) >= 0) {
+        throw new Error("Monitor registry entry could not be removed");
+      }
       return true;
     } catch (error) {
       this._recordLifecycleError("monitor-untrack", error);
