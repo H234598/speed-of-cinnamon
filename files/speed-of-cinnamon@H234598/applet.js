@@ -5673,6 +5673,18 @@ MyApplet.prototype = {
       let suffix = migrated.lastIndexOf("\n") === migrated.length - 1 ? "" : "\n";
       migrated += suffix + "OPENAI_COMPATIBLE_TEXT_MODEL=" + this._externalApiEnvValue(this.openaiCompatibleTextModel, DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL) + "\n";
     }
+    let legacyApiKey = this._coerceCliTextArg(
+      this.openaiCompatibleApiKey || "",
+      "openai-compatible API key"
+    ).trim();
+    let migratedValues = this._parseExternalApiEnvText(migrated);
+    let migratedApiKey = typeof migratedValues.OPENAI_COMPATIBLE_API_KEY === "string"
+      ? migratedValues.OPENAI_COMPATIBLE_API_KEY.trim()
+      : "";
+    if (legacyApiKey !== "" && migratedApiKey === "") {
+      let suffix = migrated.lastIndexOf("\n") === migrated.length - 1 ? "" : "\n";
+      migrated += suffix + "OPENAI_COMPATIBLE_API_KEY=" + legacyApiKey + "\n";
+    }
     if (migrated !== text) {
       try {
         this._writeExternalApiEnvFileContents(path, migrated);
@@ -5725,6 +5737,9 @@ MyApplet.prototype = {
         textModel: values.OPENAI_COMPATIBLE_TEXT_MODEL || "",
         apiKey: values.OPENAI_COMPATIBLE_API_KEY || "",
       });
+      if (String(this.openaiCompatibleApiKey || "").trim() !== "" && config.apiKey.trim() === "") {
+        throw new Error("External API config does not contain the persisted API key");
+      }
     } catch (err) {
       this._safeLogError(err);
       this._setStatusPreservingRecording("error", _("External API config contains invalid values"), this.lastTranscript);
