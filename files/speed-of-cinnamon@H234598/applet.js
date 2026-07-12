@@ -5749,16 +5749,28 @@ MyApplet.prototype = {
   },
 
   _syncExternalApiConfigOnStartup: function() {
-    let changed = false;
+    let settingsWrites = [];
+    let nextUrl = this.openaiCompatibleUrl;
+    let nextModel = this.openaiCompatibleModel;
     if (String(this.openaiCompatibleUrl || "").trim() === LEGACY_OPENAI_COMPATIBLE_URL) {
-      this.openaiCompatibleUrl = DEFAULT_OPENAI_COMPATIBLE_URL;
-      this.settings.setValue("openai-compatible-url", this.openaiCompatibleUrl);
-      changed = true;
+      nextUrl = DEFAULT_OPENAI_COMPATIBLE_URL;
+      settingsWrites.push(["openai-compatible-url", nextUrl, this.openaiCompatibleUrl]);
     }
     if (String(this.openaiCompatibleModel || "").trim() === "") {
-      this.openaiCompatibleModel = DEFAULT_OPENAI_COMPATIBLE_MODEL;
-      this.settings.setValue("openai-compatible-model", this.openaiCompatibleModel);
-      changed = true;
+      nextModel = DEFAULT_OPENAI_COMPATIBLE_MODEL;
+      settingsWrites.push(["openai-compatible-model", nextModel, this.openaiCompatibleModel]);
+    }
+    let defaultsCommitted = true;
+    if (settingsWrites.length > 0) {
+      defaultsCommitted = this._commitSettingsBatch(
+        settingsWrites,
+        "settings-external-api",
+        _("External API defaults could not be saved")
+      );
+      if (defaultsCommitted) {
+        this.openaiCompatibleUrl = nextUrl;
+        this.openaiCompatibleModel = nextModel;
+      }
     }
     let hasLegacyApiKey = String(this.openaiCompatibleApiKey || "").trim() !== "";
     if (GLib.file_test(this._externalApiEnvPath(), GLib.FileTest.EXISTS)) {
@@ -5768,7 +5780,7 @@ MyApplet.prototype = {
       }
       return;
     }
-    if (changed || hasLegacyApiKey) {
+    if (defaultsCommitted && (settingsWrites.length > 0 || hasLegacyApiKey)) {
       let envPath = this._ensureExternalApiEnvFile();
       if (envPath && this._applyExternalApiEnvFile(false)) {
         this._clearPersistedOpenAiCompatibleApiKey();
