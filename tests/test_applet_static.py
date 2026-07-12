@@ -1772,7 +1772,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let selected = false;", block)
         self.assertIn('if (!entry || typeof entry !== "object" || String(entry.group || "process") !== wanted)', block)
         self.assertIn('this._recordLifecycleError("process-cancel", error);', block)
-        self.assertIn("if (selected) {\n            this._unregisterProcess(token);", block)
+        self.assertIn("let cleanupSucceeded = false;", block)
+        self.assertIn("if (selected && cleanupSucceeded) {\n          this._unregisterProcess(token);", block)
 
     def test_process_and_cancellable_unregistration_contains_delete_failures(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -3119,13 +3120,16 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("typeof entry.cancel === \"function\"", group_block)
         self.assertIn("entry.cancel(Boolean(notifyCallback));", group_block)
         self.assertIn('this._recordLifecycleError("process-cancel", error);', group_block)
-        self.assertIn("finally {\n          if (selected) {", group_block)
+        self.assertIn("let cleanupSucceeded = false;", group_block)
+        self.assertIn("if (selected && cleanupSucceeded) {", group_block)
 
         all_start = source.index("_terminateAllProcesses: function()")
         all_end = source.index("\n  _terminateProcessesByGroup:", all_start)
         all_block = source[all_start:all_end]
         self.assertIn('this._recordLifecycleError("process-cancel", error);', all_block)
-        self.assertIn("finally {\n            this._unregisterProcess(token);", all_block)
+        self.assertIn("let cleanupSucceeded = false;", all_block)
+        self.assertIn("if (cleanupSucceeded) {\n            this._unregisterProcess(token);", all_block)
+        self.assertIn('if (result === false) {\n                throw new Error("Process cancellation failed");', all_block)
 
     def test_teardown_uses_safe_process_and_cancellable_unregistration(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -3134,6 +3138,20 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         self.assertIn("this._unregisterCancellable(token);", block)
         self.assertNotIn("delete cancellables[token];", block)
+        self.assertIn("let cleanupSucceeded = false;", block)
+        self.assertIn('throw new Error("Cancellable cancellation is unavailable");', block)
+        self.assertIn('throw new Error("Cancellable cancellation failed");', block)
+
+    def test_process_termination_reports_failed_force_exit(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_terminateProcess: function(process)")
+        end = source.index("\n  _terminateAllProcesses:", start)
+        block = source[start:end]
+        self.assertIn('throw new Error("Process exit state API is unavailable");', block)
+        self.assertIn('throw new Error("Process termination API is unavailable");', block)
+        self.assertIn('if (result === false)', block)
+        self.assertIn("return true;", block)
+        self.assertIn("return false;", block)
 
     def test_keyboard_group_cancel_notifies_active_insert_cleanup(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

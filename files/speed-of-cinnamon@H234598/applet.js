@@ -1265,14 +1265,25 @@ MyApplet.prototype = {
 
   _terminateProcess: function(process) {
     if (!process) {
-      return;
+      return false;
     }
     try {
-      if (!process.get_if_exited() && process.force_exit) {
-        process.force_exit();
+      if (typeof process.get_if_exited !== "function") {
+        throw new Error("Process exit state API is unavailable");
       }
+      if (!process.get_if_exited()) {
+        if (typeof process.force_exit !== "function") {
+          throw new Error("Process termination API is unavailable");
+        }
+        let result = process.force_exit();
+        if (result === false) {
+          throw new Error("Process termination failed");
+        }
+      }
+      return true;
     } catch (error) {
       this._recordLifecycleError("process-kill", error);
+      return false;
     }
   },
 
@@ -1283,15 +1294,22 @@ MyApplet.prototype = {
         : {};
       for (let token in processes) {
         if (Object.prototype.hasOwnProperty.call(processes, token)) {
+          let cleanupSucceeded = false;
           try {
-            if (processes[token] && typeof processes[token].cancel === "function") {
-              processes[token].cancel();
-            } else if (processes[token]) {
-              this._terminateProcess(processes[token].process);
+            let entry = processes[token];
+            if (entry && typeof entry.cancel === "function") {
+              let result = entry.cancel();
+              if (result === false) {
+                throw new Error("Process cancellation failed");
+              }
+            } else if (entry && !this._terminateProcess(entry.process)) {
+              throw new Error("Process termination failed");
             }
+            cleanupSucceeded = true;
           } catch (error) {
             this._recordLifecycleError("process-cancel", error);
-          } finally {
+          }
+          if (cleanupSucceeded) {
             this._unregisterProcess(token);
           }
         }
@@ -1314,6 +1332,7 @@ MyApplet.prototype = {
         }
         let entry = null;
         let selected = false;
+        let cleanupSucceeded = false;
         try {
           entry = processes[token];
           if (!entry || typeof entry !== "object" || String(entry.group || "process") !== wanted) {
@@ -1321,16 +1340,19 @@ MyApplet.prototype = {
           }
           selected = true;
           if (typeof entry.cancel === "function") {
-            entry.cancel(Boolean(notifyCallback));
-          } else {
-            this._terminateProcess(entry.process);
+            let result = entry.cancel(Boolean(notifyCallback));
+            if (result === false) {
+              throw new Error("Process cancellation failed");
+            }
+          } else if (!this._terminateProcess(entry.process)) {
+            throw new Error("Process termination failed");
           }
+          cleanupSucceeded = true;
         } catch (error) {
           this._recordLifecycleError("process-cancel", error);
-        } finally {
-          if (selected) {
-            this._unregisterProcess(token);
-          }
+        }
+        if (selected && cleanupSucceeded) {
+          this._unregisterProcess(token);
         }
       }
     } catch (error) {
@@ -1347,14 +1369,23 @@ MyApplet.prototype = {
         if (!Object.prototype.hasOwnProperty.call(cancellables, token)) {
           continue;
         }
+        let cleanupSucceeded = false;
         try {
-          if (cancellables[token] && cancellables[token].cancel) {
-            cancellables[token].cancel();
+          let cancellable = cancellables[token];
+          if (!cancellable || typeof cancellable.cancel !== "function") {
+            throw new Error("Cancellable cancellation is unavailable");
           }
+          let result = cancellable.cancel();
+          if (result === false) {
+            throw new Error("Cancellable cancellation failed");
+          }
+          cleanupSucceeded = true;
         } catch (error) {
           this._recordLifecycleError("teardown-cancellable", error);
         }
-        this._unregisterCancellable(token);
+        if (cleanupSucceeded) {
+          this._unregisterCancellable(token);
+        }
       }
     } catch (error) {
       this._recordLifecycleError("teardown-cancellable", error);
@@ -7818,28 +7849,39 @@ MyApplet.prototype = {
 
     let finish = (result, terminate, suppressCallback) => {
       if (done) {
-        return;
+        return true;
+      }
+      this._clearTrackedTimer(timeoutKey);
+      let terminationSucceeded = true;
+      if (terminate) {
+        terminationSucceeded = this._terminateProcess(process);
+      }
+      let cancellationSucceeded = true;
+      try {
+        let cancelResult = cancellable.cancel();
+        if (cancelResult === false) {
+          throw new Error("Subprocess cancellation failed");
+        }
+      } catch (error) {
+        cancellationSucceeded = false;
+        this._recordLifecycleError("process-cancel", error);
+      }
+      if (!terminationSucceeded || !cancellationSucceeded) {
+        return false;
       }
       done = true;
-      this._clearTrackedTimer(timeoutKey);
-      if (terminate) {
-        this._terminateProcess(process);
-      }
-      try {
-        cancellable.cancel();
-      } catch (ignored) {
-        // Cancellation is best effort during normal EOF and teardown.
-      }
-      this._unregisterProcess(processToken);
-      this._unregisterCancellable(cancellableToken);
+      let processCleanupSucceeded = this._unregisterProcess(processToken);
+      let cancellableCleanupSucceeded = this._unregisterCancellable(cancellableToken);
+      let cleanupSucceeded = processCleanupSucceeded && cancellableCleanupSucceeded;
       if (suppressCallback || this.appletRemoved || this.spawnGeneration !== generation || typeof callback !== "function") {
-        return;
+        return cleanupSucceeded;
       }
       try {
         callback(stdoutParts.join(""), stderrParts.join(""), result || {});
       } catch (error) {
         this._recordLifecycleError("process-callback", error);
       }
+      return cleanupSucceeded;
     };
     try {
       let processEntry = this._resourceRegistry && this._resourceRegistry.processes
