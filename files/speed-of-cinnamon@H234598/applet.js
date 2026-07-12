@@ -1460,6 +1460,7 @@ MyApplet.prototype = {
   },
 
   _destroyMenus: function() {
+    let success = true;
     let cleanupMenu = (menu, group, propertyName) => {
       if (!menu) {
         return true;
@@ -1469,25 +1470,41 @@ MyApplet.prototype = {
       let destroySucceeded = this._runTeardownOperation("teardown-" + group + "-destroy", menu, "destroy");
       if (signalsSucceeded && closeSucceeded && destroySucceeded) {
         if (!this._untrackOrphanedMenu(menu)) {
-          this._trackOrphanedMenu(menu, propertyName, group, true, true, true, true);
+          if (!this._trackOrphanedMenu(menu, propertyName, group, true, true, true, true)) {
+            success = false;
+          }
+          success = false;
           return false;
         }
         return true;
       }
-      this._trackOrphanedMenu(menu, propertyName, group, true, signalsSucceeded, closeSucceeded, destroySucceeded);
+      if (!this._trackOrphanedMenu(menu, propertyName, group, true, signalsSucceeded, closeSucceeded, destroySucceeded)) {
+        success = false;
+      }
+      success = false;
       return false;
     };
     let menu = this.menu;
     if (cleanupMenu(menu, "menu", "menu")) {
       if (!this._clearDestroyedMenuReference(menu, "menu", "teardown-menu")) {
-        this._trackOrphanedMenu(menu, "menu", "menu", false, true, true, true);
+        if (!this._trackOrphanedMenu(menu, "menu", "menu", false, true, true, true)) {
+          success = false;
+        }
+        success = false;
       }
+    } else {
+      success = false;
     }
     let contextMenu = this._applet_context_menu;
     if (cleanupMenu(contextMenu, "context-menu", "_applet_context_menu")) {
       if (!this._clearDestroyedMenuReference(contextMenu, "_applet_context_menu", "teardown-context-menu")) {
-        this._trackOrphanedMenu(contextMenu, "_applet_context_menu", "context-menu", false, true, true, true);
+        if (!this._trackOrphanedMenu(contextMenu, "_applet_context_menu", "context-menu", false, true, true, true)) {
+          success = false;
+        }
+        success = false;
       }
+    } else {
+      success = false;
     }
     let cleanupManager = (manager, group, propertyName) => {
       if (!manager) {
@@ -1497,26 +1514,43 @@ MyApplet.prototype = {
       let destroySucceeded = this._runTeardownOperation("teardown-" + group + "-destroy", manager, "destroy");
       if (signalsSucceeded && destroySucceeded) {
         if (!this._untrackOrphanedMenu(manager)) {
-          this._trackOrphanedMenu(manager, propertyName, group, false, true, true, true);
+          if (!this._trackOrphanedMenu(manager, propertyName, group, false, true, true, true)) {
+            success = false;
+          }
+          success = false;
           return false;
         }
         return true;
       }
-      this._trackOrphanedMenu(manager, propertyName, group, false, signalsSucceeded, true, destroySucceeded);
+      if (!this._trackOrphanedMenu(manager, propertyName, group, false, signalsSucceeded, true, destroySucceeded)) {
+        success = false;
+      }
+      success = false;
       return false;
     };
     let menuManager = this.menuManager;
     if (cleanupManager(menuManager, "menu-manager", "menuManager")) {
       if (!this._clearDestroyedMenuReference(menuManager, "menuManager", "teardown-menu-manager")) {
-        this._trackOrphanedMenu(menuManager, "menuManager", "menu-manager", false, true, true, true);
+        if (!this._trackOrphanedMenu(menuManager, "menuManager", "menu-manager", false, true, true, true)) {
+          success = false;
+        }
+        success = false;
       }
+    } else {
+      success = false;
     }
     let privateMenuManager = this._menuManager;
     if (cleanupManager(privateMenuManager, "private-menu-manager", "_menuManager")) {
       if (!this._clearDestroyedMenuReference(privateMenuManager, "_menuManager", "teardown-private-menu-manager")) {
-        this._trackOrphanedMenu(privateMenuManager, "_menuManager", "private-menu-manager", false, true, true, true);
+        if (!this._trackOrphanedMenu(privateMenuManager, "_menuManager", "private-menu-manager", false, true, true, true)) {
+          success = false;
+        }
+        success = false;
       }
+    } else {
+      success = false;
     }
+    return success;
   },
 
   _clearDestroyedMenuReference: function(menu, propertyName, errorGroup) {

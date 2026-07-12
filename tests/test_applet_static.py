@@ -2537,6 +2537,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('throw new Error("Menu items could not be removed");', block)
         self.assertLess(block.index("try {"), block.index("for (let item of items)"))
 
+    def test_menu_teardown_reports_partial_cleanup_failures(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_destroyMenus: function()")
+        end = source.index("\n  _clearDestroyedMenuReference:", start)
+        block = source[start:end]
+        self.assertIn("let success = true;", block)
+        self.assertIn("success = false;", block)
+        self.assertIn("if (!this._trackOrphanedMenu(menu, propertyName, group, true, signalsSucceeded, closeSucceeded, destroySucceeded))", block)
+        self.assertIn("if (!this._trackOrphanedMenu(manager, propertyName, group, false, signalsSucceeded, true, destroySucceeded))", block)
+        self.assertIn("return success;", block)
+
     def test_menu_refreshes_abort_when_menu_reset_fails(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         for line in source.splitlines():
@@ -2640,7 +2651,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._runTeardownOperation(\"teardown-\" + group + \"-signals\", menu, \"disconnectAllSignals\", [], true)", block)
         self.assertIn("this._runTeardownOperation(\"teardown-\" + group + \"-close\"", block)
         self.assertIn("this._runTeardownOperation(\"teardown-\" + group + \"-destroy\"", block)
-        self.assertIn("this._trackOrphanedMenu(menu, propertyName, group, true, signalsSucceeded, closeSucceeded, destroySucceeded);", block)
+        self.assertIn("if (!this._trackOrphanedMenu(menu, propertyName, group, true, signalsSucceeded, closeSucceeded, destroySucceeded))", block)
         self.assertIn("if (cleanupMenu(menu, \"menu\", \"menu\"))", block)
         self.assertIn("if (cleanupMenu(contextMenu, \"context-menu\", \"_applet_context_menu\"))", block)
         self.assertIn("let cleanupManager = (manager, group, propertyName) => {", block)
