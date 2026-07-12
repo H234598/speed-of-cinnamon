@@ -1901,9 +1901,13 @@ MyApplet.prototype = {
         success = false;
         continue;
       }
-      let cancellable = this._resourceRegistry && this._resourceRegistry.cancellables
-        ? this._resourceRegistry.cancellables[entry.token]
-        : null;
+      let registry = this._resourceRegistry && this._resourceRegistry.cancellables;
+      if (!registry) {
+        this._recordLifecycleError("cancellable-state", new Error("Cancellable registry is unavailable"));
+        success = false;
+        continue;
+      }
+      let cancellable = registry[entry.token];
       if (!cancellable) {
         if (!this._untrackOrphanedCancellable(entry.token)) {
           success = false;
