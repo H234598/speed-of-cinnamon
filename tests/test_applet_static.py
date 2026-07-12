@@ -397,6 +397,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('throw new Error("Monitor registry is unavailable");', monitor_block)
         self.assertIn("if (monitors.indexOf(monitor) < 0)", monitor_block)
         self.assertIn('throw new Error("Monitor could not be registered");', monitor_block)
+        self.assertIn("let added = false;", monitor_block)
+        self.assertIn("monitors.pop();", monitor_block)
+        self.assertIn('this._recordLifecycleError("monitor-registration-rollback", rollbackError);', monitor_block)
 
     def test_error_status_displays_backend_error_message(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

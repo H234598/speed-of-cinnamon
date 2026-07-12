@@ -1028,13 +1028,34 @@ MyApplet.prototype = {
       throw new Error("Monitor registry is unavailable");
     }
     let monitors = this._resourceRegistry.monitors;
-    if (monitors.indexOf(monitor) < 0) {
-      monitors.push(monitor);
+    let added = false;
+    try {
       if (monitors.indexOf(monitor) < 0) {
-        throw new Error("Monitor could not be registered");
+        monitors.push(monitor);
+        added = true;
+        if (monitors.indexOf(monitor) < 0) {
+          throw new Error("Monitor could not be registered");
+        }
       }
+      return monitor;
+    } catch (error) {
+      if (added) {
+        try {
+          let lastIndex = monitors.length - 1;
+          if (lastIndex >= 0 && monitors[lastIndex] === monitor) {
+            monitors.pop();
+          } else {
+            let index = monitors.indexOf(monitor);
+            if (index >= 0) {
+              monitors.splice(index, 1);
+            }
+          }
+        } catch (rollbackError) {
+          this._recordLifecycleError("monitor-registration-rollback", rollbackError);
+        }
+      }
+      throw error;
     }
-    return monitor;
   },
 
   _untrackMonitor: function(monitor) {
