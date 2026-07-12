@@ -4185,7 +4185,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (mkdirResult !== 0)", source)
         self.assertIn('throw new Error("folder could not be created");', source)
         self.assertIn('throw new Error("External API config directory could not be created");', source)
-        self.assertIn("GLib.file_test(path, GLib.FileTest.IS_DIR)", source)
+        self.assertIn('query_info("standard::type", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null)', source)
+        self.assertIn("info.get_file_type() !== Gio.FileType.DIRECTORY", source)
         self.assertIn('query_info("standard::type", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null)', source)
         self.assertIn("info.get_file_type() !== Gio.FileType.REGULAR", source)
         self.assertIn('this._openUri(RUNBOOK_URL, _("Opened setup guide"))', source)
@@ -4210,6 +4211,15 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('file.query_info("standard::type", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null)', block)
         self.assertIn("info.get_file_type() !== Gio.FileType.REGULAR", block)
         self.assertNotIn("GLib.FileTest.EXISTS", block)
+
+    def test_open_folder_rejects_symlinked_directories(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_openFolder: function(path, successMessage)")
+        end = source.index("\n  _openFile:", start)
+        block = source[start:end]
+        self.assertIn("let folder = Gio.File.new_for_path(path);", block)
+        self.assertIn('folder.query_info("standard::type", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null)', block)
+        self.assertIn("info.get_file_type() !== Gio.FileType.DIRECTORY", block)
 
     def test_applet_copies_setup_commands_without_installing_packages(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

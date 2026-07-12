@@ -4126,8 +4126,10 @@ MyApplet.prototype = {
       if (mkdirResult !== 0) {
         throw new Error("folder could not be created");
       }
-      if (!GLib.file_test(path, GLib.FileTest.IS_DIR)) {
-        throw new Error("folder is not available: " + path);
+      let folder = Gio.File.new_for_path(path);
+      let info = folder.query_info("standard::type", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
+      if (!info || info.get_file_type() !== Gio.FileType.DIRECTORY) {
+        throw new Error("path is not a regular directory");
       }
       this._openUri(GLib.filename_to_uri(path, null), successMessage);
     } catch (err) {
