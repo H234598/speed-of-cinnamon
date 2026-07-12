@@ -5440,6 +5440,10 @@ MyApplet.prototype = {
     this.alarmCheckToken = null;
     this.benchmarkFlowToken = null;
     this.settingsTransferToken = null;
+    let settingsTransferCleanupSucceeded = this._terminateProcessesByGroup("settings-transfer") !== false;
+    if (!settingsTransferCleanupSucceeded) {
+      this._setStatusPreservingRecording("error", _("Settings transfer could not be stopped"), this.lastTranscript);
+    }
     this.setupDiagnosticsToken = null;
     let setupDiagnosticsCleanupSucceeded = this._terminateProcessesByGroup("setup-diagnostics") !== false;
     if (!setupDiagnosticsCleanupSucceeded) {
@@ -5455,7 +5459,7 @@ MyApplet.prototype = {
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
     this.transcriptListPromptToken = null;
-    return setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;
+    return settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;
   },
 
   _runDoctor: function(startupCheck) {
@@ -9545,7 +9549,7 @@ MyApplet.prototype = {
         this._recordLifecycleError("settings-transfer", error);
         this._setStatus("error", _("Could not complete settings export"), this.lastTranscript);
       }
-    }, inputOption);
+    }, Object.assign({}, inputOption, { resourceGroup: "settings-transfer" }));
   },
 
   _importSettings: function() {
@@ -9591,7 +9595,7 @@ MyApplet.prototype = {
         this._recordLifecycleError("settings-transfer", error);
         this._setStatus("error", _("Could not complete settings import"), this.lastTranscript);
       }
-    });
+    }, { resourceGroup: "settings-transfer" });
   },
 
   _applyImportedSettings: function(settings) {

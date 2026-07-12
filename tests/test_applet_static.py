@@ -4300,6 +4300,7 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn("this.settingsTransferToken !== transferToken", block)
             self.assertIn("!this._lifecycleAllowsWork()", block)
             self.assertIn("if (this.settingsTransferToken || this._hasActiveRecordingState())", block)
+            self.assertIn('resourceGroup: "settings-transfer"', block)
             self.assertLess(block.index("if (this.settingsTransferToken || this._hasActiveRecordingState())"), block.index("let transferToken = {};"))
 
         import_start = source.index("_importSettings: function()")
@@ -6019,8 +6020,9 @@ class AppletStaticTest(unittest.TestCase):
         ]:
             self.assertIn(f"this.{token} = null;", helper_block)
         self.assertIn('this._terminateProcessesByGroup("doctor")', helper_block)
+        self.assertIn('this._terminateProcessesByGroup("settings-transfer")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("setup-diagnostics")', helper_block)
-        self.assertIn("return setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;", helper_block)
+        self.assertIn("return settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;", helper_block)
         self.assertNotIn("this.transcriptWindowToken = null;", helper_block)
         self.assertNotIn("this.settingsWindowToken = null;", helper_block)
 
