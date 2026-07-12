@@ -167,6 +167,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("read_bytes_async", source)
         self.assertIn("process.wait_check_async", source)
         self.assertIn("source.wait_check_finish(result)", source)
+        self.assertIn("if (waitResult !== true)", source)
+        self.assertIn('throw new Error("Subprocess exit status check failed");', source)
         self.assertIn("let finishWhenReady = () => {", source)
         self.assertIn('finish({ error: "Subprocess exited unsuccessfully" }, false);', source)
         self.assertIn("SUBPROCESS_READ_CHUNK_BYTES", source)

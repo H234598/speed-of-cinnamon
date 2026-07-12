@@ -7638,7 +7638,10 @@ MyApplet.prototype = {
           }
           processExited = true;
           try {
-            source.wait_check_finish(result);
+            let waitResult = source.wait_check_finish(result);
+            if (waitResult !== true) {
+              throw new Error("Subprocess exit status check failed");
+            }
             processSuccessful = true;
           } catch (error) {
             processWaitError = error;
