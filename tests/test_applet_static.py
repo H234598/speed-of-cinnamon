@@ -362,6 +362,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._readExternalApiEnvFile(path)", source)
         self.assertIn("ByteArray.toString(contents)", source)
 
+    def test_external_api_urls_reject_out_of_range_ports_and_fake_loopback(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_validateExternalApiUrl: function(value, fieldName)")
+        end = source.index("\n  _validatedExternalApiConfig:", start)
+        block = source[start:end]
+        self.assertIn("let numericPort = Number(port.slice(1));", block)
+        self.assertIn("numericPort > 65535", block)
+        self.assertIn("let ipv4Loopback =", block)
+        self.assertIn("Number(ipv4Loopback[index]) > 255", block)
+        self.assertIn("let validIpv4Loopback = Boolean(ipv4Loopback);", block)
+
     def test_external_env_monitor_is_cleaned_when_signal_connection_fails(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_watchExternalApiEnvFile: function(path)")

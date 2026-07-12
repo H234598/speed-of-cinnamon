@@ -5738,11 +5738,27 @@ MyApplet.prototype = {
     if (host === "") {
       throw new Error(field + " requires a host");
     }
-    if (port !== "" && !/^:[0-9]{1,5}$/.test(port)) {
-      throw new Error(field + " has invalid port");
+    if (port !== "") {
+      if (!/^:[0-9]{1,5}$/.test(port)) {
+        throw new Error(field + " has invalid port");
+      }
+      let numericPort = Number(port.slice(1));
+      if (!isFinite(numericPort) || numericPort < 0 || numericPort > 65535) {
+        throw new Error(field + " has invalid port");
+      }
     }
     let normalizedHost = host.toLowerCase();
-    let localHost = normalizedHost === "localhost" || normalizedHost === "[::1]" || /^127\.(?:[0-9]{1,3}\.){2}[0-9]{1,3}$/.test(normalizedHost);
+    let ipv4Loopback = /^127\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$/.exec(normalizedHost);
+    let validIpv4Loopback = Boolean(ipv4Loopback);
+    if (validIpv4Loopback) {
+      for (let index = 1; index <= 3; index++) {
+        if (Number(ipv4Loopback[index]) > 255) {
+          validIpv4Loopback = false;
+          break;
+        }
+      }
+    }
+    let localHost = normalizedHost === "localhost" || normalizedHost === "[::1]" || validIpv4Loopback;
     if (match[1].toLowerCase() === "http" && !localHost) {
       throw new Error(field + " must use https:// unless host is local loopback");
     }
