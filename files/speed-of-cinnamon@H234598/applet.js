@@ -5745,13 +5745,46 @@ MyApplet.prototype = {
       this._setStatusPreservingRecording("error", _("External API config contains invalid values"), this.lastTranscript);
       return false;
     }
+    let previousConfig = {
+      url: this.openaiCompatibleUrl,
+      model: this.openaiCompatibleModel,
+      textModel: this.openaiCompatibleTextModel,
+      apiKey: this.externalApiEnvApiKey,
+    };
+    let settingsWrites = [
+      ["openai-compatible-url", config.url, previousConfig.url],
+      ["openai-compatible-model", config.model, previousConfig.model],
+      ["openai-compatible-text-model", config.textModel, previousConfig.textModel],
+    ];
+    let attemptedWrites = [];
+    try {
+      for (let setting of settingsWrites) {
+        attemptedWrites.push(setting);
+        let result = this.settings.setValue(setting[0], setting[1]);
+        if (result === false) {
+          throw new Error("External API setting could not be saved");
+        }
+      }
+    } catch (err) {
+      for (let index = attemptedWrites.length - 1; index >= 0; index--) {
+        let setting = attemptedWrites[index];
+        try {
+          let rollbackResult = this.settings.setValue(setting[0], setting[2]);
+          if (rollbackResult === false) {
+            throw new Error("External API setting rollback failed");
+          }
+        } catch (rollbackErr) {
+          this._safeLogError(rollbackErr);
+        }
+      }
+      this._safeLogError(err);
+      this._setStatusPreservingRecording("error", _("External API settings could not be saved"), this.lastTranscript);
+      return false;
+    }
     this.openaiCompatibleUrl = config.url;
     this.openaiCompatibleModel = config.model;
     this.openaiCompatibleTextModel = config.textModel;
     this.externalApiEnvApiKey = config.apiKey;
-    this.settings.setValue("openai-compatible-url", this.openaiCompatibleUrl);
-    this.settings.setValue("openai-compatible-model", this.openaiCompatibleModel);
-    this.settings.setValue("openai-compatible-text-model", this.openaiCompatibleTextModel);
     this._clearPersistedOpenAiCompatibleApiKey();
     if (showStatus) {
       this._setStatusPreservingRecording("ready", _("External API config loaded: ") + (this.openaiCompatibleModel || _("not configured")), this.lastTranscript);
