@@ -10683,27 +10683,27 @@ MyApplet.prototype = {
   },
 
   _clearStatusTimer: function() {
-    this._clearTrackedTimer("status", "statusTimer");
+    return this._clearTrackedTimer("status", "statusTimer");
   },
 
   _clearDisplayTimer: function() {
-    this._clearTrackedTimer("display", "displayTimer");
+    return this._clearTrackedTimer("display", "displayTimer");
   },
 
   _clearSetupCheckTimer: function() {
-    this._clearTrackedTimer("setup", "setupCheckTimer");
+    return this._clearTrackedTimer("setup", "setupCheckTimer");
   },
 
   _clearPasteTimer: function() {
-    this._clearTrackedTimer("paste", "pasteTimer");
+    return this._clearTrackedTimer("paste", "pasteTimer");
   },
 
   _clearAlarmTimer: function() {
-    this._clearTrackedTimer("alarm", "alarmTimer");
+    return this._clearTrackedTimer("alarm", "alarmTimer");
   },
 
   _clearOllamaInstallWatchTimer: function() {
-    this._clearTrackedTimer("ollama-install", "ollamaInstallWatchTimer");
+    return this._clearTrackedTimer("ollama-install", "ollamaInstallWatchTimer");
   },
 
   _cancelOllamaInstallWatch: function() {

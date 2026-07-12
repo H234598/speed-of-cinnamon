@@ -3031,6 +3031,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._recordLifecycleError("timer-clear", error);', block)
         self.assertLess(block.index("try {"), block.index("Mainloop.source_remove(sourceId)"))
 
+    def test_timer_clear_wrappers_propagate_cleanup_failures(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for timer_name, property_name in [
+            ("status", "statusTimer"),
+            ("display", "displayTimer"),
+            ("setup", "setupCheckTimer"),
+            ("paste", "pasteTimer"),
+            ("alarm", "alarmTimer"),
+            ("ollama-install", "ollamaInstallWatchTimer"),
+        ]:
+            expected = f'return this._clearTrackedTimer("{timer_name}", "{property_name}");'
+            self.assertIn(expected, source)
+
     def test_timer_registry_delete_failures_do_not_escape_cleanup(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_clearTrackedTimer: function(name, propertyName)")
