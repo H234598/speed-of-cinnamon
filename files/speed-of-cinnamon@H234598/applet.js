@@ -2230,7 +2230,10 @@ MyApplet.prototype = {
         continue;
       }
       try {
-        this._orphanedTimers.splice(index, 1);
+        let removed = this._orphanedTimers.splice(index, 1);
+        if (!Array.isArray(removed) || removed.length !== 1 || removed[0] !== entry || this._orphanedTimers.indexOf(entry) >= 0) {
+          throw new Error("Timer orphan entry could not be removed");
+        }
       } catch (error) {
         this._recordLifecycleError("timer-orphan", error);
         success = false;
@@ -2263,7 +2266,9 @@ MyApplet.prototype = {
         if (untracked === false) {
           throw new Error("Timer orphan registry cleanup failed");
         }
-        this._orphanedTimers.splice(index, 1);
+        if (!this._untrackOrphanedTimer(entry.name, entry.sourceId)) {
+          success = false;
+        }
       } catch (error) {
         this._recordLifecycleError("timer-orphan", error);
         success = false;

@@ -2788,7 +2788,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("Mainloop.source_remove(entry.sourceId)", orphan_block)
         self.assertIn("if (entry.sourceRemoved !== true)", orphan_block)
         self.assertIn("let untracked = this._untrackTimer(entry.name, entry.sourceId, entry.propertyName);", orphan_block)
-        self.assertIn("this._orphanedTimers.splice(index, 1);", orphan_block)
+        self.assertIn("let removed = this._orphanedTimers.splice(index, 1);", orphan_block)
+        self.assertIn("removed[0] !== entry", orphan_block)
+        self.assertIn('throw new Error("Timer orphan entry could not be removed");', orphan_block)
+        self.assertIn("this._untrackOrphanedTimer(entry.name, entry.sourceId)", orphan_block)
 
         start = source.index("_scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName)")
         end = source.index("\n  _init:", start)
