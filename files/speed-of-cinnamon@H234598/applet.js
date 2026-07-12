@@ -978,17 +978,17 @@ MyApplet.prototype = {
 
   _dialogClose: function(dialog, group) {
     if (!dialog) {
-      return;
+      return true;
     }
     try {
       if (this._resourceRegistry && Array.isArray(this._resourceRegistry.dialogs)) {
         if (this._resourceRegistry.dialogs.indexOf(dialog) < 0) {
-          return;
+          return true;
         }
       }
     } catch (error) {
       this._recordLifecycleError("dialog-close", error);
-      return;
+      return false;
     }
     let closed = false;
     this._runTeardownGuarded("dialog-" + String(group || "close"), () => {
@@ -1004,6 +1004,7 @@ MyApplet.prototype = {
     if (closed) {
       this._untrackDialog(dialog);
     }
+    return closed;
   },
 
   _dialogOpen: function(dialog, group) {
@@ -6870,12 +6871,13 @@ MyApplet.prototype = {
     this.transcriptListPromptToken = promptToken;
     let dialog = this._newSafeDialog("transcript-list");
     let completed = false;
+    let releasePrompt = true;
     let complete = (result) => {
       if (completed) {
         return;
       }
       completed = true;
-      if (this.transcriptListPromptToken === promptToken) {
+      if (releasePrompt && this.transcriptListPromptToken === promptToken) {
         this.transcriptListPromptToken = null;
       }
       if (typeof completionCallback === "function") {
@@ -6888,9 +6890,11 @@ MyApplet.prototype = {
       { x_expand: true },
       "transcript-list"
     ), "transcript-list")) {
-      this._dialogClose(dialog, "transcript-list");
+      let closed = this._dialogClose(dialog, "transcript-list");
       this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);
-      complete(false);
+      if (closed) {
+        complete(false);
+      }
       return;
     }
     if (!this._dialogSetButtons(dialog, [
@@ -6899,7 +6903,12 @@ MyApplet.prototype = {
         key: Clutter.KEY_Escape,
         action: function() {
           try {
-            this._dialogClose(dialog, "transcript-list");
+            let closed = this._dialogClose(dialog, "transcript-list");
+            if (!closed) {
+              releasePrompt = false;
+              this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be closed"), this.lastTranscript);
+              return;
+            }
             if (this.transcriptListPromptToken === promptToken) {
               this._setStatusPreservingRecording("ready", _("Transcript list cancelled"), this.lastTranscript);
             }
@@ -6911,21 +6920,28 @@ MyApplet.prototype = {
       {
         label: _("Show transcripts"),
         action: function() {
-          this._dialogClose(dialog, "transcript-list");
+          if (!this._dialogClose(dialog, "transcript-list")) {
+            this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be closed"), this.lastTranscript);
+            return;
+          }
           complete(true);
         }.bind(this),
       }
     ], "transcript-list")) {
-      this._dialogClose(dialog, "transcript-list");
+      let closed = this._dialogClose(dialog, "transcript-list");
       this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);
-      complete(false);
+      if (closed) {
+        complete(false);
+      }
       return;
     }
     if (!this._dialogOpen(dialog, "transcript-list")) {
-      this._dialogClose(dialog, "transcript-list");
+      let closed = this._dialogClose(dialog, "transcript-list");
       this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);
       this._notify(_("Speed of Cinnamon"), _("Transcript list confirmation could not be opened"), true);
-      complete(false);
+      if (closed) {
+        complete(false);
+      }
     }
   },
 

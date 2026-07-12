@@ -2137,12 +2137,28 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_dialogClose: function(dialog, group)")
         end = source.index("\n  _dialogOpen:", start)
         block = source[start:end]
+        self.assertIn("return true;", block)
         self.assertIn("let closed = false;", block)
         self.assertIn("let result = dialog.close();", block)
         self.assertIn('if (result === false)', block)
         self.assertIn("if (closed) {", block)
         self.assertIn("this._untrackDialog(dialog);", block)
+        self.assertIn("return closed;", block)
         self.assertLess(block.index("try {"), block.index("Array.isArray(this._resourceRegistry.dialogs)"))
+
+    def test_transcript_confirmation_does_not_advance_when_close_fails(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_confirmPlaintextTranscriptList: function(completionCallback)")
+        end = source.index("\n  _loadAllTranscriptsDocument:", start)
+        block = source[start:end]
+        self.assertIn('let closed = this._dialogClose(dialog, "transcript-list");', block)
+        self.assertIn('if (closed) {\n        complete(false);', block)
+        self.assertIn('if (!closed) {\n              releasePrompt = false;', block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be closed")', block)
+        show_index = block.index('label: _("Show transcripts")')
+        show_block = block[show_index:]
+        self.assertIn('if (!this._dialogClose(dialog, "transcript-list"))', show_block)
+        self.assertIn('return;\n          }\n          complete(true);', show_block)
 
     def test_dialog_teardown_untracks_only_after_close_and_destroy(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
