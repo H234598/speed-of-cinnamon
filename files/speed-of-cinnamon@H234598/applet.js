@@ -2129,10 +2129,32 @@ MyApplet.prototype = {
   },
 
   _retryOrphanedCancellables: function() {
-    if (!Array.isArray(this._orphanedCancellables)) {
-      return true;
-    }
     let success = true;
+    let inTeardown = this.appletRemoved ||
+      this.lifecycleState === LIFECYCLE_REMOVING ||
+      this.lifecycleState === LIFECYCLE_REMOVED;
+    if (inTeardown) {
+      let registry = this._resourceRegistry && this._resourceRegistry.cancellables;
+      if (!registry) {
+        this._recordLifecycleError("cancellable-state", new Error("Cancellable registry is unavailable"));
+        success = false;
+      } else {
+        if (!Array.isArray(this._orphanedCancellables)) {
+          this._orphanedCancellables = [];
+        }
+        for (let token in registry) {
+          if (!Object.prototype.hasOwnProperty.call(registry, token)) {
+            continue;
+          }
+          if (!this._trackOrphanedCancellable(token, false)) {
+            success = false;
+          }
+        }
+      }
+    }
+    if (!Array.isArray(this._orphanedCancellables)) {
+      return success;
+    }
     for (let index = this._orphanedCancellables.length - 1; index >= 0; index--) {
       let entry = this._orphanedCancellables[index];
       if (!entry || !entry.token) {
@@ -2308,10 +2330,38 @@ MyApplet.prototype = {
   },
 
   _retryOrphanedProcesses: function() {
-    if (!Array.isArray(this._orphanedProcesses)) {
-      return true;
-    }
     let success = true;
+    let inTeardown = this.appletRemoved ||
+      this.lifecycleState === LIFECYCLE_REMOVING ||
+      this.lifecycleState === LIFECYCLE_REMOVED;
+    if (inTeardown) {
+      let registry = this._resourceRegistry && this._resourceRegistry.processes;
+      if (!registry) {
+        this._recordLifecycleError("process-state", new Error("Process registry is unavailable"));
+        success = false;
+      } else {
+        if (!Array.isArray(this._orphanedProcesses)) {
+          this._orphanedProcesses = [];
+        }
+        for (let token in registry) {
+          if (!Object.prototype.hasOwnProperty.call(registry, token)) {
+            continue;
+          }
+          let entry = registry[token];
+          if (!entry || typeof entry !== "object" || !entry.process) {
+            this._recordLifecycleError("process-state", new Error("Process registry entry is unavailable"));
+            success = false;
+            continue;
+          }
+          if (!this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, false)) {
+            success = false;
+          }
+        }
+      }
+    }
+    if (!Array.isArray(this._orphanedProcesses)) {
+      return success;
+    }
     for (let index = this._orphanedProcesses.length - 1; index >= 0; index--) {
       let entry = this._orphanedProcesses[index];
       if (!entry || !entry.process) {

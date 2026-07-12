@@ -2294,6 +2294,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._untrackOrphanedCancellable(entry.token)", orphan_block)
         self.assertIn("if (entry.cancelSucceeded === true)", orphan_block)
         self.assertIn('new Error("Orphaned cancellable is missing from registry")', orphan_block)
+        self.assertIn("this.lifecycleState === LIFECYCLE_REMOVING ||", orphan_block)
+        self.assertIn("this.lifecycleState === LIFECYCLE_REMOVED;", orphan_block)
+        self.assertIn('this._trackOrphanedCancellable(token, false)', orphan_block)
 
         start = source.index("_retryOrphanedProcesses: function()")
         end = source.index("\n  _terminateProcess: function(process)", start)
@@ -2302,6 +2305,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!registry)", process_orphan_block)
         self.assertIn('this._recordLifecycleError("process-state", new Error("Process registry is unavailable"));', process_orphan_block)
         self.assertIn("this._unregisterProcess(entry.registryToken)", process_orphan_block)
+        self.assertIn("this.lifecycleState === LIFECYCLE_REMOVING ||", process_orphan_block)
+        self.assertIn("this.lifecycleState === LIFECYCLE_REMOVED;", process_orphan_block)
+        self.assertIn('this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, false)', process_orphan_block)
 
         start = source.index("_cancelAllCancellables: function()")
         end = source.index("\n  _trackTimer:", start)
