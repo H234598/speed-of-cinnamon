@@ -445,6 +445,7 @@ MyApplet.prototype = {
     this.terminalWorkflowToken = null;
     this.doctorCommandToken = null;
     this.settingsWindowToken = null;
+    this._cleanupCommandToken = null;
     this._externalApiEnvMonitorCancelSucceeded = false;
   },
 
@@ -2469,6 +2470,7 @@ MyApplet.prototype = {
     this.recordingMaxSeconds = 0;
     this.transcriptWindowToken = null;
     this.cleanupPreviewDialogToken = null;
+    this._cleanupCommandToken = null;
     this.targetWindow = null;
     this.targetWindowXid = "";
     this.targetWindowXTitle = "";
@@ -3467,6 +3469,8 @@ MyApplet.prototype = {
     this.setupDiagnosticsToken = null;
     this.doctorCommandToken = null;
     this._doctorCommandRunning = false;
+    this._cleanupCommandToken = null;
+    this.isCommandRunning = false;
     this._runTeardownGuarded("teardown-processes", () => this._terminateAllProcesses());
     this._runTeardownGuarded("teardown-orphaned-processes", () => this._retryOrphanedProcesses());
     this._runTeardownGuarded("teardown-cancellables", () => this._cancelAllCancellables());
@@ -8507,8 +8511,14 @@ MyApplet.prototype = {
       return;
     }
     this.isCommandRunning = true;
+    let cleanupToken = {};
+    this._cleanupCommandToken = cleanupToken;
     this._setStatus("processing", _("Previewing cleanup..."), this.lastTranscript);
     this._spawnJson(cleanupPreviewArgs, (payload) => {
+      if (this._cleanupCommandToken !== cleanupToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
+      this._cleanupCommandToken = null;
       this.isCommandRunning = false;
       if (payload.error) {
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
@@ -8531,8 +8541,14 @@ MyApplet.prototype = {
       return;
     }
     this.isCommandRunning = true;
+    let cleanupToken = {};
+    this._cleanupCommandToken = cleanupToken;
     this._setStatus("processing", _("Cleaning old files..."), this.lastTranscript);
     this._spawnJson(cleanupArgs, (payload) => {
+      if (this._cleanupCommandToken !== cleanupToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
+      this._cleanupCommandToken = null;
       this.isCommandRunning = false;
       if (payload.error) {
         this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
