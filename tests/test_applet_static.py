@@ -3750,7 +3750,9 @@ class AppletStaticTest(unittest.TestCase):
         editor_start = source.index("_openExternalApiEnvEditor: function(target)")
         editor_end = source.index("\n  _applyExternalApiEnvTarget:", editor_start)
         editor_block = source[editor_start:editor_end]
-        self.assertIn("if (!this._clearOllamaModelFlow())", editor_block)
+        self.assertIn("let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;", editor_block)
+        self.assertIn("let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();", editor_block)
+        self.assertIn("if (!ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded)", editor_block)
         self.assertIn('this._setStatusPreservingRecording("error", _(', editor_block)
 
     def test_text_model_settings_invalidate_refresh_before_ollama_cleanup(self) -> None:
@@ -4000,7 +4002,11 @@ class AppletStaticTest(unittest.TestCase):
             start = source.index(method)
             end = source.index(next_method, start)
             block = source[start:end]
-            if method == "_selectTextModelBackend: function(backend, model, message)":
+            if method in [
+                "_selectTextModelBackend: function(backend, model, message)",
+                "_openExternalApiEnvEditor: function(target)",
+                "_applyExternalApiEnvTarget: function(target)",
+            ]:
                 self.assertIn("this._cancelOllamaInstallWatch() !== false;", block)
             else:
                 self.assertIn("this._cancelOllamaInstallWatch();", block)

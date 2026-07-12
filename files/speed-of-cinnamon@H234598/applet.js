@@ -7972,8 +7972,9 @@ MyApplet.prototype = {
   _openExternalApiEnvEditor: function(target) {
     this.externalApiEnvApplyTarget = target || "voice";
     if (this.externalApiEnvApplyTarget === "text") {
-      this._cancelOllamaInstallWatch();
-      if (!this._clearOllamaModelFlow()) {
+      let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;
+      let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();
+      if (!ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded) {
         this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
         return;
       }
@@ -8003,8 +8004,9 @@ MyApplet.prototype = {
         this._setStatusPreservingRecording("error", _("External API text backend could not be selected"), this.lastTranscript);
         return false;
       }
-      this._cancelOllamaInstallWatch();
-      if (!this._clearOllamaModelFlow()) {
+      let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;
+      let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();
+      if (!ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded) {
         try {
           let rollbackResult = this.settings.setValue("post-process-backend", previousBackend);
           if (rollbackResult === false) {
