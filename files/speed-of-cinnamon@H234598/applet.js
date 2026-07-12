@@ -3219,7 +3219,11 @@ MyApplet.prototype = {
         continue;
       }
       try {
-        this._orphanedHotkeys.splice(index, 1);
+        let entry = this._orphanedHotkeys[index];
+        let removed = this._orphanedHotkeys.splice(index, 1);
+        if (!Array.isArray(removed) || removed.length !== 1 || removed[0] !== entry || this._orphanedHotkeys.indexOf(entry) >= 0) {
+          throw new Error("Hotkey orphan entry could not be removed");
+        }
         if (this._orphanedHotkeyStates && Object.prototype.hasOwnProperty.call(this._orphanedHotkeyStates, key)) {
           let deleted = delete this._orphanedHotkeyStates[key];
           if (deleted === false || Object.prototype.hasOwnProperty.call(this._orphanedHotkeyStates, key)) {
