@@ -4189,6 +4189,23 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._spawnJson(setupArgs, (payload) => {\n      try {", block)
         self.assertIn('} catch (error) {\n        this._failSetupDiagnosticsAction(actionToken, error, _("Could not copy setup plan"));', block)
 
+    def test_setup_callbacks_release_tokens_when_processing_throws(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method, args_name, message in [
+            ("_openProfanityFilterList: function()", "\n  _copySetupPlan:", "documentArgs", "Could not open profanity replacement list"),
+            ("_copySetupCommands: function()", "\n  _copyDiagnostics:", "setupArgs", "Could not copy setup commands"),
+            ("_copyDiagnostics: function()", "\n  _saveDiagnostics:", "diagnosticsArgs", "Could not copy diagnostics"),
+            ("_saveDiagnostics: function()", "\n  _benchmarkAudioFileDialogArgs:", "diagnosticsSaveArgs", "Could not save diagnostics"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn(f"this._spawnJson({args_name}, (payload) => {{\n      try {{", block)
+            self.assertIn(
+                f'}} catch (error) {{\n        this._failSetupDiagnosticsAction(actionToken, error, _("{message}"));',
+                block,
+            )
+
     def test_benchmark_callback_releases_flow_when_processing_throws(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_benchmarkDownloadedModels: function(audioPath, flowToken)")

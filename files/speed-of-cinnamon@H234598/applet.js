@@ -5682,22 +5682,26 @@ MyApplet.prototype = {
       return;
     }
     this._spawnJson(documentArgs, (payload) => {
-      if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
-        return;
-      }
-      if (payload.error) {
+      try {
+        if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
+          return;
+        }
+        if (payload.error) {
+          this.setupDiagnosticsToken = null;
+          this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          return;
+        }
+        let path = typeof payload.path === "string" ? payload.path.trim() : "";
+        if (path === "") {
+          this.setupDiagnosticsToken = null;
+          this._setStatus("error", _("Profanity replacement list was not generated"), this.lastTranscript);
+          return;
+        }
         this.setupDiagnosticsToken = null;
-        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
-        return;
+        this._openFile(path, _("Opened profanity replacement list: ") + String(this._safePayloadCount(payload.entries)));
+      } catch (error) {
+        this._failSetupDiagnosticsAction(actionToken, error, _("Could not open profanity replacement list"));
       }
-      let path = typeof payload.path === "string" ? payload.path.trim() : "";
-      if (path === "") {
-        this.setupDiagnosticsToken = null;
-        this._setStatus("error", _("Profanity replacement list was not generated"), this.lastTranscript);
-        return;
-      }
-      this.setupDiagnosticsToken = null;
-      this._openFile(path, _("Opened profanity replacement list: ") + String(this._safePayloadCount(payload.entries)));
     }, inputOption);
   },
 
@@ -5781,29 +5785,33 @@ MyApplet.prototype = {
       return;
     }
     this._spawnJson(setupArgs, (payload) => {
-      if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
-        return;
-      }
-      if (payload.error) {
-        this.setupDiagnosticsToken = null;
-        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
-        return;
-      }
+      try {
+        if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
+          return;
+        }
+        if (payload.error) {
+          this.setupDiagnosticsToken = null;
+          this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          return;
+        }
 
-      let text = this._setupCommandsText(payload);
-      if (text === "") {
-        this.setupDiagnosticsToken = null;
-        this._setStatus("ready", _("No setup commands needed"), this.lastTranscript);
-        return;
-      }
+        let text = this._setupCommandsText(payload);
+        if (text === "") {
+          this.setupDiagnosticsToken = null;
+          this._setStatus("ready", _("No setup commands needed"), this.lastTranscript);
+          return;
+        }
 
-      if (!this._setClipboardText(text)) {
+        if (!this._setClipboardText(text)) {
+          this.setupDiagnosticsToken = null;
+          this._setStatus("error", _("Could not copy setup commands"), this.lastTranscript);
+          return;
+        }
         this.setupDiagnosticsToken = null;
-        this._setStatus("error", _("Could not copy setup commands"), this.lastTranscript);
-        return;
+        this._setStatus("done", _("Copied setup commands"), this.lastTranscript);
+      } catch (error) {
+        this._failSetupDiagnosticsAction(actionToken, error, _("Could not copy setup commands"));
       }
-      this.setupDiagnosticsToken = null;
-      this._setStatus("done", _("Copied setup commands"), this.lastTranscript);
     }, inputOption);
   },
 
@@ -5825,21 +5833,25 @@ MyApplet.prototype = {
       return;
     }
     this._spawnJson(diagnosticsArgs, (payload) => {
-      if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
-        return;
-      }
-      if (payload.error) {
+      try {
+        if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
+          return;
+        }
+        if (payload.error) {
+          this.setupDiagnosticsToken = null;
+          this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          return;
+        }
+        if (!this._setClipboardText(JSON.stringify(payload, null, 2))) {
+          this.setupDiagnosticsToken = null;
+          this._setStatus("error", _("Could not copy diagnostics"), this.lastTranscript);
+          return;
+        }
         this.setupDiagnosticsToken = null;
-        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
-        return;
+        this._setStatus("done", _("Copied diagnostics"), this.lastTranscript);
+      } catch (error) {
+        this._failSetupDiagnosticsAction(actionToken, error, _("Could not copy diagnostics"));
       }
-      if (!this._setClipboardText(JSON.stringify(payload, null, 2))) {
-        this.setupDiagnosticsToken = null;
-        this._setStatus("error", _("Could not copy diagnostics"), this.lastTranscript);
-        return;
-      }
-      this.setupDiagnosticsToken = null;
-      this._setStatus("done", _("Copied diagnostics"), this.lastTranscript);
     }, inputOption);
   },
 
@@ -5861,16 +5873,20 @@ MyApplet.prototype = {
       return;
     }
     this._spawnJson(diagnosticsSaveArgs, (payload) => {
-      if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
-        return;
-      }
-      if (payload.error) {
+      try {
+        if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
+          return;
+        }
+        if (payload.error) {
+          this.setupDiagnosticsToken = null;
+          this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          return;
+        }
         this.setupDiagnosticsToken = null;
-        this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
-        return;
+        this._setStatus("done", _("Saved diagnostics"), this.lastTranscript);
+      } catch (error) {
+        this._failSetupDiagnosticsAction(actionToken, error, _("Could not save diagnostics"));
       }
-      this.setupDiagnosticsToken = null;
-      this._setStatus("done", _("Saved diagnostics"), this.lastTranscript);
     }, inputOption);
   },
 
