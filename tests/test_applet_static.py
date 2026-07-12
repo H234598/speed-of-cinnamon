@@ -2024,6 +2024,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (result === false)', block)
         self.assertIn("if (closed) {", block)
         self.assertIn("this._untrackDialog(dialog);", block)
+        self.assertLess(block.index("try {"), block.index("Array.isArray(this._resourceRegistry.dialogs)"))
 
     def test_dialog_teardown_untracks_only_after_close_and_destroy(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
