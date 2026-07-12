@@ -6222,7 +6222,9 @@ MyApplet.prototype = {
       return false;
     }
     if (opened && continueOllamaFlow) {
-      this._watchOllamaInstallThenChoose();
+      if (!this._watchOllamaInstallThenChoose()) {
+        return false;
+      }
     } else if (continueOllamaFlow) {
       let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;
       let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();
@@ -10756,12 +10758,17 @@ MyApplet.prototype = {
   },
 
   _watchOllamaInstallThenChoose: function() {
-    this._cancelOllamaInstallWatch();
+    if (this._cancelOllamaInstallWatch() === false) {
+      this._clearOllamaModelFlow();
+      this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+      return false;
+    }
     let watchToken = {};
     this.ollamaInstallWatchToken = watchToken;
     this.ollamaInstallWatchPolls = 0;
     this._setStatus("processing", _("Waiting for Ollama installation..."), this.lastTranscript);
     this._scheduleOllamaInstallWatchPoll(watchToken);
+    return true;
   },
 
   _scheduleOllamaInstallWatchPoll: function(watchToken) {

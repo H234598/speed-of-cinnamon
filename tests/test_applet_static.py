@@ -1963,6 +1963,11 @@ class AppletStaticTest(unittest.TestCase):
         watch_start = source.index("_watchOllamaInstallThenChoose: function()")
         watch_end = source.index("\n  _scheduleSetupCheck:", watch_start)
         watch_block = source[watch_start:watch_end]
+        self.assertIn("if (this._cancelOllamaInstallWatch() === false)", watch_block)
+        self.assertIn("this._clearOllamaModelFlow();", watch_block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped")', watch_block)
+        self.assertIn("return false;", watch_block)
+        self.assertIn("return true;", watch_block)
         self.assertIn("let watchToken = {};", watch_block)
         self.assertIn("this.ollamaInstallWatchToken = watchToken;", watch_block)
         self.assertIn("this.ollamaInstallWatchToken !== watchToken", watch_block)
