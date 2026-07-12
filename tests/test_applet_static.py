@@ -2916,6 +2916,43 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.isCommandRunning = true;", block)
         self.assertIn("return terminationSucceeded;", block)
 
+    def test_failed_ollama_flow_cleanup_blocks_parallel_flows(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        self.assertIn("this.ollamaModelCleanupFailed = false;", source)
+
+        helper_start = source.index("_clearOllamaModelFlow: function(flowToken)")
+        helper_end = source.index("\n  _ollamaCleanupStillPending:", helper_start)
+        helper_block = source[helper_start:helper_end]
+        self.assertIn('this._hasTrackedProcessGroup("ollama")', helper_block)
+        self.assertIn("this.ollamaModelCleanupFailed = !terminationSucceeded;", helper_block)
+
+        pending_start = source.index("_ollamaCleanupStillPending: function()")
+        pending_end = source.index("\n  _cancelOllamaFlowForRecording:", pending_start)
+        pending_block = source[pending_start:pending_end]
+        self.assertIn('this._hasTrackedProcessGroup("ollama")', pending_block)
+        self.assertIn('_("Previous Ollama operation is still stopping; try again shortly")', pending_block)
+
+        for method, next_method in [
+            ("_activateOllamaTextModelFlow: function()", "\n  _ollamaModelPromptArgs:"),
+            ("_chooseOllamaTextModel: function()", "\n  _promptChooseOllamaTextModel:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn("if (this._ollamaCleanupStillPending())", block)
+            self.assertLess(block.index("_ollamaCleanupStillPending"), block.index("if (this.ollamaModelFlowToken)"))
+
+        toggle_start = source.index("_toggleRecording: function()")
+        toggle_end = source.index("\n  _restartApplet:", toggle_start)
+        toggle_block = source[toggle_start:toggle_end]
+        self.assertIn("this.ollamaModelCleanupFailed", toggle_block)
+
+        editor_start = source.index("_openExternalApiEnvEditor: function(target)")
+        editor_end = source.index("\n  _applyExternalApiEnvTarget:", editor_start)
+        editor_block = source[editor_start:editor_end]
+        self.assertIn("if (!this._clearOllamaModelFlow())", editor_block)
+        self.assertIn('this._setStatusPreservingRecording("error", _(', editor_block)
+
     def test_ollama_model_flow_clears_terminal_and_install_failure_states(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

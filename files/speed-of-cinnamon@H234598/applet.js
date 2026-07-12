@@ -1655,6 +1655,7 @@ MyApplet.prototype = {
     this.ollamaInstallWatchPolls = 0;
     this.ollamaModelInstallRunning = false;
     this.ollamaModelInstallToken = null;
+    this.ollamaModelCleanupFailed = false;
     this.textInsertCancellationFailed = false;
     this.externalApiEnvMonitor = null;
     this.externalApiEnvApplyTarget = "voice";
@@ -2456,6 +2457,7 @@ MyApplet.prototype = {
     this.ollamaInstallWatchToken = null;
     this.ollamaModelInstallRunning = false;
     this.ollamaModelInstallToken = null;
+    this.ollamaModelCleanupFailed = false;
     this.textInsertCancellationFailed = false;
     this.benchmarkFlowToken = null;
     this.customLimitPromptToken = null;
@@ -3737,7 +3739,7 @@ MyApplet.prototype = {
   },
 
   _toggleRecording: function() {
-    if (this.ollamaModelFlowToken || this.ollamaInstallWatchToken || this.ollamaModelInstallRunning) {
+    if (this.ollamaModelFlowToken || this.ollamaInstallWatchToken || this.ollamaModelInstallRunning || this.ollamaModelCleanupFailed) {
       if (!this._cancelOllamaFlowForRecording()) {
         this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
         return;
@@ -6154,7 +6156,10 @@ MyApplet.prototype = {
     this.externalApiEnvApplyTarget = target || "voice";
     if (this.externalApiEnvApplyTarget === "text") {
       this._cancelOllamaInstallWatch();
-      this._clearOllamaModelFlow();
+      if (!this._clearOllamaModelFlow()) {
+        this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+        return;
+      }
     }
     let path = this._ensureExternalApiEnvFile();
     if (!path) {
@@ -6530,6 +6535,9 @@ MyApplet.prototype = {
     if (flowToken && this.ollamaModelFlowToken !== flowToken) {
       return false;
     }
+    if (this.ollamaModelCleanupFailed && !this._hasTrackedProcessGroup("ollama")) {
+      this.ollamaModelCleanupFailed = false;
+    }
     let hadOllamaModelInstall = Boolean(this.ollamaModelInstallRunning);
     let installToken = this.ollamaModelInstallToken;
     let terminationSucceeded = true;
@@ -6549,11 +6557,24 @@ MyApplet.prototype = {
     } else {
       terminationSucceeded = this._terminateProcessesByGroup("ollama", true);
     }
+    this.ollamaModelCleanupFailed = !terminationSucceeded;
     return terminationSucceeded;
   },
 
+  _ollamaCleanupStillPending: function() {
+    if (!this.ollamaModelCleanupFailed) {
+      return false;
+    }
+    if (!this._hasTrackedProcessGroup("ollama")) {
+      this.ollamaModelCleanupFailed = false;
+      return false;
+    }
+    this._setStatusPreservingRecording("error", _("Previous Ollama operation is still stopping; try again shortly"), this.lastTranscript);
+    return true;
+  },
+
   _cancelOllamaFlowForRecording: function() {
-    if (!this.ollamaModelFlowToken && !this.ollamaInstallWatchToken && !this.ollamaModelInstallRunning) {
+    if (!this.ollamaModelFlowToken && !this.ollamaInstallWatchToken && !this.ollamaModelInstallRunning && !this.ollamaModelCleanupFailed) {
       return false;
     }
     this._cancelOllamaInstallWatch();
@@ -6562,6 +6583,9 @@ MyApplet.prototype = {
 
   _activateOllamaTextModelFlow: function() {
     if (this._hasActiveRecordingState()) {
+      return;
+    }
+    if (this._ollamaCleanupStillPending()) {
       return;
     }
     if (this.ollamaModelFlowToken) {
@@ -6703,6 +6727,9 @@ MyApplet.prototype = {
 
   _chooseOllamaTextModel: function() {
     if (this._hasActiveRecordingState()) {
+      return;
+    }
+    if (this._ollamaCleanupStillPending()) {
       return;
     }
     if (this.ollamaModelFlowToken) {
