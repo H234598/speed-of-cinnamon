@@ -6134,6 +6134,7 @@ class AppletStaticTest(unittest.TestCase):
         terminal_block = source[terminal_start:terminal_end]
         self.assertIn("cancelOllamaFlow === true", terminal_block)
         self.assertIn("this.ollamaModelFlowToken !== ollamaFlowToken", terminal_block)
+        self.assertIn('resourceGroup: cancelOllamaFlow === true ? "ollama" : "terminal",', terminal_block)
 
     def test_terminal_workflow_cannot_overwrite_new_recording_status(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

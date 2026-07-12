@@ -6207,6 +6207,7 @@ MyApplet.prototype = {
         timeoutMs: 0,
         maxStdoutBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
         maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
+        resourceGroup: cancelOllamaFlow === true ? "ollama" : "terminal",
       }, (stdout, stderr, result) => {
         if (this.terminalWorkflowToken !== terminalWorkflowToken) {
           if (!this.terminalWorkflowToken) {
