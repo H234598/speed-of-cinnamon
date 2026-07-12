@@ -228,6 +228,8 @@ class StateStore:
 
     @staticmethod
     def _normalize_state_data(raw: dict[str, Any]) -> dict[str, Any]:
+        if "status" not in raw:
+            raise ValueError("state status is missing")
         normalized: dict[str, Any] = {}
         for state_field in fields(RecordingState):
             field_name = state_field.name

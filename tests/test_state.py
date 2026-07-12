@@ -74,6 +74,14 @@ class StateStoreTest(unittest.TestCase):
         self.assertEqual(state.status, "idle")
         self.assertEqual(state.transcript, "")
 
+    def test_read_rejects_existing_state_without_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text("{}", encoding="utf-8")
+            path.chmod(0o600)
+            state = StateStore(path).read()
+        self.assertEqual(state.error, "state file could not be read")
+
     def test_state_store_rejects_non_private_parent_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             os.chmod(tmp, 0o777)
