@@ -427,6 +427,7 @@ MyApplet.prototype = {
       cancellables: {},
     };
     this._orphanedSignals = [];
+    this._orphanedHotkeys = [];
     this._hotkeyDefinitions = {};
     this._teardownComplete = false;
     this._initFailed = false;
@@ -2215,9 +2216,19 @@ MyApplet.prototype = {
       ? this._hotkeyDefinitions[name]
       : null;
     let removedExternally = false;
+    let removeAttemptFailed = false;
     let removed = this._runStateGuarded("hotkeys", () => {
-      Main.keybindingManager.removeHotKey(name);
+      try {
+        let removeResult = Main.keybindingManager.removeHotKey(name);
+        if (removeResult === false) {
+          throw new Error("Hotkey could not be removed");
+        }
+      } catch (error) {
+        removeAttemptFailed = true;
+        throw error;
+      }
       removedExternally = true;
+      this._untrackOrphanedHotkey(name);
       if (this._resourceRegistry) {
         let deleted = delete this._resourceRegistry.hotkeys[name];
         if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.hotkeys, name)) {
@@ -2227,6 +2238,9 @@ MyApplet.prototype = {
       return true;
     }, false) === true;
     if (!removed) {
+      if (removeAttemptFailed) {
+        this._trackOrphanedHotkey(name);
+      }
       if (removedExternally && previous) {
         this._runStateGuarded("hotkeys", () => {
           Main.keybindingManager.addHotKey(
@@ -2263,15 +2277,30 @@ MyApplet.prototype = {
           throw new Error("Hotkey registry is unavailable");
         }
         this._resourceRegistry.hotkeys[name] = true;
-        this._hotkeyDefinitions[name] = { binding: accelerator, callback: callback };
+        let definition = { binding: accelerator, callback: callback };
+        this._hotkeyDefinitions[name] = definition;
+        if (!Object.prototype.hasOwnProperty.call(this._resourceRegistry.hotkeys, name) ||
+            this._resourceRegistry.hotkeys[name] !== true ||
+            !Object.prototype.hasOwnProperty.call(this._hotkeyDefinitions, name) ||
+            this._hotkeyDefinitions[name] !== definition) {
+          throw new Error("Hotkey could not be registered");
+        }
         return true;
       }, false) === true;
       if (tracked) {
         return;
       }
-      this._runStateGuarded("hotkeys", () => {
-        Main.keybindingManager.removeHotKey(name);
-      }, undefined);
+      let rollbackRemoved = this._runStateGuarded("hotkeys", () => {
+        let removeResult = Main.keybindingManager.removeHotKey(name);
+        if (removeResult === false) {
+          throw new Error("Hotkey rollback removal failed");
+        }
+        this._untrackOrphanedHotkey(name);
+        return true;
+      }, false) === true;
+      if (!rollbackRemoved) {
+        this._trackOrphanedHotkey(name);
+      }
       registered = false;
     }
     if (previous) {
@@ -2288,14 +2317,29 @@ MyApplet.prototype = {
             this._resourceRegistry.hotkeys[name] = true;
           }
           this._hotkeyDefinitions[name] = previous;
+          if (!this._resourceRegistry ||
+              !Object.prototype.hasOwnProperty.call(this._resourceRegistry.hotkeys, name) ||
+              this._resourceRegistry.hotkeys[name] !== true ||
+              !Object.prototype.hasOwnProperty.call(this._hotkeyDefinitions, name) ||
+              this._hotkeyDefinitions[name] !== previous) {
+            throw new Error("Previous hotkey could not be restored");
+          }
           return true;
         }, false) === true;
         if (tracked) {
           return;
         }
-        this._runStateGuarded("hotkeys", () => {
-          Main.keybindingManager.removeHotKey(name);
-        }, undefined);
+        let rollbackRemoved = this._runStateGuarded("hotkeys", () => {
+          let removeResult = Main.keybindingManager.removeHotKey(name);
+          if (removeResult === false) {
+            throw new Error("Previous hotkey rollback removal failed");
+          }
+          this._untrackOrphanedHotkey(name);
+          return true;
+        }, false) === true;
+        if (!rollbackRemoved) {
+          this._trackOrphanedHotkey(name);
+        }
       }
     }
     if (this._resourceRegistry) {
@@ -2316,14 +2360,84 @@ MyApplet.prototype = {
     }
   },
 
+  _trackOrphanedHotkey: function(name) {
+    try {
+      let key = String(name || "").trim();
+      if (key === "") {
+        throw new Error("Hotkey orphan name is invalid");
+      }
+      if (!Array.isArray(this._orphanedHotkeys)) {
+        this._orphanedHotkeys = [];
+      }
+      if (this._orphanedHotkeys.indexOf(key) < 0) {
+        this._orphanedHotkeys.push(key);
+      }
+      return true;
+    } catch (error) {
+      this._recordLifecycleError("hotkey-orphan", error);
+      return false;
+    }
+  },
+
+  _untrackOrphanedHotkey: function(name) {
+    if (!Array.isArray(this._orphanedHotkeys)) {
+      return true;
+    }
+    let success = true;
+    let key = String(name || "").trim();
+    for (let index = this._orphanedHotkeys.length - 1; index >= 0; index--) {
+      if (this._orphanedHotkeys[index] !== key) {
+        continue;
+      }
+      try {
+        this._orphanedHotkeys.splice(index, 1);
+      } catch (error) {
+        this._recordLifecycleError("hotkey-orphan", error);
+        success = false;
+      }
+    }
+    return success;
+  },
+
+  _retryOrphanedHotkeys: function() {
+    if (!Array.isArray(this._orphanedHotkeys)) {
+      return true;
+    }
+    let success = true;
+    for (let index = this._orphanedHotkeys.length - 1; index >= 0; index--) {
+      let name = this._orphanedHotkeys[index];
+      if (!this._runTeardownOperation(
+        "teardown-orphaned-hotkeys",
+        Main && Main.keybindingManager,
+        "removeHotKey",
+        [name]
+      )) {
+        success = false;
+        continue;
+      }
+      try {
+        this._orphanedHotkeys.splice(index, 1);
+      } catch (error) {
+        this._recordLifecycleError("teardown-orphaned-hotkeys", error);
+        success = false;
+      }
+    }
+    return success;
+  },
+
   _removeHotkey: function(id) {
     let name = this._hotkeyName(id);
     let removed = false;
     this._runTeardownGuarded("teardown-hotkeys", () => {
-      Main.keybindingManager.removeHotKey(name);
+      let removeResult = Main.keybindingManager.removeHotKey(name);
+      if (removeResult === false) {
+        throw new Error("Hotkey removal failed during teardown");
+      }
       removed = true;
+      this._untrackOrphanedHotkey(name);
     });
     if (!removed) {
+      this._trackOrphanedHotkey(name);
       return;
     }
     if (this._resourceRegistry) {
@@ -2542,6 +2656,7 @@ MyApplet.prototype = {
     this._removeHotkey(PRIMARY_HOTKEY_ID);
     this._removeHotkey(SECONDARY_HOTKEY_ID);
     this._removeHotkey(CANCEL_HOTKEY_ID);
+    this._runTeardownGuarded("teardown-orphaned-hotkeys", () => this._retryOrphanedHotkeys());
     this._runTeardownGuarded("teardown-menus", () => this._destroyMenus());
     if (this.settings) {
       this._runTeardownGuarded("teardown-settings", () => this.settings.finalize());

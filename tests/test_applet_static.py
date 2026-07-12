@@ -2119,6 +2119,8 @@ class AppletStaticTest(unittest.TestCase):
         end = source.index("\n  _removeHotkey:", start)
         block = source[start:end]
         self.assertIn("let removed = this._runStateGuarded(\"hotkeys\"", block)
+        self.assertIn("if (removeResult === false)", block)
+        self.assertIn('throw new Error("Hotkey could not be removed")', block)
         self.assertIn("return true;", block)
         self.assertIn("if (!removed) {", block)
         self.assertIn("return;", block)
@@ -2131,7 +2133,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let tracked = this._runStateGuarded("hotkeys", () => {', block)
         self.assertIn('if (!this._resourceRegistry || !this._resourceRegistry.hotkeys || !this._hotkeyDefinitions)', block)
         self.assertIn("this._resourceRegistry.hotkeys[name] = true;", block)
-        self.assertIn("this._hotkeyDefinitions[name] = { binding: accelerator, callback: callback };", block)
+        self.assertIn("let definition = { binding: accelerator, callback: callback };", block)
+        self.assertIn("this._hotkeyDefinitions[name] = definition;", block)
         self.assertIn("Main.keybindingManager.removeHotKey(name);", block)
         self.assertIn('delete this._resourceRegistry.hotkeys[name];', block)
         self.assertIn("Object.prototype.hasOwnProperty.call(this._resourceRegistry.hotkeys, name)", block)
@@ -2140,6 +2143,31 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let removedExternally = false;", block)
         self.assertIn("if (removedExternally && previous)", block)
         self.assertIn('throw new Error("Hotkey registry entry could not be removed");', block)
+
+    def test_hotkey_registry_writes_are_verified_and_failed_rollbacks_are_tracked(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_registerHotkey: function(id, binding, callback)")
+        end = source.index("\n  _trackOrphanedHotkey:", start)
+        block = source[start:end]
+        self.assertIn('throw new Error("Hotkey could not be registered");', block)
+        self.assertIn("Object.prototype.hasOwnProperty.call(this._resourceRegistry.hotkeys, name)", block)
+        self.assertIn("Object.prototype.hasOwnProperty.call(this._hotkeyDefinitions, name)", block)
+        self.assertIn('throw new Error("Hotkey rollback removal failed");', block)
+        self.assertIn('throw new Error("Previous hotkey could not be restored");', block)
+        self.assertIn("this._trackOrphanedHotkey(name);", block)
+
+    def test_orphaned_hotkeys_are_retried_during_teardown(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_trackOrphanedHotkey: function(name)")
+        end = source.index("\n  _removeHotkey:", start)
+        block = source[start:end]
+        self.assertIn("this._orphanedHotkeys = [];", block)
+        self.assertIn("this._orphanedHotkeys.indexOf(key)", block)
+        self.assertIn('"teardown-orphaned-hotkeys"', block)
+        self.assertIn('"removeHotKey"', block)
+        self.assertIn("this._orphanedHotkeys.splice(index, 1);", block)
+        self.assertIn("this._runTeardownOperation(", block)
+        self.assertIn("this._retryOrphanedHotkeys()", source)
 
     def test_hotkey_teardown_registry_failures_do_not_escape(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
