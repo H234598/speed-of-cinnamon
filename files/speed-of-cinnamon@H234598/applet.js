@@ -11738,6 +11738,15 @@ MyApplet.prototype = {
         this.autoInsertPendingFingerprint = "";
       }
     };
+    let releaseFingerprint = () => {
+      let released = this._forgetAutoInsertFingerprint(insertFingerprint) !== false;
+      if (!released) {
+        this.textInsertCancellationFailed = true;
+        return false;
+      }
+      clearPendingFingerprint();
+      return true;
+    };
     let inserted = false;
     if (payload.inserted === true) {
       inserted = true;
@@ -11748,8 +11757,7 @@ MyApplet.prototype = {
       try {
         result = this._insertTranscriptText(transcript, (completed) => {
           if (!completed) {
-            this._forgetAutoInsertFingerprint(insertFingerprint);
-            clearPendingFingerprint();
+            releaseFingerprint();
             this.autoRelistenPending = false;
             this.autoRelistenPendingToken = "";
             this.autoRelistenManualStopRequested = true;
@@ -11760,8 +11768,7 @@ MyApplet.prototype = {
         });
       } catch (error) {
         this._recordLifecycleError("payload-insert", error);
-        this._forgetAutoInsertFingerprint(insertFingerprint);
-        clearPendingFingerprint();
+        releaseFingerprint();
         this.autoRelistenPending = false;
         this.autoRelistenPendingToken = "";
         this.autoRelistenManualStopRequested = true;
@@ -11777,8 +11784,7 @@ MyApplet.prototype = {
       }
     }
     if (!inserted) {
-      this._forgetAutoInsertFingerprint(insertFingerprint);
-      clearPendingFingerprint();
+      releaseFingerprint();
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
       this.autoRelistenManualStopRequested = true;

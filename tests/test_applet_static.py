@@ -1106,6 +1106,10 @@ class AppletStaticTest(unittest.TestCase):
         finish_block = source[finish_start:finish_end]
         self.assertIn("this.autoInsertPendingFingerprint = insertFingerprint;", finish_block)
         self.assertIn("let clearPendingFingerprint = () =>", finish_block)
+        self.assertIn("let releaseFingerprint = () =>", finish_block)
+        self.assertIn("let released = this._forgetAutoInsertFingerprint(insertFingerprint) !== false;", finish_block)
+        self.assertIn("this.textInsertCancellationFailed = true;", finish_block)
+        self.assertIn("releaseFingerprint();", finish_block)
         self.assertIn("clearPendingFingerprint();", finish_block)
 
     def test_failed_text_insert_cancellation_blocks_new_insertions(self) -> None:
@@ -4470,7 +4474,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._payloadMessage(payload, _("Transcript already inserted by backend")', source)
         self.assertIn("let reservation = this._reserveAutoInsertFingerprint(insertFingerprint);", source)
         self.assertIn("if (!this._rememberAutoInsertFingerprint(fingerprint))", source)
-        self.assertIn("this._forgetAutoInsertFingerprint(insertFingerprint);", source)
+        self.assertIn("this._forgetAutoInsertFingerprint(insertFingerprint)", source)
         self.assertIn("_transcriptDigest: function(transcript)", source)
         self.assertIn("GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, text, -1)", source)
         self.assertIn('"sha256:" + GLib.compute_checksum_for_string', source)
@@ -4488,7 +4492,7 @@ class AppletStaticTest(unittest.TestCase):
         duplicate_return_index = source.index("return;", duplicate_index)
         self.assertLess(duplicate_finish_index, duplicate_return_index)
         self.assertIn("if (!completed) {", source)
-        self.assertIn("this._forgetAutoInsertFingerprint(insertFingerprint);", source)
+        self.assertIn("releaseFingerprint();", source)
         self.assertIn("this.autoRelistenPending = false;", source)
         self.assertIn('this.autoRelistenPendingToken = "";', source)
         self.assertIn("this.autoRelistenManualStopRequested = true;", source)
@@ -4990,7 +4994,7 @@ class AppletStaticTest(unittest.TestCase):
         insert_block = source[insert_start:insert_end]
         self.assertIn("try {\n        result = this._insertTranscriptText", insert_block)
         self.assertIn('this._recordLifecycleError("payload-insert", error);', insert_block)
-        self.assertIn("this._forgetAutoInsertFingerprint(insertFingerprint);", insert_block)
+        self.assertIn("releaseFingerprint();", insert_block)
         self.assertIn('this._setStatusPreservingRecording("error", _("Could not insert transcript")', insert_block)
         self.assertIn('if (method === "none")', source)
         self.assertIn('if (method === "type")', source)
