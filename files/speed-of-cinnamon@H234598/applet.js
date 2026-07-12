@@ -1691,7 +1691,10 @@ MyApplet.prototype = {
     } else {
       this._recordLifecycleError("menu-state", new Error("Menu orphan registry is unavailable"));
     }
-    if (!Array.isArray(this._orphanedMenus)) {
+    let inTeardown = this.appletRemoved ||
+      this.lifecycleState === LIFECYCLE_REMOVING ||
+      this.lifecycleState === LIFECYCLE_REMOVED;
+    if (!Array.isArray(this._orphanedMenus) || inTeardown) {
       addPendingMenu(this.menu, "menu", "menu", true, false, false, false);
       addPendingMenu(this._applet_context_menu, "_applet_context_menu", "context-menu", true, false, false, false);
       addPendingMenu(this.menuManager, "menuManager", "menu-manager", false, false, true, false);

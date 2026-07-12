@@ -608,7 +608,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('addPendingMenu(this._applet_context_menu, "_applet_context_menu", "context-menu", true, false, false, false);', retry_block)
         self.assertIn('addPendingMenu(this.menuManager, "menuManager", "menu-manager", false, false, true, false);', retry_block)
         self.assertIn('addPendingMenu(this._menuManager, "_menuManager", "private-menu-manager", false, false, true, false);', retry_block)
-        self.assertIn('if (!Array.isArray(this._orphanedMenus)) {', retry_block)
+        self.assertIn("this.lifecycleState === LIFECYCLE_REMOVING ||", retry_block)
+        self.assertIn("this.lifecycleState === LIFECYCLE_REMOVED;", retry_block)
+        self.assertIn('if (!Array.isArray(this._orphanedMenus) || inTeardown) {', retry_block)
         self.assertIn("for (let index = pendingMenus.length - 1;", retry_block)
 
         reference_start = source.index("_clearDestroyedMenuReference: function(menu, propertyName, errorGroup)")
