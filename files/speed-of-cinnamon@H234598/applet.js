@@ -2286,9 +2286,11 @@ MyApplet.prototype = {
 
   _terminateAllProcesses: function() {
     try {
-      let processes = this._resourceRegistry && this._resourceRegistry.processes
-        ? this._resourceRegistry.processes
-        : {};
+      if (!this._resourceRegistry || !this._resourceRegistry.processes) {
+        this._recordLifecycleError("process-state", new Error("Process registry is unavailable"));
+        return false;
+      }
+      let processes = this._resourceRegistry.processes;
       for (let token in processes) {
         if (Object.prototype.hasOwnProperty.call(processes, token)) {
           let cleanupSucceeded = false;
@@ -2324,8 +2326,10 @@ MyApplet.prototype = {
           }
         }
       }
+      return true;
     } catch (error) {
       this._recordLifecycleError("process-cancel", error);
+      return false;
     }
   },
 

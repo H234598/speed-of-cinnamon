@@ -2064,6 +2064,15 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!this._untrackOrphanedProcess(entry.process))", block)
         self.assertIn("allSucceeded = false;", block)
 
+    def test_process_teardown_fails_closed_when_registry_is_unavailable(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_terminateAllProcesses: function()")
+        end = source.index("\n  _terminateProcessesByGroup:", start)
+        block = source[start:end]
+        self.assertIn('this._recordLifecycleError("process-state", new Error("Process registry is unavailable"));', block)
+        self.assertIn("return false;", block)
+        self.assertIn("let processes = this._resourceRegistry.processes;", block)
+
     def test_process_and_cancellable_unregistration_contains_delete_failures(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_unregisterCancellable: function(token)")
