@@ -428,6 +428,7 @@ MyApplet.prototype = {
     };
     this._orphanedSignals = [];
     this._orphanedHotkeys = [];
+    this._orphanedProcesses = [];
     this._hotkeyDefinitions = {};
     this._teardownComplete = false;
     this._initFailed = false;
@@ -1313,6 +1314,75 @@ MyApplet.prototype = {
     }
   },
 
+  _trackOrphanedProcess: function(process, generation, group) {
+    try {
+      if (!process) {
+        throw new Error("Process orphan is invalid");
+      }
+      if (!Array.isArray(this._orphanedProcesses)) {
+        this._orphanedProcesses = [];
+      }
+      let known = this._orphanedProcesses.some((entry) => entry && entry.process === process);
+      if (!known) {
+        this._orphanedProcesses.push({
+          process: process,
+          generation: generation,
+          group: String(group || "process"),
+        });
+      }
+      return true;
+    } catch (error) {
+      this._recordLifecycleError("process-orphan", error);
+      return false;
+    }
+  },
+
+  _untrackOrphanedProcess: function(process) {
+    if (!Array.isArray(this._orphanedProcesses)) {
+      return true;
+    }
+    let success = true;
+    for (let index = this._orphanedProcesses.length - 1; index >= 0; index--) {
+      let entry = this._orphanedProcesses[index];
+      if (!entry || entry.process !== process) {
+        continue;
+      }
+      try {
+        this._orphanedProcesses.splice(index, 1);
+      } catch (error) {
+        this._recordLifecycleError("process-orphan", error);
+        success = false;
+      }
+    }
+    return success;
+  },
+
+  _retryOrphanedProcesses: function() {
+    if (!Array.isArray(this._orphanedProcesses)) {
+      return true;
+    }
+    let success = true;
+    for (let index = this._orphanedProcesses.length - 1; index >= 0; index--) {
+      let entry = this._orphanedProcesses[index];
+      if (!entry || !entry.process) {
+        this._recordLifecycleError("process-orphan", new Error("Process orphan entry is invalid"));
+        success = false;
+        continue;
+      }
+      if (!this._terminateProcess(entry.process)) {
+        success = false;
+        continue;
+      }
+      try {
+        this._orphanedProcesses.splice(index, 1);
+      } catch (error) {
+        this._recordLifecycleError("process-orphan", error);
+        success = false;
+      }
+    }
+    return success;
+  },
+
   _terminateProcess: function(process) {
     if (!process) {
       return false;
@@ -1345,8 +1415,9 @@ MyApplet.prototype = {
       for (let token in processes) {
         if (Object.prototype.hasOwnProperty.call(processes, token)) {
           let cleanupSucceeded = false;
+          let entry = null;
           try {
-            let entry = processes[token];
+            entry = processes[token];
             if (entry && typeof entry.cancel === "function") {
               let result = entry.cancel();
               if (result === false) {
@@ -1360,6 +1431,7 @@ MyApplet.prototype = {
             this._recordLifecycleError("process-cancel", error);
           }
           if (cleanupSucceeded) {
+            this._untrackOrphanedProcess(entry && entry.process);
             this._unregisterProcess(token);
           }
         }
@@ -1405,6 +1477,7 @@ MyApplet.prototype = {
           this._recordLifecycleError("process-cancel", error);
         }
         if (selected && cleanupSucceeded) {
+          this._untrackOrphanedProcess(entry && entry.process);
           if (!this._unregisterProcess(token)) {
             allSucceeded = false;
           }
@@ -2636,6 +2709,7 @@ MyApplet.prototype = {
     this.doctorCommandToken = null;
     this._doctorCommandRunning = false;
     this._runTeardownGuarded("teardown-processes", () => this._terminateAllProcesses());
+    this._runTeardownGuarded("teardown-orphaned-processes", () => this._retryOrphanedProcesses());
     this._runTeardownGuarded("teardown-cancellables", () => this._cancelAllCancellables());
     this._runTeardownGuarded("teardown-dialogs", () => this._destroyTrackedDialogs());
     this._runTeardownGuarded("teardown-timer", () => this._clearStatusTimer());
@@ -8183,6 +8257,13 @@ MyApplet.prototype = {
     if (!this._lifecycleAllowsWork()) {
       return null;
     }
+    if (Array.isArray(this._orphanedProcesses) && this._orphanedProcesses.length > 0) {
+      let orphanCleanupSucceeded = this._retryOrphanedProcesses();
+      if (!orphanCleanupSucceeded || this._orphanedProcesses.length > 0) {
+        this._recordLifecycleError("process-state", new Error("An orphaned process is still pending"));
+        return null;
+      }
+    }
     let hasInput = options.inputText !== null && options.inputText !== undefined;
     if (hasInput && typeof options.inputText !== "string") {
       throw new Error("Subprocess input must be text");
@@ -8217,7 +8298,9 @@ MyApplet.prototype = {
     try {
       processToken = this._registerProcess(process, generation, options.resourceGroup);
     } catch (error) {
-      this._terminateProcess(process);
+      if (!this._terminateProcess(process)) {
+        this._trackOrphanedProcess(process, generation, options.resourceGroup);
+      }
       throw error;
     }
     let cancellable = null;
@@ -8227,8 +8310,10 @@ MyApplet.prototype = {
       cancellableToken = this._registerCancellable(cancellable);
     } catch (error) {
       this._unregisterCancellable(cancellableToken);
-      this._unregisterProcess(processToken);
-      this._terminateProcess(process);
+      let processTerminated = this._terminateProcess(process);
+      if (processTerminated) {
+        this._unregisterProcess(processToken);
+      }
       throw error;
     }
     let timeoutKey = "process-timeout-" + processToken;

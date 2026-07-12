@@ -1800,6 +1800,31 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("cancellableToken = this._registerCancellable(cancellable);", block)
         self.assertIn("this._unregisterProcess(processToken);", block)
         self.assertIn("this._terminateProcess(process);", block)
+        self.assertIn("if (!this._terminateProcess(process))", block)
+        self.assertIn("this._trackOrphanedProcess(process, generation, options.resourceGroup);", block)
+        self.assertIn("let processTerminated = this._terminateProcess(process);", block)
+        self.assertLess(block.index("let processTerminated = this._terminateProcess(process);"), block.index("this._unregisterProcess(processToken);"))
+
+    def test_orphaned_processes_are_retried_and_block_new_spawns(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_trackOrphanedProcess: function(process, generation, group)")
+        end = source.index("\n  _terminateProcess:", start)
+        orphan_block = source[start:end]
+        self.assertIn("this._orphanedProcesses = [];", orphan_block)
+        self.assertIn("entry.process === process", orphan_block)
+        self.assertIn("this._orphanedProcesses.push({", orphan_block)
+        self.assertIn("_retryOrphanedProcesses: function()", orphan_block)
+        self.assertIn("this._terminateProcess(entry.process)", orphan_block)
+        self.assertIn("this._orphanedProcesses.splice(index, 1);", orphan_block)
+
+        bounded_start = source.index("_runBoundedSubprocess: function(args, env, options, callback)")
+        bounded_end = source.index("\n  _spawnJsonWithBackendEnvironment:", bounded_start)
+        bounded_block = source[bounded_start:bounded_end]
+        self.assertIn("Array.isArray(this._orphanedProcesses)", bounded_block)
+        self.assertIn("let orphanCleanupSucceeded = this._retryOrphanedProcesses();", bounded_block)
+        self.assertIn('this._recordLifecycleError("process-state", new Error("An orphaned process is still pending"));', bounded_block)
+        self.assertIn("return null;", bounded_block)
+        self.assertIn('this._runTeardownGuarded("teardown-orphaned-processes", () => this._retryOrphanedProcesses());', source)
 
     def test_process_and_cancellable_registration_verify_registry_writes(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -3337,7 +3362,7 @@ class AppletStaticTest(unittest.TestCase):
         all_block = source[all_start:all_end]
         self.assertIn('this._recordLifecycleError("process-cancel", error);', all_block)
         self.assertIn("let cleanupSucceeded = false;", all_block)
-        self.assertIn("if (cleanupSucceeded) {\n            this._unregisterProcess(token);", all_block)
+        self.assertIn("if (cleanupSucceeded) {\n            this._untrackOrphanedProcess(entry && entry.process);\n            this._unregisterProcess(token);", all_block)
         self.assertIn('if (result === false) {\n                throw new Error("Process cancellation failed");', all_block)
 
     def test_bounded_subprocess_retries_registry_cleanup_after_callback(self) -> None:
