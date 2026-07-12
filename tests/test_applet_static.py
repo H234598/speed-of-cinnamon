@@ -4231,6 +4231,7 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn("this.alarmActionToken !== actionToken", block)
             self.assertIn("!this._lifecycleAllowsWork()", block)
             self.assertIn("this.alarmMenuRefreshToken = null;", block)
+            self.assertIn('resourceGroup: "alarm-action"', block)
 
     def test_alarm_checks_ignore_stale_backend_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -6021,13 +6022,14 @@ class AppletStaticTest(unittest.TestCase):
             "autoPastePromptToken",
         ]:
             self.assertIn(f"this.{token} = null;", helper_block)
+        self.assertIn('this._terminateProcessesByGroup("alarm-action")', helper_block)
         self.assertIn("let hadBenchmarkFlow = Boolean(this.benchmarkFlowToken);", helper_block)
         self.assertIn('this._terminateProcessesByGroup("benchmark")', helper_block)
         self.assertIn("if (hadBenchmarkFlow && !this._recordingCommandToken)", helper_block)
         self.assertIn('this._terminateProcessesByGroup("doctor")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("settings-transfer")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("setup-diagnostics")', helper_block)
-        self.assertIn("return benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;", helper_block)
+        self.assertIn("return alarmActionCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;", helper_block)
         self.assertNotIn("this.transcriptWindowToken = null;", helper_block)
         self.assertNotIn("this.settingsWindowToken = null;", helper_block)
 

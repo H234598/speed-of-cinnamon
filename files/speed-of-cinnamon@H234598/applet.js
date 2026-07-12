@@ -5437,6 +5437,10 @@ MyApplet.prototype = {
     this.textModelMenuRefreshToken = null;
     this.alarmMenuRefreshToken = null;
     this.alarmActionToken = null;
+    let alarmActionCleanupSucceeded = this._terminateProcessesByGroup("alarm-action") !== false;
+    if (!alarmActionCleanupSucceeded) {
+      this._setStatusPreservingRecording("error", _("Alarm action could not be stopped"), this.lastTranscript);
+    }
     this.alarmCheckToken = null;
     let hadBenchmarkFlow = Boolean(this.benchmarkFlowToken);
     this.benchmarkFlowToken = null;
@@ -5466,7 +5470,7 @@ MyApplet.prototype = {
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
     this.transcriptListPromptToken = null;
-    return benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;
+    return alarmActionCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded;
   },
 
   _runDoctor: function(startupCheck) {
@@ -6490,7 +6494,7 @@ MyApplet.prototype = {
         this._recordLifecycleError("alarm-action", error);
         this._setAlarmErrorStatus(_("Could not complete alarm update"));
       }
-    });
+    }, { resourceGroup: "alarm-action" });
   },
 
   _removeAlarm: function(id) {
@@ -6533,7 +6537,7 @@ MyApplet.prototype = {
         this._recordLifecycleError("alarm-action", error);
         this._setAlarmErrorStatus(_("Could not complete alarm removal"));
       }
-    });
+    }, { resourceGroup: "alarm-action" });
   },
 
   _checkAlarms: function(manual) {
