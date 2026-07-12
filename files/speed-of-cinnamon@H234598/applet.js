@@ -3975,7 +3975,10 @@ MyApplet.prototype = {
 
   _openFolder: function(path, successMessage) {
     try {
-      GLib.mkdir_with_parents(path, 0o755);
+      let mkdirResult = GLib.mkdir_with_parents(path, 0o755);
+      if (mkdirResult !== 0) {
+        throw new Error("folder could not be created");
+      }
       if (!GLib.file_test(path, GLib.FileTest.IS_DIR)) {
         throw new Error("folder is not available: " + path);
       }
@@ -5579,7 +5582,10 @@ MyApplet.prototype = {
     if (ByteArray.fromString(text).length > MAX_EXTERNAL_API_ENV_BYTES) {
       throw new Error("External API config file is too large");
     }
-    GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o700);
+    let mkdirResult = GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o700);
+    if (mkdirResult !== 0) {
+      throw new Error("External API config directory could not be created");
+    }
     let setPrivateMode = () => {
       let modeResult = Gio.File.new_for_path(path).set_attribute_uint32(
         "unix::mode",
