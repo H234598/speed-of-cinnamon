@@ -2413,9 +2413,11 @@ MyApplet.prototype = {
 
   _cancelAllCancellables: function() {
     try {
-      let cancellables = this._resourceRegistry && this._resourceRegistry.cancellables
-        ? this._resourceRegistry.cancellables
-        : {};
+      if (!this._resourceRegistry || !this._resourceRegistry.cancellables) {
+        this._recordLifecycleError("cancellable-state", new Error("Cancellable registry is unavailable"));
+        return false;
+      }
+      let cancellables = this._resourceRegistry.cancellables;
       for (let token in cancellables) {
         if (!Object.prototype.hasOwnProperty.call(cancellables, token)) {
           continue;
@@ -2446,8 +2448,10 @@ MyApplet.prototype = {
           this._trackOrphanedCancellable(token, false);
         }
       }
+      return true;
     } catch (error) {
       this._recordLifecycleError("teardown-cancellable", error);
+      return false;
     }
   },
 
