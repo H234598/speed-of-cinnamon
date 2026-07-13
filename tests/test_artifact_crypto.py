@@ -276,6 +276,17 @@ class ArtifactCryptoTest(unittest.TestCase):
             self.assertEqual(len(leftovers), 1)
             self.assertEqual(leftovers[0].read_bytes(), b"")
 
+    def test_scrub_temp_passphrase_preserves_inspection_error_when_fd_close_fails(self) -> None:
+        with (
+            mock.patch.object(artifact_crypto.os, "open", return_value=123),
+            mock.patch.object(artifact_crypto.os, "fstat", side_effect=OSError("inspect failed")),
+            mock.patch.object(artifact_crypto.os, "close", side_effect=OSError("close failed")),
+        ):
+            with self.assertRaisesRegex(OSError, "inspect failed") as caught:
+                artifact_crypto._scrub_temp_passphrase_file(456, ".artifact.key.tmp")
+
+        self.assertIn("artifact encryption cleanup failed", "\n".join(caught.exception.__notes__))
+
     def test_default_passphrase_rotation_failure_keeps_existing_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "artifact.key"

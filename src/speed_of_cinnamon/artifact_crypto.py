@@ -73,6 +73,10 @@ _SAFE_DBUS_SESSION_PREFIX = "unix:path="
 _ACL_XATTR = "system.posix_acl_access"
 
 
+def _note_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
+    primary.add_note(f"artifact encryption cleanup failed: {cleanup_error}")
+
+
 def _safe_utf8_length(value: str, *, field_name: str) -> int:
     try:
         return len(value.encode("utf-8"))
@@ -316,6 +320,7 @@ def _scrub_temp_passphrase_file(parent_fd: int, temp_name: str) -> None:
     if not temp_name:
         return
     fd = os.open(temp_name, os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
+    primary_error: BaseException | None = None
     try:
         file_stat = os.fstat(fd)
         if not stat.S_ISREG(file_stat.st_mode):
@@ -334,8 +339,17 @@ def _scrub_temp_passphrase_file(parent_fd: int, temp_name: str) -> None:
         os.ftruncate(fd, 0)
         with suppress(OSError, RuntimeError):
             _fsync_fd(fd)
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError as cleanup_error:
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise
 
 
 def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> str:
