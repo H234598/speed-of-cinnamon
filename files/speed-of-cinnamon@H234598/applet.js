@@ -5699,7 +5699,7 @@ MyApplet.prototype = {
     let effectiveStatus = typeof statusOverride === "string" ? statusOverride : this.status;
     return effectiveStatus === "recording" || effectiveStatus === "recorded" ||
       this.autoRelistenPending ||
-      (this.isCommandRunning && this.notificationSessionActive);
+      (this.isCommandRunning && this.notificationSessionActive && Boolean(this._recordingCommandToken));
   },
 
   _cancelRecording: function(statusOverride) {

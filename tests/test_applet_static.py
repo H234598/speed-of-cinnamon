@@ -5308,7 +5308,8 @@ class AppletStaticTest(unittest.TestCase):
         cancel_work_block = source[cancel_work_start:cancel_work_end]
         self.assertIn('effectiveStatus === "recording" || effectiveStatus === "recorded"', cancel_work_block)
         self.assertIn("this.autoRelistenPending", cancel_work_block)
-        self.assertIn("this.isCommandRunning && this.notificationSessionActive", cancel_work_block)
+        self.assertIn("this.isCommandRunning && this.notificationSessionActive && Boolean(this._recordingCommandToken)", cancel_work_block)
+        self.assertNotIn("this.isCommandRunning && this.notificationSessionActive);", cancel_work_block)
         self.assertNotIn("return this.notificationSessionActive ||", cancel_work_block)
         self.assertIn("if (!this._hasCancelableRecordingWork(statusOverride))", source[cancel_index:cancel_end])
         self.assertIn("if (this.autoRelistenManualStopRequested) {\n      return;\n    }", source[ensure_index:ensure_end])
