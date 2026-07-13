@@ -653,6 +653,19 @@ class AppLoggingTest(unittest.TestCase):
 
             self.assertFalse(missing.exists())
 
+    def test_rotate_active_if_needed_bounds_occupied_rotation_slots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            active = Path(tmp) / f"speed-of-cinnamon-{date.today().isoformat()}.log"
+            active.write_bytes(b"x")
+
+            with (
+                mock.patch.object(app_logging, "MAX_LOG_ROTATION_CANDIDATES", 3),
+                mock.patch.object(app_logging.Path, "exists", return_value=True),
+                mock.patch.object(app_logging.Path, "is_symlink", return_value=False),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "failed to allocate log rotation slot"):
+                    app_logging._rotate_active_if_needed(active, force=True)
+
     def test_configure_logging_rejects_symlinked_active_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

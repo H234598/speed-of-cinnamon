@@ -36,6 +36,7 @@ DEFAULT_LOG_LEVEL = "error"
 MAX_DAILY_LOG_BYTES = 1_000_000
 MAX_TOTAL_LOG_BYTES = 5_000_000
 COMPRESS_AFTER_DAYS = 3
+MAX_LOG_ROTATION_CANDIDATES = 100
 MAX_LOG_MESSAGE_CHARS = 320
 MAX_LOG_FIELD_CHARS = 160
 LOG_MAINTENANCE_INTERVAL_SECONDS = 60.0
@@ -608,8 +609,7 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
     size = file_stat.st_size
     if not force and size < MAX_DAILY_LOG_BYTES:
         return
-    suffix = 1
-    while True:
+    for suffix in range(1, MAX_LOG_ROTATION_CANDIDATES + 1):
         candidate = path.with_name(f"{path.stem}.{suffix}{path.suffix}")
         if not candidate.exists() and not candidate.is_symlink():
             parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name="log directory")
@@ -623,7 +623,7 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
                 except OSError:
                     pass
             return
-        suffix += 1
+    raise RuntimeError("failed to allocate log rotation slot")
 
 
 def _compress_old_daily_logs(directory: Path, today: date) -> None:
