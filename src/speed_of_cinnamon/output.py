@@ -1481,11 +1481,13 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
             committed = True
             return True
         finally:
-            if not committed:
-                if not operation_performed:
-                    _restore_clipboard_insertion_snapshot(snapshot)
-                    _restore_clipboard_dedup_state(persistent_snapshot, pending=persistent_snapshot_pending)
-            _release_clipboard_dedup_lock(lock_path)
+            try:
+                if not committed:
+                    if not operation_performed:
+                        _restore_clipboard_insertion_snapshot(snapshot)
+                        _restore_clipboard_dedup_state(persistent_snapshot, pending=persistent_snapshot_pending)
+            finally:
+                _release_clipboard_dedup_lock(lock_path)
     if method == "clipboard-paste":
         xdotool = _which("xdotool")
         target_window_snapshot = _active_x_window_snapshot(xdotool_command=xdotool) if xdotool else None
@@ -1541,24 +1543,26 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
             committed = True
             return True
         finally:
-            if not committed:
-                if not operation_performed or paste_not_attempted:
-                    _restore_clipboard_insertion_snapshot(snapshot)
-                    _restore_clipboard_dedup_state(persistent_snapshot, pending=persistent_snapshot_pending)
-                    _restore_clipboard_snapshot_after_failed_paste(
-                        text,
-                        clipboard_snapshot_available,
-                        clipboard_snapshot,
-                        allowed_helpers=("xclip", "xsel"),
-                    )
-                else:
-                    _restore_clipboard_snapshot_after_failed_paste(
-                        text,
-                        clipboard_snapshot_available,
-                        clipboard_snapshot,
-                        allowed_helpers=("xclip", "xsel"),
-                    )
-            _release_clipboard_dedup_lock(lock_path)
+            try:
+                if not committed:
+                    if not operation_performed or paste_not_attempted:
+                        _restore_clipboard_insertion_snapshot(snapshot)
+                        _restore_clipboard_dedup_state(persistent_snapshot, pending=persistent_snapshot_pending)
+                        _restore_clipboard_snapshot_after_failed_paste(
+                            text,
+                            clipboard_snapshot_available,
+                            clipboard_snapshot,
+                            allowed_helpers=("xclip", "xsel"),
+                        )
+                    else:
+                        _restore_clipboard_snapshot_after_failed_paste(
+                            text,
+                            clipboard_snapshot_available,
+                            clipboard_snapshot,
+                            allowed_helpers=("xclip", "xsel"),
+                        )
+            finally:
+                _release_clipboard_dedup_lock(lock_path)
     if method == "type":
         xdotool = _which("xdotool")
         if not xdotool:
