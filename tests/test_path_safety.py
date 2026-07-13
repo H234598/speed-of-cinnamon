@@ -16,6 +16,57 @@ class PathSafetyTest(unittest.TestCase):
         with self.assertRaisesRegex(OSError, "must be absolute"):
             path_safety.open_file_without_following_symlinks(Path("settings.json"), os.O_RDONLY)
 
+    def test_open_file_closes_leaf_when_directory_close_fails(self) -> None:
+        close_calls: list[int] = []
+
+        def fail_directory_close(fd: int) -> None:
+            close_calls.append(fd)
+            if fd == 100:
+                raise OSError("directory close failed")
+
+        with (
+            mock.patch.object(path_safety.os, "open", side_effect=[100, 101]),
+            mock.patch.object(path_safety.os, "close", side_effect=fail_directory_close),
+        ):
+            with self.assertRaisesRegex(OSError, "directory close failed"):
+                path_safety.open_file_without_following_symlinks(Path("/settings.json"), os.O_RDONLY)
+
+        self.assertEqual(close_calls, [100, 101])
+
+    def test_open_file_closes_next_directory_when_previous_close_fails(self) -> None:
+        close_calls: list[int] = []
+
+        def fail_first_directory_close(fd: int) -> None:
+            close_calls.append(fd)
+            if fd == 100:
+                raise OSError("directory close failed")
+
+        with (
+            mock.patch.object(path_safety.os, "open", side_effect=[100, 101]),
+            mock.patch.object(path_safety.os, "close", side_effect=fail_first_directory_close),
+        ):
+            with self.assertRaisesRegex(OSError, "directory close failed"):
+                path_safety.open_file_without_following_symlinks(Path("/tmp/settings.json"), os.O_RDONLY)
+
+        self.assertEqual(close_calls, [100, 101, 100])
+
+    def test_ensure_directory_closes_next_directory_when_previous_close_fails(self) -> None:
+        close_calls: list[int] = []
+
+        def fail_first_directory_close(fd: int) -> None:
+            close_calls.append(fd)
+            if fd == 100:
+                raise OSError("directory close failed")
+
+        with (
+            mock.patch.object(path_safety.os, "open", side_effect=[100, 101]),
+            mock.patch.object(path_safety.os, "close", side_effect=fail_first_directory_close),
+        ):
+            with self.assertRaisesRegex(OSError, "directory close failed"):
+                path_safety.ensure_directory_without_following_symlinks(Path("/tmp/settings"))
+
+        self.assertEqual(close_calls, [100, 101, 100])
+
     def test_atomic_write_rejects_relative_paths(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "must be absolute"):
             path_safety.write_text_atomically_without_following_symlinks(Path("settings.json"), "{}")

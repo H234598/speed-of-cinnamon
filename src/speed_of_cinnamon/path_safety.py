@@ -9,6 +9,10 @@ from typing import Any
 DEFAULT_MAX_TEXT_READ_BYTES = 1_000_000
 
 
+def _note_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
+    primary.add_note(f"secure path cleanup failed: {cleanup_error}")
+
+
 def _safe_path_parts(path: Path, *, field_name: str) -> tuple[str, ...]:
     if not path.is_absolute():
         raise OSError(f"{field_name} must be absolute")
@@ -59,6 +63,8 @@ def open_file_without_following_symlinks(
     parts = _safe_path_parts(path, field_name=field_name)
     start_path = path.anchor if path.is_absolute() else "."
     directory_fd = os.open(start_path, os.O_RDONLY | directory_flag)
+    result_fd: int | None = None
+    primary_error: BaseException | None = None
     try:
         for component in parts[:-1]:
             next_fd = os.open(
@@ -66,11 +72,34 @@ def open_file_without_following_symlinks(
                 os.O_RDONLY | directory_flag | nofollow_flag,
                 dir_fd=directory_fd,
             )
-            os.close(directory_fd)
+            try:
+                os.close(directory_fd)
+            except OSError as close_error:
+                try:
+                    os.close(next_fd)
+                except OSError as next_close_error:
+                    _note_cleanup_failure(close_error, next_close_error)
+                raise
             directory_fd = next_fd
-        return os.open(parts[-1], flags | nofollow_flag, mode, dir_fd=directory_fd)
+        result_fd = os.open(parts[-1], flags | nofollow_flag, mode, dir_fd=directory_fd)
+        return result_fd
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
-        os.close(directory_fd)
+        try:
+            os.close(directory_fd)
+        except OSError as cleanup_error:
+            if result_fd is not None:
+                try:
+                    os.close(result_fd)
+                except OSError as result_close_error:
+                    _note_cleanup_failure(cleanup_error, result_close_error)
+                result_fd = None
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise
 
 
 def open_directory_without_following_symlinks(path: Path, *, field_name: str = "path") -> int:
@@ -152,11 +181,21 @@ def ensure_directory_without_following_symlinks(path: Path, *, field_name: str =
                     os.O_RDONLY | directory_flag | nofollow_flag,
                     dir_fd=directory_fd,
                 )
-            os.close(directory_fd)
+            try:
+                os.close(directory_fd)
+            except OSError as close_error:
+                try:
+                    os.close(next_fd)
+                except OSError as next_close_error:
+                    _note_cleanup_failure(close_error, next_close_error)
+                raise
             directory_fd = next_fd
         return directory_fd
-    except OSError:
-        os.close(directory_fd)
+    except OSError as exc:
+        try:
+            os.close(directory_fd)
+        except OSError as cleanup_error:
+            _note_cleanup_failure(exc, cleanup_error)
         raise
 
 
