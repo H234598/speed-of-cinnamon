@@ -1001,14 +1001,14 @@ class AppLoggingTest(unittest.TestCase):
             may_daily = log_dir / "speed-of-cinnamon-2026-05-30.log"
             may_daily.write_text("may-30\n", encoding="utf-8")
             may_daily.chmod(0o600)
-            real_replace = os.replace
+            real_rename = app_logging._rename_without_replacing
 
-            def replace_and_swap(src: object, dst: object, *args: object, **kwargs: object) -> None:
-                real_replace(src, dst, *args, **kwargs)
+            def rename_and_swap(src: object, dst: object, *args: object, **kwargs: object) -> None:
+                real_rename(src, dst, *args, **kwargs)
                 may_daily.unlink()
                 may_daily.write_text("attacker\n", encoding="utf-8")
 
-            with mock.patch("speed_of_cinnamon.app_logging.os.replace", side_effect=replace_and_swap):
+            with mock.patch("speed_of_cinnamon.app_logging._rename_without_replacing", side_effect=rename_and_swap):
                 with self.assertRaisesRegex(RuntimeError, "monthly log source changed before deletion"):
                     app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 
@@ -1033,15 +1033,15 @@ class AppLoggingTest(unittest.TestCase):
                 fsync_modes.append(os.fstat(fd).st_mode)
                 real_fsync(fd)
 
-            real_replace = os.replace
+            real_rename = app_logging._rename_without_replacing
 
-            def fail_activation_replace(src: object, dst: object, *args: object, **kwargs: object) -> None:
+            def fail_activation_rename(src: object, dst: object, *args: object, **kwargs: object) -> None:
                 if str(src).endswith(".tmp"):
                     raise PermissionError("replace failed")
-                real_replace(src, dst, *args, **kwargs)
+                real_rename(src, dst, *args, **kwargs)
 
             with (
-                mock.patch("speed_of_cinnamon.app_logging.os.replace", side_effect=fail_activation_replace),
+                mock.patch("speed_of_cinnamon.app_logging._rename_without_replacing", side_effect=fail_activation_rename),
                 mock.patch("speed_of_cinnamon.app_logging.os.fsync", side_effect=record_fsync),
             ):
                 with self.assertRaises(PermissionError, msg="replace failure"):
@@ -1138,7 +1138,7 @@ class AppLoggingTest(unittest.TestCase):
             source.write_text("content\n", encoding="utf-8")
             source.chmod(0o600)
 
-            with mock.patch("speed_of_cinnamon.app_logging.os.replace", side_effect=PermissionError("replace failed")):
+            with mock.patch("speed_of_cinnamon.app_logging._rename_without_replacing", side_effect=PermissionError("replace failed")):
                 with self.assertRaises(PermissionError, msg="replace failure"):
                     app_logging._gzip_file(source, target)
 
@@ -1207,6 +1207,33 @@ class AppLoggingTest(unittest.TestCase):
                 self.assertEqual(handle.read(), "replacement content\n")
             self.assertEqual(list(log_dir.glob("*.backup")), [])
 
+    def test_gzip_file_does_not_clobber_target_created_during_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "source.log"
+            target = log_dir / "target.log.gz"
+            source.write_text("new content\n", encoding="utf-8")
+            source.chmod(0o600)
+            with gzip.open(target, "wt", encoding="utf-8") as handle:
+                handle.write("old content\n")
+            target.chmod(0o600)
+            racing = log_dir / "racing.log.gz"
+            real_rename = app_logging._rename_without_replacing
+
+            def rename_then_race(src: object, dst: object, *args: object, **kwargs: object) -> None:
+                if str(src).endswith(".tmp") and dst == target.name:
+                    racing.write_text("racing target\n", encoding="utf-8")
+                    racing.replace(target)
+                real_rename(src, dst, *args, **kwargs)
+
+            with mock.patch.object(app_logging, "_rename_without_replacing", side_effect=rename_then_race):
+                with self.assertRaises(OSError):
+                    app_logging._gzip_file(source, target)
+
+            self.assertTrue(source.exists())
+            self.assertEqual(target.read_text(encoding="utf-8"), "racing target\n")
+            self.assertTrue(list(log_dir.glob("*.backup")))
+
     def test_gzip_file_removes_target_backup_when_replace_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
@@ -1218,7 +1245,14 @@ class AppLoggingTest(unittest.TestCase):
                 handle.write("old content\n")
             target.chmod(0o600)
 
-            with mock.patch("speed_of_cinnamon.app_logging.os.replace", side_effect=PermissionError("replace failed")):
+            real_rename = app_logging._rename_without_replacing
+
+            def fail_activation_rename(src: object, dst: object, *args: object, **kwargs: object) -> None:
+                if str(src).endswith(".tmp"):
+                    raise PermissionError("replace failed")
+                real_rename(src, dst, *args, **kwargs)
+
+            with mock.patch("speed_of_cinnamon.app_logging._rename_without_replacing", side_effect=fail_activation_rename):
                 with self.assertRaisesRegex(PermissionError, "replace failed"):
                     app_logging._gzip_file(source, target)
 
@@ -1236,7 +1270,7 @@ class AppLoggingTest(unittest.TestCase):
             source.chmod(0o600)
 
             with (
-                mock.patch("speed_of_cinnamon.app_logging.os.replace", side_effect=PermissionError("replace failed")),
+                mock.patch("speed_of_cinnamon.app_logging._rename_without_replacing", side_effect=PermissionError("replace failed")),
                 mock.patch("speed_of_cinnamon.app_logging.os.unlink", side_effect=PermissionError("cleanup denied")),
             ):
                 with self.assertRaisesRegex(RuntimeError, "failed to remove log temporary file"):
@@ -1269,14 +1303,14 @@ class AppLoggingTest(unittest.TestCase):
             target = log_dir / "target.log.gz"
             source.write_text("content\n", encoding="utf-8")
             source.chmod(0o600)
-            real_replace = os.replace
+            real_rename = app_logging._rename_without_replacing
 
-            def replace_and_swap(src: object, dst: object, *args: object, **kwargs: object) -> None:
-                real_replace(src, dst, *args, **kwargs)
+            def rename_and_swap(src: object, dst: object, *args: object, **kwargs: object) -> None:
+                real_rename(src, dst, *args, **kwargs)
                 source.unlink()
                 source.write_text("attacker\n", encoding="utf-8")
 
-            with mock.patch("speed_of_cinnamon.app_logging.os.replace", side_effect=replace_and_swap):
+            with mock.patch("speed_of_cinnamon.app_logging._rename_without_replacing", side_effect=rename_and_swap):
                 with self.assertRaisesRegex(RuntimeError, "log source file changed before deletion"):
                     app_logging._gzip_file(source, target)
 

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from .path_safety import (
+    _rename_without_replacing,
     assert_fd_is_private_directory,
     assert_fd_is_regular_private_file,
     ensure_directory_without_following_symlinks,
@@ -850,7 +851,12 @@ def _merge_old_months(directory: Path, today: date) -> None:
                 if archive_backup_name is None:
                     raise RuntimeError("failed to allocate monthly log archive backup")
             archive_activation_attempted = True
-            os.replace(temp_name, archive.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            _rename_without_replacing(
+                temp_name,
+                archive.name,
+                directory_fd=parent_fd,
+                field_name="monthly log archive",
+            )
             temp_name = ""
             os.fsync(parent_fd)
             archive_transaction_active = False
@@ -864,7 +870,12 @@ def _merge_old_months(directory: Path, today: date) -> None:
                 except OSError as delete_error:
                     cleanup_name = f"{path.name}.{secrets.token_hex(8)}.merged"
                     try:
-                        os.replace(path.name, cleanup_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                        _rename_without_replacing(
+                            path.name,
+                            cleanup_name,
+                            directory_fd=parent_fd,
+                            field_name="monthly log source",
+                        )
                         os.fsync(parent_fd)
                         moved_stat = _assert_regular_unlinked_file(
                             path.with_name(cleanup_name),
@@ -928,11 +939,11 @@ def _merge_old_months(directory: Path, today: date) -> None:
                         try:
                             os.stat(archive.name, dir_fd=parent_fd, follow_symlinks=False)
                         except FileNotFoundError:
-                            os.replace(
+                            _rename_without_replacing(
                                 archive_backup_name,
                                 archive.name,
-                                src_dir_fd=parent_fd,
-                                dst_dir_fd=parent_fd,
+                                directory_fd=parent_fd,
+                                field_name="monthly log archive",
                             )
                             os.fsync(parent_fd)
                         else:
@@ -1050,6 +1061,7 @@ def _gzip_file(source: Path, target: Path) -> None:
     target_temp_stat: os.stat_result | None = None
     target_activation_stat: os.stat_result | None = None
     target_activation_attempted = False
+    target_removed = False
     target_transaction_active = False
 
     def _same_target_inode(first: os.stat_result, second: os.stat_result) -> bool:
@@ -1071,7 +1083,7 @@ def _gzip_file(source: Path, target: Path) -> None:
         return _same_target_inode(first, second) and getattr(first, "st_nlink", 1) == getattr(second, "st_nlink", 1)
 
     def _rollback_target_activation() -> None:
-        nonlocal target_backup_created, target_backup_name
+        nonlocal target_backup_created, target_backup_name, target_removed
         if not target_transaction_active:
             return
         activation_visible = False
@@ -1085,6 +1097,8 @@ def _gzip_file(source: Path, target: Path) -> None:
                 activation_visible = True
             elif target_existing_stat is None and current_stat is None:
                 pass
+            elif target_removed and target_existing_stat is not None and current_stat is None:
+                pass
             elif target_existing_stat is not None and current_stat is not None and _same_target_inode(current_stat, target_existing_stat):
                 pass
             else:
@@ -1094,22 +1108,40 @@ def _gzip_file(source: Path, target: Path) -> None:
                 os.fsync(parent_fd)
         if target_backup_created:
             if not activation_visible:
-                os.unlink(target_backup_name, dir_fd=parent_fd)
-                target_backup_created = False
-                target_backup_name = ""
-                os.fsync(parent_fd)
+                if target_removed:
+                    try:
+                        os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
+                    except FileNotFoundError:
+                        _rename_without_replacing(
+                            target_backup_name,
+                            target.name,
+                            directory_fd=parent_fd,
+                            field_name="log target",
+                        )
+                        target_backup_created = False
+                        target_backup_name = ""
+                        target_removed = False
+                        os.fsync(parent_fd)
+                    else:
+                        raise RuntimeError("log target exists during activation rollback")
+                else:
+                    os.unlink(target_backup_name, dir_fd=parent_fd)
+                    target_backup_created = False
+                    target_backup_name = ""
+                    os.fsync(parent_fd)
             else:
                 try:
                     os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
                 except FileNotFoundError:
-                    os.replace(
+                    _rename_without_replacing(
                         target_backup_name,
                         target.name,
-                        src_dir_fd=parent_fd,
-                        dst_dir_fd=parent_fd,
+                        directory_fd=parent_fd,
+                        field_name="log target",
                     )
                     target_backup_created = False
                     target_backup_name = ""
+                    target_removed = False
                     os.fsync(parent_fd)
                 else:
                     raise RuntimeError("log target exists during activation rollback")
@@ -1220,7 +1252,22 @@ def _gzip_file(source: Path, target: Path) -> None:
                 raise RuntimeError("failed to allocate log target backup")
             os.fsync(parent_fd)
         target_activation_attempted = True
-        os.replace(temp_name, target.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        if target_backup_created:
+            current_target_stat = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
+            if (
+                not stat_module.S_ISREG(current_target_stat.st_mode)
+                or not _same_target_inode(current_target_stat, target_existing_stat)
+            ):
+                raise RuntimeError("log target changed before activation")
+            os.unlink(target.name, dir_fd=parent_fd)
+            target_removed = True
+            os.fsync(parent_fd)
+        _rename_without_replacing(
+            temp_name,
+            target.name,
+            directory_fd=parent_fd,
+            field_name="log target",
+        )
         temp_name = ""
         target_activation_stat = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
         os.fsync(parent_fd)
