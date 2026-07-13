@@ -4520,6 +4520,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (expectedClass === "" && expectedTitle === "")', match_block)
         self.assertIn("complete(false);\n      return false;", match_block)
 
+        title_start = source.index("_targetXWindowMatchesSnapshotTitle: function(snapshot, xid, completionCallback, deadlineMs)")
+        title_end = source.index("\n  _windowProbeValue:", title_start)
+        title_block = source[title_start:title_end]
+        self.assertIn('this._xdotoolOutput(["getwindowname", xid]', title_block)
+        self.assertIn("this._xWindowLooksLikeSpeedOfCinnamon(activeTitle, snapshot.windowClass)", title_block)
+        self.assertIn('if (expectedTitle === "")', title_block)
+
         probe_start = source.index("_windowProbeValue: function(window, methodName)")
         probe_end = source.index("\n  _windowLooksLikeSpeedOfCinnamon:", probe_start)
         probe_block = source[probe_start:probe_end]

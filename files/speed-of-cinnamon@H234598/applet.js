@@ -11749,16 +11749,21 @@ MyApplet.prototype = {
       return;
     }
     let expectedTitle = String(snapshot.windowTitle || "").trim().toLowerCase();
-    if (expectedTitle === "") {
-      complete(generationMatches());
-      return;
-    }
     this._xdotoolOutput(["getwindowname", xid], MAX_XDOTOOL_TARGET_OUTPUT_BYTES, (titleOutput) => {
       if (!generationMatches()) {
         complete(false);
         return;
       }
       let activeTitle = this._shortMenuText(String(titleOutput || "").trim(), 160).toLowerCase();
+      if (this._xWindowLooksLikeSpeedOfCinnamon(activeTitle, snapshot.windowClass)) {
+        this._notifySelfProtectionBlocked(activeTitle, snapshot.windowClass);
+        complete(false);
+        return;
+      }
+      if (expectedTitle === "") {
+        complete(true);
+        return;
+      }
       complete(activeTitle === expectedTitle);
     }, Math.max(1, deadlineMs ? deadlineMs - Date.now() : X11_COMMAND_TIMEOUT_MS));
   },
