@@ -2640,7 +2640,10 @@ def _safe_directory_entries(directory: Path, *, field_name: str) -> list[tuple[P
             entries.append((directory / name, file_stat))
         return entries
     finally:
-        os.close(directory_fd)
+        try:
+            os.close(directory_fd)
+        except OSError:
+            pass
 
 
 def _safe_regular_child_files(directory: Path, suffixes: tuple[str, ...], *, field_name: str) -> list[Path]:
