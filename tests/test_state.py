@@ -115,6 +115,47 @@ class StateStoreTest(unittest.TestCase):
 
             mocked_close.assert_called_once_with(123)
 
+    def test_state_lock_preserves_directory_validation_error_when_parent_close_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = StateStore(Path(tmp) / "state.json")
+            with (
+                mock.patch("speed_of_cinnamon.state.ensure_directory_without_following_symlinks", return_value=123),
+                mock.patch(
+                    "speed_of_cinnamon.state.assert_fd_is_private_directory",
+                    side_effect=RuntimeError("directory not private"),
+                ),
+                mock.patch("speed_of_cinnamon.state.os.close", side_effect=OSError("parent close failed")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "directory not private") as caught:
+                    store.write(RecordingState())
+
+            self.assertIn("state lock cleanup failed", "\n".join(caught.exception.__notes__))
+
+    def test_state_lock_preserves_lock_validation_error_when_lock_fd_close_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = StateStore(Path(tmp) / "state.json")
+
+            def fail_lock_close(fd: int) -> None:
+                if fd == 456:
+                    raise OSError("lock fd close failed")
+
+            with (
+                mock.patch("speed_of_cinnamon.state.ensure_directory_without_following_symlinks", return_value=123),
+                mock.patch("speed_of_cinnamon.state.assert_fd_is_private_directory"),
+                mock.patch(
+                    "speed_of_cinnamon.state.assert_fd_is_regular_private_file",
+                    side_effect=RuntimeError("lock file not private"),
+                ),
+                mock.patch("speed_of_cinnamon.state.os.open", return_value=456),
+                mock.patch("speed_of_cinnamon.state.fcntl.flock"),
+                mock.patch("speed_of_cinnamon.state.os.close", side_effect=fail_lock_close),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "lock file not private") as caught:
+                    with store._locked():
+                        pass
+
+            self.assertIn("state lock cleanup failed", "\n".join(caught.exception.__notes__))
+
     def test_state_lock_closes_parent_fd_when_lock_fd_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")

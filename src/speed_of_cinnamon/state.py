@@ -31,6 +31,10 @@ MAX_STATE_INT = 2_147_483_647
 VALID_STATE_STATUSES = frozenset({"idle", "recording", "recorded", "processing", "finalizing", "done", "error"})
 
 
+def _note_lock_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
+    primary.add_note(f"state lock cleanup failed: {cleanup_error}")
+
+
 def _utf8_byte_count(value: str, *, field_name: str) -> int:
     try:
         return len(value.encode("utf-8"))
@@ -127,27 +131,48 @@ class StateStore:
         try:
             assert_fd_is_private_directory(parent_fd, field_name="state lock directory")
             fd = os.open(lock_path.name, os.O_RDWR | os.O_CREAT | nofollow_flag, 0o600, dir_fd=parent_fd)
-        except RuntimeError:
-            os.close(parent_fd)
+        except RuntimeError as exc:
+            try:
+                os.close(parent_fd)
+            except OSError as cleanup_error:
+                _note_lock_cleanup_failure(exc, cleanup_error)
             raise
         except Exception as exc:
-            os.close(parent_fd)
-            raise RuntimeError("failed to open state lock file") from exc
+            error = RuntimeError("failed to open state lock file")
+            try:
+                os.close(parent_fd)
+            except OSError as cleanup_error:
+                _note_lock_cleanup_failure(error, cleanup_error)
+            raise error from exc
+        primary_error: BaseException | None = None
         try:
             assert_fd_is_regular_private_file(fd, field_name="state lock file", require_private_mode=True)
             fcntl.flock(fd, fcntl.LOCK_EX)
             assert_fd_is_regular_private_file(fd, field_name="state lock file", require_private_mode=True)
             yield
-        except RuntimeError:
+        except BaseException as exc:
+            primary_error = exc
             raise
         finally:
+            cleanup_errors: list[OSError] = []
             try:
                 fcntl.flock(fd, fcntl.LOCK_UN)
-            finally:
-                try:
-                    os.close(fd)
-                finally:
-                    os.close(parent_fd)
+            except OSError as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+            try:
+                os.close(fd)
+            except OSError as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+            try:
+                os.close(parent_fd)
+            except OSError as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+            if cleanup_errors:
+                if primary_error is not None:
+                    for cleanup_error in cleanup_errors:
+                        _note_lock_cleanup_failure(primary_error, cleanup_error)
+                else:
+                    raise cleanup_errors[0]
 
     @staticmethod
     def _sanitize_text_field(
