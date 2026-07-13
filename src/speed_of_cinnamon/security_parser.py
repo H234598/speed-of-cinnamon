@@ -435,6 +435,7 @@ def _read_blacklist(path: Path, *, strict: bool = False) -> list[str]:
             field_name="blacklist file",
             max_bytes=_MAX_BLACKLIST_FILE_BYTES,
             require_private_mode=True,
+            expected_stat=file_stat,
         )
     except (OSError, UnicodeDecodeError) as exc:
         if "too large" in str(exc):

@@ -571,7 +571,25 @@ class SecurityParserTest(unittest.TestCase):
             field_name="blacklist file",
             max_bytes=_MAX_BLACKLIST_FILE_BYTES,
             require_private_mode=True,
+            expected_stat=mock.ANY,
         )
+
+    def test_load_blacklist_file_rejects_regular_file_swap_before_secure_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            path.write_text("geheim\n", encoding="utf-8")
+            path.chmod(0o600)
+            real_read = security_parser.read_text_without_following_symlinks
+
+            def read_and_swap(*args: object, **kwargs: object) -> str:
+                path.rename(Path(tmp) / "blacklist-original.txt")
+                path.write_text("attacker\n", encoding="utf-8")
+                path.chmod(0o600)
+                return real_read(*args, **kwargs)
+
+            with mock.patch.object(security_parser, "read_text_without_following_symlinks", side_effect=read_and_swap):
+                with self.assertRaisesRegex(ValueError, "failed to read blacklist file"):
+                    load_blacklist_file(path)
 
     def test_load_blacklist_file_rejects_world_readable_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
