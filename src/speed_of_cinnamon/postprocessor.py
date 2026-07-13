@@ -501,7 +501,12 @@ def _safe_model_listing_size(value: object) -> int:
 def _normalize_ollama_model(model: object) -> dict[str, object] | None:
     if not isinstance(model, dict):
         return None
-    name = str(model.get("name") or model.get("model") or "").strip()
+    raw_name = model.get("name")
+    if raw_name is None or raw_name == "":
+        raw_name = model.get("model")
+    if not isinstance(raw_name, str) or isinstance(raw_name, bool):
+        return None
+    name = raw_name.strip()
     if not name:
         return None
     if _contains_escaped_null(name) or _contains_http_header_control_chars(name):
@@ -583,7 +588,12 @@ def list_ollama_models(url: str = DEFAULT_OLLAMA_URL, timeout: int = 5) -> dict[
 def _normalize_openai_compatible_model(model: object) -> dict[str, object] | None:
     if not isinstance(model, dict):
         return None
-    name = str(model.get("id") or model.get("name") or "").strip()
+    raw_name = model.get("id")
+    if raw_name is None or raw_name == "":
+        raw_name = model.get("name")
+    if not isinstance(raw_name, str) or isinstance(raw_name, bool):
+        return None
+    name = raw_name.strip()
     if not name:
         return None
     try:

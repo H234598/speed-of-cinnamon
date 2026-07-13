@@ -1301,6 +1301,8 @@ class PostProcessorTest(unittest.TestCase):
                         "quantization_level": "Q4",
                     },
                 },
+                {"name": 123},
+                {"name": {"id": "nested"}},
             ]
         }
 
@@ -1401,6 +1403,8 @@ class PostProcessorTest(unittest.TestCase):
                 {"id": "bad\r\nmodel", "object": "model", "owned_by": "ignored"},
                 {"id": "x" * (MAX_OPENAI_COMPATIBLE_MODEL_CHARS + 1), "object": "model", "owned_by": "ignored"},
                 {"id": "local-safe", "object": "model", "owned_by": "owner\nbad"},
+                {"id": 123, "object": "model", "owned_by": "ignored"},
+                {"id": {"nested": "model"}, "object": "model", "owned_by": "ignored"},
             ],
         }
 
