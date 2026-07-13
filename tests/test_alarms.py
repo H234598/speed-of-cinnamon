@@ -447,6 +447,15 @@ class AlarmTest(unittest.TestCase):
 
         self.assertEqual(closed_fds, [123, 456])
 
+    def test_load_alarm_store_wraps_json_recursion_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            path.write_text("{}", encoding="utf-8")
+            path.chmod(0o600)
+            with mock.patch.object(alarm_module.json, "loads", side_effect=RecursionError("too deep")):
+                with self.assertRaisesRegex(RuntimeError, "alarm store could not be parsed"):
+                    load_alarm_store(path)
+
     def test_due_check_with_zero_catch_up_skips_past_alarm(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"

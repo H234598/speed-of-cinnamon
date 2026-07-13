@@ -337,7 +337,7 @@ def load_alarm_store(path: Path | None = None) -> dict[str, Any]:
         raise RuntimeError("alarm store contains invalid null byte")
     try:
         raw = json.loads(text)
-    except (json.JSONDecodeError) as exc:
+    except (json.JSONDecodeError, RecursionError) as exc:
         if isinstance(exc, OSError):
             raise RuntimeError(f"alarm store could not be read: {store_path}") from exc
         raise RuntimeError(f"alarm store could not be parsed: {exc}") from exc
