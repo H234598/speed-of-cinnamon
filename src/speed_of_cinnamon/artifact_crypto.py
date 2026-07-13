@@ -360,6 +360,7 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
     parent_fd = -1
     temp_fd = -1
     temp_name = ""
+    primary_error: BaseException | None = None
     cleanup_error: Exception | None = None
     try:
         parent_fd = ensure_directory_without_following_symlinks(
@@ -408,7 +409,11 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
     except FileExistsError:
         return _read_private_passphrase_file(path, allow_default_generation=False, rotate_weak_default=False)
     except (OSError, RuntimeError) as exc:
-        raise ArtifactCryptoError("artifact encryption passphrase file could not be generated") from exc
+        primary_error = ArtifactCryptoError("artifact encryption passphrase file could not be generated")
+        raise primary_error from exc
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
         if temp_fd >= 0:
             try:
@@ -431,7 +436,10 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
                 if cleanup_error is None:
                     cleanup_error = exc
         if cleanup_error is not None:
-            raise _temp_passphrase_cleanup_error() from cleanup_error
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise _temp_passphrase_cleanup_error() from cleanup_error
     return passphrase
 
 

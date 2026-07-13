@@ -214,11 +214,13 @@ class ArtifactCryptoTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.artifact_crypto.os.write", side_effect=OSError("disk full")),
                 mock.patch("speed_of_cinnamon.artifact_crypto.os.unlink", side_effect=OSError("cleanup denied")),
             ):
-                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "temporary file could not be removed"):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be generated") as caught:
                     artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
 
             self.assertFalse(path.exists())
             self.assertTrue(any(child.name.startswith(".artifact.key.") and child.name.endswith(".tmp") for child in Path(tmp).iterdir()))
+            self.assertIn("artifact encryption cleanup failed", "\n".join(caught.exception.__notes__))
+            self.assertIn("cleanup denied", "\n".join(caught.exception.__notes__))
 
     def test_default_passphrase_generation_closes_parent_after_temp_close_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -249,7 +251,7 @@ class ArtifactCryptoTest(unittest.TestCase):
                     mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
                     mock.patch("speed_of_cinnamon.artifact_crypto.os.close", side_effect=flaky_close),
                 ):
-                    with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "temporary file could not be removed"):
+                    with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be generated"):
                         artifact_crypto._generate_default_passphrase_file(path)
             finally:
                 for fd in leaked_fds:
@@ -269,12 +271,14 @@ class ArtifactCryptoTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.artifact_crypto._fsync_fd", side_effect=OSError("fsync failed")),
                 mock.patch("speed_of_cinnamon.artifact_crypto.os.unlink", side_effect=OSError("cleanup denied")),
             ):
-                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "temporary file could not be removed"):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be generated") as caught:
                     artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
 
             leftovers = [child for child in Path(tmp).iterdir() if child.name.startswith(".artifact.key.") and child.name.endswith(".tmp")]
             self.assertEqual(len(leftovers), 1)
             self.assertEqual(leftovers[0].read_bytes(), b"")
+            self.assertIn("artifact encryption cleanup failed", "\n".join(caught.exception.__notes__))
+            self.assertIn("cleanup denied", "\n".join(caught.exception.__notes__))
 
     def test_scrub_temp_passphrase_preserves_inspection_error_when_fd_close_fails(self) -> None:
         with (
