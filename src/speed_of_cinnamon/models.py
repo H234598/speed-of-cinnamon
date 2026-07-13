@@ -1717,7 +1717,10 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
                 prefix=f".{path.name}.",
             )
         finally:
-            os.close(parent_fd)
+            try:
+                os.close(parent_fd)
+            except OSError:
+                pass
         checksum = sha1_file(tmp_path)
         if checksum != model.sha1:
             raise ModelError(f"downloaded checksum mismatch for {model.name}: {checksum}")

@@ -1467,6 +1467,48 @@ class ModelsTest(unittest.TestCase):
         self.assertEqual(len(temporary_file_calls), 1, "single-file download should use secure temporary-file helper once")
         self.assertIn(temporary_file_calls[0][0], open_parent_calls)
 
+    def test_single_file_download_preserves_success_when_parent_close_fails(self) -> None:
+        data = b"tiny model"
+        spec = models.ModelSpec(
+            name="test-single-parent-close",
+            filename="ggml-test-single-parent-close.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(data).hexdigest(),
+            description="test single-file parent close",
+        )
+        parent_fds: list[int] = []
+        real_open_parent = models._open_model_parent_directory
+        real_close = os.close
+
+        def record_open_parent(*args: object, **kwargs: object) -> int:
+            fd = real_open_parent(*args, **kwargs)
+            parent_fds.append(fd)
+            return fd
+
+        def close_wrapper(fd: int) -> None:
+            if fd in parent_fds:
+                raise OSError("parent close failed")
+            real_close(fd)
+
+        try:
+            with (
+                tempfile.TemporaryDirectory() as tmp,
+                mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+                mock.patch.object(models, "CATALOG", (spec,)),
+                mock.patch.object(models, "_open_model_parent_directory", side_effect=record_open_parent),
+                mock.patch.object(models, "_open_model_download_url", return_value=FakeResponse(data)),
+                mock.patch.object(models.os, "close", side_effect=close_wrapper),
+            ):
+                result = models.download_model(spec.name)
+        finally:
+            for fd in parent_fds:
+                try:
+                    real_close(fd)
+                except OSError:
+                    pass
+
+        self.assertEqual(result["status"], "done")
+
     def test_download_url_closes_temporary_fd_when_fdopen_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             created_fds: list[int] = []
