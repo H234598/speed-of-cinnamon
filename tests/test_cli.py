@@ -1865,6 +1865,17 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("LD_PRELOAD", opener_env)
         self.assertNotIn("PYTHONPATH", opener_env)
 
+    def test_open_blacklist_document_wraps_process_argument_value_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            with (
+                mock.patch("speed_of_cinnamon.cli.blacklist_file", return_value=path),
+                mock.patch("speed_of_cinnamon.cli.ensure_runtime_dirs"),
+                mock.patch("speed_of_cinnamon.cli._which", side_effect=["xdg-open", None]),
+                mock.patch("speed_of_cinnamon.cli.subprocess.Popen", side_effect=ValueError("invalid process argument")),
+            ):
+                self.assertFalse(cli._open_blacklist_document())
+
     def test_models_lists_catalog(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             stdout = io.StringIO()

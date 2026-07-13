@@ -1020,7 +1020,7 @@ def _open_blacklist_document() -> bool:
                 env=_filtered_environment(),
             )
             return True
-        except OSError:
+        except (OSError, ValueError):
             pass
     gio_open = _which("gio")
     if gio_open:
@@ -1032,7 +1032,7 @@ def _open_blacklist_document() -> bool:
                 env=_filtered_environment(),
             )
             return True
-        except OSError:
+        except (OSError, ValueError):
             pass
     return False
 
