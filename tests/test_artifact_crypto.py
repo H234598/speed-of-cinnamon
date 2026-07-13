@@ -320,15 +320,62 @@ class ArtifactCryptoTest(unittest.TestCase):
 
         self.assertIn("artifact encryption cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_scrub_temp_passphrase_rejects_missing_nofollow(self) -> None:
+        with (
+            mock.patch.object(artifact_crypto.os, "O_NOFOLLOW", None, create=True),
+            self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "secure artifact encryption passphrase temporary file scrubbing"),
+        ):
+            artifact_crypto._scrub_temp_passphrase_file(456, ".artifact.key.tmp")
+
+    def test_default_passphrase_rotation_rejects_target_swap_during_backup_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.key"
+            replacement = Path(tmp) / "replacement.key"
+            path.write_text("short\n", encoding="utf-8")
+            path.chmod(0o600)
+            replacement.write_text("replacement\n", encoding="utf-8")
+            real_link = os.link
+
+            def link_then_swap(source: object, destination: object, *args: object, **kwargs: object) -> None:
+                real_link(source, destination, *args, **kwargs)
+                if isinstance(destination, str) and destination.endswith(".bak"):
+                    replacement.replace(path)
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: ""},
+                    clear=False,
+                ),
+                mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
+                mock.patch.object(artifact_crypto.os, "link", side_effect=link_then_swap),
+            ):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be generated"):
+                    artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "replacement\n")
+            self.assertFalse(list(Path(tmp).glob(".artifact.key.*.bak")))
+            self.assertFalse(list(Path(tmp).glob(".artifact.key.*.tmp")))
+
     def test_default_passphrase_rotation_failure_keeps_existing_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "artifact.key"
             path.write_text("short\n", encoding="utf-8")
             path.chmod(0o600)
+            real_rename = artifact_crypto._rename_without_replacing
+            rename_calls = 0
+
+            def fail_activation_once(*args: object, **kwargs: object) -> None:
+                nonlocal rename_calls
+                rename_calls += 1
+                if rename_calls == 1:
+                    raise OSError("replace failed")
+                real_rename(*args, **kwargs)
+
             with (
                 mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: ""}, clear=False),
                 mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
-                mock.patch("speed_of_cinnamon.artifact_crypto.os.replace", side_effect=OSError("replace failed")),
+                mock.patch("speed_of_cinnamon.artifact_crypto._rename_without_replacing", side_effect=fail_activation_once),
             ):
                 with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be generated"):
                     artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
@@ -340,10 +387,20 @@ class ArtifactCryptoTest(unittest.TestCase):
             path = Path(tmp) / "artifact.key"
             path.write_text("short\n", encoding="utf-8")
             path.chmod(0o600)
+            real_rename = artifact_crypto._rename_without_replacing
+            rename_calls = 0
+
+            def fail_activation_once(*args: object, **kwargs: object) -> None:
+                nonlocal rename_calls
+                rename_calls += 1
+                if rename_calls == 1:
+                    raise OSError("replace failed")
+                real_rename(*args, **kwargs)
+
             with (
                 mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: ""}, clear=False),
                 mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
-                mock.patch("speed_of_cinnamon.artifact_crypto.os.replace", side_effect=OSError("replace failed")),
+                mock.patch("speed_of_cinnamon.artifact_crypto._rename_without_replacing", side_effect=fail_activation_once),
             ):
                 with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be generated"):
                     artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
