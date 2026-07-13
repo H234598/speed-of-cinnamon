@@ -3203,6 +3203,33 @@ class ModelsTest(unittest.TestCase):
 
         self.assertIn("model artifact cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_model_orphan_cleanup_preserves_count_when_parent_close_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_path = root / "model.bin"
+            orphan = root / ".model.bin.0123456789abcdef.tmp"
+            orphan.write_bytes(b"partial")
+            old_mtime = time.time() - models.MODEL_ORPHAN_CLEANUP_MIN_AGE_SECONDS - 60
+            os.utime(orphan, (old_mtime, old_mtime))
+            parent_fd = os.open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_close = os.close
+
+            def close_wrapper(fd: int) -> None:
+                if fd == parent_fd:
+                    raise OSError("close failed")
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.object(models, "open_directory_without_following_symlinks", return_value=parent_fd),
+                    mock.patch.object(models.os, "close", side_effect=close_wrapper),
+                ):
+                    self.assertEqual(models._remove_model_orphan_paths(model_path, root), 1)
+            finally:
+                real_close(parent_fd)
+
+            self.assertFalse(orphan.exists())
+
     def test_unlink_model_file_preserves_success_when_parent_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

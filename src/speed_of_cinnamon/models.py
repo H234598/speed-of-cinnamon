@@ -1627,6 +1627,7 @@ def _remove_model_orphan_paths(path: Path, root: Path, *, allow_suffixless: bool
     parent_fd = open_directory_without_following_symlinks(parent, field_name="model orphan parent")
     removed = 0
     scan_started_at = time.time()
+    primary_error: BaseException | None = None
     try:
         try:
             names = os.listdir(parent_fd)
@@ -1656,8 +1657,17 @@ def _remove_model_orphan_paths(path: Path, root: Path, *, allow_suffixless: bool
                 if _unlink_model_file_leaf(candidate, root, field_name="model orphan file"):
                     removed += 1
                 continue
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except OSError as cleanup_error:
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                pass
     return removed
 
 
