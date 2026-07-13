@@ -11748,26 +11748,32 @@ MyApplet.prototype = {
     return false;
   },
 
-  _clipboardProgramSpec: function() {
+  _clipboardProgramSpecs: function() {
+    let specs = [];
     if (this._findTrustedProgramInPath("xclip")) {
-      return {
+      specs.push({
         program: "xclip",
         targetArgs: ["-selection", "clipboard", "-t", "TARGETS", "-out"],
-      };
+      });
     }
     if (this._findTrustedProgramInPath("xsel")) {
-      return {
+      specs.push({
         program: "xsel",
         targetArgs: ["--clipboard", "--output", "--target", "TARGETS"],
-      };
+      });
     }
     if (this._findTrustedProgramInPath("wl-paste")) {
-      return {
+      specs.push({
         program: "wl-paste",
         targetArgs: ["--list-types"],
-      };
+      });
     }
-    return null;
+    return specs;
+  },
+
+  _clipboardProgramSpec: function() {
+    let specs = this._clipboardProgramSpecs();
+    return specs.length > 0 ? specs[0] : null;
   },
 
   _clipboardPayloadArgs: function(spec, targetName) {
@@ -11783,7 +11789,62 @@ MyApplet.prototype = {
     return ["--type", String(targetName || "")];
   },
 
-  _clipboardTargetList: function(program, args, completionCallback, timeoutMs) {
+  _clipboardFallbackSpec: function(program, args, attemptedPrograms) {
+    let attempted = Array.isArray(attemptedPrograms) ? attemptedPrograms.slice() : [];
+    if (attempted.indexOf(program) < 0) {
+      attempted.push(program);
+    }
+    let targetName = null;
+    let targetList = false;
+    args = Array.isArray(args) ? args : [];
+    if (program === "xclip") {
+      let targetIndex = args.indexOf("-t");
+      if (targetIndex < 0 || typeof args[targetIndex + 1] !== "string") {
+        return null;
+      }
+      targetName = args[targetIndex + 1];
+      targetList = targetName === "TARGETS";
+    } else if (program === "xsel") {
+      let targetIndex = args.indexOf("--target");
+      if (targetIndex < 0 || typeof args[targetIndex + 1] !== "string") {
+        return null;
+      }
+      targetName = args[targetIndex + 1];
+      targetList = targetName === "TARGETS";
+    } else if (program === "wl-paste") {
+      targetList = args.indexOf("--list-types") >= 0;
+      if (!targetList) {
+        let targetIndex = args.indexOf("--type");
+        if (targetIndex < 0 || typeof args[targetIndex + 1] !== "string") {
+          return null;
+        }
+        targetName = args[targetIndex + 1];
+      }
+    } else {
+      return null;
+    }
+    let specs = this._clipboardProgramSpecs();
+    for (let i = 0; i < specs.length; i++) {
+      let spec = specs[i];
+      if (!spec || attempted.indexOf(spec.program) >= 0) {
+        continue;
+      }
+      let fallbackArgs = targetList
+        ? spec.targetArgs
+        : this._clipboardPayloadArgs(spec, targetName);
+      if (!Array.isArray(fallbackArgs)) {
+        continue;
+      }
+      return {
+        program: spec.program,
+        args: fallbackArgs,
+        attemptedPrograms: attempted,
+      };
+    }
+    return null;
+  },
+
+  _clipboardTargetList: function(program, args, completionCallback, timeoutMs, attemptedPrograms, deadlineMs) {
     args = args || [];
     let timeout = this._findTrustedProgramInPath("timeout");
     let helper = this._findTrustedProgramInPath(program);
@@ -11796,6 +11857,18 @@ MyApplet.prototype = {
       completed = true;
       complete(value);
     };
+    let commandTimeoutMs = Math.max(1, Number(timeoutMs || CLIPBOARD_COMMAND_TIMEOUT_MS));
+    if (!isFinite(commandTimeoutMs)) {
+      commandTimeoutMs = CLIPBOARD_COMMAND_TIMEOUT_MS;
+    }
+    let commandDeadlineMs = Number(deadlineMs);
+    if (!isFinite(commandDeadlineMs) || commandDeadlineMs <= 0) {
+      commandDeadlineMs = Date.now() + commandTimeoutMs;
+    }
+    let attempted = Array.isArray(attemptedPrograms) ? attemptedPrograms.slice() : [];
+    if (attempted.indexOf(program) < 0) {
+      attempted.push(program);
+    }
     if (!timeout || !helper || !this._lifecycleAllowsWork()) {
       completeOnce(null);
       return false;
@@ -11806,13 +11879,38 @@ MyApplet.prototype = {
     }
     try {
       let handle = this._runBoundedSubprocess(this._coerceSpawnArgs(command), {}, {
-        timeoutMs: Math.max(1, Number(timeoutMs || CLIPBOARD_COMMAND_TIMEOUT_MS)),
+        timeoutMs: Math.max(1, Math.min(commandTimeoutMs, Math.max(1, commandDeadlineMs - Date.now()))),
         minimumTimeoutMs: 1,
         maxStdoutBytes: MAX_CLIPBOARD_TARGET_OUTPUT_BYTES,
         maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
         resourceGroup: "clipboard",
       }, (stdout, stderr, result) => {
-        if (result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge)) {
+        if (result && result.cancelled) {
+          completeOnce(null);
+          return;
+        }
+        if (result && (result.error || result.timedOut || result.outputTooLarge)) {
+          let remainingMs = commandDeadlineMs - Date.now();
+          if (remainingMs > 0 && this._lifecycleAllowsWork()) {
+            try {
+              let fallback = this._clipboardFallbackSpec(program, args, attempted);
+              if (fallback) {
+                let fallbackHandle = this._clipboardTargetList(
+                  fallback.program,
+                  fallback.args,
+                  completeOnce,
+                  Math.max(1, remainingMs),
+                  fallback.attemptedPrograms,
+                  commandDeadlineMs
+                );
+                if (fallbackHandle) {
+                  return;
+                }
+              }
+            } catch (error) {
+              this._recordLifecycleError("clipboard-command-fallback", error);
+            }
+          }
           completeOnce(null);
           return;
         }

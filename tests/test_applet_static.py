@@ -5704,9 +5704,11 @@ class AppletStaticTest(unittest.TestCase):
     def test_applet_checks_clipboard_targets_before_overwriting_clipboard_for_auto_paste(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
+        self.assertIn("_clipboardProgramSpecs: function()", source)
         self.assertIn("_clipboardProgramSpec: function()", source)
         self.assertIn("_clipboardPayloadArgs: function(spec, targetName)", source)
-        self.assertIn("_clipboardTargetList: function(program, args, completionCallback, timeoutMs)", source)
+        self.assertIn("_clipboardFallbackSpec: function(program, args, attemptedPrograms)", source)
+        self.assertIn("_clipboardTargetList: function(program, args, completionCallback, timeoutMs, attemptedPrograms, deadlineMs)", source)
         self.assertIn('let timeout = this._findTrustedProgramInPath("timeout");', source)
         self.assertIn("let helper = this._findTrustedProgramInPath(program);", source)
         self.assertIn('let command = [timeout, "--kill-after=1", String(CLIPBOARD_TARGET_TIMEOUT_SECONDS), helper];', source)
@@ -5719,6 +5721,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("maxStdoutBytes: MAX_CLIPBOARD_TARGET_OUTPUT_BYTES", source)
         self.assertIn("minimumTimeoutMs: 1", source)
         self.assertIn('resourceGroup: "clipboard"', source)
+        self.assertIn("if (result && result.cancelled) {", source)
+        self.assertIn("let remainingMs = commandDeadlineMs - Date.now();", source)
+        self.assertIn("this._clipboardTargetList(\n                  fallback.program,", source)
         self.assertIn("let nonTextTargets = [];", source)
         self.assertIn("_clipboardPayloadDescriptionFromTargets: function(targets)", source)
         self.assertIn("nonTextTargets.slice(0, 6).join(\", \")", source)
