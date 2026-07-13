@@ -1492,7 +1492,19 @@ def _prepare_transient_transcript_path(path: Path, storage_path: Path) -> int | 
     if not path.name.startswith(".") or not path.name.endswith(".tmp.txt"):
         raise RuntimeError(f"refusing to prepare unexpected transient transcript path: {path}")
     assert_no_symlink_ancestors(path, field_name="transient transcript file")
-    _prepare_private_file(path, field_name="transient transcript file")
+
+    def cleanup_created_path(primary_error: BaseException) -> None:
+        try:
+            _remove_transient_transcript_path(path, storage_path)
+        except Exception as cleanup_error:
+            raise RuntimeError(f"{primary_error}; {cleanup_error}") from cleanup_error
+
+    try:
+        _prepare_private_file(path, field_name="transient transcript file")
+    except _PrivateFilePrepareError as exc:
+        if exc.created:
+            cleanup_created_path(exc)
+        raise
     nofollow_flag = getattr(os, "O_NOFOLLOW", 0)
     cloexec_flag = getattr(os, "O_CLOEXEC", 0)
     fd: int | None = None
@@ -1511,13 +1523,15 @@ def _prepare_transient_transcript_path(path: Path, storage_path: Path) -> int | 
                 os.close(fd)
             except OSError:
                 pass
+        cleanup_created_path(exc)
         raise RuntimeError(f"failed to open transient transcript file identity: {path}") from exc
-    except RuntimeError:
+    except RuntimeError as exc:
         if fd is not None:
             try:
                 os.close(fd)
             except OSError:
                 pass
+        cleanup_created_path(exc)
         raise
 
 

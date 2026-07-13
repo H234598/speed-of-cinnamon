@@ -189,6 +189,34 @@ class CliTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "owner failed"):
                     cli._prepare_transient_transcript_path(path, storage_path)
 
+    def test_prepare_transient_transcript_removes_file_after_private_prepare_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / ".transcript.tmp.txt"
+            storage_path = root / "transcript.txt"
+            with (
+                mock.patch.object(cli, "transcript_dir", return_value=root),
+                mock.patch.object(cli.os, "fdopen", side_effect=ValueError("invalid descriptor mode")),
+            ):
+                with self.assertRaisesRegex(cli._PrivateFilePrepareError, "failed to prepare transient transcript file"):
+                    cli._prepare_transient_transcript_path(path, storage_path)
+
+            self.assertFalse(path.exists())
+
+    def test_prepare_transient_transcript_removes_file_after_owner_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / ".transcript.tmp.txt"
+            storage_path = root / "transcript.txt"
+            with (
+                mock.patch.object(cli, "transcript_dir", return_value=root),
+                mock.patch.object(cli, "_write_transient_transcript_owner", side_effect=RuntimeError("owner failed")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "owner failed"):
+                    cli._prepare_transient_transcript_path(path, storage_path)
+
+            self.assertFalse(path.exists())
+
     def test_remove_transient_transcript_preserves_success_when_fd_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
