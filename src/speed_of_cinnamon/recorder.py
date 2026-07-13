@@ -71,6 +71,15 @@ def _which(command_name: str) -> str | None:
     return shutil.which(command_name, path=_TRUSTED_COMMAND_PATH)
 
 
+def _close_fd_quietly(fd: int | None) -> None:
+    if fd is None:
+        return
+    try:
+        os.close(fd)
+    except (OSError, ValueError):
+        pass
+
+
 def _is_unsafe_env_var(name: str) -> bool:
     return name in _DANGEROUS_ENV_KEYS or name.startswith(_DANGEROUS_ENV_PREFIXES)
 
@@ -459,10 +468,7 @@ def _create_recording_temp_file(audio_path: Path, *, marker: str, suffix: str) -
     except OSError as exc:
         raise RecorderError("failed to create recording temporary file") from exc
     finally:
-        try:
-            os.close(parent_fd)
-        except OSError:
-            pass
+        _close_fd_quietly(parent_fd)
 
 
 def _recording_temp_path_matches_fd(path: Path, fd: int) -> bool:
@@ -502,10 +508,7 @@ def _unlink_recording_path_if_same(path: Path, expected_stat: os.stat_result) ->
     except OSError:
         return
     finally:
-        try:
-            os.close(parent_fd)
-        except OSError:
-            pass
+        _close_fd_quietly(parent_fd)
 
 
 def _cleanup_recording_temp_file(path: Path, fd: int) -> None:
@@ -513,10 +516,7 @@ def _cleanup_recording_temp_file(path: Path, fd: int) -> None:
         expected_stat = os.fstat(fd)
     except OSError:
         expected_stat = None
-    try:
-        os.close(fd)
-    except OSError:
-        pass
+    _close_fd_quietly(fd)
     if expected_stat is not None:
         _unlink_recording_path_if_same(path, expected_stat)
 
@@ -536,10 +536,7 @@ def _inspect_and_close_recording_temp_file(path: Path, fd: int, *, field_name: s
     except OSError as exc:
         raise RecorderError(f"failed to inspect {field_name}") from exc
     finally:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
+        _close_fd_quietly(fd)
     return output_size, output_matches_path, output_stat
 
 
@@ -598,10 +595,7 @@ def detect_silent_recording(audio_path: Path) -> SilenceDetectionResult:
         ffmpeg = _command_path("ffmpeg")
     except RecorderError as exc:
         if audio_fd is not None:
-            try:
-                os.close(audio_fd)
-            except OSError:
-                pass
+            _close_fd_quietly(audio_fd)
         return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, str(exc))
     try:
         input_path = _ffmpeg_output_path_for_fd(audio_fd)
@@ -630,10 +624,7 @@ def detect_silent_recording(audio_path: Path) -> SilenceDetectionResult:
         return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, "ffmpeg silence detection failed")
     finally:
         if audio_fd is not None:
-            try:
-                os.close(audio_fd)
-            except OSError:
-                pass
+            _close_fd_quietly(audio_fd)
     if proc.returncode != 0:
         detail = _decode_ffmpeg_output(proc.stderr)
         detail = _sanitize_ffmpeg_error_detail(detail)
@@ -730,9 +721,8 @@ def trim_recording_leading_silence(audio_path: Path, leading_silence_seconds: fl
         raise RecorderError("failed to write trimmed recording audio file") from exc
     finally:
         if audio_fd is not None:
-            os.close(audio_fd)
-        if fd is not None:
-            os.close(fd)
+            _close_fd_quietly(audio_fd)
+        _close_fd_quietly(fd)
     if temp_path is None:
         raise RecorderError("failed to write trimmed recording audio file")
     return temp_path
@@ -769,7 +759,7 @@ def trim_recording_silence(
         fd, trimmed_path = _create_recording_temp_file(audio_path, marker="trimmed", suffix=".flac")
     except Exception:
         if audio_fd is not None:
-            os.close(audio_fd)
+            _close_fd_quietly(audio_fd)
         raise
     output_path = ""
     try:
@@ -779,7 +769,7 @@ def trim_recording_silence(
     except Exception:
         _cleanup_recording_temp_file(trimmed_path, fd)
         if audio_fd is not None:
-            os.close(audio_fd)
+            _close_fd_quietly(audio_fd)
         raise
     command = [
         ffmpeg,
@@ -811,14 +801,14 @@ def trim_recording_silence(
         )
     except (OSError, subprocess.TimeoutExpired, RecorderError) as exc:
         if audio_fd is not None:
-            os.close(audio_fd)
+            _close_fd_quietly(audio_fd)
             audio_fd = None
         _cleanup_recording_temp_file(trimmed_path, fd)
         detail = _sanitize_ffmpeg_error_detail(exc)
         raise RecorderError(f"failed to trim silence from recording: {detail or 'ffmpeg failed'}") from exc
     finally:
         if audio_fd is not None:
-            os.close(audio_fd)
+            _close_fd_quietly(audio_fd)
             audio_fd = None
     if proc.returncode != 0:
         detail = _decode_ffmpeg_output(proc.stderr)
@@ -861,14 +851,14 @@ def reencode_recording_to_flac(audio_path: Path) -> Path:
         raise RecorderError(str(exc)) from exc
     if audio_path.suffix.lower() == ".flac":
         if audio_fd is not None:
-            os.close(audio_fd)
+            _close_fd_quietly(audio_fd)
         return audio_path
 
     try:
         fd, encoded_path = _create_recording_temp_file(audio_path, marker="encoded", suffix=".flac")
     except Exception:
         if audio_fd is not None:
-            os.close(audio_fd)
+            _close_fd_quietly(audio_fd)
         raise
     output_path = ""
     try:
@@ -878,7 +868,7 @@ def reencode_recording_to_flac(audio_path: Path) -> Path:
     except Exception:
         _cleanup_recording_temp_file(encoded_path, fd)
         if audio_fd is not None:
-            os.close(audio_fd)
+            _close_fd_quietly(audio_fd)
         raise
     command = [
         ffmpeg,
@@ -904,14 +894,14 @@ def reencode_recording_to_flac(audio_path: Path) -> Path:
         )
     except (OSError, subprocess.TimeoutExpired, RecorderError) as exc:
         if audio_fd is not None:
-            os.close(audio_fd)
+            _close_fd_quietly(audio_fd)
             audio_fd = None
         _cleanup_recording_temp_file(encoded_path, fd)
         detail = _sanitize_ffmpeg_error_detail(exc)
         raise RecorderError(f"failed to convert recording to FLAC: {detail or 'ffmpeg failed'}") from exc
     finally:
         if audio_fd is not None:
-            os.close(audio_fd)
+            _close_fd_quietly(audio_fd)
             audio_fd = None
     if proc.returncode != 0:
         detail = _decode_ffmpeg_output(proc.stderr)
@@ -995,17 +985,11 @@ def read_recording_level(audio_path: Path) -> RecordingLevel:
         assert_fd_is_regular_private_file(fd, field_name="recording audio file")
     except OSError as exc:
         if fd is not None:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
+            _close_fd_quietly(fd)
         raise RecorderError("recording audio file is not readable") from exc
     except RuntimeError as exc:
         if fd is not None:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
+            _close_fd_quietly(fd)
         raise RecorderError("recording audio file is not readable") from exc
     try:
         with os.fdopen(fd, "rb") as handle:
@@ -1024,10 +1008,7 @@ def read_recording_level(audio_path: Path) -> RecordingLevel:
             raw = handle.read(read_bytes)
     except (OSError, ValueError) as exc:
         if fd is not None:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
+            _close_fd_quietly(fd)
         raise RecorderError("recording audio file is not readable") from exc
 
     raw = raw[: len(raw) - (len(raw) % 2)]
@@ -1158,10 +1139,7 @@ def _validate_private_recording_audio_file(
         require_recordings_dir=require_recordings_dir,
         recordings_root=recordings_root,
     )
-    try:
-        os.close(fd)
-    except OSError:
-        pass
+    _close_fd_quietly(fd)
     return normalized
 
 
@@ -1174,10 +1152,7 @@ def _open_recording_artifact_leaf(path: Path, flags: int, *, field_name: str) ->
     try:
         return os.open(path.name, flags, dir_fd=parent_fd)
     finally:
-        try:
-            os.close(parent_fd)
-        except OSError:
-            pass
+        _close_fd_quietly(parent_fd)
 
 
 def _open_private_recording_audio_file(
@@ -1204,10 +1179,7 @@ def _open_private_recording_audio_file(
     try:
         assert_fd_is_regular_private_file(fd, field_name="recording audio file")
     except Exception:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
+        _close_fd_quietly(fd)
         raise
     return normalized, fd
 
@@ -1452,8 +1424,8 @@ def _open_recorder_log_file(log_path: Path) -> tuple[io.BufferedWriter, bool]:
         raise RecorderError("failed to open recorder log file") from exc
     finally:
         if fd is not None:
-            os.close(fd)
-        os.close(parent_fd)
+            _close_fd_quietly(fd)
+        _close_fd_quietly(parent_fd)
 
 
 def _unlink_recorder_log_if_same(log_path: Path, expected_stat: os.stat_result) -> None:
@@ -1475,7 +1447,7 @@ def _unlink_recorder_log_if_same(log_path: Path, expected_stat: os.stat_result) 
     except OSError:
         return
     finally:
-        os.close(parent_fd)
+        _close_fd_quietly(parent_fd)
 
 
 def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen[bytes]:
