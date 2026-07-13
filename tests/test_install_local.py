@@ -196,6 +196,41 @@ class InstallLocalTest(unittest.TestCase):
             self.assertTrue(marker.exists())
             self.assertEqual(marker.read_text(encoding="utf-8"), "old install\n")
 
+    def test_install_local_restores_existing_target_when_backup_fsync_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo_root = self._copy_installable_minimal_repo(tmp_path)
+            home = tmp_path / "home"
+            home.mkdir()
+            applet_target = home / ".local" / "share" / "cinnamon" / "applets" / "speed-of-cinnamon@H234598"
+            applet_target.mkdir(parents=True)
+            marker = applet_target / "existing.txt"
+            marker.write_text("old install\n", encoding="utf-8")
+
+            real_helper = repo_root / "scripts" / "safe-local-fs-real.py"
+            shutil.copy2(repo_root / "scripts" / "safe-local-fs.py", real_helper)
+            helper = repo_root / "scripts" / "safe-local-fs.py"
+            helper.write_text(
+                "from pathlib import Path\n"
+                "import subprocess\n"
+                "import sys\n"
+                f"real_helper = Path({str(real_helper)!r})\n"
+                "result = subprocess.run([sys.executable, str(real_helper), *sys.argv[1:]], check=False)\n"
+                "if result.returncode:\n"
+                "    raise SystemExit(result.returncode)\n"
+                "if len(sys.argv) > 4 and sys.argv[1] == 'replace' and 'cinnamon/applets/speed-of-cinnamon@H234598' in sys.argv[3]:\n"
+                "    raise SystemExit(77)\n",
+                encoding="utf-8",
+            )
+
+            result = self._run_install_local(repo_root, home)
+
+            self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+            self.assertIn("failed to back up existing applet", result.stderr)
+            self.assertTrue(marker.exists())
+            self.assertEqual(marker.read_text(encoding="utf-8"), "old install\n")
+            self.assertEqual(list((home / ".local" / "share" / "speed-of-cinnamon").glob("install-stage-*")), [])
+
     def test_install_local_removes_new_targets_when_late_activation_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

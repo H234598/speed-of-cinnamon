@@ -218,16 +218,16 @@ activate_staged() {
   fi
 
   if [[ -e "${target}" ]]; then
+    activated_targets+=("${target}")
+    activated_backups+=("${backup_path}")
+    activated_kinds+=("${kind}")
+    activated_had_existing+=("1")
+    had_existing=1
     if ! "${safe_fs_cmd[@]}" replace install "${target}" "${backup_path}" --src-kind "${kind}"; then
       rollback_staged_items
       printf 'failed to back up existing %s\n' "${label}" >&2
       exit 1
     fi
-    had_existing=1
-    activated_targets+=("${target}")
-    activated_backups+=("${backup_path}")
-    activated_kinds+=("${kind}")
-    activated_had_existing+=("1")
   fi
 
   if ! "${safe_fs_cmd[@]}" replace install "${source}" "${target}" --src-kind "${kind}"; then
