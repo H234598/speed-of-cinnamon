@@ -22,6 +22,7 @@ from speed_of_cinnamon.postprocessor import (
     _open_http_request,
     _validate_same_origin_redirect,
     _format_model_size,
+    _normalize_ollama_model,
     post_process_text,
     post_process_with_openai_compatible,
     MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
@@ -1104,6 +1105,15 @@ class PostProcessorTest(unittest.TestCase):
 
     def test_format_model_size_rejects_float(self) -> None:
         self.assertEqual(_format_model_size(3.5), "")
+
+    def test_format_model_size_rejects_unrepresentably_large_integer(self) -> None:
+        self.assertEqual(_format_model_size(10**1000), "")
+
+    def test_ollama_model_listing_normalizes_unrepresentably_large_size(self) -> None:
+        model = _normalize_ollama_model({"name": "large", "size": 10**1000})
+        self.assertIsNotNone(model)
+        self.assertEqual(model["size"], 0)
+        self.assertEqual(model["size_label"], "")
 
     def test_list_ollama_models_reads_local_tags(self) -> None:
         payload = {

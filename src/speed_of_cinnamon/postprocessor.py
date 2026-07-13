@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shlex
@@ -440,7 +441,12 @@ def _format_model_size(size: object) -> str:
     if value <= 0:
         return ""
     units = ("B", "KiB", "MiB", "GiB")
-    amount = float(value)
+    try:
+        amount = float(value)
+    except (OverflowError, ValueError):
+        return ""
+    if not math.isfinite(amount):
+        return ""
     unit = units[0]
     for unit in units:
         if amount < 1024 or unit == units[-1]:
@@ -468,7 +474,14 @@ def _safe_model_listing_size(value: object) -> int:
         size = int(value)
     except (TypeError, ValueError):
         return 0
-    return size if size > 0 else 0
+    if size <= 0:
+        return 0
+    try:
+        if not math.isfinite(float(size)):
+            return 0
+    except (OverflowError, ValueError):
+        return 0
+    return size
 
 
 def _normalize_ollama_model(model: object) -> dict[str, object] | None:
