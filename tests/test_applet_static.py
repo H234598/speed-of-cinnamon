@@ -6071,6 +6071,8 @@ class AppletStaticTest(unittest.TestCase):
         preview_dialog_block = source[preview_dialog_start:preview_dialog_end]
         self.assertIn("if (this.cleanupPreviewDialogToken)", preview_dialog_block)
         self.assertIn("let releaseDialog = () =>", preview_dialog_block)
+        self.assertIn("this.cleanupPreviewDialog === dialog", preview_dialog_block)
+        self.assertIn("this.cleanupPreviewDialog = null;", preview_dialog_block)
         self.assertIn("if (closed) {\n        releaseDialog();", preview_dialog_block)
         self.assertIn("let failToOpen = () =>", preview_dialog_block)
         self.assertIn('this._dialogClose(dialog, "cleanup-preview");\n      releaseDialog();', preview_dialog_block)
@@ -6309,8 +6311,13 @@ class AppletStaticTest(unittest.TestCase):
             "customLimitPromptToken",
             "autoPastePromptToken",
             "transcriptListPromptToken",
+            "cleanupPreviewDialogToken",
         ]:
             self.assertIn(f"this.{token} = null;", helper_block)
+        self.assertIn("let cleanupPreviewCleanupSucceeded = true;", helper_block)
+        self.assertIn("this._dialogClose(this.cleanupPreviewDialog, \"cleanup-preview\")", helper_block)
+        self.assertIn("this._setStatusPreservingRecording(\"error\", _(\"Cleanup preview could not be stopped\")", helper_block)
+        self.assertIn("&& cleanupPreviewCleanupSucceeded", helper_block)
         self.assertIn("let transcriptPromptCleanupSucceeded = true;", helper_block)
         self.assertIn("this._dialogClose(this.transcriptListPromptDialog, \"transcript-list\")", helper_block)
         self.assertIn("this._setStatusPreservingRecording(\"error\", _(\"Transcript list confirmation could not be stopped\")", helper_block)

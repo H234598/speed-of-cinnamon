@@ -3142,6 +3142,7 @@ MyApplet.prototype = {
     this.recordingMaxSeconds = 0;
     this.transcriptWindowToken = null;
     this.cleanupPreviewDialogToken = null;
+    this.cleanupPreviewDialog = null;
     this._cleanupCommandToken = null;
     this._recordingCommandToken = null;
     this.targetWindow = null;
@@ -4253,6 +4254,7 @@ MyApplet.prototype = {
     this.transcriptListPromptDialog = null;
     this.transcriptWindowToken = null;
     this.cleanupPreviewDialogToken = null;
+    this.cleanupPreviewDialog = null;
     this.textInsertToken = null;
     this.autoInsertPendingFingerprint = "";
     this.settingsWindowToken = null;
@@ -5835,6 +5837,24 @@ MyApplet.prototype = {
     }
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
+    let cleanupPreviewCleanupSucceeded = true;
+    if (this.cleanupPreviewDialogToken || this.cleanupPreviewDialog) {
+      if (!this.cleanupPreviewDialog) {
+        cleanupPreviewCleanupSucceeded = false;
+        this._recordLifecycleError("dialog-state", new Error("Cleanup preview dialog is unavailable"));
+        this._setStatusPreservingRecording("error", _("Cleanup preview could not be stopped"), this.lastTranscript);
+      } else {
+        cleanupPreviewCleanupSucceeded = this._dialogClose(this.cleanupPreviewDialog, "cleanup-preview");
+        if (cleanupPreviewCleanupSucceeded) {
+          this.cleanupPreviewDialog = null;
+          this.cleanupPreviewDialogToken = null;
+        } else {
+          this._setStatusPreservingRecording("error", _("Cleanup preview could not be stopped"), this.lastTranscript);
+        }
+      }
+    } else {
+      this.cleanupPreviewDialogToken = null;
+    }
     let transcriptPromptCleanupSucceeded = true;
     if (this.transcriptListPromptToken || this.transcriptListPromptDialog) {
       if (!this.transcriptListPromptDialog) {
@@ -5883,7 +5903,7 @@ MyApplet.prototype = {
       this.ollamaModelCleanupFailed = true;
       this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
     }
-    return historyRefreshCleanupSucceeded && inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && voiceModelCleanupSucceeded && textModelRefreshCleanupSucceeded && alarmMenuCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded && textInsertProcessCleanupSucceeded && settingsPromptCleanupSucceeded && ollamaWatchTimerCleanupSucceeded && ollamaCleanupSucceeded && transcriptPromptCleanupSucceeded;
+    return historyRefreshCleanupSucceeded && inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && voiceModelCleanupSucceeded && textModelRefreshCleanupSucceeded && alarmMenuCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded && textInsertProcessCleanupSucceeded && settingsPromptCleanupSucceeded && ollamaWatchTimerCleanupSucceeded && ollamaCleanupSucceeded && cleanupPreviewCleanupSucceeded && transcriptPromptCleanupSucceeded;
   },
 
   _runDoctor: function(startupCheck) {
@@ -9589,6 +9609,9 @@ MyApplet.prototype = {
     let releaseDialog = () => {
       if (this.cleanupPreviewDialogToken === dialogToken) {
         this.cleanupPreviewDialogToken = null;
+        if (this.cleanupPreviewDialog === dialog) {
+          this.cleanupPreviewDialog = null;
+        }
       }
     };
     let closeDialog = (dialog) => {
@@ -9599,6 +9622,7 @@ MyApplet.prototype = {
       return closed;
     };
     let dialog = this._newSafeDialog("cleanup-preview");
+    this.cleanupPreviewDialog = dialog;
     let failToOpen = () => {
       this._dialogClose(dialog, "cleanup-preview");
       releaseDialog();
