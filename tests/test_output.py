@@ -1920,6 +1920,13 @@ class OutputTest(unittest.TestCase):
                 self.assertIsNone(_acquire_clipboard_dedup_lock())
                 self.assertFalse(lock_path.exists())
 
+    def test_clipboard_lock_pid_range_errors_fail_closed(self) -> None:
+        for error in (OverflowError("out of range"), ValueError("invalid pid")):
+            with self.subTest(error=type(error).__name__), mock.patch(
+                "speed_of_cinnamon.output.os.kill", side_effect=error
+            ):
+                self.assertFalse(output_module._clipboard_lock_pid_is_running(1234))
+
     def test_clipboard_dedupe_lock_closes_fd_when_creation_stat_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with (

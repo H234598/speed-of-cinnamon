@@ -368,6 +368,8 @@ def _clipboard_lock_pid_is_running(pid: int) -> bool:
         return False
     except PermissionError:
         return True
+    except (OverflowError, ValueError):
+        return False
     except OSError:
         return True
     return True
