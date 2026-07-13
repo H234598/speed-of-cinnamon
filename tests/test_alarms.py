@@ -189,6 +189,14 @@ class AlarmTest(unittest.TestCase):
         self.assertEqual(parse_repeat_days("weekends"), ["sat", "sun"])
         self.assertEqual(parse_repeat_days("mon,wed,fri"), ["mon", "wed", "fri"])
 
+    def test_alarm_days_defaults_to_daily_only_when_days_are_missing(self) -> None:
+        self.assertEqual(alarm_module.alarm_days({}), list(alarm_module.DAY_CODES))
+        self.assertEqual(alarm_module.alarm_days({"days": []}), [])
+
+    def test_alarm_days_rejects_invalid_present_days_without_falling_back_to_daily(self) -> None:
+        self.assertEqual(alarm_module.alarm_days({"days": ["noday"]}), [])
+        self.assertIsNone(alarm_occurrence({"hour": 9, "minute": 0, "days": ["noday"]}, date(2026, 6, 1)))
+
     def test_repeat_day_parser_rejects_null_byte(self) -> None:
         with self.assertRaisesRegex(ValueError, "alarm days contains invalid null byte"):
             parse_repeat_days("mon\x00,fri")

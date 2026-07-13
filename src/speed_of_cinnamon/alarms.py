@@ -275,13 +275,23 @@ def format_alarm_summary(alarm: dict[str, Any]) -> str:
 
 
 def alarm_days(alarm: dict[str, Any]) -> list[str]:
+    if not isinstance(alarm, dict):
+        return []
+    if "days" not in alarm:
+        return list(DAY_CODES)
     days = alarm.get("days")
-    if not isinstance(days, list):
-        return list(DAY_CODES)
-    if not all(isinstance(day, str) for day in days):
-        return list(DAY_CODES)
-    normalized = [str(day).lower()[:3] for day in days]
-    return [day for day in DAY_CODES if day in normalized] or list(DAY_CODES)
+    if not isinstance(days, list) or not days:
+        return []
+    normalized: list[str] = []
+    for raw_day in days:
+        if isinstance(raw_day, bool) or not isinstance(raw_day, str):
+            return []
+        day = raw_day.strip().lower()[:3]
+        if day not in DAY_CODES:
+            return []
+        if day not in normalized:
+            normalized.append(day)
+    return [day for day in DAY_CODES if day in normalized]
 
 
 def _normalize_alarm_list(alarms: object) -> list[dict[str, Any]]:
