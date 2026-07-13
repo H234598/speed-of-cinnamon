@@ -21,6 +21,7 @@ from speed_of_cinnamon.recorder import (
     _file_size,
     _completed_output_bytes,
     _decode_ffmpeg_output,
+    _wav_data_offset,
     choose_recorder,
     detect_silent_recording,
     _run_kill,
@@ -97,6 +98,21 @@ class RecorderTest(unittest.TestCase):
         self.assertFalse(level.ok)
         self.assertEqual(level.percent, 0)
         self.assertEqual(level.detail, "waiting for audio")
+
+    def test_wav_data_offset_skips_data_text_inside_metadata_chunk(self) -> None:
+        header = (
+            b"RIFF"
+            + b"\x00\x00\x00\x00"
+            + b"WAVE"
+            + b"JUNK"
+            + (14).to_bytes(4, "little")
+            + b"metadata data!"
+            + b"data"
+            + (4).to_bytes(4, "little")
+            + b"\x00\x00\x00\x00"
+        )
+
+        self.assertEqual(_wav_data_offset(header), 42)
 
     def test_detect_silent_recording_uses_ffmpeg_silencedetect(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

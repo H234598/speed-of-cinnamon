@@ -988,9 +988,17 @@ def _assert_valid_recording_seconds(seconds: int) -> int:
 
 
 def _wav_data_offset(header: bytes) -> int:
-    data_index = header.find(b"data")
-    if data_index >= 0 and data_index + 8 <= len(header):
-        return data_index + 8
+    if len(header) >= 12 and header[:4] in {b"RIFF", b"RF64"} and header[8:12] == b"WAVE":
+        chunk_offset = 12
+        while chunk_offset + 8 <= len(header):
+            chunk_id = header[chunk_offset : chunk_offset + 4]
+            chunk_size = int.from_bytes(header[chunk_offset + 4 : chunk_offset + 8], "little")
+            if chunk_id == b"data":
+                return chunk_offset + 8
+            next_offset = chunk_offset + 8 + chunk_size + (chunk_size & 1)
+            if next_offset <= chunk_offset or next_offset > len(header):
+                break
+            chunk_offset = next_offset
     return DEFAULT_WAV_DATA_OFFSET if len(header) >= DEFAULT_WAV_DATA_OFFSET else len(header)
 
 
