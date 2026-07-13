@@ -1152,14 +1152,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("fingerprintCleanupSucceeded = this._forgetAutoInsertFingerprint(pendingInsertFingerprint) !== false;", cancel_block)
         self.assertIn("if (fingerprintCleanupSucceeded && this.autoInsertPendingFingerprint === pendingInsertFingerprint)", cancel_block)
         self.assertIn("this._clearClipboardOverwriteApproval();", cancel_block)
+        self.assertIn("let dialogCleanupSucceeded = true;", cancel_block)
+        self.assertIn("this._dialogClose(this.clipboardOverwriteDialog, \"clipboard-overwrite\")", cancel_block)
+        self.assertIn("this._setStatusPreservingRecording(\"error\", _(\"Clipboard overwrite prompt could not be stopped\")", cancel_block)
         self.assertIn("let pasteTimerCleanupSucceeded = this._clearPasteTimer() !== false;", cancel_block)
         self.assertIn('this._terminateProcessesByGroup("keyboard") === false', cancel_block)
         self.assertIn('this._terminateProcessesByGroup("clipboard") === false', cancel_block)
         self.assertIn('this._terminateProcessesByGroup("x11") === false', cancel_block)
         self.assertIn("if (!fingerprintCleanupSucceeded)", cancel_block)
         self.assertIn("if (!pasteTimerCleanupSucceeded)", cancel_block)
+        self.assertIn("if (!dialogCleanupSucceeded)", cancel_block)
         self.assertIn("let cancellationSucceeded = true;", cancel_block)
         self.assertIn("this.textInsertCancellationFailed = !cancellationSucceeded;", cancel_block)
+        self.assertIn("return cancellationSucceeded;", cancel_block)
         self.assertIn("if (hadInsertToken && this.autoRelistenPending)", cancel_block)
         self.assertIn("this.autoRelistenPendingToken = \"\";", cancel_block)
         self.assertIn("this.autoRelistenManualStopRequested = true;", cancel_block)
@@ -5333,7 +5338,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.cancelItem.setSensitive(this._hasCancelableRecordingWork());", status_block)
         self.assertIn("if (!this._hasCancelableRecordingWork(statusOverride))", cancel_block)
         self.assertIn("if (!this.isCommandRunning && this.autoRelistenPending && this.textInsertToken)", cancel_block)
-        self.assertIn("this._cancelTextInsertForSettingsChange();", cancel_block)
+        self.assertIn("if (!this._cancelTextInsertForSettingsChange())", cancel_block)
         self.assertIn('this._setStatus("ready", _("Auto Relisten cancelled"), this.lastTranscript);', cancel_block)
         self.assertIn("let effectiveStatus = typeof statusOverride === \"string\" ? statusOverride : this.status;", work_block)
 
@@ -6371,10 +6376,10 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_toggleRecording: function()")
         end = source.index("\n  _restartApplet:", start)
         block = source[start:end]
-        self.assertIn("this._cancelTextInsertForSettingsChange();", block)
+        self.assertIn("if (!this._cancelTextInsertForSettingsChange())", block)
         self.assertNotIn("if (this.textInsertToken)", block)
         self.assertLess(
-            block.index("this._cancelTextInsertForSettingsChange();"),
+            block.index("if (!this._cancelTextInsertForSettingsChange())"),
             block.index("if (this.isCommandRunning)"),
         )
 
@@ -6403,7 +6408,7 @@ class AppletStaticTest(unittest.TestCase):
         overwrite = block.index('label: _("Overwrite clipboard")')
         overwrite_block = block[overwrite:]
         self.assertIn('if (!this._dialogClose(dialog, "clipboard-overwrite"))', overwrite_block)
-        self.assertIn('return;\n            }\n            if (!isCurrentOperation())', overwrite_block)
+        self.assertIn('return;\n            }\n            this.clipboardOverwriteDialog = null;\n            if (!isCurrentOperation())', overwrite_block)
         self.assertIn('this._recordLifecycleError("clipboard-overwrite", error);', block)
 
     def test_clipboard_overwrite_does_not_continue_when_dialog_close_fails(self) -> None:
@@ -6425,7 +6430,8 @@ class AppletStaticTest(unittest.TestCase):
         end = source.index("\n  _pasteClipboardAfterFocus:", start)
         block = source[start:end]
         self.assertIn("let failToOpen = () => {", block)
-        self.assertIn('this._dialogClose(dialog, "clipboard-overwrite");', block)
+        self.assertIn('if (this._dialogClose(dialog, "clipboard-overwrite")) {', block)
+        self.assertIn("this.clipboardOverwriteDialog = null;", block)
         self.assertIn('this._setStatus("error", _("Clipboard overwrite prompt could not be opened"), transcript);\n      complete(false);', block)
         fail_start = block.index("let failToOpen = () => {")
         open_failure = block.index('if (!this._dialogOpen(dialog, "clipboard-overwrite"))')

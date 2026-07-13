@@ -3143,6 +3143,7 @@ MyApplet.prototype = {
     this.transcriptWindowToken = null;
     this.cleanupPreviewDialogToken = null;
     this.cleanupPreviewDialog = null;
+    this.clipboardOverwriteDialog = null;
     this._cleanupCommandToken = null;
     this._recordingCommandToken = null;
     this.targetWindow = null;
@@ -4175,6 +4176,15 @@ MyApplet.prototype = {
 
   _cancelTextInsertForSettingsChange: function() {
     this._clearClipboardOverwriteApproval();
+    let dialogCleanupSucceeded = true;
+    if (this.clipboardOverwriteDialog) {
+      dialogCleanupSucceeded = this._dialogClose(this.clipboardOverwriteDialog, "clipboard-overwrite");
+      if (dialogCleanupSucceeded) {
+        this.clipboardOverwriteDialog = null;
+      } else {
+        this._setStatusPreservingRecording("error", _("Clipboard overwrite prompt could not be stopped"), this.lastTranscript);
+      }
+    }
     let hadInsertToken = Boolean(this.textInsertToken);
     let pendingInsertFingerprint = String(this.autoInsertPendingFingerprint || "");
     let fingerprintCleanupSucceeded = true;
@@ -4204,12 +4214,16 @@ MyApplet.prototype = {
     if (!pasteTimerCleanupSucceeded) {
       cancellationSucceeded = false;
     }
+    if (!dialogCleanupSucceeded) {
+      cancellationSucceeded = false;
+    }
     this.textInsertCancellationFailed = !cancellationSucceeded;
     if (hadInsertToken && this.autoRelistenPending) {
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
       this.autoRelistenManualStopRequested = true;
     }
+    return cancellationSucceeded;
   },
 
   on_applet_clicked: function() {
@@ -4255,6 +4269,7 @@ MyApplet.prototype = {
     this.transcriptWindowToken = null;
     this.cleanupPreviewDialogToken = null;
     this.cleanupPreviewDialog = null;
+    this.clipboardOverwriteDialog = null;
     this.textInsertToken = null;
     this.autoInsertPendingFingerprint = "";
     this.settingsWindowToken = null;
@@ -5598,7 +5613,9 @@ MyApplet.prototype = {
     if (!this._invalidateBackgroundCallbacksForRecording()) {
       return;
     }
-    this._cancelTextInsertForSettingsChange();
+    if (!this._cancelTextInsertForSettingsChange()) {
+      return;
+    }
     if (this.isCommandRunning) {
       if (this.autoRelisten && this.notificationSessionActive) {
         this.autoRelistenManualStopRequested = true;
@@ -5711,7 +5728,9 @@ MyApplet.prototype = {
       return;
     }
     if (!this.isCommandRunning && this.autoRelistenPending && this.textInsertToken) {
-      this._cancelTextInsertForSettingsChange();
+      if (!this._cancelTextInsertForSettingsChange()) {
+        return;
+      }
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
       this.autoRelistenManualStopRequested = true;
@@ -12459,6 +12478,7 @@ MyApplet.prototype = {
     }
     let message = _("Clipboard contains non-text payload (%s).").replace("%s", String(nonTextDescription || _("unknown")));
     let dialog = this._newSafeDialog("clipboard-overwrite");
+    this.clipboardOverwriteDialog = dialog;
     let completed = false;
     let complete = (result) => {
       if (completed) {
@@ -12470,7 +12490,9 @@ MyApplet.prototype = {
       }
     };
     let failToOpen = () => {
-      this._dialogClose(dialog, "clipboard-overwrite");
+      if (this._dialogClose(dialog, "clipboard-overwrite")) {
+        this.clipboardOverwriteDialog = null;
+      }
       this._setStatus("error", _("Clipboard overwrite prompt could not be opened"), transcript);
       complete(false);
     };
@@ -12488,6 +12510,7 @@ MyApplet.prototype = {
             this._setStatus("error", _("Clipboard overwrite prompt could not be closed"), transcript);
             return;
           }
+          this.clipboardOverwriteDialog = null;
           if (isCurrentOperation()) {
             this._setStatus("ready", _("Clipboard overwrite cancelled"), transcript);
           }
@@ -12502,6 +12525,7 @@ MyApplet.prototype = {
               this._setStatus("error", _("Clipboard overwrite prompt could not be closed"), transcript);
               return;
             }
+            this.clipboardOverwriteDialog = null;
             if (!isCurrentOperation()) {
               complete(false);
               return;
