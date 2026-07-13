@@ -6960,6 +6960,70 @@ class CliTest(unittest.TestCase):
             self.assertEqual(final_state.audio_path, str(audio))
             self.assertEqual(final_state.log_path, str(log))
 
+    def test_finalize_restores_artifacts_when_delete_reports_post_delete_failure(self) -> None:
+        real_unlink = cli._unlink_regular_leaf_with_parent_fsync
+
+        def delete_then_report_failure(
+            path: Path,
+            *,
+            field_name: str,
+            expected_stat: object = None,
+        ) -> bool:
+            real_unlink(path, field_name=field_name, expected_stat=expected_stat)  # type: ignore[arg-type]
+            if field_name == "recording artifact":
+                raise RuntimeError("parent fsync failed after unlink")
+            return True
+
+        for silent in (False, True):
+            with self.subTest(silent=silent), tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+                recordings_root.mkdir(parents=True)
+                audio = recordings_root / "recording.wav"
+                log = recordings_root / "recording.log"
+                audio.write_bytes(b"audio-before-cleanup")
+                log.write_bytes(b"log-before-cleanup")
+                state_file = tmp_path / "state.json"
+                store = StateStore(state_file)
+                store.write(RecordingState(status="finalizing", audio_path=str(audio), log_path=str(log)))
+                args = self._build_finalize_args(keep_recording_artifacts=False)
+                with (
+                    mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                    mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                    mock.patch(
+                        "speed_of_cinnamon.cli.detect_silent_recording",
+                        return_value=cli.SilenceDetectionResult(
+                            silent,
+                            silent,
+                            2.0,
+                            2.0 if silent else 1.0,
+                            0.0 if silent else 1.0,
+                            2.0 if silent else 0.1,
+                            "silent" if silent else "not silent",
+                        ),
+                    ),
+                    mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("skip trim")),
+                    mock.patch("speed_of_cinnamon.cli.reencode_recording_to_flac", side_effect=cli.RecorderError("skip encode")),
+                    mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="transcript"),
+                    mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="transcript"),
+                    mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True),
+                    mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
+                    mock.patch(
+                        "speed_of_cinnamon.cli._unlink_regular_leaf_with_parent_fsync",
+                        side_effect=delete_then_report_failure,
+                    ),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "failed to delete recording artifact"):
+                        cli.finalize_recording(args, store, store.read())
+
+                final_state = store.read()
+                self.assertEqual(final_state.status, "error")
+                self.assertEqual(final_state.audio_path, str(audio))
+                self.assertEqual(final_state.log_path, str(log))
+                self.assertEqual(audio.read_bytes(), b"audio-before-cleanup")
+                self.assertEqual(log.read_bytes(), b"log-before-cleanup")
+                self.assertEqual(list(recordings_root.glob(".cleanup.*.bak")), [])
+
     def test_finalize_non_silent_cleanup_failure_does_not_persist_done_if_error_state_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

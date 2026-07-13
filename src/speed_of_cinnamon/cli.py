@@ -3225,6 +3225,7 @@ def finalize_recording(
     artifact_encryption = ARTIFACT_ENCRYPTION_OFF
     preserve_written_text_on_error = False
     cleanup_rollback_backups: list[tuple[Path, Path]] = []
+    preserve_recording_artifacts_after_cleanup_failure = False
 
     def _backup_cleanup_file(path_text: str | None) -> Path | None:
         if not path_text:
@@ -3360,26 +3361,23 @@ def finalize_recording(
             artifact_cleanup = _enforce_recording_artifact_cap(state, state_path=store.path)
             cleanup_failures: list[tuple[str, str, str]] = []
             if not keep_recording_artifacts:
-                audio_backup = _backup_cleanup_file(str(audio_path))
-                log_backup = _backup_cleanup_file(cleanup_log_path)
+                _backup_cleanup_file(str(audio_path))
+                _backup_cleanup_file(cleanup_log_path)
                 audio_deleted = remove_file(str(audio_path), suffix=audio_suffix)
                 log_deleted = remove_file(cleanup_log_path, suffix=".log")
                 if not audio_deleted:
-                    if audio_backup is not None:
-                        audio_backup.unlink(missing_ok=True)
                     cleanup_failures.append(("audio_path", str(audio_path), "recording audio artifact"))
                 if cleanup_log_path and not log_deleted:
-                    if log_backup is not None:
-                        log_backup.unlink(missing_ok=True)
                     cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
             elif artifact_encryption != ARTIFACT_ENCRYPTION_OFF and cleanup_log_path:
-                log_backup = _backup_cleanup_file(cleanup_log_path)
+                _backup_cleanup_file(cleanup_log_path)
                 log_deleted = remove_file(cleanup_log_path, suffix=".log")
                 if not log_deleted:
-                    if log_backup is not None:
-                        log_backup.unlink(missing_ok=True)
                     cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
             if cleanup_failures:
+                audio_deleted = False
+                log_deleted = False
+                preserve_recording_artifacts_after_cleanup_failure = True
                 _restore_cleanup_backups()
             _raise_recording_cleanup_failure(store, cleanup_failures)
             cleanup_failed_paths = _cleanup_failed_paths(artifact_cleanup)
@@ -3555,19 +3553,20 @@ def finalize_recording(
 
         cleanup_failures: list[tuple[str, str, str]] = []
         if cleanup_audio_path is not None:
-            audio_backup = _backup_cleanup_file(str(cleanup_audio_path))
+            _backup_cleanup_file(str(cleanup_audio_path))
             audio_deleted = remove_file(str(cleanup_audio_path), suffix=audio_suffix)
             if not audio_deleted:
-                if audio_backup is not None:
-                    audio_backup.unlink(missing_ok=True)
                 cleanup_failures.append(("audio_path", str(cleanup_audio_path), "recording audio artifact"))
         if cleanup_log_path:
-            log_backup = _backup_cleanup_file(cleanup_log_path)
+            _backup_cleanup_file(cleanup_log_path)
             log_deleted = remove_file(cleanup_log_path, suffix=".log")
             if not log_deleted:
-                if log_backup is not None:
-                    log_backup.unlink(missing_ok=True)
                 cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
+        if cleanup_failures:
+            audio_deleted = False
+            log_deleted = False
+            preserve_recording_artifacts_after_cleanup_failure = True
+            _restore_cleanup_backups()
         _raise_recording_cleanup_failure(store, cleanup_failures)
 
         done_candidate = RecordingState(
@@ -3714,7 +3713,10 @@ def finalize_recording(
                 keep_recording_artifacts
                 and artifact_encryption != ARTIFACT_ENCRYPTION_OFF
             )
-            if not keep_recording_artifacts or cleanup_plaintext_recording_artifacts:
+            if (
+                not preserve_recording_artifacts_after_cleanup_failure
+                and (not keep_recording_artifacts or cleanup_plaintext_recording_artifacts)
+            ):
                 if (
                     audio_suffix
                     and _recording_artifact_stat(audio_path) is not None
