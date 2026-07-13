@@ -1146,7 +1146,10 @@ def _validate_private_recording_audio_file(
         require_recordings_dir=require_recordings_dir,
         recordings_root=recordings_root,
     )
-    os.close(fd)
+    try:
+        os.close(fd)
+    except OSError:
+        pass
     return normalized
 
 

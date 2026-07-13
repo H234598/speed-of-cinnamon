@@ -409,6 +409,28 @@ class RecorderTest(unittest.TestCase):
             finally:
                 real_close(parent_fd)
 
+    def test_validate_private_recording_audio_file_does_not_mask_fd_close_failure(self) -> None:
+        from speed_of_cinnamon import recorder as recorder_module
+
+        real_close = os.close
+        fd = os.open(os.devnull, os.O_RDONLY)
+        try:
+            with (
+                mock.patch.object(
+                    recorder_module,
+                    "_open_private_recording_audio_file",
+                    return_value=(Path("/tmp/sample.wav"), fd),
+                ),
+                mock.patch.object(recorder_module.os, "close", side_effect=OSError("close failed")),
+            ):
+                normalized = recorder_module._validate_private_recording_audio_file(
+                    Path("/tmp/sample.wav"),
+                    suffix=".wav",
+                )
+            self.assertEqual(normalized, Path("/tmp/sample.wav"))
+        finally:
+            real_close(fd)
+
     def test_trim_recording_leading_silence_open_error_does_not_leak_audio_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "secret-sample.wav"
