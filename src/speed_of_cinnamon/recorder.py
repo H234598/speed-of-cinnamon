@@ -1198,7 +1198,10 @@ def _open_private_recording_audio_file(
     try:
         assert_fd_is_regular_private_file(fd, field_name="recording audio file")
     except Exception:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            pass
         raise
     return normalized, fd
 
