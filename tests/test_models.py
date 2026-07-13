@@ -3119,6 +3119,57 @@ class ModelsTest(unittest.TestCase):
             self.assertTrue(any(models.stat_module.S_ISREG(mode) for mode in fsync_modes))
             self.assertTrue(any(models.stat_module.S_ISDIR(mode) for mode in fsync_modes))
 
+    def test_unlink_model_file_preserves_success_when_parent_close_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "model.bin"
+            path.write_bytes(b"model")
+            parent_fd = os.open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_close = os.close
+
+            def close_wrapper(fd: int) -> None:
+                if fd == parent_fd:
+                    raise OSError("close failed")
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.object(models, "open_directory_without_following_symlinks", return_value=parent_fd),
+                    mock.patch.object(models.os, "close", side_effect=close_wrapper),
+                ):
+                    self.assertTrue(models._unlink_model_file_leaf(path, root))
+            finally:
+                real_close(parent_fd)
+
+            self.assertFalse(path.exists())
+
+    def test_remove_model_directory_preserves_success_when_parent_close_fails(self) -> None:
+        if not getattr(models.shutil.rmtree, "avoids_symlink_attacks", False):
+            self.skipTest("secure recursive removal unavailable")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "model-dir"
+            path.mkdir()
+            (path / "payload").write_bytes(b"model")
+            parent_fd = os.open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_close = os.close
+
+            def close_wrapper(fd: int) -> None:
+                if fd == parent_fd:
+                    raise OSError("close failed")
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.object(models, "open_directory_without_following_symlinks", return_value=parent_fd),
+                    mock.patch.object(models.os, "close", side_effect=close_wrapper),
+                ):
+                    self.assertTrue(models._remove_model_directory_leaf(path, root))
+            finally:
+                real_close(parent_fd)
+
+            self.assertFalse(path.exists())
+
     def test_model_status_rejects_non_boolean_verify(self) -> None:
         with self.assertRaisesRegex(models.ModelError, "verify must be a boolean"):
             models.model_status(models.CATALOG[0], verify="true")  # type: ignore[arg-type]

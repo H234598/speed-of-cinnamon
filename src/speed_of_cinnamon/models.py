@@ -48,6 +48,10 @@ MAX_MODEL_DOWNLOAD_REDIRECTS = 5
 MODEL_ORPHAN_CLEANUP_MIN_AGE_SECONDS = 60 * 60
 
 
+def _note_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
+    primary.add_note(f"model artifact cleanup failed: {cleanup_error}")
+
+
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req: object, fp: object, code: int, msg: str, headers: object, newurl: str) -> None:
         return None
@@ -984,6 +988,7 @@ def _unlink_model_file_leaf(path: Path, root: Path, *, field_name: str = "model 
     except OSError as exc:
         raise ModelError(f"{field_name} parent is not safe: {path.parent}") from exc
     try:
+        primary_error: BaseException | None = None
         try:
             file_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
         except FileNotFoundError:
@@ -995,8 +1000,17 @@ def _unlink_model_file_leaf(path: Path, root: Path, *, field_name: str = "model 
         os.unlink(path.name, dir_fd=parent_fd)
         os.fsync(parent_fd)
         return True
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except OSError as cleanup_error:
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                pass
 
 
 def _remove_model_directory_leaf(path: Path, root: Path, *, field_name: str = "model directory") -> bool:
@@ -1016,6 +1030,7 @@ def _remove_model_directory_leaf(path: Path, root: Path, *, field_name: str = "m
     except OSError as exc:
         raise ModelError(f"{field_name} parent is not safe: {path.parent}") from exc
     try:
+        primary_error: BaseException | None = None
         try:
             file_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
         except FileNotFoundError:
@@ -1029,8 +1044,17 @@ def _remove_model_directory_leaf(path: Path, root: Path, *, field_name: str = "m
         return True
     except OSError as exc:
         raise ModelError(f"failed to remove {field_name}: {path}") from exc
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except OSError as cleanup_error:
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                pass
 
 
 def model_download_urls(model: ModelSpec) -> list[tuple[str, str]]:
