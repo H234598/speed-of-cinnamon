@@ -1071,6 +1071,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let refreshToken = {};", refresh_block)
         self.assertIn("this.alarmMenuRefreshToken = refreshToken;", refresh_block)
         self.assertIn("this.alarmMenuRefreshToken !== refreshToken", refresh_block)
+        self.assertIn("this.alarmActionToken || this.alarmCheckToken", refresh_block)
         self.assertIn("!this._canMutateMenu(this.alarmItem)", refresh_block)
         self.assertIn('this._terminateProcessesByGroup("alarm-menu-refresh")', refresh_block)
         self.assertIn('resourceGroup: "alarm-menu-refresh"', refresh_block)
@@ -1078,9 +1079,9 @@ class AppletStaticTest(unittest.TestCase):
             refresh_block.index('this._terminateProcessesByGroup("alarm-menu-refresh")'),
             refresh_block.index("let refreshToken = {};")
         )
-        self.assertIn("if (this.alarmMenuRefreshToken)", refresh_block)
+        self.assertIn("if (this.alarmMenuRefreshToken || this.alarmActionToken || this.alarmCheckToken)", refresh_block)
         self.assertIn("this.alarmMenuRefreshToken = null;", refresh_block)
-        self.assertLess(refresh_block.index("if (this.alarmMenuRefreshToken)"), refresh_block.index("let refreshToken = {};"))
+        self.assertLess(refresh_block.index("if (this.alarmMenuRefreshToken || this.alarmActionToken || this.alarmCheckToken)"), refresh_block.index("let refreshToken = {};"))
         self.assertLess(refresh_block.index("this.alarmMenuRefreshToken = null;"), refresh_block.index("if (payload.error)"))
 
     def test_alarm_checks_do_not_spawn_concurrent_backend_processes(self) -> None:
@@ -1089,9 +1090,9 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_checkAlarms: function(manual)")
         end = source.index("\n  _refreshInputSourceMenu:", start)
         block = source[start:end]
-        self.assertIn("if (this.alarmCheckToken || (manual && this._hasActiveRecordingState()))", block)
+        self.assertIn("if (this.alarmCheckToken || this.alarmActionToken || this.alarmMenuRefreshToken || (manual && this._hasActiveRecordingState()))", block)
         self.assertIn("let checkToken = {};", block)
-        self.assertLess(block.index("if (this.alarmCheckToken || (manual && this._hasActiveRecordingState()))"), block.index("let checkToken = {};"))
+        self.assertLess(block.index("if (this.alarmCheckToken || this.alarmActionToken || this.alarmMenuRefreshToken || (manual && this._hasActiveRecordingState()))"), block.index("let checkToken = {};"))
 
     def test_alarm_actions_do_not_spawn_concurrent_backend_processes(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -1103,9 +1104,9 @@ class AppletStaticTest(unittest.TestCase):
             start = source.index(method)
             end = source.index(next_method, start)
             block = source[start:end]
-            self.assertIn(f"if ({token} || this._hasActiveRecordingState())", block)
+            self.assertIn(f"if ({token} || this.alarmCheckToken || this.alarmMenuRefreshToken || this._hasActiveRecordingState())", block)
             self.assertIn("let actionToken = {};", block)
-            self.assertLess(block.index(f"if ({token} || this._hasActiveRecordingState())"), block.index("let actionToken = {};"))
+            self.assertLess(block.index(f"if ({token} || this.alarmCheckToken || this.alarmMenuRefreshToken || this._hasActiveRecordingState())"), block.index("let actionToken = {};"))
 
     def test_alarm_enable_reports_when_backend_cannot_find_alarm(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -4499,12 +4500,11 @@ class AppletStaticTest(unittest.TestCase):
             start = source.index(method)
             end = source.index(next_method, start)
             block = source[start:end]
-            self.assertIn("if (this.alarmActionToken || this._hasActiveRecordingState())", block)
+            self.assertIn("if (this.alarmActionToken || this.alarmCheckToken || this.alarmMenuRefreshToken || this._hasActiveRecordingState())", block)
             self.assertIn("let actionToken = {};", block)
             self.assertIn("this.alarmActionToken = actionToken;", block)
             self.assertIn("this.alarmActionToken !== actionToken", block)
             self.assertIn("!this._lifecycleAllowsWork()", block)
-            self.assertIn("this.alarmMenuRefreshToken = null;", block)
             self.assertIn('resourceGroup: "alarm-action"', block)
 
     def test_alarm_checks_ignore_stale_backend_responses(self) -> None:
@@ -4514,11 +4514,10 @@ class AppletStaticTest(unittest.TestCase):
         end = source.index("\n  _refreshInputSourceMenu:", start)
         block = source[start:end]
         self.assertIn("let checkToken = {};", block)
-        self.assertIn("if (this.alarmCheckToken || (manual && this._hasActiveRecordingState()))", block)
+        self.assertIn("if (this.alarmCheckToken || this.alarmActionToken || this.alarmMenuRefreshToken || (manual && this._hasActiveRecordingState()))", block)
         self.assertIn("this.alarmCheckToken = checkToken;", block)
         self.assertIn("this.alarmCheckToken !== checkToken", block)
         self.assertIn("!this._lifecycleAllowsWork()", block)
-        self.assertIn("this.alarmMenuRefreshToken = null;", block)
         self.assertIn('resourceGroup: "alarm-check"', block)
 
         error_start = source.index("_setAlarmErrorStatus: function(message)")

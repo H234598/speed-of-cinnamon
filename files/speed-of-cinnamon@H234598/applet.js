@@ -6762,7 +6762,7 @@ MyApplet.prototype = {
     if (!this._canMutateMenu(this.alarmItem)) {
       return;
     }
-    if (this.alarmMenuRefreshToken) {
+    if (this.alarmMenuRefreshToken || this.alarmActionToken || this.alarmCheckToken) {
       return;
     }
     if (this._terminateProcessesByGroup("alarm-menu-refresh") === false) {
@@ -6922,10 +6922,9 @@ MyApplet.prototype = {
   },
 
   _setAlarmEnabled: function(id, enabled) {
-    if (this.alarmActionToken || this._hasActiveRecordingState()) {
+    if (this.alarmActionToken || this.alarmCheckToken || this.alarmMenuRefreshToken || this._hasActiveRecordingState()) {
       return;
     }
-    this.alarmMenuRefreshToken = null;
     let actionToken = {};
     this.alarmActionToken = actionToken;
     this._setAlarmOptionStatus(enabled ? _("Enabling alarm...") : _("Disabling alarm..."));
@@ -6951,7 +6950,6 @@ MyApplet.prototype = {
           return;
         }
         this.alarmActionToken = null;
-        this.alarmMenuRefreshToken = null;
         let alarmFound = Boolean(
           payload.alarm &&
           typeof payload.alarm === "object" &&
@@ -6974,10 +6972,9 @@ MyApplet.prototype = {
   },
 
   _removeAlarm: function(id) {
-    if (this.alarmActionToken || this._hasActiveRecordingState()) {
+    if (this.alarmActionToken || this.alarmCheckToken || this.alarmMenuRefreshToken || this._hasActiveRecordingState()) {
       return;
     }
-    this.alarmMenuRefreshToken = null;
     let actionToken = {};
     this.alarmActionToken = actionToken;
     this._setAlarmOptionStatus(_("Removing alarm..."));
@@ -7003,7 +7000,6 @@ MyApplet.prototype = {
           return;
         }
         this.alarmActionToken = null;
-        this.alarmMenuRefreshToken = null;
         this._setAlarmOptionStatus(payload.removed === true ? _("Alarm removed") : _("Alarm not found"));
         this._refreshAlarmMenu();
       } catch (error) {
@@ -7017,10 +7013,9 @@ MyApplet.prototype = {
   },
 
   _checkAlarms: function(manual) {
-    if (this.alarmCheckToken || (manual && this._hasActiveRecordingState())) {
+    if (this.alarmCheckToken || this.alarmActionToken || this.alarmMenuRefreshToken || (manual && this._hasActiveRecordingState())) {
       return;
     }
-    this.alarmMenuRefreshToken = null;
     let checkToken = {};
     this.alarmCheckToken = checkToken;
     let alarmCheckArgs;
@@ -7080,7 +7075,6 @@ MyApplet.prototype = {
           this._setAlarmOptionStatus(_("No alarms due"));
         }
         if (manual) {
-          this.alarmMenuRefreshToken = null;
           this._refreshAlarmMenu();
         }
       } catch (error) {
