@@ -5723,7 +5723,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('resourceGroup: "clipboard"', source)
         self.assertIn("if (result && result.cancelled) {", source)
         self.assertIn("let remainingMs = commandDeadlineMs - Date.now();", source)
-        self.assertIn("this._clipboardTargetList(\n                  fallback.program,", source)
+        self.assertIn("this._clipboardTargetList(\n          fallback.program,", source)
         self.assertIn("let nonTextTargets = [];", source)
         self.assertIn("_clipboardPayloadDescriptionFromTargets: function(targets)", source)
         self.assertIn("nonTextTargets.slice(0, 6).join(\", \")", source)

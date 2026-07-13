@@ -11869,6 +11869,30 @@ MyApplet.prototype = {
     if (attempted.indexOf(program) < 0) {
       attempted.push(program);
     }
+    let tryFallback = () => {
+      let remainingMs = commandDeadlineMs - Date.now();
+      if (remainingMs <= 0 || !this._lifecycleAllowsWork()) {
+        return false;
+      }
+      try {
+        let fallback = this._clipboardFallbackSpec(program, args, attempted);
+        if (!fallback) {
+          return false;
+        }
+        let fallbackHandle = this._clipboardTargetList(
+          fallback.program,
+          fallback.args,
+          completeOnce,
+          Math.max(1, remainingMs),
+          fallback.attemptedPrograms,
+          commandDeadlineMs
+        );
+        return Boolean(fallbackHandle);
+      } catch (error) {
+        this._recordLifecycleError("clipboard-command-fallback", error);
+        return false;
+      }
+    };
     if (!timeout || !helper || !this._lifecycleAllowsWork()) {
       completeOnce(null);
       return false;
@@ -11890,26 +11914,8 @@ MyApplet.prototype = {
           return;
         }
         if (result && (result.error || result.timedOut || result.outputTooLarge)) {
-          let remainingMs = commandDeadlineMs - Date.now();
-          if (remainingMs > 0 && this._lifecycleAllowsWork()) {
-            try {
-              let fallback = this._clipboardFallbackSpec(program, args, attempted);
-              if (fallback) {
-                let fallbackHandle = this._clipboardTargetList(
-                  fallback.program,
-                  fallback.args,
-                  completeOnce,
-                  Math.max(1, remainingMs),
-                  fallback.attemptedPrograms,
-                  commandDeadlineMs
-                );
-                if (fallbackHandle) {
-                  return;
-                }
-              }
-            } catch (error) {
-              this._recordLifecycleError("clipboard-command-fallback", error);
-            }
+          if (tryFallback()) {
+            return;
           }
           completeOnce(null);
           return;
@@ -11922,6 +11928,9 @@ MyApplet.prototype = {
       return Boolean(handle);
     } catch (error) {
       this._recordLifecycleError("clipboard-command", error);
+      if (tryFallback()) {
+        return true;
+      }
       completeOnce(null);
       return false;
     }
