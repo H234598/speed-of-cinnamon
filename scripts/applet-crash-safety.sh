@@ -9,6 +9,7 @@ cycles="${APPLET_CRASH_SAFETY_CYCLES:-100}"
 reload_mode="${APPLET_CRASH_SAFETY_RELOAD_MODE:-module}"
 display_number="${APPLET_CRASH_SAFETY_DISPLAY:-99}"
 heartbeat_limit_ms="${APPLET_CRASH_SAFETY_HEARTBEAT_MS:-250}"
+max_heartbeat_limit_ms=60000
 fault_injection="${APPLET_CRASH_SAFETY_FAULT_INJECTION:-0}"
 force_gc="${APPLET_CRASH_SAFETY_FORCE_GC:-1}"
 host_display="${APPLET_CRASH_SAFETY_HOST_DISPLAY:-${DISPLAY:-}}"
@@ -32,8 +33,9 @@ if [[ ! "${display_number}" =~ ^[1-9][0-9]*$ ]]; then
   printf 'APPLET_CRASH_SAFETY_DISPLAY must be a positive display number.\n' >&2
   exit 2
 fi
-if [[ ! "${heartbeat_limit_ms}" =~ ^[1-9][0-9]*$ ]]; then
-  printf 'APPLET_CRASH_SAFETY_HEARTBEAT_MS must be a positive integer.\n' >&2
+if [[ ! "${heartbeat_limit_ms}" =~ ^[1-9][0-9]*$ || ${#heartbeat_limit_ms} -gt 5 ]] ||
+   (( heartbeat_limit_ms > max_heartbeat_limit_ms )); then
+  printf 'APPLET_CRASH_SAFETY_HEARTBEAT_MS must be an integer from 1 to %s.\n' "${max_heartbeat_limit_ms}" >&2
   exit 2
 fi
 if [[ -z "${host_display}" ]]; then
