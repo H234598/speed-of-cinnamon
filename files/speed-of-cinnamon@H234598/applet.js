@@ -7247,7 +7247,7 @@ MyApplet.prototype = {
     if (!this._canMutateMenu(this.modelItem)) {
       return;
     }
-    if (this.modelMenuRefreshToken) {
+    if (this.modelMenuRefreshToken || this.voiceModelActionToken) {
       return;
     }
     let refreshToken = {};
@@ -7664,14 +7664,13 @@ MyApplet.prototype = {
   },
 
   _downloadVoiceModel: function(model) {
-    if (this.isCommandRunning || this._hasActiveRecordingState()) {
+    if (this.isCommandRunning || this.voiceModelActionToken || this.modelMenuRefreshToken || this._hasActiveRecordingState()) {
       return;
     }
     let name = model && typeof model.name === "string" ? model.name.trim() : "";
     if (name === "") {
       name = this._starterVoiceModelName();
     }
-    this.modelMenuRefreshToken = null;
     let actionToken = {};
     this.voiceModelActionToken = actionToken;
     this.isCommandRunning = true;
@@ -7720,7 +7719,7 @@ MyApplet.prototype = {
   },
 
   _removeVoiceModel: function(model) {
-    if (this.isCommandRunning || this._hasActiveRecordingState() || this.voiceModelActionToken) {
+    if (this.isCommandRunning || this._hasActiveRecordingState() || this.voiceModelActionToken || this.modelMenuRefreshToken) {
       return;
     }
     let name = model && typeof model.name === "string" ? model.name.trim() : "";
@@ -7728,7 +7727,6 @@ MyApplet.prototype = {
     if (name === "") {
       return;
     }
-    this.modelMenuRefreshToken = null;
     let actionToken = {};
     this.voiceModelActionToken = actionToken;
     this.isCommandRunning = true;

@@ -1513,7 +1513,7 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_downloadVoiceModel: function(model)")
         end = source.index("\n  _removeVoiceModel:", start)
         block = source[start:end]
-        self.assertIn("if (this.isCommandRunning || this._hasActiveRecordingState())", block)
+        self.assertIn("if (this.isCommandRunning || this.voiceModelActionToken || this.modelMenuRefreshToken || this._hasActiveRecordingState())", block)
         self.assertIn('model && typeof model.name === "string"', block)
         self.assertIn('let name = model && typeof model.name === "string" ? model.name.trim() : "";', block)
         self.assertIn('if (name === "")', block)
@@ -1697,8 +1697,7 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_removeVoiceModel: function(model)")
         end = source.index("\n  _selectVoiceModel:", start)
         block = source[start:end]
-        self.assertIn("if (this.isCommandRunning || this._hasActiveRecordingState() || this.voiceModelActionToken)", block)
-        self.assertIn("if (this.isCommandRunning || this._hasActiveRecordingState() || this.voiceModelActionToken)", block)
+        self.assertIn("if (this.isCommandRunning || this._hasActiveRecordingState() || this.voiceModelActionToken || this.modelMenuRefreshToken)", block)
         self.assertIn("let actionToken = {};", block)
         self.assertIn("this.voiceModelActionToken = actionToken;", block)
         self.assertIn("this.voiceModelActionToken !== actionToken", block)
@@ -1713,9 +1712,9 @@ class AppletStaticTest(unittest.TestCase):
         refresh_start = source.index("_refreshModelMenu: function()")
         refresh_end = source.index("\n  _populateModelMenu:", refresh_start)
         refresh_block = source[refresh_start:refresh_end]
-        self.assertIn("if (this.modelMenuRefreshToken)", refresh_block)
+        self.assertIn("if (this.modelMenuRefreshToken || this.voiceModelActionToken)", refresh_block)
         self.assertIn("this.modelMenuRefreshToken = null;", refresh_block)
-        self.assertLess(refresh_block.index("if (this.modelMenuRefreshToken)"), refresh_block.index("let refreshToken = {};"))
+        self.assertLess(refresh_block.index("if (this.modelMenuRefreshToken || this.voiceModelActionToken)"), refresh_block.index("let refreshToken = {};"))
         self.assertLess(refresh_block.index("this.modelMenuRefreshToken = null;"), refresh_block.index("if (payload.error)"))
 
         for method, next_method in [
@@ -1724,7 +1723,9 @@ class AppletStaticTest(unittest.TestCase):
         ]:
             start = source.index(method)
             end = source.index(next_method, start)
-            self.assertIn("this.modelMenuRefreshToken = null;", source[start:end])
+            action_block = source[start:end]
+            self.assertIn("this.voiceModelActionToken", action_block)
+            self.assertIn("this.modelMenuRefreshToken", action_block)
 
     def test_input_source_names_and_descriptions_are_string_checked(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
