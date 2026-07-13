@@ -2159,6 +2159,45 @@ class ModelsTest(unittest.TestCase):
             with self.assertRaisesRegex(models.ModelError, "failed to persist downloaded model file"):
                 models.download_model("ct2-replace-fails")
 
+    def test_download_model_removes_new_multifile_directory_after_activation_fsync_failure(self) -> None:
+        data = b"small model file"
+        spec = models.ModelSpec(
+            name="ct2-final-fsync-fails-new",
+            filename="ct2-final-fsync-fails-new",
+            size="2 KiB",
+            sha1="",
+            description="ct2 final activation fsync failure without backup",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-final-fsync-fails-new",
+            files=("config.json",),
+            file_sha1s=file_sha1s_for(("config.json",), data),
+        )
+        real_fsync = os.fsync
+        directory_fsyncs = 0
+
+        def fail_final_activation_fsync(fd: int) -> None:
+            nonlocal directory_fsyncs
+            if models.stat_module.S_ISDIR(os.fstat(fd).st_mode):
+                directory_fsyncs += 1
+                if directory_fsyncs == 3:
+                    raise OSError("final directory activation fsync failed")
+            real_fsync(fd)
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
+            mock.patch("speed_of_cinnamon.models.os.fsync", side_effect=fail_final_activation_fsync),
+        ):
+            with self.assertRaisesRegex(models.ModelError, "failed to persist downloaded model directory"):
+                models.download_model("ct2-final-fsync-fails-new")
+
+            path = models.model_path(spec)
+            self.assertFalse(path.exists())
+            self.assertEqual(list(path.parent.glob(f".{spec.filename}.*")), [])
+
     def test_download_model_restores_existing_multifile_model_when_final_replace_fails(self) -> None:
         data = b"small model file"
         spec = models.ModelSpec(

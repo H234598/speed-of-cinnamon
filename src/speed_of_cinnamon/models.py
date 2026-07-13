@@ -1578,6 +1578,11 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                         except (OSError, ModelError):
                             pass
                     raise ModelError(f"failed to restore existing model directory after download failure: {path}") from restore_exc
+            elif not tmp_dir.exists() and path.exists():
+                try:
+                    _remove_model_directory_leaf(path, root, field_name="partially installed model directory")
+                except (OSError, ModelError) as cleanup_exc:
+                    raise ModelError(f"failed to remove partially installed model directory: {path}") from cleanup_exc
             raise ModelError(f"failed to persist downloaded model directory: {path}") from exc
         if backup_dir is not None:
             try:
