@@ -536,7 +536,10 @@ def _inspect_and_close_recording_temp_file(path: Path, fd: int, *, field_name: s
     except OSError as exc:
         raise RecorderError(f"failed to inspect {field_name}") from exc
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            pass
     return output_size, output_matches_path, output_stat
 
 

@@ -455,6 +455,23 @@ class RecorderTest(unittest.TestCase):
                 self.assertFalse(path.exists())
                 real_close(parent_fd)
 
+    def test_inspect_recording_temp_file_preserves_result_on_fd_close_failure(self) -> None:
+        from speed_of_cinnamon import recorder as recorder_module
+
+        output_stat = os.stat(__file__)
+        with (
+            mock.patch.object(recorder_module.os, "fstat", return_value=output_stat),
+            mock.patch.object(recorder_module, "_recording_temp_path_matches_fd", return_value=True),
+            mock.patch.object(recorder_module.os, "close", side_effect=OSError("close failed")),
+        ):
+            result = recorder_module._inspect_and_close_recording_temp_file(
+                Path(__file__),
+                42,
+                field_name="test temporary file",
+            )
+
+        self.assertEqual(result, (output_stat.st_size, True, output_stat))
+
     def test_trim_recording_leading_silence_open_error_does_not_leak_audio_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "secret-sample.wav"
