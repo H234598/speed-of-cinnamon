@@ -2003,11 +2003,39 @@ Source #13
     def test_stop_process_returns_when_process_is_already_gone(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", side_effect=ProcessLookupError),
+            mock.patch("speed_of_cinnamon.recorder._process_group_exists", return_value=False),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
             stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
 
         mocked_kill.assert_not_called()
+
+    def test_stop_process_cleans_group_after_leader_was_reaped(self) -> None:
+        group_checks = 0
+
+        def process_gone(target: str) -> bool:
+            nonlocal group_checks
+            if target == "1234":
+                return True
+            group_checks += 1
+            return group_checks >= 4
+
+        with (
+            mock.patch("speed_of_cinnamon.recorder.os.getpgid", side_effect=ProcessLookupError),
+            mock.patch("speed_of_cinnamon.recorder._process_group_exists", return_value=True) as mocked_group_exists,
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_matches", return_value=False),
+            mock.patch("speed_of_cinnamon.recorder._process_is_gone", side_effect=process_gone),
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2]),
+            mock.patch("speed_of_cinnamon.recorder.time.sleep"),
+            mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
+        ):
+            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+
+        self.assertTrue(result)
+        self.assertGreaterEqual(mocked_group_exists.call_count, 2)
+        self.assertEqual(mocked_kill.call_args_list[0].args[0], ["kill", "-INT", "--", "-1234"])
+        self.assertEqual(mocked_kill.call_args_list[1].args[0], ["kill", "-TERM", "--", "-1234"])
+        self.assertEqual(mocked_kill.call_args_list[2].args[0], ["kill", "-KILL", "--", "-1234"])
 
 
 if __name__ == "__main__":

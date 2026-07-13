@@ -1392,6 +1392,14 @@ def _process_is_gone(process_target: str) -> bool:
     return False
 
 
+def _process_group_exists(process_group_id: int) -> bool:
+    try:
+        os.kill(-process_group_id, 0)
+    except OSError:
+        return False
+    return True
+
+
 def _open_recorder_log_file(log_path: Path) -> tuple[io.BufferedWriter, bool]:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
@@ -1534,16 +1542,29 @@ def stop_process(
         process_group_target = os.getpgid(pid) == pid
         process_target = f"-{pid}" if process_group_target else str(pid)
     except ProcessLookupError:
-        return False
+        # start_recorder() creates a new session, so its leader PID is also the
+        # process-group ID. The leader can be reaped by another process before
+        # a later stop/cancel invocation, while descendants still remain.
+        process_group_target = _process_group_exists(pid)
+        if not process_group_target:
+            return False
+        process_target = f"-{pid}"
     except OSError as exc:
         raise RecorderError(f"failed to inspect recorder process {pid}: {exc}") from exc
-
-    if not _recording_process_identity_matches(pid, expected_process_identity):
-        return False
 
     def target_identity_still_safe() -> bool:
         if _recording_process_identity_matches(pid, expected_process_identity):
             return True
+        if (
+            process_group_target
+            and expected_process_identity
+            and _process_is_gone(str(pid))
+            and _process_group_exists(pid)
+        ):
+            return True
+        return False
+
+    if not target_identity_still_safe():
         return False
 
     _run_kill(["kill", "-INT", "--", process_target], check_exit=False)
