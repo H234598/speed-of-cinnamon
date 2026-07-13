@@ -215,6 +215,23 @@ class CliTest(unittest.TestCase):
 
             self.assertFalse(path.exists())
 
+    def test_ensure_transcript_export_dir_preserves_success_when_fd_close_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            export_path = root / "exports" / "all-transcripts.txt"
+            directory_fd = os.open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_close = os.close
+
+            try:
+                with (
+                    mock.patch.object(cli, "ensure_directory_without_following_symlinks", return_value=directory_fd),
+                    mock.patch.object(cli.os, "fchmod"),
+                    mock.patch.object(cli.os, "close", side_effect=OSError("close failed")),
+                ):
+                    cli._ensure_transcript_export_dir(export_path)
+            finally:
+                real_close(directory_fd)
+
     def test_finalization_lock_pid_closes_descriptor_when_fdopen_rejects(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ".state.finalizing"

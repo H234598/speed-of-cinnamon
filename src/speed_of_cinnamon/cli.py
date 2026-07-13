@@ -1883,7 +1883,10 @@ def _ensure_transcript_export_dir(path: Path) -> None:
     try:
         os.fchmod(fd, 0o700)
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 def write_transcripts_export(
