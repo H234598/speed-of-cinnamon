@@ -153,7 +153,26 @@ class AlarmTest(unittest.TestCase):
             field_name="alarm store path",
             max_bytes=MAX_ALARM_STORE_BYTES,
             require_private_mode=True,
+            expected_stat=mock.ANY,
         )
+
+    def test_load_alarm_store_rejects_regular_file_swap_before_secure_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            payload = '{"version":1,"alarms":[],"last_checked_at":""}'
+            path.write_text(payload, encoding="utf-8")
+            path.chmod(0o600)
+            real_read = alarm_module.read_text_without_following_symlinks
+
+            def read_and_swap(*args: object, **kwargs: object) -> str:
+                path.rename(Path(tmp) / "alarms-original.json")
+                path.write_text(payload, encoding="utf-8")
+                path.chmod(0o600)
+                return real_read(*args, **kwargs)
+
+            with mock.patch.object(alarm_module, "read_text_without_following_symlinks", side_effect=read_and_swap):
+                with self.assertRaisesRegex(RuntimeError, "alarm store could not be read"):
+                    load_alarm_store(path)
 
     @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
     def test_load_alarm_store_uses_secure_open_flags(self, mocked_open: mock.Mock) -> None:
