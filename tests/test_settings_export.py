@@ -25,6 +25,7 @@ from speed_of_cinnamon.settings_export import (
     read_export,
     write_export,
 )
+from speed_of_cinnamon import settings_export as settings_export_module
 
 
 class SettingsExportTest(unittest.TestCase):
@@ -620,6 +621,28 @@ class SettingsExportTest(unittest.TestCase):
             with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
                 write_export(path, {"language": "en"})
         mocked_replace.assert_called_once()
+
+    def test_write_export_closes_temporary_fd_when_fdopen_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            created_fds: list[int] = []
+            real_create = settings_export_module._create_private_temp_file
+
+            def create_temp_file(parent_fd: int, final_name: str) -> tuple[int, str]:
+                fd, temp_name = real_create(parent_fd, final_name)
+                created_fds.append(fd)
+                return fd, temp_name
+
+            with (
+                mock.patch.object(settings_export_module, "_create_private_temp_file", side_effect=create_temp_file),
+                mock.patch.object(settings_export_module.os, "fdopen", side_effect=OSError("fdopen failed")),
+            ):
+                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+                    write_export(path, {"language": "en"})
+
+            self.assertEqual(len(created_fds), 1)
+            with self.assertRaises(OSError):
+                os.fstat(created_fds[0])
 
     def test_write_export_rejects_leaf_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

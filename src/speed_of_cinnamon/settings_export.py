@@ -474,6 +474,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
         raise SettingsExportError(f"settings export is too large: {path}")
     parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name="settings export directory")
     temp_name = ""
+    temp_fd: int | None = None
     try:
         try:
             assert_fd_is_private_directory(parent_fd, field_name="settings export directory")
@@ -486,7 +487,12 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
         if existing_stat is not None and stat_module.S_ISLNK(existing_stat.st_mode):
             raise SettingsExportError(f"settings export path must not be a symlink: {path}")
         temp_fd, temp_name = _create_private_temp_file(parent_fd, path.name)
-        with os.fdopen(temp_fd, "w", encoding="utf-8") as handle:
+        try:
+            handle = os.fdopen(temp_fd, "w", encoding="utf-8")
+        except (OSError, ValueError) as exc:
+            raise OSError("failed to open settings export temporary file") from exc
+        temp_fd = None
+        with handle:
             try:
                 os.fchmod(handle.fileno(), 0o600)
             except OSError:
@@ -513,6 +519,11 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
             raise SettingsExportError(f"failed to remove settings export temporary file: {path}") from cleanup_error
         raise SettingsExportError(f"failed to write settings export: {path}") from exc
     finally:
+        if temp_fd is not None:
+            try:
+                os.close(temp_fd)
+            except OSError:
+                pass
         os.close(parent_fd)
     return payload
 
