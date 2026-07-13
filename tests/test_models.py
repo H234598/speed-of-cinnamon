@@ -1624,6 +1624,25 @@ class ModelsTest(unittest.TestCase):
             self.assertTrue(any(child.name.startswith(f".{spec.filename}.") and child.name.endswith(".tmp") for child in path.parent.iterdir()))
             self.assertIn("model artifact cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_download_url_rejects_non_binary_response_chunks(self) -> None:
+        class InvalidChunkResponse(FakeResponse):
+            def read(self, size: int = -1) -> object:
+                return "not bytes"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.object(models, "_open_model_download_url", return_value=InvalidChunkResponse(b"")),
+                self.assertRaisesRegex(models.ModelError, "response chunk must be bytes"),
+            ):
+                models._download_url_to_file(
+                    models.HUGGING_FACE_BASE_URL + "/ggml-test.bin",
+                    Path(tmp),
+                    1024,
+                    "test",
+                    prefix=".test.",
+                )
+            self.assertEqual([], list(Path(tmp).iterdir()))
+
     def test_download_directory_model_uses_fd_based_temporary_directory(self) -> None:
         data = b"small model file"
         spec = models.ModelSpec(
