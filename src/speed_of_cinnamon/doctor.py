@@ -587,7 +587,10 @@ def parse_settings_json(value: str) -> dict[str, object]:
         parsed = json.loads(value)
     except (json.JSONDecodeError, RecursionError) as exc:
         raise ValueError(f"settings JSON could not be parsed: {exc}") from exc
-    _validate_json_string_encoding(parsed, field_name="settings JSON")
+    try:
+        _validate_json_string_encoding(parsed, field_name="settings JSON")
+    except RecursionError as exc:
+        raise ValueError(f"settings JSON could not be parsed: {exc}") from exc
     if not isinstance(parsed, dict):
         raise ValueError("settings JSON must be an object")
     return parsed

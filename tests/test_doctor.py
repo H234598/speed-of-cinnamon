@@ -778,6 +778,13 @@ class DoctorTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "settings JSON could not be parsed"):
                 doctor.parse_settings_json('{"language":"en"}')
 
+    def test_parse_settings_json_wraps_validation_recursion_error(self) -> None:
+        nested = "{}"
+        for _ in range(1_000):
+            nested = "[" + nested + "]"
+        with self.assertRaisesRegex(ValueError, "settings JSON could not be parsed"):
+            doctor.parse_settings_json(nested)
+
     def test_setting_rejects_non_text_payload(self) -> None:
         with self.assertRaisesRegex(ValueError, "setting language must be text"):
             doctor._setting({"language": 1}, "language")  # type: ignore[arg-type]
