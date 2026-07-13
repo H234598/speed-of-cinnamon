@@ -372,6 +372,23 @@ class ArtifactCryptoTest(unittest.TestCase):
         with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "invalid length"):
             artifact_crypto._parse_keyring_secret(bad_secret)
 
+    def test_keyring_lookup_failure_does_not_create_or_replace_key(self) -> None:
+        failure = subprocess.CompletedProcess(
+            ["secret-tool", "lookup"],
+            1,
+            b"",
+            b"Could not connect: Connection refused\n",
+        )
+        with (
+            mock.patch("speed_of_cinnamon.artifact_crypto._run_secret_tool", return_value=failure),
+            mock.patch("speed_of_cinnamon.artifact_crypto._store_keyring_key") as mocked_store,
+            mock.patch("speed_of_cinnamon.artifact_crypto.secrets.token_bytes", return_value=b"k" * 32),
+        ):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "keyring lookup failed"):
+                artifact_crypto._load_keyring_key()
+
+        mocked_store.assert_not_called()
+
     def _pipe_reader(self, payload: bytes) -> object:
         read_fd, write_fd = os.pipe()
         os.write(write_fd, payload)

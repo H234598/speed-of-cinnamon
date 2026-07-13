@@ -855,6 +855,8 @@ def _parse_keyring_secret(raw: bytes) -> bytes | None:
 def _lookup_keyring_key() -> bytes | None:
     proc = _run_secret_tool(["lookup", *_SECRET_TOOL_ATTRIBUTES])
     if proc.returncode != 0:
+        if proc.stdout or proc.stderr:
+            raise ArtifactCryptoError("Secret Service keyring lookup failed")
         return None
     try:
         return _parse_keyring_secret(proc.stdout)
