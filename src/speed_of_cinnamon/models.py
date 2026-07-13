@@ -931,7 +931,10 @@ def _assert_model_parent_for_atomic_replace(path: Path, root: Path, *, field_nam
 
 def _ensure_model_parent_directory(path: Path, root: Path, *, field_name: str = "model path") -> None:
     parent_fd = _open_model_parent_directory(path, root, field_name=field_name)
-    os.close(parent_fd)
+    try:
+        os.close(parent_fd)
+    except OSError:
+        pass
 
 
 def _open_model_parent_directory(path: Path, root: Path, *, field_name: str = "model path") -> int:
@@ -970,7 +973,10 @@ def _replace_model_sibling_path(source: Path, target: Path, root: Path, *, field
         os.replace(source.name, target.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         os.fsync(parent_fd)
     finally:
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except OSError:
+            pass
 
 
 def _unlink_model_file_leaf(path: Path, root: Path, *, field_name: str = "model file") -> bool:

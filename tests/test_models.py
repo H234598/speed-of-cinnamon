@@ -3119,6 +3119,32 @@ class ModelsTest(unittest.TestCase):
             self.assertTrue(any(models.stat_module.S_ISREG(mode) for mode in fsync_modes))
             self.assertTrue(any(models.stat_module.S_ISDIR(mode) for mode in fsync_modes))
 
+    def test_replace_model_sibling_preserves_success_when_parent_close_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.bin"
+            target = root / "target.bin"
+            source.write_bytes(b"model")
+            parent_fd = os.open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_close = os.close
+
+            def close_wrapper(fd: int) -> None:
+                if fd == parent_fd:
+                    raise OSError("close failed")
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.object(models, "_open_model_parent_directory", return_value=parent_fd),
+                    mock.patch.object(models.os, "close", side_effect=close_wrapper),
+                ):
+                    models._replace_model_sibling_path(source, target, root, field_name="model path")
+            finally:
+                real_close(parent_fd)
+
+            self.assertEqual(target.read_bytes(), b"model")
+            self.assertFalse(source.exists())
+
     def test_unlink_model_file_preserves_success_when_parent_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
