@@ -773,6 +773,11 @@ class DoctorTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be an object"):
             doctor.parse_settings_json("[\"en\"]")
 
+    def test_parse_settings_json_wraps_json_recursion_error(self) -> None:
+        with mock.patch("speed_of_cinnamon.doctor.json.loads", side_effect=RecursionError("too deep")):
+            with self.assertRaisesRegex(ValueError, "settings JSON could not be parsed"):
+                doctor.parse_settings_json('{"language":"en"}')
+
     def test_setting_rejects_non_text_payload(self) -> None:
         with self.assertRaisesRegex(ValueError, "setting language must be text"):
             doctor._setting({"language": 1}, "language")  # type: ignore[arg-type]
