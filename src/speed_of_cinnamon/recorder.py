@@ -1007,7 +1007,12 @@ def read_recording_level(audio_path: Path) -> RecordingLevel:
                 return RecordingLevel(False, 0, 0.0, 0.0, 0, "waiting for audio")
             handle.seek(size - read_bytes)
             raw = handle.read(read_bytes)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         raise RecorderError("recording audio file is not readable") from exc
 
     raw = raw[: len(raw) - (len(raw) % 2)]

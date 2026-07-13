@@ -944,6 +944,27 @@ class RecorderTest(unittest.TestCase):
 
         log_file.close.assert_called_once()
 
+    def test_read_recording_level_closes_descriptor_when_fdopen_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio_path = Path(tmp) / "sample.wav"
+            audio_path.write_bytes(b"0" * 128)
+            fd = os.open(audio_path, os.O_RDONLY)
+            try:
+                with (
+                    mock.patch("speed_of_cinnamon.recorder._open_recording_artifact_leaf", return_value=fd),
+                    mock.patch("speed_of_cinnamon.recorder.os.fdopen", side_effect=ValueError("bad audio fd")),
+                ):
+                    with self.assertRaisesRegex(RecorderError, "recording audio file is not readable"):
+                        read_recording_level(audio_path)
+
+                with self.assertRaises(OSError):
+                    os.fstat(fd)
+            finally:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
     def test_start_recorder_filters_dangerous_environment_variables(self) -> None:
         command = RecorderCommand(name="noop", argv=["true"])
         captured_env: dict[str, str] = {}
