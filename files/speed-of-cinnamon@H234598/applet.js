@@ -13241,7 +13241,7 @@ MyApplet.prototype = {
   },
 
   _insertTranscriptText: function(transcript, completionCallback) {
-    if (!this._lifecycleAllowsWork() || this.textInsertToken) {
+    if (!this._lifecycleAllowsWork() || this.textInsertToken || this.clipboardOverwriteDialog) {
       return false;
     }
     if (this.textInsertCancellationFailed) {
@@ -13261,6 +13261,7 @@ MyApplet.prototype = {
         timerCleanupStillPending = true;
       }
       let cancellationStillPending = timerCleanupStillPending ||
+        Boolean(this.clipboardOverwriteDialog) ||
         ["keyboard", "clipboard", "x11"].some((group) => this._hasTrackedProcessGroup(group));
       if (cancellationStillPending) {
         this._setStatusPreservingRecording("error", _("Previous text insertion is still stopping; try again shortly"), this.lastTranscript);

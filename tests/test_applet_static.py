@@ -1217,6 +1217,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let orphanCleanupSucceeded = this._retryOrphanedTimers();", insert_block)
         self.assertIn("Boolean(this.pasteTimer)", insert_block)
         self.assertIn("Boolean(timers && timers.paste)", insert_block)
+        self.assertIn("Boolean(this.clipboardOverwriteDialog)", insert_block)
         self.assertIn("let cancellationStillPending = timerCleanupStillPending ||", insert_block)
         self.assertIn("[\"keyboard\", \"clipboard\", \"x11\"].some", insert_block)
         self.assertIn('_("Previous text insertion is still stopping; try again shortly")', insert_block)
@@ -5747,7 +5748,7 @@ class AppletStaticTest(unittest.TestCase):
         insert_start = source.index("_insertTranscriptText: function(transcript, completionCallback)")
         insert_end = source.index("_restartRelistenRecording: function()", insert_start)
         insert_block = source[insert_start:insert_end]
-        self.assertIn("if (!this._lifecycleAllowsWork() || this.textInsertToken)", insert_block)
+        self.assertIn("if (!this._lifecycleAllowsWork() || this.textInsertToken || this.clipboardOverwriteDialog)", insert_block)
         self.assertIn("this.textInsertToken = insertToken;", insert_block)
         self.assertIn("if (!isCurrentInsert())", insert_block)
         self.assertIn("let complete = (result) =>", insert_block)
