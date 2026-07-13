@@ -8067,6 +8067,34 @@ class CliTest(unittest.TestCase):
         self.assertTrue(payload["audio_path_present"])
         self.assertNotIn("audio_path", payload)
 
+    def test_start_does_not_overwrite_pending_recording_states(self) -> None:
+        for status in ("recorded", "processing"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                state_file = Path(tmp) / "state.json"
+                store = StateStore(state_file)
+                store.write(
+                    RecordingState(
+                        status=status,
+                        audio_path=f"recordings/{status}.wav",
+                        log_path=f"recordings/{status}.log",
+                    )
+                )
+                args = argparse.Namespace(
+                    max_seconds=30,
+                    input_device="",
+                    recorder="auto",
+                    language="en",
+                )
+                with mock.patch.object(cli, "choose_recorder") as mocked_choose:
+                    result = cli._command_start_locked(args, store)
+
+                self.assertEqual(result["status"], status)
+                self.assertIn("previous recording is pending", result["message"])
+                self.assertTrue(result["audio_path_present"])
+                self.assertTrue(result["log_path_present"])
+                self.assertEqual(store.read().status, status)
+                mocked_choose.assert_not_called()
+
     def test_status_includes_microphone_level_for_recording_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

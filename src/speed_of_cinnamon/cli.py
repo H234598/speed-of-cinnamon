@@ -2928,6 +2928,14 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
             "log_path_present": bool(current.log_path),
             "transcript_path_present": bool(current.transcript_path),
         }
+    if current.status in {"recorded", "processing"}:
+        return {
+            "status": current.status,
+            "message": "previous recording is pending; run stop or toggle to finalize before starting a new recording",
+            "audio_path_present": bool(current.audio_path),
+            "log_path_present": bool(current.log_path),
+            "transcript_path_present": bool(current.transcript_path),
+        }
     if current.status == "recording":
         current_audio_path = _normalized_state_recording_artifact_path(
             current.audio_path,
