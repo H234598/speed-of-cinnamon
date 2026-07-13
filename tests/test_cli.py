@@ -8314,7 +8314,7 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(code, 1)
         self.assertIn("state write failed", payload["error"])
-        mocked_stop.assert_called_once_with(23456, allow_unverified_process=True)
+        mocked_stop.assert_called_once_with(23456, expected_process_identity="proc-identity")
         self.assertEqual(artifacts, [])
 
     def test_start_auto_falls_back_when_first_recorder_exits_immediately(self) -> None:

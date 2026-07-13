@@ -3060,7 +3060,7 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
     try:
         store.write(state)
     except Exception:
-        stop_process(proc.pid, allow_unverified_process=True)
+        stop_process(proc.pid, expected_process_identity=process_identity)
         remove_file(str(audio_path), suffix=".wav")
         remove_file(str(log_path), suffix=".log")
         raise
