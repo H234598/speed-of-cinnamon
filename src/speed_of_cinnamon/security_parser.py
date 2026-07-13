@@ -27,6 +27,10 @@ _MATCH_IGNORE_CATEGORIES = frozenset({"Mn", "Mc", "Me", "Cf"})
 _NORMALIZED_CARD_CANDIDATE_RE = re.compile(r"(?<!\d)(?:\d[\d\s-]{11,40}\d)(?!\d)")
 
 
+def _note_lock_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
+    primary.add_note(f"blacklist lock cleanup failed: {cleanup_error}")
+
+
 _BLACKLIST_ADD_RE = re.compile(
     r"(?im)^\s*(?:blacklisteintrag|blacklist\s*eintrag)\b[\s:,-]*(.+?)\s*$",
 )
@@ -483,8 +487,13 @@ def _acquire_blacklist_lock(path: Path) -> int:
     try:
         fd = os.open(lock_path.name, os.O_RDWR | os.O_CREAT | nofollow_flag, 0o600, dir_fd=parent_fd)
     except OSError as exc:
-        os.close(parent_fd)
-        raise ValueError("failed to open blacklist lock file") from exc
+        error = ValueError("failed to open blacklist lock file")
+        try:
+            os.close(parent_fd)
+        except OSError as cleanup_error:
+            _note_lock_cleanup_failure(error, cleanup_error)
+        raise error from exc
+    primary_error: BaseException | None = None
     try:
         assert_fd_is_regular_private_file(fd, field_name="blacklist lock file", require_private_mode=True)
         try:
@@ -494,18 +503,39 @@ def _acquire_blacklist_lock(path: Path) -> int:
         fcntl.flock(fd, fcntl.LOCK_EX)
         assert_fd_is_regular_private_file(fd, field_name="blacklist lock file", require_private_mode=True)
     except (OSError, RuntimeError) as exc:
-        os.close(fd)
-        raise ValueError("failed to lock blacklist file") from exc
+        error = ValueError("failed to lock blacklist file")
+        primary_error = error
+        try:
+            os.close(fd)
+        except OSError as cleanup_error:
+            _note_lock_cleanup_failure(error, cleanup_error)
+        raise error from exc
     finally:
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except OSError as cleanup_error:
+            if primary_error is not None:
+                _note_lock_cleanup_failure(primary_error, cleanup_error)
+            else:
+                pass
     return fd
 
 
 def _release_blacklist_lock(fd: int) -> None:
+    primary_error: BaseException | None = None
     try:
         fcntl.flock(fd, fcntl.LOCK_UN)
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError as cleanup_error:
+            if primary_error is not None:
+                _note_lock_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise
 
 
 def _luhn_valid(value: str) -> bool:

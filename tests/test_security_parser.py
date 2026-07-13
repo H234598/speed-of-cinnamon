@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from speed_of_cinnamon import security_parser
 from speed_of_cinnamon.security_parser import (
     _MAX_BLACKLIST_ENTRIES,
     _MAX_BLACKLIST_FILE_BYTES,
@@ -440,6 +441,54 @@ class SecurityParserTest(unittest.TestCase):
             [call.args[1] for call in mocked_flock.call_args_list],
             [fcntl.LOCK_EX, fcntl.LOCK_UN],
         )
+
+    def test_blacklist_lock_returns_lock_fd_when_parent_close_fails(self) -> None:
+        close_calls: list[int] = []
+
+        def fail_parent_close(fd: int) -> None:
+            close_calls.append(fd)
+            if fd == 456:
+                raise OSError("parent close failed")
+
+        with (
+            mock.patch.object(security_parser, "assert_no_symlink_ancestors"),
+            mock.patch.object(security_parser, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(security_parser, "assert_fd_is_regular_private_file"),
+            mock.patch.object(security_parser.os, "open", return_value=123),
+            mock.patch.object(security_parser.os, "close", side_effect=fail_parent_close),
+            mock.patch.object(security_parser.fcntl, "flock"),
+        ):
+            fd = security_parser._acquire_blacklist_lock(Path("/probe/blacklist.txt"))
+
+        self.assertEqual(fd, 123)
+        self.assertEqual(close_calls, [456])
+
+    def test_blacklist_lock_preserves_lock_error_when_fd_close_fails(self) -> None:
+        with (
+            mock.patch.object(security_parser, "assert_no_symlink_ancestors"),
+            mock.patch.object(security_parser, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(
+                security_parser,
+                "assert_fd_is_regular_private_file",
+                side_effect=RuntimeError("lock file not private"),
+            ),
+            mock.patch.object(security_parser.os, "open", return_value=123),
+            mock.patch.object(security_parser.os, "close", side_effect=OSError("fd close failed")),
+        ):
+            with self.assertRaisesRegex(ValueError, "failed to lock blacklist file") as caught:
+                security_parser._acquire_blacklist_lock(Path("/probe/blacklist.txt"))
+
+        self.assertIn("blacklist lock cleanup failed", "\n".join(caught.exception.__notes__))
+
+    def test_blacklist_unlock_preserves_unlock_error_when_fd_close_fails(self) -> None:
+        with (
+            mock.patch.object(security_parser.fcntl, "flock", side_effect=OSError("unlock failed")),
+            mock.patch.object(security_parser.os, "close", side_effect=OSError("fd close failed")),
+        ):
+            with self.assertRaisesRegex(OSError, "unlock failed") as caught:
+                security_parser._release_blacklist_lock(123)
+
+        self.assertIn("blacklist lock cleanup failed", "\n".join(caught.exception.__notes__))
 
     def test_update_blacklist_file_rejects_hardlinked_existing_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
