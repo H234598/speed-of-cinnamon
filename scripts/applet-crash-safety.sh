@@ -6,6 +6,7 @@ IFS=$'\n\t'
 repo_dir="${APPLET_CRASH_SAFETY_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
 uuid="speed-of-cinnamon@H234598"
 cycles="${APPLET_CRASH_SAFETY_CYCLES:-100}"
+max_cycles=1000
 reload_mode="${APPLET_CRASH_SAFETY_RELOAD_MODE:-module}"
 display_number="${APPLET_CRASH_SAFETY_DISPLAY:-99}"
 heartbeat_limit_ms="${APPLET_CRASH_SAFETY_HEARTBEAT_MS:-250}"
@@ -21,8 +22,9 @@ for tool in Xephyr dbus-run-session dconf gdbus cinnamon mktemp ps sed awk date 
   fi
 done
 
-if [[ ! "${cycles}" =~ ^[1-9][0-9]*$ || "${cycles}" -gt 1000 ]]; then
-  printf 'APPLET_CRASH_SAFETY_CYCLES must be an integer from 1 to 1000.\n' >&2
+if [[ ! "${cycles}" =~ ^[1-9][0-9]*$ || ${#cycles} -gt 4 ]] ||
+   (( cycles > max_cycles )); then
+  printf 'APPLET_CRASH_SAFETY_CYCLES must be an integer from 1 to %s.\n' "${max_cycles}" >&2
   exit 2
 fi
 if [[ "${reload_mode}" != "instance" && "${reload_mode}" != "module" ]]; then
