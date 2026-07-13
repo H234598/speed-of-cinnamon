@@ -56,18 +56,10 @@ fi
 
 if [[ -n "${APPLET_CRASH_SAFETY_TEST_ROOT:-}" ]]; then
   test_root="${APPLET_CRASH_SAFETY_TEST_ROOT}"
-  if [[ "${APPLET_CRASH_SAFETY_INSIDE:-0}" == "1" ]]; then
-    test_root_owned="${APPLET_CRASH_SAFETY_TEST_ROOT_OWNED:-0}"
-  else
-    test_root_owned="0"
-  fi
+  test_root_owned="0"
 else
   test_root="$(mktemp -d "${TMPDIR:-/tmp}/speed-of-cinnamon-crash-safety.XXXXXX")"
   test_root_owned="1"
-fi
-if [[ "${test_root_owned}" != "0" && "${test_root_owned}" != "1" ]]; then
-  printf 'APPLET_CRASH_SAFETY_TEST_ROOT_OWNED must be 0 or 1.\n' >&2
-  exit 2
 fi
 session_home="${test_root}/home"
 runtime_dir="${test_root}/runtime"
@@ -77,6 +69,12 @@ data_dir="${session_home}/.local/share"
 state_dir="${test_root}/state"
 display_log="${test_root}/xephyr.log"
 cinnamon_log="${test_root}/cinnamon.log"
+
+cleanup_test_root() {
+  if [[ "${test_root_owned}" == "1" ]]; then
+    python3 "${repo_dir}/scripts/safe-local-fs.py" remove applet-crash-safety "${test_root}" --kind dir >/dev/null 2>&1 || true
+  fi
+}
 
 mkdir -p -- "${session_home}" "${runtime_dir}" "${config_dir}/autostart" "${cache_dir}" "${data_dir}" "${state_dir}"
 chmod 700 "${session_home}" "${runtime_dir}" "${config_dir}" "${cache_dir}" "${data_dir}" "${state_dir}"
@@ -98,13 +96,18 @@ nested_display=":${display_number}"
 export DISPLAY="${nested_display}"
 
 if [[ "${APPLET_CRASH_SAFETY_INSIDE:-0}" != "1" ]]; then
-  exec dbus-run-session -- env \
-    APPLET_CRASH_SAFETY_INSIDE=1 \
-    APPLET_CRASH_SAFETY_REPO="${repo_dir}" \
-    APPLET_CRASH_SAFETY_TEST_ROOT="${test_root}" \
-    APPLET_CRASH_SAFETY_TEST_ROOT_OWNED="${test_root_owned}" \
-    APPLET_CRASH_SAFETY_HOST_DISPLAY="${host_display}" \
-    bash "${BASH_SOURCE[0]}" "$@"
+  if dbus-run-session -- env \
+      APPLET_CRASH_SAFETY_INSIDE=1 \
+      APPLET_CRASH_SAFETY_REPO="${repo_dir}" \
+      APPLET_CRASH_SAFETY_TEST_ROOT="${test_root}" \
+      APPLET_CRASH_SAFETY_HOST_DISPLAY="${host_display}" \
+      bash "${BASH_SOURCE[0]}" "$@"; then
+    nested_status=0
+  else
+    nested_status=$?
+  fi
+  cleanup_test_root
+  exit "${nested_status}"
 fi
 
 cinnamon_pid=""
@@ -120,9 +123,7 @@ cleanup() {
     kill "${xephyr_pid}" >/dev/null 2>&1 || true
     wait "${xephyr_pid}" >/dev/null 2>&1 || true
   fi
-  if [[ "${test_root_owned}" == "1" ]]; then
-    python3 "${repo_dir}/scripts/safe-local-fs.py" remove applet-crash-safety "${test_root}" --kind dir >/dev/null 2>&1 || true
-  fi
+  cleanup_test_root
 }
 trap cleanup EXIT INT TERM
 

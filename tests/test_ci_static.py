@@ -174,6 +174,9 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("Cjs-CRITICAL", harness)
         self.assertIn("Cinnamon RSS grew by more than 50 MiB", harness)
         self.assertIn('safe-local-fs.py" remove applet-crash-safety', harness)
+        self.assertIn("cleanup_test_root()", harness)
+        self.assertIn("nested_status=$?", harness)
+        self.assertNotIn("exec dbus-run-session", harness)
         self.assertNotIn('rm -rf -- "${test_root}"', harness)
         self.assertNotIn("sudo ", harness)
 
