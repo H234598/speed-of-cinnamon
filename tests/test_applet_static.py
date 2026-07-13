@@ -2156,6 +2156,39 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._recordLifecycleError("timer-state", new Error("An orphaned timer is still pending"));', bounded_block)
         self.assertIn('this._runTeardownGuarded("teardown-orphaned-processes", () => this._retryOrphanedProcesses());', source)
 
+    def test_failed_process_cleanup_retries_before_releasing_busy_state(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        pending_start = source.index("_processCleanupStillPending: function()")
+        pending_end = source.index("\n  _releaseBusyStateAfterProcessCleanup:", pending_start)
+        pending_block = source[pending_start:pending_end]
+        self.assertIn("this._orphanedProcesses", pending_block)
+        self.assertIn("this._orphanedCancellables", pending_block)
+
+        release_start = source.index("_releaseBusyStateAfterProcessCleanup: function(group, marker, releaseRequested)")
+        release_end = source.index("\n  _scheduleProcessCleanupRetry:", release_start)
+        release_block = source[release_start:release_end]
+        self.assertIn("releaseRequested === true", release_block)
+        self.assertIn("this._hasTrackedProcessGroup(wanted)", release_block)
+        self.assertIn("String(entry.group || \"process\") === wanted", release_block)
+        self.assertIn("anotherCommandRunning", release_block)
+        self.assertIn("this.isCommandRunning = false;", release_block)
+
+        retry_start = source.index("_scheduleProcessCleanupRetry: function()")
+        retry_end = source.index("\n  _clearProcessCleanupRetryTimer:", retry_start)
+        retry_block = source[retry_start:retry_end]
+        self.assertIn("this._retryOrphanedProcesses()", retry_block)
+        self.assertIn("this._retryOrphanedCancellables()", retry_block)
+        self.assertIn("this._processCleanupStillPending()", retry_block)
+        self.assertIn('this._releaseBusyStateAfterProcessCleanup("voice-model", "voiceModelCleanupFailed");', retry_block)
+        self.assertIn('this._releaseBusyStateAfterProcessCleanup("benchmark", "benchmarkCleanupFailed");', retry_block)
+        self.assertIn('this._releaseBusyStateAfterProcessCleanup("ollama", "ollamaModelCleanupFailed");', retry_block)
+        self.assertIn('this._clearTrackedTimer("process-cleanup-retry", "processCleanupRetryTimer")', source)
+        self.assertIn('this._scheduleProcessCleanupRetry();', source)
+
+        for marker in ["voiceModelCleanupFailed", "benchmarkCleanupFailed", "processCleanupRetryTimer"]:
+            self.assertIn(f"this.{marker}", source)
+
     def test_process_and_cancellable_registration_verify_registry_writes(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_registerCancellable: function(cancellable)")
@@ -3439,6 +3472,7 @@ class AppletStaticTest(unittest.TestCase):
             guard_index = block.index(guard)
             stale_block = block[guard_index:block.index("return;", guard_index) + len("return;")]
             self.assertNotIn("this.isCommandRunning = false;", stale_block)
+            self.assertIn("this._releaseBusyStateAfterProcessCleanup", stale_block)
 
     def test_saved_diagnostics_does_not_copy_or_display_full_path(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -3838,7 +3872,7 @@ class AppletStaticTest(unittest.TestCase):
         helper_start = source.index("_clearOllamaModelFlow: function(flowToken)")
         helper_end = source.index("\n  _ollamaCleanupStillPending:", helper_start)
         helper_block = source[helper_start:helper_end]
-        self.assertIn('this._hasTrackedProcessGroup("ollama")', helper_block)
+        self.assertIn('this._releaseBusyStateAfterProcessCleanup("ollama", "ollamaModelCleanupFailed", true);', helper_block)
         self.assertIn("this.ollamaModelCleanupFailed = !terminationSucceeded;", helper_block)
 
         pending_start = source.index("_ollamaCleanupStillPending: function()")
@@ -6212,14 +6246,16 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._terminateProcessesByGroup("model-menu-refresh")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("voice-model")', helper_block)
         self.assertIn("let hadVoiceModelAction = Boolean(this.voiceModelActionToken);", helper_block)
-        self.assertIn("if (hadVoiceModelAction && !this._recordingCommandToken)", helper_block)
+        self.assertIn("let hadVoiceModelCleanupFailure = this.voiceModelCleanupFailed === true;", helper_block)
+        self.assertIn('this._releaseBusyStateAfterProcessCleanup(\n        "voice-model",', helper_block)
         self.assertIn('this._terminateProcessesByGroup("text-model-refresh")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("alarm-menu-refresh")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("alarm-action")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("alarm-check")', helper_block)
         self.assertIn("let hadBenchmarkFlow = Boolean(this.benchmarkFlowToken);", helper_block)
+        self.assertIn("let hadBenchmarkCleanupFailure = this.benchmarkCleanupFailed === true;", helper_block)
         self.assertIn('this._terminateProcessesByGroup("benchmark")', helper_block)
-        self.assertIn("if (hadBenchmarkFlow && !this._recordingCommandToken)", helper_block)
+        self.assertIn('this._releaseBusyStateAfterProcessCleanup(\n        "benchmark",', helper_block)
         self.assertIn('this._terminateProcessesByGroup("doctor")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("settings-transfer")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("setup-diagnostics")', helper_block)

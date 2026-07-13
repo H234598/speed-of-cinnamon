@@ -448,6 +448,7 @@ MyApplet.prototype = {
     this.settingsWindowToken = null;
     this._cleanupCommandToken = null;
     this._recordingCommandToken = null;
+    this.processCleanupRetryTimer = 0;
     this._externalApiEnvMonitorCancelSucceeded = false;
   },
 
@@ -2419,6 +2420,80 @@ MyApplet.prototype = {
     return success;
   },
 
+  _processCleanupStillPending: function() {
+    return !Array.isArray(this._orphanedProcesses) || this._orphanedProcesses.length > 0 ||
+      !Array.isArray(this._orphanedCancellables) || this._orphanedCancellables.length > 0;
+  },
+
+  _releaseBusyStateAfterProcessCleanup: function(group, marker, releaseRequested) {
+    let wanted = String(group || "process");
+    let requested = releaseRequested === true || (marker && this[marker] === true);
+    if (!requested || this._hasTrackedProcessGroup(wanted)) {
+      return false;
+    }
+    if (!Array.isArray(this._orphanedProcesses)) {
+      this._recordLifecycleError("process-state", new Error("Process orphan registry is unavailable"));
+      return false;
+    }
+    for (let entry of this._orphanedProcesses) {
+      if (!entry || !entry.process) {
+        return false;
+      }
+      if (String(entry.group || "process") === wanted) {
+        return false;
+      }
+    }
+    if (marker) {
+      this[marker] = false;
+    }
+    if (wanted === "ollama" && !this.ollamaModelFlowToken && !this.ollamaModelInstallToken) {
+      this.ollamaModelInstallRunning = false;
+    }
+    let anotherCommandRunning = Boolean(
+      this._recordingCommandToken ||
+      this._cleanupCommandToken ||
+      this.voiceModelActionToken ||
+      this.benchmarkFlowToken ||
+      this.ollamaModelFlowToken ||
+      this.ollamaModelInstallToken
+    );
+    if (!anotherCommandRunning) {
+      this.isCommandRunning = false;
+    }
+    return true;
+  },
+
+  _scheduleProcessCleanupRetry: function() {
+    if (!this._lifecycleAllowsWork()) {
+      return false;
+    }
+    if (!this._processCleanupStillPending()) {
+      return true;
+    }
+    if (this.processCleanupRetryTimer) {
+      return true;
+    }
+    let timerId = this._scheduleTrackedTimer("process-cleanup-retry", 1000, () => {
+      let processCleanupSucceeded = this._retryOrphanedProcesses();
+      let cancellableCleanupSucceeded = this._retryOrphanedCancellables();
+      if (!processCleanupSucceeded || !cancellableCleanupSucceeded || this._processCleanupStillPending()) {
+        return true;
+      }
+      this._releaseBusyStateAfterProcessCleanup("voice-model", "voiceModelCleanupFailed");
+      this._releaseBusyStateAfterProcessCleanup("benchmark", "benchmarkCleanupFailed");
+      this._releaseBusyStateAfterProcessCleanup("ollama", "ollamaModelCleanupFailed");
+      if (this._doctorCommandRunning && !this.doctorCommandToken && !this._hasTrackedProcessGroup("doctor")) {
+        this._doctorCommandRunning = false;
+      }
+      return false;
+    }, false, "processCleanupRetryTimer");
+    return Boolean(timerId);
+  },
+
+  _clearProcessCleanupRetryTimer: function() {
+    return this._clearTrackedTimer("process-cleanup-retry", "processCleanupRetryTimer");
+  },
+
   _terminateProcess: function(process) {
     if (!process) {
       return false;
@@ -2552,6 +2627,9 @@ MyApplet.prototype = {
     } catch (error) {
       allSucceeded = false;
       this._recordLifecycleError("process-cancel", error);
+    }
+    if (!allSucceeded) {
+      this._scheduleProcessCleanupRetry();
     }
     return allSucceeded;
   },
@@ -3044,6 +3122,9 @@ MyApplet.prototype = {
     this.ollamaModelInstallRunning = false;
     this.ollamaModelInstallToken = null;
     this.ollamaModelCleanupFailed = false;
+    this.voiceModelCleanupFailed = false;
+    this.benchmarkCleanupFailed = false;
+    this.processCleanupRetryTimer = 0;
     this.textInsertCancellationFailed = false;
     this.externalApiEnvMonitor = null;
     this.externalApiEnvApplyTarget = "voice";
@@ -4005,13 +4086,20 @@ MyApplet.prototype = {
     this.modelMenuRefreshToken = null;
     let modelMenuCleanupSucceeded = this._terminateProcessesByGroup("model-menu-refresh") !== false;
     let hadVoiceModelAction = Boolean(this.voiceModelActionToken);
+    let hadVoiceModelCleanupFailure = this.voiceModelCleanupFailed === true;
     this.voiceModelActionToken = null;
     let voiceModelCleanupSucceeded = this._terminateProcessesByGroup("voice-model") !== false;
-    if (hadVoiceModelAction && voiceModelCleanupSucceeded) {
-      this.isCommandRunning = false;
-      if (this.status === "processing") {
+    if (voiceModelCleanupSucceeded) {
+      this._releaseBusyStateAfterProcessCleanup(
+        "voice-model",
+        "voiceModelCleanupFailed",
+        hadVoiceModelAction || hadVoiceModelCleanupFailure
+      );
+      if ((hadVoiceModelAction || hadVoiceModelCleanupFailure) && !this._recordingCommandToken && this.status === "processing") {
         this._setStatus("ready", _("Voice model operation cancelled by settings change"), this.lastTranscript);
       }
+    } else {
+      this.voiceModelCleanupFailed = true;
     }
     this._ensureVoiceModelCompatibleWithPrimaryLanguage(false);
     this._populateModelMenu([], _("Open menu to load voice models"));
@@ -4117,6 +4205,8 @@ MyApplet.prototype = {
     this.ollamaModelInstallRunning = false;
     this.ollamaModelInstallToken = null;
     this.ollamaModelCleanupFailed = false;
+    this.voiceModelCleanupFailed = false;
+    this.benchmarkCleanupFailed = false;
     this.textInsertCancellationFailed = false;
     this.benchmarkFlowToken = null;
     this.customLimitPromptToken = null;
@@ -4149,6 +4239,7 @@ MyApplet.prototype = {
     this._runTeardownGuarded("teardown-clipboard", () => this._clearClipboardOverwriteApproval());
     this._runTeardownGuarded("teardown-timer", () => this._clearAlarmTimer());
     this._runTeardownGuarded("teardown-timer", () => this._clearOllamaInstallWatchTimer());
+    this._runTeardownGuarded("teardown-timer", () => this._clearProcessCleanupRetryTimer());
     this._runTeardownGuarded("teardown-orphaned-timers", () => this._retryOrphanedTimers());
     this._runTeardownGuarded("teardown-monitor", () => this._clearExternalApiEnvMonitor());
     this._runTeardownGuarded("teardown-signals", () => this._disconnectAllSignals());
@@ -5296,13 +5387,20 @@ MyApplet.prototype = {
     this.modelMenuRefreshToken = null;
     let modelMenuCleanupSucceeded = this._terminateProcessesByGroup("model-menu-refresh") !== false;
     let hadVoiceModelAction = Boolean(this.voiceModelActionToken);
+    let hadVoiceModelCleanupFailure = this.voiceModelCleanupFailed === true;
     this.voiceModelActionToken = null;
     let voiceModelCleanupSucceeded = this._terminateProcessesByGroup("voice-model") !== false;
-    if (hadVoiceModelAction && voiceModelCleanupSucceeded) {
-      this.isCommandRunning = false;
-      if (this.status === "processing") {
+    if (voiceModelCleanupSucceeded) {
+      this._releaseBusyStateAfterProcessCleanup(
+        "voice-model",
+        "voiceModelCleanupFailed",
+        hadVoiceModelAction || hadVoiceModelCleanupFailure
+      );
+      if ((hadVoiceModelAction || hadVoiceModelCleanupFailure) && !this._recordingCommandToken && this.status === "processing") {
         this._setStatus("ready", _("Voice model operation cancelled by settings change"), this.lastTranscript);
       }
+    } else {
+      this.voiceModelCleanupFailed = true;
     }
     this._ensureVoiceModelCompatibleWithPrimaryLanguage(false);
     this._populateLanguageMenu();
@@ -5632,12 +5730,18 @@ MyApplet.prototype = {
       this._setStatusPreservingRecording("error", _("Voice model list refresh could not be stopped"), this.lastTranscript);
     }
     let hadVoiceModelAction = Boolean(this.voiceModelActionToken);
+    let hadVoiceModelCleanupFailure = this.voiceModelCleanupFailed === true;
     this.voiceModelActionToken = null;
     let voiceModelCleanupSucceeded = this._terminateProcessesByGroup("voice-model") !== false;
     if (!voiceModelCleanupSucceeded) {
+      this.voiceModelCleanupFailed = true;
       this._setStatusPreservingRecording("error", _("Voice model operation could not be stopped"), this.lastTranscript);
-    } else if (hadVoiceModelAction && !this._recordingCommandToken) {
-      this.isCommandRunning = false;
+    } else if ((hadVoiceModelAction || hadVoiceModelCleanupFailure) && !this._recordingCommandToken) {
+      this._releaseBusyStateAfterProcessCleanup(
+        "voice-model",
+        "voiceModelCleanupFailed",
+        true
+      );
     }
     this.textModelMenuRefreshToken = null;
     let textModelRefreshCleanupSucceeded = this._terminateProcessesByGroup("text-model-refresh") !== false;
@@ -5660,12 +5764,18 @@ MyApplet.prototype = {
       this._setStatusPreservingRecording("error", _("Alarm check could not be stopped"), this.lastTranscript);
     }
     let hadBenchmarkFlow = Boolean(this.benchmarkFlowToken);
+    let hadBenchmarkCleanupFailure = this.benchmarkCleanupFailed === true;
     this.benchmarkFlowToken = null;
     let benchmarkCleanupSucceeded = this._terminateProcessesByGroup("benchmark") !== false;
     if (!benchmarkCleanupSucceeded) {
+      this.benchmarkCleanupFailed = true;
       this._setStatusPreservingRecording("error", _("Benchmark could not be stopped"), this.lastTranscript);
-    } else if (hadBenchmarkFlow && !this._recordingCommandToken) {
-      this.isCommandRunning = false;
+    } else if ((hadBenchmarkFlow || hadBenchmarkCleanupFailure) && !this._recordingCommandToken) {
+      this._releaseBusyStateAfterProcessCleanup(
+        "benchmark",
+        "benchmarkCleanupFailed",
+        true
+      );
     }
     this.settingsTransferToken = null;
     let settingsTransferCleanupSucceeded = this._terminateProcessesByGroup("settings-transfer") !== false;
@@ -6513,6 +6623,7 @@ MyApplet.prototype = {
     this._spawnJson(benchmarkArgs, (payload) => {
       try {
         if (this.benchmarkFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
+          this._releaseBusyStateAfterProcessCleanup("benchmark", "benchmarkCleanupFailed");
           return;
         }
         this.isCommandRunning = false;
@@ -7481,6 +7592,7 @@ MyApplet.prototype = {
     }
     this._spawnJson(downloadArgs, (payload) => {
       if (this.voiceModelActionToken !== actionToken || !this._lifecycleAllowsWork()) {
+        this._releaseBusyStateAfterProcessCleanup("voice-model", "voiceModelCleanupFailed");
         return;
       }
       try {
@@ -7537,6 +7649,7 @@ MyApplet.prototype = {
     }
     this._spawnJson(removeArgs, (payload) => {
       if (this.voiceModelActionToken !== actionToken || !this._lifecycleAllowsWork()) {
+        this._releaseBusyStateAfterProcessCleanup("voice-model", "voiceModelCleanupFailed");
         return;
       }
       try {
@@ -8560,9 +8673,7 @@ MyApplet.prototype = {
     if (flowToken && this.ollamaModelFlowToken !== flowToken) {
       return false;
     }
-    if (this.ollamaModelCleanupFailed && !this._hasTrackedProcessGroup("ollama")) {
-      this.ollamaModelCleanupFailed = false;
-    }
+    let hadOllamaModelCleanupFailure = this.ollamaModelCleanupFailed === true;
     let hadOllamaModelInstall = Boolean(this.ollamaModelInstallRunning);
     let installToken = this.ollamaModelInstallToken;
     let terminationSucceeded = true;
@@ -8583,6 +8694,9 @@ MyApplet.prototype = {
       terminationSucceeded = this._terminateProcessesByGroup("ollama", true);
     }
     this.ollamaModelCleanupFailed = !terminationSucceeded;
+    if (terminationSucceeded && hadOllamaModelCleanupFailure) {
+      this._releaseBusyStateAfterProcessCleanup("ollama", "ollamaModelCleanupFailed", true);
+    }
     return terminationSucceeded;
   },
 
@@ -8591,7 +8705,7 @@ MyApplet.prototype = {
       return false;
     }
     if (!this._hasTrackedProcessGroup("ollama")) {
-      this.ollamaModelCleanupFailed = false;
+      this._releaseBusyStateAfterProcessCleanup("ollama", "ollamaModelCleanupFailed");
       return false;
     }
     this._setStatusPreservingRecording("error", _("Previous Ollama operation is still stopping; try again shortly"), this.lastTranscript);
@@ -10335,10 +10449,14 @@ MyApplet.prototype = {
       if (!terminationSucceeded || !cancellationSucceeded) {
         this._trackOrphanedProcess(process, generation, options.resourceGroup, processToken, terminationSucceeded);
         this._trackOrphanedCancellable(cancellableToken, cancellationSucceeded);
+        this._scheduleProcessCleanupRetry();
         return false;
       }
       done = true;
       let cleanupSucceeded = cleanupResources(timeoutCleanupSucceeded);
+      if (!cleanupSucceeded) {
+        this._scheduleProcessCleanupRetry();
+      }
       let callbackResult = cleanupSucceeded ? (result || {}) : { error: "Subprocess cleanup failed" };
       if (suppressCallback || this.appletRemoved || this.spawnGeneration !== generation || typeof callback !== "function") {
         return cleanupSucceeded;
