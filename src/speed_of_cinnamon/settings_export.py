@@ -500,6 +500,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
     parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name="settings export directory")
     temp_name = ""
     temp_fd: int | None = None
+    primary_error: BaseException | None = None
     try:
         try:
             assert_fd_is_private_directory(parent_fd, field_name="settings export directory")
@@ -541,15 +542,27 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                     pass
                 cleanup_error = cleanup_exc
         if cleanup_error is not None:
-            raise SettingsExportError(f"failed to remove settings export temporary file: {path}") from cleanup_error
-        raise SettingsExportError(f"failed to write settings export: {path}") from exc
+            primary_error = SettingsExportError(f"failed to remove settings export temporary file: {path}")
+            raise primary_error from cleanup_error
+        primary_error = SettingsExportError(f"failed to write settings export: {path}")
+        raise primary_error from exc
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
         if temp_fd is not None:
             try:
                 os.close(temp_fd)
             except OSError:
                 pass
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except OSError as cleanup_error:
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                error = SettingsExportError("failed to close settings export directory")
+                raise error from cleanup_error
     return payload
 
 

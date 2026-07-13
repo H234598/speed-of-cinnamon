@@ -678,6 +678,32 @@ class SettingsExportTest(unittest.TestCase):
 
         self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_write_export_reports_parent_close_failure_after_successful_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            real_ensure = settings_export_module.ensure_directory_without_following_symlinks
+            real_close = os.close
+            parent_fds: list[int] = []
+
+            def ensure_parent(directory: Path, *, field_name: str) -> int:
+                fd = real_ensure(directory, field_name=field_name)
+                parent_fds.append(fd)
+                return fd
+
+            def close_wrapper(fd: int) -> None:
+                if fd in parent_fds:
+                    raise OSError("parent close failed")
+                real_close(fd)
+
+            with (
+                mock.patch.object(settings_export_module, "ensure_directory_without_following_symlinks", side_effect=ensure_parent),
+                mock.patch.object(settings_export_module.os, "close", side_effect=close_wrapper),
+            ):
+                with self.assertRaisesRegex(SettingsExportError, "failed to close settings export directory"):
+                    write_export(path, {"language": "en"})
+
+            self.assertTrue(path.exists())
+
     def test_write_export_rejects_leaf_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "target.json"
