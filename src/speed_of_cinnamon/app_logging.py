@@ -677,7 +677,37 @@ def _merge_old_months(directory: Path, today: date) -> None:
                 if original_stat is None:
                     continue
                 _assert_same_log_file_identity(path, original_stat, field_name="monthly log source")
-                os.unlink(path.name, dir_fd=parent_fd)
+                try:
+                    os.unlink(path.name, dir_fd=parent_fd)
+                except OSError as delete_error:
+                    cleanup_name = f"{path.name}.{secrets.token_hex(8)}.merged"
+                    try:
+                        os.replace(path.name, cleanup_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                        os.fsync(parent_fd)
+                        moved_stat = _assert_regular_unlinked_file(
+                            path.with_name(cleanup_name),
+                            field_name="monthly log source",
+                        )
+                        if (
+                            moved_stat.st_dev != original_stat.st_dev
+                            or moved_stat.st_ino != original_stat.st_ino
+                            or moved_stat.st_mode != original_stat.st_mode
+                            or moved_stat.st_size != original_stat.st_size
+                            or getattr(moved_stat, "st_nlink", 1) != getattr(original_stat, "st_nlink", 1)
+                            or moved_stat.st_mtime_ns != original_stat.st_mtime_ns
+                        ):
+                            raise RuntimeError("monthly log source changed before cleanup")
+                    except OSError:
+                        raise delete_error
+                    try:
+                        os.unlink(cleanup_name, dir_fd=parent_fd)
+                        os.fsync(parent_fd)
+                    except OSError:
+                        # The archive already contains this source. Retain the
+                        # moved cleanup copy rather than allowing a later run
+                        # to merge the source a second time.
+                        pass
+                    continue
                 os.fsync(parent_fd)
         except (gzip.BadGzipFile, EOFError, zlib.error):
             # Keep malformed archives intact so size-based cleanup can handle them.

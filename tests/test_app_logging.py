@@ -814,6 +814,37 @@ class AppLoggingTest(unittest.TestCase):
         self.assertIsInstance(unlink_calls[0][1].get("dir_fd"), int)
         self.assertTrue(any(stat_module.S_ISDIR(mode) for mode in fsync_modes))
 
+    def test_maintain_logs_monthly_merge_does_not_duplicate_after_source_cleanup_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            first = log_dir / "speed-of-cinnamon-2026-05-30.log"
+            second = log_dir / "speed-of-cinnamon-2026-05-31.log"
+            first.write_text("first\n", encoding="utf-8")
+            second.write_text("second\n", encoding="utf-8")
+            first.chmod(0o600)
+            second.chmod(0o600)
+            real_unlink = os.unlink
+            failed = False
+
+            def unlink_once(name: object, *args: object, **kwargs: object) -> None:
+                nonlocal failed
+                if name == second.name and kwargs.get("dir_fd") is not None and not failed:
+                    failed = True
+                    raise PermissionError("cleanup denied")
+                real_unlink(name, *args, **kwargs)
+
+            with mock.patch("speed_of_cinnamon.app_logging.os.unlink", side_effect=unlink_once):
+                app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
+
+            archive = log_dir / "speed-of-cinnamon-2026-05.log.gz"
+            app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
+            with gzip.open(archive, "rt", encoding="utf-8") as handle:
+                content = handle.read()
+
+        self.assertTrue(failed)
+        self.assertEqual(content.count("first"), 1)
+        self.assertEqual(content.count("second"), 1)
+
     def test_maintain_logs_monthly_merge_rejects_source_swap_before_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
