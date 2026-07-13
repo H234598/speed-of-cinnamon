@@ -6513,9 +6513,6 @@ MyApplet.prototype = {
     this._spawnJson(benchmarkArgs, (payload) => {
       try {
         if (this.benchmarkFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
-          if (!this.benchmarkFlowToken && !this._recordingCommandToken) {
-            this.isCommandRunning = false;
-          }
           return;
         }
         this.isCommandRunning = false;
@@ -7484,9 +7481,6 @@ MyApplet.prototype = {
     }
     this._spawnJson(downloadArgs, (payload) => {
       if (this.voiceModelActionToken !== actionToken || !this._lifecycleAllowsWork()) {
-        if (!this.voiceModelActionToken) {
-          this.isCommandRunning = false;
-        }
         return;
       }
       try {
@@ -7543,9 +7537,6 @@ MyApplet.prototype = {
     }
     this._spawnJson(removeArgs, (payload) => {
       if (this.voiceModelActionToken !== actionToken || !this._lifecycleAllowsWork()) {
-        if (!this.voiceModelActionToken) {
-          this.isCommandRunning = false;
-        }
         return;
       }
       try {

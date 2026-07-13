@@ -3407,7 +3407,6 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.isCommandRunning = false;", benchmark_block)
         self.assertIn("this.benchmarkFlowToken = null;", benchmark_block)
         self.assertIn("this.benchmarkFlowToken !== flowToken", benchmark_block)
-        self.assertIn("if (!this.benchmarkFlowToken && !this._recordingCommandToken)", benchmark_block)
         self.assertIn('resourceGroup: "benchmark"', benchmark_block)
         self.assertIn("this.benchmarkFlowToken = null;", benchmark_block)
         self.assertIn('let fastest = typeof payload.fastest_model === "string" ? payload.fastest_model.trim() : "";', benchmark_block)
@@ -3438,15 +3437,8 @@ class AppletStaticTest(unittest.TestCase):
             guard = f"if (this.{token_name} !== {token_value} || !this._lifecycleAllowsWork())"
             self.assertIn(guard, block)
             guard_index = block.index(guard)
-            reset_index = block.index("this.isCommandRunning = false;", guard_index)
-            self.assertLess(guard_index, reset_index)
-            reset = (
-                "if (!this.benchmarkFlowToken && !this._recordingCommandToken) {\n"
-                "            this.isCommandRunning = false;\n          }"
-                if token_name == "benchmarkFlowToken"
-                else f"if (!this.{token_name}) {{\n          this.isCommandRunning = false;\n        }}"
-            )
-            self.assertIn(reset, block)
+            stale_block = block[guard_index:block.index("return;", guard_index) + len("return;")]
+            self.assertNotIn("this.isCommandRunning = false;", stale_block)
 
     def test_saved_diagnostics_does_not_copy_or_display_full_path(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
