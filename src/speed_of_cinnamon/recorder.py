@@ -240,6 +240,7 @@ MAX_RECORDING_SECONDS = 3_600
 MAX_RECORDING_INPUT_DEVICE_CHARS = 256
 MAX_PACTL_OUTPUT_CHARS = 1_000_000
 MAX_PACTL_TIMEOUT_SECONDS = 10
+MAX_PROCESS_STOP_TIMEOUT_SECONDS = 60
 MAX_FFMPEG_OUTPUT_BYTES = 256 * 1024
 MAX_FFMPEG_ARTIFACT_BYTES = 256 * 1024 * 1024
 MAX_RECORDING_LEVEL_BYTES = 128_000
@@ -1562,6 +1563,10 @@ def stop_process(
         raise RecorderError("timeout_seconds must be finite")
     if timeout_seconds <= 0:
         raise RecorderError("timeout_seconds must be positive")
+    if timeout_seconds > MAX_PROCESS_STOP_TIMEOUT_SECONDS:
+        raise RecorderError(
+            f"timeout_seconds exceeds safe limit of {MAX_PROCESS_STOP_TIMEOUT_SECONDS}s"
+        )
     if expected_process_identity is None and not allow_unverified_process:
         raise RecorderError("expected_process_identity is required to stop recorder process")
     try:

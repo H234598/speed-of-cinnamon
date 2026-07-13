@@ -1961,6 +1961,17 @@ Source #13
         with self.assertRaisesRegex(RecorderError, "timeout_seconds must be finite"):
             stop_process(1234, timeout_seconds=float("inf"))
 
+    def test_stop_process_rejects_unboundedly_large_timeout(self) -> None:
+        with mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill:
+            with self.assertRaisesRegex(RecorderError, "timeout_seconds exceeds safe limit"):
+                stop_process(
+                    1234,
+                    timeout_seconds=recorder_module.MAX_PROCESS_STOP_TIMEOUT_SECONDS + 1,
+                    expected_process_identity="owner-identity",
+                )
+
+        mocked_kill.assert_not_called()
+
     def test_stop_process_rejects_missing_kill_command(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
