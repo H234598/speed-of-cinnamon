@@ -1419,7 +1419,7 @@ def _open_recorder_log_file(log_path: Path) -> tuple[io.BufferedWriter, bool]:
         raise
     except RuntimeError as exc:
         raise RecorderError(str(exc)) from exc
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         raise RecorderError("failed to open recorder log file") from exc
     finally:
         if fd is not None:

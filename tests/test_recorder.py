@@ -911,6 +911,20 @@ class RecorderTest(unittest.TestCase):
         self.assertIs(result, mocked_process)
         self.assertEqual(mocked_popen.call_args.args[0][0], "/usr/bin/true")
 
+    def test_start_recorder_wraps_log_fdopen_value_error(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "session.log"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+                mock.patch("speed_of_cinnamon.recorder.os.fdopen", side_effect=ValueError("bad fd")),
+            ):
+                with self.assertRaisesRegex(RecorderError, "failed to open recorder log file"):
+                    start_recorder(command, log_path)
+
+            self.assertTrue(log_path.exists())
+
     def test_start_recorder_filters_dangerous_environment_variables(self) -> None:
         command = RecorderCommand(name="noop", argv=["true"])
         captured_env: dict[str, str] = {}
