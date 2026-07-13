@@ -73,6 +73,7 @@ from .paths import (
     transcript_dir,
 )
 from .path_safety import (
+    _rename_without_replacing,
     assert_fd_is_regular_private_file,
     assert_no_symlink_ancestors,
     assert_safe_path_components,
@@ -2649,35 +2650,163 @@ def _stabilize_recording_artifact_path(
     if stable_path == artifact_path:
         return artifact_path
     parent_fd: int | None = None
+    source_stat: os.stat_result | None = None
+    target_stat: os.stat_result | None = None
+    backup_name = ""
+    target_removed = False
+    transaction_active = False
+
+    def same_artifact_identity(first: os.stat_result, second: os.stat_result) -> bool:
+        return (
+            first.st_dev,
+            first.st_ino,
+            first.st_mode,
+            first.st_size,
+            first.st_mtime_ns,
+        ) == (
+            second.st_dev,
+            second.st_ino,
+            second.st_mode,
+            second.st_size,
+            second.st_mtime_ns,
+        )
+
+    def rollback() -> None:
+        nonlocal backup_name, target_removed
+        if not transaction_active or parent_fd is None or source_stat is None:
+            return
+        try:
+            current_target_stat = os.stat(stable_path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            current_target_stat = None
+        activated = current_target_stat is not None and same_artifact_identity(current_target_stat, source_stat)
+        if activated:
+            os.unlink(stable_path.name, dir_fd=parent_fd)
+            os.fsync(parent_fd)
+        elif target_removed and current_target_stat is not None:
+            raise RuntimeError(f"stable recording artifact changed during rollback: {stable_path}")
+        elif not target_removed and target_stat is not None and (
+            current_target_stat is None or not same_artifact_identity(current_target_stat, target_stat)
+        ):
+            raise RuntimeError(f"stable recording artifact changed during rollback: {stable_path}")
+        if not backup_name:
+            return
+        if target_removed or activated:
+            if current_target_stat is None or activated:
+                try:
+                    os.stat(stable_path.name, dir_fd=parent_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    _rename_without_replacing(
+                        backup_name,
+                        stable_path.name,
+                        directory_fd=parent_fd,
+                        field_name="stable recording artifact",
+                    )
+                    backup_name = ""
+                    target_removed = False
+                    os.fsync(parent_fd)
+                    return
+            raise RuntimeError(f"stable recording artifact exists during rollback: {stable_path}")
+        backup_stat = os.stat(backup_name, dir_fd=parent_fd, follow_symlinks=False)
+        if target_stat is None or not same_artifact_identity(backup_stat, target_stat):
+            raise RuntimeError(f"stable recording artifact backup changed during rollback: {stable_path}")
+        os.unlink(backup_name, dir_fd=parent_fd)
+        backup_name = ""
+        os.fsync(parent_fd)
+
     try:
         assert_no_symlink_ancestors(stable_path, field_name="recording artifact path")
         parent_fd = ensure_directory_without_following_symlinks(
             stable_path.parent,
             field_name="recording artifact directory",
         )
-        stable_path_exists = stable_path.exists() or stable_path.is_symlink()
-        if stable_path_exists:
-            if _recording_artifact_stat(stable_path) is None:
+        source_stat = os.stat(artifact_path.name, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat_module.S_ISREG(source_stat.st_mode) or getattr(source_stat, "st_nlink", 1) != 1:
+            raise RuntimeError(f"recording artifact path is not a safe regular file: {artifact_path}")
+        try:
+            target_stat = os.stat(stable_path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            target_stat = None
+        if target_stat is not None:
+            if not stat_module.S_ISREG(target_stat.st_mode) or getattr(target_stat, "st_nlink", 1) != 1:
                 raise RuntimeError(f"stable recording artifact is not a safe regular file: {stable_path}")
             if replace_existing_path != stable_path:
                 raise RuntimeError(f"stable recording artifact already exists: {stable_path}")
-        try:
-            os.replace(
-                artifact_path.name,
-                stable_path.name,
-                src_dir_fd=parent_fd,
-                dst_dir_fd=parent_fd,
-            )
+            for _ in range(100):
+                candidate_name = f".{stable_path.name}.{secrets.token_hex(8)}.bak"
+                try:
+                    os.link(
+                        stable_path.name,
+                        candidate_name,
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
+                except FileExistsError:
+                    continue
+                try:
+                    backup_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                    current_target_stat = os.stat(stable_path.name, dir_fd=parent_fd, follow_symlinks=False)
+                    if (
+                        not stat_module.S_ISREG(backup_stat.st_mode)
+                        or getattr(backup_stat, "st_nlink", 1) != 2
+                        or not same_artifact_identity(backup_stat, target_stat)
+                        or not same_artifact_identity(current_target_stat, target_stat)
+                    ):
+                        raise RuntimeError("stable recording artifact changed during backup activation")
+                    backup_name = candidate_name
+                    break
+                except BaseException as backup_error:
+                    try:
+                        candidate_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                        if same_artifact_identity(candidate_stat, target_stat):
+                            os.unlink(candidate_name, dir_fd=parent_fd)
+                            os.fsync(parent_fd)
+                    except FileNotFoundError:
+                        pass
+                    except BaseException as cleanup_error:
+                        backup_error.add_note(f"recording artifact backup cleanup failed: {cleanup_error}")
+                    raise
+            if not backup_name:
+                raise RuntimeError("failed to create stable recording artifact backup")
+            transaction_active = True
+            current_target_stat = os.stat(stable_path.name, dir_fd=parent_fd, follow_symlinks=False)
+            if not same_artifact_identity(current_target_stat, target_stat):
+                raise RuntimeError(f"stable recording artifact changed before replacement: {stable_path}")
+            os.unlink(stable_path.name, dir_fd=parent_fd)
+            target_removed = True
             os.fsync(parent_fd)
-        except OSError as exc:
-            if stable_path.exists() and stable_path.is_symlink():
-                raise RuntimeError(f"stable recording artifact is not a safe regular file: {stable_path}") from exc
-            if stable_path.exists() and _recording_artifact_stat(stable_path) is None:
-                raise RuntimeError(f"stable recording artifact is not a safe regular file: {stable_path}") from exc
-            raise
+        _rename_without_replacing(
+            artifact_path.name,
+            stable_path.name,
+            directory_fd=parent_fd,
+            field_name="stable recording artifact",
+        )
+        activated_stat = os.stat(stable_path.name, dir_fd=parent_fd, follow_symlinks=False)
+        if not same_artifact_identity(activated_stat, source_stat):
+            raise RuntimeError(f"stable recording artifact changed during activation: {stable_path}")
+        os.fsync(parent_fd)
+        transaction_active = False
+        if backup_name:
+            backup_stat = os.stat(backup_name, dir_fd=parent_fd, follow_symlinks=False)
+            if not same_artifact_identity(backup_stat, target_stat):
+                raise RuntimeError(f"stable recording artifact backup changed before cleanup: {stable_path}")
+            os.unlink(backup_name, dir_fd=parent_fd)
+            backup_name = ""
+            os.fsync(parent_fd)
         return stable_path
     except (OSError, RuntimeError) as exc:
+        try:
+            rollback()
+        except BaseException as rollback_error:
+            exc.add_note(f"recording artifact rollback failed: {rollback_error}")
         raise RuntimeError(f"failed to stabilize recording artifact path: {exc}") from exc
+    except BaseException as exc:
+        try:
+            rollback()
+        except BaseException as rollback_error:
+            exc.add_note(f"recording artifact rollback failed: {rollback_error}")
+        raise
     finally:
         if parent_fd is not None:
             try:

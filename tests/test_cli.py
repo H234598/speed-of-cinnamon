@@ -4950,8 +4950,8 @@ class CliTest(unittest.TestCase):
             self.assertEqual(final_audio.read_bytes(), b"trimmed-audio")
             self.assertFalse(temp_trimmed.exists())
 
-    @mock.patch("speed_of_cinnamon.cli.os.replace", wraps=os.replace)
-    def test_stabilize_recording_artifact_uses_secure_directory_fd_replace(self, mocked_replace: mock.Mock) -> None:
+    @mock.patch("speed_of_cinnamon.cli._rename_without_replacing", wraps=cli._rename_without_replacing)
+    def test_stabilize_recording_artifact_uses_secure_directory_fd_replace(self, mocked_rename: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             recordings_root = Path(tmp) / "speed-of-cinnamon" / "recordings"
             recordings_root.mkdir(parents=True)
@@ -4967,13 +4967,13 @@ class CliTest(unittest.TestCase):
             mocked_fsync.assert_called()
             calls = [
                 (args, kwargs)
-                for args, kwargs in mocked_replace.call_args_list
+                for args, kwargs in mocked_rename.call_args_list
                 if args[:2] == ("recording.trimmed-keep.flac", "recording.flac")
             ]
             self.assertEqual(len(calls), 1)
             _args, kwargs = calls[0]
-            self.assertIsInstance(kwargs.get("src_dir_fd"), int)
-            self.assertEqual(kwargs.get("src_dir_fd"), kwargs.get("dst_dir_fd"))
+            self.assertIsInstance(kwargs.get("directory_fd"), int)
+            self.assertEqual(kwargs.get("field_name"), "stable recording artifact")
 
     def test_stabilize_recording_artifact_does_not_overwrite_unrelated_stable_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4989,6 +4989,54 @@ class CliTest(unittest.TestCase):
 
             self.assertEqual(temp_trimmed.read_bytes(), b"new-audio")
             self.assertEqual(stable.read_bytes(), b"existing-audio")
+
+    def test_stabilize_recording_artifact_does_not_clobber_target_created_during_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings_root = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            temp_trimmed = recordings_root / "recording.trimmed-race.flac"
+            stable = recordings_root / "recording.flac"
+            racing = recordings_root / "racing.flac"
+            temp_trimmed.write_bytes(b"new-audio")
+            real_rename = cli._rename_without_replacing
+
+            def rename_then_race(source: object, destination: object, *args: object, **kwargs: object) -> None:
+                if destination == stable.name:
+                    racing.write_bytes(b"racing-audio")
+                    racing.replace(stable)
+                real_rename(source, destination, *args, **kwargs)
+
+            with mock.patch.object(cli, "_rename_without_replacing", side_effect=rename_then_race):
+                with self.assertRaisesRegex(RuntimeError, "failed to stabilize recording artifact path"):
+                    cli._stabilize_recording_artifact_path(temp_trimmed)
+
+            self.assertEqual(stable.read_bytes(), b"racing-audio")
+            self.assertEqual(temp_trimmed.read_bytes(), b"new-audio")
+
+    def test_stabilize_recording_artifact_restores_no_clobber_backup_after_target_race(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings_root = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            temp_trimmed = recordings_root / "recording.trimmed-race.wav"
+            stable = recordings_root / "recording.wav"
+            racing = recordings_root / "racing.wav"
+            temp_trimmed.write_bytes(b"new-audio")
+            stable.write_bytes(b"old-audio")
+            real_rename = cli._rename_without_replacing
+
+            def rename_then_race(source: object, destination: object, *args: object, **kwargs: object) -> None:
+                if destination == stable.name:
+                    racing.write_bytes(b"racing-audio")
+                    racing.replace(stable)
+                real_rename(source, destination, *args, **kwargs)
+
+            with mock.patch.object(cli, "_rename_without_replacing", side_effect=rename_then_race):
+                with self.assertRaisesRegex(RuntimeError, "failed to stabilize recording artifact path"):
+                    cli._stabilize_recording_artifact_path(temp_trimmed, replace_existing_path=stable)
+
+            self.assertEqual(stable.read_bytes(), b"racing-audio")
+            self.assertEqual(temp_trimmed.read_bytes(), b"new-audio")
+            self.assertTrue(list(recordings_root.glob(".recording.wav.*.bak")))
 
     def test_cleanup_rejects_boolean_recording_counts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
