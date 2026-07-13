@@ -3017,7 +3017,8 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
                 error_text = "previous recorder could not be stopped safely; recording state preserved"
                 store.update(status="recording", error=error_text, inserted=False)
                 return {"status": "recording", "message": error_text, "error": error_text}
-        if current_audio_path and current_audio_path.exists() and current_audio_path.stat().st_size > 0:
+        current_audio_stat = _recording_artifact_stat(current_audio_path) if current_audio_path else None
+        if current_audio_stat is not None and current_audio_stat.st_size > 0:
             recorded = store.update(
                 status="recorded",
                 pid=None,
