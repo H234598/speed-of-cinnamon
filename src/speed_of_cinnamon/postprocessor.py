@@ -522,7 +522,13 @@ def list_ollama_models(url: str = DEFAULT_OLLAMA_URL, timeout: int = 5) -> dict[
     request = urllib.request.Request(endpoint, method="GET")
     try:
         data = _read_json(request, timeout)
-    except OSError as exc:
+    except json.JSONDecodeError:
+        return {
+            "available": False,
+            "models": [],
+            "message": "Ollama returned invalid JSON for model listing",
+        }
+    except (OSError, ValueError) as exc:
         return {
             "available": False,
             "models": [],
@@ -533,12 +539,6 @@ def list_ollama_models(url: str = DEFAULT_OLLAMA_URL, timeout: int = 5) -> dict[
             "available": False,
             "models": [],
             "message": str(exc),
-        }
-    except json.JSONDecodeError:
-        return {
-            "available": False,
-            "models": [],
-            "message": "Ollama returned invalid JSON for model listing",
         }
     if not isinstance(data, dict):
         return {
@@ -632,7 +632,13 @@ def list_openai_compatible_models(
             "models": [],
             "message": f"OpenAI-compatible API failed ({exc.code}) at {_safe_url_display(endpoint, field_name='openai-compatible url')}: {detail}",
         }
-    except OSError as exc:
+    except json.JSONDecodeError:
+        return {
+            "available": False,
+            "models": [],
+            "message": "OpenAI-compatible API returned invalid JSON for model listing",
+        }
+    except (OSError, ValueError) as exc:
         detail = _sanitize_remote_error_detail(str(exc))
         return {
             "available": False,
@@ -644,12 +650,6 @@ def list_openai_compatible_models(
             "available": False,
             "models": [],
             "message": str(exc),
-        }
-    except json.JSONDecodeError:
-        return {
-            "available": False,
-            "models": [],
-            "message": "OpenAI-compatible API returned invalid JSON for model listing",
         }
     if not isinstance(data, dict):
         return {
@@ -710,7 +710,7 @@ def post_process_with_ollama(
     try:
         with _open_http_request(request, timeout=180, field_name="ollama post-process request") as response:
             raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         raise PostProcessError(f"Ollama request failed: {_sanitize_remote_error_detail(exc)}") from exc
     try:
         data = json.loads(raw)
@@ -887,13 +887,13 @@ def post_process_with_openai_compatible(
                 raise PostProcessError(
                     f"OpenAI-compatible request failed ({fallback_exc.code}) at {_safe_url_display(endpoint, field_name='openai-compatible url')}: {fallback_detail}"
                 ) from fallback_exc
-            except OSError as fallback_exc:
+            except (OSError, ValueError) as fallback_exc:
                 raise PostProcessError(f"OpenAI-compatible request failed: {_sanitize_remote_error_detail(fallback_exc)}") from fallback_exc
         else:
             raise PostProcessError(
                 f"OpenAI-compatible request failed ({exc.code}) at {_safe_url_display(endpoint, field_name='openai-compatible url')}: {detail}"
             ) from exc
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         raise PostProcessError(f"OpenAI-compatible request failed: {_sanitize_remote_error_detail(exc)}") from exc
     try:
         data = json.loads(raw)

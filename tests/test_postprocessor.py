@@ -496,6 +496,16 @@ class PostProcessorTest(unittest.TestCase):
         self.assertNotIn("sk-secret", message)
         self.assertNotIn("private transcript", message)
 
+    def test_ollama_backend_wraps_http_opener_value_error(self) -> None:
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=ValueError("invalid URL")):
+            with self.assertRaisesRegex(PostProcessError, "Ollama request failed"):
+                post_process_text(
+                    "hello",
+                    "en",
+                    backend="ollama",
+                    ollama_model="llama3.2:3b",
+                )
+
     def test_openai_compatible_messages_include_context_vocabulary_and_text(self) -> None:
         messages = build_openai_compatible_messages(
             "hallo cinnamon",
@@ -676,6 +686,17 @@ class PostProcessorTest(unittest.TestCase):
         self.assertIn("[redacted remote error]", message)
         self.assertNotIn("abc123", message)
         self.assertNotIn("private transcript", message)
+
+    def test_openai_compatible_backend_wraps_http_opener_value_error(self) -> None:
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=ValueError("invalid URL")):
+            with self.assertRaisesRegex(PostProcessError, "OpenAI-compatible request failed"):
+                post_process_text(
+                    "hello",
+                    "en",
+                    backend="openai-compatible",
+                    openai_compatible_model="local",
+                    openai_compatible_url="http://127.0.0.1:8000/v1",
+                )
 
     def test_endpoint_builders_normalize_without_duplicate_behavior_change(self) -> None:
         self.assertEqual(_ollama_endpoint("http://127.0.0.1:11434/", "/api/generate"), "http://127.0.0.1:11434/api/generate")
@@ -1219,6 +1240,13 @@ class PostProcessorTest(unittest.TestCase):
         self.assertEqual(result["models"], [])
         self.assertIn("not reachable", result["message"])
 
+    def test_list_ollama_models_contains_http_opener_value_error(self) -> None:
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=ValueError("invalid URL")):
+            result = list_ollama_models("http://127.0.0.1:11434")
+        self.assertFalse(result["available"])
+        self.assertEqual(result["models"], [])
+        self.assertIn("not reachable", result["message"])
+
     def test_list_ollama_models_wraps_json_recursion_error(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.postprocessor._open_http_request", return_value=FakeResponse({"models": []})),
@@ -1363,6 +1391,13 @@ class PostProcessorTest(unittest.TestCase):
         self.assertNotIn("missing API key", result["message"])
         self.assertNotIn("local server", result["message"])
         self.assertTrue(error.fp.closed)
+
+    def test_list_openai_compatible_models_contains_http_opener_value_error(self) -> None:
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=ValueError("invalid URL")):
+            result = list_openai_compatible_models("https://api.openai.com/v1")
+        self.assertFalse(result["available"])
+        self.assertEqual(result["models"], [])
+        self.assertIn("not reachable", result["message"])
 
 
 if __name__ == "__main__":
