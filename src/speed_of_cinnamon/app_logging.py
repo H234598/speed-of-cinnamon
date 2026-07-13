@@ -786,6 +786,12 @@ def _merge_old_months(directory: Path, today: date) -> None:
                 except OSError as cleanup_error:
                     _note_cleanup_failure(exc, cleanup_error)
                 raise
+            except BaseException as exc:
+                try:
+                    os.close(temp_fd)
+                except OSError as cleanup_error:
+                    _note_cleanup_failure(exc, cleanup_error)
+                raise
             with raw_output:
                 with gzip.GzipFile(fileobj=raw_output, mode="wb") as output:
                     for path in sorted(existing + paths, key=lambda item: item.name):
@@ -1163,10 +1169,36 @@ def _gzip_file(source: Path, target: Path) -> None:
                 _note_cleanup_failure(exc, cleanup_error)
             temp_fd = -1
             raise
+        except BaseException as exc:
+            if source_fd is not None:
+                try:
+                    os.close(source_fd)
+                except OSError as cleanup_error:
+                    _note_cleanup_failure(exc, cleanup_error)
+                source_fd = None
+            try:
+                os.close(temp_fd)
+            except OSError as cleanup_error:
+                _note_cleanup_failure(exc, cleanup_error)
+            temp_fd = -1
+            raise
         try:
             input_file = os.fdopen(source_fd, "rb")
             source_fd = None
         except Exception as exc:
+            if source_fd is not None:
+                try:
+                    os.close(source_fd)
+                except OSError as cleanup_error:
+                    _note_cleanup_failure(exc, cleanup_error)
+                source_fd = None
+            try:
+                os.close(temp_fd)
+            except OSError as cleanup_error:
+                _note_cleanup_failure(exc, cleanup_error)
+            temp_fd = -1
+            raise
+        except BaseException as exc:
             if source_fd is not None:
                 try:
                     os.close(source_fd)
@@ -1186,6 +1218,17 @@ def _gzip_file(source: Path, target: Path) -> None:
             try:
                 input_file.close()
             except Exception as cleanup_error:
+                _note_cleanup_failure(exc, cleanup_error)
+            try:
+                os.close(temp_fd)
+            except OSError as cleanup_error:
+                _note_cleanup_failure(exc, cleanup_error)
+            temp_fd = -1
+            raise
+        except BaseException as exc:
+            try:
+                input_file.close()
+            except BaseException as cleanup_error:
                 _note_cleanup_failure(exc, cleanup_error)
             try:
                 os.close(temp_fd)

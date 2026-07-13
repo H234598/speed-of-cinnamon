@@ -517,6 +517,56 @@ class AppLoggingTest(unittest.TestCase):
         self.assertIn(mock.call(456), mocked_close.call_args_list)
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_gzip_file_closes_source_and_temp_fds_when_fdopen_is_interrupted(self) -> None:
+        with (
+            mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".target.tmp")),
+            mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
+            mock.patch.object(app_logging.os, "fstat", return_value=os.stat(__file__)),
+            mock.patch.object(app_logging.os, "fdopen", side_effect=KeyboardInterrupt),
+            mock.patch.object(app_logging, "_unlink_log_temp"),
+            mock.patch.object(app_logging.os, "close") as mocked_close,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                app_logging._gzip_file(Path("/probe/source.log"), Path("/probe/target.log.gz"))
+
+        mocked_close.assert_any_call(123)
+        mocked_close.assert_any_call(456)
+        mocked_close.assert_any_call(789)
+
+    def test_gzip_file_closes_temp_fd_when_output_fdopen_is_interrupted(self) -> None:
+        input_file = mock.Mock()
+        with (
+            mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".target.tmp")),
+            mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
+            mock.patch.object(app_logging.os, "fstat", return_value=os.stat(__file__)),
+            mock.patch.object(app_logging.os, "fdopen", side_effect=[input_file, KeyboardInterrupt]),
+            mock.patch.object(app_logging, "_unlink_log_temp"),
+            mock.patch.object(app_logging.os, "close") as mocked_close,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                app_logging._gzip_file(Path("/probe/source.log"), Path("/probe/target.log.gz"))
+
+        input_file.close.assert_called_once_with()
+        mocked_close.assert_any_call(456)
+        mocked_close.assert_any_call(789)
+
+    def test_monthly_merge_closes_temp_fd_when_fdopen_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "speed-of-cinnamon-2026-05-30.log"
+            source.write_text("source\n", encoding="utf-8")
+            source.chmod(0o600)
+            with (
+                mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".archive.tmp")),
+                mock.patch.object(app_logging.os, "fdopen", side_effect=KeyboardInterrupt),
+                mock.patch.object(app_logging.os, "close") as mocked_close,
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    app_logging._merge_old_months(log_dir, date(2026, 6, 1))
+
+            mocked_close.assert_any_call(456)
+            mocked_close.assert_any_call(789)
+
     def test_create_log_temp_preserves_open_error_when_parent_close_fails(self) -> None:
         with (
             mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
