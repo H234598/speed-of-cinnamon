@@ -6952,7 +6952,16 @@ MyApplet.prototype = {
         }
         this.alarmActionToken = null;
         this.alarmMenuRefreshToken = null;
-        this._setAlarmOptionStatus(enabled ? _("Alarm enabled") : _("Alarm disabled"));
+        let alarmFound = Boolean(
+          payload.alarm &&
+          typeof payload.alarm === "object" &&
+          !Array.isArray(payload.alarm)
+        );
+        this._setAlarmOptionStatus(
+          alarmFound
+            ? (enabled ? _("Alarm enabled") : _("Alarm disabled"))
+            : _("Alarm not found")
+        );
         this._refreshAlarmMenu();
       } catch (error) {
         if (this.alarmActionToken === actionToken) {

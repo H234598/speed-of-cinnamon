@@ -1107,6 +1107,17 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn("let actionToken = {};", block)
             self.assertLess(block.index(f"if ({token} || this._hasActiveRecordingState())"), block.index("let actionToken = {};"))
 
+    def test_alarm_enable_reports_when_backend_cannot_find_alarm(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_setAlarmEnabled: function(id, enabled)")
+        end = source.index("\n  _removeAlarm:", start)
+        block = source[start:end]
+        self.assertIn("let alarmFound = Boolean(", block)
+        self.assertIn('payload.alarm &&', block)
+        self.assertIn('typeof payload.alarm === "object"', block)
+        self.assertIn("!Array.isArray(payload.alarm)", block)
+        self.assertIn(': _("Alarm not found")', block)
+
     def test_interactive_dialogs_do_not_spawn_concurrent_flows(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
