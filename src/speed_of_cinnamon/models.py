@@ -1450,10 +1450,13 @@ def _download_url_to_file_with_fd(
         return tmp_path, downloaded
     except BaseException as exc:
         primary_error = exc
-        if tmp_dir_fd is not None and temporary_name is not None:
-            _unlink_temporary_download_name(tmp_dir_fd, temporary_name)
-        elif tmp_path is not None:
-            _unlink_temporary_download_path(tmp_path)
+        try:
+            if tmp_dir_fd is not None and temporary_name is not None:
+                _unlink_temporary_download_name(tmp_dir_fd, temporary_name)
+            elif tmp_path is not None:
+                _unlink_temporary_download_path(tmp_path)
+        except BaseException as cleanup_error:
+            _note_cleanup_failure(primary_error, cleanup_error)
         raise
     finally:
         if tmp_fd is not None:
@@ -1758,13 +1761,18 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
             _set_model_checksum_cache(path, checksum, tmp_stat)
         except OSError as exc:
             raise ModelError(f"failed to persist downloaded model file: {path}") from exc
-    except Exception:
+    except Exception as primary_error:
         if tmp_path is not None:
-            _clear_model_checksum_cache(tmp_path)
+            try:
+                _clear_model_checksum_cache(tmp_path)
+            except (OSError, ModelError) as cleanup_error:
+                _note_cleanup_failure(primary_error, cleanup_error)
             try:
                 _unlink_model_file_leaf(tmp_path, root, field_name="temporary model file")
             except FileNotFoundError:
                 pass
+            except (OSError, ModelError) as cleanup_error:
+                _note_cleanup_failure(primary_error, cleanup_error)
         if replaced_path:
             _clear_model_checksum_cache(path)
             if backup_path is not None:
