@@ -478,6 +478,7 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
     backup_name = f".{leaf}.{token}.backup"
     backup_created = False
     activated = False
+    activated_stat: os.stat_result | None = None
     parent_path = Path(f"/proc/self/fd/{parent_fd}")
     try:
         os.mkdir(stage_name, 0o700, dir_fd=parent_fd)
@@ -507,6 +508,7 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
             backup_created = True
             _fsync_directory_fd(parent_fd, action=args.action)
         os.replace(f"{stage_name}/{leaf}", leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        activated_stat = _lstat_at(parent_fd, leaf)
         activated = True
         _check_leaf(parent_fd, leaf, target, action=args.action, kind="dir", must_exist=True)
         _fsync_directory_fd(parent_fd, action=args.action)
@@ -524,6 +526,17 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
                 os.replace(backup_name, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
                 os.fsync(parent_fd)
                 backup_created = False
+        elif activated and not backup_created and _lstat_at(parent_fd, leaf) is not None:
+            with context_suppress():
+                current = _lstat_at(parent_fd, leaf)
+                if (
+                    current is not None
+                    and activated_stat is not None
+                    and _same_identity(current, activated_stat)
+                    and stat_is_dir_no_follow(current.st_mode)
+                ):
+                    _rmtree_safe(leaf, dir_fd=parent_fd, action=args.action)
+                    os.fsync(parent_fd)
         elif backup_created and _lstat_at(parent_fd, backup_name) is not None and _lstat_at(parent_fd, leaf) is None:
             with context_suppress():
                 os.replace(backup_name, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
