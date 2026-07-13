@@ -318,7 +318,7 @@ def build_ollama_prompt(
         raise PostProcessError(str(exc)) from exc
 
     sections = [
-        (instruction or DEFAULT_OLLAMA_PROMPT).strip(),
+        (instruction.strip() or DEFAULT_OLLAMA_PROMPT),
         POSTPROCESS_OUTPUT_CONTRACT,
         f"Language: {language}",
     ]
@@ -776,7 +776,7 @@ def build_openai_compatible_messages(
         raise PostProcessError(str(exc)) from exc
 
     system_sections = [
-        (instruction or DEFAULT_OLLAMA_PROMPT).strip(),
+        (instruction.strip() or DEFAULT_OLLAMA_PROMPT),
         POSTPROCESS_OUTPUT_CONTRACT,
         f"Language: {language}",
     ]
