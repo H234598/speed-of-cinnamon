@@ -1891,6 +1891,21 @@ class ModelsTest(unittest.TestCase):
                     prefix=".model.",
                 )
 
+    def test_download_url_closes_parent_fd_when_url_validation_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            before = len(os.listdir("/proc/self/fd"))
+            for _ in range(3):
+                with self.assertRaisesRegex(models.ModelError, "host is not allowed"):
+                    models._download_url_to_file(
+                        "https://example.com/model.bin",
+                        Path(tmp),
+                        1024,
+                        "test",
+                        prefix=".model.",
+                    )
+            after = len(os.listdir("/proc/self/fd"))
+        self.assertEqual(after, before)
+
     def test_download_url_rejects_disallowed_host_without_leaking_userinfo(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(models.ModelError) as raised:

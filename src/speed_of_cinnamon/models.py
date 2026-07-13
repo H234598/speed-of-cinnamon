@@ -1391,12 +1391,22 @@ def _download_url_to_file_with_fd(
     allowed_hosts = {HUGGING_FACE_DOWNLOAD_HOST}
     redirect_allowed_hosts = allowed_hosts | HUGGING_FACE_STORAGE_REDIRECT_HOSTS
     allowed_urls = {TINY_DE_MODEL_URL} if model_name == "tiny-de" else {url}
-    url = _assert_download_url(
-        url,
-        field_name="model download URL",
-        allowed_hosts=allowed_hosts,
-        allowed_urls=allowed_urls,
-    )
+    try:
+        url = _assert_download_url(
+            url,
+            field_name="model download URL",
+            allowed_hosts=allowed_hosts,
+            allowed_urls=allowed_urls,
+        )
+    except BaseException as exc:
+        if close_tmp_dir_fd and tmp_dir_fd is not None:
+            try:
+                os.close(tmp_dir_fd)
+            except OSError as cleanup_error:
+                _note_cleanup_failure(exc, cleanup_error)
+            finally:
+                tmp_dir_fd = None
+        raise
     temporary_name: str | None = None
     tmp_path: Path | None = None
     tmp_fd: int | None = None
