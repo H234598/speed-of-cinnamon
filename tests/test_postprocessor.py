@@ -290,6 +290,14 @@ class PostProcessorTest(unittest.TestCase):
             with self.assertRaisesRegex(PostProcessError, "invalid UTF-8"):
                 post_process_text("hello", "en", backend="ollama", ollama_model="llama3.2:3b")
 
+    def test_post_process_with_ollama_wraps_json_recursion_error(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.postprocessor._open_http_request", return_value=FakeResponse({"response": "ok"})),
+            mock.patch("speed_of_cinnamon.postprocessor.json.loads", side_effect=RecursionError("too deep")),
+        ):
+            with self.assertRaisesRegex(PostProcessError, "invalid JSON"):
+                post_process_text("hello", "en", backend="ollama", ollama_model="llama3.2:3b")
+
     def test_post_process_with_ollama_rejects_escaped_null_response(self) -> None:
         with mock.patch(
             "speed_of_cinnamon.postprocessor._open_http_request",
@@ -724,6 +732,20 @@ class PostProcessorTest(unittest.TestCase):
         self.assertEqual(body["temperature"], 0)
         self.assertNotIn("service_tier", body)
         self.assertIn("hello cinnamon", body["messages"][1]["content"])
+
+    def test_openai_compatible_backend_wraps_json_recursion_error(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.postprocessor._open_http_request", return_value=FakeResponse({"choices": []})),
+            mock.patch("speed_of_cinnamon.postprocessor.json.loads", side_effect=RecursionError("too deep")),
+        ):
+            with self.assertRaisesRegex(PostProcessError, "invalid JSON"):
+                post_process_text(
+                    "hello",
+                    "en",
+                    backend="openai-compatible",
+                    openai_compatible_model="local-model",
+                    openai_compatible_url="http://127.0.0.1:1234/v1",
+                )
 
     def test_openai_compatible_backend_strips_returned_transcript_label(self) -> None:
         with mock.patch(

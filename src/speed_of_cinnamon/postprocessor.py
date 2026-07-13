@@ -419,7 +419,7 @@ def _openai_compatible_error_detail(raw: str) -> str:
         return ""
     try:
         payload = json.loads(raw)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, RecursionError):
         return raw.strip()
     if not isinstance(payload, dict):
         return str(payload)
@@ -714,7 +714,7 @@ def post_process_with_ollama(
         raise PostProcessError(f"Ollama request failed: {_sanitize_remote_error_detail(exc)}") from exc
     try:
         data = json.loads(raw)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, RecursionError) as exc:
         raise PostProcessError("Ollama returned invalid JSON") from exc
     if not isinstance(data, dict):
         raise PostProcessError("Ollama response must be a JSON object")
@@ -897,7 +897,7 @@ def post_process_with_openai_compatible(
         raise PostProcessError(f"OpenAI-compatible request failed: {_sanitize_remote_error_detail(exc)}") from exc
     try:
         data = json.loads(raw)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, RecursionError) as exc:
         raise PostProcessError("OpenAI-compatible server returned invalid JSON") from exc
     if not isinstance(data, dict):
         raise PostProcessError("OpenAI-compatible response must be a JSON object")
