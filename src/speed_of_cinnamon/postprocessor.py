@@ -734,7 +734,10 @@ def post_process_with_ollama(
         raise PostProcessError("Ollama response must be a JSON object")
     if data.get("error"):
         raise PostProcessError(f"Ollama failed: {_sanitize_remote_error_detail(data['error'])}")
-    processed = _strip_transcript_prompt_label(str(data.get("response") or ""))
+    response_text = data.get("response")
+    if response_text is not None and not isinstance(response_text, str):
+        raise PostProcessError("Ollama response text must be text")
+    processed = _strip_transcript_prompt_label(response_text or "")
     processed = _assert_text_length(processed, field_name="post-process output")
     if not processed:
         raise PostProcessError("Ollama completed without output")
@@ -795,12 +798,17 @@ def _choice_text(choice: object) -> str:
         if isinstance(content, list):
             parts = []
             for item in content:
-                if isinstance(item, dict):
-                    parts.append(str(item.get("text") or item.get("content") or ""))
-                else:
-                    parts.append(str(item))
+                if not isinstance(item, dict):
+                    return ""
+                part = item.get("text")
+                if part is None:
+                    part = item.get("content")
+                if not isinstance(part, str):
+                    return ""
+                parts.append(part)
             return "".join(parts)
-    return str(choice.get("text") or "")
+    text = choice.get("text")
+    return text if isinstance(text, str) else ""
 
 
 def _strip_transcript_prompt_label(text: str) -> str:

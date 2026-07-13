@@ -1143,6 +1143,35 @@ class PostProcessorTest(unittest.TestCase):
             with self.assertRaisesRegex(PostProcessError, "without output"):
                 post_process_text("hello", "en", backend="ollama", ollama_model="llama3.2:3b")
 
+    def test_ollama_rejects_non_text_response(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.postprocessor._open_http_request",
+            return_value=FakeResponse({"response": {"text": "not a response string"}}),
+        ):
+            with self.assertRaisesRegex(PostProcessError, "response text must be text"):
+                post_process_text("hello", "en", backend="ollama", ollama_model="llama3.2:3b")
+
+    def test_openai_compatible_rejects_non_text_content_parts(self) -> None:
+        payloads = (
+            {"choices": [{"message": {"content": [42]}}]},
+            {"choices": [{"message": {"content": [{"type": "text", "text": 42}]}}]},
+            {"choices": [{"text": 42}]},
+        )
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                with mock.patch(
+                    "speed_of_cinnamon.postprocessor._open_http_request",
+                    return_value=FakeResponse(payload),
+                ):
+                    with self.assertRaisesRegex(PostProcessError, "without output"):
+                        post_process_text(
+                            "hello",
+                            "en",
+                            backend="openai-compatible",
+                            openai_compatible_model="local-model",
+                            openai_compatible_url="http://127.0.0.1:8000/v1",
+                        )
+
     def test_http_postprocess_rejects_oversized_prompt_before_request(self) -> None:
         prompt = "x" * (MAX_POSTPROCESS_PROMPT_CHARS + 1)
         with mock.patch("speed_of_cinnamon.postprocessor._open_http_request") as mocked_http:
