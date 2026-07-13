@@ -946,8 +946,12 @@ def _open_model_parent_directory(path: Path, root: Path, *, field_name: str = "m
     try:
         _assert_model_parent_for_atomic_replace(path, root, field_name=field_name)
     except (ModelError, OSError, RuntimeError) as exc:
-        os.close(parent_fd)
-        raise ModelError(f"{field_name} parent is not safe: {path.parent}") from exc
+        error = ModelError(f"{field_name} parent is not safe: {path.parent}")
+        try:
+            os.close(parent_fd)
+        except OSError as cleanup_error:
+            _note_cleanup_failure(error, cleanup_error)
+        raise error from exc
     return parent_fd
 
 
@@ -963,13 +967,23 @@ def _replace_model_sibling_path(source: Path, target: Path, root: Path, *, field
             os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
             dir_fd=parent_fd,
         )
+        source_primary_error: BaseException | None = None
         try:
             source_stat = os.fstat(source_fd)
             if not (stat_module.S_ISREG(source_stat.st_mode) or stat_module.S_ISDIR(source_stat.st_mode)):
                 raise ModelError(f"{field_name} source must be a regular file or directory: {source}")
             os.fsync(source_fd)
+        except BaseException as exc:
+            source_primary_error = exc
+            raise
         finally:
-            os.close(source_fd)
+            try:
+                os.close(source_fd)
+            except OSError as cleanup_error:
+                if source_primary_error is not None:
+                    _note_cleanup_failure(source_primary_error, cleanup_error)
+                else:
+                    pass
         os.replace(source.name, target.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         os.fsync(parent_fd)
     finally:

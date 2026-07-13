@@ -3145,6 +3145,40 @@ class ModelsTest(unittest.TestCase):
             self.assertEqual(target.read_bytes(), b"model")
             self.assertFalse(source.exists())
 
+    def test_model_parent_open_preserves_validation_error_when_parent_close_fails(self) -> None:
+        with (
+            mock.patch.object(
+                models,
+                "_assert_model_parent_for_atomic_replace",
+                side_effect=[None, models.ModelError("parent changed")],
+            ),
+            mock.patch.object(models, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(models.os, "close", side_effect=OSError("close failed")),
+        ):
+            with self.assertRaisesRegex(models.ModelError, "parent is not safe") as caught:
+                models._open_model_parent_directory(Path("/probe/model.bin"), Path("/probe"))
+
+        self.assertIn("model artifact cleanup failed", "\n".join(caught.exception.__notes__))
+
+    def test_replace_model_sibling_preserves_source_error_when_source_close_fails(self) -> None:
+        source_stat = os.stat(__file__)
+        with (
+            mock.patch.object(models, "_open_model_parent_directory", return_value=456),
+            mock.patch.object(models, "_assert_model_path_for_atomic_replace"),
+            mock.patch.object(models.os, "open", return_value=123),
+            mock.patch.object(models.os, "fstat", return_value=source_stat),
+            mock.patch.object(models.os, "fsync", side_effect=OSError("source fsync failed")),
+            mock.patch.object(models.os, "close", side_effect=OSError("source close failed")),
+        ):
+            with self.assertRaisesRegex(OSError, "source fsync failed") as caught:
+                models._replace_model_sibling_path(
+                    Path("/probe/source.bin"),
+                    Path("/probe/target.bin"),
+                    Path("/probe"),
+                )
+
+        self.assertIn("model artifact cleanup failed", "\n".join(caught.exception.__notes__))
+
     def test_unlink_model_file_preserves_success_when_parent_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
