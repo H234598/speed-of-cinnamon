@@ -553,6 +553,22 @@ def _assert_regular_unlinked_file(path: Path, *, field_name: str) -> os.stat_res
     return file_stat
 
 
+def _same_log_inode(first: os.stat_result, second: os.stat_result) -> bool:
+    return (
+        first.st_dev,
+        first.st_ino,
+        first.st_mode,
+        first.st_size,
+        first.st_mtime_ns,
+    ) == (
+        second.st_dev,
+        second.st_ino,
+        second.st_mode,
+        second.st_size,
+        second.st_mtime_ns,
+    )
+
+
 def _open_log_source_file(
     path: Path,
     *,
@@ -770,19 +786,51 @@ def _merge_old_months(directory: Path, today: date) -> None:
                 raise RuntimeError("monthly log temporary archive must not be hardlinked")
             archive_transaction_active = True
             if archive.exists():
-                _assert_regular_unlinked_file(archive, field_name="monthly log archive")
+                archive_stat = _assert_regular_unlinked_file(archive, field_name="monthly log archive")
                 for _ in range(100):
                     candidate_name = f".{archive.name}.{secrets.token_hex(8)}.backup"
                     try:
-                        os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                        os.link(
+                            archive.name,
+                            candidate_name,
+                            src_dir_fd=parent_fd,
+                            dst_dir_fd=parent_fd,
+                            follow_symlinks=False,
+                        )
                     except FileNotFoundError:
+                        raise RuntimeError("monthly log archive disappeared before backup activation") from None
+                    except FileExistsError:
+                        continue
+                    try:
+                        backup_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                        current_archive_stat = os.stat(archive.name, dir_fd=parent_fd, follow_symlinks=False)
+                        if (
+                            not stat_module.S_ISREG(backup_stat.st_mode)
+                            or getattr(backup_stat, "st_nlink", 1) < 2
+                            or not _same_log_inode(backup_stat, archive_stat)
+                            or not stat_module.S_ISREG(current_archive_stat.st_mode)
+                            or not _same_log_inode(current_archive_stat, archive_stat)
+                        ):
+                            raise RuntimeError("monthly log archive changed during backup activation")
+                        os.unlink(archive.name, dir_fd=parent_fd)
                         archive_backup_name = candidate_name
+                        archive_backup_moved = True
+                        os.fsync(parent_fd)
                         break
+                    except BaseException as exc:
+                        if not archive_backup_moved:
+                            try:
+                                candidate_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                                if _same_log_inode(candidate_stat, archive_stat):
+                                    os.unlink(candidate_name, dir_fd=parent_fd)
+                                    os.fsync(parent_fd)
+                            except FileNotFoundError:
+                                pass
+                            except BaseException as cleanup_error:
+                                _note_cleanup_failure(exc, cleanup_error)
+                        raise
                 if archive_backup_name is None:
                     raise RuntimeError("failed to allocate monthly log archive backup")
-                os.replace(archive.name, archive_backup_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
-                archive_backup_moved = True
-                os.fsync(parent_fd)
             archive_activation_attempted = True
             os.replace(temp_name, archive.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
             temp_name = ""

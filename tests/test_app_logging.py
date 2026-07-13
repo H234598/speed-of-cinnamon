@@ -983,8 +983,15 @@ class AppLoggingTest(unittest.TestCase):
                 fsync_modes.append(os.fstat(fd).st_mode)
                 real_fsync(fd)
 
+            real_replace = os.replace
+
+            def fail_activation_replace(src: object, dst: object, *args: object, **kwargs: object) -> None:
+                if str(src).endswith(".tmp"):
+                    raise PermissionError("replace failed")
+                real_replace(src, dst, *args, **kwargs)
+
             with (
-                mock.patch("speed_of_cinnamon.app_logging.os.replace", side_effect=PermissionError("replace failed")),
+                mock.patch("speed_of_cinnamon.app_logging.os.replace", side_effect=fail_activation_replace),
                 mock.patch("speed_of_cinnamon.app_logging.os.fsync", side_effect=record_fsync),
             ):
                 with self.assertRaises(PermissionError, msg="replace failure"):
@@ -995,6 +1002,31 @@ class AppLoggingTest(unittest.TestCase):
                 self.assertEqual(handle.read(), "legacy\n")
             self.assertTrue(old_daily.exists())
             self.assertTrue(any(stat_module.S_ISDIR(mode) for mode in fsync_modes))
+
+    def test_maintain_logs_monthly_merge_does_not_overwrite_existing_backup_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            old_archive = log_dir / "speed-of-cinnamon-2026-05.log.gz"
+            old_daily = log_dir / "speed-of-cinnamon-2026-05-30.log"
+            old_daily.write_text("may-30\n", encoding="utf-8")
+            old_daily.chmod(0o600)
+            with gzip.open(old_archive, "wt", encoding="utf-8") as handle:
+                handle.write("legacy\n")
+            old_archive.chmod(0o600)
+            racing_candidate = log_dir / ".speed-of-cinnamon-2026-05.log.gz.fixed.backup"
+            racing_candidate.write_text("racing backup\n", encoding="utf-8")
+
+            with mock.patch.object(
+                app_logging.secrets,
+                "token_hex",
+                side_effect=["temp", "fixed", "free"],
+            ):
+                app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
+
+            self.assertEqual(racing_candidate.read_text(encoding="utf-8"), "racing backup\n")
+            self.assertFalse((log_dir / ".speed-of-cinnamon-2026-05.log.gz.free.backup").exists())
+            self.assertTrue(old_archive.exists())
+            self.assertFalse(old_daily.exists())
 
     def test_maintain_logs_rolls_back_monthly_archive_after_activation_fsync_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
