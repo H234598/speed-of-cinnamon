@@ -977,6 +977,57 @@ class AppLoggingTest(unittest.TestCase):
             self.assertFalse(target.exists())
             self.assertEqual(list(log_dir.glob("*.tmp")), [])
 
+    def test_gzip_file_rolls_back_existing_target_after_activation_fsync_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "source.log"
+            target = log_dir / "target.log.gz"
+            source.write_text("new content\n", encoding="utf-8")
+            source.chmod(0o600)
+            with gzip.open(target, "wt", encoding="utf-8") as handle:
+                handle.write("old content\n")
+            target.chmod(0o600)
+            real_fsync = os.fsync
+            directory_syncs = 0
+
+            def fail_activation_sync(fd: int) -> None:
+                nonlocal directory_syncs
+                if stat_module.S_ISDIR(os.fstat(fd).st_mode):
+                    directory_syncs += 1
+                    if directory_syncs == 2:
+                        raise OSError("target activation fsync failed")
+                real_fsync(fd)
+
+            with mock.patch("speed_of_cinnamon.app_logging.os.fsync", side_effect=fail_activation_sync):
+                with self.assertRaisesRegex(OSError, "target activation fsync failed"):
+                    app_logging._gzip_file(source, target)
+
+            self.assertTrue(source.exists())
+            self.assertEqual(source.read_text(encoding="utf-8"), "new content\n")
+            with gzip.open(target, "rt", encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "old content\n")
+            self.assertEqual(list(log_dir.glob("*.backup")), [])
+
+    def test_gzip_file_removes_target_backup_when_replace_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "source.log"
+            target = log_dir / "target.log.gz"
+            source.write_text("new content\n", encoding="utf-8")
+            source.chmod(0o600)
+            with gzip.open(target, "wt", encoding="utf-8") as handle:
+                handle.write("old content\n")
+            target.chmod(0o600)
+
+            with mock.patch("speed_of_cinnamon.app_logging.os.replace", side_effect=PermissionError("replace failed")):
+                with self.assertRaisesRegex(PermissionError, "replace failed"):
+                    app_logging._gzip_file(source, target)
+
+            self.assertTrue(source.exists())
+            with gzip.open(target, "rt", encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "old content\n")
+            self.assertEqual(list(log_dir.glob("*.backup")), [])
+
     def test_gzip_file_reports_temp_cleanup_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

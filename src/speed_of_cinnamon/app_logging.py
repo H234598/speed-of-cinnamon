@@ -881,6 +881,76 @@ def _gzip_file(source: Path, target: Path) -> None:
         _assert_regular_unlinked_file(target, field_name="log target file")
     temp_fd, parent_fd, temp_name = _create_log_temp_file(target.parent, prefix=target.stem, suffix=".tmp")
     source_fd: int | None = None
+    target_backup_name = ""
+    target_backup_created = False
+    target_existing_stat: os.stat_result | None = None
+    target_temp_stat: os.stat_result | None = None
+    target_activation_stat: os.stat_result | None = None
+    target_activation_attempted = False
+    target_transaction_active = False
+
+    def _same_target_inode(first: os.stat_result, second: os.stat_result) -> bool:
+        return (
+            first.st_dev,
+            first.st_ino,
+            first.st_mode,
+            first.st_size,
+            first.st_mtime_ns,
+        ) == (
+            second.st_dev,
+            second.st_ino,
+            second.st_mode,
+            second.st_size,
+            second.st_mtime_ns,
+        )
+
+    def _same_activated_target(first: os.stat_result, second: os.stat_result) -> bool:
+        return _same_target_inode(first, second) and getattr(first, "st_nlink", 1) == getattr(second, "st_nlink", 1)
+
+    def _rollback_target_activation() -> None:
+        nonlocal target_backup_created, target_backup_name
+        if not target_transaction_active:
+            return
+        activation_visible = False
+        if target_activation_attempted:
+            try:
+                current_stat = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                current_stat = None
+            expected_stat = target_activation_stat or target_temp_stat
+            if current_stat is not None and expected_stat is not None and _same_activated_target(current_stat, expected_stat):
+                activation_visible = True
+            elif target_existing_stat is None and current_stat is None:
+                pass
+            elif target_existing_stat is not None and current_stat is not None and _same_target_inode(current_stat, target_existing_stat):
+                pass
+            else:
+                raise RuntimeError("log target changed during activation rollback")
+            if activation_visible:
+                os.unlink(target.name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+        if target_backup_created:
+            if not activation_visible:
+                os.unlink(target_backup_name, dir_fd=parent_fd)
+                target_backup_created = False
+                target_backup_name = ""
+                os.fsync(parent_fd)
+            else:
+                try:
+                    os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    os.replace(
+                        target_backup_name,
+                        target.name,
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=parent_fd,
+                    )
+                    target_backup_created = False
+                    target_backup_name = ""
+                    os.fsync(parent_fd)
+                else:
+                    raise RuntimeError("log target exists during activation rollback")
+
     try:
         try:
             source_fd = _open_log_source_file(source, field_name="log source file")
@@ -935,12 +1005,53 @@ def _gzip_file(source: Path, target: Path) -> None:
             os.fsync(raw_output.fileno())
             if not _log_temp_name_matches_fd(parent_fd, temp_name, raw_output.fileno()):
                 raise RuntimeError("log temporary archive was replaced")
+        target_temp_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat_module.S_ISREG(target_temp_stat.st_mode) or getattr(target_temp_stat, "st_nlink", 1) != 1:
+            raise RuntimeError("log temporary archive must be a private regular file")
+        try:
+            target_existing_stat = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            target_existing_stat = None
+        target_transaction_active = True
+        if target_existing_stat is not None:
+            if not stat_module.S_ISREG(target_existing_stat.st_mode) or getattr(target_existing_stat, "st_nlink", 1) != 1:
+                raise RuntimeError("log target file must be a private regular file")
+            for _ in range(100):
+                candidate_name = f".{target.name}.{secrets.token_hex(8)}.backup"
+                try:
+                    os.link(
+                        target.name,
+                        candidate_name,
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
+                except FileExistsError:
+                    continue
+                target_backup_name = candidate_name
+                target_backup_created = True
+                break
+            if not target_backup_created:
+                raise RuntimeError("failed to allocate log target backup")
+            os.fsync(parent_fd)
+        target_activation_attempted = True
         os.replace(temp_name, target.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         temp_name = ""
+        target_activation_stat = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
         os.fsync(parent_fd)
+        target_transaction_active = False
+        if target_backup_created:
+            os.unlink(target_backup_name, dir_fd=parent_fd)
+            target_backup_created = False
+            target_backup_name = ""
+            os.fsync(parent_fd)
         _assert_same_log_file_identity(source, source_stat, field_name="log source file")
         _unlink_log_file_with_parent_fsync(source, source_stat, field_name="log source file")
-    except Exception:
+    except Exception as primary_error:
+        try:
+            _rollback_target_activation()
+        except BaseException as rollback_error:
+            _note_cleanup_failure(primary_error, rollback_error)
         _unlink_log_temp(parent_fd, temp_name)
         raise
     finally:
