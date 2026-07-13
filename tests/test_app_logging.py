@@ -7,6 +7,7 @@ import logging
 import os
 import stat as stat_module
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr
 from datetime import date
@@ -168,6 +169,15 @@ class AppLoggingTest(unittest.TestCase):
 
     def test_sanitize_hint_detects_url_userinfo_without_password(self) -> None:
         self.assertIsNotNone(app_logging._SANITIZE_HINT_RE.search("https://secret-token@example.test/path"))
+
+    def test_sanitize_text_bounds_long_plaintext_scan(self) -> None:
+        value = "x" * 32_000
+        started = time.perf_counter()
+
+        sanitized = app_logging.sanitize_text(value)
+
+        self.assertLess(time.perf_counter() - started, 2.0)
+        self.assertTrue(sanitized.endswith("...[truncated]"))
 
     def test_log_path_insecure_rejects_non_private_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
