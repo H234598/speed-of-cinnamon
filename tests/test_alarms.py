@@ -442,10 +442,24 @@ class AlarmTest(unittest.TestCase):
             mock.patch.object(alarm_module.os, "close", side_effect=close),
             mock.patch.object(alarm_module.fcntl, "flock"),
         ):
-            with alarm_module._locked_alarm_store(Path("/probe/alarms.json")) as store_path:
-                self.assertEqual(store_path, Path("/probe/alarms.json"))
+            with self.assertRaisesRegex(OSError, "lock close failed"):
+                with alarm_module._locked_alarm_store(Path("/probe/alarms.json")) as store_path:
+                    self.assertEqual(store_path, Path("/probe/alarms.json"))
 
         self.assertEqual(closed_fds, [123, 456])
+
+    def test_alarm_store_lock_preserves_open_error_when_parent_close_fails(self) -> None:
+        with (
+            mock.patch.object(alarm_module, "_assert_clean_path"),
+            mock.patch.object(alarm_module, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(alarm_module.os, "open", side_effect=OSError("lock open failed")),
+            mock.patch.object(alarm_module.os, "close", side_effect=OSError("parent close failed")),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "failed to open alarm store lock file") as caught:
+                with alarm_module._locked_alarm_store(Path("/probe/alarms.json")):
+                    pass
+
+        self.assertIn("alarm store lock cleanup failed", "\n".join(caught.exception.__notes__))
 
     def test_load_alarm_store_wraps_json_recursion_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

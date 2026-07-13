@@ -44,6 +44,10 @@ MAX_ALARM_TIME_CHARS = 16
 MAX_ALARM_URGENCY_CHARS = 16
 
 
+def _note_lock_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
+    primary.add_note(f"alarm store lock cleanup failed: {cleanup_error}")
+
+
 def _assert_clean_path(path: Path, *, field_name: str) -> None:
     if not isinstance(path, Path):
         raise RuntimeError(f"{field_name} path must be a path")
@@ -83,25 +87,41 @@ def _locked_alarm_store(path: Path | None = None) -> Iterator[Path]:
     try:
         fd = os.open(lock_path.name, os.O_RDWR | os.O_CREAT | nofollow_flag, 0o600, dir_fd=parent_fd)
     except OSError as exc:
-        os.close(parent_fd)
-        raise RuntimeError("failed to open alarm store lock file") from exc
+        error = RuntimeError("failed to open alarm store lock file")
+        try:
+            os.close(parent_fd)
+        except OSError as cleanup_error:
+            _note_lock_cleanup_failure(error, cleanup_error)
+        raise error from exc
+    primary_error: BaseException | None = None
     try:
         assert_fd_is_regular_private_file(fd, field_name="alarm store lock file", require_private_mode=True)
         fcntl.flock(fd, fcntl.LOCK_EX)
         assert_fd_is_regular_private_file(fd, field_name="alarm store lock file", require_private_mode=True)
         yield store_path
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
+        cleanup_errors: list[OSError] = []
         try:
             fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-            try:
-                os.close(parent_fd)
-            except OSError:
-                pass
+        except OSError as cleanup_error:
+            cleanup_errors.append(cleanup_error)
+        try:
+            os.close(fd)
+        except OSError as cleanup_error:
+            cleanup_errors.append(cleanup_error)
+        try:
+            os.close(parent_fd)
+        except OSError as cleanup_error:
+            cleanup_errors.append(cleanup_error)
+        if cleanup_errors:
+            if primary_error is not None:
+                for cleanup_error in cleanup_errors:
+                    _note_lock_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise cleanup_errors[0]
 
 
 def _contains_escaped_null(value: str) -> bool:
