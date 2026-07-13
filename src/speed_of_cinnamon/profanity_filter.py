@@ -374,6 +374,8 @@ def parse_profanity_replacement_list(text: str) -> tuple[tuple[str, str], ...]:
         if not pattern or not replacement:
             continue
         pattern_source = _safe_profanity_pattern_source(pattern)
+        if not pattern_source:
+            continue
         try:
             re.compile(pattern_source, re.IGNORECASE)
         except re.error:
@@ -403,6 +405,8 @@ def compile_profanity_replacements(
             if use_ascii_patterns
             else _safe_profanity_pattern_source(clean_pattern)
         )
+        if not pattern_source:
+            continue
         try:
             compiled.append((re.compile(pattern_source, re.IGNORECASE), clean_replacement))
         except re.error:
