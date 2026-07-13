@@ -607,20 +607,24 @@ class SettingsExportTest(unittest.TestCase):
         with self.assertRaisesRegex(SettingsExportError, "settings export alarms must be an object"):
             build_export({"language": "en"}, alarm_store=[])  # type: ignore[arg-type]
 
-    def test_write_export_reports_temp_cleanup_failure(self) -> None:
+    def test_write_export_preserves_primary_error_when_temp_cleanup_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             with (
                 mock.patch("speed_of_cinnamon.settings_export.os.replace", side_effect=OSError("disk full")),
                 mock.patch("speed_of_cinnamon.settings_export.os.unlink", side_effect=OSError("cleanup denied")),
             ):
-                with self.assertRaisesRegex(SettingsExportError, "failed to remove settings export temporary file"):
+                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export") as caught:
                     write_export(path, {"language": "en"})
 
             self.assertFalse(path.exists())
             leftovers = [child for child in Path(tmp).iterdir() if child.name.startswith(".settings-export.json.") and child.name.endswith(".tmp")]
             self.assertEqual(len(leftovers), 1)
             self.assertEqual(leftovers[0].read_bytes(), b"")
+        self.assertIsNotNone(caught.exception.__cause__)
+        self.assertIn("disk full", str(caught.exception.__cause__))
+        self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertIn("cleanup denied", "\n".join(caught.exception.__notes__))
 
     @mock.patch("speed_of_cinnamon.settings_export.os.replace", side_effect=OSError("disk full"))
     def test_write_export_raises_when_atomic_replace_fails(self, mocked_replace: mock.Mock) -> None:

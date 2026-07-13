@@ -542,8 +542,9 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                     pass
                 cleanup_error = cleanup_exc
         if cleanup_error is not None:
-            primary_error = SettingsExportError(f"failed to remove settings export temporary file: {path}")
-            raise primary_error from cleanup_error
+            primary_error = SettingsExportError(f"failed to write settings export: {path}")
+            _note_cleanup_failure(primary_error, cleanup_error)
+            raise primary_error from exc
         primary_error = SettingsExportError(f"failed to write settings export: {path}")
         raise primary_error from exc
     except BaseException as exc:
