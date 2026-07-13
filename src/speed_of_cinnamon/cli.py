@@ -954,7 +954,7 @@ def soften_profanity_text(text: str) -> str:
     if isinstance(text, bool) or not isinstance(text, str):
         raise RuntimeError("text must be text")
     output = text
-    for pattern, replacement in _profanity_replacements():
+    for pattern, replacement in _profanity_replacements(text):
         output = pattern.sub(lambda match, value=replacement: _match_replacement_case(match.group(0), value), output)
     return output
 
@@ -998,8 +998,8 @@ def _profanity_replacement_pairs_from_file() -> tuple[tuple[str, str], ...]:
     return parse_profanity_replacement_list(text)
 
 
-def _profanity_replacements() -> tuple[tuple[re.Pattern[str], str], ...]:
-    return compile_profanity_replacements(_profanity_replacement_pairs_from_file())
+def _profanity_replacements(text: str = "") -> tuple[tuple[re.Pattern[str], str], ...]:
+    return compile_profanity_replacements(_profanity_replacement_pairs_from_file(), text=text)
 
 
 def _open_blacklist_document() -> bool:

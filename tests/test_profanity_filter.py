@@ -40,6 +40,16 @@ class ProfanityFilterTest(unittest.TestCase):
         self.assertEqual(compiled[0][0].sub(compiled[0][1], "fu\u0441\u043a"), "frog")
         self.assertEqual(compiled[1][0].sub(compiled[1][1], "\u0430\u0455s"), "donkey")
 
+    def test_compile_profanity_replacements_uses_compact_ascii_patterns(self) -> None:
+        compiled = compile_profanity_replacements((("fuck", "frog"), ("f.*k", "rainbow")), text="fuck f.*k")
+
+        self.assertEqual(compiled[0][0].sub(compiled[0][1], "fuck"), "frog")
+        self.assertEqual(compiled[1][0].sub(compiled[1][1], "f.*k"), "rainbow")
+
+    def test_compile_profanity_replacements_rejects_invalid_text_context(self) -> None:
+        with self.assertRaisesRegex(ValueError, "text must be text"):
+            compile_profanity_replacements((("fuck", "frog"),), text=123)  # type: ignore[arg-type]
+
     def test_default_profanity_replacements_preserve_trusted_regex_patterns(self) -> None:
         from speed_of_cinnamon.profanity_filter import PROFANITY_REPLACEMENTS
 

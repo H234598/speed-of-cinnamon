@@ -314,6 +314,15 @@ def _safe_profanity_pattern_source(pattern: str) -> str:
     return _build_tolerant_profanity_pattern(pattern)
 
 
+def _safe_ascii_profanity_pattern_source(pattern: str) -> str:
+    if pattern in _TRUSTED_PROFANITY_PATTERNS and any(char in _REGEX_META_CHARS for char in pattern):
+        return rf"(?<!\w)(?:{pattern})(?!\w)"
+    normalized = _normalize_profanity_pattern(pattern)
+    if not normalized:
+        return ""
+    return rf"(?<!\w){re.escape(normalized)}(?!\w)"
+
+
 PROFANITY_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
     (re.compile(_safe_profanity_pattern_source(pattern), re.IGNORECASE), replacement)
     for pattern, replacement in PROFANITY_REPLACEMENT_PAIRS
@@ -375,14 +384,25 @@ def parse_profanity_replacement_list(text: str) -> tuple[tuple[str, str], ...]:
     return tuple(pairs) or PROFANITY_REPLACEMENT_PAIRS
 
 
-def compile_profanity_replacements(pairs: tuple[tuple[str, str], ...]) -> tuple[tuple[re.Pattern[str], str], ...]:
+def compile_profanity_replacements(
+    pairs: tuple[tuple[str, str], ...],
+    *,
+    text: str | None = None,
+) -> tuple[tuple[re.Pattern[str], str], ...]:
+    if text is not None and (not isinstance(text, str) or isinstance(text, bool)):
+        raise ValueError("text must be text")
+    use_ascii_patterns = text is not None and text.isascii()
     compiled: list[tuple[re.Pattern[str], str]] = []
     for pattern, replacement in pairs[:MAX_PROFANITY_FILTER_ENTRIES]:
         clean_pattern = _clean_editable_value(pattern, max_chars=MAX_PROFANITY_PATTERN_CHARS)
         clean_replacement = _clean_editable_value(replacement, max_chars=MAX_PROFANITY_REPLACEMENT_CHARS)
         if not clean_pattern or not clean_replacement:
             continue
-        pattern_source = _safe_profanity_pattern_source(clean_pattern)
+        pattern_source = (
+            _safe_ascii_profanity_pattern_source(clean_pattern)
+            if use_ascii_patterns
+            else _safe_profanity_pattern_source(clean_pattern)
+        )
         try:
             compiled.append((re.compile(pattern_source, re.IGNORECASE), clean_replacement))
         except re.error:
