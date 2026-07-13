@@ -710,6 +710,29 @@ class SettingsExportTest(unittest.TestCase):
             with self.assertRaises(OSError):
                 os.fstat(created_fds[0])
 
+    def test_write_export_closes_and_removes_temp_when_fdopen_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            created_fds: list[int] = []
+            real_create = settings_export_module._create_private_temp_file
+
+            def create_temp_file(parent_fd: int, final_name: str) -> tuple[int, str]:
+                fd, temp_name = real_create(parent_fd, final_name)
+                created_fds.append(fd)
+                return fd, temp_name
+
+            with (
+                mock.patch.object(settings_export_module, "_create_private_temp_file", side_effect=create_temp_file),
+                mock.patch.object(settings_export_module.os, "fdopen", side_effect=KeyboardInterrupt),
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    write_export(path, {"language": "en"})
+
+            self.assertEqual(len(created_fds), 1)
+            with self.assertRaises(OSError):
+                os.fstat(created_fds[0])
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
     def test_read_export_preserves_fd_validation_error_when_fd_close_fails(self) -> None:
         with (
             mock.patch.object(settings_export_module, "open_file_without_following_symlinks", return_value=123),

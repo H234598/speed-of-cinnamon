@@ -721,6 +721,16 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                 error.add_note(note)
             primary_error = error
             raise error from exc
+        if temp_name:
+            try:
+                os.unlink(temp_name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+            except OSError as cleanup_error:
+                try:
+                    _scrub_temp_settings_export_file(parent_fd, temp_name)
+                except (OSError, RuntimeError):
+                    pass
+                _note_cleanup_failure(primary_error, cleanup_error)
         raise
     finally:
         if temp_fd is not None:
