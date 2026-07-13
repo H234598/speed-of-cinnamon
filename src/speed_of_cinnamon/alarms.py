@@ -148,6 +148,18 @@ def now_local() -> datetime:
 MAX_CATCH_UP_MINUTES = 14_400
 
 
+def _normalize_local_datetime(value: object, *, field_name: str) -> datetime:
+    if not isinstance(value, datetime):
+        raise ValueError(f"{field_name} must be a datetime")
+    normalized = value
+    if normalized.tzinfo is not None:
+        try:
+            normalized = normalized.astimezone().replace(tzinfo=None)
+        except (OverflowError, OSError, ValueError) as exc:
+            raise ValueError(f"{field_name} could not be converted to local time") from exc
+    return normalized.replace(second=0, microsecond=0)
+
+
 def parse_alarm_time(value: str) -> tuple[int, int]:
     text = _sanitize_text_field(value, field_name="alarm time", max_chars=MAX_ALARM_TIME_CHARS)
     match = re.fullmatch(r"(\d{1,2}):(\d{2})", text)
@@ -574,6 +586,8 @@ def _coerce_required_bool(value: object, *, field_name: str) -> bool:
 
 
 def due_occurrences(alarm: dict[str, Any], start: datetime, end: datetime) -> list[datetime]:
+    start = _normalize_local_datetime(start, field_name="start")
+    end = _normalize_local_datetime(end, field_name="end")
     occurrences: list[datetime] = []
     for day in iter_dates(start.date(), end.date()):
         candidate = alarm_occurrence(alarm, day)
@@ -593,7 +607,7 @@ def check_due_alarms(
     catch_up_minutes: int = DEFAULT_CATCH_UP_MINUTES,
 ) -> dict[str, Any]:
     mark = _coerce_required_bool(mark, field_name="mark")
-    current = (now or now_local()).replace(second=0, microsecond=0)
+    current = _normalize_local_datetime(now or now_local(), field_name="now")
     if mark:
         with _locked_alarm_store(path) as store_path:
             return _check_due_alarms_locked(
@@ -611,6 +625,7 @@ def _check_due_alarms_locked(
     mark: bool,
     catch_up_minutes: int,
 ) -> dict[str, Any]:
+    current = _normalize_local_datetime(current, field_name="current time")
     store = load_alarm_store(path)
     last_checked = parse_local_datetime(str(store.get("last_checked_at") or ""))
     if not isinstance(catch_up_minutes, int) or isinstance(catch_up_minutes, bool):
@@ -668,7 +683,7 @@ def _check_due_alarms_locked(
 
 
 def next_occurrence(alarm: dict[str, Any], now: datetime) -> datetime | None:
-    current = now.replace(second=0, microsecond=0)
+    current = _normalize_local_datetime(now, field_name="now")
     for offset in range(8):
         day = current.date() + timedelta(days=offset)
         candidate = alarm_occurrence(alarm, day)
@@ -683,7 +698,7 @@ def format_alarm_overview(alarms: list[dict[str, Any]], now: datetime | None = N
     active = [alarm for alarm in alarms if _is_alarm_enabled(alarm)]
     if not active:
         return "All alarms disabled"
-    current = (now or now_local()).replace(second=0, microsecond=0)
+    current = _normalize_local_datetime(now or now_local(), field_name="now")
     next_items = [(next_occurrence(alarm, current), alarm) for alarm in active]
     next_items = [(when, alarm) for when, alarm in next_items if when is not None]
     if not next_items:

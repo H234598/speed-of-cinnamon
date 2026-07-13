@@ -7,7 +7,7 @@ import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -296,6 +296,44 @@ class AlarmTest(unittest.TestCase):
 
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["due"][0]["scheduled_at"], "2026-06-01T09:00")
+
+    def test_due_check_normalizes_timezone_aware_now(self) -> None:
+        aware_now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+        local_now = aware_now.astimezone()
+        day = alarm_module.DAY_CODES[local_now.weekday()]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            add_alarm(
+                local_now.strftime("%H:%M"),
+                name="Local time",
+                days=day,
+                path=path,
+            )
+            payload = check_due_alarms(path=path, now=aware_now, mark=True, catch_up_minutes=0)
+
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(
+            payload["due"][0]["scheduled_at"],
+            local_now.replace(tzinfo=None).isoformat(timespec="minutes"),
+        )
+
+    def test_alarm_overview_normalizes_timezone_aware_now(self) -> None:
+        aware_now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+        local_now = aware_now.astimezone()
+        alarm = {
+            "id": "local-time",
+            "name": "Local time",
+            "hour": local_now.hour,
+            "minute": local_now.minute,
+            "days": [alarm_module.DAY_CODES[local_now.weekday()]],
+            "enabled": True,
+            "urgency": "normal",
+        }
+
+        summary = format_alarm_overview([alarm], aware_now)
+
+        self.assertIn("Local time", summary)
+        self.assertIn(f"at {local_now.strftime('%H:%M')}", summary)
 
     def test_add_alarm_reads_store_after_lock_to_avoid_lost_update(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
