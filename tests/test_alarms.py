@@ -392,6 +392,20 @@ class AlarmTest(unittest.TestCase):
             )
         )
 
+    def test_due_check_clamps_catch_up_window_at_datetime_lower_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            save_alarm_store(alarm_module.empty_store(), path)
+            payload = check_due_alarms(
+                path=path,
+                now=datetime.min,
+                mark=False,
+                catch_up_minutes=15,
+            )
+
+        self.assertEqual(payload["status"], "done")
+        self.assertEqual(payload["window_start"], "0001-01-01T00:00")
+
     def test_add_alarm_reads_store_after_lock_to_avoid_lost_update(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"

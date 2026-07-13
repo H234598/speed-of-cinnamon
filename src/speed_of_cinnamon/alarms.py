@@ -694,11 +694,15 @@ def _check_due_alarms_locked(
     if max_catch_up == 0:
         window_start = current
     else:
-        window_start = current - timedelta(minutes=max_catch_up)
+        try:
+            minimum_window_start = current - timedelta(minutes=max_catch_up)
+        except OverflowError:
+            minimum_window_start = datetime.min
+        window_start = minimum_window_start
     if last_checked and max_catch_up > 0:
         last_checked = last_checked.replace(second=0, microsecond=0)
         if last_checked <= current:
-            window_start = max(last_checked, current - timedelta(minutes=max_catch_up))
+            window_start = max(last_checked, minimum_window_start)
 
     due: list[dict[str, Any]] = []
     for alarm in store["alarms"]:
