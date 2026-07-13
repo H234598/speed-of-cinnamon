@@ -685,6 +685,27 @@ class AppLoggingTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "failed to allocate log rotation slot"):
                     app_logging._rotate_active_if_needed(active, force=True)
 
+    def test_rotate_active_if_needed_does_not_overwrite_racing_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            active = Path(tmp) / f"speed-of-cinnamon-{date.today().isoformat()}.log"
+            active.write_text("active\n", encoding="utf-8")
+            racing_candidate = active.with_name(f"{active.stem}.1{active.suffix}")
+            real_ensure = app_logging.ensure_directory_without_following_symlinks
+
+            def ensure_and_race(directory: object, *args: object, **kwargs: object) -> int:
+                if directory == active.parent and not racing_candidate.exists():
+                    racing_candidate.write_text("racing\n", encoding="utf-8")
+                return real_ensure(directory, *args, **kwargs)
+
+            with mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", side_effect=ensure_and_race):
+                app_logging._rotate_active_if_needed(active, force=True)
+
+            self.assertEqual(racing_candidate.read_text(encoding="utf-8"), "racing\n")
+            self.assertEqual(
+                active.with_name(f"{active.stem}.2{active.suffix}").read_text(encoding="utf-8"),
+                "active\n",
+            )
+
     def test_configure_logging_rejects_symlinked_active_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

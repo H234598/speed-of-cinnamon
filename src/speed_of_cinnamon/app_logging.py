@@ -624,10 +624,48 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
         candidate = path.with_name(f"{path.stem}.{suffix}{path.suffix}")
         if not candidate.exists() and not candidate.is_symlink():
             parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name="log directory")
+            candidate_linked = False
+            source_unlinked = False
             try:
-                _assert_regular_unlinked_file(path, field_name="active log file")
-                os.replace(path.name, candidate.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                rotation_stat = _assert_regular_unlinked_file(path, field_name="active log file")
+                try:
+                    os.link(
+                        path.name,
+                        candidate.name,
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
+                except FileExistsError:
+                    continue
+                candidate_linked = True
                 os.fsync(parent_fd)
+                current_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+                if (
+                    current_stat.st_dev != rotation_stat.st_dev
+                    or current_stat.st_ino != rotation_stat.st_ino
+                    or current_stat.st_mode != rotation_stat.st_mode
+                ):
+                    raise RuntimeError("active log changed during rotation")
+                os.unlink(path.name, dir_fd=parent_fd)
+                source_unlinked = True
+                os.fsync(parent_fd)
+            except BaseException as primary_error:
+                if candidate_linked and not source_unlinked:
+                    try:
+                        candidate_stat = os.stat(candidate.name, dir_fd=parent_fd, follow_symlinks=False)
+                        if (
+                            candidate_stat.st_dev == rotation_stat.st_dev
+                            and candidate_stat.st_ino == rotation_stat.st_ino
+                            and candidate_stat.st_mode == rotation_stat.st_mode
+                        ):
+                            os.unlink(candidate.name, dir_fd=parent_fd)
+                            os.fsync(parent_fd)
+                    except FileNotFoundError:
+                        pass
+                    except BaseException as cleanup_error:
+                        _note_cleanup_failure(primary_error, cleanup_error)
+                raise
             finally:
                 try:
                     os.close(parent_fd)
