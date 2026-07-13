@@ -300,27 +300,38 @@ def _normalize_profanity_pattern(pattern: str) -> str:
     return "".join(normalized)
 
 
-def _build_tolerant_profanity_pattern(pattern: str) -> str:
+def _build_tolerant_profanity_pattern(
+    pattern: str,
+    *,
+    boundary_class: str = _IGNORABLE_BOUNDARY_CLASS,
+    gap_pattern: str = _IGNORABLE_GAP_PATTERN,
+) -> str:
     normalized = _normalize_profanity_pattern(pattern)
     if not normalized:
         return ""
-    source = _IGNORABLE_GAP_PATTERN.join(_confusable_regex_source(char) for char in normalized)
-    return rf"(?<!{_IGNORABLE_BOUNDARY_CLASS}){_IGNORABLE_GAP_PATTERN}{source}{_IGNORABLE_GAP_PATTERN}(?!{_IGNORABLE_BOUNDARY_CLASS})"
+    source = gap_pattern.join(_confusable_regex_source(char) for char in normalized)
+    return rf"(?<!{boundary_class}){gap_pattern}{source}{gap_pattern}(?!{boundary_class})"
 
 
-def _safe_profanity_pattern_source(pattern: str) -> str:
+def _safe_profanity_pattern_source(
+    pattern: str,
+    *,
+    boundary_class: str = _IGNORABLE_BOUNDARY_CLASS,
+    gap_pattern: str = _IGNORABLE_GAP_PATTERN,
+) -> str:
     if pattern in _TRUSTED_PROFANITY_PATTERNS and any(char in _REGEX_META_CHARS for char in pattern):
-        return rf"(?<!{_IGNORABLE_BOUNDARY_CLASS}){_IGNORABLE_GAP_PATTERN}(?:{pattern}){_IGNORABLE_GAP_PATTERN}(?!{_IGNORABLE_BOUNDARY_CLASS})"
-    return _build_tolerant_profanity_pattern(pattern)
+        return rf"(?<!{boundary_class}){gap_pattern}(?:{pattern}){gap_pattern}(?!{boundary_class})"
+    return _build_tolerant_profanity_pattern(pattern, boundary_class=boundary_class, gap_pattern=gap_pattern)
 
 
-def _safe_ascii_profanity_pattern_source(pattern: str) -> str:
+def _safe_compact_profanity_pattern_source(pattern: str) -> str:
     if pattern in _TRUSTED_PROFANITY_PATTERNS and any(char in _REGEX_META_CHARS for char in pattern):
         return rf"(?<!\w)(?:{pattern})(?!\w)"
     normalized = _normalize_profanity_pattern(pattern)
     if not normalized:
         return ""
-    return rf"(?<!\w){re.escape(normalized)}(?!\w)"
+    source = "".join(_confusable_regex_source(char) for char in normalized)
+    return rf"(?<!\w){source}(?!\w)"
 
 
 PROFANITY_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
@@ -393,7 +404,33 @@ def compile_profanity_replacements(
 ) -> tuple[tuple[re.Pattern[str], str], ...]:
     if text is not None and (not isinstance(text, str) or isinstance(text, bool)):
         raise ValueError("text must be text")
-    use_ascii_patterns = text is not None and text.isascii()
+    boundary_class = _IGNORABLE_BOUNDARY_CLASS
+    gap_pattern = _IGNORABLE_GAP_PATTERN
+    use_compact_patterns = text is not None
+    if text is not None:
+        ignorable_codepoints = {
+            ord(char)
+            for value in (
+                text,
+                *(
+                    clean_value
+                    for pattern, replacement in pairs[:MAX_PROFANITY_FILTER_ENTRIES]
+                    for clean_value in (
+                        _clean_editable_value(pattern, max_chars=MAX_PROFANITY_PATTERN_CHARS),
+                        _clean_editable_value(replacement, max_chars=MAX_PROFANITY_REPLACEMENT_CHARS),
+                    )
+                    if clean_value
+                ),
+            )
+            for char in value
+            if unicodedata.category(char) in _MATCH_IGNORE_CATEGORIES
+        }
+        if ignorable_codepoints:
+            escaped_codepoints = "".join(_regex_escape_codepoint(codepoint) for codepoint in sorted(ignorable_codepoints))
+            ignorable_class = f"[{escaped_codepoints}]"
+            boundary_class = f"[\\w{escaped_codepoints}]"
+            gap_pattern = rf"{ignorable_class}*"
+            use_compact_patterns = False
     compiled: list[tuple[re.Pattern[str], str]] = []
     for pattern, replacement in pairs[:MAX_PROFANITY_FILTER_ENTRIES]:
         clean_pattern = _clean_editable_value(pattern, max_chars=MAX_PROFANITY_PATTERN_CHARS)
@@ -401,9 +438,13 @@ def compile_profanity_replacements(
         if not clean_pattern or not clean_replacement:
             continue
         pattern_source = (
-            _safe_ascii_profanity_pattern_source(clean_pattern)
-            if use_ascii_patterns
-            else _safe_profanity_pattern_source(clean_pattern)
+            _safe_compact_profanity_pattern_source(clean_pattern)
+            if use_compact_patterns
+            else _safe_profanity_pattern_source(
+                clean_pattern,
+                boundary_class=boundary_class,
+                gap_pattern=gap_pattern,
+            )
         )
         if not pattern_source:
             continue
