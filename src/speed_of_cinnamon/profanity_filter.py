@@ -355,7 +355,7 @@ def _clean_editable_value(value: str, *, max_chars: int) -> str:
         return ""
     if len(text) > max_chars or text_bytes > max_chars:
         return ""
-    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in text):
+    if any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in text):
         return ""
     return text
 

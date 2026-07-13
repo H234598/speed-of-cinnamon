@@ -14,6 +14,11 @@ class ProfanityFilterTest(unittest.TestCase):
 
         self.assertEqual(pairs, (("fuck", "frog"),))
 
+    def test_parse_profanity_replacement_list_ignores_c1_control_values(self) -> None:
+        pairs = parse_profanity_replacement_list("bad\x85 -> harmless\nfuck -> frog\n")
+
+        self.assertEqual(pairs, (("fuck", "frog"),))
+
     def test_compile_profanity_replacements_ignores_unencodable_values(self) -> None:
         compiled = compile_profanity_replacements((("bad\ud800", "harmless"), ("fuck", "frog")))
 
