@@ -3038,9 +3038,21 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
         remove_file(str(log_path), suffix=".log")
         detail = "; ".join(startup_errors) if startup_errors else "no supported recorder found"
         raise RuntimeError(f"no recorder backend started successfully: {detail}")
+
+    def recorder_process_is_gone() -> bool:
+        try:
+            return proc.poll() is not None
+        except Exception:
+            return False
+
     process_identity = _recording_process_identity_for_pid(proc.pid)
     if process_identity is None:
-        stop_process(proc.pid, allow_unverified_process=True)
+        try:
+            stopped = stop_process(proc.pid, allow_unverified_process=True)
+        except Exception as cleanup_error:
+            raise RuntimeError("recording process identity could not be verified; recorder process cleanup failed") from cleanup_error
+        if not stopped and not recorder_process_is_gone():
+            raise RuntimeError("recording process identity could not be verified; recorder process could not be stopped safely")
         remove_file(str(audio_path), suffix=".wav")
         remove_file(str(log_path), suffix=".log")
         raise RuntimeError("recording process identity could not be verified")
@@ -3059,8 +3071,13 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
     )
     try:
         store.write(state)
-    except Exception:
-        stop_process(proc.pid, expected_process_identity=process_identity)
+    except Exception as state_error:
+        try:
+            stopped = stop_process(proc.pid, expected_process_identity=process_identity)
+        except Exception as cleanup_error:
+            raise RuntimeError(f"{state_error}; recorder process cleanup failed") from cleanup_error
+        if not stopped and not recorder_process_is_gone():
+            raise RuntimeError(f"{state_error}; recorder process could not be stopped safely") from state_error
         remove_file(str(audio_path), suffix=".wav")
         remove_file(str(log_path), suffix=".log")
         raise
