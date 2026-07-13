@@ -335,9 +335,9 @@ def _safe_compact_profanity_pattern_source(pattern: str) -> str:
 
 
 PROFANITY_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
-    (re.compile(_safe_profanity_pattern_source(pattern), re.IGNORECASE), replacement)
+    (re.compile(_safe_compact_profanity_pattern_source(pattern), re.IGNORECASE), replacement)
     for pattern, replacement in PROFANITY_REPLACEMENT_PAIRS
-    if _safe_profanity_pattern_source(pattern)
+    if _safe_compact_profanity_pattern_source(pattern)
 )
 
 

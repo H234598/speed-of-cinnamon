@@ -61,6 +61,12 @@ class ProfanityFilterTest(unittest.TestCase):
 
         self.assertEqual(compiled[0][0].sub(compiled[0][1], "fuck ä"), "frog ä")
 
+    def test_compile_profanity_replacements_keeps_zero_width_matching_in_text_context(self) -> None:
+        text = "fu\u200bck"
+        compiled = compile_profanity_replacements((("fuck", "frog"),), text=text)
+
+        self.assertEqual(compiled[0][0].sub(compiled[0][1], text), "frog")
+
     def test_compile_profanity_replacements_rejects_invalid_text_context(self) -> None:
         with self.assertRaisesRegex(ValueError, "text must be text"):
             compile_profanity_replacements((("fuck", "frog"),), text=123)  # type: ignore[arg-type]
