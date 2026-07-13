@@ -5883,7 +5883,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn("this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);", fn_body)
         self.assertIn("this._setClipboardText(text)", fn_body[restore_index:paste_command_index])
         self.assertIn(
-            'if (!restored) {\n        this._setClipboardText(text);\n        this._setStatus("error", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);\n        completeOnce(false);\n        return;\n      }',
+            'if (!restored) {\n        if (this._setClipboardText(text)) {\n          this._setStatus("error", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);\n        } else {\n          this._setStatus("error", _("Could not copy to clipboard"), transcript);\n        }\n        completeOnce(false);\n        return;\n      }',
             fn_body,
         )
         self.assertIn(

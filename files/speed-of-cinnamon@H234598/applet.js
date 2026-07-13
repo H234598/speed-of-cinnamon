@@ -12197,8 +12197,11 @@ MyApplet.prototype = {
         return;
       }
       if (!restored) {
-        this._setClipboardText(text);
-        this._setStatus("error", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);
+        if (this._setClipboardText(text)) {
+          this._setStatus("error", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);
+        } else {
+          this._setStatus("error", _("Could not copy to clipboard"), transcript);
+        }
         completeOnce(false);
         return;
       }
