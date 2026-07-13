@@ -1547,7 +1547,7 @@ def stop_process(
         # a later stop/cancel invocation, while descendants still remain.
         process_group_target = _process_group_exists(pid)
         if not process_group_target:
-            return False
+            return True
         process_target = f"-{pid}"
     except OSError as exc:
         raise RecorderError(f"failed to inspect recorder process {pid}: {exc}") from exc

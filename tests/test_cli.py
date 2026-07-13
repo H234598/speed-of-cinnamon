@@ -3895,6 +3895,7 @@ class CliTest(unittest.TestCase):
             with (
                 mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
                 mock.patch.object(cli, "_recording_process_verified_alive", return_value=False),
+                mock.patch.object(cli, "stop_process", return_value=True) as mocked_stop,
             ):
                 result = cli._command_start_locked(argparse.Namespace(), store)
             final_state = store.read()
@@ -3902,6 +3903,42 @@ class CliTest(unittest.TestCase):
             self.assertEqual(final_state.status, "recorded")
             self.assertIsNone(final_state.pid)
             self.assertFalse(final_state.process_identity)
+            mocked_stop.assert_called_once_with(1234, expected_process_identity="stale-process-identity")
+
+    def test_start_locked_preserves_state_when_stale_recorder_group_cannot_be_stopped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            state_dir = tmp_path / "speed-of-cinnamon"
+            recordings_dir = state_dir / "recordings"
+            state_dir.mkdir(parents=True)
+            state_dir.chmod(0o700)
+            recordings_dir.mkdir(parents=True)
+            audio = recordings_dir / "active.wav"
+            audio.write_bytes(b"audio")
+            state_file = state_dir / "state.json"
+            store = StateStore(state_file)
+            store.write(
+                RecordingState(
+                    status="recording",
+                    pid=1234,
+                    process_identity="stale-process-identity",
+                    audio_path="recordings/active.wav",
+                )
+            )
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch.object(cli, "_recording_process_verified_alive", return_value=False),
+                mock.patch.object(cli, "stop_process", return_value=False) as mocked_stop,
+            ):
+                result = cli._command_start_locked(argparse.Namespace(), store)
+
+            final_state = store.read()
+
+        self.assertEqual(result["status"], "recording")
+        self.assertIn("could not be stopped safely", result["error"])
+        self.assertEqual(final_state.status, "recording")
+        self.assertEqual(final_state.error, result["error"])
+        mocked_stop.assert_called_once_with(1234, expected_process_identity="stale-process-identity")
 
     def test_start_locked_rejects_relative_recording_path_escape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

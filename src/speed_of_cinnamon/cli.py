@@ -3007,6 +3007,16 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
                 "pid_present": bool(current.pid),
                 "language": current.language,
             }
+        expected_process_identity = str(current.process_identity or "").strip()
+        if current.pid is not None and expected_process_identity:
+            stopped = stop_process(
+                current.pid,
+                expected_process_identity=expected_process_identity,
+            )
+            if not stopped:
+                error_text = "previous recorder could not be stopped safely; recording state preserved"
+                store.update(status="recording", error=error_text, inserted=False)
+                return {"status": "recording", "message": error_text, "error": error_text}
         if current_audio_path and current_audio_path.exists() and current_audio_path.stat().st_size > 0:
             recorded = store.update(
                 status="recorded",

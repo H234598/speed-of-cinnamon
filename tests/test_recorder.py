@@ -2006,8 +2006,9 @@ Source #13
             mock.patch("speed_of_cinnamon.recorder._process_group_exists", return_value=False),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
 
+        self.assertTrue(result)
         mocked_kill.assert_not_called()
 
     def test_stop_process_cleans_group_after_leader_was_reaped(self) -> None:
