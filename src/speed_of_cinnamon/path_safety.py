@@ -139,6 +139,17 @@ def open_file_without_following_symlinks(
                 _note_cleanup_failure(primary_error, cleanup_error)
             else:
                 raise
+        except BaseException as cleanup_error:
+            if result_fd is not None:
+                try:
+                    os.close(result_fd)
+                except BaseException as result_close_error:
+                    _note_cleanup_failure(cleanup_error, result_close_error)
+                result_fd = None
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise
 
 
 def open_directory_without_following_symlinks(path: Path, *, field_name: str = "path") -> int:
@@ -240,6 +251,8 @@ def ensure_directory_without_following_symlinks(path: Path, *, field_name: str =
         try:
             os.close(directory_fd)
         except OSError as cleanup_error:
+            _note_cleanup_failure(exc, cleanup_error)
+        except BaseException as cleanup_error:
             _note_cleanup_failure(exc, cleanup_error)
         raise
 

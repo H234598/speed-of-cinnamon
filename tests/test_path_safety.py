@@ -33,6 +33,23 @@ class PathSafetyTest(unittest.TestCase):
 
         self.assertEqual(close_calls, [100, 101])
 
+    def test_open_file_closes_leaf_when_directory_close_is_interrupted(self) -> None:
+        close_calls: list[int] = []
+
+        def interrupt_directory_close(fd: int) -> None:
+            close_calls.append(fd)
+            if fd == 100:
+                raise KeyboardInterrupt
+
+        with (
+            mock.patch.object(path_safety.os, "open", side_effect=[100, 101]),
+            mock.patch.object(path_safety.os, "close", side_effect=interrupt_directory_close),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                path_safety.open_file_without_following_symlinks(Path("/settings.json"), os.O_RDONLY)
+
+        self.assertEqual(close_calls, [100, 101])
+
     def test_open_file_closes_next_directory_when_previous_close_fails(self) -> None:
         close_calls: list[int] = []
 
@@ -96,6 +113,14 @@ class PathSafetyTest(unittest.TestCase):
                 path_safety.ensure_directory_without_following_symlinks(Path("/tmp/settings"))
 
         mocked_close.assert_called_once_with(100)
+
+    def test_ensure_directory_preserves_open_error_when_fd_close_is_interrupted(self) -> None:
+        with (
+            mock.patch.object(path_safety.os, "open", side_effect=[100, ValueError("open failed")]),
+            mock.patch.object(path_safety.os, "close", side_effect=KeyboardInterrupt),
+        ):
+            with self.assertRaisesRegex(ValueError, "open failed"):
+                path_safety.ensure_directory_without_following_symlinks(Path("/tmp/settings"))
 
     def test_ensure_directory_closes_next_directory_when_previous_close_is_interrupted(self) -> None:
         close_calls: list[int] = []
