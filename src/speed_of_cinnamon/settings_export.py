@@ -34,6 +34,7 @@ MAX_TYPING_DELAY_MS = 10_000
 DEFAULT_MAX_SECONDS = 30
 DEFAULT_TYPING_DELAY_MS = 8
 DEFAULT_MAX_TRANSCRIPT_FILES = 500
+MAX_TRANSCRIPT_FILES = 1_000
 MIN_RECORDING_SECONDS = 0
 MIN_TYPING_DELAY_MS = 0
 
@@ -381,6 +382,14 @@ def normalize_setting(key: str, value: Any) -> Any:
             if parsed > MAX_TYPING_DELAY_MS:
                 raise SettingsExportError(
                     f"setting typing-delay-ms must be at most {MAX_TYPING_DELAY_MS}"
+                )
+            return parsed
+        if key == "max-transcript-files":
+            if parsed < 1:
+                raise SettingsExportError("setting max-transcript-files must be at least 1")
+            if parsed > MAX_TRANSCRIPT_FILES:
+                raise SettingsExportError(
+                    f"setting max-transcript-files must be at most {MAX_TRANSCRIPT_FILES}"
                 )
             return parsed
         return parsed

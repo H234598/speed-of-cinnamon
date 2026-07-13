@@ -422,6 +422,10 @@ class SettingsExportTest(unittest.TestCase):
             build_export({"max-seconds": -2})
         with self.assertRaisesRegex(SettingsExportError, "must be at most"):
             build_export({"typing-delay-ms": MAX_TYPING_DELAY_MS + 1})
+        with self.assertRaisesRegex(SettingsExportError, "max-transcript-files must be at least"):
+            build_export({"max-transcript-files": 0})
+        with self.assertRaisesRegex(SettingsExportError, "max-transcript-files must be at most"):
+            build_export({"max-transcript-files": 1001})
 
     def test_write_export_rejects_non_integer_numeric_settings(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "must be an integer"):
@@ -458,6 +462,24 @@ class SettingsExportTest(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(SettingsExportError, "must be an integer"):
+                read_export(path)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text(
+                '{"app":"speed-of-cinnamon","version":2,"settings":{"max-transcript-files":0},'
+                '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(SettingsExportError, "max-transcript-files must be at least"):
+                read_export(path)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text(
+                '{"app":"speed-of-cinnamon","version":2,"settings":{"max-transcript-files":1001},'
+                '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(SettingsExportError, "max-transcript-files must be at most"):
                 read_export(path)
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
