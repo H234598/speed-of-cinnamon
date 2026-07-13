@@ -94,8 +94,14 @@ def _locked_alarm_store(path: Path | None = None) -> Iterator[Path]:
         try:
             fcntl.flock(fd, fcntl.LOCK_UN)
         finally:
-            os.close(fd)
-            os.close(parent_fd)
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.close(parent_fd)
+            except OSError:
+                pass
 
 
 def _contains_escaped_null(value: str) -> bool:

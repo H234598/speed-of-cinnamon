@@ -426,6 +426,27 @@ class AlarmTest(unittest.TestCase):
             self.assertTrue(lock_path.exists())
             self.assertTrue(backing.exists())
 
+    def test_alarm_store_lock_closes_parent_when_lock_close_fails(self) -> None:
+        closed_fds: list[int] = []
+
+        def close(fd: int) -> None:
+            closed_fds.append(fd)
+            if fd == 123:
+                raise OSError("lock close failed")
+
+        with (
+            mock.patch.object(alarm_module, "_assert_clean_path"),
+            mock.patch.object(alarm_module, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(alarm_module, "assert_fd_is_regular_private_file"),
+            mock.patch.object(alarm_module.os, "open", return_value=123),
+            mock.patch.object(alarm_module.os, "close", side_effect=close),
+            mock.patch.object(alarm_module.fcntl, "flock"),
+        ):
+            with alarm_module._locked_alarm_store(Path("/probe/alarms.json")) as store_path:
+                self.assertEqual(store_path, Path("/probe/alarms.json"))
+
+        self.assertEqual(closed_fds, [123, 456])
+
     def test_due_check_with_zero_catch_up_skips_past_alarm(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
