@@ -1789,6 +1789,38 @@ class ModelsTest(unittest.TestCase):
         self.assertFalse(status["downloaded"])
         self.assertFalse(status["verified"])
 
+    def test_multifile_model_rejects_hardlinked_inner_file(self) -> None:
+        data = b"small model file"
+        spec = models.ModelSpec(
+            name="ct2-hardlink-status",
+            filename="ct2-hardlink-status",
+            size="2 KiB",
+            sha1="",
+            description="ct2 hardlink status",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-hardlink-status",
+            files=("config.json",),
+            file_sha1s=file_sha1s_for(("config.json",), data),
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+        ):
+            path = models.model_path(spec)
+            path.mkdir(parents=True)
+            outside = Path(tmp) / "outside-config.json"
+            outside.write_bytes(data)
+            try:
+                os.link(outside, path / "config.json")
+            except OSError as exc:
+                self.skipTest(f"hardlinks unavailable: {exc}")
+
+            status = models.model_status(spec, verify=False)
+
+        self.assertFalse(status["downloaded"])
+
     def test_sha1_file_rejects_symlinked_intermediate_model_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -1256,7 +1256,8 @@ def _model_file_is_regular(path: Path) -> bool:
     fd: int | None = None
     try:
         fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name="model file")
-        return stat_module.S_ISREG(os.fstat(fd).st_mode)
+        assert_fd_is_regular_private_file(fd, field_name="model file")
+        return True
     except (OSError, RuntimeError):
         return False
     finally:
