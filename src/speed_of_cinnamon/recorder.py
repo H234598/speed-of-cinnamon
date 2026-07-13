@@ -728,6 +728,10 @@ def trim_recording_leading_silence(audio_path: Path, leading_silence_seconds: fl
         if isinstance(exc, RecorderError):
             raise
         raise RecorderError("failed to write trimmed recording audio file") from exc
+    except BaseException:
+        if temp_path is not None and temp_stat is not None:
+            _unlink_recording_path_if_same(temp_path, temp_stat)
+        raise
     finally:
         if audio_fd is not None:
             _close_fd_quietly(audio_fd)
@@ -779,12 +783,23 @@ def trim_recording_silence(
         if audio_fd is not None:
             _close_fd_quietly(audio_fd)
         raise
+    except BaseException:
+        if fd is not None and trimmed_path is not None:
+            _cleanup_recording_temp_file(trimmed_path, fd)
+        if audio_fd is not None:
+            _close_fd_quietly(audio_fd)
+        raise
     output_path = ""
     try:
         output_path = _ffmpeg_output_path_for_fd(fd)
         input_path = _ffmpeg_output_path_for_fd(audio_fd)
         ffmpeg = _command_path("ffmpeg")
     except Exception:
+        _cleanup_recording_temp_file(trimmed_path, fd)
+        if audio_fd is not None:
+            _close_fd_quietly(audio_fd)
+        raise
+    except BaseException:
         _cleanup_recording_temp_file(trimmed_path, fd)
         if audio_fd is not None:
             _close_fd_quietly(audio_fd)
@@ -824,6 +839,12 @@ def trim_recording_silence(
         _cleanup_recording_temp_file(trimmed_path, fd)
         detail = _sanitize_ffmpeg_error_detail(exc)
         raise RecorderError(f"failed to trim silence from recording: {detail or 'ffmpeg failed'}") from exc
+    except BaseException:
+        if audio_fd is not None:
+            _close_fd_quietly(audio_fd)
+            audio_fd = None
+        _cleanup_recording_temp_file(trimmed_path, fd)
+        raise
     finally:
         if audio_fd is not None:
             _close_fd_quietly(audio_fd)
@@ -884,12 +905,23 @@ def reencode_recording_to_flac(audio_path: Path) -> Path:
         if audio_fd is not None:
             _close_fd_quietly(audio_fd)
         raise
+    except BaseException:
+        if fd is not None and encoded_path is not None:
+            _cleanup_recording_temp_file(encoded_path, fd)
+        if audio_fd is not None:
+            _close_fd_quietly(audio_fd)
+        raise
     output_path = ""
     try:
         output_path = _ffmpeg_output_path_for_fd(fd)
         input_path = _ffmpeg_output_path_for_fd(audio_fd)
         ffmpeg = _command_path("ffmpeg")
     except Exception:
+        _cleanup_recording_temp_file(encoded_path, fd)
+        if audio_fd is not None:
+            _close_fd_quietly(audio_fd)
+        raise
+    except BaseException:
         _cleanup_recording_temp_file(encoded_path, fd)
         if audio_fd is not None:
             _close_fd_quietly(audio_fd)
@@ -923,6 +955,12 @@ def reencode_recording_to_flac(audio_path: Path) -> Path:
         _cleanup_recording_temp_file(encoded_path, fd)
         detail = _sanitize_ffmpeg_error_detail(exc)
         raise RecorderError(f"failed to convert recording to FLAC: {detail or 'ffmpeg failed'}") from exc
+    except BaseException:
+        if audio_fd is not None:
+            _close_fd_quietly(audio_fd)
+            audio_fd = None
+        _cleanup_recording_temp_file(encoded_path, fd)
+        raise
     finally:
         if audio_fd is not None:
             _close_fd_quietly(audio_fd)

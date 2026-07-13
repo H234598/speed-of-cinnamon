@@ -618,6 +618,48 @@ class RecorderTest(unittest.TestCase):
                     trim_recording_leading_silence(audio, 0.1)
             self.assertNotIn(str(audio), str(raised.exception))
 
+    def test_trim_recording_silence_cleans_temp_on_interruption(self) -> None:
+        from speed_of_cinnamon import recorder as recorder_module
+
+        audio_path = Path("/probe/input.wav")
+        temp_path = Path("/probe/.input.trimmed-test.flac")
+        with (
+            mock.patch.object(recorder_module, "_open_private_recording_audio_file", return_value=(audio_path, 11)),
+            mock.patch.object(recorder_module, "_create_recording_temp_file", return_value=(42, temp_path)),
+            mock.patch.object(recorder_module.os, "fstat", return_value=os.stat(__file__)),
+            mock.patch.object(recorder_module, "_ffmpeg_output_path_for_fd", side_effect=["out", "in"]),
+            mock.patch.object(recorder_module, "_command_path", return_value="/usr/bin/ffmpeg"),
+            mock.patch.object(recorder_module, "_run_ffmpeg_bounded", side_effect=KeyboardInterrupt),
+            mock.patch.object(recorder_module, "_cleanup_recording_temp_file") as mocked_cleanup,
+            mock.patch.object(recorder_module, "_close_fd_quietly") as mocked_close,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                recorder_module.trim_recording_silence(audio_path)
+
+        mocked_cleanup.assert_called_once_with(temp_path, 42)
+        mocked_close.assert_called_once_with(11)
+
+    def test_reencode_recording_cleans_temp_on_interruption(self) -> None:
+        from speed_of_cinnamon import recorder as recorder_module
+
+        audio_path = Path("/probe/input.wav")
+        temp_path = Path("/probe/.input.encoded-test.flac")
+        with (
+            mock.patch.object(recorder_module, "_open_private_recording_audio_file", return_value=(audio_path, 11)),
+            mock.patch.object(recorder_module, "_create_recording_temp_file", return_value=(42, temp_path)),
+            mock.patch.object(recorder_module.os, "fstat", return_value=os.stat(__file__)),
+            mock.patch.object(recorder_module, "_ffmpeg_output_path_for_fd", side_effect=["out", "in"]),
+            mock.patch.object(recorder_module, "_command_path", return_value="/usr/bin/ffmpeg"),
+            mock.patch.object(recorder_module, "_run_ffmpeg_bounded", side_effect=KeyboardInterrupt),
+            mock.patch.object(recorder_module, "_cleanup_recording_temp_file") as mocked_cleanup,
+            mock.patch.object(recorder_module, "_close_fd_quietly") as mocked_close,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                recorder_module.reencode_recording_to_flac(audio_path)
+
+        mocked_cleanup.assert_called_once_with(temp_path, 42)
+        mocked_close.assert_called_once_with(11)
+
     def test_trim_recording_silence_empty_output_does_not_leak_audio_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "secret-sample.wav"
