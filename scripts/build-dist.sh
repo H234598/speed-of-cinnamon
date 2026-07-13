@@ -190,6 +190,7 @@ replace_with_finalize_lock() {
 
   python3 - "$lock_path" "$safe_fs" "$staging_path" "$final_path" "$staging_checksum_path" "$final_checksum_path" <<'PY'
 import os
+import secrets
 import subprocess
 import stat
 import sys
@@ -203,6 +204,83 @@ except ModuleNotFoundError:
 lock_path, safe_fs, staging_path, final_path, staging_checksum_path, final_checksum_path = sys.argv[1:]
 lock_parent = os.path.dirname(lock_path)
 lock_name = os.path.basename(lock_path)
+
+
+def _lstat(path):
+    try:
+        return os.lstat(path)
+    except FileNotFoundError:
+        return None
+
+
+def _regular_file(path, label, *, required):
+    path_stat = _lstat(path)
+    if path_stat is None:
+        if required:
+            raise RuntimeError(f"{label} is missing: {path}")
+        return None
+    if stat.S_ISLNK(path_stat.st_mode):
+        raise RuntimeError(f"{label} must not be a symlink: {path}")
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise RuntimeError(f"{label} must be a regular file: {path}")
+    if getattr(path_stat, "st_nlink", 1) != 1:
+        raise RuntimeError(f"{label} must not be hardlinked: {path}")
+    return path_stat
+
+
+def _run_safe_fs(*arguments):
+    subprocess.run([sys.executable, safe_fs, *arguments], check=True)
+
+
+def _file_identity(path_stat):
+    return (path_stat.st_dev, path_stat.st_ino)
+
+
+def _new_backup_path(final_path):
+    for _ in range(16):
+        backup_path = f"{final_path}.{os.getpid()}.{secrets.token_hex(8)}.backup"
+        if _lstat(backup_path) is None:
+            return backup_path
+    raise RuntimeError(f"could not allocate a free backup path for {final_path}")
+
+
+def _rollback(entries):
+    rollback_errors = []
+    for entry in reversed(entries):
+        try:
+            if entry["backup_attempted"]:
+                backup_stat = _lstat(entry["backup"])
+                if backup_stat is not None:
+                    if _file_identity(backup_stat) != entry["final_identity"]:
+                        raise RuntimeError(
+                            f"refusing to restore changed backup during rollback: {entry['backup']}"
+                        )
+                    _run_safe_fs(
+                        "replace",
+                        "build-dist",
+                        entry["backup"],
+                        entry["final"],
+                        "--src-kind",
+                        "file",
+                    )
+                    entry["backup_created"] = False
+                else:
+                    final_stat = _lstat(entry["final"])
+                    if entry["backup_created"] or (
+                        final_stat is None or _file_identity(final_stat) != entry["final_identity"]
+                    ):
+                        raise RuntimeError(f"backup disappeared during rollback: {entry['backup']}")
+            elif entry["activation_attempted"] and not entry["had_existing"]:
+                current = _lstat(entry["final"])
+                if current is not None:
+                    if _file_identity(current) != entry["staging_identity"]:
+                        raise RuntimeError(
+                            f"refusing to remove changed final file during rollback: {entry['final']}"
+                        )
+                    _run_safe_fs("remove-leaf", "build-dist", entry["final"])
+        except BaseException as rollback_exc:
+            rollback_errors.append(f"{entry['final']}: {rollback_exc}")
+    return rollback_errors
 
 if not lock_name:
     print(f"finalization lock path is invalid: {lock_path}", file=sys.stderr)
@@ -246,16 +324,69 @@ try:
     lock_fd = os.open(lock_name, flags, 0o600, dir_fd=parent_fd)
     with os.fdopen(lock_fd, "r+", encoding="utf-8") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        if staging_path and final_path:
-            subprocess.run(
-                [sys.executable, safe_fs, "replace", "build-dist", staging_path, final_path, "--src-kind", "file"],
-                check=True,
+        pair_specs = (
+            (staging_path, final_path, "dist tarball"),
+            (staging_checksum_path, final_checksum_path, "dist checksum"),
+        )
+        entries = []
+        for staging, final, label in pair_specs:
+            if bool(staging) != bool(final):
+                raise RuntimeError(f"incomplete {label} finalization pair")
+            if not staging:
+                continue
+            staging_stat = _regular_file(staging, f"staged {label}", required=True)
+            final_stat = _regular_file(final, f"existing {label}", required=False)
+            entries.append(
+                {
+                    "backup": _new_backup_path(final),
+                    "backup_attempted": False,
+                    "backup_created": False,
+                    "activation_attempted": False,
+                    "final": final,
+                    "final_identity": _file_identity(final_stat) if final_stat is not None else None,
+                    "had_existing": final_stat is not None,
+                    "staging": staging,
+                    "staging_identity": _file_identity(staging_stat),
+                }
             )
-        if staging_checksum_path and final_checksum_path:
-            subprocess.run(
-                [sys.executable, safe_fs, "replace", "build-dist", staging_checksum_path, final_checksum_path, "--src-kind", "file"],
-                check=True,
-            )
+
+        try:
+            for entry in entries:
+                if entry["had_existing"]:
+                    entry["backup_attempted"] = True
+                    _run_safe_fs(
+                        "replace",
+                        "build-dist",
+                        entry["final"],
+                        entry["backup"],
+                        "--src-kind",
+                        "file",
+                        "--dst-must-not-exist",
+                    )
+                    entry["backup_created"] = True
+            for entry in entries:
+                entry["activation_attempted"] = True
+                _run_safe_fs(
+                    "replace",
+                    "build-dist",
+                    entry["staging"],
+                    entry["final"],
+                    "--src-kind",
+                    "file",
+                )
+        except BaseException as exc:
+            rollback_errors = _rollback(entries)
+            if rollback_errors:
+                exc.add_note("finalization rollback failed: " + "; ".join(rollback_errors))
+            raise
+
+        # Cleanup failures leave a complete new archive/checksum pair active;
+        # keep any remaining backup as a recovery copy rather than rolling back
+        # only one member of the pair.
+        for entry in entries:
+            if entry["backup_created"]:
+                _run_safe_fs("remove-leaf", "build-dist", entry["backup"])
+                entry["backup_created"] = False
 finally:
     os.close(parent_fd)
 PY
