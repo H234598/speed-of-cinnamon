@@ -172,6 +172,49 @@ class CliTest(unittest.TestCase):
             self.assertTrue(path.exists())
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
+    def test_prepare_transient_transcript_preserves_owner_error_when_fd_close_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / ".transcript.tmp.txt"
+            storage_path = root / "transcript.txt"
+            file_stat = os.stat(__file__)
+            with (
+                mock.patch.object(cli, "transcript_dir", return_value=root),
+                mock.patch.object(cli, "_prepare_private_file"),
+                mock.patch.object(cli.os, "open", return_value=42),
+                mock.patch.object(cli.os, "fstat", return_value=file_stat),
+                mock.patch.object(cli, "_write_transient_transcript_owner", side_effect=RuntimeError("owner failed")),
+                mock.patch.object(cli.os, "close", side_effect=OSError("close failed")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "owner failed"):
+                    cli._prepare_transient_transcript_path(path, storage_path)
+
+    def test_remove_transient_transcript_preserves_success_when_fd_close_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / ".transcript.tmp.txt"
+            storage_path = root / "transcript.txt"
+            path.write_text("temporary transcript\n", encoding="utf-8")
+            expected_fd = os.open(path, os.O_RDONLY)
+            real_close = os.close
+
+            def close_wrapper(fd: int) -> None:
+                if fd == expected_fd:
+                    raise OSError("close failed")
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.object(cli, "transcript_dir", return_value=root),
+                    mock.patch.object(cli, "_remove_transient_transcript_owner", return_value=True),
+                    mock.patch.object(cli.os, "close", side_effect=close_wrapper),
+                ):
+                    self.assertTrue(cli._remove_transient_transcript_path(path, storage_path, expected_fd=expected_fd))
+            finally:
+                real_close(expected_fd)
+
+            self.assertFalse(path.exists())
+
     def test_finalization_lock_pid_closes_descriptor_when_fdopen_rejects(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ".state.finalizing"

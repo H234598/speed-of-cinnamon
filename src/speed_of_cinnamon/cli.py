@@ -1507,11 +1507,17 @@ def _prepare_transient_transcript_path(path: Path, storage_path: Path) -> int | 
         return fd
     except OSError as exc:
         if fd is not None:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         raise RuntimeError(f"failed to open transient transcript file identity: {path}") from exc
     except RuntimeError:
         if fd is not None:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         raise
 
 
@@ -1551,7 +1557,10 @@ def _unlink_regular_leaf_with_parent_fsync(
     except OSError as exc:
         raise RuntimeError(f"failed to delete {field_name}: {path}") from exc
     finally:
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except OSError:
+            pass
 
 
 def _remove_transient_transcript_path(
@@ -1587,7 +1596,10 @@ def _remove_transient_transcript_path(
         raise RuntimeError(f"failed to delete transient transcript file: {path}") from exc
     finally:
         if expected_fd is not None:
-            os.close(expected_fd)
+            try:
+                os.close(expected_fd)
+            except OSError:
+                pass
 
 
 def _raise_recording_cleanup_failure(store: StateStore, failures: list[tuple[str, str, str]]) -> None:
