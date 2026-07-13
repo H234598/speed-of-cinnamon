@@ -304,7 +304,7 @@ class StateStore:
             if "too large" in str(exc):
                 return RecordingState(error="state file is too large")
             return RecordingState(error="state file could not be read")
-        except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError, RecursionError):
             return RecordingState(error="state file could not be read")
         return RecordingState(**normalized)
 

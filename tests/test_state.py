@@ -82,6 +82,16 @@ class StateStoreTest(unittest.TestCase):
             state = StateStore(path).read()
         self.assertEqual(state.error, "state file could not be read")
 
+    def test_read_wraps_json_recursion_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('{"status":"idle"}', encoding="utf-8")
+            path.chmod(0o600)
+            with mock.patch("speed_of_cinnamon.state.json.loads", side_effect=RecursionError("too deep")):
+                state = StateStore(path).read()
+
+        self.assertEqual(state.error, "state file could not be read")
+
     def test_state_store_rejects_non_private_parent_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             os.chmod(tmp, 0o777)
