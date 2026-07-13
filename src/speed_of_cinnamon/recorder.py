@@ -767,9 +767,14 @@ def trim_recording_silence(
         )
     except RuntimeError as exc:
         raise RecorderError(str(exc)) from exc
+    fd: int | None = None
+    trimmed_path: Path | None = None
     try:
         fd, trimmed_path = _create_recording_temp_file(audio_path, marker="trimmed", suffix=".flac")
+        temporary_stat = os.fstat(fd)
     except Exception:
+        if fd is not None and trimmed_path is not None:
+            _cleanup_recording_temp_file(trimmed_path, fd)
         if audio_fd is not None:
             _close_fd_quietly(audio_fd)
         raise
@@ -836,6 +841,7 @@ def trim_recording_silence(
             field_name="ffmpeg silence trimming temporary file",
         )
     except RecorderError:
+        _unlink_recording_path_if_same(trimmed_path, temporary_stat)
         raise
     if output_size == 0:
         _unlink_recording_path_if_same(trimmed_path, output_stat)
@@ -866,9 +872,14 @@ def reencode_recording_to_flac(audio_path: Path) -> Path:
             _close_fd_quietly(audio_fd)
         return audio_path
 
+    fd: int | None = None
+    encoded_path: Path | None = None
     try:
         fd, encoded_path = _create_recording_temp_file(audio_path, marker="encoded", suffix=".flac")
+        temporary_stat = os.fstat(fd)
     except Exception:
+        if fd is not None and encoded_path is not None:
+            _cleanup_recording_temp_file(encoded_path, fd)
         if audio_fd is not None:
             _close_fd_quietly(audio_fd)
         raise
@@ -929,6 +940,7 @@ def reencode_recording_to_flac(audio_path: Path) -> Path:
             field_name="ffmpeg FLAC conversion temporary file",
         )
     except RecorderError:
+        _unlink_recording_path_if_same(encoded_path, temporary_stat)
         raise
     if output_size == 0:
         _unlink_recording_path_if_same(encoded_path, output_stat)

@@ -697,6 +697,58 @@ class RecorderTest(unittest.TestCase):
                         with self.assertRaisesRegex(RecorderError, "temporary file was replaced"):
                             trim_recording_silence(audio)
 
+    def test_trim_recording_silence_removes_temp_file_when_inspection_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+
+            def fail_inspection(path: Path, fd: int, *, field_name: str) -> None:
+                os.close(fd)
+                raise RecorderError("inspection failed")
+
+            with (
+                mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"),
+                mock.patch(
+                    "speed_of_cinnamon.recorder.subprocess.run",
+                    side_effect=lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0]),
+                ),
+                mock.patch.object(
+                    recorder_module,
+                    "_inspect_and_close_recording_temp_file",
+                    side_effect=fail_inspection,
+                ),
+            ):
+                with self.assertRaisesRegex(RecorderError, "inspection failed"):
+                    trim_recording_silence(audio)
+
+            self.assertEqual(list(Path(tmp).glob("*.flac")), [])
+
+    def test_reencode_recording_to_flac_removes_temp_file_when_inspection_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+
+            def fail_inspection(path: Path, fd: int, *, field_name: str) -> None:
+                os.close(fd)
+                raise RecorderError("inspection failed")
+
+            with (
+                mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"),
+                mock.patch(
+                    "speed_of_cinnamon.recorder.subprocess.run",
+                    side_effect=lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0]),
+                ),
+                mock.patch.object(
+                    recorder_module,
+                    "_inspect_and_close_recording_temp_file",
+                    side_effect=fail_inspection,
+                ),
+            ):
+                with self.assertRaisesRegex(RecorderError, "inspection failed"):
+                    reencode_recording_to_flac(audio)
+
+            self.assertEqual(list(Path(tmp).glob("*.flac")), [])
+
     def test_trim_recording_silence_reports_ffmpeg_error_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
