@@ -3135,6 +3135,7 @@ MyApplet.prototype = {
     this.autoInsertFingerprints = [];
     this.autoInsertPendingFingerprint = "";
     this.transcriptListPromptToken = null;
+    this.transcriptListPromptDialog = null;
     this.textInsertToken = null;
     this.voiceModelActionToken = null;
     this.recordingStartedAtMs = 0;
@@ -4249,6 +4250,7 @@ MyApplet.prototype = {
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
     this.transcriptListPromptToken = null;
+    this.transcriptListPromptDialog = null;
     this.transcriptWindowToken = null;
     this.cleanupPreviewDialogToken = null;
     this.textInsertToken = null;
@@ -5833,7 +5835,24 @@ MyApplet.prototype = {
     }
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
-    this.transcriptListPromptToken = null;
+    let transcriptPromptCleanupSucceeded = true;
+    if (this.transcriptListPromptToken || this.transcriptListPromptDialog) {
+      if (!this.transcriptListPromptDialog) {
+        transcriptPromptCleanupSucceeded = false;
+        this._recordLifecycleError("dialog-state", new Error("Transcript list prompt dialog is unavailable"));
+        this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be stopped"), this.lastTranscript);
+      } else {
+        transcriptPromptCleanupSucceeded = this._dialogClose(this.transcriptListPromptDialog, "transcript-list");
+        if (transcriptPromptCleanupSucceeded) {
+          this.transcriptListPromptDialog = null;
+          this.transcriptListPromptToken = null;
+        } else {
+          this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be stopped"), this.lastTranscript);
+        }
+      }
+    } else {
+      this.transcriptListPromptToken = null;
+    }
     let textInsertProcessCleanupSucceeded = true;
     for (let group of ["keyboard", "clipboard", "x11"]) {
       if (this._terminateProcessesByGroup(group) === false) {
@@ -5864,7 +5883,7 @@ MyApplet.prototype = {
       this.ollamaModelCleanupFailed = true;
       this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
     }
-    return historyRefreshCleanupSucceeded && inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && voiceModelCleanupSucceeded && textModelRefreshCleanupSucceeded && alarmMenuRefreshCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded && textInsertProcessCleanupSucceeded && settingsPromptCleanupSucceeded && ollamaWatchTimerCleanupSucceeded && ollamaCleanupSucceeded;
+    return historyRefreshCleanupSucceeded && inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && voiceModelCleanupSucceeded && textModelRefreshCleanupSucceeded && alarmMenuCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded && textInsertProcessCleanupSucceeded && settingsPromptCleanupSucceeded && ollamaWatchTimerCleanupSucceeded && ollamaCleanupSucceeded && transcriptPromptCleanupSucceeded;
   },
 
   _runDoctor: function(startupCheck) {
@@ -9253,6 +9272,7 @@ MyApplet.prototype = {
     let promptToken = {};
     this.transcriptListPromptToken = promptToken;
     let dialog = this._newSafeDialog("transcript-list");
+    this.transcriptListPromptDialog = dialog;
     let completed = false;
     let releasePrompt = true;
     let complete = (result) => {
@@ -9262,6 +9282,9 @@ MyApplet.prototype = {
       completed = true;
       if (releasePrompt && this.transcriptListPromptToken === promptToken) {
         this.transcriptListPromptToken = null;
+        if (this.transcriptListPromptDialog === dialog) {
+          this.transcriptListPromptDialog = null;
+        }
       }
       if (typeof completionCallback === "function") {
         completionCallback(result === true);

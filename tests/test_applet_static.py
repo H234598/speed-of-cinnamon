@@ -5007,8 +5007,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (this.transcriptListPromptToken)", prompt_block)
         self.assertIn("let promptToken = {};", prompt_block)
         self.assertIn("this.transcriptListPromptToken = promptToken;", prompt_block)
+        self.assertIn("this.transcriptListPromptDialog = dialog;", prompt_block)
         self.assertIn("this.transcriptListPromptToken === promptToken", prompt_block)
         self.assertIn("this.transcriptListPromptToken = null;", prompt_block)
+        self.assertIn("this.transcriptListPromptDialog === dialog", prompt_block)
+        self.assertIn("this.transcriptListPromptDialog = null;", prompt_block)
         self.assertIn("} finally {\n            complete(false);", prompt_block)
         cancel_status = prompt_block.index('this._setStatusPreservingRecording("ready", _("Transcript list cancelled")')
         self.assertIn("if (this.transcriptListPromptToken === promptToken)", prompt_block[cancel_status - 90:cancel_status])
@@ -6308,6 +6311,10 @@ class AppletStaticTest(unittest.TestCase):
             "transcriptListPromptToken",
         ]:
             self.assertIn(f"this.{token} = null;", helper_block)
+        self.assertIn("let transcriptPromptCleanupSucceeded = true;", helper_block)
+        self.assertIn("this._dialogClose(this.transcriptListPromptDialog, \"transcript-list\")", helper_block)
+        self.assertIn("this._setStatusPreservingRecording(\"error\", _(\"Transcript list confirmation could not be stopped\")", helper_block)
+        self.assertIn("&& transcriptPromptCleanupSucceeded;", helper_block)
         self.assertIn('this._terminateProcessesByGroup("history-refresh")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("input-source-refresh")', helper_block)
         self.assertIn('this._terminateProcessesByGroup("model-menu-refresh")', helper_block)
