@@ -168,7 +168,7 @@ def is_encrypted_payload(payload: bytes) -> bool:
         return False
     try:
         envelope = json.loads(stripped.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         return False
     return (
         isinstance(envelope, dict)
@@ -979,7 +979,7 @@ def decrypt_bytes(payload: bytes, *, kind: str, require_encrypted: bool = True) 
         return payload
     try:
         envelope = json.loads(payload.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise ArtifactCryptoError("encrypted artifact envelope is malformed") from exc
     if not isinstance(envelope, dict):
         raise ArtifactCryptoError("encrypted artifact envelope must be an object")
