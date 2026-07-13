@@ -145,6 +145,29 @@ class PathSafetyTest(unittest.TestCase):
             self.assertEqual(target.read_text(encoding="utf-8"), "{}")
             self.assertGreaterEqual(mocked_fsync.call_count, 2)
 
+    def test_atomic_write_restores_existing_target_when_activation_fsync_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            target.write_text("old", encoding="utf-8")
+            directory_fsyncs = 0
+            real_fsync = os.fsync
+
+            def fail_activation_fsync(fd: int) -> None:
+                nonlocal directory_fsyncs
+                if stat.S_ISDIR(os.fstat(fd).st_mode):
+                    directory_fsyncs += 1
+                    if directory_fsyncs == 2:
+                        raise OSError("activation fsync failed")
+                real_fsync(fd)
+
+            with mock.patch.object(path_safety.os, "fsync", side_effect=fail_activation_fsync):
+                with self.assertRaisesRegex(OSError, "activation fsync failed"):
+                    path_safety.write_text_atomically_without_following_symlinks(target, "new")
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "old")
+            self.assertEqual(list(Path(tmp).glob(".settings.json.*.bak")), [])
+            self.assertEqual(list(Path(tmp).glob(".settings.json.*.tmp")), [])
+
     def test_atomic_write_fails_closed_when_temp_file_cannot_be_made_private(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "settings.json"

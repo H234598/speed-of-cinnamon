@@ -256,7 +256,50 @@ def _write_atomically_without_following_symlinks(
         raise OSError(f"secure atomic write is not supported for {field_name}")
     parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name=f"{field_name} directory")
     temp_name = ""
+    backup_name = ""
+    backup_moved = False
+    activation_attempted = False
+    activation_stat: os.stat_result | None = None
+    temporary_stat: os.stat_result | None = None
+    transaction_active = False
     primary_error: BaseException | None = None
+
+    def _same_leaf_snapshot(first: os.stat_result, second: os.stat_result) -> bool:
+        return (
+            first.st_dev,
+            first.st_ino,
+            first.st_mode,
+            getattr(first, "st_nlink", 1),
+            first.st_size,
+            first.st_mtime_ns,
+            first.st_ctime_ns,
+        ) == (
+            second.st_dev,
+            second.st_ino,
+            second.st_mode,
+            getattr(second, "st_nlink", 1),
+            second.st_size,
+            second.st_mtime_ns,
+            second.st_ctime_ns,
+        )
+
+    def _same_leaf_identity(first: os.stat_result, second: os.stat_result) -> bool:
+        return (
+            first.st_dev,
+            first.st_ino,
+            first.st_mode,
+            getattr(first, "st_nlink", 1),
+            first.st_size,
+            first.st_mtime_ns,
+        ) == (
+            second.st_dev,
+            second.st_ino,
+            second.st_mode,
+            getattr(second, "st_nlink", 1),
+            second.st_size,
+            second.st_mtime_ns,
+        )
+
     try:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag
         try:
@@ -265,6 +308,10 @@ def _write_atomically_without_following_symlinks(
             target_stat = None
         if target_stat is not None and stat.S_ISLNK(target_stat.st_mode):
             raise OSError(f"{field_name} must not be a symlink")
+        if target_stat is not None and not stat.S_ISREG(target_stat.st_mode):
+            raise OSError(f"{field_name} must be a regular file")
+        if target_stat is not None and getattr(target_stat, "st_nlink", 1) != 1:
+            raise OSError(f"{field_name} must not be hardlinked")
         for _ in range(100):
             candidate_name = f".{path.name}.{secrets.token_hex(8)}.tmp"
             try:
@@ -294,11 +341,80 @@ def _write_atomically_without_following_symlinks(
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
+            temporary_stat = os.fstat(handle.fileno())
+
+        try:
+            current_target_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            current_target_stat = None
+        if target_stat is None:
+            if current_target_stat is not None:
+                raise OSError(f"{field_name} changed before activation")
+        elif current_target_stat is None or not _same_leaf_snapshot(current_target_stat, target_stat):
+            raise OSError(f"{field_name} changed before activation")
+        if temporary_stat is None:
+            raise OSError(f"{field_name} temporary file identity is unavailable")
+        staged_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISREG(staged_stat.st_mode) or getattr(staged_stat, "st_nlink", 1) != 1:
+            raise OSError(f"{field_name} temporary file is not safe")
+        if not _same_leaf_snapshot(staged_stat, temporary_stat):
+            raise OSError(f"{field_name} temporary file changed before activation")
+
+        transaction_active = True
+        if target_stat is not None:
+            for _ in range(100):
+                candidate_name = f".{path.name}.{secrets.token_hex(8)}.bak"
+                try:
+                    os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    backup_name = candidate_name
+                    break
+            if not backup_name:
+                raise OSError(f"failed to create recovery backup for {field_name}")
+            os.replace(path.name, backup_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            backup_moved = True
+            os.fsync(parent_fd)
+        activation_attempted = True
         os.replace(temp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         temp_name = ""
+        try:
+            activation_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except OSError as stat_error:
+            raise OSError(f"{field_name} could not be inspected after activation") from stat_error
         os.fsync(parent_fd)
+        transaction_active = False
+        if backup_moved:
+            backup_stat = os.stat(backup_name, dir_fd=parent_fd, follow_symlinks=False)
+            if not stat.S_ISREG(backup_stat.st_mode) or getattr(backup_stat, "st_nlink", 1) != 1:
+                raise OSError(f"{field_name} recovery backup is not safe")
+            if target_stat is None or not _same_leaf_identity(backup_stat, target_stat):
+                raise OSError(f"{field_name} recovery backup changed before cleanup")
+            os.unlink(backup_name, dir_fd=parent_fd)
+            os.fsync(parent_fd)
     except BaseException as exc:
         primary_error = exc
+        if transaction_active:
+            try:
+                if activation_attempted and activation_stat is not None:
+                    try:
+                        current_target_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+                    except FileNotFoundError:
+                        current_target_stat = None
+                    if current_target_stat is not None:
+                        if not _same_leaf_snapshot(current_target_stat, activation_stat):
+                            raise OSError(f"{field_name} target changed during rollback")
+                        os.unlink(path.name, dir_fd=parent_fd)
+                        os.fsync(parent_fd)
+                if backup_moved:
+                    try:
+                        os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+                    except FileNotFoundError:
+                        os.replace(backup_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                        os.fsync(parent_fd)
+                    else:
+                        raise OSError(f"{field_name} target exists during rollback")
+            except BaseException as rollback_error:
+                _note_cleanup_failure(primary_error, rollback_error)
         cleanup_error: OSError | None = None
         if temp_name:
             try:
