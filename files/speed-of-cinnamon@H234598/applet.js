@@ -150,6 +150,23 @@ const AUTO_PASTE_TITLE_PRESETS = [
   "Telegram",
   "Teams"
 ];
+
+function _decodeSubprocessOutputChunks(chunks) {
+  let totalBytes = 0;
+  for (let chunk of chunks || []) {
+    if (!chunk || typeof chunk.length !== "number" || !isFinite(chunk.length) || chunk.length < 0) {
+      throw new Error("Subprocess output chunk is invalid");
+    }
+    totalBytes += chunk.length;
+  }
+  let contents = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (let chunk of chunks || []) {
+    contents.set(new Uint8Array(chunk), offset);
+    offset += chunk.length;
+  }
+  return ByteArray.toString(contents);
+}
 const CLI_COMMAND_TIMEOUT_MS = 300000;
 const STATUS_COMMAND_TIMEOUT_MS = 10000;
 const DOCTOR_COMMAND_TIMEOUT_MS = 20000;
@@ -10603,7 +10620,15 @@ MyApplet.prototype = {
       if (!callbackDelivered) {
         callbackDelivered = true;
         try {
-          callback(stdoutParts.join(""), stderrParts.join(""), callbackResult);
+          let stdoutText = "";
+          let stderrText = "";
+          try {
+            stdoutText = _decodeSubprocessOutputChunks(stdoutParts);
+            stderrText = _decodeSubprocessOutputChunks(stderrParts);
+          } catch (error) {
+            callbackResult = { error: "Subprocess output is not valid UTF-8" };
+          }
+          callback(stdoutText, stderrText, callbackResult);
         } catch (error) {
           this._recordLifecycleError("process-callback", error);
         }
@@ -10667,7 +10692,7 @@ MyApplet.prototype = {
               return;
             }
             let data = bytes && bytes.get_data ? bytes.get_data() : bytes;
-            let chunk = ByteArray.toString(data || "");
+            let chunk = new Uint8Array(data || []);
             if (name === "stdout") {
               stdoutBytes += size;
             } else {

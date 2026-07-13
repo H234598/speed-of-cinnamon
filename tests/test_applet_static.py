@@ -4402,7 +4402,20 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("processOrphanCleanupSucceeded", block)
         self.assertIn("let cleanupSucceeded = cleanupResources(timeoutCleanupSucceeded);", block)
         self.assertIn('let callbackResult = cleanupSucceeded ? (result || {}) : { error: "Subprocess cleanup failed" };', block)
-        self.assertIn("callback(stdoutParts.join(\"\"), stderrParts.join(\"\"), callbackResult);", block)
+        self.assertIn("callback(stdoutText, stderrText, callbackResult);", block)
+
+    def test_subprocess_output_reassembles_bytes_before_utf8_decode(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_runBoundedSubprocess: function(args, env, options, callback)")
+        end = source.index("\n  _spawnJsonWithBackendEnvironment:", start)
+        block = source[start:end]
+        self.assertIn("function _decodeSubprocessOutputChunks(chunks)", source)
+        self.assertIn("let contents = new Uint8Array(totalBytes);", source)
+        self.assertIn("stdoutText = _decodeSubprocessOutputChunks(stdoutParts);", block)
+        self.assertIn("stderrText = _decodeSubprocessOutputChunks(stderrParts);", block)
+        self.assertIn("let chunk = new Uint8Array(data || []);", block)
+        self.assertNotIn('ByteArray.toString(data || "")', block)
+        self.assertIn('callbackResult = { error: "Subprocess output is not valid UTF-8" };', block)
 
     def test_teardown_uses_safe_process_and_cancellable_unregistration(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
