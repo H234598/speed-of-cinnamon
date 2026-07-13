@@ -2015,7 +2015,10 @@ def _prepare_private_file(path: Path, *, field_name: str, exclusive: bool = True
     except OSError as exc:
         raise _PrivateFilePrepareError(f"failed to prepare {field_name}: {path}", created=False, errno_value=exc.errno) from exc
     finally:
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except OSError:
+            pass
     try:
         with os.fdopen(fd, "ab") as handle:
             try:

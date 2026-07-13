@@ -149,6 +149,29 @@ class CliTest(unittest.TestCase):
             with self.assertRaises(OSError):
                 os.fstat(target_fds[0])
 
+    def test_prepare_private_file_preserves_success_when_parent_close_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "recording.wav"
+            parent_fd = os.open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_close = os.close
+
+            def close_wrapper(fd: int) -> None:
+                if fd == parent_fd:
+                    raise OSError("parent close failed")
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.object(cli, "ensure_directory_without_following_symlinks", return_value=parent_fd),
+                    mock.patch.object(cli.os, "close", side_effect=close_wrapper),
+                ):
+                    cli._prepare_private_file(path, field_name="recording audio file")
+            finally:
+                real_close(parent_fd)
+
+            self.assertTrue(path.exists())
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
     def test_finalization_lock_pid_closes_descriptor_when_fdopen_rejects(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ".state.finalizing"
