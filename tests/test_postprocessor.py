@@ -159,6 +159,20 @@ class PostProcessorTest(unittest.TestCase):
         self.assertIn("Correct only punctuation", ollama_prompt)
         self.assertIn("Correct only punctuation", openai_messages[0]["content"])
 
+    def test_prompt_builders_reject_non_text_inputs(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "text must be text"):
+            build_ollama_prompt(123, "en")  # type: ignore[arg-type]
+        with self.assertRaisesRegex(PostProcessError, "text must be text"):
+            build_openai_compatible_messages(123, "en")  # type: ignore[arg-type]
+        with self.assertRaisesRegex(PostProcessError, "instruction must be text"):
+            build_openai_compatible_messages("hello", "en", instruction=123)  # type: ignore[arg-type]
+
+    def test_prompt_builders_bound_direct_inputs(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "input text is too large"):
+            build_openai_compatible_messages("x" * (1_000_000 + 1), "en")
+        with self.assertRaisesRegex(PostProcessError, "instruction is too large"):
+            build_ollama_prompt("hello", "en", instruction="x" * (MAX_POSTPROCESS_PROMPT_CHARS + 1))
+
     def test_command_does_not_receive_personalization_environment_without_placeholder(self) -> None:
         command = "python3 -c \"import os, sys; print(sys.stdin.read().strip() + '|' + os.environ.get('SPEED_OF_CINNAMON_VOCABULARY', 'missing'))\""
         self.assertEqual(

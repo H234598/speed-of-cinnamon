@@ -305,6 +305,7 @@ def build_ollama_prompt(
 ) -> str:
     if not isinstance(text, str) or isinstance(text, bool):
         raise PostProcessError("text must be text")
+    text = _assert_text_length(text, field_name="input text")
     language = _safe_prompt_language(language)
     if not isinstance(personal_context, str) or isinstance(personal_context, bool):
         raise PostProcessError("personal context must be text")
@@ -312,6 +313,7 @@ def build_ollama_prompt(
         raise PostProcessError("vocabulary must be text")
     if not isinstance(instruction, str) or isinstance(instruction, bool):
         raise PostProcessError("instruction must be text")
+    instruction = _assert_text_length(instruction, field_name="instruction", max_chars=MAX_POSTPROCESS_PROMPT_CHARS)
     try:
         personalization = build_personalization_prompt(personal_context, vocabulary)
     except ValueError as exc:
@@ -779,7 +781,13 @@ def build_openai_compatible_messages(
     vocabulary: str = "",
     instruction: str = "",
 ) -> list[dict[str, str]]:
+    if not isinstance(text, str) or isinstance(text, bool):
+        raise PostProcessError("text must be text")
+    text = _assert_text_length(text, field_name="input text")
     language = _safe_prompt_language(language)
+    if not isinstance(instruction, str) or isinstance(instruction, bool):
+        raise PostProcessError("instruction must be text")
+    instruction = _assert_text_length(instruction, field_name="instruction", max_chars=MAX_POSTPROCESS_PROMPT_CHARS)
     try:
         personalization = build_personalization_prompt(personal_context, vocabulary)
     except ValueError as exc:
