@@ -29,6 +29,17 @@ from speed_of_cinnamon.state import RecordingState, StateStore
 
 
 class CliTest(unittest.TestCase):
+    def test_temporary_benchmark_path_preserves_result_on_fd_close_failure(self) -> None:
+        file_stat = os.stat(__file__)
+        with (
+            mock.patch.object(cli.tempfile, "mkstemp", return_value=(42, "/tmp/.benchmark-test.tmp.txt")),
+            mock.patch.object(cli.os, "fstat", return_value=file_stat),
+            mock.patch.object(cli.os, "close", side_effect=OSError("close failed")),
+        ):
+            result = cli._temporary_benchmark_transcript_path()
+
+        self.assertEqual(result, (Path("/tmp/.benchmark-test.tmp.txt"), file_stat))
+
     def test_write_json_atomic_sets_private_permissions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "payload.json"
