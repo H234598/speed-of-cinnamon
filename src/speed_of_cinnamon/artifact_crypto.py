@@ -206,7 +206,7 @@ def _b64decode(value: object, *, field_name: str) -> bytes:
     if isinstance(value, bool) or not isinstance(value, str) or not value:
         raise ArtifactCryptoError(f"encrypted artifact {field_name} is invalid")
     try:
-        return base64.urlsafe_b64decode(value.encode("ascii"))
+        return base64.b64decode(value.encode("ascii"), altchars=b"-_", validate=True)
     except Exception as exc:
         raise ArtifactCryptoError(f"encrypted artifact {field_name} is invalid") from exc
 

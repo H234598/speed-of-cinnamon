@@ -31,6 +31,23 @@ class ArtifactCryptoTest(unittest.TestCase):
         with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "path is not safe"):
             artifact_crypto.encrypted_path_for(Path("artifact\nspoof.txt"))
 
+    def test_base64_decoder_rejects_non_alphabet_characters(self) -> None:
+        for value in ("YWJj!", "YW Jj"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "probe is invalid"):
+                    artifact_crypto._b64decode(value, field_name="probe")
+
+    def test_decryption_rejects_tampered_base64_envelope_field(self) -> None:
+        with mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: STRONG_PASSPHRASE}, clear=False):
+            encrypted, _mode = artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
+
+        envelope = json.loads(encrypted.decode("utf-8"))
+        envelope["ciphertext"] += "!"
+        tampered = (json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+        with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "ciphertext is invalid"):
+            artifact_crypto.decrypt_bytes(tampered, kind="transcript")
+
     def test_passphrase_encrypts_and_decrypts_payload(self) -> None:
         with mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: STRONG_PASSPHRASE}, clear=False):
             encrypted, mode = artifact_crypto.encrypt_bytes(b"private transcript", "passphrase", kind="transcript")
