@@ -8957,6 +8957,43 @@ class CliTest(unittest.TestCase):
         self.assertEqual(final_state.status, "error")
         self.assertIn("missing or empty", final_state.error)
 
+    @mock.patch("speed_of_cinnamon.cli.transcribe", side_effect=RuntimeError("transcribe failed"))
+    def test_finalize_recovery_clears_stale_process_identity(
+        self, mocked_transcribe: mock.Mock
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            (tmp_path / "speed-of-cinnamon").chmod(0o700)
+            state_file = tmp_path / "speed-of-cinnamon" / "state.json"
+            audio = recordings / "recording.wav"
+            audio.write_bytes(b"audio")
+            store = StateStore(state_file)
+            store.write(
+                RecordingState(
+                    status="finalizing",
+                    pid=424242,
+                    process_identity="stale-process-identity",
+                    audio_path=str(audio),
+                )
+            )
+            args = self._build_finalize_args()
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=cli.SilenceDetectionResult(False, False, 1.0, 0.0, 1.0, 0.0, "speech detected")),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("skip trim")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "transcribe failed"):
+                    cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+
+        mocked_transcribe.assert_called_once()
+        self.assertEqual(final_state.status, "error")
+        self.assertIsNone(final_state.pid)
+        self.assertFalse(final_state.process_identity)
+
     def test_stop_recorded_without_audio_path_persists_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "state.json"

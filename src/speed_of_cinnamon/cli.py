@@ -1412,7 +1412,13 @@ def _persist_cleanup_failure_state(
         return
     error_text = _cleanup_failure_error(failed_paths)
     try:
-        updates: dict[str, object] = {"status": "error", "stopped_at": now_iso(), "error": error_text}
+        updates: dict[str, object] = {
+            "status": "error",
+            "pid": None,
+            "process_identity": "",
+            "stopped_at": now_iso(),
+            "error": error_text,
+        }
         if artifact_state is not None:
             updates.update(
                 {
@@ -1591,6 +1597,8 @@ def _raise_recording_cleanup_failure(store: StateStore, failures: list[tuple[str
     error_text = f"failed to delete recording artifact(s): {failed_labels}"
     error_update: dict[str, object] = {
         "status": "error",
+        "pid": None,
+        "process_identity": "",
         "stopped_at": now_iso(),
         "error": error_text,
     }
@@ -3217,6 +3225,8 @@ def finalize_recording(
             )
             state_marked_finalizing = True
         else:
+            if state.pid is not None or state.process_identity:
+                state = store.update(pid=None, process_identity="")
             state_marked_finalizing = True
         audio_deleted = False
         log_deleted = False
@@ -3548,6 +3558,8 @@ def finalize_recording(
                 stabilized_audio_deleted = remove_file(str(stabilized_audio_path), suffix=stabilized_audio_path.suffix)
             error_update: dict[str, object] = {
                 "status": "error",
+                "pid": None,
+                "process_identity": "",
                 "stopped_at": now_iso(),
                 "error": error_text,
             }
