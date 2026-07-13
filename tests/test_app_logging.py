@@ -383,6 +383,50 @@ class AppLoggingTest(unittest.TestCase):
 
             self.assertFalse(path.exists())
 
+    def test_gzip_file_closes_source_when_source_inspection_fails(self) -> None:
+        with (
+            mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".target.tmp")),
+            mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
+            mock.patch.object(app_logging.os, "fstat", side_effect=OSError("inspect failed")),
+            mock.patch.object(app_logging, "_unlink_log_temp"),
+            mock.patch.object(app_logging.os, "close", side_effect=OSError("close failed")),
+        ):
+            with self.assertRaisesRegex(OSError, "inspect failed") as caught:
+                app_logging._gzip_file(Path("/probe/source.log"), Path("/probe/target.log.gz"))
+
+        self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
+
+    def test_gzip_file_preserves_source_fdopen_error_when_close_fails(self) -> None:
+        with (
+            mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".target.tmp")),
+            mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
+            mock.patch.object(app_logging.os, "fstat", return_value=os.stat(__file__)),
+            mock.patch.object(app_logging.os, "fdopen", side_effect=ValueError("source fdopen failed")),
+            mock.patch.object(app_logging, "_unlink_log_temp"),
+            mock.patch.object(app_logging.os, "close", side_effect=OSError("close failed")),
+        ):
+            with self.assertRaisesRegex(ValueError, "source fdopen failed") as caught:
+                app_logging._gzip_file(Path("/probe/source.log"), Path("/probe/target.log.gz"))
+
+        self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
+
+    def test_gzip_file_closes_temp_fd_when_output_fdopen_fails(self) -> None:
+        input_file = mock.Mock()
+        with (
+            mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".target.tmp")),
+            mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
+            mock.patch.object(app_logging.os, "fstat", return_value=os.stat(__file__)),
+            mock.patch.object(app_logging.os, "fdopen", side_effect=[input_file, ValueError("output fdopen failed")]),
+            mock.patch.object(app_logging, "_unlink_log_temp"),
+            mock.patch.object(app_logging.os, "close", side_effect=OSError("close failed")) as mocked_close,
+        ):
+            with self.assertRaisesRegex(ValueError, "output fdopen failed") as caught:
+                app_logging._gzip_file(Path("/probe/source.log"), Path("/probe/target.log.gz"))
+
+        input_file.close.assert_called_once_with()
+        self.assertIn(mock.call(456), mocked_close.call_args_list)
+        self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
+
     def test_create_log_temp_preserves_open_error_when_parent_close_fails(self) -> None:
         with (
             mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),

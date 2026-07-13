@@ -778,24 +778,53 @@ def _gzip_file(source: Path, target: Path) -> None:
     if target.exists():
         _assert_regular_unlinked_file(target, field_name="log target file")
     temp_fd, parent_fd, temp_name = _create_log_temp_file(target.parent, prefix=target.stem, suffix=".tmp")
+    source_fd: int | None = None
     try:
         try:
             source_fd = _open_log_source_file(source, field_name="log source file")
             source_stat = os.fstat(source_fd)
-        except Exception:
-            os.close(temp_fd)
+        except Exception as exc:
+            if source_fd is not None:
+                try:
+                    os.close(source_fd)
+                except OSError as cleanup_error:
+                    _note_cleanup_failure(exc, cleanup_error)
+                source_fd = None
+            try:
+                os.close(temp_fd)
+            except OSError as cleanup_error:
+                _note_cleanup_failure(exc, cleanup_error)
+            temp_fd = -1
             raise
         try:
             input_file = os.fdopen(source_fd, "rb")
-        except Exception:
-            os.close(source_fd)
-            os.close(temp_fd)
+            source_fd = None
+        except Exception as exc:
+            if source_fd is not None:
+                try:
+                    os.close(source_fd)
+                except OSError as cleanup_error:
+                    _note_cleanup_failure(exc, cleanup_error)
+                source_fd = None
+            try:
+                os.close(temp_fd)
+            except OSError as cleanup_error:
+                _note_cleanup_failure(exc, cleanup_error)
+            temp_fd = -1
             raise
         try:
             raw_output = os.fdopen(temp_fd, "wb")
-        except Exception:
-            input_file.close()
-            os.close(temp_fd)
+            temp_fd = -1
+        except Exception as exc:
+            try:
+                input_file.close()
+            except Exception as cleanup_error:
+                _note_cleanup_failure(exc, cleanup_error)
+            try:
+                os.close(temp_fd)
+            except OSError as cleanup_error:
+                _note_cleanup_failure(exc, cleanup_error)
+            temp_fd = -1
             raise
         with input_file, raw_output:
             with gzip.GzipFile(fileobj=raw_output, mode="wb") as output_file:
