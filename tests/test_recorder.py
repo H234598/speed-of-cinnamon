@@ -488,6 +488,28 @@ class RecorderTest(unittest.TestCase):
                 )
         self.assertIs(raised.exception, expected)
 
+    def test_silence_detection_preserves_result_on_audio_fd_close_failure(self) -> None:
+        from speed_of_cinnamon import recorder as recorder_module
+
+        audio_path = Path("/tmp/sample.wav")
+        with (
+            mock.patch.object(
+                recorder_module,
+                "_open_private_recording_audio_file",
+                return_value=(audio_path, 42),
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_command_path",
+                side_effect=recorder_module.RecorderError("ffmpeg missing"),
+            ),
+            mock.patch.object(recorder_module.os, "close", side_effect=OSError("close failed")),
+        ):
+            result = recorder_module.detect_silent_recording(audio_path)
+
+        self.assertFalse(result.analyzed)
+        self.assertIn("ffmpeg missing", result.detail)
+
     def test_trim_recording_leading_silence_open_error_does_not_leak_audio_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "secret-sample.wav"

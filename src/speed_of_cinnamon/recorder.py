@@ -598,7 +598,10 @@ def detect_silent_recording(audio_path: Path) -> SilenceDetectionResult:
         ffmpeg = _command_path("ffmpeg")
     except RecorderError as exc:
         if audio_fd is not None:
-            os.close(audio_fd)
+            try:
+                os.close(audio_fd)
+            except OSError:
+                pass
         return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, str(exc))
     try:
         input_path = _ffmpeg_output_path_for_fd(audio_fd)
@@ -627,7 +630,10 @@ def detect_silent_recording(audio_path: Path) -> SilenceDetectionResult:
         return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, "ffmpeg silence detection failed")
     finally:
         if audio_fd is not None:
-            os.close(audio_fd)
+            try:
+                os.close(audio_fd)
+            except OSError:
+                pass
     if proc.returncode != 0:
         detail = _decode_ffmpeg_output(proc.stderr)
         detail = _sanitize_ffmpeg_error_detail(detail)
