@@ -1024,6 +1024,10 @@ def read_recording_level(audio_path: Path) -> RecordingLevel:
         if fd is not None:
             _close_fd_quietly(fd)
         raise RecorderError("recording audio file is not readable") from exc
+    except BaseException:
+        if fd is not None:
+            _close_fd_quietly(fd)
+        raise
     try:
         with os.fdopen(fd, "rb") as handle:
             fd = None
@@ -1043,6 +1047,10 @@ def read_recording_level(audio_path: Path) -> RecordingLevel:
         if fd is not None:
             _close_fd_quietly(fd)
         raise RecorderError("recording audio file is not readable") from exc
+    except BaseException:
+        if fd is not None:
+            _close_fd_quietly(fd)
+        raise
 
     raw = raw[: len(raw) - (len(raw) % 2)]
     if len(raw) < 2:
@@ -1212,6 +1220,9 @@ def _open_private_recording_audio_file(
     try:
         assert_fd_is_regular_private_file(fd, field_name="recording audio file")
     except Exception:
+        _close_fd_quietly(fd)
+        raise
+    except BaseException:
         _close_fd_quietly(fd)
         raise
     return normalized, fd

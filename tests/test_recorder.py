@@ -532,6 +532,61 @@ class RecorderTest(unittest.TestCase):
                 )
         self.assertIs(raised.exception, expected)
 
+    def test_private_recording_open_closes_fd_when_validation_is_interrupted(self) -> None:
+        from speed_of_cinnamon import recorder as recorder_module
+
+        with (
+            mock.patch.object(recorder_module, "_open_recording_artifact_leaf", return_value=42),
+            mock.patch.object(
+                recorder_module,
+                "assert_fd_is_regular_private_file",
+                side_effect=KeyboardInterrupt,
+            ),
+            mock.patch.object(recorder_module, "_close_fd_quietly") as mocked_close,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                recorder_module._open_private_recording_audio_file(
+                    Path("/tmp/sample.wav"),
+                    suffix=".wav",
+                )
+
+        mocked_close.assert_called_once_with(42)
+
+    def test_read_recording_level_closes_fd_when_validation_is_interrupted(self) -> None:
+        from speed_of_cinnamon import recorder as recorder_module
+
+        audio_path = Path("/tmp/sample.wav")
+        with (
+            mock.patch.object(recorder_module, "validate_recording_path", return_value=audio_path),
+            mock.patch.object(recorder_module, "_open_recording_artifact_leaf", return_value=42),
+            mock.patch.object(
+                recorder_module,
+                "assert_fd_is_regular_private_file",
+                side_effect=KeyboardInterrupt,
+            ),
+            mock.patch.object(recorder_module, "_close_fd_quietly") as mocked_close,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                recorder_module.read_recording_level(audio_path)
+
+        mocked_close.assert_called_once_with(42)
+
+    def test_read_recording_level_closes_fd_when_fdopen_is_interrupted(self) -> None:
+        from speed_of_cinnamon import recorder as recorder_module
+
+        audio_path = Path("/tmp/sample.wav")
+        with (
+            mock.patch.object(recorder_module, "validate_recording_path", return_value=audio_path),
+            mock.patch.object(recorder_module, "_open_recording_artifact_leaf", return_value=42),
+            mock.patch.object(recorder_module, "assert_fd_is_regular_private_file"),
+            mock.patch.object(recorder_module.os, "fdopen", side_effect=KeyboardInterrupt),
+            mock.patch.object(recorder_module, "_close_fd_quietly") as mocked_close,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                recorder_module.read_recording_level(audio_path)
+
+        mocked_close.assert_called_once_with(42)
+
     def test_silence_detection_preserves_result_on_audio_fd_close_failure(self) -> None:
         from speed_of_cinnamon import recorder as recorder_module
 
