@@ -2999,10 +2999,26 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
     normalized_input_device = normalize_input_device(args.input_device)
     audio_path, log_path = _allocate_recording_artifacts()
 
+    def remove_started_artifact(path: Path, suffix: str) -> bool:
+        if remove_file(str(path), suffix=suffix):
+            return True
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        return False
+
+    def cleanup_started_artifacts() -> bool:
+        audio_deleted = remove_started_artifact(audio_path, ".wav")
+        log_deleted = remove_started_artifact(log_path, ".log")
+        return audio_deleted and log_deleted
+
     def reset_recording_artifacts() -> None:
         nonlocal audio_path, log_path
-        remove_file(str(audio_path), suffix=".wav")
-        remove_file(str(log_path), suffix=".log")
+        if not cleanup_started_artifacts():
+            raise RuntimeError("failed to clean recording artifacts after recorder startup failure")
         audio_path, log_path = _allocate_recording_artifacts()
 
     recorder_preferences = ["pw-record", "parecord", "arecord"] if args.recorder == "auto" else [args.recorder]
@@ -3016,8 +3032,8 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
         except Exception as exc:
             startup_errors.append(f"{recorder_preference}: {exc}")
             if args.recorder != "auto":
-                remove_file(str(audio_path), suffix=".wav")
-                remove_file(str(log_path), suffix=".log")
+                if not cleanup_started_artifacts():
+                    raise RuntimeError("failed to clean recording artifacts after recorder startup failure") from exc
                 raise
             reset_recording_artifacts()
             continue
@@ -3029,13 +3045,13 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
         detail = read_log_excerpt(log_path) or f"exit code {candidate_proc.returncode}"
         startup_errors.append(f"{candidate.name} exited immediately: {detail}")
         if args.recorder != "auto":
-            remove_file(str(audio_path), suffix=".wav")
-            remove_file(str(log_path), suffix=".log")
+            if not cleanup_started_artifacts():
+                raise RuntimeError("failed to clean recording artifacts after recorder exited") from None
             raise RuntimeError(startup_errors[-1])
         reset_recording_artifacts()
     if command is None or proc is None:
-        remove_file(str(audio_path), suffix=".wav")
-        remove_file(str(log_path), suffix=".log")
+        if not cleanup_started_artifacts():
+            raise RuntimeError("failed to clean recording artifacts after recorder startup failures")
         detail = "; ".join(startup_errors) if startup_errors else "no supported recorder found"
         raise RuntimeError(f"no recorder backend started successfully: {detail}")
 
@@ -3053,8 +3069,8 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
             raise RuntimeError("recording process identity could not be verified; recorder process cleanup failed") from cleanup_error
         if not stopped and not recorder_process_is_gone():
             raise RuntimeError("recording process identity could not be verified; recorder process could not be stopped safely")
-        remove_file(str(audio_path), suffix=".wav")
-        remove_file(str(log_path), suffix=".log")
+        if not cleanup_started_artifacts():
+            raise RuntimeError("recording process identity could not be verified; recorder artifacts could not be cleaned")
         raise RuntimeError("recording process identity could not be verified")
     language = args.language or "en"
     state = RecordingState(
@@ -3078,8 +3094,8 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
             raise RuntimeError(f"{state_error}; recorder process cleanup failed") from cleanup_error
         if not stopped and not recorder_process_is_gone():
             raise RuntimeError(f"{state_error}; recorder process could not be stopped safely") from state_error
-        remove_file(str(audio_path), suffix=".wav")
-        remove_file(str(log_path), suffix=".log")
+        if not cleanup_started_artifacts():
+            raise RuntimeError(f"{state_error}; recorder artifacts could not be cleaned") from state_error
         raise
     artifact_cleanup = _enforce_recording_artifact_cap(state, state_path=store.path)
     cleanup_failed_paths = _cleanup_failed_paths(artifact_cleanup)

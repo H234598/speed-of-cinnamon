@@ -8410,6 +8410,31 @@ class CliTest(unittest.TestCase):
         self.assertEqual([call.args[0] for call in mocked_choose.call_args_list], ["pw-record", "parecord"])
         self.assertEqual(second_log_existed, [False])
 
+    def test_start_auto_fails_closed_when_failed_recorder_artifact_cleanup_fails(self) -> None:
+        failed_proc = mock.Mock()
+        failed_proc.pid = 23456
+        failed_proc.poll.return_value = 1
+        failed_proc.returncode = 1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            stdout = io.StringIO()
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.choose_recorder", return_value=RecorderCommand("pw-record", ["pw-record"])),
+                mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=failed_proc),
+                mock.patch("speed_of_cinnamon.cli.remove_file", return_value=False),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["start", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            artifacts = list(recordings.glob("*")) if recordings.exists() else []
+
+        self.assertEqual(code, 1)
+        self.assertIn("failed to clean recording artifacts", payload["error"])
+        self.assertTrue(artifacts)
+
     def test_start_explicit_recorder_reports_immediate_exit_without_fallback(self) -> None:
         failed_proc = mock.Mock()
         failed_proc.pid = 23456
