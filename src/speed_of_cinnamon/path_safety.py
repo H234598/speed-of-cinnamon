@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ctypes
+import errno
 import os
 import secrets
 import stat
@@ -13,6 +15,35 @@ def _note_cleanup_failure(primary: BaseException, cleanup_error: BaseException) 
     primary.add_note(f"secure path cleanup failed: {cleanup_error}")
 
 
+def _rename_without_replacing(
+    source_name: str,
+    target_name: str,
+    *,
+    directory_fd: int,
+    field_name: str,
+) -> None:
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        renameat2 = libc.renameat2
+    except (AttributeError, OSError) as exc:
+        raise OSError(
+            errno.ENOTSUP,
+            f"{field_name} no-clobber activation is not supported on this platform",
+        ) from exc
+    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        directory_fd,
+        os.fsencode(source_name),
+        directory_fd,
+        os.fsencode(target_name),
+        1,
+    )
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), target_name)
+
+
 def _safe_path_parts(path: Path, *, field_name: str) -> tuple[str, ...]:
     if not path.is_absolute():
         raise OSError(f"{field_name} must be absolute")
@@ -22,6 +53,8 @@ def _safe_path_parts(path: Path, *, field_name: str) -> tuple[str, ...]:
         raise OSError(f"{field_name} is invalid")
     if any(part in {"", ".."} for part in parts):
         raise OSError(f"{field_name} contains an unsafe path component")
+    if any("\x00" in part for part in parts):
+        raise OSError(f"{field_name} contains an invalid null byte")
     return parts
 
 
@@ -191,7 +224,7 @@ def ensure_directory_without_following_symlinks(path: Path, *, field_name: str =
                 raise
             directory_fd = next_fd
         return directory_fd
-    except OSError as exc:
+    except BaseException as exc:
         try:
             os.close(directory_fd)
         except OSError as cleanup_error:
@@ -282,6 +315,7 @@ def _write_atomically_without_following_symlinks(
     backup_name = ""
     backup_moved = False
     activation_attempted = False
+    activation_completed = False
     activation_stat: os.stat_result | None = None
     temporary_stat: os.stat_result | None = None
     transaction_active = False
@@ -433,7 +467,13 @@ def _write_atomically_without_following_symlinks(
             if not backup_name:
                 raise OSError(f"failed to create recovery backup for {field_name}")
         activation_attempted = True
-        os.replace(temp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        _rename_without_replacing(
+            temp_name,
+            path.name,
+            directory_fd=parent_fd,
+            field_name=field_name,
+        )
+        activation_completed = True
         temp_name = ""
         try:
             activation_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
@@ -460,7 +500,12 @@ def _write_atomically_without_following_symlinks(
                     except FileNotFoundError:
                         current_target_stat = None
                     if current_target_stat is not None:
-                        same_activation = _same_leaf_snapshot if activation_stat is not None else _same_leaf_identity
+                        if activation_stat is not None:
+                            same_activation = _same_leaf_snapshot
+                        elif activation_completed:
+                            same_activation = _same_leaf_inode
+                        else:
+                            same_activation = _same_leaf_identity
                         if expected_activation_stat is None or not same_activation(current_target_stat, expected_activation_stat):
                             raise OSError(f"{field_name} target changed during rollback")
                         os.unlink(path.name, dir_fd=parent_fd)

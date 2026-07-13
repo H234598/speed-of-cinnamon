@@ -67,6 +67,20 @@ class PathSafetyTest(unittest.TestCase):
 
         self.assertEqual(close_calls, [100, 101, 100])
 
+    def test_ensure_directory_closes_fd_when_open_raises_value_error(self) -> None:
+        with (
+            mock.patch.object(path_safety.os, "open", side_effect=[100, ValueError("bad path")]),
+            mock.patch.object(path_safety.os, "close") as mocked_close,
+        ):
+            with self.assertRaisesRegex(ValueError, "bad path"):
+                path_safety.ensure_directory_without_following_symlinks(Path("/tmp/settings"))
+
+        mocked_close.assert_called_once_with(100)
+
+    def test_safe_path_components_reject_null_bytes(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "invalid null byte"):
+            path_safety.assert_safe_path_components(Path("/tmp/bad\x00name"))
+
     def test_atomic_write_rejects_relative_paths(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "must be absolute"):
             path_safety.write_text_atomically_without_following_symlinks(Path("settings.json"), "{}")
@@ -244,7 +258,7 @@ class PathSafetyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "settings.json"
             with (
-                mock.patch.object(path_safety.os, "replace", side_effect=OSError("disk full")),
+                mock.patch.object(path_safety, "_rename_without_replacing", side_effect=OSError("disk full")),
                 mock.patch.object(path_safety.os, "unlink", side_effect=OSError("cleanup denied")),
             ):
                 with self.assertRaisesRegex(OSError, "disk full") as caught:
@@ -254,6 +268,32 @@ class PathSafetyTest(unittest.TestCase):
             self.assertTrue(any(child.name.startswith(".settings.json.") and child.name.endswith(".tmp") for child in Path(tmp).iterdir()))
         self.assertIn("secure path cleanup failed", "\n".join(caught.exception.__notes__))
         self.assertIn("cleanup denied", "\n".join(caught.exception.__notes__))
+
+    def test_atomic_write_does_not_clobber_target_created_during_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            target.write_text("old", encoding="utf-8")
+            replacement = Path(tmp) / "replacement.json"
+            replacement.write_text("racing target", encoding="utf-8")
+            real_rename = path_safety._rename_without_replacing
+
+            def rename_then_create_target(
+                source: str,
+                destination: str,
+                *args: object,
+                **kwargs: object,
+            ) -> None:
+                if destination == target.name:
+                    replacement.replace(target)
+                real_rename(source, destination, *args, **kwargs)
+
+            with mock.patch.object(path_safety, "_rename_without_replacing", side_effect=rename_then_create_target):
+                with self.assertRaises(OSError):
+                    path_safety.write_text_atomically_without_following_symlinks(target, "new")
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "racing target")
+            self.assertTrue(list(Path(tmp).glob(".settings.json.*.bak")))
+            self.assertFalse(list(Path(tmp).glob(".settings.json.*.tmp")))
 
     def test_atomic_text_write_removes_temp_file_when_encoding_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

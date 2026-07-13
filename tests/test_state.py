@@ -275,14 +275,14 @@ class StateStoreTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "state transcript contains invalid control character"):
                 store.write(RecordingState(transcript="hello\x1fworld"))
 
-    @mock.patch("speed_of_cinnamon.state.os.replace", side_effect=OSError("disk full"))
-    def test_write_raises_runtime_error_when_atomic_replace_fails(self, mocked_replace: mock.Mock) -> None:
+    @mock.patch("speed_of_cinnamon.path_safety._rename_without_replacing", side_effect=OSError("disk full"))
+    def test_write_raises_runtime_error_when_atomic_activation_fails(self, mocked_link: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
             store = StateStore(path)
             with self.assertRaisesRegex(RuntimeError, "^failed to persist state$"):
                 store.write(store.read())
-        mocked_replace.assert_called_once()
+        mocked_link.assert_called_once()
 
     @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
     def test_write_uses_secure_directory_relative_replace(self, mocked_open: mock.Mock) -> None:

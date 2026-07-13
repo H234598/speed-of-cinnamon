@@ -909,7 +909,7 @@ class CliTest(unittest.TestCase):
             audio.write_bytes(b"audio")
             stdout = io.StringIO()
             with (
-                mock.patch("speed_of_cinnamon.cli.os.replace", side_effect=OSError("disk full")),
+                mock.patch("speed_of_cinnamon.path_safety._rename_without_replacing", side_effect=OSError("disk full")),
                 mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
                 redirect_stdout(stdout),
             ):
@@ -5471,7 +5471,7 @@ class CliTest(unittest.TestCase):
             stdout = io.StringIO()
             with (
                 mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
-                mock.patch("speed_of_cinnamon.cli.os.replace", side_effect=OSError("disk full")),
+                mock.patch("speed_of_cinnamon.path_safety._rename_without_replacing", side_effect=OSError("disk full")),
                 redirect_stdout(stdout),
             ):
                 code = cli.run([
