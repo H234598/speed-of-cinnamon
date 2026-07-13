@@ -8351,13 +8351,13 @@ MyApplet.prototype = {
       this.externalApiEnvMonitor = monitor;
       this._externalApiEnvMonitorCancelSucceeded = false;
       this._trackMonitor(monitor);
-      let connectionId = this._connectSafe(monitor, "changed", (monitor, fileObj, otherFile, eventType) => {
-        if (this.appletRemoved) {
+      let connectionId = this._connectSafe(monitor, "changed", (changedMonitor, fileObj, otherFile, eventType) => {
+        if (this.appletRemoved || !this._lifecycleAllowsWork() || this.externalApiEnvMonitor !== monitor || changedMonitor !== monitor) {
           return;
         }
         if (eventType === Gio.FileMonitorEvent.CHANGES_DONE_HINT || eventType === Gio.FileMonitorEvent.CREATED) {
           if (this._applyExternalApiEnvFile(true)) {
-            if (this.appletRemoved) {
+            if (!this._lifecycleAllowsWork() || this.externalApiEnvMonitor !== monitor) {
               return;
             }
             this._applyExternalApiEnvTarget(this.externalApiEnvApplyTarget || "voice");

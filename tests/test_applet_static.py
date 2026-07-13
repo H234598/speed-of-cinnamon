@@ -418,6 +418,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!connectionId) {\n        this._clearExternalApiEnvMonitor();", block)
         self.assertIn("} catch (err) {\n      this._clearExternalApiEnvMonitor();", block)
 
+    def test_external_env_monitor_ignores_stale_changed_signals(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_watchExternalApiEnvFile: function(path)")
+        end = source.index("\n  _openExternalApiEnvEditor:", start)
+        block = source[start:end]
+        self.assertIn('"changed", (changedMonitor, fileObj, otherFile, eventType) =>', block)
+        guard = "if (this.appletRemoved || !this._lifecycleAllowsWork() || this.externalApiEnvMonitor !== monitor || changedMonitor !== monitor)"
+        self.assertIn(guard, block)
+        self.assertIn("this.externalApiEnvMonitor !== monitor", block)
+        self.assertLess(block.index(guard), block.index("this._applyExternalApiEnvFile(true)"))
+
     def test_signal_rollback_restores_registry_when_orphan_tracking_fails(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_connectSafe: function(target, signal, callback, group)")
