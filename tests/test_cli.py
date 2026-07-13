@@ -113,6 +113,31 @@ class CliTest(unittest.TestCase):
             self.assertEqual(list(real.iterdir()), [])
             self.assertTrue(link.is_symlink())
 
+    def test_prepare_private_file_closes_descriptor_when_fdopen_rejects(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "recording.wav"
+            real_open = os.open
+            target_fds: list[int] = []
+
+            def open_wrapper(*args: object, **kwargs: object) -> int:
+                fd = real_open(*args, **kwargs)
+                if args and args[0] == path.name:
+                    target_fds.append(fd)
+                return fd
+
+            with (
+                mock.patch.object(cli.os, "open", side_effect=open_wrapper),
+                mock.patch.object(cli.os, "fdopen", side_effect=ValueError("invalid descriptor mode")),
+            ):
+                with self.assertRaisesRegex(cli._PrivateFilePrepareError, "failed to prepare recording audio file") as caught:
+                    cli._prepare_private_file(path, field_name="recording audio file")
+
+            self.assertTrue(caught.exception.created)
+            self.assertIsNone(caught.exception.errno)
+            self.assertEqual(len(target_fds), 1)
+            with self.assertRaises(OSError):
+                os.fstat(target_fds[0])
+
     def test_ensure_private_text_file_keeps_existing_blacklist_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "blacklist.txt"

@@ -2022,12 +2022,16 @@ def _prepare_private_file(path: Path, *, field_name: str, exclusive: bool = True
                 os.fchmod(handle.fileno(), 0o600)
             except OSError:
                 pass
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         try:
             os.close(fd)
         except OSError:
             pass
-        raise _PrivateFilePrepareError(f"failed to prepare {field_name}: {path}", created=True, errno_value=exc.errno) from exc
+        raise _PrivateFilePrepareError(
+            f"failed to prepare {field_name}: {path}",
+            created=True,
+            errno_value=getattr(exc, "errno", None),
+        ) from exc
 
 
 def _allocate_recording_artifacts() -> tuple[Path, Path]:
