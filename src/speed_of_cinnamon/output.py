@@ -1140,35 +1140,40 @@ def set_clipboard(text: str, *, allowed_helpers: tuple[str, ...] | None = None) 
     raise OutputError("no clipboard helper found; install xclip, xsel, or wl-clipboard")
 
 
+def _clipboard_read_candidates(*, targets: bool = False) -> tuple[tuple[list[str], str], ...]:
+    if targets:
+        candidates = (
+            ("xclip", ["xclip", "-selection", "clipboard", "-t", "TARGETS", "-out"]),
+            ("xsel", ["xsel", "--clipboard", "--output", "--target", "TARGETS"]),
+            ("wl-paste", ["wl-paste", "--list-types"]),
+        )
+    else:
+        candidates = (
+            ("xclip", ["xclip", "-selection", "clipboard", "-out"]),
+            ("xsel", ["xsel", "--clipboard", "--output"]),
+            ("wl-paste", ["wl-paste"]),
+        )
+    available: list[tuple[list[str], str]] = []
+    for helper, command in candidates:
+        resolved = _which(helper)
+        if resolved:
+            available.append((command, resolved))
+    return tuple(available)
+
+
 def _read_text_clipboard() -> str | None:
-    xclip = _which("xclip")
-    if xclip:
-        text = _run_stdout(["xclip", "-selection", "clipboard", "-out"], resolved_command=xclip)
-        return text or None
-    xsel = _which("xsel")
-    if xsel:
-        text = _run_stdout(["xsel", "--clipboard", "--output"], resolved_command=xsel)
-        return text or None
-    wl_paste = _which("wl-paste")
-    if wl_paste:
-        text = _run_stdout(["wl-paste"], resolved_command=wl_paste)
-        return text or None
+    for command, resolved in _clipboard_read_candidates():
+        text = _run_stdout_raw(command, resolved_command=resolved)
+        if text is not None:
+            return text.strip() or None
     return None
 
 
 def _read_text_clipboard_snapshot() -> tuple[bool, str]:
-    xclip = _which("xclip")
-    if xclip:
-        text = _run_stdout_raw(["xclip", "-selection", "clipboard", "-out"], resolved_command=xclip)
-        return (text is not None), text or ""
-    xsel = _which("xsel")
-    if xsel:
-        text = _run_stdout_raw(["xsel", "--clipboard", "--output"], resolved_command=xsel)
-        return (text is not None), text or ""
-    wl_paste = _which("wl-paste")
-    if wl_paste:
-        text = _run_stdout_raw(["wl-paste"], resolved_command=wl_paste)
-        return (text is not None), text or ""
+    for command, resolved in _clipboard_read_candidates():
+        text = _run_stdout_raw(command, resolved_command=resolved)
+        if text is not None:
+            return True, text
     return False, ""
 
 
@@ -1202,18 +1207,10 @@ def _clipboard_still_contains_inserted_text(text: str) -> bool:
 
 
 def _clipboard_has_non_text_payload() -> bool:
-    xclip = _which("xclip")
-    if xclip:
-        targets = _run_stdout(["xclip", "-selection", "clipboard", "-t", "TARGETS", "-out"], resolved_command=xclip)
-        return _clipboard_targets_contain_non_text_payload(targets)
-    xsel = _which("xsel")
-    if xsel:
-        targets = _run_stdout(["xsel", "--clipboard", "--output", "--target", "TARGETS"], resolved_command=xsel)
-        return _clipboard_targets_contain_non_text_payload(targets)
-    wl_paste = _which("wl-paste")
-    if wl_paste:
-        targets = _run_stdout(["wl-paste", "--list-types"], resolved_command=wl_paste)
-        return _clipboard_targets_contain_non_text_payload(targets)
+    for command, resolved in _clipboard_read_candidates(targets=True):
+        targets = _run_stdout_raw(command, resolved_command=resolved)
+        if targets is not None:
+            return _clipboard_targets_contain_non_text_payload(targets)
     return True
 
 

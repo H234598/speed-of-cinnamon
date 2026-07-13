@@ -215,6 +215,42 @@ class OutputTest(unittest.TestCase):
             with self.assertRaisesRegex(OutputError, "no clipboard helper found"):
                 set_clipboard("hello")
 
+    def test_read_text_clipboard_falls_back_after_xclip_failure(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_which(command: str) -> str | None:
+            return f"/usr/bin/{command}" if command in {"xclip", "xsel"} else None
+
+        def fake_run(argv: list[str], **_kwargs: object) -> str | None:
+            calls.append(argv)
+            return None if argv[0] == "xclip" else "fallback text"
+
+        with (
+            mock.patch("speed_of_cinnamon.output._which", side_effect=fake_which),
+            mock.patch("speed_of_cinnamon.output._run_stdout_raw", side_effect=fake_run),
+        ):
+            self.assertEqual(output_module._read_text_clipboard(), "fallback text")
+
+        self.assertEqual([call[0] for call in calls], ["xclip", "xsel"])
+
+    def test_text_clipboard_snapshot_falls_back_after_xclip_failure(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_which(command: str) -> str | None:
+            return f"/usr/bin/{command}" if command in {"xclip", "xsel"} else None
+
+        def fake_run(argv: list[str], **_kwargs: object) -> str | None:
+            calls.append(argv)
+            return None if argv[0] == "xclip" else "fallback text\n"
+
+        with (
+            mock.patch("speed_of_cinnamon.output._which", side_effect=fake_which),
+            mock.patch("speed_of_cinnamon.output._run_stdout_raw", side_effect=fake_run),
+        ):
+            self.assertEqual(output_module._read_text_clipboard_snapshot(), (True, "fallback text\n"))
+
+        self.assertEqual([call[0] for call in calls], ["xclip", "xsel"])
+
     def test_run_with_input_rejects_non_sequence_argv(self) -> None:
         with self.assertRaisesRegex(OutputError, "argv must be a sequence"):
             _run_with_input("echo", "input")  # type: ignore[arg-type]
@@ -1477,16 +1513,34 @@ class OutputTest(unittest.TestCase):
 
         with (
             mock.patch("speed_of_cinnamon.output._which", side_effect=lambda command: "/usr/bin/xsel" if command == "xsel" else None),
-            mock.patch("speed_of_cinnamon.output._run_stdout", side_effect=fake_run_stdout),
+            mock.patch("speed_of_cinnamon.output._run_stdout_raw", side_effect=fake_run_stdout),
         ):
             self.assertTrue(output_module._clipboard_has_non_text_payload())
 
         self.assertEqual(calls, [["xsel", "--clipboard", "--output", "--target", "TARGETS"]])
 
+    def test_clipboard_non_text_detection_falls_back_after_xclip_failure(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_which(command: str) -> str | None:
+            return f"/usr/bin/{command}" if command in {"xclip", "xsel"} else None
+
+        def fake_run(argv: list[str], **_kwargs: object) -> str | None:
+            calls.append(argv)
+            return None if argv[0] == "xclip" else "text/plain\n"
+
+        with (
+            mock.patch("speed_of_cinnamon.output._which", side_effect=fake_which),
+            mock.patch("speed_of_cinnamon.output._run_stdout_raw", side_effect=fake_run),
+        ):
+            self.assertFalse(output_module._clipboard_has_non_text_payload())
+
+        self.assertEqual([call[0] for call in calls], ["xclip", "xsel"])
+
     def test_clipboard_non_text_detection_fails_closed_on_empty_targets(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.output._which", side_effect=lambda command: "/usr/bin/xclip" if command == "xclip" else None),
-            mock.patch("speed_of_cinnamon.output._run_stdout", return_value=""),
+            mock.patch("speed_of_cinnamon.output._run_stdout_raw", return_value=""),
         ):
             self.assertTrue(output_module._clipboard_has_non_text_payload())
 
