@@ -17,6 +17,7 @@ from speed_of_cinnamon.state import (
     process_is_alive,
     _contains_escaped_null,
 )
+from speed_of_cinnamon import state as state_module
 
 
 class StateStoreTest(unittest.TestCase):
@@ -369,7 +370,27 @@ class StateStoreTest(unittest.TestCase):
             field_name="state file path",
             max_bytes=MAX_STATE_FILE_BYTES,
             require_private_mode=True,
+            expected_stat=mock.ANY,
         )
+
+    def test_read_rejects_regular_state_file_swap_before_secure_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('{"status":"recording"}', encoding="utf-8")
+            path.chmod(0o600)
+            store = StateStore(path)
+            real_read = state_module.read_text_without_following_symlinks
+
+            def read_and_swap(*args: object, **kwargs: object) -> str:
+                path.rename(Path(tmp) / "state-original.json")
+                path.write_text('{"status":"done"}', encoding="utf-8")
+                path.chmod(0o600)
+                return real_read(*args, **kwargs)
+
+            with mock.patch("speed_of_cinnamon.state.read_text_without_following_symlinks", side_effect=read_and_swap):
+                state = store.read()
+
+        self.assertEqual(state.error, "state file could not be read")
 
     def test_read_rejects_world_readable_state_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

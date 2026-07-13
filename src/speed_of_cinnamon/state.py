@@ -318,6 +318,7 @@ class StateStore:
                 field_name="state file path",
                 max_bytes=MAX_STATE_FILE_BYTES,
                 require_private_mode=True,
+                expected_stat=file_stat,
             )
             if _contains_escaped_null(data_text):
                 return RecordingState(error="state file could not be read")

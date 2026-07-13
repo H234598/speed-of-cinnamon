@@ -206,6 +206,7 @@ def read_text_without_following_symlinks(
     encoding: str = "utf-8",
     max_bytes: int | None = None,
     require_private_mode: bool = False,
+    expected_stat: os.stat_result | None = None,
 ) -> str:
     if not isinstance(path, Path):
         raise RuntimeError(f"{field_name} must be a path")
@@ -226,6 +227,28 @@ def read_text_without_following_symlinks(
             )
         except RuntimeError as exc:
             raise OSError(str(exc)) from exc
+        if expected_stat is not None:
+            opened_stat = os.fstat(fd)
+            if (
+                opened_stat.st_dev != expected_stat.st_dev
+                or opened_stat.st_ino != expected_stat.st_ino
+                or opened_stat.st_mode != expected_stat.st_mode
+                or opened_stat.st_size != expected_stat.st_size
+                or getattr(opened_stat, "st_nlink", 1) != getattr(expected_stat, "st_nlink", 1)
+                or opened_stat.st_mtime_ns != expected_stat.st_mtime_ns
+                or opened_stat.st_ctime_ns != expected_stat.st_ctime_ns
+            ):
+                raise OSError(f"{field_name} changed before reading")
+            try:
+                current_path_stat = path.lstat()
+            except FileNotFoundError as exc:
+                raise OSError(f"{field_name} changed before reading") from exc
+            if (
+                current_path_stat.st_dev != opened_stat.st_dev
+                or current_path_stat.st_ino != opened_stat.st_ino
+                or current_path_stat.st_mode != opened_stat.st_mode
+            ):
+                raise OSError(f"{field_name} changed before reading")
         handle = os.fdopen(fd, "rb")
     except Exception as exc:
         try:

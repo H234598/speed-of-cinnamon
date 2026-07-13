@@ -303,6 +303,18 @@ class PathSafetyTest(unittest.TestCase):
 
         mocked_close.assert_not_called()
 
+    def test_read_text_rejects_expected_file_swap_before_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.txt"
+            path.write_text("original\n", encoding="utf-8")
+            path.chmod(0o600)
+            expected_stat = path.lstat()
+            path.rename(Path(tmp) / "state-original.txt")
+            path.write_text("replacement\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(OSError, "changed before reading"):
+                path_safety.read_text_without_following_symlinks(path, expected_stat=expected_stat)
+
     def test_read_text_closes_fd_when_fdopen_fails(self) -> None:
         with (
             mock.patch.object(path_safety, "open_file_without_following_symlinks", return_value=123),
