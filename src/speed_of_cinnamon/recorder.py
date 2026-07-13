@@ -657,7 +657,11 @@ def detect_silent_recording(audio_path: Path) -> SilenceDetectionResult:
 def trim_recording_leading_silence(audio_path: Path, leading_silence_seconds: float) -> Path:
     if not isinstance(audio_path, Path):
         raise RecorderError("recording audio path must be a path")
-    if not isinstance(leading_silence_seconds, (int, float)) or isinstance(leading_silence_seconds, bool):
+    if (
+        not isinstance(leading_silence_seconds, (int, float))
+        or isinstance(leading_silence_seconds, bool)
+        or not math.isfinite(leading_silence_seconds)
+    ):
         raise RecorderError("leading silence seconds must be numeric")
     if leading_silence_seconds <= 0:
         return audio_path
@@ -744,7 +748,11 @@ def trim_recording_silence(
         raise RecorderError("silence trim noise threshold must be text")
     if not noise.strip():
         raise RecorderError("silence trim noise threshold must not be empty")
-    if not isinstance(duration_seconds, (int, float)) or isinstance(duration_seconds, bool):
+    if (
+        not isinstance(duration_seconds, (int, float))
+        or isinstance(duration_seconds, bool)
+        or not math.isfinite(duration_seconds)
+    ):
         raise RecorderError("silence trim duration must be numeric")
     if duration_seconds <= 0:
         raise RecorderError("silence trim duration must be greater than 0")

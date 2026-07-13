@@ -302,6 +302,16 @@ class RecorderTest(unittest.TestCase):
             with self.assertRaisesRegex(RecorderError, "recording contains no speech"):
                 trim_recording_leading_silence(audio, 2 / 16000)
 
+    def test_trim_recording_leading_silence_rejects_nonfinite_seconds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            self._write_wav(audio, [0, 12000])
+
+            for value in (float("nan"), float("inf"), float("-inf")):
+                with self.subTest(value=value):
+                    with self.assertRaisesRegex(RecorderError, "leading silence seconds must be numeric"):
+                        trim_recording_leading_silence(audio, value)
+
     def test_trim_recording_leading_silence_rejects_symlink_recording_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             real_root = Path(tmp) / "real"
@@ -578,6 +588,16 @@ class RecorderTest(unittest.TestCase):
 
             with self.assertRaisesRegex(RecorderError, "recording audio file must not be hardlinked"):
                 trim_recording_silence(hardlink)
+
+    def test_trim_recording_silence_rejects_nonfinite_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+
+            for value in (float("nan"), float("inf"), float("-inf")):
+                with self.subTest(value=value):
+                    with self.assertRaisesRegex(RecorderError, "silence trim duration must be numeric"):
+                        trim_recording_silence(audio, duration_seconds=value)
 
     def test_reencode_recording_to_flac_uses_ffmpeg_flac_encoder(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
