@@ -549,6 +549,13 @@ class StateStoreTest(unittest.TestCase):
         with mock.patch("speed_of_cinnamon.state.os.kill", side_effect=OSError("unexpected kernel error")):
             self.assertFalse(process_is_alive(1234))
 
+    def test_process_is_alive_fails_closed_on_pid_range_error(self) -> None:
+        for error in (OverflowError("out of range"), ValueError("invalid pid")):
+            with self.subTest(error=type(error).__name__), mock.patch(
+                "speed_of_cinnamon.state.os.kill", side_effect=error
+            ):
+                self.assertFalse(process_is_alive(1234))
+
     def test_read_rejects_invalid_boolean_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"

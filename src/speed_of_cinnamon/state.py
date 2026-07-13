@@ -378,6 +378,6 @@ def process_is_alive(pid: int | None) -> bool:
         return False
     except PermissionError:
         return True
-    except OSError:
+    except (OSError, OverflowError, ValueError):
         return False
     return True
