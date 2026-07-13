@@ -500,7 +500,48 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
     parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name="settings export directory")
     temp_name = ""
     temp_fd: int | None = None
+    backup_name = ""
+    backup_moved = False
+    activation_attempted = False
+    activation_stat: os.stat_result | None = None
+    temporary_stat: os.stat_result | None = None
+    transaction_active = False
     primary_error: BaseException | None = None
+
+    def _same_leaf_snapshot(first: os.stat_result, second: os.stat_result) -> bool:
+        return (
+            first.st_dev,
+            first.st_ino,
+            first.st_mode,
+            getattr(first, "st_nlink", 1),
+            first.st_size,
+            first.st_mtime_ns,
+            first.st_ctime_ns,
+        ) == (
+            second.st_dev,
+            second.st_ino,
+            second.st_mode,
+            getattr(second, "st_nlink", 1),
+            second.st_size,
+            second.st_mtime_ns,
+            second.st_ctime_ns,
+        )
+
+    def _same_leaf_identity(first: os.stat_result, second: os.stat_result) -> bool:
+        return (
+            first.st_dev,
+            first.st_ino,
+            first.st_mode,
+            getattr(first, "st_nlink", 1),
+            first.st_size,
+        ) == (
+            second.st_dev,
+            second.st_ino,
+            second.st_mode,
+            getattr(second, "st_nlink", 1),
+            second.st_size,
+        )
+
     try:
         try:
             assert_fd_is_private_directory(parent_fd, field_name="settings export directory")
@@ -512,6 +553,10 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
             existing_stat = None
         if existing_stat is not None and stat_module.S_ISLNK(existing_stat.st_mode):
             raise SettingsExportError(f"settings export path must not be a symlink: {path}")
+        if existing_stat is not None and not stat_module.S_ISREG(existing_stat.st_mode):
+            raise SettingsExportError(f"settings export path must be a regular file: {path}")
+        if existing_stat is not None and getattr(existing_stat, "st_nlink", 1) != 1:
+            raise SettingsExportError(f"settings export path must not be hardlinked: {path}")
         temp_fd, temp_name = _create_private_temp_file(parent_fd, path.name)
         try:
             handle = os.fdopen(temp_fd, "w", encoding="utf-8")
@@ -526,29 +571,105 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
             handle.write(rendered)
             handle.flush()
             os.fsync(handle.fileno())
+            temporary_stat = os.fstat(handle.fileno())
+        if temporary_stat is None:
+            raise OSError("settings export temporary file identity is unavailable")
+        try:
+            current_target_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            current_target_stat = None
+        if existing_stat is None:
+            if current_target_stat is not None:
+                raise OSError("settings export path changed before activation")
+        elif current_target_stat is None or not _same_leaf_snapshot(current_target_stat, existing_stat):
+            raise OSError("settings export path changed before activation")
+        staged_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat_module.S_ISREG(staged_stat.st_mode) or getattr(staged_stat, "st_nlink", 1) != 1:
+            raise OSError("settings export temporary file is not safe")
+        if not _same_leaf_snapshot(staged_stat, temporary_stat):
+            raise OSError("settings export temporary file changed before activation")
+
+        transaction_active = True
+        if existing_stat is not None:
+            for _ in range(100):
+                candidate_name = f".{path.name}.{secrets.token_hex(8)}.bak"
+                try:
+                    os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    backup_name = candidate_name
+                    break
+            if not backup_name:
+                raise OSError("failed to create settings export recovery backup")
+            os.replace(path.name, backup_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            backup_moved = True
+            os.fsync(parent_fd)
+
+        activation_attempted = True
         os.replace(temp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         temp_name = ""
+        try:
+            activation_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except OSError as stat_error:
+            raise OSError("settings export could not be inspected after activation") from stat_error
         os.fsync(parent_fd)
-    except OSError as exc:
-        cleanup_error: OSError | None = None
-        if temp_name:
-            try:
-                os.unlink(temp_name, dir_fd=parent_fd)
-                os.fsync(parent_fd)
-            except OSError as cleanup_exc:
-                try:
-                    _scrub_temp_settings_export_file(parent_fd, temp_name)
-                except (OSError, RuntimeError):
-                    pass
-                cleanup_error = cleanup_exc
-        if cleanup_error is not None:
-            primary_error = SettingsExportError(f"failed to write settings export: {path}")
-            _note_cleanup_failure(primary_error, cleanup_error)
-            raise primary_error from exc
-        primary_error = SettingsExportError(f"failed to write settings export: {path}")
-        raise primary_error from exc
+        transaction_active = False
+        if backup_moved:
+            backup_stat = os.stat(backup_name, dir_fd=parent_fd, follow_symlinks=False)
+            if not stat_module.S_ISREG(backup_stat.st_mode) or getattr(backup_stat, "st_nlink", 1) != 1:
+                raise OSError("settings export recovery backup is not safe")
+            if existing_stat is None or not _same_leaf_identity(backup_stat, existing_stat):
+                raise OSError("settings export recovery backup changed before cleanup")
+            os.unlink(backup_name, dir_fd=parent_fd)
+            os.fsync(parent_fd)
     except BaseException as exc:
         primary_error = exc
+        if transaction_active:
+            try:
+                if activation_attempted:
+                    try:
+                        current_target_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+                    except FileNotFoundError:
+                        current_target_stat = None
+                    expected_activation_stat = activation_stat or temporary_stat
+                    if current_target_stat is not None:
+                        if expected_activation_stat is None or not _same_leaf_identity(current_target_stat, expected_activation_stat):
+                            raise OSError("settings export target changed during rollback")
+                        os.unlink(path.name, dir_fd=parent_fd)
+                        os.fsync(parent_fd)
+                if backup_moved:
+                    try:
+                        os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+                    except FileNotFoundError:
+                        os.replace(backup_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                        os.fsync(parent_fd)
+                    else:
+                        raise OSError("settings export target exists during rollback")
+            except BaseException as rollback_error:
+                _note_cleanup_failure(primary_error, rollback_error)
+        if isinstance(exc, OSError):
+            cleanup_error: OSError | None = None
+            if temp_name:
+                try:
+                    os.unlink(temp_name, dir_fd=parent_fd)
+                    os.fsync(parent_fd)
+                except OSError as cleanup_exc:
+                    try:
+                        _scrub_temp_settings_export_file(parent_fd, temp_name)
+                    except (OSError, RuntimeError):
+                        pass
+                    cleanup_error = cleanup_exc
+            if cleanup_error is not None:
+                error = SettingsExportError(f"failed to write settings export: {path}")
+                for note in getattr(exc, "__notes__", ()):
+                    error.add_note(note)
+                _note_cleanup_failure(error, cleanup_error)
+                primary_error = error
+                raise error from exc
+            error = SettingsExportError(f"failed to write settings export: {path}")
+            for note in getattr(exc, "__notes__", ()):
+                error.add_note(note)
+            primary_error = error
+            raise error from exc
         raise
     finally:
         if temp_fd is not None:

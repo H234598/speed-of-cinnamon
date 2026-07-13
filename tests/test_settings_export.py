@@ -730,6 +730,31 @@ class SettingsExportTest(unittest.TestCase):
             self.assertTrue(path.exists())
             self.assertGreaterEqual(mocked_fsync.call_count, 2)
 
+    def test_write_export_rolls_back_after_activation_parent_fsync_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text("old export\n", encoding="utf-8")
+            path.chmod(0o600)
+            real_fsync = os.fsync
+            directory_syncs = 0
+
+            def fail_activation_sync(fd: int) -> None:
+                nonlocal directory_syncs
+                mode = os.fstat(fd).st_mode
+                if stat.S_ISDIR(mode):
+                    directory_syncs += 1
+                    if directory_syncs == 2:
+                        raise OSError("activation directory sync failed")
+                real_fsync(fd)
+
+            with mock.patch.object(settings_export_module.os, "fsync", side_effect=fail_activation_sync):
+                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+                    write_export(path, {"language": "de"})
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "old export\n")
+            leftovers = [child for child in Path(tmp).iterdir() if child.name.startswith(".settings-export.json.")]
+            self.assertEqual(leftovers, [])
+
     def test_write_export_removes_temp_file_when_file_fsync_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
