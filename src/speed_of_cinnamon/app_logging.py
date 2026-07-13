@@ -975,6 +975,12 @@ def _copy_log_content(
         except OSError as cleanup_error:
             _note_cleanup_failure(exc, cleanup_error)
         raise
+    except BaseException as exc:
+        try:
+            os.close(fd)
+        except OSError as cleanup_error:
+            _note_cleanup_failure(exc, cleanup_error)
+        raise
     with source_file:
         if path.suffix == ".gz":
             with gzip.GzipFile(fileobj=source_file, mode="rb") as source:
