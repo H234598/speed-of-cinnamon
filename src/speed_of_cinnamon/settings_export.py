@@ -38,6 +38,11 @@ MAX_TRANSCRIPT_FILES = 1_000
 MIN_RECORDING_SECONDS = 0
 MIN_TYPING_DELAY_MS = 0
 
+
+def _note_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
+    primary.add_note(f"settings export cleanup failed: {cleanup_error}")
+
+
 NON_EXPORTABLE_PRIVATE_SETTINGS: tuple[str, ...] = (
     "cli-path",
     "openai-compatible-api-key",
@@ -267,6 +272,7 @@ def _scrub_temp_settings_export_file(parent_fd: int, temp_name: str) -> None:
     if not temp_name:
         return
     fd = os.open(temp_name, os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
+    primary_error: BaseException | None = None
     try:
         file_stat = os.fstat(fd)
         if not stat_module.S_ISREG(file_stat.st_mode):
@@ -289,13 +295,23 @@ def _scrub_temp_settings_export_file(parent_fd: int, temp_name: str) -> None:
             os.fsync(fd)
         except OSError:
             pass
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except OSError as cleanup_error:
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise
 
 
 def _read_text_capped_without_following_symlinks(path: Path) -> str:
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name="settings export path")
+    primary_error: BaseException | None = None
     try:
         try:
             assert_fd_is_regular_private_file(fd, field_name="settings export")
@@ -307,9 +323,18 @@ def _read_text_capped_without_following_symlinks(path: Path) -> str:
         with os.fdopen(fd, "r", encoding="utf-8") as handle:
             fd = -1
             return handle.read(MAX_SETTINGS_EXPORT_BYTES + 1)
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
         if fd >= 0:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except OSError as cleanup_error:
+                if primary_error is not None:
+                    _note_cleanup_failure(primary_error, cleanup_error)
+                else:
+                    raise
 
 
 def _sanitize_text_field(value: object, *, field_name: str) -> str:

@@ -652,6 +652,32 @@ class SettingsExportTest(unittest.TestCase):
             with self.assertRaises(OSError):
                 os.fstat(created_fds[0])
 
+    def test_read_export_preserves_fd_validation_error_when_fd_close_fails(self) -> None:
+        with (
+            mock.patch.object(settings_export_module, "open_file_without_following_symlinks", return_value=123),
+            mock.patch.object(
+                settings_export_module,
+                "assert_fd_is_regular_private_file",
+                side_effect=RuntimeError("not private"),
+            ),
+            mock.patch.object(settings_export_module.os, "close", side_effect=OSError("close failed")),
+        ):
+            with self.assertRaisesRegex(SettingsExportError, "not private") as caught:
+                settings_export_module._read_text_capped_without_following_symlinks(Path("/settings.json"))
+
+        self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
+
+    def test_scrub_preserves_inspection_error_when_fd_close_fails(self) -> None:
+        with (
+            mock.patch.object(settings_export_module.os, "open", return_value=123),
+            mock.patch.object(settings_export_module.os, "fstat", side_effect=OSError("inspect failed")),
+            mock.patch.object(settings_export_module.os, "close", side_effect=OSError("close failed")),
+        ):
+            with self.assertRaisesRegex(OSError, "inspect failed") as caught:
+                settings_export_module._scrub_temp_settings_export_file(456, ".settings.tmp")
+
+        self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
+
     def test_write_export_rejects_leaf_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "target.json"
