@@ -809,7 +809,10 @@ def _validate_text_input(text: str) -> bytes:
         raise OutputError("command input contains invalid null byte")
     if len(text) > MAX_INPUT_CHARS:
         raise OutputError(f"command input is too large (max {MAX_INPUT_CHARS} characters)")
-    encoded = text.encode("utf-8")
+    try:
+        encoded = text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise OutputError("command input contains invalid Unicode") from exc
     if len(encoded) > MAX_INPUT_CHARS:
         raise OutputError(f"command input is too large (max {MAX_INPUT_CHARS} bytes)")
     return encoded

@@ -247,6 +247,10 @@ class OutputTest(unittest.TestCase):
         with self.assertRaisesRegex(OutputError, "text must be text"):
             _run_with_input(["echo"], 123)  # type: ignore[arg-type]
 
+    def test_validate_text_input_rejects_unpaired_surrogate(self) -> None:
+        with self.assertRaisesRegex(OutputError, "command input contains invalid Unicode"):
+            _validate_text_input("\ud800")
+
     def test_run_with_input_accepts_tuple_argv(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/echo"),
