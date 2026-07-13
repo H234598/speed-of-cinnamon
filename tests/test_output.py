@@ -1938,6 +1938,32 @@ class OutputTest(unittest.TestCase):
 
             self.assertGreaterEqual(mocked_close.call_count, 2)
 
+    def test_clipboard_dedupe_lock_closes_fd_when_creation_stat_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.output.os.fstat", side_effect=KeyboardInterrupt),
+                mock.patch("speed_of_cinnamon.output.os.close", wraps=os.close) as mocked_close,
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    _acquire_clipboard_dedup_lock()
+
+            self.assertGreaterEqual(mocked_close.call_count, 2)
+
+    def test_clipboard_dedupe_lock_cleans_up_when_lock_write_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+                mock.patch.object(output_module, "_write_all", side_effect=KeyboardInterrupt),
+                mock.patch("speed_of_cinnamon.output.os.close", wraps=os.close) as mocked_close,
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    _acquire_clipboard_dedup_lock()
+
+            lock_path = Path(tmp) / "speed-of-cinnamon" / output_module.CLIPBOARD_DEDUP_LOCK_FILE
+            self.assertFalse(lock_path.exists())
+            self.assertGreaterEqual(mocked_close.call_count, 2)
+
     def test_clipboard_dedupe_lock_acquire_fsyncs_lock_and_parent(self) -> None:
         fsync_modes: list[int] = []
         real_fsync = os.fsync

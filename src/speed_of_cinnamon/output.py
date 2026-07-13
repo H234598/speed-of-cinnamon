@@ -603,6 +603,13 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                     except OSError:
                         pass
                 return None
+            except BaseException:
+                if created_fd is not None:
+                    try:
+                        os.close(created_fd)
+                    except OSError:
+                        pass
+                raise
 
             fd = created_fd
             try:
@@ -628,6 +635,21 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                 except OSError:
                     pass
                 return None
+            except BaseException:
+                cleanup_stat = created_stat
+                try:
+                    cleanup_stat = os.fstat(fd)
+                except OSError:
+                    pass
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                try:
+                    _unlink_clipboard_lock_at(parent_fd, path, expected_stat=cleanup_stat)
+                except OSError:
+                    pass
+                raise
             try:
                 os.close(fd)
             except OSError:
