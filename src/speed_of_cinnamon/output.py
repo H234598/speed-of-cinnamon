@@ -1436,7 +1436,7 @@ def _begin_clipboard_insertion(
             _release_clipboard_dedup_lock(lock_path)
             return None
         return lock_path, persistent_snapshot, persistent_state_pending
-    except Exception:
+    except BaseException:
         _release_clipboard_dedup_lock(lock_path)
         raise
 
