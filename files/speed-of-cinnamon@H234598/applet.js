@@ -1420,6 +1420,16 @@ MyApplet.prototype = {
     try {
       if (this._resourceRegistry && Array.isArray(this._resourceRegistry.dialogs)) {
         if (this._resourceRegistry.dialogs.indexOf(dialog) < 0) {
+          if (!Array.isArray(this._orphanedDialogs)) {
+            this._recordLifecycleError("dialog-state", new Error("Dialog orphan registry is unavailable"));
+            return false;
+          }
+          let isOrphaned = this._orphanedDialogs.some((entry) => entry && entry.dialog === dialog);
+          if (isOrphaned) {
+            let orphanCleanupSucceeded = this._retryOrphanedDialogs();
+            let orphanStillPending = this._orphanedDialogs.some((entry) => entry && entry.dialog === dialog);
+            return orphanCleanupSucceeded && !orphanStillPending;
+          }
           return true;
         }
       }

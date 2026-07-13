@@ -3031,6 +3031,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("return true;", block)
         self.assertLess(block.index("try {"), block.index("Array.isArray(this._resourceRegistry.dialogs)"))
 
+    def test_dialog_close_reconciles_orphaned_dialogs_before_reporting_success(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_dialogClose: function(dialog, group)")
+        end = source.index("\n  _dialogOpen:", start)
+        block = source[start:end]
+        self.assertIn('new Error("Dialog orphan registry is unavailable")', block)
+        self.assertIn("let isOrphaned = this._orphanedDialogs.some((entry) => entry && entry.dialog === dialog);", block)
+        self.assertIn("let orphanCleanupSucceeded = this._retryOrphanedDialogs();", block)
+        self.assertIn("let orphanStillPending = this._orphanedDialogs.some((entry) => entry && entry.dialog === dialog);", block)
+        self.assertIn("return orphanCleanupSucceeded && !orphanStillPending;", block)
+
     def test_transcript_confirmation_does_not_advance_when_close_fails(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_confirmPlaintextTranscriptList: function(completionCallback)")
