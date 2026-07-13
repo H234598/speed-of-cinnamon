@@ -113,16 +113,27 @@ fi
 cinnamon_pid=""
 xephyr_pid=""
 
+terminate_process() {
+  local pid="$1"
+  if [[ -z "${pid}" ]]; then
+    return 0
+  fi
+  kill -TERM "${pid}" >/dev/null 2>&1 || true
+  for _ in $(seq 1 40); do
+    if ! kill -0 "${pid}" >/dev/null 2>&1; then
+      wait "${pid}" >/dev/null 2>&1 || true
+      return 0
+    fi
+    sleep 0.1
+  done
+  kill -KILL "${pid}" >/dev/null 2>&1 || true
+  wait "${pid}" >/dev/null 2>&1 || true
+}
+
 cleanup() {
   set +e
-  if [[ -n "${cinnamon_pid}" ]]; then
-    kill "${cinnamon_pid}" >/dev/null 2>&1 || true
-    wait "${cinnamon_pid}" >/dev/null 2>&1 || true
-  fi
-  if [[ -n "${xephyr_pid}" ]]; then
-    kill "${xephyr_pid}" >/dev/null 2>&1 || true
-    wait "${xephyr_pid}" >/dev/null 2>&1 || true
-  fi
+  terminate_process "${cinnamon_pid}"
+  terminate_process "${xephyr_pid}"
   cleanup_test_root
 }
 trap cleanup EXIT INT TERM
