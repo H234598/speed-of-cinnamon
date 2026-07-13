@@ -360,8 +360,84 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
     parent_fd = -1
     temp_fd = -1
     temp_name = ""
+    backup_name = ""
+    backup_created = False
+    activation_attempted = False
+    activation_stat: os.stat_result | None = None
+    temporary_stat: os.stat_result | None = None
+    existing_stat: os.stat_result | None = None
+    transaction_active = False
     primary_error: BaseException | None = None
     cleanup_error: Exception | None = None
+
+    def _same_leaf_identity(first: os.stat_result, second: os.stat_result) -> bool:
+        return (
+            first.st_dev,
+            first.st_ino,
+            first.st_mode,
+            getattr(first, "st_nlink", 1),
+            first.st_size,
+        ) == (
+            second.st_dev,
+            second.st_ino,
+            second.st_mode,
+            getattr(second, "st_nlink", 1),
+            second.st_size,
+        )
+
+    def _same_pre_activation_identity(first: os.stat_result, second: os.stat_result) -> bool:
+        return (
+            first.st_dev,
+            first.st_ino,
+            first.st_mode,
+            first.st_uid,
+            first.st_gid,
+            first.st_size,
+        ) == (
+            second.st_dev,
+            second.st_ino,
+            second.st_mode,
+            second.st_uid,
+            second.st_gid,
+            second.st_size,
+        )
+
+    def _rollback_passphrase_activation() -> None:
+        nonlocal backup_created
+        if not transaction_active:
+            return
+        activation_visible = False
+        if activation_attempted:
+            try:
+                current_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                current_stat = None
+            expected_stat = activation_stat or temporary_stat
+            if current_stat is not None and expected_stat is not None and _same_leaf_identity(current_stat, expected_stat):
+                activation_visible = True
+            elif existing_stat is None and current_stat is None:
+                pass
+            elif existing_stat is not None and current_stat is not None and _same_pre_activation_identity(current_stat, existing_stat):
+                pass
+            else:
+                raise OSError("artifact encryption passphrase target changed during rollback")
+            if activation_visible:
+                os.unlink(path.name, dir_fd=parent_fd)
+                _fsync_fd(parent_fd)
+        if backup_created:
+            if not activation_visible:
+                os.unlink(backup_name, dir_fd=parent_fd)
+                _fsync_fd(parent_fd)
+            else:
+                try:
+                    os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    os.replace(backup_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                    backup_created = False
+                    _fsync_fd(parent_fd)
+                else:
+                    raise OSError("artifact encryption passphrase target exists during rollback")
+
     try:
         parent_fd = ensure_directory_without_following_symlinks(
             path.parent,
@@ -383,6 +459,7 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
             require_private_mode=True,
         )
         file_stat = os.fstat(temp_fd)
+        temporary_stat = file_stat
         if hasattr(os, "getuid") and file_stat.st_uid != os.getuid():
             raise ArtifactCryptoError("artifact encryption passphrase file must be owned by the current user")
         if file_stat.st_mode & 0o077:
@@ -393,8 +470,33 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
         os.close(temp_fd)
         temp_fd = -1
         if replace:
+            try:
+                existing_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                existing_stat = None
+            transaction_active = True
+            if existing_stat is not None:
+                if not stat.S_ISREG(existing_stat.st_mode) or getattr(existing_stat, "st_nlink", 1) != 1:
+                    raise ArtifactCryptoError("artifact encryption passphrase file is not safe to replace")
+                backup_name = f".{path.name}.{secrets.token_hex(8)}.bak"
+                os.link(path.name, backup_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd, follow_symlinks=False)
+                backup_created = True
+                _fsync_fd(parent_fd)
+            activation_attempted = True
             os.replace(temp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
             temp_name = ""
+            try:
+                activation_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            except OSError as stat_error:
+                raise OSError("artifact encryption passphrase file could not be inspected after activation") from stat_error
+            _fsync_fd(parent_fd)
+            transaction_active = False
+            if backup_created:
+                _scrub_temp_passphrase_file(parent_fd, backup_name)
+                os.unlink(backup_name, dir_fd=parent_fd)
+                backup_name = ""
+                backup_created = False
+                _fsync_fd(parent_fd)
         else:
             try:
                 os.link(temp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd, follow_symlinks=False)
@@ -410,9 +512,17 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
         return _read_private_passphrase_file(path, allow_default_generation=False, rotate_weak_default=False)
     except (OSError, RuntimeError) as exc:
         primary_error = ArtifactCryptoError("artifact encryption passphrase file could not be generated")
+        try:
+            _rollback_passphrase_activation()
+        except BaseException as rollback_error:
+            _note_cleanup_failure(primary_error, rollback_error)
         raise primary_error from exc
     except BaseException as exc:
         primary_error = exc
+        try:
+            _rollback_passphrase_activation()
+        except BaseException as rollback_error:
+            _note_cleanup_failure(primary_error, rollback_error)
         raise
     finally:
         if temp_fd >= 0:

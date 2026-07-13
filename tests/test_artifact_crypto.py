@@ -182,6 +182,35 @@ class ArtifactCryptoTest(unittest.TestCase):
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
                 self.assertEqual(artifact_crypto.decrypt_bytes(encrypted, kind="transcript"), b"payload")
 
+    def test_weak_default_rotation_rolls_back_after_activation_parent_fsync_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.key"
+            path.write_text("short\n", encoding="utf-8")
+            path.chmod(0o600)
+            real_fsync = artifact_crypto._fsync_fd
+            directory_syncs = 0
+
+            def fail_activation_sync(fd: int) -> None:
+                nonlocal directory_syncs
+                mode = os.fstat(fd).st_mode
+                if stat.S_ISDIR(mode):
+                    directory_syncs += 1
+                    if directory_syncs == 2:
+                        raise OSError("activation directory sync failed")
+                real_fsync(fd)
+
+            with (
+                mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: ""}, clear=False),
+                mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
+                mock.patch.object(artifact_crypto, "_fsync_fd", side_effect=fail_activation_sync),
+            ):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be generated"):
+                    artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "short\n")
+            leftovers = [child for child in Path(tmp).iterdir() if child.name.startswith(".artifact.key.") and child.name.endswith(".bak")]
+            self.assertEqual(leftovers, [])
+
     def test_default_passphrase_generation_failure_leaves_no_partial_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "artifact.key"
@@ -305,6 +334,23 @@ class ArtifactCryptoTest(unittest.TestCase):
                     artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
 
             self.assertEqual(path.read_text(encoding="utf-8"), "short\n")
+
+    def test_default_passphrase_rotation_replace_failure_removes_recovery_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.key"
+            path.write_text("short\n", encoding="utf-8")
+            path.chmod(0o600)
+            with (
+                mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: ""}, clear=False),
+                mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
+                mock.patch("speed_of_cinnamon.artifact_crypto.os.replace", side_effect=OSError("replace failed")),
+            ):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be generated"):
+                    artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "short\n")
+            leftovers = [child for child in Path(tmp).iterdir() if child.name.startswith(".artifact.key.") and child.name.endswith(".bak")]
+            self.assertEqual(leftovers, [])
 
     def test_passphrase_file_must_be_private(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
