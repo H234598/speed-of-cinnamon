@@ -13,7 +13,7 @@ fault_injection="${APPLET_CRASH_SAFETY_FAULT_INJECTION:-0}"
 force_gc="${APPLET_CRASH_SAFETY_FORCE_GC:-1}"
 host_display="${APPLET_CRASH_SAFETY_HOST_DISPLAY:-${DISPLAY:-}}"
 
-for tool in Xephyr dbus-run-session dconf gdbus cinnamon mktemp ps sed awk date xprop rg; do
+for tool in Xephyr dbus-run-session dconf gdbus cinnamon mktemp ps sed awk date xprop rg python3; do
   if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf 'applet-crash-safety: required tool missing: %s\n' "${tool}" >&2
     exit 2
@@ -54,7 +54,21 @@ if [[ ! -d "${repo_dir}/files/${uuid}" || -L "${repo_dir}/files/${uuid}" ]]; the
   exit 2
 fi
 
-test_root="${APPLET_CRASH_SAFETY_TEST_ROOT:-$(mktemp -d "${TMPDIR:-/tmp}/speed-of-cinnamon-crash-safety.XXXXXX")}"
+if [[ -n "${APPLET_CRASH_SAFETY_TEST_ROOT:-}" ]]; then
+  test_root="${APPLET_CRASH_SAFETY_TEST_ROOT}"
+  if [[ "${APPLET_CRASH_SAFETY_INSIDE:-0}" == "1" ]]; then
+    test_root_owned="${APPLET_CRASH_SAFETY_TEST_ROOT_OWNED:-0}"
+  else
+    test_root_owned="0"
+  fi
+else
+  test_root="$(mktemp -d "${TMPDIR:-/tmp}/speed-of-cinnamon-crash-safety.XXXXXX")"
+  test_root_owned="1"
+fi
+if [[ "${test_root_owned}" != "0" && "${test_root_owned}" != "1" ]]; then
+  printf 'APPLET_CRASH_SAFETY_TEST_ROOT_OWNED must be 0 or 1.\n' >&2
+  exit 2
+fi
 session_home="${test_root}/home"
 runtime_dir="${test_root}/runtime"
 config_dir="${test_root}/config"
@@ -88,6 +102,7 @@ if [[ "${APPLET_CRASH_SAFETY_INSIDE:-0}" != "1" ]]; then
     APPLET_CRASH_SAFETY_INSIDE=1 \
     APPLET_CRASH_SAFETY_REPO="${repo_dir}" \
     APPLET_CRASH_SAFETY_TEST_ROOT="${test_root}" \
+    APPLET_CRASH_SAFETY_TEST_ROOT_OWNED="${test_root_owned}" \
     APPLET_CRASH_SAFETY_HOST_DISPLAY="${host_display}" \
     bash "${BASH_SOURCE[0]}" "$@"
 fi
@@ -105,7 +120,9 @@ cleanup() {
     kill "${xephyr_pid}" >/dev/null 2>&1 || true
     wait "${xephyr_pid}" >/dev/null 2>&1 || true
   fi
-  rm -rf -- "${test_root}" >/dev/null 2>&1 || true
+  if [[ "${test_root_owned}" == "1" ]]; then
+    python3 "${repo_dir}/scripts/safe-local-fs.py" remove applet-crash-safety "${test_root}" --kind dir >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT INT TERM
 

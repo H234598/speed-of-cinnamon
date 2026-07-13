@@ -173,6 +173,8 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("NO_AT_BRIDGE", harness)
         self.assertIn("Cjs-CRITICAL", harness)
         self.assertIn("Cinnamon RSS grew by more than 50 MiB", harness)
+        self.assertIn('safe-local-fs.py" remove applet-crash-safety', harness)
+        self.assertNotIn('rm -rf -- "${test_root}"', harness)
         self.assertNotIn("sudo ", harness)
 
     def test_makefile_has_repo_local_clean_target(self) -> None:
