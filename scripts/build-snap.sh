@@ -37,6 +37,175 @@ require_regular_source_file() {
   fi
 }
 
+activate_snap_output() {
+  local lock_path=$1
+  local staging_path=$2
+  local final_path=$3
+
+  python3 - "$lock_path" "$safe_fs" "$staging_path" "$final_path" <<'PY'
+import os
+import secrets
+import stat
+import subprocess
+import sys
+
+try:
+    import fcntl
+except ModuleNotFoundError:
+    print("fcntl is required for safe snap finalization", file=sys.stderr)
+    raise SystemExit(1)
+
+lock_path, safe_fs, staging_path, final_path = sys.argv[1:]
+lock_parent = os.path.dirname(lock_path)
+lock_name = os.path.basename(lock_path)
+
+
+def _lstat(path):
+    try:
+        return os.lstat(path)
+    except FileNotFoundError:
+        return None
+
+
+def _regular_file(path, label, *, required):
+    path_stat = _lstat(path)
+    if path_stat is None:
+        if required:
+            raise RuntimeError(f"{label} is missing: {path}")
+        return None
+    if stat.S_ISLNK(path_stat.st_mode):
+        raise RuntimeError(f"{label} must not be a symlink: {path}")
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise RuntimeError(f"{label} must be a regular file: {path}")
+    if getattr(path_stat, "st_nlink", 1) != 1:
+        raise RuntimeError(f"{label} must not be hardlinked: {path}")
+    return path_stat
+
+
+def _run_safe_fs(*arguments):
+    subprocess.run([sys.executable, safe_fs, *arguments], check=True)
+
+
+def _identity(path_stat):
+    return (path_stat.st_dev, path_stat.st_ino)
+
+
+def _new_backup_path():
+    for _ in range(16):
+        backup_path = f"{final_path}.{os.getpid()}.{secrets.token_hex(8)}.backup"
+        if _lstat(backup_path) is None:
+            return backup_path
+    raise RuntimeError(f"could not allocate a free snap backup path for {final_path}")
+
+
+def _rollback(*, backup_path, backup_attempted, backup_created, final_stat, final_identity, activation_attempted, staging_identity):
+    if backup_attempted:
+        backup_stat = _lstat(backup_path)
+        if backup_stat is not None:
+            if _identity(backup_stat) != final_identity:
+                raise RuntimeError(f"refusing to restore changed snap backup: {backup_path}")
+            _run_safe_fs("replace", "build-snap", backup_path, final_path, "--src-kind", "file")
+            return
+        current = _lstat(final_path)
+        if backup_created or current is None or _identity(current) != final_identity:
+            raise RuntimeError(f"snap backup disappeared during rollback: {backup_path}")
+        return
+    if activation_attempted and final_stat is None:
+        current = _lstat(final_path)
+        if current is None:
+            return
+        if _identity(current) != staging_identity:
+            raise RuntimeError(f"refusing to remove changed snap output during rollback: {final_path}")
+        _run_safe_fs("remove-leaf", "build-snap", final_path)
+
+
+if not lock_name:
+    print(f"snap finalization lock path is invalid: {lock_path}", file=sys.stderr)
+    raise SystemExit(1)
+
+parent_flags = os.O_RDONLY
+if hasattr(os, "O_DIRECTORY"):
+    parent_flags |= os.O_DIRECTORY
+if hasattr(os, "O_NOFOLLOW"):
+    parent_flags |= os.O_NOFOLLOW
+try:
+    parent_fd = os.open(lock_parent, parent_flags)
+except OSError as exc:
+    print(f"failed to open snap finalization lock parent safely: {lock_parent}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+
+try:
+    parent_stat = os.fstat(parent_fd)
+    if not stat.S_ISDIR(parent_stat.st_mode):
+        print(f"snap finalization lock parent must be a directory: {lock_parent}", file=sys.stderr)
+        raise SystemExit(1)
+    try:
+        lock_stat = os.stat(lock_name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        lock_stat = None
+    if lock_stat is not None:
+        if stat.S_ISLNK(lock_stat.st_mode):
+            print(f"snap finalization lock must not be a symlink: {lock_path}", file=sys.stderr)
+            raise SystemExit(1)
+        if not stat.S_ISREG(lock_stat.st_mode):
+            print(f"snap finalization lock must be a regular file: {lock_path}", file=sys.stderr)
+            raise SystemExit(1)
+        if getattr(lock_stat, "st_nlink", 1) != 1:
+            print(f"snap finalization lock must not be hardlinked: {lock_path}", file=sys.stderr)
+            raise SystemExit(1)
+
+    flags = os.O_CREAT | os.O_RDWR
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    lock_fd = os.open(lock_name, flags, 0o600, dir_fd=parent_fd)
+    with os.fdopen(lock_fd, "r+", encoding="utf-8") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        staging_stat = _regular_file(staging_path, "staged snap", required=True)
+        final_stat = _regular_file(final_path, "existing snap output", required=False)
+        staging_identity = _identity(staging_stat)
+        final_identity = _identity(final_stat) if final_stat is not None else None
+        backup_path = _new_backup_path()
+        backup_attempted = False
+        backup_created = False
+        activation_attempted = False
+        try:
+            if final_stat is not None:
+                backup_attempted = True
+                _run_safe_fs(
+                    "replace",
+                    "build-snap",
+                    final_path,
+                    backup_path,
+                    "--src-kind",
+                    "file",
+                    "--dst-must-not-exist",
+                )
+                backup_created = True
+            activation_attempted = True
+            _run_safe_fs("replace", "build-snap", staging_path, final_path, "--src-kind", "file")
+        except BaseException as exc:
+            try:
+                _rollback(
+                    backup_path=backup_path,
+                    backup_attempted=backup_attempted,
+                    backup_created=backup_created,
+                    final_stat=final_stat,
+                    final_identity=final_identity,
+                    activation_attempted=activation_attempted,
+                    staging_identity=staging_identity,
+                )
+            except BaseException as rollback_exc:
+                exc.add_note(f"snap finalization rollback failed: {rollback_exc}")
+            raise
+        if backup_created:
+            # A cleanup failure leaves the new snap active; the backup remains
+            # available as a recovery copy instead of risking a partial rollback.
+            _run_safe_fs("remove-leaf", "build-snap", backup_path)
+finally:
+    os.close(parent_fd)
+PY
+}
+
 for tool in python3 snapcraft mktemp mkdir find realpath stat chmod grep sort basename; do
   require_cmd "${tool}"
 done
@@ -235,6 +404,7 @@ fi
 
 cleanup_existing_dist_snaps() {
   local cleanup_list
+  local keep_name=$1
   local existing_snap
   local existing_real
   local -a existing_dist_snaps=()
@@ -245,7 +415,7 @@ cleanup_existing_dist_snaps() {
   fi
 
   cleanup_list="$(mktemp "${repo_tmp_root}/speed-of-cinnamon-snap-cleanup-XXXXXX")"
-  find "${dist_dir}" -maxdepth 1 -type f -name "speed-of-cinnamon_*.snap" -print0 | sort -z > "${cleanup_list}"
+  find "${dist_dir}" -maxdepth 1 -type f -name "speed-of-cinnamon_*.snap" ! -name "${keep_name}" -print0 | sort -z > "${cleanup_list}"
   mapfile -d '' -t existing_dist_snaps < "${cleanup_list}"
   "${safe_fs_cmd[@]}" remove build-snap "${cleanup_list}" --kind file
 
@@ -258,8 +428,6 @@ cleanup_existing_dist_snaps() {
     "${safe_fs_cmd[@]}" remove build-snap "${existing_snap}" --kind file
   done
 }
-
-cleanup_existing_dist_snaps
 
 cleanup_existing_root_snaps() {
   local cleanup_list
@@ -287,15 +455,11 @@ cleanup_existing_root_snaps() {
   done
 }
 
-cleanup_existing_root_snaps
-
 tmp_output="$(mktemp "${repo_tmp_root}/speed-of-cinnamon-snap-output-XXXXXX")"
 
 {
   find "${snap_workspace}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -type f -print0
   find "${snap_workspace_dist}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -type f -print0
-  find "${dist_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -type f -print0
-  find "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -type f -print0
 } | sort -z > "${tmp_output}"
 
 mapfile -d '' -t snap_files < "${tmp_output}"
@@ -311,9 +475,7 @@ for path in "${snap_files[@]}"; do
   fi
   absolute="$(realpath "${path}")"
   if [[ "${absolute}" != "${snap_workspace}/speed-of-cinnamon_${version}_"* &&
-        "${absolute}" != "${snap_workspace_dist}/speed-of-cinnamon_${version}_"* &&
-        "${absolute}" != "${dist_dir}/speed-of-cinnamon_${version}_"* &&
-        "${absolute}" != "${repo_dir}/speed-of-cinnamon_${version}_"* ]]; then
+        "${absolute}" != "${snap_workspace_dist}/speed-of-cinnamon_${version}_"* ]]; then
     printf 'snap package path is unexpected: %s\n' "${path}" >&2
     exit 1
   fi
@@ -329,8 +491,8 @@ for path in "${snap_files[@]}"; do
 done
 
 output_path="${dist_dir}/$(basename "${snap_files[0]}")"
-if [[ "$(realpath "${snap_files[0]}")" != "${output_path}" ]]; then
-  "${safe_fs_cmd[@]}" copy-file build-snap "${snap_files[0]}" "${output_path}" 0644 --dst-must-not-exist
-fi
+activate_snap_output "${dist_parent}/.build-snap.finalize.lock" "${snap_files[0]}" "${output_path}"
+cleanup_existing_dist_snaps "$(basename "${output_path}")"
+cleanup_existing_root_snaps
 printf 'Built %s\n' "${output_path}" >&2
 printf '%s\n' "${output_path}"
