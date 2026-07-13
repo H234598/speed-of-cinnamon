@@ -902,7 +902,7 @@ def timestamp() -> str:
 
 def print_result(payload: dict[str, object], json_output: bool) -> None:
     if json_output:
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False))
     else:
         status = payload.get("status", "ok")
         message = payload.get("message") or payload.get("error") or status
@@ -1994,13 +1994,13 @@ def _normalized_state_recording_artifact_path(
 
 
 def _assert_json_payload_size(payload: dict[str, object], *, max_bytes: int) -> None:
-    rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    rendered = json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
     if len(rendered.encode("utf-8")) > max_bytes:
         raise RuntimeError(f"output JSON is too large (max {max_bytes} bytes)")
 
 
 def _write_json_atomic(path: Path, payload: dict[str, object], *, max_bytes: int) -> None:
-    content = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    content = json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
     if len(content.encode("utf-8")) > max_bytes:
         raise RuntimeError(f"output JSON is too large (max {max_bytes} bytes)")
     try:

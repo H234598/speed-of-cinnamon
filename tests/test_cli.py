@@ -29,6 +29,35 @@ from speed_of_cinnamon.state import RecordingState, StateStore
 
 
 class CliTest(unittest.TestCase):
+    def test_print_result_rejects_nonfinite_json_values(self) -> None:
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value), redirect_stdout(io.StringIO()):
+                with self.assertRaises(ValueError):
+                    cli.print_result({"status": "done", "value": value}, True)
+
+    def test_run_returns_valid_json_when_payload_contains_nonfinite_value(self) -> None:
+        parser = argparse.ArgumentParser()
+        parser.parse_args = mock.Mock(
+            return_value=argparse.Namespace(
+                command="test",
+                json=True,
+                log_level="INFO",
+                handler=lambda _args: {"status": "done", "value": float("inf")},
+            )
+        )
+        stdout = io.StringIO()
+        with (
+            mock.patch.object(cli, "build_parser", return_value=parser),
+            mock.patch.object(cli, "configure_logging"),
+            mock.patch.object(cli, "log_event"),
+            redirect_stdout(stdout),
+        ):
+            code = cli.run([])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertNotIn("Infinity", stdout.getvalue())
+
     def test_temporary_benchmark_path_preserves_result_on_fd_close_failure(self) -> None:
         file_stat = os.stat(__file__)
         with (
