@@ -3230,6 +3230,30 @@ class ModelsTest(unittest.TestCase):
 
             self.assertFalse(orphan.exists())
 
+    def test_unlink_temporary_download_preserves_success_when_parent_close_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            temporary = root / ".model.tmp"
+            temporary.write_bytes(b"partial")
+            parent_fd = os.open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_close = os.close
+
+            def close_wrapper(fd: int) -> None:
+                if fd == parent_fd:
+                    raise OSError("close failed")
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.object(models, "ensure_directory_without_following_symlinks", return_value=parent_fd),
+                    mock.patch.object(models.os, "close", side_effect=close_wrapper),
+                ):
+                    models._unlink_temporary_download_path(temporary)
+            finally:
+                real_close(parent_fd)
+
+            self.assertFalse(temporary.exists())
+
     def test_unlink_model_file_preserves_success_when_parent_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

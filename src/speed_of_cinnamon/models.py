@@ -1326,7 +1326,10 @@ def _unlink_temporary_download_path(path: Path) -> None:
         _unlink_temporary_download_name(parent_fd, path.name)
     finally:
         if parent_fd is not None:
-            os.close(parent_fd)
+            try:
+                os.close(parent_fd)
+            except OSError:
+                pass
 
 
 def _create_temporary_file_in_parent_directory(parent_fd: int, *, prefix: str) -> tuple[str, int]:
@@ -1518,7 +1521,10 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                     prefix=f".{target.name}.",
                 )
             finally:
-                os.close(target_parent_fd)
+                try:
+                    os.close(target_parent_fd)
+                except OSError:
+                    pass
             downloaded_total += downloaded
             expected_checksum = expected_hashes[filename_key]
             if _sha1_file_without_cache(tmp_path) != expected_checksum:
@@ -1577,7 +1583,10 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                 _remove_model_directory_leaf(tmp_dir, root, field_name="model temporary directory")
         raise
     finally:
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except OSError:
+            pass
     return {**model_status(model, verify=True), "status": "done", "message": f"model downloaded: {model.name}"}
 
 
