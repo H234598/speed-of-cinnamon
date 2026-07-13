@@ -1892,6 +1892,11 @@ Source #13
         with self.assertRaisesRegex(RecorderError, "invalid process id"):
             stop_process(0)
 
+    def test_stop_process_wraps_pid_range_errors(self) -> None:
+        with mock.patch("speed_of_cinnamon.recorder.os.getpgid", side_effect=OverflowError("pid out of range")):
+            with self.assertRaisesRegex(RecorderError, "failed to inspect recorder process"):
+                stop_process(10**100, timeout_seconds=0.1, expected_process_identity="owner-identity")
+
     def test_stop_process_rejects_non_positive_timeout(self) -> None:
         with self.assertRaisesRegex(RecorderError, "timeout_seconds must be positive"):
             stop_process(1234, timeout_seconds=0)

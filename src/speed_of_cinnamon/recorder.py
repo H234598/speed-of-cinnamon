@@ -1409,7 +1409,7 @@ def _process_group_exists(process_group_id: int) -> bool:
         os.kill(-process_group_id, 0)
     except PermissionError:
         return True
-    except OSError:
+    except (OSError, OverflowError, ValueError):
         return False
     return True
 
@@ -1563,7 +1563,7 @@ def stop_process(
         if not process_group_target:
             return True
         process_target = f"-{pid}"
-    except OSError as exc:
+    except (OSError, OverflowError, ValueError) as exc:
         raise RecorderError(f"failed to inspect recorder process {pid}: {exc}") from exc
 
     def target_identity_still_safe() -> bool:
