@@ -234,6 +234,10 @@ class SizeCappedJsonFileHandler(logging.Handler):
 
     def _open(self) -> None:
         if self.stream is None:
+            try:
+                expected_stat = self.path.lstat()
+            except FileNotFoundError:
+                expected_stat = None
             parent_fd = ensure_directory_without_following_symlinks(self.path.parent, field_name="log directory")
             try:
                 assert_fd_is_private_directory(parent_fd, field_name="log directory")
@@ -252,6 +256,22 @@ class SizeCappedJsonFileHandler(logging.Handler):
                     raise RuntimeError(f"log file must be a regular file: {self.path}")
                 if getattr(file_stat, "st_nlink", 1) != 1:
                     raise RuntimeError(f"log file must not be hardlinked: {self.path}")
+                if expected_stat is not None and (
+                    file_stat.st_dev != expected_stat.st_dev
+                    or file_stat.st_ino != expected_stat.st_ino
+                    or file_stat.st_mode != expected_stat.st_mode
+                ):
+                    raise RuntimeError(f"log file changed while opening: {self.path}")
+                try:
+                    current_path_stat = self.path.lstat()
+                except FileNotFoundError as exc:
+                    raise RuntimeError(f"log file changed while opening: {self.path}") from exc
+                if (
+                    current_path_stat.st_dev != file_stat.st_dev
+                    or current_path_stat.st_ino != file_stat.st_ino
+                    or current_path_stat.st_mode != file_stat.st_mode
+                ):
+                    raise RuntimeError(f"log file changed while opening: {self.path}")
                 try:
                     os.fchmod(fd, 0o600)
                 except OSError as exc:

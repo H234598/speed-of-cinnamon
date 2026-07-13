@@ -336,6 +336,29 @@ class AppLoggingTest(unittest.TestCase):
             self.assertIsNone(handler.stream)
             handler.close()
 
+    def test_file_handler_rejects_active_path_swap_during_open(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            active = log_dir / f"speed-of-cinnamon-{date.today().isoformat()}.log"
+            active.write_text("original\n", encoding="utf-8")
+            active.chmod(0o600)
+            handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
+            real_open = app_logging.open_file_without_following_symlinks
+
+            def open_and_swap(*args: object, **kwargs: object) -> int:
+                fd = real_open(*args, **kwargs)
+                active.rename(log_dir / "active-original.log")
+                active.write_text("replacement\n", encoding="utf-8")
+                return fd
+
+            with mock.patch.object(app_logging, "open_file_without_following_symlinks", side_effect=open_and_swap):
+                with self.assertRaisesRegex(RuntimeError, "log file changed while opening"):
+                    handler._open()
+
+            self.assertIsNone(handler.stream)
+            self.assertEqual(active.read_text(encoding="utf-8"), "replacement\n")
+            handler.close()
+
     def test_copy_log_content_closes_source_fd_when_fdopen_fails(self) -> None:
         with (
             mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
