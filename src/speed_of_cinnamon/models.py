@@ -1388,6 +1388,7 @@ def _download_url_to_file_with_fd(
     temporary_name: str | None = None
     tmp_path: Path | None = None
     tmp_fd: int | None = None
+    primary_error: BaseException | None = None
     try:
         temporary_name, tmp_fd = _create_temporary_file_in_parent_directory(tmp_dir_fd, prefix=prefix)
         tmp_path = tmp_dir / temporary_name
@@ -1436,7 +1437,8 @@ def _download_url_to_file_with_fd(
                 output.flush()
                 os.fsync(output.fileno())
         return tmp_path, downloaded
-    except Exception:
+    except BaseException as exc:
+        primary_error = exc
         if tmp_dir_fd is not None and temporary_name is not None:
             _unlink_temporary_download_name(tmp_dir_fd, temporary_name)
         elif tmp_path is not None:
@@ -1447,7 +1449,13 @@ def _download_url_to_file_with_fd(
             with suppress(OSError):
                 os.close(tmp_fd)
         if close_tmp_dir_fd and tmp_dir_fd is not None:
-            os.close(tmp_dir_fd)
+            try:
+                os.close(tmp_dir_fd)
+            except OSError as cleanup_error:
+                if primary_error is not None:
+                    _note_cleanup_failure(primary_error, cleanup_error)
+                else:
+                    pass
 
 
 def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict[str, object]:

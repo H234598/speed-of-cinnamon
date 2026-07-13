@@ -3179,6 +3179,30 @@ class ModelsTest(unittest.TestCase):
 
         self.assertIn("model artifact cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_download_temp_open_error_survives_parent_close_failure(self) -> None:
+        def fail_close(fd: int) -> None:
+            if fd in {123, 456}:
+                raise OSError("close failed")
+
+        with (
+            mock.patch.object(models, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(models, "_create_temporary_file_in_parent_directory", return_value=(".model.tmp", 123)),
+            mock.patch.object(models.os, "fdopen", side_effect=OSError("fdopen failed")),
+            mock.patch.object(models, "_unlink_temporary_download_name"),
+            mock.patch.object(models.os, "close", side_effect=fail_close),
+        ):
+            with self.assertRaisesRegex(OSError, "failed to open temporary model file") as caught:
+                models._download_url_to_file_with_fd(
+                    "https://huggingface.co/model.bin",
+                    Path("/probe"),
+                    None,
+                    1024,
+                    "test-model",
+                    prefix=".model.",
+                )
+
+        self.assertIn("model artifact cleanup failed", "\n".join(caught.exception.__notes__))
+
     def test_unlink_model_file_preserves_success_when_parent_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
