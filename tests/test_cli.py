@@ -336,6 +336,65 @@ class CliTest(unittest.TestCase):
             with self.assertRaises(OSError):
                 os.fstat(target_fds[0])
 
+    def test_finalization_lock_pid_closes_descriptor_when_fdopen_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".state.finalizing"
+            path.write_text("123\n", encoding="ascii")
+            path.chmod(0o600)
+            real_open = os.open
+            target_fds: list[int] = []
+
+            def open_wrapper(*args: object, **kwargs: object) -> int:
+                fd = real_open(*args, **kwargs)
+                if args and args[0] == str(path):
+                    target_fds.append(fd)
+                return fd
+
+            with (
+                mock.patch.object(cli.os, "open", side_effect=open_wrapper),
+                mock.patch.object(cli.os, "fdopen", side_effect=KeyboardInterrupt),
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    cli._read_finalization_lock_pid(path)
+
+            self.assertEqual(len(target_fds), 1)
+            with self.assertRaises(OSError):
+                os.fstat(target_fds[0])
+
+    def test_finalization_lock_closes_descriptor_when_creation_stat_is_interrupted(self) -> None:
+        state_file = Path("/probe/state.json")
+        with (
+            mock.patch.object(cli, "assert_no_symlink_ancestors"),
+            mock.patch.object(cli, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(cli.os, "open", return_value=123),
+            mock.patch.object(cli.os, "fstat", side_effect=KeyboardInterrupt),
+            mock.patch.object(cli.os, "close") as mocked_close,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                cli._acquire_finalization_lock(state_file)
+
+        mocked_close.assert_any_call(123)
+        mocked_close.assert_any_call(456)
+
+    def test_finalization_lock_cleans_up_when_write_is_interrupted(self) -> None:
+        state_file = Path("/probe/state.json")
+        with (
+            mock.patch.object(cli, "assert_no_symlink_ancestors"),
+            mock.patch.object(cli, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(cli.os, "open", return_value=123),
+            mock.patch.object(cli.os, "fstat", return_value=mock.Mock()),
+            mock.patch.object(cli, "_finalization_lock_identity_for_pid", return_value=None),
+            mock.patch.object(cli, "_write_all", side_effect=KeyboardInterrupt),
+            mock.patch.object(cli, "_unlink_finalization_lock_at") as mocked_unlink,
+            mock.patch.object(cli.os, "close") as mocked_close,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                cli._acquire_finalization_lock(state_file)
+
+        mocked_close.assert_any_call(123)
+        mocked_close.assert_any_call(456)
+        mocked_unlink.assert_called_once()
+
     def test_ensure_private_text_file_keeps_existing_blacklist_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "blacklist.txt"

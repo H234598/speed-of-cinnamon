@@ -257,6 +257,13 @@ def _read_finalization_lock_pid(lock_path: Path) -> int | None:
             except OSError:
                 pass
         return None
+    except BaseException:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        raise
     try:
         text = raw.decode("ascii")
     except UnicodeDecodeError:
@@ -393,6 +400,7 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
         for _attempt in range(2):
             now = time.time()
             created_stat: os.stat_result | None = None
+            fd: int | None = None
             try:
                 fd = os.open(
                     lock_path.name,
@@ -438,6 +446,13 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                 continue
             except OSError:
                 return None
+            except BaseException:
+                if fd is not None:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+                raise
 
             try:
                 identity = _finalization_lock_identity_for_pid(os.getpid())
@@ -456,6 +471,16 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                 except OSError:
                     pass
                 return None
+            except BaseException:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                try:
+                    _unlink_finalization_lock_at(parent_fd, lock_path, expected_stat=created_stat)
+                except OSError:
+                    pass
+                raise
             try:
                 os.close(fd)
             except OSError:
