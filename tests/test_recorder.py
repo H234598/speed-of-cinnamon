@@ -1027,6 +1027,34 @@ class RecorderTest(unittest.TestCase):
             mode = log_path.stat().st_mode & 0o777
             self.assertEqual(mode, 0o600)
 
+    def test_recording_temp_creation_does_not_mask_parent_fd_close_failure(self) -> None:
+        from speed_of_cinnamon import recorder as recorder_module
+
+        real_close = os.close
+        real_open = os.open
+        with tempfile.TemporaryDirectory() as tmp:
+            audio_path = Path(tmp) / "sample.wav"
+            parent_fd = real_open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                with (
+                    mock.patch.object(
+                        recorder_module,
+                        "ensure_directory_without_following_symlinks",
+                        return_value=parent_fd,
+                    ),
+                    mock.patch.object(recorder_module.os, "close", side_effect=OSError("close failed")),
+                ):
+                    fd, temp_path = recorder_module._create_recording_temp_file(
+                        audio_path,
+                        marker="test",
+                        suffix=".wav",
+                    )
+                self.assertTrue(temp_path.exists())
+            finally:
+                real_close(fd)
+                temp_path.unlink()
+                real_close(parent_fd)
+
     def test_start_recorder_opens_log_file_without_following_symlinks(self) -> None:
         command = RecorderCommand(name="noop", argv=["true"])
         captured: dict[str, object] = {}

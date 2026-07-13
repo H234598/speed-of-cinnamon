@@ -459,7 +459,10 @@ def _create_recording_temp_file(audio_path: Path, *, marker: str, suffix: str) -
     except OSError as exc:
         raise RecorderError("failed to create recording temporary file") from exc
     finally:
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except OSError:
+            pass
 
 
 def _recording_temp_path_matches_fd(path: Path, fd: int) -> bool:
