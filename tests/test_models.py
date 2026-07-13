@@ -2994,6 +2994,51 @@ class ModelsTest(unittest.TestCase):
         self.assertFalse(path.exists())
         self.assertFalse(path.with_suffix(path.suffix + ".tmp").exists())
 
+    def test_download_model_restores_existing_file_when_final_replace_reports_post_rename_failure(self) -> None:
+        old_data = b"old model"
+        new_data = b"new model"
+        spec = models.ModelSpec(
+            name="post-rename-replace-fails",
+            filename="ggml-post-rename-replace-fails.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(new_data).hexdigest(),
+            description="post-rename replace failure",
+        )
+        real_replace = models._replace_model_sibling_path
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(new_data)),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            path.write_bytes(old_data)
+
+            def replace_then_fail_after_final_activation(
+                source: Path,
+                target: Path,
+                root: Path,
+                *,
+                field_name: str = "model path",
+            ) -> None:
+                real_replace(source, target, root, field_name=field_name)
+                if target == path and source.name.startswith(f".{path.name}.") and source.name.endswith(".tmp"):
+                    raise OSError("parent fsync failed after final activation")
+
+            with mock.patch.object(
+                models,
+                "_replace_model_sibling_path",
+                side_effect=replace_then_fail_after_final_activation,
+            ):
+                with self.assertRaisesRegex(models.ModelError, "failed to persist downloaded model file"):
+                    models.download_model("post-rename-replace-fails", force=True)
+
+            self.assertEqual(path.read_bytes(), old_data)
+            self.assertEqual(list(path.parent.glob(f".{path.name}.*.backup")), [])
+            self.assertEqual(list(path.parent.glob(f".{path.name}.*.tmp")), [])
+
     def test_download_model_preserves_existing_checksum_cache_when_atomic_replace_fails(self) -> None:
         old_data = b"old model"
         new_data = b"new model"

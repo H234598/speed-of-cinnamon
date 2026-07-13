@@ -1756,8 +1756,14 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
                     raise ModelError(f"model backup path already exists: {backup_path}")
                 _replace_model_sibling_path(path, backup_path, root, field_name="model backup path")
             _assert_model_path_for_atomic_replace(path, root, field_name="model path")
-            _replace_model_sibling_path(tmp_path, path, root, field_name="model path")
-            replaced_path = True
+            # The helper can raise after os.replace() when the parent fsync fails.
+            try:
+                _replace_model_sibling_path(tmp_path, path, root, field_name="model path")
+            except (OSError, ModelError):
+                replaced_path = tmp_path is not None and not tmp_path.exists()
+                raise
+            else:
+                replaced_path = True
             _clear_model_checksum_cache(tmp_path)
             _set_model_checksum_cache(path, checksum, tmp_stat)
         except OSError as exc:
