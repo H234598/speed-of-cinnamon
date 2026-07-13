@@ -638,6 +638,12 @@ def _create_log_temp_file(directory: Path, *, prefix: str, suffix: str) -> tuple
         except OSError as cleanup_error:
             _note_cleanup_failure(exc, cleanup_error)
         raise
+    except BaseException as exc:
+        try:
+            os.close(parent_fd)
+        except OSError as cleanup_error:
+            _note_cleanup_failure(exc, cleanup_error)
+        raise
 
 
 def _log_temp_name_matches_fd(parent_fd: int, temp_name: str, fd: int) -> bool:

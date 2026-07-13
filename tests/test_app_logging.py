@@ -504,6 +504,17 @@ class AppLoggingTest(unittest.TestCase):
 
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_create_log_temp_closes_parent_when_open_is_interrupted(self) -> None:
+        with (
+            mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(app_logging.os, "open", side_effect=KeyboardInterrupt),
+            mock.patch.object(app_logging.os, "close") as mocked_close,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                app_logging._create_log_temp_file(Path("/probe"), prefix="daily", suffix=".tmp")
+
+        mocked_close.assert_called_once_with(456)
+
     def test_file_handler_transient_emit_failure_retries_after_temporary_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
