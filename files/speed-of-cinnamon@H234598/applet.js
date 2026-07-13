@@ -3009,6 +3009,17 @@ MyApplet.prototype = {
     let generation = this.spawnGeneration;
     let sourceId = 0;
     let sourceRemovalSucceeded = false;
+    let normalizedDelay;
+    try {
+      normalizedDelay = Number(delay || 1);
+      if (!Number.isFinite(normalizedDelay)) {
+        throw new Error("Timer delay is invalid");
+      }
+      normalizedDelay = Math.max(1, normalizedDelay);
+    } catch (error) {
+      this._recordLifecycleError("timer-schedule", error);
+      return 0;
+    }
     let retireTimer = () => {
       let registryUntracked = this._untrackTimer(key, sourceId, propertyName);
       let orphanUntracked = this._untrackOrphanedTimer(key, sourceId);
@@ -3033,8 +3044,8 @@ MyApplet.prototype = {
     };
     try {
       sourceId = useSeconds
-        ? Mainloop.timeout_add_seconds(Math.max(1, Number(delay || 1)), timerCallback)
-        : Mainloop.timeout_add(Math.max(1, Number(delay || 1)), timerCallback);
+        ? Mainloop.timeout_add_seconds(normalizedDelay, timerCallback)
+        : Mainloop.timeout_add(normalizedDelay, timerCallback);
       let trackedSourceId = this._trackTimer(key, sourceId, propertyName);
       let registryHasTimer = !this._resourceRegistry ||
         (this._resourceRegistry.timers && this._resourceRegistry.timers[key] === sourceId);

@@ -3225,6 +3225,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("Timer rollback registry entry could not be removed", block)
         self.assertIn("Object.prototype.hasOwnProperty.call(this._resourceRegistry.timers, key)", block)
 
+    def test_tracked_timer_rejects_non_finite_delays_before_mainloop(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName)")
+        end = source.index("\n  _init:", start)
+        block = source[start:end]
+        self.assertIn("let normalizedDelay;", block)
+        self.assertIn("normalizedDelay = Number(delay || 1);", block)
+        self.assertIn("if (!Number.isFinite(normalizedDelay))", block)
+        self.assertIn('new Error("Timer delay is invalid")', block)
+        self.assertIn('this._recordLifecycleError("timer-schedule", error);', block)
+        self.assertIn("Mainloop.timeout_add_seconds(normalizedDelay, timerCallback)", block)
+        self.assertIn("Mainloop.timeout_add(normalizedDelay, timerCallback)", block)
+
     def test_malformed_orphan_registries_fail_closed_before_new_resources(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
