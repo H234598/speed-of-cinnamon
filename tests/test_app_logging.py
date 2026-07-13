@@ -908,6 +908,39 @@ class AppLoggingTest(unittest.TestCase):
             self.assertTrue(old_daily.exists())
             self.assertTrue(any(stat_module.S_ISDIR(mode) for mode in fsync_modes))
 
+    def test_maintain_logs_rolls_back_monthly_archive_after_activation_fsync_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            first = log_dir / "speed-of-cinnamon-2026-05-30.log"
+            second = log_dir / "speed-of-cinnamon-2026-05-31.log"
+            first.write_text("first\n", encoding="utf-8")
+            second.write_text("second\n", encoding="utf-8")
+            failed = False
+            real_fsync = os.fsync
+
+            def fail_first_directory_fsync(fd: int) -> None:
+                nonlocal failed
+                if not failed and stat_module.S_ISDIR(os.fstat(fd).st_mode):
+                    failed = True
+                    raise OSError("archive activation fsync failed")
+                real_fsync(fd)
+
+            with mock.patch("speed_of_cinnamon.app_logging.os.fsync", side_effect=fail_first_directory_fsync):
+                with self.assertRaisesRegex(OSError, "archive activation fsync failed"):
+                    app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
+
+            archive = log_dir / "speed-of-cinnamon-2026-05.log.gz"
+            self.assertFalse(archive.exists())
+            self.assertTrue(first.exists())
+            self.assertTrue(second.exists())
+
+            app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
+
+            with gzip.open(archive, "rt", encoding="utf-8") as handle:
+                content = handle.read()
+            self.assertEqual(content.count("first"), 1)
+            self.assertEqual(content.count("second"), 1)
+
     def test_maintain_logs_ignores_preexisting_monthly_tmp_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

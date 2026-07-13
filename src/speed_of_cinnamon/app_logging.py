@@ -651,6 +651,11 @@ def _merge_old_months(directory: Path, today: date) -> None:
         if archive.exists():
             _assert_regular_unlinked_file(archive, field_name="monthly log archive")
         temp_fd, parent_fd, temp_name = _create_log_temp_file(directory, prefix=archive.stem, suffix=".tmp")
+        archive_backup_name: str | None = None
+        archive_backup_moved = False
+        archive_activation_attempted = False
+        archive_activation_stat: os.stat_result | None = None
+        archive_transaction_active = False
         try:
             source_stats: dict[Path, os.stat_result] = {}
             try:
@@ -672,9 +677,31 @@ def _merge_old_months(directory: Path, today: date) -> None:
                 os.fsync(raw_output.fileno())
                 if not _log_temp_name_matches_fd(parent_fd, temp_name, raw_output.fileno()):
                     raise RuntimeError("monthly log temporary archive was replaced")
+            archive_activation_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
+            if not stat_module.S_ISREG(archive_activation_stat.st_mode):
+                raise RuntimeError("monthly log temporary archive must be a regular file")
+            if getattr(archive_activation_stat, "st_nlink", 1) != 1:
+                raise RuntimeError("monthly log temporary archive must not be hardlinked")
+            archive_transaction_active = True
+            if archive.exists():
+                _assert_regular_unlinked_file(archive, field_name="monthly log archive")
+                for _ in range(100):
+                    candidate_name = f".{archive.name}.{secrets.token_hex(8)}.backup"
+                    try:
+                        os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                    except FileNotFoundError:
+                        archive_backup_name = candidate_name
+                        break
+                if archive_backup_name is None:
+                    raise RuntimeError("failed to allocate monthly log archive backup")
+                os.replace(archive.name, archive_backup_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                archive_backup_moved = True
+                os.fsync(parent_fd)
+            archive_activation_attempted = True
             os.replace(temp_name, archive.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
             temp_name = ""
             os.fsync(parent_fd)
+            archive_transaction_active = False
             for path in paths:
                 original_stat = source_stats.get(path)
                 if original_stat is None:
@@ -712,12 +739,54 @@ def _merge_old_months(directory: Path, today: date) -> None:
                         pass
                     continue
                 os.fsync(parent_fd)
+            if archive_backup_moved and archive_backup_name is not None:
+                backup_path = directory / archive_backup_name
+                backup_stat = _assert_regular_unlinked_file(backup_path, field_name="monthly log archive backup")
+                _unlink_log_file_with_parent_fsync(
+                    backup_path,
+                    backup_stat,
+                    field_name="monthly log archive backup",
+                )
         except (gzip.BadGzipFile, EOFError, zlib.error):
             # Keep malformed archives intact so size-based cleanup can handle them.
             _unlink_log_temp(parent_fd, temp_name)
             temp_name = ""
             continue
-        except Exception:
+        except Exception as primary_error:
+            if archive_transaction_active:
+                try:
+                    if archive_activation_attempted and archive_activation_stat is not None:
+                        try:
+                            current_stat = os.stat(archive.name, dir_fd=parent_fd, follow_symlinks=False)
+                        except FileNotFoundError:
+                            current_stat = None
+                        if current_stat is not None:
+                            if (
+                                current_stat.st_dev != archive_activation_stat.st_dev
+                                or current_stat.st_ino != archive_activation_stat.st_ino
+                                or current_stat.st_mode != archive_activation_stat.st_mode
+                                or current_stat.st_size != archive_activation_stat.st_size
+                                or getattr(current_stat, "st_nlink", 1)
+                                != getattr(archive_activation_stat, "st_nlink", 1)
+                            ):
+                                raise RuntimeError("monthly log archive changed during activation rollback")
+                            os.unlink(archive.name, dir_fd=parent_fd)
+                            os.fsync(parent_fd)
+                    if archive_backup_moved and archive_backup_name is not None:
+                        try:
+                            os.stat(archive.name, dir_fd=parent_fd, follow_symlinks=False)
+                        except FileNotFoundError:
+                            os.replace(
+                                archive_backup_name,
+                                archive.name,
+                                src_dir_fd=parent_fd,
+                                dst_dir_fd=parent_fd,
+                            )
+                            os.fsync(parent_fd)
+                        else:
+                            raise RuntimeError("monthly log archive target exists during rollback")
+                except Exception as rollback_error:
+                    _note_cleanup_failure(primary_error, rollback_error)
             _unlink_log_temp(parent_fd, temp_name)
             raise
         finally:
