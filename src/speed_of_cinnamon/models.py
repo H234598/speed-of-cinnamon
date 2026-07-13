@@ -639,19 +639,23 @@ def _open_model_download_response(
         try:
             return _open_model_download_url(current_url, timeout=30)
         except urllib.error.HTTPError as exc:
-            redirect_url = _model_download_redirect_target(exc, current_url)
-            if redirect_url is None:
-                raise ModelError(f"model download failed with HTTP status {exc.code}") from exc
-            redirect_url = _assert_download_url(
-                redirect_url,
-                field_name="model download redirect URL",
-                allowed_hosts=redirect_allowed_hosts,
-            )
-            if allowed_urls is not None and not any(
-                _download_redirect_matches_allowed_url(redirect_url, allowed_url) for allowed_url in allowed_urls
-            ):
-                raise ModelError("model download redirect URL is not allowed") from exc
-            current_url = redirect_url
+            try:
+                redirect_url = _model_download_redirect_target(exc, current_url)
+                if redirect_url is None:
+                    raise ModelError(f"model download failed with HTTP status {exc.code}") from exc
+                redirect_url = _assert_download_url(
+                    redirect_url,
+                    field_name="model download redirect URL",
+                    allowed_hosts=redirect_allowed_hosts,
+                )
+                if allowed_urls is not None and not any(
+                    _download_redirect_matches_allowed_url(redirect_url, allowed_url) for allowed_url in allowed_urls
+                ):
+                    raise ModelError("model download redirect URL is not allowed") from exc
+                current_url = redirect_url
+            finally:
+                with suppress(Exception):
+                    exc.close()
     raise ModelError("model download has too many redirects")
 
 

@@ -1978,6 +1978,34 @@ class ModelsTest(unittest.TestCase):
             self.assertTrue(tmp_path.exists())
             self.assertEqual(tmp_path.read_bytes(), b"model")
 
+    def test_download_redirect_closes_http_error_response(self) -> None:
+        error = urllib.error.HTTPError(
+            models.TINY_DE_MODEL_URL,
+            302,
+            "Found",
+            {
+                "Location": (
+                    "https://huggingface.co/wabisabisocial/whisper-tiny-german-ggml/resolve/main/"
+                    "ggml-tiny-de.bin?download=1"
+                )
+            },
+            io.BytesIO(),
+        )
+        with mock.patch(
+            "speed_of_cinnamon.models._open_model_download_url",
+            side_effect=[error, FakeResponseWithLength(b"model", 5)],
+        ):
+            response = models._open_model_download_response(
+                models.TINY_DE_MODEL_URL,
+                allowed_hosts={models.HUGGING_FACE_DOWNLOAD_HOST},
+                redirect_allowed_hosts=models.HUGGING_FACE_STORAGE_REDIRECT_HOSTS
+                | {models.HUGGING_FACE_DOWNLOAD_HOST},
+                allowed_urls={models.TINY_DE_MODEL_URL},
+            )
+
+        self.assertIsInstance(response, FakeResponseWithLength)
+        self.assertTrue(error.fp.closed)
+
     def test_download_url_allows_huggingface_resolve_cache_redirect_for_same_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch(
