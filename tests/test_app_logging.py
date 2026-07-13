@@ -294,6 +294,26 @@ class AppLoggingTest(unittest.TestCase):
 
         self.assertEqual(stderr.getvalue(), "")
 
+    def test_file_handler_suppresses_close_failure_after_log_io_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            handler = app_logging.SizeCappedJsonFileHandler(
+                log_dir / f"speed-of-cinnamon-{date.today().isoformat()}.log",
+                log_dir,
+            )
+            handler.setFormatter(app_logging.JsonLogFormatter())
+            handler.stream = io.StringIO()
+            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+
+            with (
+                mock.patch.object(handler, "_open", side_effect=OSError("read only")),
+                mock.patch.object(handler.stream, "close", side_effect=OSError("close failed")),
+            ):
+                handler.emit(record)
+
+            self.assertIsNone(handler.stream)
+            handler.close()
+
     def test_copy_log_content_closes_source_fd_when_fdopen_fails(self) -> None:
         with (
             mock.patch.object(app_logging, "_open_log_source_file", return_value=123),

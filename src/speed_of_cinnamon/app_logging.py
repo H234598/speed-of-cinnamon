@@ -144,10 +144,15 @@ class SizeCappedJsonFileHandler(logging.Handler):
         self._next_maintenance_at = time.monotonic() + LOG_MAINTENANCE_INTERVAL_SECONDS
 
     def close(self) -> None:
-        if self.stream is not None:
-            self.stream.close()
+        stream = self.stream
+        self.stream = None
+        try:
+            if stream is not None:
+                stream.close()
+        except Exception:
             self.stream = None
-        super().close()
+        finally:
+            super().close()
 
     def emit(self, record: logging.LogRecord) -> None:
         if self._disabled:
