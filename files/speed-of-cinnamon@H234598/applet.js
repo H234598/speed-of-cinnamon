@@ -9330,8 +9330,13 @@ MyApplet.prototype = {
       }
     };
     let failToOpen = () => {
-      this._dialogClose(dialog, "transcript-list");
-      this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);
+      let closed = this._dialogClose(dialog, "transcript-list");
+      if (!closed) {
+        releasePrompt = false;
+        this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be closed"), this.lastTranscript);
+      } else {
+        this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);
+      }
       complete(false);
     };
     if (!dialog || !this._dialogAddChild(dialog, this._newSafeLabel(_("List all transcripts?"), { x_expand: true }, "transcript-list"), "transcript-list") ||
@@ -9643,9 +9648,11 @@ MyApplet.prototype = {
     let dialog = this._newSafeDialog("cleanup-preview");
     this.cleanupPreviewDialog = dialog;
     let failToOpen = () => {
-      this._dialogClose(dialog, "cleanup-preview");
-      releaseDialog();
-      this._notify(_("Speed of Cinnamon"), _("Cleanup preview: ") + String(this._cleanupCount(payload, true)), false);
+      if (closeDialog(dialog)) {
+        this._notify(_("Speed of Cinnamon"), _("Cleanup preview: ") + String(this._cleanupCount(payload, true)), false);
+      } else {
+        this._setStatusPreservingRecording("error", _("Cleanup preview could not be closed"), this.lastTranscript);
+      }
     };
     if (!dialog || !this._dialogAddChild(dialog, this._newSafeLabel(this._cleanupPreviewText(payload), { x_expand: true }, "cleanup-preview"), "cleanup-preview") ||
       !this._dialogSetButtons(dialog, [
