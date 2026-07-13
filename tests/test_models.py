@@ -713,7 +713,44 @@ class ModelsTest(unittest.TestCase):
                 cache_path,
                 field_name="model checksum cache path",
                 max_bytes=models.MAX_MODEL_CHECKSUM_JSON_BYTES,
+                expected_stat=mock.ANY,
             )
+
+    def test_model_checksum_cache_rejects_regular_file_swap_before_secure_read(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            model_path = Path(tmp) / "model.bin"
+            model_path.write_bytes(b"model")
+            model_stat = model_path.stat()
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text("{}", encoding="utf-8")
+            replacement = json.dumps(
+                {
+                    str(model_path): {
+                        "checksum": hashlib.sha1(b"model").hexdigest(),
+                        "size": model_stat.st_size,
+                        "mtime_ns": model_stat.st_mtime_ns,
+                    }
+                }
+            )
+            real_read = models.read_text_without_following_symlinks
+
+            def read_and_swap(*args: object, **kwargs: object) -> str:
+                cache_path.rename(cache_path.with_name("model_checksums-original.json"))
+                cache_path.write_text(replacement, encoding="utf-8")
+                cache_path.chmod(0o600)
+                return real_read(*args, **kwargs)
+
+            with mock.patch.object(models, "read_text_without_following_symlinks", side_effect=read_and_swap):
+                models._load_model_checksum_cache()
+
+            self.assertEqual(models._model_checksum_cache, {})
+            self.assertTrue(cache_path.with_name("model_checksums-original.json").exists())
 
     def test_invalid_model_checksum_cache_delete_uses_dir_fd_and_fsync(self) -> None:
         with (

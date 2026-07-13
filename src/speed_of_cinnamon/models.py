@@ -159,17 +159,28 @@ def _load_model_checksum_cache() -> None:
     _model_checksum_cache_loaded = True
 
     cache_path = _model_checksum_cache_path()
-    if not cache_path.exists():
+    try:
+        cache_stat = cache_path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError:
+        return
+    if (
+        not stat_module.S_ISREG(cache_stat.st_mode)
+        or getattr(cache_stat, "st_nlink", 1) != 1
+    ):
+        _remove_model_checksum_cache_file(cache_path)
         return
 
     try:
-        if cache_path.stat().st_size > MAX_MODEL_CHECKSUM_JSON_BYTES:
+        if cache_stat.st_size > MAX_MODEL_CHECKSUM_JSON_BYTES:
             _remove_model_checksum_cache_file(cache_path)
             return
         text = read_text_without_following_symlinks(
             cache_path,
             field_name="model checksum cache path",
             max_bytes=MAX_MODEL_CHECKSUM_JSON_BYTES,
+            expected_stat=cache_stat,
         )
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         _remove_model_checksum_cache_file(cache_path)
