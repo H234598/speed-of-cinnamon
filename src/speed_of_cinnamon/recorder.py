@@ -1517,7 +1517,7 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
             shell=False,
             env=_filtered_environment(),  # nosec B603
         )
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         _cleanup_created_recorder_log(log_path, log_file, created_log)
         raise RecorderError(f"failed to start {command.name}: {exc}") from exc
     except RecorderError:

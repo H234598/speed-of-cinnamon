@@ -1401,6 +1401,17 @@ class RecorderTest(unittest.TestCase):
             self.assertFalse(log_path.exists())
         mocked_popen.assert_called_once()
 
+    @mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=ValueError("invalid process argument"))
+    def test_start_recorder_wraps_process_argument_value_error(self, mocked_popen: mock.Mock) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "session.log"
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
+                with self.assertRaisesRegex(RecorderError, "failed to start noop"):
+                    start_recorder(command, log_path)
+            self.assertFalse(log_path.exists())
+        mocked_popen.assert_called_once()
+
     @mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=OSError("boom"))
     def test_start_recorder_fsyncs_parent_when_start_failure_removes_log(self, mocked_popen: mock.Mock) -> None:
         from speed_of_cinnamon import recorder as recorder_module
