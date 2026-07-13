@@ -384,6 +384,14 @@ class AlarmTest(unittest.TestCase):
         self.assertIn("Local time", summary)
         self.assertIn(f"at {local_now.strftime('%H:%M')}", summary)
 
+    def test_next_occurrence_handles_datetime_upper_bound(self) -> None:
+        self.assertIsNone(
+            alarm_module.next_occurrence(
+                {"hour": 0, "minute": 0},
+                datetime(9999, 12, 31, 23, 59),
+            )
+        )
+
     def test_add_alarm_reads_store_after_lock_to_avoid_lost_update(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"

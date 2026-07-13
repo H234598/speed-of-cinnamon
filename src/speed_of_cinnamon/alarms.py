@@ -741,7 +741,10 @@ def _check_due_alarms_locked(
 def next_occurrence(alarm: dict[str, Any], now: datetime) -> datetime | None:
     current = _normalize_local_datetime(now, field_name="now")
     for offset in range(8):
-        day = current.date() + timedelta(days=offset)
+        try:
+            day = current.date() + timedelta(days=offset)
+        except OverflowError:
+            break
         candidate = alarm_occurrence(alarm, day)
         if candidate and candidate >= current:
             return candidate
