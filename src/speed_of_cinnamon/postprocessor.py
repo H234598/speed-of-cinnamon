@@ -408,7 +408,10 @@ def _read_json(request: urllib.request.Request, timeout: int) -> object:
         raise PostProcessError("timeout must be an integer")
     with _open_http_request(request, timeout=timeout, field_name="postprocess request") as response:
         raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except RecursionError as exc:
+        raise json.JSONDecodeError("JSON nesting is too deep", raw, 0) from exc
 
 
 def _openai_compatible_error_detail(raw: str) -> str:

@@ -1197,6 +1197,17 @@ class PostProcessorTest(unittest.TestCase):
         self.assertEqual(result["models"], [])
         self.assertIn("not reachable", result["message"])
 
+    def test_list_ollama_models_wraps_json_recursion_error(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.postprocessor._open_http_request", return_value=FakeResponse({"models": []})),
+            mock.patch("speed_of_cinnamon.postprocessor.json.loads", side_effect=RecursionError("too deep")),
+        ):
+            result = list_ollama_models("http://127.0.0.1:11434")
+
+        self.assertFalse(result["available"])
+        self.assertEqual(result["models"], [])
+        self.assertIn("invalid JSON", result["message"])
+
     def test_list_openai_compatible_models_reads_models_endpoint(self) -> None:
         payload = {
             "object": "list",
