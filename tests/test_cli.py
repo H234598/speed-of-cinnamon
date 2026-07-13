@@ -138,6 +138,30 @@ class CliTest(unittest.TestCase):
             with self.assertRaises(OSError):
                 os.fstat(target_fds[0])
 
+    def test_finalization_lock_pid_closes_descriptor_when_fdopen_rejects(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".state.finalizing"
+            path.write_text("123\n", encoding="ascii")
+            path.chmod(0o600)
+            real_open = os.open
+            target_fds: list[int] = []
+
+            def open_wrapper(*args: object, **kwargs: object) -> int:
+                fd = real_open(*args, **kwargs)
+                if args and args[0] == str(path):
+                    target_fds.append(fd)
+                return fd
+
+            with (
+                mock.patch.object(cli.os, "open", side_effect=open_wrapper),
+                mock.patch.object(cli.os, "fdopen", side_effect=ValueError("invalid descriptor mode")),
+            ):
+                self.assertIsNone(cli._read_finalization_lock_pid(path))
+
+            self.assertEqual(len(target_fds), 1)
+            with self.assertRaises(OSError):
+                os.fstat(target_fds[0])
+
     def test_ensure_private_text_file_keeps_existing_blacklist_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "blacklist.txt"
@@ -9767,6 +9791,30 @@ class CliTest(unittest.TestCase):
         self.assertEqual(captured["path"], Path("/tmp/sample.txt"))
         self.assertEqual(captured["flags"], os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0))
         handle.close.assert_called_once()
+
+    def test_read_file_tail_closes_descriptor_when_fdopen_rejects(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "log.txt"
+            path.write_text("hello", encoding="utf-8")
+            real_open = os.open
+            target_fds: list[int] = []
+
+            def open_wrapper(*args: object, **kwargs: object) -> int:
+                fd = real_open(*args, **kwargs)
+                if args and args[0] == path:
+                    target_fds.append(fd)
+                return fd
+
+            with (
+                mock.patch.object(cli.os, "open", side_effect=open_wrapper),
+                mock.patch.object(cli.os, "fdopen", side_effect=ValueError("invalid descriptor mode")),
+            ):
+                with self.assertRaisesRegex(ValueError, "invalid descriptor mode"):
+                    cli.read_file_tail(path, 10)
+
+            self.assertEqual(len(target_fds), 1)
+            with self.assertRaises(OSError):
+                os.fstat(target_fds[0])
 
     def test_read_file_tail_rejects_hardlinked_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

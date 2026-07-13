@@ -250,7 +250,7 @@ def _read_finalization_lock_pid(lock_path: Path) -> int | None:
         with os.fdopen(fd, "rb") as handle:
             fd = None
             raw = handle.read(512)
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, ValueError):
         if fd is not None:
             try:
                 os.close(fd)
@@ -833,7 +833,7 @@ def read_file_tail(path: Path, max_chars: int) -> str:
     try:
         handle = os.fdopen(fd, "rb")
         fd = None
-    except OSError:
+    except (OSError, ValueError):
         if fd is not None:
             try:
                 os.close(fd)
