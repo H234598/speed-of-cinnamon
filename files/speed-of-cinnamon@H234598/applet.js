@@ -2882,10 +2882,10 @@ MyApplet.prototype = {
     return success;
   },
 
-  _clearTrackedTimer: function(name, propertyName) {
+  _clearTrackedTimer: function(name, propertyName, sourceAlreadyRemoved) {
     let key = "timer";
     let sourceId = 0;
-    let sourceRemovalSucceeded = false;
+    let sourceRemovalSucceeded = sourceAlreadyRemoved === true;
     try {
       key = String(name || propertyName || "timer");
       sourceId = this._resourceRegistry && this._resourceRegistry.timers
@@ -2900,11 +2900,13 @@ MyApplet.prototype = {
         }
         return true;
       }
-      let removed = Mainloop.source_remove(sourceId);
-      if (removed === false) {
-        throw new Error("Timer source could not be removed");
+      if (sourceAlreadyRemoved !== true) {
+        let removed = Mainloop.source_remove(sourceId);
+        if (removed === false) {
+          throw new Error("Timer source could not be removed");
+        }
+        sourceRemovalSucceeded = true;
       }
-      sourceRemovalSucceeded = true;
       let orphanUntracked = this._untrackOrphanedTimer(key, sourceId);
       if (orphanUntracked === false) {
         throw new Error("Timer orphan registry entry could not be removed");
@@ -10397,13 +10399,14 @@ MyApplet.prototype = {
     let callbackDelivered = false;
     let setupFailed = false;
     let inputPending = hasInput;
+    let timeoutSourceAlreadyRemoved = false;
 
     let cleanupResources = (timeoutCleanupSucceeded) => {
       if (cleanupComplete) {
         return true;
       }
       if (timeoutCleanupSucceeded === undefined) {
-        timeoutCleanupSucceeded = this._clearTrackedTimer(timeoutKey) !== false;
+        timeoutCleanupSucceeded = this._clearTrackedTimer(timeoutKey, undefined, timeoutSourceAlreadyRemoved) !== false;
       }
       let cancellableCleanupSucceeded = this._unregisterCancellable(cancellableToken);
       let cancellableOrphanCleanupSucceeded = true;
@@ -10424,14 +10427,17 @@ MyApplet.prototype = {
       return cleanupComplete;
     };
 
-    let finish = (result, terminate, suppressCallback) => {
+    let finish = (result, terminate, suppressCallback, timeoutAlreadyRemoved) => {
+      if (timeoutAlreadyRemoved === true) {
+        timeoutSourceAlreadyRemoved = true;
+      }
       if (cleanupComplete) {
         return true;
       }
       if (done) {
         return cleanupResources();
       }
-      let timeoutCleanupSucceeded = this._clearTrackedTimer(timeoutKey) !== false;
+      let timeoutCleanupSucceeded = this._clearTrackedTimer(timeoutKey, undefined, timeoutSourceAlreadyRemoved) !== false;
       let terminationSucceeded = true;
       if (terminate) {
         terminationSucceeded = this._terminateProcess(process);
@@ -10552,7 +10558,7 @@ MyApplet.prototype = {
     };
 
     if (timeoutMs > 0 && !this._scheduleTrackedTimer(timeoutKey, Math.max(minimumTimeoutMs, timeoutMs), () => {
-      finish({ timedOut: true }, true);
+      finish({ timedOut: true }, true, false, true);
       return false;
     }, false)) {
       finish({ error: "Subprocess timeout could not be scheduled" }, true);

@@ -3159,11 +3159,12 @@ class AppletStaticTest(unittest.TestCase):
 
     def test_failed_timer_removal_remains_tracked(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
-        start = source.index("_clearTrackedTimer: function(name, propertyName)")
+        start = source.index("_clearTrackedTimer: function(name, propertyName, sourceAlreadyRemoved)")
         end = source.index("\n  _scheduleTrackedTimer:", start)
         block = source[start:end]
         self.assertIn("let sourceId = 0;", block)
-        self.assertIn("let sourceRemovalSucceeded = false;", block)
+        self.assertIn("let sourceRemovalSucceeded = sourceAlreadyRemoved === true;", block)
+        self.assertIn("if (sourceAlreadyRemoved !== true) {", block)
         self.assertIn("let removed = Mainloop.source_remove(sourceId);", block)
         self.assertIn('if (removed === false) {', block)
         self.assertIn("if (sourceId)", block)
@@ -3174,7 +3175,7 @@ class AppletStaticTest(unittest.TestCase):
 
     def test_timer_cleanup_handles_missing_registry_map(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
-        start = source.index("_clearTrackedTimer: function(name, propertyName)")
+        start = source.index("_clearTrackedTimer: function(name, propertyName, sourceAlreadyRemoved)")
         end = source.index("\n  _scheduleTrackedTimer:", start)
         block = source[start:end]
 
@@ -3199,7 +3200,7 @@ class AppletStaticTest(unittest.TestCase):
 
     def test_timer_registry_delete_failures_do_not_escape_cleanup(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
-        start = source.index("_clearTrackedTimer: function(name, propertyName)")
+        start = source.index("_clearTrackedTimer: function(name, propertyName, sourceAlreadyRemoved)")
         end = source.index("\n  _scheduleTrackedTimer:", start)
         block = source[start:end]
         self.assertIn("let deleted = delete this._resourceRegistry.timers[key];", block)
@@ -4239,7 +4240,7 @@ class AppletStaticTest(unittest.TestCase):
         bounded_start = source.index("_runBoundedSubprocess: function(args, env, options, callback)")
         bounded_end = source.index("\n  _spawnJsonWithBackendEnvironment:", bounded_start)
         bounded_block = source[bounded_start:bounded_end]
-        self.assertIn("let finish = (result, terminate, suppressCallback)", bounded_block)
+        self.assertIn("let finish = (result, terminate, suppressCallback, timeoutAlreadyRemoved)", bounded_block)
         self.assertIn('if (hasInput && typeof options.inputText !== "string")', bounded_block)
         self.assertIn('typeof options.maxStdoutBytes === "number" && isFinite(options.maxStdoutBytes)', bounded_block)
         self.assertIn('typeof options.maxStderrBytes === "number" && isFinite(options.maxStderrBytes)', bounded_block)
@@ -4290,13 +4291,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let callbackDelivered = false;", block)
         self.assertIn("let setupFailed = false;", block)
         self.assertIn("let inputPending = hasInput;", block)
+        self.assertIn("let timeoutSourceAlreadyRemoved = false;", block)
         self.assertIn("!ended.stdout || !ended.stderr || inputPending", block)
         self.assertIn("if (setupFailed || done) {\n      return null;", block)
         self.assertIn("let cleanupResources = (timeoutCleanupSucceeded) =>", block)
         self.assertIn("if (done) {\n        return cleanupResources();", block)
         self.assertIn("if (!callbackDelivered)", block)
-        self.assertIn("if (timeoutCleanupSucceeded === undefined) {\n        timeoutCleanupSucceeded = this._clearTrackedTimer(timeoutKey) !== false;", block)
-        self.assertIn("let timeoutCleanupSucceeded = this._clearTrackedTimer(timeoutKey) !== false;", block)
+        self.assertIn("if (timeoutCleanupSucceeded === undefined) {\n        timeoutCleanupSucceeded = this._clearTrackedTimer(timeoutKey, undefined, timeoutSourceAlreadyRemoved) !== false;", block)
+        self.assertIn("let timeoutCleanupSucceeded = this._clearTrackedTimer(timeoutKey, undefined, timeoutSourceAlreadyRemoved) !== false;", block)
+        self.assertIn("let finish = (result, terminate, suppressCallback, timeoutAlreadyRemoved) =>", block)
+        self.assertIn("timeoutAlreadyRemoved === true", block)
+        self.assertIn("finish({ timedOut: true }, true, false, true);", block)
         self.assertIn("let cancellableCleanupSucceeded = this._unregisterCancellable(cancellableToken);", block)
         self.assertIn("let cancellableOrphanCleanupSucceeded = true;", block)
         self.assertIn("cancellableOrphanCleanupSucceeded = this._untrackOrphanedCancellable(cancellableToken);", block)
