@@ -8295,6 +8295,34 @@ class CliTest(unittest.TestCase):
         self.assertFalse(final_state.transcript_path)
         self.assertFalse(final_state.transcript)
 
+    def test_cancel_rejects_recording_symlink_without_deleting_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            target = recordings / "target.wav"
+            symlink = recordings / "recording.wav"
+            target.write_bytes(b"audio")
+            symlink.symlink_to(target)
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="finalizing", audio_path=str(symlink)))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+            symlink_is_symlink = symlink.is_symlink()
+            target_exists = target.exists()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "error")
+        self.assertFalse(payload["audio_deleted"])
+        self.assertEqual(final_state.status, "error")
+        self.assertEqual(final_state.audio_path, str(symlink))
+        self.assertTrue(symlink_is_symlink)
+        self.assertTrue(target_exists)
+
     def test_cancel_missing_outside_artifacts_still_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

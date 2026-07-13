@@ -1962,6 +1962,10 @@ def _normalized_state_artifact_path(path_value: str | None, *, state_path: Path 
     base_dir = state_path.parent if state_path is not None else Path.cwd()
     was_relative = not path.is_absolute()
     normalized = path if not was_relative else base_dir / path
+    try:
+        assert_no_symlink_ancestors(normalized, field_name="state artifact path")
+    except (OSError, RuntimeError):
+        return None
     normalized = normalized.resolve(strict=False)
     if was_relative and state_path is not None and not normalized.is_relative_to(base_dir.resolve(strict=False)):
         return None
@@ -1981,6 +1985,10 @@ def _normalized_state_recording_artifact_path(
     base_dir = state_path.parent if state_path is not None else Path.cwd()
     was_relative = not path.is_absolute()
     path = path if not was_relative else base_dir / path
+    try:
+        assert_no_symlink_ancestors(path, field_name="state recording artifact path")
+    except (OSError, RuntimeError):
+        return None
     path = path.resolve(strict=False)
     if was_relative and state_path is not None and not path.is_relative_to(base_dir.resolve(strict=False)):
         return None
