@@ -3652,6 +3652,8 @@ class CliTest(unittest.TestCase):
             StateStore(state_file).write(
                 RecordingState(
                     status="recorded",
+                    pid=1234,
+                    process_identity="stale-process-identity",
                     audio_path="recordings/active.wav",
                     log_path="recordings/active.log",
                 )
@@ -3673,6 +3675,8 @@ class CliTest(unittest.TestCase):
             self.assertEqual(final_state.status, "done")
             self.assertFalse(final_state.audio_path)
             self.assertFalse(final_state.log_path)
+            self.assertIsNone(final_state.pid)
+            self.assertFalse(final_state.process_identity)
 
     def test_start_locked_promotes_relative_recording_path_to_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3686,12 +3690,24 @@ class CliTest(unittest.TestCase):
             audio.write_bytes(b"audio")
             state_file = state_dir / "state.json"
             store = StateStore(state_file)
-            store.write(RecordingState(status="recording", audio_path="recordings/active.wav"))
-            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}):
+            store.write(
+                RecordingState(
+                    status="recording",
+                    pid=1234,
+                    process_identity="stale-process-identity",
+                    audio_path="recordings/active.wav",
+                )
+            )
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch.object(cli, "_recording_process_verified_alive", return_value=False),
+            ):
                 result = cli._command_start_locked(argparse.Namespace(), store)
             final_state = store.read()
             self.assertEqual(result["status"], "recorded")
             self.assertEqual(final_state.status, "recorded")
+            self.assertIsNone(final_state.pid)
+            self.assertFalse(final_state.process_identity)
 
     def test_start_locked_rejects_relative_recording_path_escape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -8691,9 +8707,13 @@ class CliTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value="owner-identity"),
             ):
                 result = cli.command_stop(args)
+            final_state = StateStore(state_file).read()
         self.assertEqual(result["status"], "done")
         mocked_alive.assert_called_once_with(1234)
         mocked_stop.assert_called_once_with(1234, expected_process_identity="owner-identity")
+        self.assertEqual(final_state.status, "recorded")
+        self.assertIsNone(final_state.pid)
+        self.assertFalse(final_state.process_identity)
 
     @mock.patch("speed_of_cinnamon.cli.finalize_recording", return_value={"status": "done"})
     @mock.patch("speed_of_cinnamon.cli.stop_process", return_value=False)

@@ -2951,7 +2951,12 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
                 "language": current.language,
             }
         if current_audio_path and current_audio_path.exists() and current_audio_path.stat().st_size > 0:
-            recorded = store.update(status="recorded", stopped_at=current.stopped_at or now_iso())
+            recorded = store.update(
+                status="recorded",
+                pid=None,
+                process_identity="",
+                stopped_at=current.stopped_at or now_iso(),
+            )
             return {
                 "status": "recorded",
                 "message": "previous recording has exited; run stop or toggle to transcribe",
@@ -2961,6 +2966,8 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
         if current.audio_path and not current_audio_path:
             store.update(
                 status="error",
+                pid=None,
+                process_identity="",
                 stopped_at=current.stopped_at or now_iso(),
                 error="recording state references an invalid artifact path",
             )
@@ -2968,7 +2975,13 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
                 "status": "error",
                 "message": "recording state references an invalid artifact path",
             }
-        store.update(status="error", stopped_at=current.stopped_at or now_iso(), error="recording exited before audio was saved")
+        store.update(
+            status="error",
+            pid=None,
+            process_identity="",
+            stopped_at=current.stopped_at or now_iso(),
+            error="recording exited before audio was saved",
+        )
         return {
             "status": "error",
             "message": "recording exited before audio was saved",
@@ -3140,7 +3153,13 @@ def finalize_recording(
             return {"status": state.status, "message": state.error or f"recording already {state.status}"}
 
         if not state.audio_path:
-            store.update(status="error", stopped_at=state.stopped_at or now_iso(), error="no recording is available")
+            store.update(
+                status="error",
+                pid=None,
+                process_identity="",
+                stopped_at=state.stopped_at or now_iso(),
+                error="no recording is available",
+            )
             raise RuntimeError("no recording is available")
         audio_path = _normalized_state_recording_artifact_path(
             state.audio_path,
@@ -3155,7 +3174,13 @@ def finalize_recording(
             require_recordings_dir=True,
         )
         if not audio_path:
-            store.update(status="error", stopped_at=state.stopped_at or now_iso(), error="recording audio path is invalid")
+            store.update(
+                status="error",
+                pid=None,
+                process_identity="",
+                stopped_at=state.stopped_at or now_iso(),
+                error="recording audio path is invalid",
+            )
             raise RuntimeError("recording audio path is invalid")
         try:
             audio_path.lstat()
@@ -3165,6 +3190,8 @@ def finalize_recording(
             if _recording_artifact_stat(audio_path) is None:
                 store.update(
                     status="error",
+                    pid=None,
+                    process_identity="",
                     stopped_at=state.stopped_at or now_iso(),
                     error="recording audio path is not a safe regular file",
                 )
@@ -3182,6 +3209,8 @@ def finalize_recording(
         if state.status != "finalizing":
             state = store.update(
                 status="finalizing",
+                pid=None,
+                process_identity="",
                 stopped_at=state.stopped_at or now_iso(),
                 error="",
                 inserted=False,
@@ -3464,6 +3493,8 @@ def finalize_recording(
         else:
             done = store.update(
                 status="done",
+                pid=None,
+                process_identity="",
                 stopped_at=done_candidate.stopped_at,
                 audio_path=done_candidate.audio_path,
                 log_path=done_candidate.log_path,
@@ -3661,6 +3692,8 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
                 return {"status": "recording", "message": error_text, "error": error_text}
         state = store.update(
             status="recorded",
+            pid=None,
+            process_identity="",
             stopped_at=now_iso(),
             error="",
             inserted=False,
