@@ -308,6 +308,7 @@ def _cached_or_computed_sha1(path: Path) -> str:
     fd = _open_model_hash_file(path)
     try:
         with os.fdopen(fd, "rb") as handle:
+            fd = -1
             info = os.fstat(handle.fileno())
             digest = hashlib.sha1(usedforsecurity=False)
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -316,8 +317,12 @@ def _cached_or_computed_sha1(path: Path) -> str:
             checksum = digest.hexdigest()
             _set_model_checksum_cache(path, checksum, info)
             return checksum
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         raise ModelError(str(exc)) from exc
+    finally:
+        if fd >= 0:
+            with suppress(OSError):
+                os.close(fd)
 
 
 def _parse_model_size_bytes(value: str) -> int:
