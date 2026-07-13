@@ -310,6 +310,14 @@ class OutputTest(unittest.TestCase):
             with self.assertRaisesRegex(OutputError, "failed with exit code 1"):
                 _run_with_input(["cmd"], "input")
 
+    def test_run_with_input_wraps_process_argument_value_error(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"),
+            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=ValueError("invalid process argument")),
+        ):
+            with self.assertRaisesRegex(OutputError, "cmd failed to execute"):
+                _run_with_input(["cmd"], "input")
+
     def test_run_with_input_redacts_command_error_output(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             stderr = cast(BinaryIO, kwargs["stderr"])
@@ -521,6 +529,16 @@ class OutputTest(unittest.TestCase):
             _run_stdout(["xdotool", "-h"])
 
         self.assertEqual(calls[0][0], "/usr/bin/xdotool")
+
+    def test_run_stdout_returns_empty_when_process_argument_is_invalid(self) -> None:
+        with (
+            unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
+            unittest.mock.patch(
+                "speed_of_cinnamon.output.subprocess.run",
+                side_effect=ValueError("invalid process argument"),
+            ),
+        ):
+            self.assertEqual(_run_stdout(["xdotool", "--help"]), "")
 
     def test_run_stdout_uses_file_backed_output_capture(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:

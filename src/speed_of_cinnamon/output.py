@@ -874,7 +874,7 @@ def _run_with_input(
             raise OutputError(f"{command} is not available") from exc
         except subprocess.TimeoutExpired as exc:
             raise OutputError(f"{command} timed out after {timeout}s") from exc
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             raise OutputError(f"{command} failed to execute: {exc}") from exc
 
         if _filesize(stdout_file) > max_output_chars:
@@ -943,7 +943,7 @@ def _run_bounded_stdout_command(
                 shell=False,
                 env=_filtered_environment(),
             )
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError, ValueError):
             return None
         completed_stdout = proc.stdout if isinstance(proc.stdout, bytes) else None
         completed_stderr = proc.stderr if isinstance(proc.stderr, bytes) else None
