@@ -856,10 +856,24 @@ def read_file_tail(path: Path, max_chars: int) -> str:
             except OSError:
                 pass
         raise OSError(str(exc)) from exc
+    except BaseException:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        raise
     try:
         handle = os.fdopen(fd, "rb")
         fd = None
     except (OSError, ValueError):
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        raise
+    except BaseException:
         if fd is not None:
             try:
                 os.close(fd)
@@ -1559,6 +1573,14 @@ def _prepare_transient_transcript_path(path: Path, storage_path: Path) -> int | 
                 pass
         cleanup_created_path(exc)
         raise
+    except BaseException as exc:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        cleanup_created_path(exc)
+        raise
 
 
 def _same_leaf_identity(current: os.stat_result, expected: os.stat_result) -> bool:
@@ -2098,6 +2120,12 @@ def _prepare_private_file(path: Path, *, field_name: str, exclusive: bool = True
             created=True,
             errno_value=getattr(exc, "errno", None),
         ) from exc
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
 
 
 def _allocate_recording_artifacts() -> tuple[Path, Path]:

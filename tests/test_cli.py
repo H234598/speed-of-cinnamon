@@ -178,6 +178,49 @@ class CliTest(unittest.TestCase):
             with self.assertRaises(OSError):
                 os.fstat(target_fds[0])
 
+    def test_prepare_private_file_closes_descriptor_when_fdopen_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "recording.wav"
+            real_open = os.open
+            target_fds: list[int] = []
+
+            def open_wrapper(*args: object, **kwargs: object) -> int:
+                fd = real_open(*args, **kwargs)
+                if args and args[0] == path.name:
+                    target_fds.append(fd)
+                return fd
+
+            with (
+                mock.patch.object(cli.os, "open", side_effect=open_wrapper),
+                mock.patch.object(cli.os, "fdopen", side_effect=KeyboardInterrupt),
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    cli._prepare_private_file(path, field_name="recording audio file")
+
+            self.assertEqual(len(target_fds), 1)
+            with self.assertRaises(OSError):
+                os.fstat(target_fds[0])
+
+    def test_prepare_transient_transcript_closes_descriptor_when_owner_write_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / ".transcript.tmp.txt"
+            storage_path = root / "transcript.txt"
+            with (
+                mock.patch.object(cli, "transcript_dir", return_value=root),
+                mock.patch.object(cli, "_prepare_private_file"),
+                mock.patch.object(cli.os, "open", return_value=42),
+                mock.patch.object(cli.os, "fstat", return_value=os.stat(__file__)),
+                mock.patch.object(cli, "_write_transient_transcript_owner", side_effect=KeyboardInterrupt),
+                mock.patch.object(cli, "_remove_transient_transcript_path") as mocked_remove,
+                mock.patch.object(cli.os, "close") as mocked_close,
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    cli._prepare_transient_transcript_path(path, storage_path)
+
+            mocked_close.assert_called_once_with(42)
+            mocked_remove.assert_called_once_with(path, storage_path)
+
     def test_prepare_private_file_preserves_success_when_parent_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "recording.wav"
@@ -10289,6 +10332,30 @@ class CliTest(unittest.TestCase):
                 mock.patch.object(cli.os, "fdopen", side_effect=ValueError("invalid descriptor mode")),
             ):
                 with self.assertRaisesRegex(ValueError, "invalid descriptor mode"):
+                    cli.read_file_tail(path, 10)
+
+            self.assertEqual(len(target_fds), 1)
+            with self.assertRaises(OSError):
+                os.fstat(target_fds[0])
+
+    def test_read_file_tail_closes_descriptor_when_fdopen_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "log.txt"
+            path.write_text("hello", encoding="utf-8")
+            real_open = os.open
+            target_fds: list[int] = []
+
+            def open_wrapper(*args: object, **kwargs: object) -> int:
+                fd = real_open(*args, **kwargs)
+                if args and args[0] == path:
+                    target_fds.append(fd)
+                return fd
+
+            with (
+                mock.patch.object(cli.os, "open", side_effect=open_wrapper),
+                mock.patch.object(cli.os, "fdopen", side_effect=KeyboardInterrupt),
+            ):
+                with self.assertRaises(KeyboardInterrupt):
                     cli.read_file_tail(path, 10)
 
             self.assertEqual(len(target_fds), 1)
