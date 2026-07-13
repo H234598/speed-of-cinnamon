@@ -1315,6 +1315,7 @@ class RecorderTest(unittest.TestCase):
                 with mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value=None):
                     with self.assertRaisesRegex(RecorderError, "true is not available"):
                         start_recorder(command, Path(tmp) / "session.log")
+            self.assertFalse((Path(tmp) / "session.log").exists())
 
     def test_start_recorder_rejects_empty_executable(self) -> None:
         command = RecorderCommand(name="noop", argv=[""])

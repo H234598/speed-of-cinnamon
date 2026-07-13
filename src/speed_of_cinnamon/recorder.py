@@ -1450,6 +1450,16 @@ def _unlink_recorder_log_if_same(log_path: Path, expected_stat: os.stat_result) 
         _close_fd_quietly(parent_fd)
 
 
+def _cleanup_created_recorder_log(log_path: Path, log_file: io.BufferedWriter, created_log: bool) -> None:
+    if not created_log:
+        return
+    try:
+        opened_stat = os.fstat(log_file.fileno())
+    except (OSError, ValueError):
+        return
+    _unlink_recorder_log_if_same(log_path, opened_stat)
+
+
 def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen[bytes]:
     if not isinstance(log_path, Path):
         raise RecorderError("invalid recorder log path")
@@ -1486,13 +1496,11 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
             env=_filtered_environment(),  # nosec B603
         )
     except OSError as exc:
-        try:
-            opened_stat = os.fstat(log_file.fileno())
-            if created_log:
-                _unlink_recorder_log_if_same(log_path, opened_stat)
-        except OSError:
-            pass
+        _cleanup_created_recorder_log(log_path, log_file, created_log)
         raise RecorderError(f"failed to start {command.name}: {exc}") from exc
+    except RecorderError:
+        _cleanup_created_recorder_log(log_path, log_file, created_log)
+        raise
     finally:
         try:
             log_file.close()
