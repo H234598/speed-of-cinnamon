@@ -492,6 +492,31 @@ class SecurityParserTest(unittest.TestCase):
 
         self.assertIn("blacklist lock cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_blacklist_lock_closes_parent_when_open_is_interrupted(self) -> None:
+        with (
+            mock.patch.object(security_parser, "assert_no_symlink_ancestors"),
+            mock.patch.object(security_parser, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(security_parser.os, "open", side_effect=KeyboardInterrupt),
+            mock.patch.object(security_parser.os, "close") as mocked_close,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                security_parser._acquire_blacklist_lock(Path("/probe/blacklist.txt"))
+
+        mocked_close.assert_called_once_with(456)
+
+    def test_blacklist_lock_closes_fd_when_validation_is_interrupted(self) -> None:
+        with (
+            mock.patch.object(security_parser, "assert_no_symlink_ancestors"),
+            mock.patch.object(security_parser, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(security_parser.os, "open", return_value=123),
+            mock.patch.object(security_parser, "assert_fd_is_regular_private_file", side_effect=KeyboardInterrupt),
+            mock.patch.object(security_parser.os, "close") as mocked_close,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                security_parser._acquire_blacklist_lock(Path("/probe/blacklist.txt"))
+
+        self.assertEqual(mocked_close.call_args_list, [mock.call(123), mock.call(456)])
+
     def test_blacklist_unlock_preserves_unlock_error_when_fd_close_fails(self) -> None:
         with (
             mock.patch.object(security_parser.fcntl, "flock", side_effect=OSError("unlock failed")),

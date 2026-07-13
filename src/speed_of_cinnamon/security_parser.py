@@ -494,6 +494,12 @@ def _acquire_blacklist_lock(path: Path) -> int:
         except OSError as cleanup_error:
             _note_lock_cleanup_failure(error, cleanup_error)
         raise error from exc
+    except BaseException as exc:
+        try:
+            os.close(parent_fd)
+        except OSError as cleanup_error:
+            _note_lock_cleanup_failure(exc, cleanup_error)
+        raise
     primary_error: BaseException | None = None
     try:
         assert_fd_is_regular_private_file(fd, field_name="blacklist lock file", require_private_mode=True)
@@ -511,6 +517,13 @@ def _acquire_blacklist_lock(path: Path) -> int:
         except OSError as cleanup_error:
             _note_lock_cleanup_failure(error, cleanup_error)
         raise error from exc
+    except BaseException as exc:
+        primary_error = exc
+        try:
+            os.close(fd)
+        except OSError as cleanup_error:
+            _note_lock_cleanup_failure(exc, cleanup_error)
+        raise
     finally:
         try:
             os.close(parent_fd)
