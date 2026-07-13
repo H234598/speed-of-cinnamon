@@ -23,6 +23,7 @@ from .path_safety import (
     assert_no_symlink_ancestors,
     ensure_directory_without_following_symlinks,
     open_directory_without_following_symlinks,
+    open_file_without_following_symlinks,
     read_text_without_following_symlinks,
     write_text_atomically_without_following_symlinks,
 )
@@ -289,13 +290,10 @@ def _clear_model_checksum_cache(path: Path) -> None:
 
 
 def _open_model_hash_file(path: Path) -> int:
-    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
-        raise ModelError("secure model file open is not supported on this platform")
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     fd: int | None = None
     try:
-        fd = os.open(path, os.O_RDONLY | nofollow_flag | nonblock_flag)
+        fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name="model file")
         assert_fd_is_regular_private_file(fd, field_name="model file")
     except OSError as exc:
         raise ModelError(str(exc)) from exc
@@ -1247,14 +1245,24 @@ def _model_is_downloaded(model: ModelSpec, path: Path) -> bool:
             return False
         for filename in model.files:
             file_path = path / _validated_catalog_path_fragment(filename, field_name="model file path")
-            try:
-                file_stat = file_path.stat(follow_symlinks=False)
-            except OSError:
-                return False
-            if not stat_module.S_ISREG(file_stat.st_mode):
+            if not _model_file_is_regular(file_path):
                 return False
         return True
     return stat_module.S_ISREG(path_stat.st_mode)
+
+
+def _model_file_is_regular(path: Path) -> bool:
+    nonblock_flag = getattr(os, "O_NONBLOCK", 0)
+    fd: int | None = None
+    try:
+        fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name="model file")
+        return stat_module.S_ISREG(os.fstat(fd).st_mode)
+    except (OSError, RuntimeError):
+        return False
+    finally:
+        if fd is not None:
+            with suppress(OSError):
+                os.close(fd)
 
 
 def _model_is_verified(model: ModelSpec, path: Path, checksum: str = "") -> bool:

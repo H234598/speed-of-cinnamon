@@ -105,8 +105,11 @@ class ModelsTest(unittest.TestCase):
             self.assertTrue(cache_path.exists())
             self.assertTrue(
                 any(
-                    Path(args[0]) == path and isinstance(args[1], int) and args[1] & os.O_NOFOLLOW
-                    for args, _ in mocked_open.call_args_list
+                    args[0] == path.name
+                    and isinstance(args[1], int)
+                    and args[1] & os.O_NOFOLLOW
+                    and "dir_fd" in kwargs
+                    for args, kwargs in mocked_open.call_args_list
                 )
             )
             self.assertTrue(
@@ -170,7 +173,7 @@ class ModelsTest(unittest.TestCase):
 
             def open_wrapper(*args: object, **kwargs: object) -> int:
                 fd = real_open(*args, **kwargs)
-                if args and args[0] == path:
+                if args and args[0] == path.name and "dir_fd" in kwargs:
                     target_fds.append(fd)
                 return fd
 
@@ -194,7 +197,7 @@ class ModelsTest(unittest.TestCase):
 
             def open_wrapper(*args: object, **kwargs: object) -> int:
                 fd = real_open(*args, **kwargs)
-                if args and args[0] == path:
+                if args and args[0] == path.name and "dir_fd" in kwargs:
                     target_fds.append(fd)
                 return fd
 
@@ -1732,6 +1735,50 @@ class ModelsTest(unittest.TestCase):
             status = models.model_status(spec, verify=False)
 
         self.assertFalse(status["downloaded"])
+
+    def test_multifile_model_rejects_symlinked_intermediate_directory(self) -> None:
+        data = b"small model file"
+        spec = models.ModelSpec(
+            name="ct2-nested-symlink-status",
+            filename="ct2-nested-symlink-status",
+            size="2 KiB",
+            sha1="",
+            description="ct2 nested symlink status",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-nested-symlink-status",
+            files=("nested/model.bin",),
+            file_sha1s=file_sha1s_for(("nested/model.bin",), data),
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+        ):
+            path = models.model_path(spec)
+            path.mkdir(parents=True)
+            outside = Path(tmp) / "outside-model"
+            outside.mkdir()
+            (outside / "model.bin").write_bytes(data)
+            (path / "nested").symlink_to(outside, target_is_directory=True)
+
+            status = models.model_status(spec, verify=True)
+
+        self.assertFalse(status["downloaded"])
+        self.assertFalse(status["verified"])
+
+    def test_sha1_file_rejects_symlinked_intermediate_model_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "model.bin").write_bytes(b"outside model")
+            model_path = root / "model" / "nested" / "model.bin"
+            model_path.parent.parent.mkdir()
+            (model_path.parent).symlink_to(outside, target_is_directory=True)
+
+            with self.assertRaisesRegex(models.ModelError, "symbolic link|symlink|Not a directory"):
+                models._sha1_file_without_cache(model_path)
 
     def test_download_model_rejects_multifile_catalog_without_repo_id(self) -> None:
         spec = models.ModelSpec(
