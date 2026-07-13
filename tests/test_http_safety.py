@@ -21,6 +21,10 @@ class HttpSafetyTest(unittest.TestCase):
             with self.subTest(hostname=hostname):
                 self.assertFalse(is_loopback_hostname(hostname))
 
+    def test_is_loopback_hostname_rejects_non_text_values(self) -> None:
+        self.assertFalse(is_loopback_hostname(123))  # type: ignore[arg-type]
+        self.assertFalse(is_loopback_hostname(True))  # type: ignore[arg-type]
+
 
 if __name__ == "__main__":
     unittest.main()

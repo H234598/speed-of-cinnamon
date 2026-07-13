@@ -4,7 +4,7 @@ import ipaddress
 
 
 def is_loopback_hostname(hostname: str | None) -> bool:
-    if hostname is None:
+    if hostname is None or isinstance(hostname, bool) or not isinstance(hostname, str):
         return False
     normalized = hostname.lower()
     if normalized.startswith("[") or normalized.endswith("]"):
