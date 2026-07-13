@@ -1167,9 +1167,31 @@ def _gzip_file(source: Path, target: Path) -> None:
                     )
                 except FileExistsError:
                     continue
-                target_backup_name = candidate_name
-                target_backup_created = True
-                break
+                try:
+                    backup_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                    current_target_stat = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
+                    if (
+                        not stat_module.S_ISREG(backup_stat.st_mode)
+                        or getattr(backup_stat, "st_nlink", 1) < 2
+                        or not _same_target_inode(backup_stat, target_existing_stat)
+                        or not stat_module.S_ISREG(current_target_stat.st_mode)
+                        or not _same_target_inode(current_target_stat, target_existing_stat)
+                    ):
+                        raise RuntimeError("log target changed during backup activation")
+                    target_backup_name = candidate_name
+                    target_backup_created = True
+                    break
+                except BaseException as exc:
+                    try:
+                        candidate_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                        if _same_target_inode(candidate_stat, target_existing_stat):
+                            os.unlink(candidate_name, dir_fd=parent_fd)
+                            os.fsync(parent_fd)
+                    except FileNotFoundError:
+                        pass
+                    except BaseException as cleanup_error:
+                        _note_cleanup_failure(exc, cleanup_error)
+                    raise
             if not target_backup_created:
                 raise RuntimeError("failed to allocate log target backup")
             os.fsync(parent_fd)

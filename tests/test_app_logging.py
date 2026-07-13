@@ -1128,6 +1128,35 @@ class AppLoggingTest(unittest.TestCase):
                 self.assertEqual(handle.read(), "old content\n")
             self.assertEqual(list(log_dir.glob("*.backup")), [])
 
+    def test_gzip_file_rejects_target_swap_during_backup_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "source.log"
+            target = log_dir / "target.log.gz"
+            source.write_text("new content\n", encoding="utf-8")
+            source.chmod(0o600)
+            with gzip.open(target, "wt", encoding="utf-8") as handle:
+                handle.write("old content\n")
+            target.chmod(0o600)
+            real_link = os.link
+
+            def link_then_swap(src: object, dst: object, *args: object, **kwargs: object) -> None:
+                real_link(src, dst, *args, **kwargs)
+                if src == target.name:
+                    target.unlink()
+                    with gzip.open(target, "wt", encoding="utf-8") as handle:
+                        handle.write("replacement content\n")
+                    target.chmod(0o600)
+
+            with mock.patch("speed_of_cinnamon.app_logging.os.link", side_effect=link_then_swap):
+                with self.assertRaisesRegex(RuntimeError, "log target changed during backup activation"):
+                    app_logging._gzip_file(source, target)
+
+            self.assertTrue(source.exists())
+            with gzip.open(target, "rt", encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "replacement content\n")
+            self.assertEqual(list(log_dir.glob("*.backup")), [])
+
     def test_gzip_file_removes_target_backup_when_replace_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
