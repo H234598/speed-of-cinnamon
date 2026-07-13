@@ -4530,7 +4530,8 @@ class CliTest(unittest.TestCase):
             os.utime(active_audio, (200, 200))
             os.utime(active_log, (200, 200))
             os.utime(other_audio, (100, 100))
-            active_group = {active_audio.resolve(strict=False), active_log.resolve(strict=False)}
+            active_audio_alias = active_audio.parent / "nested" / ".." / active_audio.name
+            active_group = {active_audio_alias, active_log}
 
             def _prune_files_by_mtime(
                 paths: list[Path],
@@ -4552,7 +4553,7 @@ class CliTest(unittest.TestCase):
             ):
                 result = cli.prune_recording_groups(
                     keep=0,
-                    active_paths={active_audio.resolve(strict=False)},
+                    active_paths={active_audio_alias},
                     dry_run=True,
                     max_age_days=36500,
                 )

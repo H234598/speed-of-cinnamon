@@ -2894,6 +2894,7 @@ def prune_recording_groups(
     failed_paths: list[str] = []
     skipped_active_paths: list[str] = []
     skipped_group_paths: list[Path] = []
+    normalized_active_paths = {path.resolve(strict=False) for path in active_paths}
     cutoff = time.time() - max(0, max_age_days) * 24 * 60 * 60
     try:
         groups = recording_groups()
@@ -2918,7 +2919,7 @@ def prune_recording_groups(
         if not isinstance(files, list):
             continue
         group_paths = [path for path in files if isinstance(path, Path)]
-        if any(path.resolve(strict=False) in active_paths for path in group_paths):
+        if any(path.resolve(strict=False) in normalized_active_paths for path in group_paths):
             skipped_group_paths.extend(group_paths)
             skipped_active_paths.extend(str(path) for path in group_paths)
             continue
@@ -2962,7 +2963,7 @@ def prune_recording_groups(
     file_cap_result = prune_files_by_mtime(
         remaining_artifacts,
         MAX_TEMP_RECORDING_FILES,
-        active_paths,
+        normalized_active_paths,
         dry_run,
     )
     cap_planned = list(file_cap_result["planned_paths"])
