@@ -1407,6 +1407,8 @@ def _process_is_gone(process_target: str) -> bool:
 def _process_group_exists(process_group_id: int) -> bool:
     try:
         os.kill(-process_group_id, 0)
+    except PermissionError:
+        return True
     except OSError:
         return False
     return True

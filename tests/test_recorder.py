@@ -2049,6 +2049,18 @@ Source #13
         self.assertTrue(result)
         mocked_kill.assert_not_called()
 
+    def test_stop_process_does_not_assume_reaped_group_is_gone_on_permission_error(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.recorder.os.getpgid", side_effect=ProcessLookupError),
+            mock.patch("speed_of_cinnamon.recorder.os.kill", side_effect=PermissionError("Operation not permitted")),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_matches", return_value=False),
+            mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
+        ):
+            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+
+        self.assertFalse(result)
+        mocked_kill.assert_not_called()
+
     def test_stop_process_cleans_group_after_leader_was_reaped(self) -> None:
         group_checks = 0
 
