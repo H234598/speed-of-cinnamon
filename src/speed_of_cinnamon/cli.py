@@ -3758,20 +3758,8 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     inserted=False,
                 )
                 return {"status": "recording", "message": error_text, "error": error_text}
-
-            store.update(
-                status="idle",
-                pid=None,
-                process_identity="",
-                audio_path=None,
-                log_path=None,
-                transcript_path=None,
-                transcript="",
-                stopped_at=now_iso(),
-                error="",
-                inserted=False,
-            )
-            return {"status": "idle", "message": "recording stopped"}
+            # Continue through the normal finalizing/discard path so cancel also removes
+            # the artifacts produced by the just-stopped recording.
 
         discarded_audio_path = _normalized_state_recording_artifact_path(
             state.audio_path,

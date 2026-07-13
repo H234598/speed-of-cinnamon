@@ -8705,11 +8705,15 @@ class CliTest(unittest.TestCase):
     def test_cancel_running_recording_stops_process(self, mocked_alive: mock.Mock, mocked_stop: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            audio = tmp_path / "recording.wav"
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            transcripts = tmp_path / "speed-of-cinnamon" / "transcripts"
+            recordings.mkdir(parents=True)
+            transcripts.mkdir(parents=True)
+            audio = recordings / "recording.wav"
             audio.write_bytes(b"audio")
-            log = tmp_path / "recording.log"
+            log = recordings / "recording.log"
             log.write_text("recorder log", encoding="utf-8")
-            transcript = tmp_path / "recording.txt"
+            transcript = transcripts / "recording.txt"
             transcript.write_text("transcript", encoding="utf-8")
             state_file = tmp_path / "state.json"
             store = StateStore(state_file)
@@ -8724,11 +8728,15 @@ class CliTest(unittest.TestCase):
                 )
             )
             with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
                 mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value="owner-identity"),
                 redirect_stdout(io.StringIO()),
             ):
                 code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
             final_state = store.read()
+            audio_exists = audio.exists()
+            log_exists = log.exists()
+            transcript_exists = transcript.exists()
         self.assertEqual(code, 0)
         mocked_alive.assert_called_once_with(1234)
         mocked_stop.assert_called_once_with(1234, expected_process_identity="owner-identity")
@@ -8736,6 +8744,54 @@ class CliTest(unittest.TestCase):
         self.assertFalse(final_state.audio_path)
         self.assertFalse(final_state.log_path)
         self.assertFalse(final_state.transcript_path)
+        self.assertFalse(audio_exists)
+        self.assertFalse(log_exists)
+        self.assertFalse(transcript_exists)
+
+    @mock.patch("speed_of_cinnamon.cli.stop_process")
+    @mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=True)
+    def test_cancel_running_recording_preserves_state_when_artifact_cleanup_fails(
+        self,
+        mocked_alive: mock.Mock,
+        mocked_stop: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "recording.wav"
+            audio.write_bytes(b"audio")
+            log = recordings / "recording.log"
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            StateStore(state_file).write(
+                RecordingState(
+                    status="recording",
+                    pid=1234,
+                    process_identity="owner-identity",
+                    audio_path=str(audio),
+                    log_path=str(log),
+                )
+            )
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value="owner-identity"),
+                mock.patch("speed_of_cinnamon.cli._remove_recording_artifact", return_value=False),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = StateStore(state_file).read()
+            audio_exists = audio.exists()
+
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(final_state.status, "error")
+        self.assertTrue(final_state.audio_path)
+        self.assertTrue(audio_exists)
+        mocked_alive.assert_called_once_with(1234)
+        mocked_stop.assert_called_once_with(1234, expected_process_identity="owner-identity")
 
     @mock.patch("speed_of_cinnamon.cli.finalize_recording", return_value={"status": "done"})
     @mock.patch("speed_of_cinnamon.cli.stop_process")
