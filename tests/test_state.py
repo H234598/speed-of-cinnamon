@@ -524,6 +524,10 @@ class StateStoreTest(unittest.TestCase):
         self.assertFalse(process_is_alive("123"))  # type: ignore[arg-type]
         self.assertFalse(process_is_alive(True))
 
+    def test_process_is_alive_fails_closed_on_unexpected_os_error(self) -> None:
+        with mock.patch("speed_of_cinnamon.state.os.kill", side_effect=OSError("unexpected kernel error")):
+            self.assertFalse(process_is_alive(1234))
+
     def test_read_rejects_invalid_boolean_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"

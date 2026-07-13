@@ -377,4 +377,6 @@ def process_is_alive(pid: int | None) -> bool:
         return False
     except PermissionError:
         return True
+    except OSError:
+        return False
     return True
