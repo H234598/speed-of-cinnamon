@@ -323,6 +323,46 @@ class InstallLocalTest(unittest.TestCase):
             self.assertEqual(list(root.glob(".target.*.backup")), [])
             self.assertEqual(list(root.glob(".target.*.install")), [])
 
+    def test_safe_fs_install_tree_preserves_backup_when_rollback_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = self._load_safe_fs_module()
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir()
+            target.mkdir()
+            (source / "payload.txt").write_text("new\n", encoding="utf-8")
+            (target / "payload.txt").write_text("old\n", encoding="utf-8")
+            real_fsync_directory_fd = module._fsync_directory_fd
+            real_replace = module.os.replace
+            fsync_calls = 0
+
+            def fail_after_activation(fd: int, *, action: str) -> None:
+                nonlocal fsync_calls
+                fsync_calls += 1
+                if fsync_calls == 3:
+                    raise OSError("post-activation fsync failed")
+                real_fsync_directory_fd(fd, action=action)
+
+            def fail_backup_restore(src: str, dst: str, **kwargs: object) -> None:
+                if ".backup" in src:
+                    raise OSError("backup restore failed")
+                real_replace(src, dst, **kwargs)
+
+            args = module.argparse.Namespace(action="install", source=str(source), target=str(target), label="tree")
+            with (
+                mock.patch.object(module, "_fsync_directory_fd", side_effect=fail_after_activation),
+                mock.patch.object(module.os, "replace", side_effect=fail_backup_restore),
+            ):
+                with self.assertRaisesRegex(OSError, "post-activation fsync failed"):
+                    module.cmd_install_tree(args)
+
+            backups = list(root.glob(".target.*.backup"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual((backups[0] / "payload.txt").read_text(encoding="utf-8"), "old\n")
+            self.assertFalse(target.exists())
+            self.assertEqual(list(root.glob(".target.*.install")), [])
+
     def test_safe_fs_remove_dir_requires_symlink_safe_rmtree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = self._load_safe_fs_module()

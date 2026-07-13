@@ -534,10 +534,9 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
         with context_suppress():
             _rmtree_safe(stage_name, dir_fd=parent_fd, action=args.action)
             os.fsync(parent_fd)
-        if backup_created:
-            with context_suppress():
-                _rmtree_safe(backup_name, dir_fd=parent_fd, action=args.action)
-                os.fsync(parent_fd)
+        # A backup that is still marked as created is the only recovery copy
+        # left after a failed rollback.  Keep it instead of deleting the
+        # previous installation while handling the original error.
         os.close(parent_fd)
 
 
