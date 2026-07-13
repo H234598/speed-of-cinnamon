@@ -442,6 +442,18 @@ class SecurityParserTest(unittest.TestCase):
             [fcntl.LOCK_EX, fcntl.LOCK_UN],
         )
 
+    def test_update_blacklist_preserves_primary_error_when_unlock_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            with (
+                mock.patch.object(security_parser, "_read_blacklist", side_effect=ValueError("primary failure")),
+                mock.patch.object(security_parser, "_release_blacklist_lock", side_effect=OSError("unlock failed")),
+            ):
+                with self.assertRaisesRegex(ValueError, "primary failure") as caught:
+                    update_blacklist_file(path, ["entry"])
+
+        self.assertIn("blacklist lock cleanup failed", "\n".join(caught.exception.__notes__))
+
     def test_blacklist_lock_returns_lock_fd_when_parent_close_fails(self) -> None:
         close_calls: list[int] = []
 

@@ -692,6 +692,7 @@ def update_blacklist_file(path: Path, added: list[str]) -> list[str]:
     except RuntimeError as exc:
         raise ValueError("blacklist file path is not safe") from exc
     lock_fd = _acquire_blacklist_lock(path)
+    primary_error: BaseException | None = None
     try:
         existing = _read_blacklist(path, strict=True)
         existing_keys = {entry.casefold() for entry in existing}
@@ -716,5 +717,14 @@ def update_blacklist_file(path: Path, added: list[str]) -> list[str]:
         if changed:
             _write_blacklist(path, existing)
         return existing
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
-        _release_blacklist_lock(lock_fd)
+        try:
+            _release_blacklist_lock(lock_fd)
+        except BaseException as cleanup_error:
+            if primary_error is not None:
+                _note_lock_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise
