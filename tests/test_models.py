@@ -291,6 +291,21 @@ class ModelsTest(unittest.TestCase):
             self.assertTrue(cache_path.exists())
             self.assertIn(spec.sha1, cache_path.read_text(encoding="utf-8"))
 
+    def test_model_checksum_cache_removes_recursively_invalid_json(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text("{}", encoding="utf-8")
+            with mock.patch.object(models.json, "loads", side_effect=RecursionError("too deep")):
+                models._load_model_checksum_cache()
+
+            self.assertFalse(cache_path.exists())
+
     def test_model_checksum_cache_prunes_stale_entries(self) -> None:
         spec = models.ModelSpec(
             name="cache-prune",

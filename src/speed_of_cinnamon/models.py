@@ -174,7 +174,7 @@ def _load_model_checksum_cache() -> None:
         return
     try:
         payload = json.loads(text)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, RecursionError):
         _remove_model_checksum_cache_file(cache_path)
         return
 
