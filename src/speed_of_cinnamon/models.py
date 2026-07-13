@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 import os
 import secrets
 import shutil
@@ -339,9 +340,12 @@ def _parse_model_size_bytes(value: str) -> int:
                 number = float(stripped[: -len(suffix)])
             except ValueError as exc:
                 raise ModelError(f"invalid model size for {value!r}: {exc}") from exc
-            if number <= 0:
+            if not math.isfinite(number) or number <= 0:
                 raise ModelError(f"invalid model size for {value!r}: must be positive")
-            return int(number * factor)
+            parsed = int(number * factor)
+            if parsed <= 0:
+                raise ModelError(f"invalid model size for {value!r}: must be positive")
+            return parsed
     raise ModelError(f"invalid model size for {value!r}: unsupported format")
 
 

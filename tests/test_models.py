@@ -2604,6 +2604,15 @@ class ModelsTest(unittest.TestCase):
         with self.assertRaisesRegex(models.ModelError, "invalid model size"):
             models._parse_model_size_bytes("abc MiB")
 
+    def test_parse_model_size_bytes_rejects_non_finite_sizes(self) -> None:
+        for value in ("NaN MiB", "inf MiB", "1e309 MiB"):
+            with self.subTest(value=value), self.assertRaisesRegex(models.ModelError, "must be positive"):
+                models._parse_model_size_bytes(value)
+
+    def test_parse_model_size_bytes_rejects_sizes_rounding_to_zero_bytes(self) -> None:
+        with self.assertRaisesRegex(models.ModelError, "must be positive"):
+            models._parse_model_size_bytes("0.0001 KiB")
+
     def test_parse_model_size_bytes_rejects_non_text(self) -> None:
         with self.assertRaisesRegex(models.ModelError, "must be text"):
             models._parse_model_size_bytes(42)  # type: ignore[arg-type]
