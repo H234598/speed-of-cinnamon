@@ -5304,6 +5304,8 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertIn("let manualRelistenStopRequested = Boolean(", source[toggle_index:toggle_end])
         self.assertIn('this.status === "recording" || this.status === "recorded" || this.autoRelistenPending', source[toggle_index:toggle_end])
+        self.assertIn("if (this.autoRelisten && this.notificationSessionActive && this._recordingCommandToken)", source[toggle_index:toggle_end])
+        self.assertNotIn("if (this.autoRelisten && this.notificationSessionActive) {", source[toggle_index:toggle_end])
         self.assertIn("this.autoRelistenManualStopRequested = manualRelistenStopRequested;", source[toggle_index:toggle_end])
         self.assertIn('this._setStatus("processing", _("Stopping Auto Relisten..."), this.lastTranscript);', source[toggle_index:toggle_end])
         self.assertIn("if (this.isCommandRunning) {", source[cancel_index:cancel_end])

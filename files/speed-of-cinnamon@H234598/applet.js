@@ -5617,7 +5617,7 @@ MyApplet.prototype = {
       return;
     }
     if (this.isCommandRunning) {
-      if (this.autoRelisten && this.notificationSessionActive) {
+      if (this.autoRelisten && this.notificationSessionActive && this._recordingCommandToken) {
         this.autoRelistenManualStopRequested = true;
         this.autoRelistenPending = false;
         this.autoRelistenPendingToken = "";
