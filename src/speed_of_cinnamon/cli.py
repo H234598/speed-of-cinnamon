@@ -445,6 +445,7 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                     _write_all(fd, f"{os.getpid()}\n".encode("ascii"), field_name="finalization lock")
                 else:
                     _write_all(fd, f"{os.getpid()}\n{identity}\n".encode("ascii"), field_name="finalization lock")
+                os.fsync(fd)
             except OSError:
                 try:
                     os.close(fd)

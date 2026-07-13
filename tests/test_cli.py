@@ -6222,6 +6222,25 @@ class CliTest(unittest.TestCase):
 
         self.assertTrue(any(cli.stat_module.S_ISDIR(mode) for mode in fsync_modes))
 
+    def test_finalization_lock_acquire_fsyncs_lock_file(self) -> None:
+        fsync_modes: list[int] = []
+        real_fsync = os.fsync
+
+        def record_fsync(fd: int) -> None:
+            fsync_modes.append(os.fstat(fd).st_mode)
+            real_fsync(fd)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            with mock.patch("speed_of_cinnamon.cli.os.fsync", side_effect=record_fsync):
+                lock_path = cli._acquire_finalization_lock(state_file)
+            try:
+                self.assertIsNotNone(lock_path)
+            finally:
+                cli._release_finalization_lock(lock_path)
+
+        self.assertTrue(any(cli.stat_module.S_ISREG(mode) for mode in fsync_modes))
+
     def test_finalization_lock_short_write_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "state.json"
