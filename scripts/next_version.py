@@ -86,10 +86,12 @@ def commits_since_ref(ref: str) -> int:
     ref = ref.strip()
     if ref == "":
         raise UserInputError("ref must be a non-empty string")
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in ref):
+        raise UserInputError("ref contains invalid control characters")
     try:
         # Fixed git argv, shell=False, ref is validated as text.
         result = subprocess.run(  # nosec
-            ["git", "rev-list", "--count", f"{ref}..HEAD"],
+            ["git", "rev-list", "--count", "--end-of-options", f"{ref}..HEAD"],
             check=True,
             text=True,
             capture_output=True,

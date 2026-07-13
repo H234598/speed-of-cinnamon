@@ -454,11 +454,27 @@ class NextVersionTest(unittest.TestCase):
         ) as run:
             self.assertEqual(next_version.commits_since_ref("  0.1.20  "), 8)
             run.assert_called_once_with(
-                ["git", "rev-list", "--count", "0.1.20..HEAD"],
+                ["git", "rev-list", "--count", "--end-of-options", "0.1.20..HEAD"],
                 check=True,
                 text=True,
                 capture_output=True,
             )
+
+    def test_commits_since_ref_terminates_git_options(self) -> None:
+        with mock.patch.object(
+            next_version.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="8\n", stderr=""),
+        ) as run:
+            self.assertEqual(next_version.commits_since_ref("--all"), 8)
+            self.assertEqual(
+                run.call_args.args[0],
+                ["git", "rev-list", "--count", "--end-of-options", "--all..HEAD"],
+            )
+
+    def test_commits_since_ref_rejects_control_characters(self) -> None:
+        with self.assertRaises(next_version.UserInputError):
+            next_version.commits_since_ref("v0.1.20\x00")
 
     def test_commits_since_ref_missing_git_is_git_error(self) -> None:
         with mock.patch.object(
@@ -513,7 +529,7 @@ class NextVersionTest(unittest.TestCase):
         ) as run:
             self.assertEqual(next_version.commits_since_tag("  0.1.20  "), 4)
             run.assert_called_once_with(
-                ["git", "rev-list", "--count", "v0.1.20..HEAD"],
+                ["git", "rev-list", "--count", "--end-of-options", "v0.1.20..HEAD"],
                 check=True,
                 text=True,
                 capture_output=True,
