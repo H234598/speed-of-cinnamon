@@ -13280,10 +13280,17 @@ MyApplet.prototype = {
   },
 
   _insertTranscriptText: function(transcript, completionCallback) {
-    if (!this._lifecycleAllowsWork() || this.textInsertToken || this.clipboardOverwriteDialog) {
+    if (!this._lifecycleAllowsWork()) {
       return false;
     }
     if (this.textInsertCancellationFailed) {
+      if (this.clipboardOverwriteDialog) {
+        if (!this._dialogClose(this.clipboardOverwriteDialog, "clipboard-overwrite")) {
+          this._setStatusPreservingRecording("error", _("Previous text insertion is still stopping; try again shortly"), this.lastTranscript);
+          return false;
+        }
+        this.clipboardOverwriteDialog = null;
+      }
       let timerCleanupStillPending = false;
       try {
         if (!Array.isArray(this._orphanedTimers)) {
@@ -13307,6 +13314,9 @@ MyApplet.prototype = {
         return false;
       }
       this.textInsertCancellationFailed = false;
+    }
+    if (this.textInsertToken || this.clipboardOverwriteDialog) {
+      return false;
     }
     let method = this._normalizeOutputMethod(this.insertMethod);
     let autoPasteTarget = this._windowTitleMatchesAutoPaste();

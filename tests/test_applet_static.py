@@ -5780,7 +5780,22 @@ class AppletStaticTest(unittest.TestCase):
         insert_start = source.index("_insertTranscriptText: function(transcript, completionCallback)")
         insert_end = source.index("_restartRelistenRecording: function()", insert_start)
         insert_block = source[insert_start:insert_end]
-        self.assertIn("if (!this._lifecycleAllowsWork() || this.textInsertToken || this.clipboardOverwriteDialog)", insert_block)
+        self.assertIn("if (!this._lifecycleAllowsWork())", insert_block)
+        self.assertIn("if (this.textInsertCancellationFailed)", insert_block)
+        self.assertIn('this._dialogClose(this.clipboardOverwriteDialog, "clipboard-overwrite")', insert_block)
+        self.assertIn("let timerCleanupStillPending = false;", insert_block)
+        self.assertIn("let orphanCleanupSucceeded = this._retryOrphanedTimers();", insert_block)
+        self.assertIn('Boolean(this.clipboardOverwriteDialog)', insert_block)
+        self.assertIn("this.clipboardOverwriteDialog = null;", insert_block)
+        self.assertIn("if (this.textInsertToken || this.clipboardOverwriteDialog)", insert_block)
+        self.assertLess(
+            insert_block.index("if (this.textInsertCancellationFailed)"),
+            insert_block.index("if (this.textInsertToken || this.clipboardOverwriteDialog)")
+        )
+        self.assertLess(
+            insert_block.index('this._dialogClose(this.clipboardOverwriteDialog, "clipboard-overwrite")'),
+            insert_block.index("let timerCleanupStillPending = false;")
+        )
         self.assertIn("this.textInsertToken = insertToken;", insert_block)
         self.assertIn("if (!isCurrentInsert())", insert_block)
         self.assertIn("let complete = (result) =>", insert_block)
