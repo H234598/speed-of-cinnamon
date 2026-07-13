@@ -532,6 +532,15 @@ def _acquire_blacklist_lock(path: Path) -> int:
                 _note_lock_cleanup_failure(primary_error, cleanup_error)
             else:
                 pass
+        except BaseException as cleanup_error:
+            if primary_error is not None:
+                _note_lock_cleanup_failure(primary_error, cleanup_error)
+            else:
+                try:
+                    os.close(fd)
+                except BaseException as fd_cleanup_error:
+                    _note_lock_cleanup_failure(cleanup_error, fd_cleanup_error)
+                raise
     return fd
 
 
@@ -546,6 +555,11 @@ def _release_blacklist_lock(fd: int) -> None:
         try:
             os.close(fd)
         except OSError as cleanup_error:
+            if primary_error is not None:
+                _note_lock_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise
+        except BaseException as cleanup_error:
             if primary_error is not None:
                 _note_lock_cleanup_failure(primary_error, cleanup_error)
             else:
