@@ -611,7 +611,7 @@ class SettingsExportTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             with (
-                mock.patch("speed_of_cinnamon.settings_export.os.replace", side_effect=OSError("disk full")),
+                mock.patch("speed_of_cinnamon.settings_export._rename_without_replacing", side_effect=OSError("disk full")),
                 mock.patch("speed_of_cinnamon.settings_export.os.unlink", side_effect=OSError("cleanup denied")),
             ):
                 with self.assertRaisesRegex(SettingsExportError, "failed to write settings export") as caught:
@@ -626,13 +626,49 @@ class SettingsExportTest(unittest.TestCase):
         self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
         self.assertIn("cleanup denied", "\n".join(caught.exception.__notes__))
 
-    @mock.patch("speed_of_cinnamon.settings_export.os.replace", side_effect=OSError("disk full"))
-    def test_write_export_raises_when_atomic_replace_fails(self, mocked_replace: mock.Mock) -> None:
+    @mock.patch("speed_of_cinnamon.settings_export._rename_without_replacing", side_effect=OSError("disk full"))
+    def test_write_export_raises_when_atomic_activation_fails(self, mocked_rename: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
                 write_export(path, {"language": "en"})
-        mocked_replace.assert_called_once()
+        mocked_rename.assert_called_once()
+
+    def test_write_export_does_not_clobber_target_created_during_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            replacement = Path(tmp) / "replacement.json"
+            replacement.write_text("racing target", encoding="utf-8")
+            real_rename = settings_export_module._rename_without_replacing
+
+            def rename_then_create_target(
+                source: str,
+                target: str,
+                *,
+                directory_fd: int,
+                field_name: str,
+            ) -> None:
+                if target == path.name:
+                    replacement.replace(path)
+                real_rename(source, target, directory_fd=directory_fd, field_name=field_name)
+
+            with mock.patch.object(
+                settings_export_module,
+                "_rename_without_replacing",
+                side_effect=rename_then_create_target,
+            ):
+                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+                    write_export(path, {"language": "de"})
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "racing target")
+            self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.tmp")))
+
+    def test_create_private_temp_file_rejects_missing_nofollow(self) -> None:
+        with (
+            mock.patch.object(settings_export_module.os, "O_NOFOLLOW", None, create=True),
+            self.assertRaisesRegex(SettingsExportError, "secure settings export temp file creation"),
+        ):
+            settings_export_module._create_private_temp_file(456, "settings-export.json")
 
     def test_write_export_does_not_overwrite_existing_recovery_backup_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -699,6 +735,13 @@ class SettingsExportTest(unittest.TestCase):
                 settings_export_module._scrub_temp_settings_export_file(456, ".settings.tmp")
 
         self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
+
+    def test_scrub_temp_file_rejects_missing_nofollow(self) -> None:
+        with (
+            mock.patch.object(settings_export_module.os, "O_NOFOLLOW", None, create=True),
+            self.assertRaisesRegex(SettingsExportError, "secure settings export temp file scrubbing"),
+        ):
+            settings_export_module._scrub_temp_settings_export_file(456, ".settings.tmp")
 
     def test_write_export_reports_parent_close_failure_after_successful_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

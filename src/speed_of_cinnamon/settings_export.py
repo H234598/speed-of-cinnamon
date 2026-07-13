@@ -21,6 +21,7 @@ from .path_safety import (
     assert_no_symlink_ancestors,
     ensure_directory_without_following_symlinks,
     open_file_without_following_symlinks,
+    _rename_without_replacing,
 )
 
 EXPORT_VERSION = 2
@@ -257,7 +258,9 @@ def _assert_json_value_budget(value: Any) -> None:
 
 def _create_private_temp_file(parent_fd: int, final_name: str) -> tuple[int, str]:
     safe_name = final_name.replace("/", "_") or "settings-export.json"
-    nofollow_flag = getattr(os, "O_NOFOLLOW", 0)
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise SettingsExportError("secure settings export temp file creation is not supported on this platform")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag
     for _ in range(100):
         temp_name = f".{safe_name}.{secrets.token_hex(8)}.tmp"
@@ -271,7 +274,10 @@ def _create_private_temp_file(parent_fd: int, final_name: str) -> tuple[int, str
 def _scrub_temp_settings_export_file(parent_fd: int, temp_name: str) -> None:
     if not temp_name:
         return
-    fd = os.open(temp_name, os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise SettingsExportError("secure settings export temp file scrubbing is not supported on this platform")
+    fd = os.open(temp_name, os.O_WRONLY | nofollow_flag, dir_fd=parent_fd)
     primary_error: BaseException | None = None
     try:
         file_stat = os.fstat(fd)
@@ -640,7 +646,12 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                 raise OSError("failed to create settings export recovery backup")
 
         activation_attempted = True
-        os.replace(temp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        _rename_without_replacing(
+            temp_name,
+            path.name,
+            directory_fd=parent_fd,
+            field_name="settings export path",
+        )
         temp_name = ""
         try:
             activation_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
@@ -675,7 +686,12 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                     try:
                         os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
                     except FileNotFoundError:
-                        os.replace(backup_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                        _rename_without_replacing(
+                            backup_name,
+                            path.name,
+                            directory_fd=parent_fd,
+                            field_name="settings export path",
+                        )
                         os.fsync(parent_fd)
                     else:
                         raise OSError("settings export target exists during rollback")
