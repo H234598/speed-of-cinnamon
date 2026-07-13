@@ -1014,13 +1014,13 @@ class AlarmTest(unittest.TestCase):
                     path,
                 )
 
-    @mock.patch("speed_of_cinnamon.alarms.os.replace", side_effect=OSError("disk full"))
-    def test_save_alarm_store_raises_runtime_error_when_atomic_replace_fails(self, mocked_replace: mock.Mock) -> None:
+    @mock.patch("speed_of_cinnamon.path_safety._rename_without_replacing", side_effect=OSError("disk full"))
+    def test_save_alarm_store_raises_runtime_error_when_atomic_activation_fails(self, mocked_rename: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
             with self.assertRaisesRegex(RuntimeError, "failed to persist alarm store"):
                 save_alarm_store({}, path)
-        mocked_replace.assert_called_once()
+        mocked_rename.assert_called_once()
 
     @mock.patch("speed_of_cinnamon.alarms.json.dumps")
     def test_save_alarm_store_rejects_unencodable_rendered_payload(self, mocked_dumps: mock.Mock) -> None:
