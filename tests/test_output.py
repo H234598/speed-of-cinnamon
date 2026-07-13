@@ -1689,6 +1689,35 @@ class OutputTest(unittest.TestCase):
         mocked_clipboard.assert_not_called()
         mocked_paste.assert_not_called()
 
+    def test_insert_text_fails_closed_when_dedupe_state_is_invalid_utf8(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
+            mock.patch("speed_of_cinnamon.output.paste_from_clipboard") as mocked_paste,
+        ):
+            state_path = Path(tmp) / "speed-of-cinnamon" / output_module.CLIPBOARD_DEDUP_STATE_FILE
+            state_path.parent.mkdir(parents=True)
+            state_path.write_bytes(b"{\xff")
+            with self.assertRaisesRegex(OutputError, "untrusted clipboard dedupe state"):
+                insert_text("secure text", "clipboard-paste")
+
+        mocked_clipboard.assert_not_called()
+        mocked_paste.assert_not_called()
+
+    def test_clipboard_dedup_state_fails_closed_on_json_recursion_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp)
+            path = state_root / output_module.CLIPBOARD_DEDUP_STATE_FILE
+            path.write_text("{}", encoding="utf-8")
+            with (
+                mock.patch("speed_of_cinnamon.output.state_dir", return_value=state_root),
+                mock.patch.object(output_module.json, "loads", side_effect=RecursionError("too deep")),
+            ):
+                entry = output_module._read_clipboard_dedup_state_entry()
+
+        self.assertEqual(entry, (False, ("", 0.0), False))
+
     def test_insert_text_fails_closed_when_dedupe_state_is_symlink(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,

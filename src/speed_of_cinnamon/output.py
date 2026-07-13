@@ -282,11 +282,11 @@ def _read_clipboard_dedup_state_entry() -> tuple[bool, tuple[str, float], bool]:
         )
     except FileNotFoundError:
         return True, ("", 0.0), False
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return False, ("", 0.0), False
     try:
         payload = json.loads(raw)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return False, ("", 0.0), False
     if not isinstance(payload, dict):
         return False, ("", 0.0), False
