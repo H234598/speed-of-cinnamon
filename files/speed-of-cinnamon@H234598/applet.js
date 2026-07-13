@@ -8461,6 +8461,9 @@ MyApplet.prototype = {
     if (!this._canMutateMenu(this.textModelItem)) {
       return;
     }
+    if (this.ollamaModelFlowToken || this.ollamaInstallWatchToken || this.ollamaModelInstallToken || this.ollamaModelInstallRunning || this.ollamaModelCleanupFailed) {
+      return;
+    }
     if (this.textModelMenuRefreshToken && !backendOverride) {
       return;
     }

@@ -3851,6 +3851,10 @@ class AppletStaticTest(unittest.TestCase):
             refresh_block.index("this._tryTextModelsArgs")
         )
 
+        ollama_guard = "if (this.ollamaModelFlowToken || this.ollamaInstallWatchToken || this.ollamaModelInstallToken || this.ollamaModelInstallRunning || this.ollamaModelCleanupFailed)"
+        self.assertIn(ollama_guard, refresh_block)
+        self.assertLess(refresh_block.index(ollama_guard), refresh_block.index("let refreshToken = {};"))
+
         watch_start = source.index("_scheduleOllamaInstallWatchPoll: function(watchToken)")
         watch_end = source.index("\n  _scheduleSetupCheck:", watch_start)
         watch_block = source[watch_start:watch_end]
