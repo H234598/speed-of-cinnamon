@@ -738,7 +738,7 @@ def post_process_with_ollama(
     response_text = data.get("response")
     if response_text is not None and not isinstance(response_text, str):
         raise PostProcessError("Ollama response text must be text")
-    processed = _strip_transcript_prompt_label(response_text or "")
+    processed = _strip_transcript_prompt_label(response_text or "", text)
     processed = _assert_text_length(processed, field_name="post-process output")
     if not processed:
         raise PostProcessError("Ollama completed without output")
@@ -812,10 +812,30 @@ def _choice_text(choice: object) -> str:
     return text if isinstance(text, str) else ""
 
 
-def _strip_transcript_prompt_label(text: str) -> str:
+def _transcript_prompt_label_count(text: str) -> int:
+    count = 0
     value = text.strip()
     for _ in range(3):
         folded = value.casefold()
+        if folded.startswith("transcript:"):
+            count += 1
+            value = value[len("Transcript:"):].lstrip()
+            continue
+        if folded.startswith("transkript:"):
+            count += 1
+            value = value[len("Transkript:"):].lstrip()
+            continue
+        break
+    return count
+
+
+def _strip_transcript_prompt_label(text: str, source_text: str = "") -> str:
+    value = text.strip()
+    source_label_count = _transcript_prompt_label_count(source_text) if source_text.strip() else 0
+    for _ in range(3):
+        folded = value.casefold()
+        if source_label_count and _transcript_prompt_label_count(value) <= source_label_count:
+            break
         if folded.startswith("transcript:"):
             value = value[len("Transcript:"):].lstrip()
             continue
@@ -919,7 +939,7 @@ def post_process_with_openai_compatible(
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices:
         raise PostProcessError("OpenAI-compatible server completed without choices")
-    processed = _strip_transcript_prompt_label(_choice_text(choices[0]))
+    processed = _strip_transcript_prompt_label(_choice_text(choices[0]), text)
     processed = _assert_text_length(processed, field_name="post-process output")
     if not processed:
         raise PostProcessError("OpenAI-compatible server completed without output")

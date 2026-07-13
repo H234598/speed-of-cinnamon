@@ -785,6 +785,36 @@ class PostProcessorTest(unittest.TestCase):
                 "Hallo Welt",
             )
 
+    def test_postprocess_preserves_transcript_label_from_source_text(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.postprocessor._open_http_request",
+            return_value=FakeResponse({"response": "Transcript: Hallo Welt"}),
+        ):
+            self.assertEqual(
+                post_process_text(
+                    "Transcript: Hallo Welt",
+                    "en",
+                    backend="ollama",
+                    ollama_model="llama3.2:3b",
+                ),
+                "Transcript: Hallo Welt",
+            )
+
+        with mock.patch(
+            "speed_of_cinnamon.postprocessor._open_http_request",
+            return_value=FakeResponse({"choices": [{"message": {"content": "Transcript: Hallo Welt"}}]}),
+        ):
+            self.assertEqual(
+                post_process_text(
+                    "Transcript: Hallo Welt",
+                    "en",
+                    backend="openai-compatible",
+                    openai_compatible_model="local-model",
+                    openai_compatible_url="http://127.0.0.1:8000/v1",
+                ),
+                "Transcript: Hallo Welt",
+            )
+
     def test_openai_compatible_backend_enables_flex_for_openai_api_by_default(self) -> None:
         requests = []
 
