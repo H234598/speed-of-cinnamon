@@ -11942,7 +11942,14 @@ MyApplet.prototype = {
         return false;
       }
     };
-    if (!timeout || !helper || !this._lifecycleAllowsWork()) {
+    if (!timeout || !this._lifecycleAllowsWork()) {
+      completeOnce(null);
+      return false;
+    }
+    if (!helper) {
+      if (tryFallback()) {
+        return true;
+      }
       completeOnce(null);
       return false;
     }

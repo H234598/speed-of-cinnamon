@@ -5762,6 +5762,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_clipboardTargetList: function(program, args, completionCallback, timeoutMs, attemptedPrograms, deadlineMs)", source)
         self.assertIn('let timeout = this._findTrustedProgramInPath("timeout");', source)
         self.assertIn("let helper = this._findTrustedProgramInPath(program);", source)
+        self.assertIn("if (!helper) {\n      if (tryFallback()) {\n        return true;\n      }\n      completeOnce(null);\n      return false;\n    }", source)
         self.assertIn('let command = [timeout, "--kill-after=1", String(CLIPBOARD_TARGET_TIMEOUT_SECONDS), helper];', source)
         self.assertIn("_clipboardNonTextPayloadTargets: function(targets)", source)
         self.assertIn("_clipboardPayloadSnapshot: function()", source)
