@@ -2651,6 +2651,17 @@ MyApplet.prototype = {
           return true;
         }
       }
+      if (!Array.isArray(this._orphanedProcesses)) {
+        throw new Error("Process orphan registry is unavailable");
+      }
+      for (let entry of this._orphanedProcesses) {
+        if (!entry || !entry.process) {
+          throw new Error("Process orphan entry is unavailable");
+        }
+        if (String(entry.group || "process") === wanted) {
+          return true;
+        }
+      }
       return false;
     } catch (error) {
       this._recordLifecycleError("process-state", error);

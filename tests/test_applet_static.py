@@ -2175,6 +2175,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("anotherCommandRunning", release_block)
         self.assertIn("this.isCommandRunning = false;", release_block)
 
+        group_start = source.index("_hasTrackedProcessGroup: function(group)")
+        group_end = source.index("\n  _cancelAllCancellables:", group_start)
+        group_block = source[group_start:group_end]
+        self.assertIn("this._orphanedProcesses", group_block)
+        self.assertIn("entry.process", group_block)
+        self.assertIn("Process orphan registry is unavailable", group_block)
+
         retry_start = source.index("_scheduleProcessCleanupRetry: function()")
         retry_end = source.index("\n  _clearProcessCleanupRetryTimer:", retry_start)
         retry_block = source[retry_start:retry_end]
