@@ -634,6 +634,24 @@ class SettingsExportTest(unittest.TestCase):
                 write_export(path, {"language": "en"})
         mocked_replace.assert_called_once()
 
+    def test_write_export_does_not_overwrite_existing_recovery_backup_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text("old export\n", encoding="utf-8")
+            racing_candidate = Path(tmp) / ".settings-export.json.fixed.bak"
+            racing_candidate.write_text("racing backup\n", encoding="utf-8")
+
+            with mock.patch.object(
+                settings_export_module.secrets,
+                "token_hex",
+                side_effect=["temp", "fixed", "free"],
+            ):
+                write_export(path, {"language": "de"})
+
+            self.assertEqual(racing_candidate.read_text(encoding="utf-8"), "racing backup\n")
+            self.assertFalse((Path(tmp) / ".settings-export.json.free.bak").exists())
+            self.assertEqual(read_export(path)["settings"]["language"], "de")
+
     def test_write_export_closes_temporary_fd_when_fdopen_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
