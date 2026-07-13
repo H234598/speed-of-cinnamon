@@ -176,18 +176,20 @@ class PathSafetyTest(unittest.TestCase):
             self.assertEqual(list(Path(tmp).iterdir()), [])
             self.assertTrue(any(stat.S_ISDIR(mode) for mode in fsynced_modes))
 
-    def test_atomic_write_reports_temp_cleanup_failure(self) -> None:
+    def test_atomic_write_preserves_primary_error_when_temp_cleanup_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "settings.json"
             with (
                 mock.patch.object(path_safety.os, "replace", side_effect=OSError("disk full")),
                 mock.patch.object(path_safety.os, "unlink", side_effect=OSError("cleanup denied")),
             ):
-                with self.assertRaisesRegex(OSError, "failed to remove temporary file for settings file"):
+                with self.assertRaisesRegex(OSError, "disk full") as caught:
                     path_safety.write_text_atomically_without_following_symlinks(target, "{}", field_name="settings file")
 
             self.assertFalse(target.exists())
             self.assertTrue(any(child.name.startswith(".settings.json.") and child.name.endswith(".tmp") for child in Path(tmp).iterdir()))
+        self.assertIn("secure path cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertIn("cleanup denied", "\n".join(caught.exception.__notes__))
 
     def test_atomic_text_write_removes_temp_file_when_encoding_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

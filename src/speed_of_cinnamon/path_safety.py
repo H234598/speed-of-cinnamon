@@ -307,8 +307,8 @@ def _write_atomically_without_following_symlinks(
             except OSError as exc:
                 cleanup_error = exc
         if cleanup_error is not None:
-            primary_error = OSError(f"failed to remove temporary file for {field_name}")
-            raise primary_error from cleanup_error
+            _note_cleanup_failure(primary_error, cleanup_error)
+            raise
         raise
     finally:
         try:
