@@ -510,6 +510,19 @@ class AlarmTest(unittest.TestCase):
 
         self.assertIn("alarm store lock cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_alarm_store_lock_closes_parent_when_lock_open_is_interrupted(self) -> None:
+        with (
+            mock.patch.object(alarm_module, "_assert_clean_path"),
+            mock.patch.object(alarm_module, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(alarm_module.os, "open", side_effect=KeyboardInterrupt),
+            mock.patch.object(alarm_module.os, "close") as mocked_close,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                with alarm_module._locked_alarm_store(Path("/probe/alarms.json")):
+                    pass
+
+        mocked_close.assert_called_once_with(456)
+
     def test_load_alarm_store_wraps_json_recursion_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
