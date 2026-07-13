@@ -1159,7 +1159,10 @@ def _open_recording_artifact_leaf(path: Path, flags: int, *, field_name: str) ->
     try:
         return os.open(path.name, flags, dir_fd=parent_fd)
     finally:
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except OSError:
+            pass
 
 
 def _open_private_recording_audio_file(

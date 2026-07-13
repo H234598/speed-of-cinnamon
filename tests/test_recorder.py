@@ -381,6 +381,34 @@ class RecorderTest(unittest.TestCase):
             )
         )
 
+    def test_open_recording_artifact_leaf_does_not_mask_open_fd_on_parent_close_failure(self) -> None:
+        real_close = os.close
+        real_open = os.open
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            parent_fd = real_open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                with (
+                    mock.patch.object(
+                        recorder_module,
+                        "open_directory_without_following_symlinks",
+                        return_value=parent_fd,
+                    ),
+                    mock.patch.object(recorder_module.os, "close", side_effect=OSError("close failed")),
+                ):
+                    fd = recorder_module._open_recording_artifact_leaf(
+                        audio,
+                        os.O_RDONLY,
+                        field_name="recording audio file",
+                    )
+                try:
+                    self.assertEqual(os.read(fd, 5), b"audio")
+                finally:
+                    real_close(fd)
+            finally:
+                real_close(parent_fd)
+
     def test_trim_recording_leading_silence_open_error_does_not_leak_audio_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "secret-sample.wav"
