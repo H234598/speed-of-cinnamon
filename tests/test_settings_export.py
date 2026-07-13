@@ -73,6 +73,14 @@ class SettingsExportTest(unittest.TestCase):
             )
         )
 
+    def test_read_export_wraps_fdopen_value_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text(json.dumps(build_export({"language": "en"})), encoding="utf-8")
+            with mock.patch.object(settings_export_module.os, "fdopen", side_effect=ValueError("bad fd")):
+                with self.assertRaisesRegex(SettingsExportError, "settings export could not be read"):
+                    read_export(path)
+
     def test_read_export_rejects_hardlinked_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"

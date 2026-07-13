@@ -543,7 +543,7 @@ def read_export(path: Path) -> dict[str, Any]:
         _assert_json_value_budget(payload)
     except FileNotFoundError as exc:
         raise SettingsExportError(f"settings export not found: {path}") from exc
-    except (OSError, json.JSONDecodeError, RecursionError, UnicodeDecodeError) as exc:
+    except (OSError, ValueError, RecursionError, UnicodeDecodeError) as exc:
         raise SettingsExportError(f"settings export could not be read: {path}") from exc
 
     if not isinstance(payload, dict):
