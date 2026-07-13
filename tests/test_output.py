@@ -114,6 +114,28 @@ class OutputTest(unittest.TestCase):
         self.assertFalse(trusted)
         self.assertEqual(snapshot, ("", 0.0))
 
+    def test_clipboard_dedup_state_rejects_non_finite_timestamp(self) -> None:
+        fingerprint = output_module._clipboard_text_fingerprint("secret text")
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as tmp:
+                state_root = Path(tmp)
+                path = state_root / output_module.CLIPBOARD_DEDUP_STATE_FILE
+                path.write_text(json.dumps({"sha256": fingerprint, "at": value}), encoding="utf-8")
+                with mock.patch("speed_of_cinnamon.output.state_dir", return_value=state_root):
+                    trusted, snapshot = output_module._read_trusted_clipboard_dedup_state()
+
+            self.assertFalse(trusted)
+            self.assertEqual(snapshot, ("", 0.0))
+
+    def test_clipboard_dedup_state_rejects_non_finite_timestamp_on_write(self) -> None:
+        fingerprint = output_module._clipboard_text_fingerprint("secret text")
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp)
+            with mock.patch("speed_of_cinnamon.output.state_dir", return_value=state_root):
+                for value in (float("nan"), float("inf"), float("-inf")):
+                    self.assertFalse(output_module._write_clipboard_dedup_fingerprint_state(fingerprint, value))
+            self.assertFalse((state_root / output_module.CLIPBOARD_DEDUP_STATE_FILE).exists())
+
     def test_clipboard_dedup_state_fails_closed_when_atomic_write_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_root = Path(tmp)

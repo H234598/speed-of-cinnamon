@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import shutil
 import stat
 import subprocess  # nosec B404
@@ -292,6 +293,12 @@ def _read_clipboard_dedup_state_entry() -> tuple[bool, tuple[str, float], bool]:
     at_value = payload.get("at")
     if not isinstance(at_value, (int, float)) or isinstance(at_value, bool):
         return False, ("", 0.0), False
+    try:
+        at = float(at_value)
+    except (OverflowError, TypeError, ValueError):
+        return False, ("", 0.0), False
+    if not math.isfinite(at):
+        return False, ("", 0.0), False
     pending_raw = payload.get(_CLIPBOARD_DEDUP_PENDING_FIELD, False)
     if pending_raw is not False and not isinstance(pending_raw, bool):
         return False, ("", 0.0), False
@@ -300,7 +307,7 @@ def _read_clipboard_dedup_state_entry() -> tuple[bool, tuple[str, float], bool]:
     if "sha256" in payload:
         if not _is_clipboard_text_fingerprint(fingerprint_value):
             return False, ("", 0.0), False
-        return True, (str(fingerprint_value).lower(), float(at_value)), pending
+        return True, (str(fingerprint_value).lower(), at), pending
 
     text_value = payload.get("text")
     if not isinstance(text_value, str) or text_value is None or isinstance(text_value, bool):
@@ -320,11 +327,19 @@ def _write_clipboard_dedup_state(text: str, at: float) -> bool:
 def _write_clipboard_dedup_fingerprint_state(fingerprint: str, at: float, *, pending: bool = False) -> bool:
     if not _is_clipboard_text_fingerprint(fingerprint):
         return False
+    if isinstance(at, bool) or not isinstance(at, (int, float)):
+        return False
+    try:
+        at_value = float(at)
+    except (OverflowError, TypeError, ValueError):
+        return False
+    if not math.isfinite(at_value):
+        return False
     try:
         path = _clipboard_dedup_state_path()
     except RuntimeError:
         return False
-    payload = {"sha256": fingerprint, "at": at}
+    payload = {"sha256": fingerprint, "at": at_value}
     if pending:
         payload[_CLIPBOARD_DEDUP_PENDING_FIELD] = True
     try:
