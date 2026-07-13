@@ -395,13 +395,15 @@ def _write_atomically_without_following_symlinks(
         primary_error = exc
         if transaction_active:
             try:
-                if activation_attempted and activation_stat is not None:
+                if activation_attempted:
+                    expected_activation_stat = activation_stat or temporary_stat
                     try:
                         current_target_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
                     except FileNotFoundError:
                         current_target_stat = None
                     if current_target_stat is not None:
-                        if not _same_leaf_snapshot(current_target_stat, activation_stat):
+                        same_activation = _same_leaf_snapshot if activation_stat is not None else _same_leaf_identity
+                        if expected_activation_stat is None or not same_activation(current_target_stat, expected_activation_stat):
                             raise OSError(f"{field_name} target changed during rollback")
                         os.unlink(path.name, dir_fd=parent_fd)
                         os.fsync(parent_fd)

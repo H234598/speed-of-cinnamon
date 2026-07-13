@@ -168,6 +168,29 @@ class PathSafetyTest(unittest.TestCase):
             self.assertEqual(list(Path(tmp).glob(".settings.json.*.bak")), [])
             self.assertEqual(list(Path(tmp).glob(".settings.json.*.tmp")), [])
 
+    def test_atomic_write_restores_existing_target_when_post_activation_inspection_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            target.write_text("old", encoding="utf-8")
+            real_stat = os.stat
+            target_stats = 0
+
+            def fail_post_activation_stat(path: object, *args: object, **kwargs: object) -> os.stat_result:
+                nonlocal target_stats
+                if path == target.name and kwargs.get("dir_fd") is not None:
+                    target_stats += 1
+                    if target_stats == 3:
+                        raise OSError("post-activation inspection failed")
+                return real_stat(path, *args, **kwargs)
+
+            with mock.patch.object(path_safety.os, "stat", side_effect=fail_post_activation_stat):
+                with self.assertRaisesRegex(OSError, "could not be inspected after activation"):
+                    path_safety.write_text_atomically_without_following_symlinks(target, "new")
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "old")
+            self.assertEqual(list(Path(tmp).glob(".settings.json.*.bak")), [])
+            self.assertEqual(list(Path(tmp).glob(".settings.json.*.tmp")), [])
+
     def test_atomic_write_fails_closed_when_temp_file_cannot_be_made_private(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "settings.json"
