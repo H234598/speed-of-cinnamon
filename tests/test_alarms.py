@@ -850,6 +850,27 @@ class AlarmTest(unittest.TestCase):
         self.assertEqual(len(payload["alarms"]), 1)
         self.assertEqual(payload["alarms"][0]["id"], "good")
 
+    def test_load_alarm_store_skips_alarm_with_invalid_repeat_day(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "last_checked_at": "",
+                        "alarms": [
+                            {"id": "good", "hour": 9, "minute": 0, "days": ["mon"], "name": "Good"},
+                            {"id": "bad-days", "hour": 9, "minute": 0, "days": ["noday"], "name": "Bad days"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            path.chmod(0o600)
+            payload = load_alarm_store(path)
+
+        self.assertEqual([alarm["id"] for alarm in payload["alarms"]], ["good"])
+
     def test_load_alarm_store_skips_alarm_with_invalid_urgency(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"

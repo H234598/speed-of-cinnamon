@@ -423,6 +423,21 @@ def normalize_alarm(alarm: dict[str, Any]) -> dict[str, Any]:
     urgency = str(alarm.get("urgency") or "normal").lower()
     if urgency not in URGENCIES:
         raise ValueError("alarm urgency must be one of: normal, silent, critical")
+    if "days" not in alarm:
+        normalized_days = list(DAY_CODES)
+    else:
+        raw_days = alarm.get("days")
+        if not isinstance(raw_days, list) or not raw_days:
+            raise ValueError("alarm days must be a non-empty list")
+        normalized_days: list[str] = []
+        for raw_day in raw_days:
+            if isinstance(raw_day, bool) or not isinstance(raw_day, str):
+                raise ValueError("alarm days must contain text values")
+            day = raw_day.strip().lower()[:3]
+            if day not in DAY_CODES:
+                raise ValueError(f"unknown alarm day: {raw_day}")
+            if day not in normalized_days:
+                normalized_days.append(day)
     alarm_id = _sanitize_text_field(alarm.get("id"), field_name="alarm id", max_chars=MAX_ALARM_ID_CHARS)
     if not alarm_id:
         alarm_id = f"alarm-{hour:02d}{minute:02d}"
@@ -431,7 +446,7 @@ def normalize_alarm(alarm: dict[str, Any]) -> dict[str, Any]:
         "name": _sanitize_text_field(alarm.get("name"), field_name="alarm name", max_chars=MAX_ALARM_NAME_CHARS),
         "hour": hour,
         "minute": minute,
-        "days": alarm_days(alarm),
+        "days": normalized_days,
         "enabled": _coerce_alarm_bool(alarm.get("enabled", True), field_name="alarm enabled"),
         "urgency": urgency,
         "last_triggered_at": _sanitize_text_field(
