@@ -297,6 +297,47 @@ class AlarmTest(unittest.TestCase):
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["due"][0]["scheduled_at"], "2026-06-01T09:00")
 
+    def test_due_check_ignores_out_of_range_last_checked_at(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            save_alarm_store(
+                {
+                    "last_checked_at": "9999-12-31T23:59:00+00:00",
+                    "alarms": [],
+                },
+                path,
+            )
+            payload = check_due_alarms(path=path, now=datetime(2026, 6, 1, 9, 10), mark=False)
+
+        self.assertEqual(payload["count"], 0)
+
+    def test_add_alarm_rejects_full_store_without_dropping_existing_alarms(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            save_alarm_store(
+                {
+                    "alarms": [
+                        {
+                            "id": f"alarm-{index}",
+                            "name": f"Alarm {index}",
+                            "hour": index % 24,
+                            "minute": index % 60,
+                            "days": ["mon"],
+                            "enabled": True,
+                            "urgency": "normal",
+                        }
+                        for index in range(MAX_ALARM_COUNT)
+                    ],
+                    "last_checked_at": "",
+                },
+                path,
+            )
+
+            with self.assertRaisesRegex(ValueError, f"cannot add more than {MAX_ALARM_COUNT} alarms"):
+                add_alarm("23:59", name="Overflow", path=path)
+
+            self.assertEqual(len(load_alarm_store(path)["alarms"]), MAX_ALARM_COUNT)
+
     def test_due_check_normalizes_timezone_aware_now(self) -> None:
         aware_now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
         local_now = aware_now.astimezone()

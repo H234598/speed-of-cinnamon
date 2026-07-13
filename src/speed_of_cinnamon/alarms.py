@@ -472,6 +472,8 @@ def add_alarm(
         raise ValueError(f"urgency must be one of: {', '.join(sorted(URGENCIES))}")
     with _locked_alarm_store(path) as store_path:
         store = load_alarm_store(store_path)
+        if len(store["alarms"]) >= MAX_ALARM_COUNT:
+            raise ValueError(f"cannot add more than {MAX_ALARM_COUNT} alarms")
         alarm = normalize_alarm(
             {
                 "id": next_alarm_id(store, hour, minute),
@@ -557,7 +559,10 @@ def parse_local_datetime(value: str) -> datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is not None:
-        parsed = parsed.astimezone().replace(tzinfo=None)
+        try:
+            parsed = parsed.astimezone().replace(tzinfo=None)
+        except (OverflowError, OSError, ValueError):
+            return None
     return parsed
 
 
