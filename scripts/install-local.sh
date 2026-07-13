@@ -316,11 +316,10 @@ reject_unsafe_file "${repo_dir}/docs/man/speed-of-cinnamon-alarms.1" "man page s
 
 resolve_tmp_root >/dev/null
 staged_workspace="$(mktemp -d "${app_data}/install-stage-XXXXXX")"
+trap install_workspace_cleanup EXIT
 validate_staged_workspace
 rollback_root="${staged_workspace}/rollback"
 safe_fs mkdirs install "${rollback_root}"
-safe_fs mkdirs install "${rollback_root}"
-trap install_workspace_cleanup EXIT
 
 staging_root="$(write_staging_dir "${repo_dir}" "${staged_workspace}")"
 
