@@ -3233,7 +3233,14 @@ def finalize_recording(
             return None
         source = Path(path_text)
         backup = source.with_name(f".cleanup.{secrets.token_hex(8)}.bak")
-        shutil.copy2(source, backup)
+        try:
+            shutil.copy2(source, backup)
+        except BaseException as exc:
+            try:
+                backup.unlink(missing_ok=True)
+            except OSError as cleanup_exc:
+                exc.add_note(f"cleanup backup removal failed: {cleanup_exc}")
+            raise
         cleanup_rollback_backups.append((source, backup))
         return backup
 
