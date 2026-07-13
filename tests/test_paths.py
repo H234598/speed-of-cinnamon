@@ -172,6 +172,25 @@ class PathsTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "secure temporary directory open is not supported"):
                     paths.xdg_cache_home()
 
+    def test_valid_xdg_override_does_not_require_home_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            real_home = base / "real-home"
+            real_home.mkdir()
+            home_link = base / "home-link"
+            home_link.symlink_to(real_home, target_is_directory=True)
+            custom_data = base / "custom-data"
+
+            with (
+                mock.patch("speed_of_cinnamon.paths.Path.home", return_value=home_link),
+                mock.patch.dict(paths.os.environ, {"XDG_DATA_HOME": str(custom_data)}),
+                mock.patch(
+                    "speed_of_cinnamon.paths._private_runtime_temp_root",
+                    side_effect=AssertionError("home fallback must stay lazy"),
+                ),
+            ):
+                self.assertEqual(paths.xdg_data_home(), custom_data)
+
     def test_private_temp_root_inspection_failure_is_controlled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with (

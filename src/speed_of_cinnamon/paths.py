@@ -4,6 +4,7 @@ import os
 import stat as stat_module
 import tempfile
 from pathlib import Path
+from typing import Callable
 
 from .path_safety import (
     assert_fd_is_private_directory,
@@ -48,35 +49,39 @@ def _is_oversized_utf8_text(value: str, *, max_chars: int) -> bool:
         return True
 
 
-def _xdg_path(environment_variable: str, default: Path) -> Path:
+def _xdg_path(environment_variable: str, default: Path | Callable[[], Path]) -> Path:
     if isinstance(environment_variable, bool) or not isinstance(environment_variable, str):
         raise RuntimeError("environment variable name must be text")
+
+    def fallback() -> Path:
+        return default() if callable(default) else default
+
     try:
         value = os.environ[environment_variable]
     except KeyError:
-        return default
+        return fallback()
     if value is None or isinstance(value, bool) or not isinstance(value, str):
-        return default
+        return fallback()
     if _contains_escaped_null(value) or _contains_control_chars(value):
-        return default
+        return fallback()
     normalized = (value or "").strip()
     if not normalized:
-        return default
+        return fallback()
     if len(normalized) > MAX_XDG_PATH_CHARS or _is_oversized_utf8_text(
         normalized, max_chars=MAX_XDG_PATH_CHARS
     ):
-        return default
+        return fallback()
     try:
         candidate = Path(normalized).expanduser()
     except (OSError, RuntimeError):
-        return default
+        return fallback()
     if not candidate.is_absolute():
-        return default
+        return fallback()
     try:
         assert_safe_path_components(candidate, field_name=environment_variable)
         assert_no_symlink_ancestors(candidate, field_name=environment_variable)
     except RuntimeError:
-        return default
+        return fallback()
     return candidate
 
 
@@ -147,19 +152,19 @@ def _safe_home_path(*parts: str) -> Path:
 
 
 def xdg_data_home() -> Path:
-    return _xdg_path("XDG_DATA_HOME", _safe_home_path(".local", "share"))
+    return _xdg_path("XDG_DATA_HOME", lambda: _safe_home_path(".local", "share"))
 
 
 def xdg_state_home() -> Path:
-    return _xdg_path("XDG_STATE_HOME", _safe_home_path(".local", "state"))
+    return _xdg_path("XDG_STATE_HOME", lambda: _safe_home_path(".local", "state"))
 
 
 def xdg_cache_home() -> Path:
-    return _xdg_path("XDG_CACHE_HOME", _safe_home_path(".cache"))
+    return _xdg_path("XDG_CACHE_HOME", lambda: _safe_home_path(".cache"))
 
 
 def xdg_config_home() -> Path:
-    return _xdg_path("XDG_CONFIG_HOME", _safe_home_path(".config"))
+    return _xdg_path("XDG_CONFIG_HOME", lambda: _safe_home_path(".config"))
 
 
 def state_dir() -> Path:
