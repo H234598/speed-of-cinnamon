@@ -265,6 +265,16 @@ def _read_response_text(response: object, max_bytes: int) -> str:
     return text
 
 
+def _read_http_error_text(error: urllib.error.HTTPError) -> str:
+    try:
+        return _read_response_text(error, MAX_POSTPROCESS_JSON_BYTES)
+    except Exception:
+        return ""
+    finally:
+        with suppress(Exception):
+            error.close()
+
+
 def render_postprocess_template(
     template: str,
     text: str,
@@ -522,6 +532,13 @@ def list_ollama_models(url: str = DEFAULT_OLLAMA_URL, timeout: int = 5) -> dict[
     request = urllib.request.Request(endpoint, method="GET")
     try:
         data = _read_json(request, timeout)
+    except urllib.error.HTTPError as exc:
+        detail = _sanitize_remote_error_detail(_read_http_error_text(exc) or exc.reason or str(exc))
+        return {
+            "available": False,
+            "models": [],
+            "message": f"Ollama request failed ({exc.code}): {detail}",
+        }
     except json.JSONDecodeError:
         return {
             "available": False,
@@ -619,13 +636,7 @@ def list_openai_compatible_models(
         request = urllib.request.Request(endpoint, headers=_openai_compatible_headers(api_key), method="GET")
         data = _read_json(request, timeout)
     except urllib.error.HTTPError as exc:
-        try:
-            raw_error = _read_response_text(exc, MAX_POSTPROCESS_JSON_BYTES)
-        except PostProcessError:
-            raw_error = ""
-        finally:
-            with suppress(Exception):
-                exc.close()
+        raw_error = _read_http_error_text(exc)
         detail = _sanitize_remote_error_detail(_openai_compatible_error_detail(raw_error) or exc.reason or str(exc))
         return {
             "available": False,
@@ -710,6 +721,9 @@ def post_process_with_ollama(
     try:
         with _open_http_request(request, timeout=180, field_name="ollama post-process request") as response:
             raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
+    except urllib.error.HTTPError as exc:
+        detail = _sanitize_remote_error_detail(_read_http_error_text(exc) or exc.reason or str(exc))
+        raise PostProcessError(f"Ollama request failed ({exc.code}): {detail}") from exc
     except (OSError, ValueError) as exc:
         raise PostProcessError(f"Ollama request failed: {_sanitize_remote_error_detail(exc)}") from exc
     try:
@@ -861,13 +875,7 @@ def post_process_with_openai_compatible(
     try:
         raw = _request_chat_completion(payload)
     except urllib.error.HTTPError as exc:
-        try:
-            raw_error = _read_response_text(exc, MAX_POSTPROCESS_JSON_BYTES)
-        except PostProcessError:
-            raw_error = ""
-        finally:
-            with suppress(Exception):
-                exc.close()
+        raw_error = _read_http_error_text(exc)
         raw_detail = _openai_compatible_error_detail(raw_error) or exc.reason or str(exc)
         detail = _sanitize_remote_error_detail(raw_detail)
         if allow_service_tier_fallback and _is_flex_service_tier_rejected(raw_detail):
@@ -876,13 +884,7 @@ def post_process_with_openai_compatible(
             try:
                 raw = _request_chat_completion(fallback_payload)
             except urllib.error.HTTPError as fallback_exc:
-                try:
-                    raw_error = _read_response_text(fallback_exc, MAX_POSTPROCESS_JSON_BYTES)
-                except PostProcessError:
-                    raw_error = ""
-                finally:
-                    with suppress(Exception):
-                        fallback_exc.close()
+                raw_error = _read_http_error_text(fallback_exc)
                 fallback_detail = _sanitize_remote_error_detail(_openai_compatible_error_detail(raw_error) or fallback_exc.reason or str(fallback_exc))
                 raise PostProcessError(
                     f"OpenAI-compatible request failed ({fallback_exc.code}) at {_safe_url_display(endpoint, field_name='openai-compatible url')}: {fallback_detail}"

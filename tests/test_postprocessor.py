@@ -1021,6 +1021,28 @@ class PostProcessorTest(unittest.TestCase):
         self.assertNotIn("missing API key", message)
         self.assertTrue(error.fp.closed)
 
+    def test_openai_compatible_backend_contains_http_error_read_failure(self) -> None:
+        body = mock.Mock()
+        body.read.side_effect = OSError("response read failed")
+        error = urllib.error.HTTPError(
+            "https://api.openai.com/v1/chat/completions",
+            502,
+            "Bad Gateway",
+            {},
+            body,
+        )
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=error):
+            with self.assertRaisesRegex(PostProcessError, r"failed \(502\)"):
+                post_process_text(
+                    "hello cinnamon",
+                    "en",
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-mini",
+                    openai_compatible_url="https://api.openai.com/v1",
+                )
+
+        body.close.assert_called_once()
+
     def test_openai_compatible_backend_error_does_not_echo_url_path_secret(self) -> None:
         error = urllib.error.HTTPError(
             "http://127.0.0.1:8000/v1/secret-token/chat/completions",
@@ -1391,6 +1413,40 @@ class PostProcessorTest(unittest.TestCase):
         self.assertNotIn("missing API key", result["message"])
         self.assertNotIn("local server", result["message"])
         self.assertTrue(error.fp.closed)
+
+    def test_list_openai_compatible_models_contains_http_error_read_failure(self) -> None:
+        body = mock.Mock()
+        body.read.side_effect = OSError("response read failed")
+        error = urllib.error.HTTPError(
+            "https://api.openai.com/v1/models",
+            502,
+            "Bad Gateway",
+            {},
+            body,
+        )
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=error):
+            result = list_openai_compatible_models("https://api.openai.com/v1")
+
+        self.assertFalse(result["available"])
+        self.assertIn("failed (502)", result["message"])
+        body.close.assert_called_once()
+
+    def test_list_ollama_models_closes_http_error_after_read_failure(self) -> None:
+        body = mock.Mock()
+        body.read.side_effect = OSError("response read failed")
+        error = urllib.error.HTTPError(
+            "http://127.0.0.1:11434/api/tags",
+            502,
+            "Bad Gateway",
+            {},
+            body,
+        )
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=error):
+            result = list_ollama_models("http://127.0.0.1:11434")
+
+        self.assertFalse(result["available"])
+        self.assertIn("failed (502)", result["message"])
+        body.close.assert_called_once()
 
     def test_list_openai_compatible_models_contains_http_opener_value_error(self) -> None:
         with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=ValueError("invalid URL")):
