@@ -18,6 +18,10 @@ APPLET_UUID = "speed-of-cinnamon@H234598"
 MAX_XDG_PATH_CHARS = 4_096
 
 
+def _note_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
+    primary.add_note(f"runtime directory cleanup failed: {cleanup_error}")
+
+
 def _contains_escaped_null(value: str) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise RuntimeError("value must be text")
@@ -102,6 +106,7 @@ def _private_runtime_temp_root() -> Path:
     except OSError as exc:
         raise RuntimeError("temporary directory is not safe") from exc
     try:
+        primary_error: BaseException | None = None
         try:
             file_stat = os.fstat(fd)
             if not stat_module.S_ISDIR(file_stat.st_mode):
@@ -110,8 +115,17 @@ def _private_runtime_temp_root() -> Path:
                 raise RuntimeError("temporary directory is not owned by the current user")
             os.fchmod(fd, 0o700)
             file_stat = os.fstat(fd)
+        except BaseException as exc:
+            primary_error = exc
+            raise
         finally:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except OSError as cleanup_error:
+                if primary_error is not None:
+                    _note_cleanup_failure(primary_error, cleanup_error)
+                else:
+                    pass
     except (OSError, ValueError) as exc:
         raise RuntimeError("temporary directory is not safe") from exc
     assert_no_symlink_ancestors(private_root, field_name="temporary directory")
@@ -229,4 +243,7 @@ def ensure_runtime_dirs() -> None:
                 raise RuntimeError("runtime directory could not be made private") from exc
             assert_fd_is_private_directory(fd, field_name="runtime directory")
         finally:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except OSError:
+                pass

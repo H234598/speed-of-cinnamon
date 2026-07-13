@@ -181,6 +181,39 @@ class PathsTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "temporary directory is not safe"):
                     paths._private_runtime_temp_root()
 
+    def test_private_temp_root_preserves_success_when_directory_close_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            opened_fds: list[int] = []
+            real_open = os.open
+            real_close = os.close
+
+            def open_wrapper(*args: object, **kwargs: object) -> int:
+                fd = real_open(*args, **kwargs)
+                opened_fds.append(fd)
+                return fd
+
+            def close_wrapper(fd: int) -> None:
+                if fd in opened_fds:
+                    raise OSError("directory close failed")
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.object(paths.tempfile, "gettempdir", return_value=tmp),
+                    mock.patch.object(paths.os, "open", side_effect=open_wrapper),
+                    mock.patch.object(paths.os, "close", side_effect=close_wrapper),
+                ):
+                    private_root = paths._private_runtime_temp_root()
+            finally:
+                for fd in opened_fds:
+                    try:
+                        real_close(fd)
+                    except OSError:
+                        pass
+
+            self.assertTrue(private_root.exists())
+            self.assertEqual(private_root.stat().st_mode & 0o077, 0)
+
     def test_private_temp_root_file_collision_is_controlled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             collision = Path(tmp) / f"{paths.APP_ID}-{os.getuid()}"
