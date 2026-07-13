@@ -526,7 +526,12 @@ def _write_atomically_without_following_symlinks(
                     try:
                         os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
                     except FileNotFoundError:
-                        os.replace(backup_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                        _rename_without_replacing(
+                            backup_name,
+                            path.name,
+                            directory_fd=parent_fd,
+                            field_name=field_name,
+                        )
                         os.fsync(parent_fd)
                     else:
                         raise OSError(f"{field_name} target exists during rollback")

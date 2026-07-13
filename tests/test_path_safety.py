@@ -335,6 +335,45 @@ class PathSafetyTest(unittest.TestCase):
             self.assertTrue(list(Path(tmp).glob(".settings.json.*.bak")))
             self.assertFalse(list(Path(tmp).glob(".settings.json.*.tmp")))
 
+    def test_atomic_write_does_not_clobber_target_created_during_rollback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            target.write_text("old", encoding="utf-8")
+            racing = Path(tmp) / "racing.json"
+            real_rename = path_safety._rename_without_replacing
+
+            def rename_then_race(
+                source: str,
+                destination: str,
+                *args: object,
+                **kwargs: object,
+            ) -> None:
+                if source.endswith(".bak") and destination == target.name:
+                    racing.write_text("racing target", encoding="utf-8")
+                    racing.replace(target)
+                real_rename(source, destination, *args, **kwargs)
+
+            directory_fsyncs = 0
+            real_fsync = os.fsync
+
+            def fail_activation_fsync(fd: int) -> None:
+                nonlocal directory_fsyncs
+                if stat.S_ISDIR(os.fstat(fd).st_mode):
+                    directory_fsyncs += 1
+                    if directory_fsyncs == 2:
+                        raise OSError("activation fsync failed")
+                real_fsync(fd)
+
+            with (
+                mock.patch.object(path_safety, "_rename_without_replacing", side_effect=rename_then_race),
+                mock.patch.object(path_safety.os, "fsync", side_effect=fail_activation_fsync),
+            ):
+                with self.assertRaisesRegex(OSError, "activation fsync failed"):
+                    path_safety.write_text_atomically_without_following_symlinks(target, "new")
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "racing target")
+            self.assertTrue(list(Path(tmp).glob(".settings.json.*.bak")))
+
     def test_atomic_text_write_removes_temp_file_when_encoding_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "settings.json"
