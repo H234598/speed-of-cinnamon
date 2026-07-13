@@ -925,6 +925,25 @@ class RecorderTest(unittest.TestCase):
 
             self.assertTrue(log_path.exists())
 
+    def test_start_recorder_does_not_mask_started_process_when_log_close_fails(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        log_file = mock.Mock()
+        log_file.fileno.return_value = 11
+        log_file.close.side_effect = OSError("log flush failed")
+        process = object()
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "session.log"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder._open_recorder_log_file", return_value=(log_file, False)),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process),
+                mock.patch("speed_of_cinnamon.recorder.os.fchmod"),
+            ):
+                self.assertIs(start_recorder(command, log_path), process)
+
+        log_file.close.assert_called_once()
+
     def test_start_recorder_filters_dangerous_environment_variables(self) -> None:
         command = RecorderCommand(name="noop", argv=["true"])
         captured_env: dict[str, str] = {}

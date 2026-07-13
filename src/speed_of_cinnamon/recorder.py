@@ -1493,7 +1493,10 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
             pass
         raise RecorderError(f"failed to start {command.name}: {exc}") from exc
     finally:
-        log_file.close()
+        try:
+            log_file.close()
+        except (OSError, ValueError):
+            pass
 
 
 def stop_process(
