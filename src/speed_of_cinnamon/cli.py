@@ -3187,6 +3187,15 @@ def finalize_recording(
             backup_path.unlink(missing_ok=True)
         cleanup_rollback_backups.clear()
 
+    def _remove_recording_artifact_if_present(path: Path, *, suffix: str) -> bool:
+        if remove_file(str(path), suffix=suffix):
+            return True
+        return _recording_artifact_missing_but_safe(
+            str(path),
+            suffix=suffix,
+            state_path=store.path,
+        )
+
     try:
         state = store.read()
         _raise_if_state_unreadable(state)
@@ -3405,7 +3414,10 @@ def finalize_recording(
                     expected_fd=transient_text_stat,
                 )
                 if trimmed_audio_path is not None and trimmed_audio_path != audio_path and not keep_recording_artifacts:
-                    if not remove_file(str(trimmed_audio_path), suffix=".flac"):
+                    if not _remove_recording_artifact_if_present(
+                        trimmed_audio_path,
+                        suffix=trimmed_audio_path.suffix.lower(),
+                    ):
                         raise RuntimeError(f"failed to delete transient trimmed recording artifact: {trimmed_audio_path}")
             except RuntimeError as cleanup_exc:
                 if transcription_error is not None:
@@ -3584,11 +3596,26 @@ def finalize_recording(
             state = store.read()
             if not isinstance(state, RecordingState):
                 state = store.read()
-            if trimmed_audio_path is not None:
-                remove_file(str(trimmed_audio_path), suffix=".flac")
+            error_cleanup_failures: list[str] = []
+            if trimmed_audio_path is not None and trimmed_audio_path != audio_path:
+                if not _remove_recording_artifact_if_present(
+                    trimmed_audio_path,
+                    suffix=trimmed_audio_path.suffix.lower(),
+                ):
+                    error_cleanup_failures.append("transient trimmed recording artifact")
             stabilized_audio_deleted = False
             if stabilized_audio_path is not None and str(state.audio_path or "") != str(stabilized_audio_path):
-                stabilized_audio_deleted = remove_file(str(stabilized_audio_path), suffix=stabilized_audio_path.suffix)
+                stabilized_audio_deleted = _remove_recording_artifact_if_present(
+                    stabilized_audio_path,
+                    suffix=stabilized_audio_path.suffix.lower(),
+                )
+                if not stabilized_audio_deleted:
+                    error_cleanup_failures.append("stabilized recording artifact")
+            if error_cleanup_failures:
+                error_text = (
+                    f"{error_text}; failed to delete recording artifact(s): "
+                    f"{', '.join(error_cleanup_failures)}"
+                )
             error_update: dict[str, object] = {
                 "status": "error",
                 "pid": None,
