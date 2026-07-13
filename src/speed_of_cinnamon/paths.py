@@ -145,6 +145,17 @@ def _safe_home_path(*parts: str) -> Path:
     except (OSError, RuntimeError):
         return _private_runtime_temp_root().joinpath(*parts)
     try:
+        candidate_text = str(candidate)
+        if (
+            not candidate.is_absolute()
+            or not candidate_text
+            or len(candidate_text) > MAX_XDG_PATH_CHARS
+            or _is_oversized_utf8_text(candidate_text, max_chars=MAX_XDG_PATH_CHARS)
+            or _contains_escaped_null(candidate_text)
+            or _contains_control_chars(candidate_text)
+        ):
+            raise RuntimeError("home path is invalid")
+        assert_safe_path_components(candidate, field_name="home path")
         assert_no_symlink_ancestors(candidate, field_name="home path")
     except RuntimeError:
         return _private_runtime_temp_root().joinpath(*parts)

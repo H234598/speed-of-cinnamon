@@ -27,6 +27,18 @@ class PathsTest(unittest.TestCase):
         ):
             self.assertEqual(paths._safe_home_path(".local", "share"), fallback / ".local" / "share")
 
+    def test_safe_home_path_rejects_relative_home_before_building_runtime_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            private_root = temp_root / f"{paths.APP_ID}-{os.getuid()}"
+            with (
+                mock.patch.object(Path, "home", return_value=Path("relative-home")),
+                mock.patch("speed_of_cinnamon.paths.tempfile.gettempdir", return_value=str(temp_root)),
+            ):
+                self.assertEqual(paths.xdg_state_home(), private_root / ".local" / "state")
+
+            self.assertTrue(private_root.is_dir())
+
     def test_xdg_path_rejects_non_text_environment_values(self) -> None:
         with mock.patch("speed_of_cinnamon.paths.os.environ.__getitem__", return_value=123):
             self.assertEqual(paths.xdg_data_home(), Path.home() / ".local" / "share")
