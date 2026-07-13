@@ -1333,10 +1333,16 @@ def _download_url_to_file_with_fd(
     )
     temporary_name: str | None = None
     tmp_path: Path | None = None
+    tmp_fd: int | None = None
     try:
         temporary_name, tmp_fd = _create_temporary_file_in_parent_directory(tmp_dir_fd, prefix=prefix)
         tmp_path = tmp_dir / temporary_name
-        with os.fdopen(tmp_fd, "wb") as output:
+        try:
+            output = os.fdopen(tmp_fd, "wb")
+        except (OSError, ValueError) as exc:
+            raise OSError("failed to open temporary model file") from exc
+        tmp_fd = None
+        with output:
             try:
                 os.fchmod(output.fileno(), 0o600)
             except OSError:
@@ -1383,6 +1389,9 @@ def _download_url_to_file_with_fd(
             _unlink_temporary_download_path(tmp_path)
         raise
     finally:
+        if tmp_fd is not None:
+            with suppress(OSError):
+                os.close(tmp_fd)
         if close_tmp_dir_fd and tmp_dir_fd is not None:
             os.close(tmp_dir_fd)
 

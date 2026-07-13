@@ -1403,6 +1403,33 @@ class ModelsTest(unittest.TestCase):
         self.assertEqual(len(temporary_file_calls), 1, "single-file download should use secure temporary-file helper once")
         self.assertIn(temporary_file_calls[0][0], open_parent_calls)
 
+    def test_download_url_closes_temporary_fd_when_fdopen_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            created_fds: list[int] = []
+            real_create = models._create_temporary_file_in_parent_directory
+
+            def create_temp_file(parent_fd: int, *, prefix: str) -> tuple[str, int]:
+                temp_name, fd = real_create(parent_fd, prefix=prefix)
+                created_fds.append(fd)
+                return temp_name, fd
+
+            with (
+                mock.patch.object(models, "_create_temporary_file_in_parent_directory", side_effect=create_temp_file),
+                mock.patch.object(models.os, "fdopen", side_effect=OSError("fdopen failed")),
+            ):
+                with self.assertRaisesRegex(OSError, "failed to open temporary model file"):
+                    models._download_url_to_file(
+                        models.HUGGING_FACE_BASE_URL + "/ggml-test.bin",
+                        Path(tmp),
+                        1024,
+                        "test",
+                        prefix=".test.",
+                    )
+
+            self.assertEqual(len(created_fds), 1)
+            with self.assertRaises(OSError):
+                os.fstat(created_fds[0])
+
     def test_download_model_removes_fd_temporary_file_when_response_too_large(self) -> None:
         spec = models.ModelSpec(
             name="test-single-tdir-too-large",
