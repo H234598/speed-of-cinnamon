@@ -145,6 +145,24 @@ class PathSafetyTest(unittest.TestCase):
             self.assertEqual(target.read_text(encoding="utf-8"), "{}")
             self.assertGreaterEqual(mocked_fsync.call_count, 2)
 
+    def test_atomic_write_does_not_overwrite_existing_recovery_backup_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            target.write_text("old", encoding="utf-8")
+            racing_candidate = Path(tmp) / ".settings.json.fixed.bak"
+            racing_candidate.write_text("racing backup", encoding="utf-8")
+
+            with mock.patch.object(
+                path_safety.secrets,
+                "token_hex",
+                side_effect=["temp", "fixed", "free"],
+            ):
+                path_safety.write_text_atomically_without_following_symlinks(target, "new")
+
+            self.assertEqual(racing_candidate.read_text(encoding="utf-8"), "racing backup")
+            self.assertFalse((Path(tmp) / ".settings.json.free.bak").exists())
+            self.assertEqual(target.read_text(encoding="utf-8"), "new")
+
     def test_atomic_write_restores_existing_target_when_activation_fsync_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "settings.json"
@@ -179,7 +197,7 @@ class PathSafetyTest(unittest.TestCase):
                 nonlocal target_stats
                 if path == target.name and kwargs.get("dir_fd") is not None:
                     target_stats += 1
-                    if target_stats == 3:
+                    if target_stats == 4:
                         raise OSError("post-activation inspection failed")
                 return real_stat(path, *args, **kwargs)
 

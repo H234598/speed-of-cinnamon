@@ -323,6 +323,9 @@ def _write_atomically_without_following_symlinks(
             second.st_mtime_ns,
         )
 
+    def _same_leaf_inode(first: os.stat_result, second: os.stat_result) -> bool:
+        return (first.st_dev, first.st_ino, first.st_mode) == (second.st_dev, second.st_ino, second.st_mode)
+
     try:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag
         try:
@@ -388,15 +391,47 @@ def _write_atomically_without_following_symlinks(
             for _ in range(100):
                 candidate_name = f".{path.name}.{secrets.token_hex(8)}.bak"
                 try:
-                    os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                    os.link(
+                        path.name,
+                        candidate_name,
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
                 except FileNotFoundError:
+                    raise OSError(f"{field_name} path disappeared before backup activation") from None
+                except FileExistsError:
+                    continue
+                try:
+                    backup_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                    current_target_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+                    if (
+                        not stat.S_ISREG(backup_stat.st_mode)
+                        or getattr(backup_stat, "st_nlink", 1) < 2
+                        or not _same_leaf_inode(backup_stat, target_stat)
+                        or not stat.S_ISREG(current_target_stat.st_mode)
+                        or not _same_leaf_inode(current_target_stat, target_stat)
+                    ):
+                        raise OSError(f"{field_name} path changed during backup activation")
+                    os.unlink(path.name, dir_fd=parent_fd)
                     backup_name = candidate_name
+                    backup_moved = True
+                    os.fsync(parent_fd)
                     break
+                except BaseException as exc:
+                    if not backup_moved:
+                        try:
+                            candidate_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                            if _same_leaf_inode(candidate_stat, target_stat):
+                                os.unlink(candidate_name, dir_fd=parent_fd)
+                                os.fsync(parent_fd)
+                        except FileNotFoundError:
+                            pass
+                        except BaseException as cleanup_error:
+                            _note_cleanup_failure(exc, cleanup_error)
+                    raise
             if not backup_name:
                 raise OSError(f"failed to create recovery backup for {field_name}")
-            os.replace(path.name, backup_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
-            backup_moved = True
-            os.fsync(parent_fd)
         activation_attempted = True
         os.replace(temp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         temp_name = ""
