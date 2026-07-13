@@ -2280,7 +2280,7 @@ class ModelsTest(unittest.TestCase):
             mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
             mock.patch.object(models, "CATALOG", (spec,)),
             mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
-            mock.patch("speed_of_cinnamon.models.os.replace", side_effect=OSError("boom")),
+            mock.patch("speed_of_cinnamon.models._rename_without_replacing", side_effect=OSError("boom")),
         ):
             with self.assertRaisesRegex(models.ModelError, "failed to persist downloaded model file"):
                 models.download_model("ct2-replace-fails")
@@ -2338,7 +2338,7 @@ class ModelsTest(unittest.TestCase):
             files=("config.json",),
             file_sha1s=file_sha1s_for(("config.json",), data),
         )
-        real_replace = os.replace
+        real_rename = models._rename_without_replacing
 
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -2350,17 +2350,22 @@ class ModelsTest(unittest.TestCase):
             path.mkdir(parents=True)
             (path / "old.txt").write_text("old model", encoding="utf-8")
 
-            def replace_or_fail(src: object, dst: object, *args: object, **kwargs: object) -> None:
-                source = Path(src)
+            def rename_or_fail(
+                source: str,
+                target: str,
+                *,
+                directory_fd: int,
+                field_name: str,
+            ) -> None:
                 if (
-                    Path(dst).name == path.name
-                    and source.name.startswith(f".{spec.filename}.")
-                    and not source.name.endswith(".backup")
+                    target == path.name
+                    and source.startswith(f".{spec.filename}.")
+                    and not source.endswith(".backup")
                 ):
                     raise OSError("disk full")
-                real_replace(src, dst, *args, **kwargs)
+                real_rename(source, target, directory_fd=directory_fd, field_name=field_name)
 
-            with mock.patch("speed_of_cinnamon.models.os.replace", side_effect=replace_or_fail):
+            with mock.patch("speed_of_cinnamon.models._rename_without_replacing", side_effect=rename_or_fail):
                 with self.assertRaisesRegex(models.ModelError, "failed to persist downloaded model directory"):
                     models.download_model("ct2-final-replace-fails", force=True)
 
@@ -3136,8 +3141,8 @@ class ModelsTest(unittest.TestCase):
             with self.assertRaisesRegex(models.ModelError, "invalid content-length header"):
                 models.download_model("bad-length")
 
-    @mock.patch("speed_of_cinnamon.models.os.replace")
-    def test_download_model_raises_model_error_when_atomic_replace_fails(self, mocked_replace: mock.Mock) -> None:
+    @mock.patch("speed_of_cinnamon.models._rename_without_replacing")
+    def test_download_model_raises_model_error_when_atomic_replace_fails(self, mocked_rename: mock.Mock) -> None:
         data = b"tiny model"
         spec = models.ModelSpec(
             name="test",
@@ -3146,7 +3151,7 @@ class ModelsTest(unittest.TestCase):
             sha1=hashlib.sha1(data).hexdigest(),
             description="test model",
         )
-        mocked_replace.side_effect = OSError("disk full")
+        mocked_rename.side_effect = OSError("disk full")
         with (
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
@@ -3228,7 +3233,7 @@ class ModelsTest(unittest.TestCase):
             path.write_bytes(old_data)
             models._set_model_checksum_cache(path, old_checksum, path.stat())
 
-            with mock.patch("speed_of_cinnamon.models.os.replace", side_effect=OSError("disk full")):
+            with mock.patch("speed_of_cinnamon.models._rename_without_replacing", side_effect=OSError("disk full")):
                 with self.assertRaisesRegex(models.ModelError, "failed to persist downloaded model file"):
                     models.download_model("replace-fails-with-cache", force=True)
 
@@ -3354,7 +3359,7 @@ class ModelsTest(unittest.TestCase):
                 with self.assertRaisesRegex(models.ModelError, "failed to remove model backup"):
                     models.download_model("backup-cleanup-fails", force=True)
 
-    def test_download_model_removes_backup_when_restore_fails_after_replace(self) -> None:
+    def test_download_model_preserves_backup_when_restore_fails_after_replace(self) -> None:
         old_data = b"old model"
         new_data = b"new model"
         spec = models.ModelSpec(
@@ -3392,7 +3397,8 @@ class ModelsTest(unittest.TestCase):
                 with self.assertRaisesRegex(models.ModelError, "failed to restore existing model file"):
                     models.download_model("backup-restore-fails", force=True)
 
-            self.assertEqual(list(path.parent.glob(f".{path.name}.*.backup")), [])
+            self.assertEqual(len(list(path.parent.glob(f".{path.name}.*.backup"))), 1)
+            self.assertEqual(path.read_bytes(), new_data)
 
     def test_download_model_force_replaces_directory_with_file_model(self) -> None:
         new_data = b"new model"
@@ -3428,9 +3434,10 @@ class ModelsTest(unittest.TestCase):
             path.write_bytes(old_data)
             backup.write_bytes(new_data)
 
-            with mock.patch("speed_of_cinnamon.models.os.replace", side_effect=OSError("restore failed")):
-                with self.assertRaises(OSError):
+            with mock.patch("speed_of_cinnamon.models._rename_without_replacing", side_effect=OSError("restore failed")) as mocked_rename:
+                with self.assertRaisesRegex(models.ModelError, "restore target must be absent"):
                     models._restore_model_file_backup(path, backup)
+            mocked_rename.assert_not_called()
             self.assertEqual(path.read_bytes(), old_data)
             self.assertEqual(backup.read_bytes(), new_data)
 
@@ -3449,6 +3456,64 @@ class ModelsTest(unittest.TestCase):
                 models._replace_model_sibling_path(source, target, root, field_name="model path")
 
             self.assertFalse((real / "target.bin").exists())
+
+    def test_replace_model_sibling_path_does_not_clobber_target_created_during_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.bin"
+            target = root / "target.bin"
+            replacement = root / "replacement.bin"
+            source.write_bytes(b"model")
+            replacement.write_bytes(b"racing target")
+            real_rename = models._rename_without_replacing
+
+            def rename_then_create_target(
+                source_name: str,
+                target_name: str,
+                *,
+                directory_fd: int,
+                field_name: str,
+            ) -> None:
+                if target_name == target.name:
+                    replacement.replace(target)
+                real_rename(
+                    source_name,
+                    target_name,
+                    directory_fd=directory_fd,
+                    field_name=field_name,
+                )
+
+            with mock.patch.object(models, "_rename_without_replacing", side_effect=rename_then_create_target):
+                with self.assertRaises(OSError):
+                    models._replace_model_sibling_path(source, target, root, field_name="model path")
+
+            self.assertEqual(target.read_bytes(), b"racing target")
+            self.assertEqual(source.read_bytes(), b"model")
+
+    def test_replace_model_sibling_path_rejects_source_swap_before_open(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.bin"
+            replacement = root / "replacement.bin"
+            target = root / "target.bin"
+            source.write_bytes(b"model")
+            replacement.write_bytes(b"replacement")
+            real_open = os.open
+            swapped = False
+
+            def open_and_swap(path: object, flags: int, *args: object, **kwargs: object) -> int:
+                nonlocal swapped
+                if path == source.name and kwargs.get("dir_fd") is not None and not swapped:
+                    swapped = True
+                    replacement.replace(source)
+                return real_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(models.os, "open", side_effect=open_and_swap):
+                with self.assertRaisesRegex(models.ModelError, "source changed before activation"):
+                    models._replace_model_sibling_path(source, target, root, field_name="model path")
+
+            self.assertEqual(source.read_bytes(), b"replacement")
+            self.assertFalse(target.exists())
 
     def test_replace_model_sibling_path_fsyncs_parent_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3519,6 +3584,7 @@ class ModelsTest(unittest.TestCase):
             mock.patch.object(models, "_open_model_parent_directory", return_value=456),
             mock.patch.object(models, "_assert_model_path_for_atomic_replace"),
             mock.patch.object(models.os, "open", return_value=123),
+            mock.patch.object(models.os, "stat", return_value=source_stat),
             mock.patch.object(models.os, "fstat", return_value=source_stat),
             mock.patch.object(models.os, "fsync", side_effect=OSError("source fsync failed")),
             mock.patch.object(models.os, "close", side_effect=OSError("source close failed")),
