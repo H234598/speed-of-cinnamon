@@ -8818,6 +8818,82 @@ class CliTest(unittest.TestCase):
         mocked_alive.assert_called_once_with(1234)
         mocked_stop.assert_called_once_with(1234, expected_process_identity="owner-identity")
 
+    def test_cancel_discards_inflight_recording_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "recording.wav"
+            log = recordings / "recording.log"
+            trimmed = recordings / "recording.trimmed-cancel.flac"
+            encoded = recordings / "recording.encoded-cancel.flac"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            trimmed.write_bytes(b"trimmed")
+            encoded.write_bytes(b"encoded")
+            state_file = tmp_path / "state.json"
+            StateStore(state_file).write(
+                RecordingState(status="error", audio_path=str(audio), log_path=str(log))
+            )
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = StateStore(state_file).read()
+            paths_exist = [path.exists() for path in (audio, log, trimmed, encoded)]
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "idle")
+        self.assertEqual(payload["inflight_artifact_count"], 2)
+        self.assertTrue(payload["inflight_artifacts_deleted"])
+        self.assertEqual(final_state.status, "idle")
+        self.assertEqual(paths_exist, [False, False, False, False])
+
+    def test_cancel_preserves_state_when_inflight_artifact_cleanup_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "recording.wav"
+            log = recordings / "recording.log"
+            trimmed = recordings / "recording.trimmed-cancel.flac"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            trimmed.write_bytes(b"trimmed")
+            state_file = tmp_path / "state.json"
+            StateStore(state_file).write(
+                RecordingState(status="error", audio_path=str(audio), log_path=str(log))
+            )
+            real_remove = cli._remove_recording_artifact
+
+            def fail_trimmed_cleanup(path_value: str | None) -> bool:
+                if path_value == str(trimmed):
+                    return False
+                return real_remove(path_value)
+
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli._remove_recording_artifact", side_effect=fail_trimmed_cleanup),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = StateStore(state_file).read()
+            audio_exists = audio.exists()
+            log_exists = log.exists()
+            trimmed_exists = trimmed.exists()
+
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["inflight_artifact_count"], 1)
+        self.assertFalse(payload["inflight_artifacts_deleted"])
+        self.assertEqual(final_state.status, "error")
+        self.assertTrue(final_state.audio_path)
+        self.assertFalse(audio_exists)
+        self.assertFalse(log_exists)
+        self.assertTrue(trimmed_exists)
+
     @mock.patch("speed_of_cinnamon.cli.finalize_recording", return_value={"status": "done"})
     @mock.patch("speed_of_cinnamon.cli.stop_process")
     @mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=True)
