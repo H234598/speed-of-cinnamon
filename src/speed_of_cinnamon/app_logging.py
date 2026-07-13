@@ -41,6 +41,11 @@ LOG_MAINTENANCE_INTERVAL_SECONDS = 60.0
 LOGGER_NAME = "speed_of_cinnamon"
 HOME_DIR = str(Path.home())
 
+
+def _note_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
+    primary.add_note(f"log cleanup failed: {cleanup_error}")
+
+
 _DAILY_LOG_RE = re.compile(r"^speed-of-cinnamon-(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.log$")
 _DAILY_GZ_RE = re.compile(r"^speed-of-cinnamon-(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.log\.gz$")
 _MONTHLY_GZ_RE = re.compile(r"^speed-of-cinnamon-(\d{4}-\d{2})\.log\.gz$")
@@ -251,8 +256,11 @@ class SizeCappedJsonFileHandler(logging.Handler):
                     raise RuntimeError(f"log file permissions could not be restricted: {self.path}") from exc
                 assert_fd_is_regular_private_file(fd, field_name="log file")
                 self.stream = os.fdopen(fd, "a", encoding="utf-8")
-            except Exception:
-                os.close(fd)
+            except Exception as exc:
+                try:
+                    os.close(fd)
+                except OSError as cleanup_error:
+                    _note_cleanup_failure(exc, cleanup_error)
                 raise
 
     def _maintain_after_emit(self, *, force: bool = False) -> None:
@@ -530,8 +538,11 @@ def _open_log_source_file(path: Path, *, field_name: str) -> int:
         raise RuntimeError(f"{field_name} is not readable: {path}") from exc
     try:
         assert_fd_is_regular_private_file(fd, field_name=field_name)
-    except Exception:
-        os.close(fd)
+    except Exception as exc:
+        try:
+            os.close(fd)
+        except OSError as cleanup_error:
+            _note_cleanup_failure(exc, cleanup_error)
         raise
     return fd
 
@@ -554,8 +565,11 @@ def _create_log_temp_file(directory: Path, *, prefix: str, suffix: str) -> tuple
             except FileExistsError:
                 continue
         raise RuntimeError("failed to create log temporary file")
-    except Exception:
-        os.close(parent_fd)
+    except Exception as exc:
+        try:
+            os.close(parent_fd)
+        except OSError as cleanup_error:
+            _note_cleanup_failure(exc, cleanup_error)
         raise
 
 
@@ -601,7 +615,10 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
                 os.replace(path.name, candidate.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
                 os.fsync(parent_fd)
             finally:
-                os.close(parent_fd)
+                try:
+                    os.close(parent_fd)
+                except OSError:
+                    pass
             return
         suffix += 1
 
@@ -635,8 +652,11 @@ def _merge_old_months(directory: Path, today: date) -> None:
             source_stats: dict[Path, os.stat_result] = {}
             try:
                 raw_output = os.fdopen(temp_fd, "wb")
-            except Exception:
-                os.close(temp_fd)
+            except Exception as exc:
+                try:
+                    os.close(temp_fd)
+                except OSError as cleanup_error:
+                    _note_cleanup_failure(exc, cleanup_error)
                 raise
             with raw_output:
                 with gzip.GzipFile(fileobj=raw_output, mode="wb") as output:
@@ -668,7 +688,10 @@ def _merge_old_months(directory: Path, today: date) -> None:
             _unlink_log_temp(parent_fd, temp_name)
             raise
         finally:
-            os.close(parent_fd)
+            try:
+                os.close(parent_fd)
+            except OSError:
+                pass
 
 
 def _copy_stream_capped(source: Any, output: Any, *, source_path: Path) -> None:
