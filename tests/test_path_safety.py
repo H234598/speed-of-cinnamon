@@ -418,6 +418,24 @@ class PathSafetyTest(unittest.TestCase):
         mocked_close.assert_any_call(123)
         mocked_close.assert_any_call(456)
 
+    def test_atomic_write_closes_fd_when_fdopen_is_interrupted(self) -> None:
+        with (
+            mock.patch.object(path_safety, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(path_safety.os, "open", return_value=123),
+            mock.patch.object(path_safety.os, "stat", side_effect=FileNotFoundError),
+            mock.patch.object(path_safety.os, "fdopen", side_effect=KeyboardInterrupt),
+            mock.patch.object(path_safety.os, "unlink"),
+            mock.patch.object(path_safety.os, "fsync"),
+            mock.patch.object(path_safety.os, "close") as mocked_close,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                path_safety.write_text_atomically_without_following_symlinks(
+                    Path("/does-not-matter.txt"), "{}"
+                )
+
+        mocked_close.assert_any_call(123)
+        mocked_close.assert_any_call(456)
+
     def test_read_text_without_following_symlinks_does_not_double_close_fd_on_read_error(self) -> None:
         class _FailingHandle:
             def __enter__(self):
@@ -460,6 +478,18 @@ class PathSafetyTest(unittest.TestCase):
             mock.patch.object(path_safety.os, "close") as mocked_close,
         ):
             with self.assertRaisesRegex(ValueError, "bad fd"):
+                path_safety.read_text_without_following_symlinks(Path("/does-not-matter.txt"))
+
+        mocked_close.assert_called_once_with(123)
+
+    def test_read_text_closes_fd_when_fdopen_is_interrupted(self) -> None:
+        with (
+            mock.patch.object(path_safety, "open_file_without_following_symlinks", return_value=123),
+            mock.patch.object(path_safety, "assert_fd_is_regular_private_file"),
+            mock.patch.object(path_safety.os, "fdopen", side_effect=KeyboardInterrupt),
+            mock.patch.object(path_safety.os, "close") as mocked_close,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
                 path_safety.read_text_without_following_symlinks(Path("/does-not-matter.txt"))
 
         mocked_close.assert_called_once_with(123)

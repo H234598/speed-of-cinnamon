@@ -301,6 +301,12 @@ def read_text_without_following_symlinks(
         except OSError as cleanup_error:
             _note_cleanup_failure(exc, cleanup_error)
         raise
+    except BaseException as exc:
+        try:
+            os.close(fd)
+        except OSError as cleanup_error:
+            _note_cleanup_failure(exc, cleanup_error)
+        raise
     with handle:
         payload = handle.read(effective_max_bytes + 1)
     if len(payload) > effective_max_bytes:
@@ -400,6 +406,12 @@ def _write_atomically_without_following_symlinks(
         try:
             handle = os.fdopen(fd, mode, **handle_kwargs)
         except Exception as exc:
+            try:
+                os.close(fd)
+            except OSError as cleanup_error:
+                _note_cleanup_failure(exc, cleanup_error)
+            raise
+        except BaseException as exc:
             try:
                 os.close(fd)
             except OSError as cleanup_error:
