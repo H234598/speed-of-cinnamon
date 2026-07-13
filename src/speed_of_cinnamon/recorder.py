@@ -502,7 +502,10 @@ def _unlink_recording_path_if_same(path: Path, expected_stat: os.stat_result) ->
     except OSError:
         return
     finally:
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except OSError:
+            pass
 
 
 def _cleanup_recording_temp_file(path: Path, fd: int) -> None:

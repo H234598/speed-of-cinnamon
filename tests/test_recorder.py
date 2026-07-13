@@ -431,6 +431,30 @@ class RecorderTest(unittest.TestCase):
         finally:
             real_close(fd)
 
+    def test_unlink_recording_path_does_not_escape_parent_fd_close_failure(self) -> None:
+        from speed_of_cinnamon import recorder as recorder_module
+
+        real_close = os.close
+        real_open = os.open
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.wav"
+            path.write_bytes(b"audio")
+            expected_stat = path.stat()
+            parent_fd = real_open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                with (
+                    mock.patch.object(
+                        recorder_module,
+                        "ensure_directory_without_following_symlinks",
+                        return_value=parent_fd,
+                    ),
+                    mock.patch.object(recorder_module.os, "close", side_effect=OSError("close failed")),
+                ):
+                    recorder_module._unlink_recording_path_if_same(path, expected_stat)
+            finally:
+                self.assertFalse(path.exists())
+                real_close(parent_fd)
+
     def test_trim_recording_leading_silence_open_error_does_not_leak_audio_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "secret-sample.wav"
