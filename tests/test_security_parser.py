@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import fcntl
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -119,6 +120,14 @@ class SecurityParserTest(unittest.TestCase):
         self.assertNotIn("secret-token", sanitized)
         self.assertGreaterEqual(count, 1)
 
+    def test_apply_security_mode_masks_url_credentials_with_long_scheme(self) -> None:
+        scheme = "s" * 512
+
+        sanitized, count = apply_security_mode(f"{scheme}://secret@example.test", [])
+
+        self.assertEqual(sanitized, "[redacted credentials]example.test")
+        self.assertEqual(count, 1)
+
     def test_apply_security_mode_rejects_oversized_transcript(self) -> None:
         with self.assertRaisesRegex(ValueError, "transcript is too large"):
             apply_security_mode("x" * (_MAX_SECURITY_TEXT_CHARS + 1), [])
@@ -141,6 +150,16 @@ class SecurityParserTest(unittest.TestCase):
     def test_apply_security_mode_rejects_unencodable_transcript(self) -> None:
         with self.assertRaisesRegex(ValueError, "transcript contains invalid unicode"):
             apply_security_mode("token: abc\ud800", [])
+
+    def test_apply_security_mode_bounds_long_plaintext_redaction_time(self) -> None:
+        text = "x" * _MAX_SECURITY_TEXT_CHARS
+        started = time.perf_counter()
+
+        clean, redactions = apply_security_mode(text, [])
+
+        self.assertLess(time.perf_counter() - started, 2.0)
+        self.assertEqual(clean, text)
+        self.assertEqual(redactions, 0)
 
     def test_apply_security_mode_masks_spaced_iban_and_hyphenated_single_name(self) -> None:
         text = "mein name ist Jean-Luc und IBAN DE44 5001 0517 5407 3249 31"

@@ -105,7 +105,9 @@ _BARE_PASSWORD_WORD_RE = re.compile(
     + _BARE_SENSITIVE_WORD_VALUE_PATTERN
 )
 _ACCESS_TOKEN_RE = re.compile(r"(?i)\b(?:sk|sess|ghp|gho|xox[pb]-|hf|pat)[A-Za-z0-9_\-]{12,}\b")
-_URL_CRED_RE = re.compile(r"[a-z][a-z0-9+.-]*://[^\s/@]+@")
+# Kept as the ordering marker in _SENSITIVE_PATTERNS; matching uses the linear
+# _apply_url_credential_redaction scanner below instead of regex finditer().
+_URL_CRED_RE = re.compile(r"[a-z][a-z0-9+.-]{0,255}+://[^\s/@]+@")
 _CREDIT_CARD_RE = re.compile(r"\b(?:\d[ -]*?){13,19}\b")
 _LABELED_NAME_RE = re.compile(
     r"(?i)\b(?:name|voller\s+name|full\s+name)\b\s*[:=]\s*"
@@ -302,6 +304,80 @@ def _sub_with_normalized_projection(
     if redactions == 0:
         return text, 0
 
+    pieces.append(text[cursor:])
+    return "".join(pieces), redactions
+
+
+_URL_SCHEME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789+.-")
+_URL_SCHEME_LETTERS = frozenset("abcdefghijklmnopqrstuvwxyz")
+
+
+def _url_credential_ranges(normalized_text: str) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    search_start = 0
+    while True:
+        delimiter_start = normalized_text.find("://", search_start)
+        if delimiter_start < 0:
+            return ranges
+
+        scheme_boundary = normalized_text.rfind(":", 0, delimiter_start) + 1
+        scheme_start = delimiter_start - 1
+        while scheme_start >= scheme_boundary and normalized_text[scheme_start] in _URL_SCHEME_CHARS:
+            scheme_start -= 1
+        scheme_start += 1
+        while scheme_start < delimiter_start and normalized_text[scheme_start] not in _URL_SCHEME_LETTERS:
+            scheme_start += 1
+        if scheme_start >= delimiter_start:
+            search_start = delimiter_start + 3
+            continue
+
+        userinfo_start = delimiter_start + 3
+        at_sign = normalized_text.find("@", userinfo_start)
+        if at_sign <= userinfo_start:
+            search_start = delimiter_start + 3
+            continue
+        userinfo = normalized_text[userinfo_start:at_sign]
+        if any(char.isspace() or char == "/" for char in userinfo):
+            search_start = delimiter_start + 3
+            continue
+
+        ranges.append((scheme_start, at_sign + 1))
+        search_start = at_sign + 1
+
+
+def _apply_url_credential_redaction(text: str) -> tuple[str, int]:
+    normalized_text, index_map = _normalize_for_matching(text)
+    ranges = _url_credential_ranges(normalized_text)
+    if not ranges:
+        return text, 0
+
+    pieces: list[str] = []
+    cursor = 0
+    redactions = 0
+    for normalized_start, normalized_end in ranges:
+        if normalized_start >= normalized_end:
+            continue
+        if normalized_start >= len(index_map) or normalized_end - 1 >= len(index_map):
+            continue
+
+        original_start = index_map[normalized_start]
+        original_end = index_map[normalized_end - 1] + 1
+        if original_end <= cursor:
+            continue
+        if original_start < cursor:
+            original_start = cursor
+        while original_start > cursor and _is_match_ignorable_char(text[original_start - 1]):
+            original_start -= 1
+        while original_end < len(text) and _is_match_ignorable_char(text[original_end]):
+            original_end += 1
+
+        pieces.append(text[cursor:original_start])
+        pieces.append("[redacted credentials]")
+        cursor = original_end
+        redactions += 1
+
+    if redactions == 0:
+        return text, 0
     pieces.append(text[cursor:])
     return "".join(pieces), redactions
 
@@ -554,7 +630,10 @@ def apply_security_mode(text: str, blacklist: list[str]) -> tuple[str, int]:
     clean, count = _apply_normalized_card_redaction(clean)
     redactions += count
     for pattern, placeholder in _SENSITIVE_PATTERNS:
-        clean, count = _sub_with_normalized_projection(clean, pattern, placeholder)
+        if pattern is _URL_CRED_RE:
+            clean, count = _apply_url_credential_redaction(clean)
+        else:
+            clean, count = _sub_with_normalized_projection(clean, pattern, placeholder)
         if count:
             redactions += count
     clean, count = _apply_name_redaction(clean)
