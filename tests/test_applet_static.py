@@ -578,6 +578,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._untrackDialog(dialog);", close_block)
         self.assertIn("this._runTeardownGuarded", close_block)
         self.assertIn('this._recordLifecycleError("dialog-close", error);', close_block)
+        orphan_check = close_block.index("if (isOrphaned)")
+        close_attempt = close_block.index("let closed = false;")
+        self.assertLess(orphan_check, close_attempt)
+        self.assertNotIn("return true;", close_block[orphan_check:close_attempt])
 
         orphan_start = source.index("_untrackOrphanedDialog: function(dialog)")
         orphan_end = source.index("\n  _retryOrphanedDialogs:", orphan_start)

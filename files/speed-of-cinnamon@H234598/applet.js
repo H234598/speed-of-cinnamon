@@ -1430,7 +1430,6 @@ MyApplet.prototype = {
             let orphanStillPending = this._orphanedDialogs.some((entry) => entry && entry.dialog === dialog);
             return orphanCleanupSucceeded && !orphanStillPending;
           }
-          return true;
         }
       }
     } catch (error) {
