@@ -504,8 +504,8 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
             if not stat_is_dir_no_follow(existing.st_mode):
                 fail(f"path must be a directory during {args.action}: {target}")
             os.replace(leaf, backup_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
-            _fsync_directory_fd(parent_fd, action=args.action)
             backup_created = True
+            _fsync_directory_fd(parent_fd, action=args.action)
         os.replace(f"{stage_name}/{leaf}", leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         activated = True
         _check_leaf(parent_fd, leaf, target, action=args.action, kind="dir", must_exist=True)
