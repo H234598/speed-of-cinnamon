@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import http.client
 import math
 import os
 import re
@@ -545,7 +546,7 @@ def list_ollama_models(url: str = DEFAULT_OLLAMA_URL, timeout: int = 5) -> dict[
             "models": [],
             "message": "Ollama returned invalid JSON for model listing",
         }
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, http.client.HTTPException) as exc:
         return {
             "available": False,
             "models": [],
@@ -649,7 +650,7 @@ def list_openai_compatible_models(
             "models": [],
             "message": "OpenAI-compatible API returned invalid JSON for model listing",
         }
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, http.client.HTTPException) as exc:
         detail = _sanitize_remote_error_detail(str(exc))
         return {
             "available": False,
@@ -724,7 +725,7 @@ def post_process_with_ollama(
     except urllib.error.HTTPError as exc:
         detail = _sanitize_remote_error_detail(_read_http_error_text(exc) or exc.reason or str(exc))
         raise PostProcessError(f"Ollama request failed ({exc.code}): {detail}") from exc
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, http.client.HTTPException) as exc:
         raise PostProcessError(f"Ollama request failed: {_sanitize_remote_error_detail(exc)}") from exc
     try:
         data = json.loads(raw)
@@ -897,13 +898,13 @@ def post_process_with_openai_compatible(
                 raise PostProcessError(
                     f"OpenAI-compatible request failed ({fallback_exc.code}) at {_safe_url_display(endpoint, field_name='openai-compatible url')}: {fallback_detail}"
                 ) from fallback_exc
-            except (OSError, ValueError) as fallback_exc:
+            except (OSError, ValueError, http.client.HTTPException) as fallback_exc:
                 raise PostProcessError(f"OpenAI-compatible request failed: {_sanitize_remote_error_detail(fallback_exc)}") from fallback_exc
         else:
             raise PostProcessError(
                 f"OpenAI-compatible request failed ({exc.code}) at {_safe_url_display(endpoint, field_name='openai-compatible url')}: {detail}"
             ) from exc
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, http.client.HTTPException) as exc:
         raise PostProcessError(f"OpenAI-compatible request failed: {_sanitize_remote_error_detail(exc)}") from exc
     try:
         data = json.loads(raw)

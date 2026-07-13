@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import http.client
 import json
 import unittest
 import urllib.error
@@ -1143,6 +1144,14 @@ class PostProcessorTest(unittest.TestCase):
             with self.assertRaisesRegex(PostProcessError, "without output"):
                 post_process_text("hello", "en", backend="ollama", ollama_model="llama3.2:3b")
 
+    def test_ollama_wraps_http_body_failures(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.postprocessor._open_http_request",
+            side_effect=http.client.IncompleteRead(b"partial"),
+        ):
+            with self.assertRaisesRegex(PostProcessError, "Ollama request failed"):
+                post_process_text("hello", "en", backend="ollama", ollama_model="llama3.2:3b")
+
     def test_ollama_rejects_non_text_response(self) -> None:
         with mock.patch(
             "speed_of_cinnamon.postprocessor._open_http_request",
@@ -1287,6 +1296,17 @@ class PostProcessorTest(unittest.TestCase):
     def test_list_ollama_models_reports_unavailable_server(self) -> None:
         with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=OSError("offline")):
             result = list_ollama_models("http://127.0.0.1:11434")
+        self.assertFalse(result["available"])
+        self.assertEqual(result["models"], [])
+        self.assertIn("not reachable", result["message"])
+
+    def test_list_ollama_models_wraps_http_body_failures(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.postprocessor._open_http_request",
+            side_effect=http.client.IncompleteRead(b"partial"),
+        ):
+            result = list_ollama_models("http://127.0.0.1:11434")
+
         self.assertFalse(result["available"])
         self.assertEqual(result["models"], [])
         self.assertIn("not reachable", result["message"])
