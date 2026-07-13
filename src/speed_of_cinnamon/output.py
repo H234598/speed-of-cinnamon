@@ -533,14 +533,15 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
         for _attempt in range(2):
             now = time.time()
             created_stat: os.stat_result | None = None
+            created_fd: int | None = None
             try:
-                fd = os.open(
+                created_fd = os.open(
                     path.name,
                     os.O_CREAT | os.O_EXCL | os.O_WRONLY | nofollow_flag,
                     0o600,
                     dir_fd=parent_fd,
-            )
-                created_stat = os.fstat(fd)
+                )
+                created_stat = os.fstat(created_fd)
             except FileExistsError:
                 try:
                     existing = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
@@ -579,8 +580,14 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                     return None
                 continue
             except OSError:
+                if created_fd is not None:
+                    try:
+                        os.close(created_fd)
+                    except OSError:
+                        pass
                 return None
 
+            fd = created_fd
             try:
                 identity = _clipboard_lock_identity_for_pid(os.getpid())
                 if identity is None:
@@ -590,12 +597,17 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                 os.fsync(fd)
                 os.fsync(parent_fd)
             except OSError:
+                cleanup_stat = created_stat
+                try:
+                    cleanup_stat = os.fstat(fd)
+                except OSError:
+                    pass
                 try:
                     os.close(fd)
                 except OSError:
                     pass
                 try:
-                    _unlink_clipboard_lock_at(parent_fd, path, expected_stat=created_stat)
+                    _unlink_clipboard_lock_at(parent_fd, path, expected_stat=cleanup_stat)
                 except OSError:
                     pass
                 return None

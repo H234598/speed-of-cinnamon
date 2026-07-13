@@ -1776,6 +1776,34 @@ class OutputTest(unittest.TestCase):
                 self.assertIsNone(acquired)
                 self.assertFalse(lock_path.exists())
 
+    def test_clipboard_dedupe_lock_partial_write_cleans_up_own_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            real_write = os.write
+
+            def partial_write_then_fail(fd: int, payload: bytes | bytearray | memoryview) -> int:
+                real_write(fd, bytes(payload[:1]))
+                raise OSError("write failed after partial payload")
+
+            with (
+                mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.output.os.write", side_effect=partial_write_then_fail),
+            ):
+                lock_path = output_module.state_dir() / output_module.CLIPBOARD_DEDUP_LOCK_FILE
+
+                self.assertIsNone(_acquire_clipboard_dedup_lock())
+                self.assertFalse(lock_path.exists())
+
+    def test_clipboard_dedupe_lock_closes_fd_when_creation_stat_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.output.os.fstat", side_effect=OSError("stat failed")),
+                mock.patch("speed_of_cinnamon.output.os.close", wraps=os.close) as mocked_close,
+            ):
+                self.assertIsNone(_acquire_clipboard_dedup_lock())
+
+            self.assertGreaterEqual(mocked_close.call_count, 2)
+
     def test_clipboard_dedupe_lock_acquire_fsyncs_lock_and_parent(self) -> None:
         fsync_modes: list[int] = []
         real_fsync = os.fsync
