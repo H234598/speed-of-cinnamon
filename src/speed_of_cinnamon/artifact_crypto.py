@@ -925,9 +925,9 @@ def _validate_secret_tool_args(args: object) -> list[str]:
 
 
 def _stop_secret_tool_process(proc: subprocess.Popen[bytes]) -> None:
-    with suppress(Exception):
+    with suppress(BaseException):
         proc.kill()
-    with suppress(Exception):
+    with suppress(BaseException):
         proc.wait(timeout=1)
 
 
@@ -1030,6 +1030,10 @@ def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subpr
         stdout = _validate_secret_tool_output(stdout, field_name="stdout")
         stderr = _validate_secret_tool_output(stderr, field_name="stderr")
         return subprocess.CompletedProcess(command, returncode, stdout, stderr)
+    except BaseException as exc:
+        if proc is not None and not isinstance(exc, Exception):
+            _stop_secret_tool_process(proc)
+        raise
     finally:
         if proc is not None:
             for stream in (proc.stdin, proc.stdout, proc.stderr):
