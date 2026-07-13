@@ -553,8 +553,24 @@ def _assert_regular_unlinked_file(path: Path, *, field_name: str) -> os.stat_res
     return file_stat
 
 
-def _open_log_source_file(path: Path, *, field_name: str) -> int:
-    expected_stat = _assert_regular_unlinked_file(path, field_name=field_name)
+def _open_log_source_file(
+    path: Path,
+    *,
+    field_name: str,
+    expected_stat: os.stat_result | None = None,
+) -> int:
+    current_stat = _assert_regular_unlinked_file(path, field_name=field_name)
+    if expected_stat is not None and (
+        current_stat.st_dev != expected_stat.st_dev
+        or current_stat.st_ino != expected_stat.st_ino
+        or current_stat.st_mode != expected_stat.st_mode
+        or current_stat.st_size != expected_stat.st_size
+        or getattr(current_stat, "st_nlink", 1) != getattr(expected_stat, "st_nlink", 1)
+        or current_stat.st_mtime_ns != expected_stat.st_mtime_ns
+        or current_stat.st_ctime_ns != expected_stat.st_ctime_ns
+    ):
+        raise RuntimeError(f"{field_name} changed before opening: {path}")
+    expected_for_fd = expected_stat or current_stat
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     try:
         fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name=field_name)
@@ -564,13 +580,13 @@ def _open_log_source_file(path: Path, *, field_name: str) -> int:
         assert_fd_is_regular_private_file(fd, field_name=field_name)
         opened_stat = os.fstat(fd)
         if (
-            opened_stat.st_dev != expected_stat.st_dev
-            or opened_stat.st_ino != expected_stat.st_ino
-            or opened_stat.st_mode != expected_stat.st_mode
-            or opened_stat.st_size != expected_stat.st_size
-            or getattr(opened_stat, "st_nlink", 1) != getattr(expected_stat, "st_nlink", 1)
-            or opened_stat.st_mtime_ns != expected_stat.st_mtime_ns
-            or opened_stat.st_ctime_ns != expected_stat.st_ctime_ns
+            opened_stat.st_dev != expected_for_fd.st_dev
+            or opened_stat.st_ino != expected_for_fd.st_ino
+            or opened_stat.st_mode != expected_for_fd.st_mode
+            or opened_stat.st_size != expected_for_fd.st_size
+            or getattr(opened_stat, "st_nlink", 1) != getattr(expected_for_fd, "st_nlink", 1)
+            or opened_stat.st_mtime_ns != expected_for_fd.st_mtime_ns
+            or opened_stat.st_ctime_ns != expected_for_fd.st_ctime_ns
         ):
             raise RuntimeError(f"{field_name} changed while opening: {path}")
     except Exception as exc:
@@ -740,8 +756,9 @@ def _merge_old_months(directory: Path, today: date) -> None:
                     for path in sorted(existing + paths, key=lambda item: item.name):
                         if not path.exists():
                             continue
-                        source_stats[path] = _assert_regular_unlinked_file(path, field_name="monthly log source")
-                        _copy_log_content(path, output)
+                        source_stat = _assert_regular_unlinked_file(path, field_name="monthly log source")
+                        source_stats[path] = source_stat
+                        _copy_log_content(path, output, expected_stat=source_stat)
                 raw_output.flush()
                 os.fsync(raw_output.fileno())
                 if not _log_temp_name_matches_fd(parent_fd, temp_name, raw_output.fileno()):
@@ -877,8 +894,13 @@ def _copy_stream_capped(source: Any, output: Any, *, source_path: Path) -> None:
         output.write(chunk)
 
 
-def _copy_log_content(path: Path, output: gzip.GzipFile) -> None:
-    fd = _open_log_source_file(path, field_name="log source file")
+def _copy_log_content(
+    path: Path,
+    output: gzip.GzipFile,
+    *,
+    expected_stat: os.stat_result | None = None,
+) -> None:
+    fd = _open_log_source_file(path, field_name="log source file", expected_stat=expected_stat)
     try:
         source_file = os.fdopen(fd, "rb")
     except Exception as exc:

@@ -370,6 +370,18 @@ class AppLoggingTest(unittest.TestCase):
 
         mocked_close.assert_called_once_with(123)
 
+    def test_copy_log_content_rejects_source_swap_before_open(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "source.log"
+            path.write_text("original\n", encoding="utf-8")
+            path.chmod(0o600)
+            expected_stat = path.lstat()
+            path.rename(Path(tmp) / "source-original.log")
+            path.write_text("replacement\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "changed before opening"):
+                app_logging._copy_log_content(path, mock.Mock(), expected_stat=expected_stat)
+
     def test_open_log_source_preserves_validation_error_when_fd_close_fails(self) -> None:
         with (
             mock.patch.object(app_logging, "_assert_regular_unlinked_file"),
