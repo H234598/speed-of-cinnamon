@@ -164,6 +164,24 @@ class RecorderTest(unittest.TestCase):
         self.assertFalse(result.silent)
         self.assertIn("exceeded safe output limit", result.detail)
 
+    def test_detect_silent_recording_rejects_nonfinite_ffmpeg_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "malformed-duration.wav"
+            audio.write_bytes(b"RIFF" + b"\x00" * 44)
+            completed = subprocess.CompletedProcess(
+                ["ffmpeg"],
+                0,
+                stdout=b"",
+                stderr=(b"Duration: 00:00:" + b"9" * 400),
+            )
+            with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
+                with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=completed):
+                    result = detect_silent_recording(audio)
+
+        self.assertFalse(result.analyzed)
+        self.assertFalse(result.silent)
+        self.assertEqual(result.detail, "ffmpeg duration was unavailable")
+
     def test_detect_silent_recording_reports_leading_silence_seconds(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "speech.wav"

@@ -544,14 +544,18 @@ def _parse_ffmpeg_duration(text: str) -> float:
     match = _FFMPEG_DURATION_RE.search(text)
     if not match:
         return 0.0
-    hours = int(match.group(1))
-    minutes = int(match.group(2))
-    seconds = float(match.group(3))
-    return hours * 3600 + minutes * 60 + seconds
+    try:
+        hours = int(match.group(1))
+        minutes = int(match.group(2))
+        seconds = float(match.group(3))
+        duration = hours * 3600 + minutes * 60 + seconds
+    except (OverflowError, ValueError):
+        return 0.0
+    return duration if math.isfinite(duration) and duration > 0 else 0.0
 
 
 def _parse_silence_seconds(text: str, duration_seconds: float) -> tuple[float, float]:
-    if duration_seconds <= 0:
+    if duration_seconds <= 0 or not math.isfinite(duration_seconds):
         return 0.0, 0.0
     intervals: list[tuple[float, float]] = []
     current_start: float | None = None
