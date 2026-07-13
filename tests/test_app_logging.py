@@ -394,6 +394,19 @@ class AppLoggingTest(unittest.TestCase):
 
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_open_log_source_closes_fd_when_validation_is_interrupted(self) -> None:
+        with (
+            mock.patch.object(app_logging, "_assert_regular_unlinked_file", return_value=os.stat(__file__)),
+            mock.patch.object(app_logging, "open_file_without_following_symlinks", return_value=123),
+            mock.patch.object(app_logging, "assert_fd_is_regular_private_file"),
+            mock.patch.object(app_logging.os, "fstat", side_effect=KeyboardInterrupt),
+            mock.patch.object(app_logging.os, "close") as mocked_close,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                app_logging._open_log_source_file(Path("/probe.log"), field_name="log source file")
+
+        mocked_close.assert_called_once_with(123)
+
     def test_open_log_source_rejects_path_swap_after_initial_inspection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "source.log"
@@ -636,6 +649,21 @@ class AppLoggingTest(unittest.TestCase):
                 handler.close()
 
             self.assertEqual(active.read_text(encoding="utf-8"), "old\n")
+
+    def test_file_handler_closes_fd_when_open_validation_is_interrupted(self) -> None:
+        handler = app_logging.SizeCappedJsonFileHandler(Path("/probe.log"), Path("/probe"))
+        with (
+            mock.patch.object(Path, "lstat", side_effect=FileNotFoundError),
+            mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(app_logging, "assert_fd_is_private_directory"),
+            mock.patch.object(app_logging, "open_file_without_following_symlinks", return_value=123),
+            mock.patch.object(app_logging.os, "fstat", side_effect=KeyboardInterrupt),
+            mock.patch.object(app_logging.os, "close") as mocked_close,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                handler._open()
+
+        self.assertEqual(mocked_close.call_args_list, [mock.call(456), mock.call(123)])
 
     def test_file_handler_enforces_total_limit_during_maintenance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

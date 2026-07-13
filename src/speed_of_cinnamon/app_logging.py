@@ -284,6 +284,12 @@ class SizeCappedJsonFileHandler(logging.Handler):
                 except OSError as cleanup_error:
                     _note_cleanup_failure(exc, cleanup_error)
                 raise
+            except BaseException as exc:
+                try:
+                    os.close(fd)
+                except OSError as cleanup_error:
+                    _note_cleanup_failure(exc, cleanup_error)
+                raise
 
     def _maintain_after_emit(self, *, force: bool = False) -> None:
         now = time.monotonic()
@@ -606,6 +612,12 @@ def _open_log_source_file(
         ):
             raise RuntimeError(f"{field_name} changed while opening: {path}")
     except Exception as exc:
+        try:
+            os.close(fd)
+        except OSError as cleanup_error:
+            _note_cleanup_failure(exc, cleanup_error)
+        raise
+    except BaseException as exc:
         try:
             os.close(fd)
         except OSError as cleanup_error:
