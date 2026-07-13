@@ -534,7 +534,7 @@ def _assert_regular_unlinked_file(path: Path, *, field_name: str) -> os.stat_res
 
 
 def _open_log_source_file(path: Path, *, field_name: str) -> int:
-    _assert_regular_unlinked_file(path, field_name=field_name)
+    expected_stat = _assert_regular_unlinked_file(path, field_name=field_name)
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     try:
         fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name=field_name)
@@ -542,6 +542,17 @@ def _open_log_source_file(path: Path, *, field_name: str) -> int:
         raise RuntimeError(f"{field_name} is not readable: {path}") from exc
     try:
         assert_fd_is_regular_private_file(fd, field_name=field_name)
+        opened_stat = os.fstat(fd)
+        if (
+            opened_stat.st_dev != expected_stat.st_dev
+            or opened_stat.st_ino != expected_stat.st_ino
+            or opened_stat.st_mode != expected_stat.st_mode
+            or opened_stat.st_size != expected_stat.st_size
+            or getattr(opened_stat, "st_nlink", 1) != getattr(expected_stat, "st_nlink", 1)
+            or opened_stat.st_mtime_ns != expected_stat.st_mtime_ns
+            or opened_stat.st_ctime_ns != expected_stat.st_ctime_ns
+        ):
+            raise RuntimeError(f"{field_name} changed while opening: {path}")
     except Exception as exc:
         try:
             os.close(fd)

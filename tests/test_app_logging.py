@@ -359,6 +359,25 @@ class AppLoggingTest(unittest.TestCase):
 
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_open_log_source_rejects_path_swap_after_initial_inspection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "source.log"
+            path.write_text("original\n", encoding="utf-8")
+            path.chmod(0o600)
+            real_open = app_logging.open_file_without_following_symlinks
+
+            def open_and_swap(*args: object, **kwargs: object) -> int:
+                fd = real_open(*args, **kwargs)
+                path.rename(path.with_name("source-original.log"))
+                path.write_text("replacement\n", encoding="utf-8")
+                return fd
+
+            with mock.patch.object(app_logging, "open_file_without_following_symlinks", side_effect=open_and_swap):
+                with self.assertRaisesRegex(RuntimeError, "changed while opening"):
+                    app_logging._open_log_source_file(path, field_name="log source file")
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "replacement\n")
+
     def test_copy_log_content_preserves_fdopen_error_when_fd_close_fails(self) -> None:
         with (
             mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
