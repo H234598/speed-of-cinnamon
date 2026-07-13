@@ -161,6 +161,30 @@ class ModelsTest(unittest.TestCase):
             with self.assertRaisesRegex(models.ModelError, "must not be hardlinked"):
                 models.sha1_file(hardlink)
 
+    def test_sha1_file_closes_descriptor_when_fdopen_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "model.bin"
+            path.write_bytes(b"model")
+            real_open = os.open
+            target_fds: list[int] = []
+
+            def open_wrapper(*args: object, **kwargs: object) -> int:
+                fd = real_open(*args, **kwargs)
+                if args and args[0] == path:
+                    target_fds.append(fd)
+                return fd
+
+            with (
+                mock.patch.object(models.os, "open", side_effect=open_wrapper),
+                mock.patch.object(models.os, "fdopen", side_effect=ValueError("bad fd")),
+            ):
+                with self.assertRaisesRegex(models.ModelError, "bad fd"):
+                    models._sha1_file_without_cache(path)
+
+            self.assertEqual(len(target_fds), 1)
+            with self.assertRaises(OSError):
+                os.fstat(target_fds[0])
+
     def test_sha1_file_rejects_fifo_without_blocking(self) -> None:
         if not hasattr(os, "mkfifo"):
             self.skipTest("mkfifo unavailable")

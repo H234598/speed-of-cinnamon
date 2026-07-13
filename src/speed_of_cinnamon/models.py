@@ -1127,12 +1127,17 @@ def _sha1_file_without_cache(path: Path) -> str:
     fd = _open_model_hash_file(path)
     try:
         with os.fdopen(fd, "rb") as handle:
+            fd = -1
             digest = hashlib.sha1(usedforsecurity=False)
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
             return digest.hexdigest()
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         raise ModelError(str(exc)) from exc
+    finally:
+        if fd >= 0:
+            with suppress(OSError):
+                os.close(fd)
 
 
 def model_status(model: ModelSpec, verify: bool = False) -> dict[str, object]:
