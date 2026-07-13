@@ -710,8 +710,11 @@ def _copy_log_content(path: Path, output: gzip.GzipFile) -> None:
     fd = _open_log_source_file(path, field_name="log source file")
     try:
         source_file = os.fdopen(fd, "rb")
-    except Exception:
-        os.close(fd)
+    except Exception as exc:
+        try:
+            os.close(fd)
+        except OSError as cleanup_error:
+            _note_cleanup_failure(exc, cleanup_error)
         raise
     with source_file:
         if path.suffix == ".gz":
@@ -737,6 +740,7 @@ def _assert_same_log_file_identity(path: Path, expected_stat: os.stat_result, *,
 
 def _unlink_log_file_with_parent_fsync(path: Path, expected_stat: os.stat_result, *, field_name: str) -> bool:
     parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name=f"{field_name} directory")
+    primary_error: BaseException | None = None
     try:
         try:
             current_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
@@ -757,8 +761,17 @@ def _unlink_log_file_with_parent_fsync(path: Path, expected_stat: os.stat_result
         os.unlink(path.name, dir_fd=parent_fd)
         os.fsync(parent_fd)
         return True
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except OSError as cleanup_error:
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                pass
 
 
 def _gzip_file(source: Path, target: Path) -> None:
@@ -800,7 +813,10 @@ def _gzip_file(source: Path, target: Path) -> None:
         _unlink_log_temp(parent_fd, temp_name)
         raise
     finally:
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except OSError:
+            pass
 
 
 def _enforce_file_size_limit(directory: Path, *, today: date | None = None) -> None:

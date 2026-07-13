@@ -347,6 +347,42 @@ class AppLoggingTest(unittest.TestCase):
 
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_copy_log_content_preserves_fdopen_error_when_fd_close_fails(self) -> None:
+        with (
+            mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
+            mock.patch.object(app_logging.os, "fdopen", side_effect=ValueError("bad source fd")),
+            mock.patch.object(app_logging.os, "close", side_effect=OSError("close failed")),
+        ):
+            with self.assertRaisesRegex(ValueError, "bad source fd") as caught:
+                app_logging._copy_log_content(Path("/probe.log"), mock.Mock())
+
+        self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
+
+    def test_unlink_log_file_preserves_success_when_parent_close_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "source.log"
+            path.write_text("content\n", encoding="utf-8")
+            expected_stat = path.stat()
+            parent_fd = os.open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_close = os.close
+
+            def close_wrapper(fd: int) -> None:
+                if fd == parent_fd:
+                    raise OSError("close failed")
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=parent_fd),
+                    mock.patch.object(app_logging.os, "close", side_effect=close_wrapper),
+                ):
+                    self.assertTrue(app_logging._unlink_log_file_with_parent_fsync(path, expected_stat, field_name="log file"))
+            finally:
+                real_close(parent_fd)
+
+            self.assertFalse(path.exists())
+
     def test_create_log_temp_preserves_open_error_when_parent_close_fails(self) -> None:
         with (
             mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
