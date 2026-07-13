@@ -227,8 +227,11 @@ def read_text_without_following_symlinks(
         except RuntimeError as exc:
             raise OSError(str(exc)) from exc
         handle = os.fdopen(fd, "rb")
-    except Exception:
-        os.close(fd)
+    except Exception as exc:
+        try:
+            os.close(fd)
+        except OSError as cleanup_error:
+            _note_cleanup_failure(exc, cleanup_error)
         raise
     with handle:
         payload = handle.read(effective_max_bytes + 1)
@@ -253,6 +256,7 @@ def _write_atomically_without_following_symlinks(
         raise OSError(f"secure atomic write is not supported for {field_name}")
     parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name=f"{field_name} directory")
     temp_name = ""
+    primary_error: BaseException | None = None
     try:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag
         try:
@@ -276,8 +280,11 @@ def _write_atomically_without_following_symlinks(
             handle_kwargs["encoding"] = encoding
         try:
             handle = os.fdopen(fd, mode, **handle_kwargs)
-        except Exception:
-            os.close(fd)
+        except Exception as exc:
+            try:
+                os.close(fd)
+            except OSError as cleanup_error:
+                _note_cleanup_failure(exc, cleanup_error)
             raise
         with handle:
             try:
@@ -290,7 +297,8 @@ def _write_atomically_without_following_symlinks(
         os.replace(temp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         temp_name = ""
         os.fsync(parent_fd)
-    except Exception:
+    except BaseException as exc:
+        primary_error = exc
         cleanup_error: OSError | None = None
         if temp_name:
             try:
@@ -299,10 +307,17 @@ def _write_atomically_without_following_symlinks(
             except OSError as exc:
                 cleanup_error = exc
         if cleanup_error is not None:
-            raise OSError(f"failed to remove temporary file for {field_name}") from cleanup_error
+            primary_error = OSError(f"failed to remove temporary file for {field_name}")
+            raise primary_error from cleanup_error
         raise
     finally:
-        os.close(parent_fd)
+        try:
+            os.close(parent_fd)
+        except OSError as cleanup_error:
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise
 
 
 def write_text_atomically_without_following_symlinks(
