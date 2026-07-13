@@ -116,6 +116,22 @@ class StateStoreTest(unittest.TestCase):
 
             mocked_close.assert_called_once_with(123)
 
+    def test_state_lock_closes_parent_fd_when_directory_validation_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = StateStore(Path(tmp) / "state.json")
+            with (
+                mock.patch("speed_of_cinnamon.state.ensure_directory_without_following_symlinks", return_value=123),
+                mock.patch(
+                    "speed_of_cinnamon.state.assert_fd_is_private_directory",
+                    side_effect=KeyboardInterrupt,
+                ),
+                mock.patch("speed_of_cinnamon.state.os.close") as mocked_close,
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    store.write(RecordingState())
+
+            mocked_close.assert_called_once_with(123)
+
     def test_state_lock_preserves_directory_validation_error_when_parent_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")

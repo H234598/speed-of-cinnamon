@@ -144,6 +144,12 @@ class StateStore:
             except OSError as cleanup_error:
                 _note_lock_cleanup_failure(error, cleanup_error)
             raise error from exc
+        except BaseException:
+            try:
+                os.close(parent_fd)
+            except OSError:
+                pass
+            raise
         primary_error: BaseException | None = None
         try:
             assert_fd_is_regular_private_file(fd, field_name="state lock file", require_private_mode=True)
