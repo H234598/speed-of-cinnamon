@@ -2047,18 +2047,21 @@ MyApplet.prototype = {
       return token;
     }
     let registry = null;
+    let registrationAttempted = false;
     try {
       if (!this._resourceRegistry || !this._resourceRegistry.cancellables) {
         throw new Error("Cancellable registry is unavailable");
       }
       registry = this._resourceRegistry.cancellables;
+      registrationAttempted = true;
       registry[token] = cancellable;
       if (registry[token] !== cancellable) {
         throw new Error("Cancellable could not be registered");
       }
       return token;
     } catch (error) {
-      if (registry) {
+      let rollbackFailed = false;
+      if (registry && registrationAttempted) {
         try {
           if (Object.prototype.hasOwnProperty.call(registry, token)) {
             let deleted = delete registry[token];
@@ -2067,8 +2070,12 @@ MyApplet.prototype = {
             }
           }
         } catch (rollbackError) {
+          rollbackFailed = true;
           this._recordLifecycleError("cancellable-registration-rollback", rollbackError);
         }
+      }
+      if (rollbackFailed) {
+        this._trackOrphanedCancellable(token, false);
       }
       throw error;
     }
@@ -2243,18 +2250,21 @@ MyApplet.prototype = {
       group: String(group || "process"),
     };
     let registry = null;
+    let registrationAttempted = false;
     try {
       if (!this._resourceRegistry || !this._resourceRegistry.processes) {
         throw new Error("Process registry is unavailable");
       }
       registry = this._resourceRegistry.processes;
+      registrationAttempted = true;
       registry[token] = entry;
       if (registry[token] !== entry) {
         throw new Error("Process could not be registered");
       }
       return token;
     } catch (error) {
-      if (registry) {
+      let rollbackFailed = false;
+      if (registry && registrationAttempted) {
         try {
           if (Object.prototype.hasOwnProperty.call(registry, token)) {
             let deleted = delete registry[token];
@@ -2263,8 +2273,12 @@ MyApplet.prototype = {
             }
           }
         } catch (rollbackError) {
+          rollbackFailed = true;
           this._recordLifecycleError("process-registration-rollback", rollbackError);
         }
+      }
+      if (rollbackFailed) {
+        this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, false);
       }
       throw error;
     }

@@ -2210,8 +2210,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("registry[token] !== cancellable", cancellable_block)
         self.assertIn('throw new Error("Cancellable could not be registered");', cancellable_block)
         self.assertIn("let registry = null;", cancellable_block)
+        self.assertIn("let registrationAttempted = false;", cancellable_block)
+        self.assertIn("registrationAttempted = true;", cancellable_block)
+        self.assertIn("let rollbackFailed = false;", cancellable_block)
         self.assertIn("let deleted = delete registry[token];", cancellable_block)
+        self.assertIn("rollbackFailed = true;", cancellable_block)
         self.assertIn('this._recordLifecycleError("cancellable-registration-rollback", rollbackError);', cancellable_block)
+        self.assertIn("if (rollbackFailed) {\n        this._trackOrphanedCancellable(token, false);", cancellable_block)
 
         start = source.index("_registerProcess: function(process, generation, group)")
         end = source.index("\n  _unregisterProcess:", start)
@@ -2223,8 +2228,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("registry[token] !== entry", process_block)
         self.assertIn('throw new Error("Process could not be registered");', process_block)
         self.assertIn("let registry = null;", process_block)
+        self.assertIn("let registrationAttempted = false;", process_block)
+        self.assertIn("registrationAttempted = true;", process_block)
+        self.assertIn("let rollbackFailed = false;", process_block)
         self.assertIn("let deleted = delete registry[token];", process_block)
+        self.assertIn("rollbackFailed = true;", process_block)
         self.assertIn('this._recordLifecycleError("process-registration-rollback", rollbackError);', process_block)
+        self.assertIn("if (rollbackFailed) {\n        this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, false);", process_block)
 
     def test_process_group_cancellation_ignores_malformed_entries(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
