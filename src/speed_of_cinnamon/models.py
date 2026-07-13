@@ -1752,7 +1752,7 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                     _remove_model_backup_path(orphan_path)
                 except (OSError, ModelError):
                     raise ModelError(f"failed to remove model backup after successful download: {backup_dir}") from cleanup_exc
-    except Exception:
+    except BaseException:
         if tmp_dir is not None:
             with suppress(OSError, ModelError):
                 _remove_model_directory_leaf(tmp_dir, root, field_name="model temporary directory")
@@ -1945,7 +1945,7 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
             _set_model_checksum_cache(path, checksum, tmp_stat)
         except OSError as exc:
             raise ModelError(f"failed to persist downloaded model file: {path}") from exc
-    except Exception as primary_error:
+    except BaseException as primary_error:
         if tmp_path is not None:
             try:
                 _clear_model_checksum_cache(tmp_path)

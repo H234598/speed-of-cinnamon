@@ -3271,6 +3271,38 @@ class ModelsTest(unittest.TestCase):
             self.assertEqual(path.read_bytes(), old_data)
             self.assertEqual(models._model_checksum_cache[str(path)]["checksum"], old_checksum)
 
+    def test_download_model_restores_existing_file_when_cache_update_is_interrupted(self) -> None:
+        old_data = b"old model"
+        new_data = b"new model"
+        old_checksum = hashlib.sha1(old_data).hexdigest()
+        spec = models.ModelSpec(
+            name="cache-update-interrupted",
+            filename="ggml-cache-update-interrupted.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(new_data).hexdigest(),
+            description="cache update interrupted",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", True),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(new_data)),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            path.write_bytes(old_data)
+            models._set_model_checksum_cache(path, old_checksum, path.stat())
+
+            with mock.patch.object(models, "_set_model_checksum_cache", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    models.download_model("cache-update-interrupted", force=True)
+
+            self.assertEqual(path.read_bytes(), old_data)
+            self.assertEqual(models._model_checksum_cache[str(path)]["checksum"], old_checksum)
+            self.assertEqual(list(path.parent.glob(f".{path.name}.*.backup")), [])
+
     def test_download_model_restores_existing_file_when_cache_update_fails_after_replace_without_cache_entry(self) -> None:
         old_data = b"old model"
         new_data = b"new model"
