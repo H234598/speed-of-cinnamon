@@ -113,6 +113,12 @@ def open_file_without_following_symlinks(
                 except OSError as next_close_error:
                     _note_cleanup_failure(close_error, next_close_error)
                 raise
+            except BaseException as close_error:
+                try:
+                    os.close(next_fd)
+                except BaseException as next_close_error:
+                    _note_cleanup_failure(close_error, next_close_error)
+                raise
             directory_fd = next_fd
         result_fd = os.open(parts[-1], flags | nofollow_flag, mode, dir_fd=directory_fd)
         return result_fd
@@ -220,6 +226,12 @@ def ensure_directory_without_following_symlinks(path: Path, *, field_name: str =
                 try:
                     os.close(next_fd)
                 except OSError as next_close_error:
+                    _note_cleanup_failure(close_error, next_close_error)
+                raise
+            except BaseException as close_error:
+                try:
+                    os.close(next_fd)
+                except BaseException as next_close_error:
                     _note_cleanup_failure(close_error, next_close_error)
                 raise
             directory_fd = next_fd

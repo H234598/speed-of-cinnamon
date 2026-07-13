@@ -50,6 +50,26 @@ class PathSafetyTest(unittest.TestCase):
 
         self.assertEqual(close_calls, [100, 101, 100])
 
+    def test_open_file_closes_next_directory_when_previous_close_is_interrupted(self) -> None:
+        close_calls: list[int] = []
+        directory_close_attempts = 0
+
+        def fail_first_directory_close(fd: int) -> None:
+            nonlocal directory_close_attempts
+            close_calls.append(fd)
+            if fd == 100 and directory_close_attempts == 0:
+                directory_close_attempts += 1
+                raise KeyboardInterrupt
+
+        with (
+            mock.patch.object(path_safety.os, "open", side_effect=[100, 101]),
+            mock.patch.object(path_safety.os, "close", side_effect=fail_first_directory_close),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                path_safety.open_file_without_following_symlinks(Path("/tmp/settings.json"), os.O_RDONLY)
+
+        self.assertIn(101, close_calls)
+
     def test_ensure_directory_closes_next_directory_when_previous_close_fails(self) -> None:
         close_calls: list[int] = []
 
@@ -76,6 +96,26 @@ class PathSafetyTest(unittest.TestCase):
                 path_safety.ensure_directory_without_following_symlinks(Path("/tmp/settings"))
 
         mocked_close.assert_called_once_with(100)
+
+    def test_ensure_directory_closes_next_directory_when_previous_close_is_interrupted(self) -> None:
+        close_calls: list[int] = []
+        directory_close_attempts = 0
+
+        def fail_first_directory_close(fd: int) -> None:
+            nonlocal directory_close_attempts
+            close_calls.append(fd)
+            if fd == 100 and directory_close_attempts == 0:
+                directory_close_attempts += 1
+                raise KeyboardInterrupt
+
+        with (
+            mock.patch.object(path_safety.os, "open", side_effect=[100, 101]),
+            mock.patch.object(path_safety.os, "close", side_effect=fail_first_directory_close),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                path_safety.ensure_directory_without_following_symlinks(Path("/tmp/settings"))
+
+        self.assertIn(101, close_calls)
 
     def test_safe_path_components_reject_null_bytes(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "invalid null byte"):
