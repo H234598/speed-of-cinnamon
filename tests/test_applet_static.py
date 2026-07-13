@@ -2146,6 +2146,9 @@ class AppletStaticTest(unittest.TestCase):
         bounded_start = source.index("_runBoundedSubprocess: function(args, env, options, callback)")
         bounded_end = source.index("\n  _spawnJsonWithBackendEnvironment:", bounded_start)
         bounded_block = source[bounded_start:bounded_end]
+        self.assertIn("if (!Array.isArray(this._orphanedProcesses))", bounded_block)
+        self.assertIn("if (!Array.isArray(this._orphanedCancellables))", bounded_block)
+        self.assertIn("if (!Array.isArray(this._orphanedTimers))", bounded_block)
         self.assertIn("Array.isArray(this._orphanedProcesses)", bounded_block)
         self.assertIn("let orphanCleanupSucceeded = this._retryOrphanedProcesses();", bounded_block)
         self.assertIn('this._recordLifecycleError("process-state", new Error("An orphaned process is still pending"));', bounded_block)
@@ -3176,6 +3179,36 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let deleted = delete this._resourceRegistry.timers[key];", block)
         self.assertIn("Timer rollback registry entry could not be removed", block)
         self.assertIn("Object.prototype.hasOwnProperty.call(this._resourceRegistry.timers, key)", block)
+
+    def test_malformed_orphan_registries_fail_closed_before_new_resources(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        timer_start = source.index("_scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName)")
+        timer_end = source.index("\n  _init:", timer_start)
+        timer_block = source[timer_start:timer_end]
+        self.assertIn("if (!Array.isArray(this._orphanedTimers))", timer_block)
+        self.assertIn('new Error("Timer orphan registry is unavailable")', timer_block)
+        self.assertIn("return 0;", timer_block)
+
+        dialog_start = source.index("_newSafeDialog: function(group)")
+        dialog_end = source.index("\n  _dialogAddChild:", dialog_start)
+        dialog_block = source[dialog_start:dialog_end]
+        self.assertIn("if (!Array.isArray(this._orphanedDialogs))", dialog_block)
+        self.assertIn('new Error("Dialog orphan registry is unavailable")', dialog_block)
+        self.assertIn("return null;", dialog_block)
+
+        monitor_start = source.index("_watchExternalApiEnvFile: function(path)")
+        monitor_end = source.index("\n  _openExternalApiEnvEditor:", monitor_start)
+        monitor_block = source[monitor_start:monitor_end]
+        self.assertIn("if (!Array.isArray(this._orphanedMonitors))", monitor_block)
+        self.assertIn('new Error("Monitor orphan registry is unavailable")', monitor_block)
+        self.assertIn("return;", monitor_block)
+
+        insert_start = source.index("_insertTranscriptText: function(transcript, completionCallback)")
+        insert_end = source.index("\n  _restartRelistenRecording:", insert_start)
+        insert_block = source[insert_start:insert_end]
+        self.assertIn("if (!Array.isArray(this._orphanedTimers))", insert_block)
+        self.assertIn('throw new Error("Timer orphan registry is unavailable")', insert_block)
 
     def test_failed_timer_removal_remains_tracked(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

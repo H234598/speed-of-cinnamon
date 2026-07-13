@@ -1313,7 +1313,11 @@ MyApplet.prototype = {
     if (!this._lifecycleAllowsWork()) {
       return null;
     }
-    if (Array.isArray(this._orphanedDialogs) && this._orphanedDialogs.length > 0) {
+    if (!Array.isArray(this._orphanedDialogs)) {
+      this._recordLifecycleError("dialog-state", new Error("Dialog orphan registry is unavailable"));
+      return null;
+    }
+    if (this._orphanedDialogs.length > 0) {
       let orphanCleanupSucceeded = this._retryOrphanedDialogs();
       if (!orphanCleanupSucceeded || this._orphanedDialogs.length > 0) {
         this._recordLifecycleError("dialog-state", new Error("An orphaned dialog is still pending"));
@@ -2962,7 +2966,11 @@ MyApplet.prototype = {
       return 0;
     }
     let key = String(name || propertyName || "timer");
-    if (Array.isArray(this._orphanedTimers) && this._orphanedTimers.length > 0) {
+    if (!Array.isArray(this._orphanedTimers)) {
+      this._recordLifecycleError("timer-state", new Error("Timer orphan registry is unavailable"));
+      return 0;
+    }
+    if (this._orphanedTimers.length > 0) {
       let orphanCleanupSucceeded = this._retryOrphanedTimers();
       if (!orphanCleanupSucceeded || this._orphanedTimers.length > 0) {
         this._recordLifecycleError("timer-state", new Error("An orphaned timer is still pending"));
@@ -8270,7 +8278,11 @@ MyApplet.prototype = {
     if (!this._clearExternalApiEnvMonitor()) {
       return;
     }
-    if (Array.isArray(this._orphanedMonitors) && this._orphanedMonitors.length > 0) {
+    if (!Array.isArray(this._orphanedMonitors)) {
+      this._recordLifecycleError("monitor-state", new Error("Monitor orphan registry is unavailable"));
+      return;
+    }
+    if (this._orphanedMonitors.length > 0) {
       this._recordLifecycleError("monitor-state", new Error("An orphaned monitor is still pending"));
       return;
     }
@@ -10333,21 +10345,33 @@ MyApplet.prototype = {
     if (!this._lifecycleAllowsWork()) {
       return null;
     }
-    if (Array.isArray(this._orphanedProcesses) && this._orphanedProcesses.length > 0) {
+    if (!Array.isArray(this._orphanedProcesses)) {
+      this._recordLifecycleError("process-state", new Error("Process orphan registry is unavailable"));
+      return null;
+    }
+    if (this._orphanedProcesses.length > 0) {
       let orphanCleanupSucceeded = this._retryOrphanedProcesses();
       if (!orphanCleanupSucceeded || this._orphanedProcesses.length > 0) {
         this._recordLifecycleError("process-state", new Error("An orphaned process is still pending"));
         return null;
       }
     }
-    if (Array.isArray(this._orphanedCancellables) && this._orphanedCancellables.length > 0) {
+    if (!Array.isArray(this._orphanedCancellables)) {
+      this._recordLifecycleError("cancellable-state", new Error("Cancellable orphan registry is unavailable"));
+      return null;
+    }
+    if (this._orphanedCancellables.length > 0) {
       let orphanCancellableCleanupSucceeded = this._retryOrphanedCancellables();
       if (!orphanCancellableCleanupSucceeded || this._orphanedCancellables.length > 0) {
         this._recordLifecycleError("cancellable-state", new Error("An orphaned cancellable is still pending"));
         return null;
       }
     }
-    if (Array.isArray(this._orphanedTimers) && this._orphanedTimers.length > 0) {
+    if (!Array.isArray(this._orphanedTimers)) {
+      this._recordLifecycleError("timer-state", new Error("Timer orphan registry is unavailable"));
+      return null;
+    }
+    if (this._orphanedTimers.length > 0) {
       let orphanTimerCleanupSucceeded = this._retryOrphanedTimers();
       if (!orphanTimerCleanupSucceeded || this._orphanedTimers.length > 0) {
         this._recordLifecycleError("timer-state", new Error("An orphaned timer is still pending"));
@@ -13134,7 +13158,10 @@ MyApplet.prototype = {
     if (this.textInsertCancellationFailed) {
       let timerCleanupStillPending = false;
       try {
-        if (Array.isArray(this._orphanedTimers) && this._orphanedTimers.length > 0) {
+        if (!Array.isArray(this._orphanedTimers)) {
+          throw new Error("Timer orphan registry is unavailable");
+        }
+        if (this._orphanedTimers.length > 0) {
           let orphanCleanupSucceeded = this._retryOrphanedTimers();
           timerCleanupStillPending = !orphanCleanupSucceeded || this._orphanedTimers.length > 0;
         }
