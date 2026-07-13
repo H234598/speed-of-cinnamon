@@ -316,26 +316,52 @@ def _open_model_hash_file(path: Path) -> int:
     return fd
 
 
-def _cached_or_computed_sha1(path: Path) -> str:
-    _load_model_checksum_cache()
+def _same_model_hash_snapshot(first: os.stat_result, second: os.stat_result) -> bool:
+    return (
+        first.st_dev,
+        first.st_ino,
+        first.st_mode,
+        getattr(first, "st_nlink", 1),
+        first.st_size,
+        first.st_mtime_ns,
+        first.st_ctime_ns,
+    ) == (
+        second.st_dev,
+        second.st_ino,
+        second.st_mode,
+        getattr(second, "st_nlink", 1),
+        second.st_size,
+        second.st_mtime_ns,
+        second.st_ctime_ns,
+    )
+
+
+def _hash_model_file(path: Path) -> tuple[str, os.stat_result]:
     fd = _open_model_hash_file(path)
     try:
         with os.fdopen(fd, "rb") as handle:
             fd = -1
-            info = os.fstat(handle.fileno())
+            opened_stat = os.fstat(handle.fileno())
             digest = hashlib.sha1(usedforsecurity=False)
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
-
-            checksum = digest.hexdigest()
-            _set_model_checksum_cache(path, checksum, info)
-            return checksum
+            final_stat = os.fstat(handle.fileno())
+            if not _same_model_hash_snapshot(final_stat, opened_stat):
+                raise OSError("model file changed during checksum")
+            return digest.hexdigest(), final_stat
     except (OSError, ValueError) as exc:
         raise ModelError(str(exc)) from exc
     finally:
         if fd >= 0:
             with suppress(OSError):
                 os.close(fd)
+
+
+def _cached_or_computed_sha1(path: Path) -> str:
+    _load_model_checksum_cache()
+    checksum, info = _hash_model_file(path)
+    _set_model_checksum_cache(path, checksum, info)
+    return checksum
 
 
 def _parse_model_size_bytes(value: str) -> int:
@@ -1186,20 +1212,8 @@ def sha1_file(path: Path) -> str:
 
 
 def _sha1_file_without_cache(path: Path) -> str:
-    fd = _open_model_hash_file(path)
-    try:
-        with os.fdopen(fd, "rb") as handle:
-            fd = -1
-            digest = hashlib.sha1(usedforsecurity=False)
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-            return digest.hexdigest()
-    except (OSError, ValueError) as exc:
-        raise ModelError(str(exc)) from exc
-    finally:
-        if fd >= 0:
-            with suppress(OSError):
-                os.close(fd)
+    checksum, _stat = _hash_model_file(path)
+    return checksum
 
 
 def model_status(model: ModelSpec, verify: bool = False) -> dict[str, object]:

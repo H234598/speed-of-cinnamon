@@ -184,9 +184,36 @@ class ModelsTest(unittest.TestCase):
                 with self.assertRaisesRegex(models.ModelError, "bad fd"):
                     models._sha1_file_without_cache(path)
 
-            self.assertEqual(len(target_fds), 1)
-            with self.assertRaises(OSError):
-                os.fstat(target_fds[0])
+        self.assertEqual(len(target_fds), 1)
+        with self.assertRaises(OSError):
+            os.fstat(target_fds[0])
+
+    def test_sha1_file_rejects_model_change_during_checksum(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "model.bin"
+            path.write_bytes(b"original model")
+            real_sha1 = models.hashlib.sha1
+            mutated = False
+
+            class MutatingDigest:
+                def __init__(self) -> None:
+                    self._digest = real_sha1(usedforsecurity=False)
+
+                def update(self, chunk: bytes) -> None:
+                    nonlocal mutated
+                    self._digest.update(chunk)
+                    if not mutated:
+                        mutated = True
+                        path.write_bytes(b"changed model")
+
+                def hexdigest(self) -> str:
+                    return self._digest.hexdigest()
+
+            with mock.patch.object(models.hashlib, "sha1", side_effect=lambda **_: MutatingDigest()):
+                with self.assertRaisesRegex(models.ModelError, "changed during checksum"):
+                    models._sha1_file_without_cache(path)
+
+            self.assertTrue(mutated)
 
     def test_cached_sha1_closes_descriptor_when_fdopen_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
