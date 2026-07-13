@@ -11703,6 +11703,12 @@ MyApplet.prototype = {
       complete(false);
       return false;
     }
+    let expectedClass = String(snapshot.windowClass || "").trim().toLowerCase();
+    let expectedTitle = String(snapshot.windowTitle || "").trim().toLowerCase();
+    if (expectedClass === "" && expectedTitle === "") {
+      complete(false);
+      return false;
+    }
     let deadlineMs = Date.now() + X11_COMMAND_TIMEOUT_MS;
     this._xdotoolOutput(["getactivewindow"], MAX_XDOTOOL_TARGET_OUTPUT_BYTES, (activeOutput) => {
       if (!generationMatches()) {
@@ -11713,7 +11719,6 @@ MyApplet.prototype = {
         complete(false);
         return;
       }
-      let expectedClass = String(snapshot.windowClass || "").trim().toLowerCase();
       if (expectedClass === "") {
         this._targetXWindowMatchesSnapshotTitle(snapshot, xid, complete, deadlineMs);
         return;

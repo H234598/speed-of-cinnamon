@@ -4511,6 +4511,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let expectedGeneration = snapshot && snapshot.targetWindowGeneration !== undefined", match_block)
         self.assertIn("let generationMatches = () =>", match_block)
         self.assertIn("if (!generationMatches())", match_block)
+        self.assertIn('let expectedClass = String(snapshot.windowClass || "").trim().toLowerCase();', match_block)
+        self.assertIn('let expectedTitle = String(snapshot.windowTitle || "").trim().toLowerCase();', match_block)
+        self.assertIn('if (expectedClass === "" && expectedTitle === "")', match_block)
+        self.assertIn("complete(false);\n      return false;", match_block)
 
         probe_start = source.index("_windowProbeValue: function(window, methodName)")
         probe_end = source.index("\n  _windowLooksLikeSpeedOfCinnamon:", probe_start)
