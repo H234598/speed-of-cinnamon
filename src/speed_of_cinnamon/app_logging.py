@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -133,7 +134,7 @@ class JsonLogFormatter(logging.Formatter):
                 clean_key = sanitize_key(key)
                 if clean_key:
                     payload[clean_key] = sanitize_value(clean_key, value)
-        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
 class SizeCappedJsonFileHandler(logging.Handler):
@@ -357,6 +358,8 @@ def sanitize_value(key: str, value: object) -> object:
     if isinstance(value, int):
         return value
     if isinstance(value, float):
+        if not math.isfinite(value):
+            return None
         return round(value, 3)
     if isinstance(value, Path):
         return _safe_path(value)
@@ -510,7 +513,7 @@ def _oversized_record_line(record: logging.LogRecord) -> str:
         "level": record.levelname.lower(),
         "event": "oversized_log_record_redacted",
     }
-    return json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
 
 
 def _assert_regular_unlinked_file(path: Path, *, field_name: str) -> os.stat_result:

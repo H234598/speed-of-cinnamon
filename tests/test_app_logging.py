@@ -112,6 +112,18 @@ class AppLoggingTest(unittest.TestCase):
             with self.subTest(key=key):
                 self.assertEqual(app_logging.sanitize_value(key, "visible"), "visible")
 
+    def test_json_logging_rejects_nonfinite_float_values(self) -> None:
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                self.assertIsNone(app_logging.sanitize_value("elapsed", value))
+
+                record = logging.LogRecord("test", logging.INFO, __file__, 1, "event", (), None)
+                record.fields = {"elapsed": value}
+                rendered = app_logging.JsonLogFormatter().format(record)
+                self.assertNotIn("NaN", rendered)
+                self.assertNotIn("Infinity", rendered)
+                self.assertIsNone(json.loads(rendered)["elapsed"])
+
     def test_sanitize_text_redacts_short_token_like_values(self) -> None:
         self.assertEqual(app_logging.sanitize_text("session sk-abc", max_chars=120), "session [redacted]")
         self.assertEqual(app_logging.sanitize_text("session sess-abc", max_chars=120), "session [redacted]")
