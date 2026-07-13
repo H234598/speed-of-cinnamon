@@ -2559,9 +2559,15 @@ def _transcript_artifact_missing_but_safe(path: Path | None) -> bool:
     return False
 
 
-def _stabilize_recording_artifact_path(artifact_path: Path) -> Path:
+def _stabilize_recording_artifact_path(
+    artifact_path: Path,
+    *,
+    replace_existing_path: Path | None = None,
+) -> Path:
     if not isinstance(artifact_path, Path):
         raise RuntimeError("recording artifact path is invalid")
+    if replace_existing_path is not None and not isinstance(replace_existing_path, Path):
+        raise RuntimeError("replacement recording artifact path is invalid")
     if artifact_path.suffix.lower() not in {".wav", ".flac"}:
         raise RuntimeError("recording artifact path has invalid suffix")
     assert_no_symlink_ancestors(artifact_path, field_name="recording artifact path")
@@ -2587,8 +2593,12 @@ def _stabilize_recording_artifact_path(artifact_path: Path) -> Path:
             stable_path.parent,
             field_name="recording artifact directory",
         )
-        if stable_path.exists() and _recording_artifact_stat(stable_path) is None:
-            raise RuntimeError(f"stable recording artifact is not a safe regular file: {stable_path}")
+        stable_path_exists = stable_path.exists() or stable_path.is_symlink()
+        if stable_path_exists:
+            if _recording_artifact_stat(stable_path) is None:
+                raise RuntimeError(f"stable recording artifact is not a safe regular file: {stable_path}")
+            if replace_existing_path != stable_path:
+                raise RuntimeError(f"stable recording artifact already exists: {stable_path}")
         try:
             os.replace(
                 artifact_path.name,
@@ -3492,7 +3502,10 @@ def finalize_recording(
             done_audio_path = None
             done_log_path = None
         elif trimmed_audio_path is not None:
-            stabilized_audio_path = _stabilize_recording_artifact_path(trimmed_audio_path)
+            stabilized_audio_path = _stabilize_recording_artifact_path(
+                trimmed_audio_path,
+                replace_existing_path=audio_path,
+            )
             done_audio_path = str(stabilized_audio_path)
             if done_audio_path != str(audio_path):
                 remove_original_after_state_update = True
@@ -3503,7 +3516,10 @@ def finalize_recording(
                 except RecorderError:
                     done_audio_path = str(audio_path)
                 else:
-                    stabilized_audio_path = _stabilize_recording_artifact_path(converted_audio_path)
+                    stabilized_audio_path = _stabilize_recording_artifact_path(
+                        converted_audio_path,
+                        replace_existing_path=audio_path,
+                    )
                     done_audio_path = str(stabilized_audio_path)
                     if done_audio_path != str(audio_path):
                         remove_original_after_state_update = True

@@ -4762,6 +4762,21 @@ class CliTest(unittest.TestCase):
             self.assertIsInstance(kwargs.get("src_dir_fd"), int)
             self.assertEqual(kwargs.get("src_dir_fd"), kwargs.get("dst_dir_fd"))
 
+    def test_stabilize_recording_artifact_does_not_overwrite_unrelated_stable_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings_root = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            temp_trimmed = recordings_root / "recording.trimmed-collision.flac"
+            stable = recordings_root / "recording.flac"
+            temp_trimmed.write_bytes(b"new-audio")
+            stable.write_bytes(b"existing-audio")
+
+            with self.assertRaisesRegex(RuntimeError, "stable recording artifact already exists"):
+                cli._stabilize_recording_artifact_path(temp_trimmed)
+
+            self.assertEqual(temp_trimmed.read_bytes(), b"new-audio")
+            self.assertEqual(stable.read_bytes(), b"existing-audio")
+
     def test_cleanup_rejects_boolean_recording_counts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             stdout = io.StringIO()
