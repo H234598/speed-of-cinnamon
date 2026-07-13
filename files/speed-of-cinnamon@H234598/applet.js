@@ -2422,7 +2422,8 @@ MyApplet.prototype = {
 
   _processCleanupStillPending: function() {
     return !Array.isArray(this._orphanedProcesses) || this._orphanedProcesses.length > 0 ||
-      !Array.isArray(this._orphanedCancellables) || this._orphanedCancellables.length > 0;
+      !Array.isArray(this._orphanedCancellables) || this._orphanedCancellables.length > 0 ||
+      !Array.isArray(this._orphanedTimers) || this._orphanedTimers.length > 0;
   },
 
   _releaseBusyStateAfterProcessCleanup: function(group, marker, releaseRequested) {
@@ -2476,7 +2477,8 @@ MyApplet.prototype = {
     let timerId = this._scheduleTrackedTimer("process-cleanup-retry", 1000, () => {
       let processCleanupSucceeded = this._retryOrphanedProcesses();
       let cancellableCleanupSucceeded = this._retryOrphanedCancellables();
-      if (!processCleanupSucceeded || !cancellableCleanupSucceeded || this._processCleanupStillPending()) {
+      let timerCleanupSucceeded = this._retryOrphanedTimers();
+      if (!processCleanupSucceeded || !cancellableCleanupSucceeded || !timerCleanupSucceeded || this._processCleanupStillPending()) {
         return true;
       }
       this._releaseBusyStateAfterProcessCleanup("voice-model", "voiceModelCleanupFailed");
@@ -10407,6 +10409,11 @@ MyApplet.prototype = {
       }
       if (timeoutCleanupSucceeded === undefined) {
         timeoutCleanupSucceeded = this._clearTrackedTimer(timeoutKey, undefined, timeoutSourceAlreadyRemoved) !== false;
+      }
+      if (!timeoutCleanupSucceeded) {
+        let timerRetrySucceeded = this._retryOrphanedTimers();
+        timeoutCleanupSucceeded = timerRetrySucceeded &&
+          Array.isArray(this._orphanedTimers) && this._orphanedTimers.length === 0;
       }
       let cancellableCleanupSucceeded = this._unregisterCancellable(cancellableToken);
       let cancellableOrphanCleanupSucceeded = true;

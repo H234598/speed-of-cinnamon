@@ -2164,6 +2164,7 @@ class AppletStaticTest(unittest.TestCase):
         pending_block = source[pending_start:pending_end]
         self.assertIn("this._orphanedProcesses", pending_block)
         self.assertIn("this._orphanedCancellables", pending_block)
+        self.assertIn("this._orphanedTimers", pending_block)
 
         release_start = source.index("_releaseBusyStateAfterProcessCleanup: function(group, marker, releaseRequested)")
         release_end = source.index("\n  _scheduleProcessCleanupRetry:", release_start)
@@ -2179,6 +2180,8 @@ class AppletStaticTest(unittest.TestCase):
         retry_block = source[retry_start:retry_end]
         self.assertIn("this._retryOrphanedProcesses()", retry_block)
         self.assertIn("this._retryOrphanedCancellables()", retry_block)
+        self.assertIn("let timerCleanupSucceeded = this._retryOrphanedTimers();", retry_block)
+        self.assertIn("!timerCleanupSucceeded", retry_block)
         self.assertIn("this._processCleanupStillPending()", retry_block)
         self.assertIn('this._releaseBusyStateAfterProcessCleanup("voice-model", "voiceModelCleanupFailed");', retry_block)
         self.assertIn('this._releaseBusyStateAfterProcessCleanup("benchmark", "benchmarkCleanupFailed");', retry_block)
@@ -4298,6 +4301,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (done) {\n        return cleanupResources();", block)
         self.assertIn("if (!callbackDelivered)", block)
         self.assertIn("if (timeoutCleanupSucceeded === undefined) {\n        timeoutCleanupSucceeded = this._clearTrackedTimer(timeoutKey, undefined, timeoutSourceAlreadyRemoved) !== false;", block)
+        self.assertIn("let timerRetrySucceeded = this._retryOrphanedTimers();", block)
+        self.assertIn("timerRetrySucceeded &&", block)
         self.assertIn("let timeoutCleanupSucceeded = this._clearTrackedTimer(timeoutKey, undefined, timeoutSourceAlreadyRemoved) !== false;", block)
         self.assertIn("let finish = (result, terminate, suppressCallback, timeoutAlreadyRemoved) =>", block)
         self.assertIn("timeoutAlreadyRemoved === true", block)
