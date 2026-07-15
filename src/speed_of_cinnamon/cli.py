@@ -4466,6 +4466,15 @@ def _temporary_benchmark_transcript_path() -> tuple[Path, os.stat_result]:
     fd, path_text = tempfile.mkstemp(prefix=".benchmark-", suffix=".tmp.txt", dir=state_dir())
     try:
         file_stat = os.fstat(fd)
+    except BaseException as exc:
+        try:
+            _unlink_regular_leaf_with_parent_fsync(
+                Path(path_text),
+                field_name="benchmark transcript file",
+            )
+        except BaseException as cleanup_exc:
+            raise RuntimeError(f"{exc}; failed to clean benchmark transcript file: {cleanup_exc}") from cleanup_exc
+        raise
     finally:
         try:
             os.close(fd)

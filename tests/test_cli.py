@@ -80,6 +80,22 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(result, (Path("/tmp/.benchmark-test.tmp.txt"), file_stat))
 
+    def test_temporary_benchmark_path_removes_file_when_fstat_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            real_mkstemp = tempfile.mkstemp
+
+            def create_temp_file(*, prefix: str, suffix: str, dir: str) -> tuple[int, str]:
+                return real_mkstemp(prefix=prefix, suffix=suffix, dir=tmp)
+
+            with (
+                mock.patch.object(cli.tempfile, "mkstemp", side_effect=create_temp_file),
+                mock.patch.object(cli.os, "fstat", side_effect=OSError("fstat failed")),
+            ):
+                with self.assertRaisesRegex(OSError, "fstat failed"):
+                    cli._temporary_benchmark_transcript_path()
+
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
     def test_write_json_atomic_sets_private_permissions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "payload.json"
