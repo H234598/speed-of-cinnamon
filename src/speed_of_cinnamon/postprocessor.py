@@ -272,7 +272,7 @@ def _read_http_error_text(error: urllib.error.HTTPError) -> str:
     except Exception:
         return ""
     finally:
-        with suppress(Exception):
+        with suppress(BaseException):
             error.close()
 
 

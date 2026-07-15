@@ -1552,6 +1552,24 @@ class PostProcessorTest(unittest.TestCase):
         self.assertIn("failed (502)", result["message"])
         body.close.assert_called_once()
 
+    def test_list_ollama_models_survives_http_error_close_interrupt(self) -> None:
+        body = mock.Mock()
+        body.read.side_effect = OSError("response read failed")
+        body.close.side_effect = KeyboardInterrupt
+        error = urllib.error.HTTPError(
+            "http://127.0.0.1:11434/api/tags",
+            502,
+            "Bad Gateway",
+            {},
+            body,
+        )
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=error):
+            result = list_ollama_models("http://127.0.0.1:11434")
+
+        self.assertFalse(result["available"])
+        self.assertIn("failed (502)", result["message"])
+        body.close.assert_called_once()
+
     def test_list_openai_compatible_models_contains_http_opener_value_error(self) -> None:
         with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=ValueError("invalid URL")):
             result = list_openai_compatible_models("https://api.openai.com/v1")
