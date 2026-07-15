@@ -1027,11 +1027,15 @@ def _copy_log_content(
             os.close(fd)
         except OSError as cleanup_error:
             _note_cleanup_failure(exc, cleanup_error)
+        except BaseException as cleanup_error:
+            _note_cleanup_failure(exc, cleanup_error)
         raise
     except BaseException as exc:
         try:
             os.close(fd)
         except OSError as cleanup_error:
+            _note_cleanup_failure(exc, cleanup_error)
+        except BaseException as cleanup_error:
             _note_cleanup_failure(exc, cleanup_error)
         raise
     with source_file:

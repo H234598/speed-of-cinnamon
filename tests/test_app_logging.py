@@ -449,6 +449,17 @@ class AppLoggingTest(unittest.TestCase):
 
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_copy_log_content_preserves_fdopen_error_when_fd_close_is_interrupted(self) -> None:
+        with (
+            mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
+            mock.patch.object(app_logging.os, "fdopen", side_effect=ValueError("bad source fd")),
+            mock.patch.object(app_logging.os, "close", side_effect=KeyboardInterrupt),
+        ):
+            with self.assertRaisesRegex(ValueError, "bad source fd") as caught:
+                app_logging._copy_log_content(Path("/probe.log"), mock.Mock())
+
+        self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
+
     def test_copy_log_content_closes_source_when_fdopen_is_interrupted(self) -> None:
         with (
             mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
