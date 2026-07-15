@@ -11,7 +11,6 @@ import stat as stat_module
 import string
 import time
 import zlib
-from contextlib import suppress
 from itertools import islice
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -295,11 +294,15 @@ class SizeCappedJsonFileHandler(logging.Handler):
                     os.close(fd)
                 except OSError as cleanup_error:
                     _note_cleanup_failure(exc, cleanup_error)
+                except BaseException as cleanup_error:
+                    _note_cleanup_failure(exc, cleanup_error)
                 raise
             except BaseException as exc:
                 try:
                     os.close(fd)
                 except OSError as cleanup_error:
+                    _note_cleanup_failure(exc, cleanup_error)
+                except BaseException as cleanup_error:
                     _note_cleanup_failure(exc, cleanup_error)
                 raise
 

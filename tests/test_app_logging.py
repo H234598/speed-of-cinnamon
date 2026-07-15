@@ -359,6 +359,25 @@ class AppLoggingTest(unittest.TestCase):
             self.assertEqual(active.read_text(encoding="utf-8"), "replacement\n")
             handler.close()
 
+    def test_file_handler_preserves_validation_error_when_fd_close_is_interrupted(self) -> None:
+        handler = app_logging.SizeCappedJsonFileHandler(Path("/probe.log"), Path("/probe"))
+
+        def close(fd: int) -> None:
+            if fd == 123:
+                raise KeyboardInterrupt
+
+        with (
+            mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(app_logging, "assert_fd_is_private_directory"),
+            mock.patch.object(app_logging, "open_file_without_following_symlinks", return_value=123),
+            mock.patch.object(app_logging.os, "fstat", side_effect=RuntimeError("not regular")),
+            mock.patch.object(app_logging.os, "close", side_effect=close),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "not regular") as caught:
+                handler._open()
+
+        self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
+
     def test_copy_log_content_closes_source_fd_when_fdopen_fails(self) -> None:
         with (
             mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
