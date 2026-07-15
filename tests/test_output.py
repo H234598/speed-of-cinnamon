@@ -2136,6 +2136,42 @@ class OutputTest(unittest.TestCase):
 
                 self.assertEqual(lock_path.read_text(encoding="utf-8"), f"{os.getpid()}\nforeign-identity\n")
 
+    def test_insert_text_preserves_paste_error_when_lock_release_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "speed-of-cinnamon"
+            state_root.mkdir()
+            lock_path = state_root / output_module.CLIPBOARD_DEDUP_LOCK_FILE
+            lock_path.write_text(f"{os.getpid()}\n", encoding="utf-8")
+            parent_fd = os.open(state_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_close = os.close
+
+            def close(fd: int) -> None:
+                if fd == parent_fd:
+                    raise KeyboardInterrupt("lock release interrupted")
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+                    mock.patch(
+                        "speed_of_cinnamon.output._begin_clipboard_insertion",
+                        return_value=(lock_path, ("", 0.0), False),
+                    ),
+                    mock.patch(
+                        "speed_of_cinnamon.output._reserve_clipboard_insertion_memory",
+                        return_value=("", None, 0.0, None),
+                    ),
+                    mock.patch("speed_of_cinnamon.output.set_clipboard", side_effect=OutputError("paste failed")),
+                    mock.patch("speed_of_cinnamon.output._restore_clipboard_insertion_snapshot"),
+                    mock.patch("speed_of_cinnamon.output._restore_clipboard_dedup_state"),
+                    mock.patch.object(output_module, "ensure_directory_without_following_symlinks", return_value=parent_fd),
+                    mock.patch.object(output_module.os, "close", side_effect=close),
+                ):
+                    with self.assertRaisesRegex(OutputError, "paste failed"):
+                        insert_text("secure text", "clipboard")
+            finally:
+                real_close(parent_fd)
+
     def test_clear_clipboard_dedup_state_uses_dir_fd_unlink_and_fsync(self) -> None:
         fsync_modes: list[int] = []
         real_fsync = os.fsync

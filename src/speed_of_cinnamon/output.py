@@ -718,12 +718,12 @@ def _release_clipboard_dedup_lock(path: Path | None) -> None:
             if owner_identity is not None and owner_identity != current_identity:
                 return
             _unlink_clipboard_lock_at(parent_fd, path, expected_stat=current)
-        except OSError:
+        except BaseException:
             pass
     finally:
         try:
             os.close(parent_fd)
-        except OSError:
+        except BaseException:
             pass
 
 
@@ -830,12 +830,12 @@ def _unlink_clipboard_state_file(path: Path) -> bool:
         os.unlink(path.name, dir_fd=parent_fd)
         os.fsync(parent_fd)
         return True
-    except OSError:
+    except BaseException:
         return False
     finally:
         try:
             os.close(parent_fd)
-        except OSError:
+        except BaseException:
             pass
 
 
