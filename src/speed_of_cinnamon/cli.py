@@ -1816,6 +1816,13 @@ def _rollback_encrypted_artifact_after_plaintext_cleanup_failure(encrypted_path:
 def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tuple[Path, str]:
     mode = _artifact_encryption_mode(args)
     if mode == ARTIFACT_ENCRYPTION_OFF:
+        if not is_encrypted_path(path):
+            encrypted_sibling = encrypted_path_for(path)
+            if encrypted_sibling.exists() or encrypted_sibling.is_symlink():
+                if not remove_file(str(encrypted_sibling), suffix=".socenc"):
+                    raise RuntimeError(
+                        f"failed to remove encrypted recording sibling after plaintext storage: {encrypted_sibling}"
+                    )
         return path, ARTIFACT_ENCRYPTION_OFF
     try:
         payload = read_decrypted_bytes_from_file(
@@ -2599,12 +2606,39 @@ def _recording_level_payload(state: RecordingState, *, state_path: Path | None =
         return {"ok": False, "percent": 0, "peak": 0.0, "rms": 0.0, "samples": 0, "detail": _redact_error_for_user(str(exc))}
 
 
+def _recording_sibling_path(path: Path | None) -> Path | None:
+    if not isinstance(path, Path):
+        return None
+    if _is_encrypted_recording_artifact(path):
+        return _plaintext_recording_sibling_for_encrypted_path(path)
+    if path.suffix.lower() not in {".wav", ".flac"}:
+        return None
+    try:
+        return encrypted_path_for(path)
+    except ArtifactCryptoError:
+        return None
+
+
 def _remove_recording_artifact(path_value: str | None) -> bool:
     if not path_value:
         return False
-    if Path(str(path_value)).name.lower().endswith(ENCRYPTED_RECORDING_ARTIFACT_SUFFIXES):
-        return remove_file(path_value, suffix=".socenc")
-    return remove_file(path_value, suffix=".wav") or remove_file(path_value, suffix=".flac")
+    path = Path(str(path_value))
+    if path.name.lower().endswith(ENCRYPTED_RECORDING_ARTIFACT_SUFFIXES):
+        primary_suffix = ".socenc"
+    elif path.suffix.lower() in {".wav", ".flac"}:
+        primary_suffix = path.suffix.lower()
+    else:
+        return False
+    primary_exists = path.exists() or path.is_symlink()
+    if primary_exists and not remove_file(path_value, suffix=primary_suffix):
+        return False
+    sibling_path = _recording_sibling_path(path)
+    sibling_exists = sibling_path is not None and (sibling_path.exists() or sibling_path.is_symlink())
+    if sibling_exists:
+        sibling_suffix = ".socenc" if is_encrypted_path(sibling_path) else sibling_path.suffix.lower()
+        if not remove_file(str(sibling_path), suffix=sibling_suffix):
+            return False
+    return primary_exists or sibling_exists
 
 
 def _recording_artifact_missing_but_safe(
@@ -2627,7 +2661,16 @@ def _recording_artifact_missing_but_safe(
             return False
         path.lstat()
     except FileNotFoundError:
-        return True
+        sibling_path = _recording_sibling_path(path)
+        if sibling_path is None:
+            return True
+        try:
+            sibling_path.lstat()
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        return False
     except (RecorderError, RuntimeError, ValueError, OSError, TypeError):
         return False
     return False

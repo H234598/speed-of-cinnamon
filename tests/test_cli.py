@@ -1837,6 +1837,26 @@ class CliTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "envelope is missing"):
                     cli._encrypt_kept_recording_artifact(recording, args)
 
+    def test_plaintext_recording_storage_removes_encrypted_sibling(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings_root = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            recordings_root.parent.chmod(0o700)
+            recording = recordings_root / "recording.flac"
+            encrypted_recording = Path(f"{recording}.socenc")
+            recording.write_bytes(b"plaintext audio")
+            encrypted_recording.write_bytes(b"old encrypted audio")
+            args = argparse.Namespace(artifact_encryption="off")
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}, clear=False):
+                output_path, effective_mode = cli._encrypt_kept_recording_artifact(recording, args)
+            recording_exists = recording.exists()
+            encrypted_exists = encrypted_recording.exists()
+
+        self.assertEqual(output_path, recording)
+        self.assertEqual(effective_mode, cli.ARTIFACT_ENCRYPTION_OFF)
+        self.assertTrue(recording_exists)
+        self.assertFalse(encrypted_exists)
+
     def test_recording_level_rejects_encrypted_recording_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
@@ -9765,6 +9785,34 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["status"], "idle")
         self.assertTrue(payload["audio_deleted"])
         self.assertFalse(audio.exists())
+
+    def test_cancel_discards_encrypted_sibling_of_plaintext_recording(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            recordings_root.parent.chmod(0o700)
+            recording = recordings_root / "recorded.flac"
+            encrypted_recording = Path(f"{recording}.socenc")
+            recording.write_bytes(b"plaintext audio")
+            encrypted_recording.write_bytes(b"old encrypted audio")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="error", audio_path=str(recording)))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+            recording_exists = recording.exists()
+            encrypted_exists = encrypted_recording.exists()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "idle")
+        self.assertTrue(payload["audio_deleted"])
+        self.assertFalse(recording_exists)
+        self.assertFalse(encrypted_exists)
+        self.assertEqual(final_state.status, "idle")
 
     def test_cancel_discards_plaintext_sibling_of_encrypted_transcript(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
