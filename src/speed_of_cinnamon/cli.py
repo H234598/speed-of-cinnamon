@@ -2131,7 +2131,7 @@ def _prepare_private_file(path: Path, *, field_name: str, exclusive: bool = True
     except (OSError, ValueError) as exc:
         try:
             os.close(fd)
-        except OSError:
+        except BaseException:
             pass
         raise _PrivateFilePrepareError(
             f"failed to prepare {field_name}: {path}",
@@ -2141,7 +2141,7 @@ def _prepare_private_file(path: Path, *, field_name: str, exclusive: bool = True
     except BaseException:
         try:
             os.close(fd)
-        except OSError:
+        except BaseException:
             pass
         raise
 
