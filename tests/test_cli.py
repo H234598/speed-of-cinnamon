@@ -10588,6 +10588,21 @@ class CliTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "failed to decode file as UTF-8"):
                 cli.read_file_tail(path, 10)
 
+    def test_read_file_tail_preserves_read_error_when_handle_close_is_interrupted(self) -> None:
+        handle = mock.Mock()
+        handle.tell.return_value = 4
+        handle.read.return_value = b"bad\xff"
+        handle.close.side_effect = KeyboardInterrupt
+        with (
+            mock.patch.object(cli.os, "open", return_value=11),
+            mock.patch.object(cli.os, "fdopen", return_value=handle),
+            mock.patch.object(cli, "assert_fd_is_regular_private_file"),
+        ):
+            with self.assertRaisesRegex(ValueError, "failed to decode file as UTF-8"):
+                cli.read_file_tail(Path("/tmp/broken.txt"), 10)
+
+        handle.close.assert_called_once()
+
     def test_read_file_tail_opens_without_following_symlinks(self) -> None:
         captured: dict[str, object] = {}
         handle = mock.Mock()
@@ -10654,6 +10669,68 @@ class CliTest(unittest.TestCase):
                 mock.patch.object(cli.os, "fdopen", side_effect=KeyboardInterrupt),
             ):
                 with self.assertRaises(KeyboardInterrupt):
+                    cli.read_file_tail(path, 10)
+
+            self.assertEqual(len(target_fds), 1)
+            with self.assertRaises(OSError):
+                os.fstat(target_fds[0])
+
+    def test_read_file_tail_preserves_validation_error_when_fd_close_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "log.txt"
+            path.write_text("hello", encoding="utf-8")
+            real_open = os.open
+            real_close = os.close
+            target_fds: list[int] = []
+
+            def open_wrapper(*args: object, **kwargs: object) -> int:
+                fd = real_open(*args, **kwargs)
+                if args and args[0] == path:
+                    target_fds.append(fd)
+                return fd
+
+            def close_wrapper(fd: int) -> None:
+                real_close(fd)
+                if fd in target_fds:
+                    raise KeyboardInterrupt
+
+            with (
+                mock.patch.object(cli.os, "open", side_effect=open_wrapper),
+                mock.patch.object(cli, "assert_fd_is_regular_private_file", side_effect=OSError("not regular")),
+                mock.patch.object(cli.os, "close", side_effect=close_wrapper),
+            ):
+                with self.assertRaisesRegex(OSError, "not regular"):
+                    cli.read_file_tail(path, 10)
+
+            self.assertEqual(len(target_fds), 1)
+            with self.assertRaises(OSError):
+                os.fstat(target_fds[0])
+
+    def test_read_file_tail_preserves_fdopen_error_when_fd_close_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "log.txt"
+            path.write_text("hello", encoding="utf-8")
+            real_open = os.open
+            real_close = os.close
+            target_fds: list[int] = []
+
+            def open_wrapper(*args: object, **kwargs: object) -> int:
+                fd = real_open(*args, **kwargs)
+                if args and args[0] == path:
+                    target_fds.append(fd)
+                return fd
+
+            def close_wrapper(fd: int) -> None:
+                real_close(fd)
+                if fd in target_fds:
+                    raise KeyboardInterrupt
+
+            with (
+                mock.patch.object(cli.os, "open", side_effect=open_wrapper),
+                mock.patch.object(cli.os, "fdopen", side_effect=ValueError("invalid descriptor mode")),
+                mock.patch.object(cli.os, "close", side_effect=close_wrapper),
+            ):
+                with self.assertRaisesRegex(ValueError, "invalid descriptor mode"):
                     cli.read_file_tail(path, 10)
 
             self.assertEqual(len(target_fds), 1)

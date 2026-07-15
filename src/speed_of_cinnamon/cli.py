@@ -864,21 +864,21 @@ def read_file_tail(path: Path, max_chars: int) -> str:
         if fd is not None:
             try:
                 os.close(fd)
-            except OSError:
+            except BaseException:
                 pass
         raise OSError(str(exc)) from exc
     except RuntimeError as exc:
         if fd is not None:
             try:
                 os.close(fd)
-            except OSError:
+            except BaseException:
                 pass
         raise OSError(str(exc)) from exc
     except BaseException:
         if fd is not None:
             try:
                 os.close(fd)
-            except OSError:
+            except BaseException:
                 pass
         raise
     try:
@@ -888,14 +888,14 @@ def read_file_tail(path: Path, max_chars: int) -> str:
         if fd is not None:
             try:
                 os.close(fd)
-            except OSError:
+            except BaseException:
                 pass
         raise
     except BaseException:
         if fd is not None:
             try:
                 os.close(fd)
-            except OSError:
+            except BaseException:
                 pass
         raise
     try:
@@ -912,7 +912,7 @@ def read_file_tail(path: Path, max_chars: int) -> str:
     finally:
         try:
             handle.close()
-        except OSError:
+        except BaseException:
             pass
     if _contains_escaped_null(text):
         raise ValueError(f"file tail contains invalid null byte: {path}")
