@@ -5027,6 +5027,7 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
     artifact_encryption = _artifact_encryption_mode(args)
     transcriber_text_path = _transcript_work_path(text_path, artifact_encryption)
     transient_text_stat = _prepare_transient_transcript_path(transcriber_text_path, text_path)
+    transcription_error: Exception | None = None
     try:
         text = transcribe(
             audio_path=audio_path,
@@ -5039,12 +5040,20 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
             vocabulary=args.vocabulary,
             **_openai_compatible_transcribe_kwargs(args, normalized_transcriber),
         )
+    except Exception as exc:
+        transcription_error = exc
+        raise
     finally:
-        _remove_transient_transcript_path(
-            transcriber_text_path,
-            text_path,
-            expected_fd=transient_text_stat,
-        )
+        try:
+            _remove_transient_transcript_path(
+                transcriber_text_path,
+                text_path,
+                expected_fd=transient_text_stat,
+            )
+        except RuntimeError as cleanup_exc:
+            if transcription_error is not None:
+                raise RuntimeError(f"{transcription_error}; {cleanup_exc}") from cleanup_exc
+            raise
     if _is_empty_transcript_text(text):
         text = ""
         security_post_processing = _empty_security_post_processing()

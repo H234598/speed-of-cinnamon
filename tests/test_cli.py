@@ -1586,6 +1586,46 @@ class CliTest(unittest.TestCase):
         self.assertEqual(len(captured_path), 1)
         self.assertTrue(replacement_exists)
 
+    @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
+    def test_transcribe_file_preserves_transcriber_error_when_cleanup_also_fails(
+        self,
+        mocked_validate: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            mocked_validate.return_value = audio
+            stdout = io.StringIO()
+            env = {
+                "XDG_STATE_HOME": tmp,
+                artifact_crypto.PASSPHRASE_ENV: artifact_crypto._b64encode(bytes(range(32))),
+            }
+            with (
+                mock.patch.dict(os.environ, env, clear=False),
+                mock.patch("speed_of_cinnamon.cli.transcribe", side_effect=RuntimeError("transcriber failed")),
+                mock.patch(
+                    "speed_of_cinnamon.cli._unlink_regular_leaf_with_parent_fsync",
+                    side_effect=RuntimeError("cleanup failed"),
+                ),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf test",
+                    "--artifact-encryption",
+                    "passphrase",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertNotEqual(code, 0)
+        self.assertIn("transcriber failed", payload["error"])
+        self.assertIn("failed to delete transient transcript file", payload["error"])
+
     @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="encrypted ok")
     @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
     def test_transcribe_file_can_confirm_plaintext_output_with_encrypted_storage(
