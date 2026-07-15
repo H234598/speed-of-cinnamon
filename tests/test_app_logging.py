@@ -485,6 +485,20 @@ class AppLoggingTest(unittest.TestCase):
 
             self.assertFalse(path.exists())
 
+    def test_unlink_log_file_preserves_delete_error_when_parent_close_is_interrupted(self) -> None:
+        with (
+            mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(app_logging.os, "stat", return_value=os.stat(__file__)),
+            mock.patch.object(app_logging.os, "unlink", side_effect=OSError("delete failed")),
+            mock.patch.object(app_logging.os, "close", side_effect=KeyboardInterrupt),
+        ):
+            with self.assertRaisesRegex(OSError, "delete failed") as caught:
+                app_logging._unlink_log_file_with_parent_fsync(
+                    Path("/probe/source.log"), os.stat(__file__), field_name="log file"
+                )
+
+        self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
+
     def test_gzip_file_closes_source_when_source_inspection_fails(self) -> None:
         with (
             mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".target.tmp")),

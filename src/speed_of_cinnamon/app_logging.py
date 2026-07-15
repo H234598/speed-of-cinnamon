@@ -1072,6 +1072,11 @@ def _unlink_log_file_with_parent_fsync(path: Path, expected_stat: os.stat_result
                 _note_cleanup_failure(primary_error, cleanup_error)
             else:
                 pass
+        except BaseException as cleanup_error:
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise
 
 
 def _gzip_file(source: Path, target: Path) -> None:
