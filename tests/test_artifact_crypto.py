@@ -1079,6 +1079,24 @@ class ArtifactCryptoTest(unittest.TestCase):
 
         mocked_close.assert_called_once_with(123)
 
+    def test_private_passphrase_fd_cleanup_interrupt_does_not_mask_read_error(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=Path("/other/default.key")),
+            mock.patch("speed_of_cinnamon.artifact_crypto.assert_no_symlink_ancestors"),
+            mock.patch("speed_of_cinnamon.artifact_crypto._stat_private_passphrase_parent"),
+            mock.patch("speed_of_cinnamon.artifact_crypto.open_file_without_following_symlinks", return_value=123),
+            mock.patch("speed_of_cinnamon.artifact_crypto.assert_fd_is_regular_private_file"),
+            mock.patch("speed_of_cinnamon.artifact_crypto._assert_no_posix_acl"),
+            mock.patch(
+                "speed_of_cinnamon.artifact_crypto.os.fstat",
+                return_value=SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=os.getuid()),
+            ),
+            mock.patch("speed_of_cinnamon.artifact_crypto.os.fdopen", side_effect=ValueError("bad fd")),
+            mock.patch("speed_of_cinnamon.artifact_crypto.os.close", side_effect=KeyboardInterrupt),
+        ):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be read"):
+                artifact_crypto._read_private_passphrase_file(Path("/does-not-matter/passphrase.key"))
+
     def test_write_encrypted_bytes_error_does_not_leak_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "secret-artifact.txt"
