@@ -1596,7 +1596,7 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
     finally:
         try:
             log_file.close()
-        except (OSError, ValueError):
+        except BaseException:
             pass
 
 

@@ -1276,6 +1276,25 @@ class RecorderTest(unittest.TestCase):
 
         log_file.close.assert_called_once()
 
+    def test_start_recorder_does_not_mask_started_process_when_log_close_is_interrupted(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        log_file = mock.Mock()
+        log_file.fileno.return_value = 11
+        log_file.close.side_effect = KeyboardInterrupt
+        process = object()
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "session.log"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder._open_recorder_log_file", return_value=(log_file, False)),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process),
+                mock.patch("speed_of_cinnamon.recorder.os.fchmod"),
+            ):
+                self.assertIs(start_recorder(command, log_path), process)
+
+        log_file.close.assert_called_once()
+
     def test_read_recording_level_closes_descriptor_when_fdopen_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio_path = Path(tmp) / "sample.wav"
