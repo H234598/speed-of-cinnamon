@@ -136,6 +136,8 @@ class StateStore:
                 os.close(parent_fd)
             except OSError as cleanup_error:
                 _note_lock_cleanup_failure(exc, cleanup_error)
+            except BaseException as cleanup_error:
+                _note_lock_cleanup_failure(exc, cleanup_error)
             raise
         except Exception as exc:
             error = RuntimeError("failed to open state lock file")
@@ -143,12 +145,16 @@ class StateStore:
                 os.close(parent_fd)
             except OSError as cleanup_error:
                 _note_lock_cleanup_failure(error, cleanup_error)
+            except BaseException as cleanup_error:
+                _note_lock_cleanup_failure(error, cleanup_error)
             raise error from exc
-        except BaseException:
+        except BaseException as exc:
             try:
                 os.close(parent_fd)
-            except OSError:
-                pass
+            except OSError as cleanup_error:
+                _note_lock_cleanup_failure(exc, cleanup_error)
+            except BaseException as cleanup_error:
+                _note_lock_cleanup_failure(exc, cleanup_error)
             raise
         primary_error: BaseException | None = None
         try:
@@ -160,18 +166,18 @@ class StateStore:
             primary_error = exc
             raise
         finally:
-            cleanup_errors: list[OSError] = []
+            cleanup_errors: list[BaseException] = []
             try:
                 fcntl.flock(fd, fcntl.LOCK_UN)
-            except OSError as cleanup_error:
+            except BaseException as cleanup_error:
                 cleanup_errors.append(cleanup_error)
             try:
                 os.close(fd)
-            except OSError as cleanup_error:
+            except BaseException as cleanup_error:
                 cleanup_errors.append(cleanup_error)
             try:
                 os.close(parent_fd)
-            except OSError as cleanup_error:
+            except BaseException as cleanup_error:
                 cleanup_errors.append(cleanup_error)
             if cleanup_errors:
                 if primary_error is not None:

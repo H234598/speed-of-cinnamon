@@ -197,6 +197,29 @@ class StateStoreTest(unittest.TestCase):
 
             self.assertEqual(close_calls, [456, 123])
 
+    def test_state_lock_continues_cleanup_when_unlock_is_interrupted(self) -> None:
+        close_calls: list[int] = []
+
+        def interrupt_unlock(_fd: int, operation: int) -> None:
+            if operation == fcntl.LOCK_UN:
+                raise KeyboardInterrupt
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = StateStore(Path(tmp) / "state.json")
+            with (
+                mock.patch("speed_of_cinnamon.state.ensure_directory_without_following_symlinks", return_value=123),
+                mock.patch("speed_of_cinnamon.state.assert_fd_is_private_directory"),
+                mock.patch("speed_of_cinnamon.state.assert_fd_is_regular_private_file"),
+                mock.patch("speed_of_cinnamon.state.os.open", return_value=456),
+                mock.patch("speed_of_cinnamon.state.fcntl.flock", side_effect=interrupt_unlock),
+                mock.patch("speed_of_cinnamon.state.os.close", side_effect=close_calls.append),
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    with store._locked():
+                        pass
+
+        self.assertEqual(close_calls, [456, 123])
+
     def test_write_and_update_are_persistent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")
