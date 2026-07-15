@@ -354,6 +354,11 @@ def _scrub_temp_passphrase_file(parent_fd: int, temp_name: str) -> None:
                 _note_cleanup_failure(primary_error, cleanup_error)
             else:
                 raise
+        except BaseException as cleanup_error:
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise
 
 
 def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> str:
@@ -373,7 +378,7 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
     existing_stat: os.stat_result | None = None
     transaction_active = False
     primary_error: BaseException | None = None
-    cleanup_error: Exception | None = None
+    cleanup_error: BaseException | None = None
 
     def _same_leaf_identity(first: os.stat_result, second: os.stat_result) -> bool:
         return (
@@ -425,6 +430,8 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
                 activation_visible = True
             elif existing_stat is None and current_stat is None:
                 pass
+            elif existing_stat is not None and current_stat is None and backup_created:
+                target_removed = True
             elif target_removed and current_stat is None:
                 pass
             elif existing_stat is not None and current_stat is not None and _same_pre_activation_identity(current_stat, existing_stat):
@@ -434,6 +441,11 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
             if activation_visible:
                 os.unlink(path.name, dir_fd=parent_fd)
                 _fsync_fd(parent_fd)
+        elif backup_created:
+            try:
+                os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                target_removed = True
         if backup_created:
             if not activation_visible:
                 if target_removed:
@@ -606,21 +618,21 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
         if temp_fd >= 0:
             try:
                 os.close(temp_fd)
-            except Exception as exc:
+            except BaseException as exc:
                 cleanup_error = exc
         if temp_name and parent_fd >= 0:
             try:
                 os.unlink(temp_name, dir_fd=parent_fd)
                 _fsync_fd(parent_fd)
-            except Exception as exc:
-                with suppress(Exception):
+            except BaseException as exc:
+                with suppress(BaseException):
                     _scrub_temp_passphrase_file(parent_fd, temp_name)
                 if cleanup_error is None:
                     cleanup_error = exc
         if parent_fd >= 0:
             try:
                 os.close(parent_fd)
-            except Exception as exc:
+            except BaseException as exc:
                 if cleanup_error is None:
                     cleanup_error = exc
         if cleanup_error is not None:

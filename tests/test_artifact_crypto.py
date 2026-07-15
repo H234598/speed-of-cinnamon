@@ -382,6 +382,34 @@ class ArtifactCryptoTest(unittest.TestCase):
 
             self.assertEqual(path.read_text(encoding="utf-8"), "short\n")
 
+    def test_default_passphrase_rotation_restores_target_when_backup_unlink_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.key"
+            path.write_text("short\n", encoding="utf-8")
+            path.chmod(0o600)
+            real_unlink = artifact_crypto.os.unlink
+            interrupted = False
+
+            def unlink_then_interrupt(name: object, *args: object, **kwargs: object) -> None:
+                nonlocal interrupted
+                if name == path.name and not interrupted:
+                    interrupted = True
+                    real_unlink(name, *args, **kwargs)
+                    raise KeyboardInterrupt
+                real_unlink(name, *args, **kwargs)
+
+            with (
+                mock.patch.object(artifact_crypto, "default_passphrase_file", return_value=path),
+                mock.patch.object(artifact_crypto.os, "unlink", side_effect=unlink_then_interrupt),
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    artifact_crypto._generate_default_passphrase_file(path, replace=True)
+
+            self.assertTrue(interrupted)
+            self.assertEqual(path.read_text(encoding="utf-8"), "short\n")
+            self.assertFalse(list(Path(tmp).glob(".artifact.key.*.bak")))
+            self.assertFalse(list(Path(tmp).glob(".artifact.key.*.tmp")))
+
     def test_default_passphrase_rotation_replace_failure_removes_recovery_backup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "artifact.key"
