@@ -4421,6 +4421,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let setupFailed = false;", block)
         self.assertIn("let inputPending = hasInput;", block)
         self.assertIn("let timeoutSourceAlreadyRemoved = false;", block)
+        self.assertIn('callback("", "", { error: "Subprocess cleanup failed" });', block)
+        self.assertIn("!suppressCallback && !this.appletRemoved", block)
         self.assertIn("!ended.stdout || !ended.stderr || inputPending", block)
         self.assertIn("if (setupFailed || done) {\n      return null;", block)
         self.assertIn("let cleanupResources = (timeoutCleanupSucceeded) =>", block)

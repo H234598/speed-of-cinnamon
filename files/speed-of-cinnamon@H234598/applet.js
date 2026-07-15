@@ -10636,6 +10636,15 @@ MyApplet.prototype = {
         this._trackOrphanedProcess(process, generation, options.resourceGroup, processToken, terminationSucceeded);
         this._trackOrphanedCancellable(cancellableToken, cancellationSucceeded);
         this._scheduleProcessCleanupRetry();
+        if (!suppressCallback && !this.appletRemoved && this.spawnGeneration === generation &&
+            typeof callback === "function" && !callbackDelivered) {
+          callbackDelivered = true;
+          try {
+            callback("", "", { error: "Subprocess cleanup failed" });
+          } catch (error) {
+            this._recordLifecycleError("process-callback", error);
+          }
+        }
         return false;
       }
       done = true;
