@@ -2874,7 +2874,7 @@ def _safe_directory_entries(directory: Path, *, field_name: str) -> list[tuple[P
     finally:
         try:
             os.close(directory_fd)
-        except OSError:
+        except BaseException:
             pass
 
 

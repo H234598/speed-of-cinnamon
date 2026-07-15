@@ -534,6 +534,29 @@ class CliTest(unittest.TestCase):
 
             self.assertEqual([path.name for path, _file_stat in entries], ["entry.txt"])
 
+    def test_safe_directory_entries_preserves_scan_when_fd_close_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "entry.txt").write_text("entry\n", encoding="utf-8")
+            directory_fd = os.open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_close = os.close
+
+            def close_wrapper(fd: int) -> None:
+                if fd == directory_fd:
+                    raise KeyboardInterrupt
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.object(cli, "open_directory_without_following_symlinks", return_value=directory_fd),
+                    mock.patch.object(cli.os, "close", side_effect=close_wrapper),
+                ):
+                    entries = cli._safe_directory_entries(root, field_name="test directory")
+            finally:
+                real_close(directory_fd)
+
+            self.assertEqual([path.name for path, _file_stat in entries], ["entry.txt"])
+
     def test_finalization_lock_pid_closes_descriptor_when_fdopen_rejects(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ".state.finalizing"
