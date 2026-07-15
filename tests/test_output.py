@@ -1990,6 +1990,61 @@ class OutputTest(unittest.TestCase):
                 Path(tmp, "speed-of-cinnamon", output_module.CLIPBOARD_DEDUP_LOCK_FILE).exists()
             )
 
+    def test_clipboard_dedupe_lock_releases_when_parent_close_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "speed-of-cinnamon"
+            state_root.mkdir()
+            parent_fd = os.open(state_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_close = os.close
+
+            def close(fd: int) -> None:
+                if fd == parent_fd:
+                    raise KeyboardInterrupt
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+                    mock.patch.object(output_module, "ensure_directory_without_following_symlinks", return_value=parent_fd),
+                    mock.patch.object(output_module.os, "close", side_effect=close),
+                ):
+                    with self.assertRaises(KeyboardInterrupt):
+                        _acquire_clipboard_dedup_lock()
+            finally:
+                real_close(parent_fd)
+
+            self.assertFalse((state_root / output_module.CLIPBOARD_DEDUP_LOCK_FILE).exists())
+
+    def test_clipboard_dedupe_lock_releases_when_child_close_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "speed-of-cinnamon"
+            state_root.mkdir()
+            parent_fd = os.open(state_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_close = os.close
+            interrupted = False
+
+            def close(fd: int) -> None:
+                nonlocal interrupted
+                if fd == parent_fd:
+                    return
+                if not interrupted:
+                    interrupted = True
+                    raise KeyboardInterrupt
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+                    mock.patch.object(output_module, "ensure_directory_without_following_symlinks", return_value=parent_fd),
+                    mock.patch.object(output_module.os, "close", side_effect=close),
+                ):
+                    with self.assertRaises(KeyboardInterrupt):
+                        _acquire_clipboard_dedup_lock()
+            finally:
+                real_close(parent_fd)
+
+            self.assertFalse((state_root / output_module.CLIPBOARD_DEDUP_LOCK_FILE).exists())
+
     def test_clipboard_dedupe_lock_cleans_up_when_lock_write_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with (

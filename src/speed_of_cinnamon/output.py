@@ -382,6 +382,7 @@ def _clipboard_lock_identity_for_pid(pid: int) -> str | None:
         raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").strip()
     except OSError:
         return None
+    acquired_path: Path | None = None
     try:
         close = raw.rindex(")")
         rest = raw[close + 2 :].split()
@@ -659,9 +660,16 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                     pass
                 raise
             try:
+                acquired_path = path
                 os.close(fd)
             except OSError:
                 pass
+            except BaseException:
+                try:
+                    _release_clipboard_dedup_lock(path)
+                except BaseException:
+                    pass
+                raise
             return path
         return None
     finally:
@@ -669,6 +677,13 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
             os.close(parent_fd)
         except OSError:
             pass
+        except BaseException:
+            if acquired_path is not None:
+                try:
+                    _release_clipboard_dedup_lock(acquired_path)
+                except BaseException:
+                    pass
+            raise
 
 
 def _release_clipboard_dedup_lock(path: Path | None) -> None:
