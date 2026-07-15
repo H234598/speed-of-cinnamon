@@ -489,6 +489,28 @@ class CliTest(unittest.TestCase):
             finally:
                 real_close(directory_fd)
 
+    def test_ensure_transcript_export_dir_preserves_success_when_fd_close_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            export_path = root / "exports" / "all-transcripts.txt"
+            directory_fd = os.open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_close = os.close
+
+            def close_wrapper(fd: int) -> None:
+                if fd == directory_fd:
+                    raise KeyboardInterrupt
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.object(cli, "ensure_directory_without_following_symlinks", return_value=directory_fd),
+                    mock.patch.object(cli.os, "fchmod"),
+                    mock.patch.object(cli.os, "close", side_effect=close_wrapper),
+                ):
+                    cli._ensure_transcript_export_dir(export_path)
+            finally:
+                real_close(directory_fd)
+
     def test_safe_directory_entries_preserves_scan_when_fd_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

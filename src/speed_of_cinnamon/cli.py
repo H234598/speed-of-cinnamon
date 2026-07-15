@@ -1965,7 +1965,7 @@ def _ensure_transcript_export_dir(path: Path) -> None:
     finally:
         try:
             os.close(fd)
-        except OSError:
+        except BaseException:
             pass
 
 
