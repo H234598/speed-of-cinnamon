@@ -705,6 +705,7 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
             parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name="log directory")
             candidate_linked = False
             source_unlinked = False
+            primary_error: BaseException | None = None
             try:
                 rotation_stat = _assert_regular_unlinked_file(path, field_name="active log file")
                 try:
@@ -729,7 +730,8 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
                 os.unlink(path.name, dir_fd=parent_fd)
                 source_unlinked = True
                 os.fsync(parent_fd)
-            except BaseException as primary_error:
+            except BaseException as exc:
+                primary_error = exc
                 if candidate_linked and not source_unlinked:
                     try:
                         candidate_stat = os.stat(candidate.name, dir_fd=parent_fd, follow_symlinks=False)
@@ -750,6 +752,11 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
                     os.close(parent_fd)
                 except OSError:
                     pass
+                except BaseException as cleanup_error:
+                    if primary_error is not None:
+                        _note_cleanup_failure(primary_error, cleanup_error)
+                    else:
+                        raise
             return
     raise RuntimeError("failed to allocate log rotation slot")
 

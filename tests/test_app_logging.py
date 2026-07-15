@@ -856,6 +856,22 @@ class AppLoggingTest(unittest.TestCase):
 
             self.assertFalse(missing.exists())
 
+    def test_rotate_active_preserves_rotation_error_when_parent_close_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            active = Path(tmp) / f"speed-of-cinnamon-{date.today().isoformat()}.log"
+            active.write_text("content\n", encoding="utf-8")
+            active.chmod(0o600)
+            with (
+                mock.patch.object(app_logging, "_assert_regular_unlinked_file", return_value=os.stat(__file__)),
+                mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
+                mock.patch.object(app_logging.os, "link", side_effect=OSError("link failed")),
+                mock.patch.object(app_logging.os, "close", side_effect=KeyboardInterrupt),
+            ):
+                with self.assertRaisesRegex(OSError, "link failed") as caught:
+                    app_logging._rotate_active_if_needed(active, force=True)
+
+            self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
+
     def test_rotate_active_if_needed_bounds_occupied_rotation_slots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             active = Path(tmp) / f"speed-of-cinnamon-{date.today().isoformat()}.log"
