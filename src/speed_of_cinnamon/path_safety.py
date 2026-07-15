@@ -313,11 +313,15 @@ def read_text_without_following_symlinks(
             os.close(fd)
         except OSError as cleanup_error:
             _note_cleanup_failure(exc, cleanup_error)
+        except BaseException as cleanup_error:
+            _note_cleanup_failure(exc, cleanup_error)
         raise
     except BaseException as exc:
         try:
             os.close(fd)
         except OSError as cleanup_error:
+            _note_cleanup_failure(exc, cleanup_error)
+        except BaseException as cleanup_error:
             _note_cleanup_failure(exc, cleanup_error)
         raise
     with handle:
@@ -423,11 +427,15 @@ def _write_atomically_without_following_symlinks(
                 os.close(fd)
             except OSError as cleanup_error:
                 _note_cleanup_failure(exc, cleanup_error)
+            except BaseException as cleanup_error:
+                _note_cleanup_failure(exc, cleanup_error)
             raise
         except BaseException as exc:
             try:
                 os.close(fd)
             except OSError as cleanup_error:
+                _note_cleanup_failure(exc, cleanup_error)
+            except BaseException as cleanup_error:
                 _note_cleanup_failure(exc, cleanup_error)
             raise
         with handle:
@@ -577,6 +585,11 @@ def _write_atomically_without_following_symlinks(
         try:
             os.close(parent_fd)
         except OSError as cleanup_error:
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise
+        except BaseException as cleanup_error:
             if primary_error is not None:
                 _note_cleanup_failure(primary_error, cleanup_error)
             else:

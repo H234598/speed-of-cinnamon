@@ -531,6 +531,18 @@ class PathSafetyTest(unittest.TestCase):
 
         self.assertIn("secure path cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_read_text_preserves_fdopen_error_when_fd_close_is_interrupted(self) -> None:
+        with (
+            mock.patch.object(path_safety, "open_file_without_following_symlinks", return_value=123),
+            mock.patch.object(path_safety, "assert_fd_is_regular_private_file"),
+            mock.patch.object(path_safety.os, "fdopen", side_effect=ValueError("bad fd")),
+            mock.patch.object(path_safety.os, "close", side_effect=KeyboardInterrupt),
+        ):
+            with self.assertRaisesRegex(ValueError, "bad fd") as caught:
+                path_safety.read_text_without_following_symlinks(Path("/does-not-matter.txt"))
+
+        self.assertIn("secure path cleanup failed", "\n".join(caught.exception.__notes__))
+
     def test_atomic_write_preserves_fdopen_error_when_fd_close_fails(self) -> None:
         with (
             mock.patch.object(path_safety, "ensure_directory_without_following_symlinks", return_value=456),
@@ -540,6 +552,23 @@ class PathSafetyTest(unittest.TestCase):
             mock.patch.object(path_safety.os, "unlink"),
             mock.patch.object(path_safety.os, "fsync"),
             mock.patch.object(path_safety.os, "close", side_effect=OSError("close failed")),
+        ):
+            with self.assertRaisesRegex(ValueError, "bad fd") as caught:
+                path_safety.write_text_atomically_without_following_symlinks(
+                    Path("/does-not-matter.txt"), "{}"
+                )
+
+        self.assertIn("secure path cleanup failed", "\n".join(caught.exception.__notes__))
+
+    def test_atomic_write_preserves_fdopen_error_when_fd_close_is_interrupted(self) -> None:
+        with (
+            mock.patch.object(path_safety, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(path_safety.os, "open", return_value=123),
+            mock.patch.object(path_safety.os, "stat", side_effect=FileNotFoundError),
+            mock.patch.object(path_safety.os, "fdopen", side_effect=ValueError("bad fd")),
+            mock.patch.object(path_safety.os, "unlink"),
+            mock.patch.object(path_safety.os, "fsync"),
+            mock.patch.object(path_safety.os, "close", side_effect=KeyboardInterrupt),
         ):
             with self.assertRaisesRegex(ValueError, "bad fd") as caught:
                 path_safety.write_text_atomically_without_following_symlinks(
