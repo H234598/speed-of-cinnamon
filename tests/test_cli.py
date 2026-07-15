@@ -1500,6 +1500,25 @@ class CliTest(unittest.TestCase):
         self.assertTrue(plaintext_exists)
         self.assertFalse(encrypted_exists)
 
+    def test_stored_plaintext_transcript_removes_encrypted_sibling(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_root = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_root.mkdir(parents=True)
+            transcript_root.parent.chmod(0o700)
+            transcript = transcript_root / "input.txt"
+            encrypted_transcript = Path(f"{transcript}.socenc")
+            encrypted_transcript.write_bytes(b"old encrypted transcript")
+            args = argparse.Namespace(artifact_encryption="off")
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}, clear=False):
+                output_path, effective_mode = cli._write_stored_transcript(transcript, "new plaintext\n", args)
+
+            plaintext = transcript.read_text(encoding="utf-8")
+
+        self.assertEqual(output_path, transcript)
+        self.assertEqual(effective_mode, cli.ARTIFACT_ENCRYPTION_OFF)
+        self.assertEqual(plaintext, "new plaintext\n")
+        self.assertFalse(encrypted_transcript.exists())
+
     def test_write_stored_transcript_rejects_unencodable_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             transcript = Path(tmp) / "input.txt"
@@ -9773,6 +9792,34 @@ class CliTest(unittest.TestCase):
         self.assertTrue(payload["transcript_deleted"])
         self.assertFalse(encrypted_exists)
         self.assertFalse(plaintext_exists)
+        self.assertEqual(final_state.status, "idle")
+
+    def test_cancel_discards_encrypted_sibling_of_plaintext_transcript(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            transcripts_root = tmp_path / "speed-of-cinnamon" / "transcripts"
+            transcripts_root.mkdir(parents=True)
+            transcripts_root.parent.chmod(0o700)
+            plaintext_transcript = transcripts_root / "recorded.txt"
+            encrypted_transcript = transcripts_root / "recorded.txt.socenc"
+            plaintext_transcript.write_text("secret plaintext\n", encoding="utf-8")
+            encrypted_transcript.write_bytes(b"soc1")
+            state_file = tmp_path / "speed-of-cinnamon" / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="error", transcript_path=str(plaintext_transcript)))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+            plaintext_exists = plaintext_transcript.exists()
+            encrypted_exists = encrypted_transcript.exists()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "idle")
+        self.assertTrue(payload["transcript_deleted"])
+        self.assertFalse(plaintext_exists)
+        self.assertFalse(encrypted_exists)
         self.assertEqual(final_state.status, "idle")
 
     def test_cancel_does_not_touch_artifacts_while_finalization_lock_is_held(self) -> None:

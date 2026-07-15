@@ -1712,6 +1712,15 @@ def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) ->
         raise RuntimeError("failed to write transcript file: transcript text is not valid UTF-8") from exc
     if mode == ARTIFACT_ENCRYPTION_OFF:
         _write_text_atomic(path, text)
+        encrypted_sibling = _transcript_sibling_path(path)
+        if encrypted_sibling is not None and (encrypted_sibling.exists() or encrypted_sibling.is_symlink()):
+            try:
+                if not _remove_transcript_file(encrypted_sibling):
+                    raise RuntimeError(f"encrypted transcript sibling is missing: {encrypted_sibling}")
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    f"failed to remove encrypted transcript sibling after plaintext storage: {encrypted_sibling}"
+                ) from exc
         return path, ARTIFACT_ENCRYPTION_OFF
     try:
         encrypted_path, effective_mode = write_encrypted_bytes_atomically(
@@ -2639,11 +2648,19 @@ def _transcript_artifact_missing_but_safe(path: Path | None) -> bool:
     return False
 
 
-def _transcript_plaintext_sibling_missing_but_safe(path: Path | None) -> bool:
-    if not isinstance(path, Path) or not is_encrypted_path(path):
+def _transcript_sibling_path(path: Path | None) -> Path | None:
+    if not isinstance(path, Path) or not _is_transcript_artifact(path):
+        return None
+    if is_encrypted_path(path):
+        return path.with_name(path.name.removesuffix(".socenc"))
+    return encrypted_path_for(path)
+
+
+def _transcript_sibling_missing_but_safe(path: Path | None) -> bool:
+    sibling_path = _transcript_sibling_path(path)
+    if sibling_path is None:
         return True
-    plaintext_path = path.with_name(path.name.removesuffix(".socenc"))
-    return _transcript_artifact_missing_but_safe(plaintext_path)
+    return _transcript_artifact_missing_but_safe(sibling_path)
 
 
 def _stabilize_recording_artifact_path(
@@ -4171,16 +4188,17 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             except RuntimeError:
                 transcript_deleted = False
             else:
-                if transcript_path is not None and is_encrypted_path(transcript_path):
-                    plaintext_path = transcript_path.with_name(transcript_path.name.removesuffix(".socenc"))
+                sibling_path = _transcript_sibling_path(transcript_path)
+                if sibling_path is not None and (sibling_path.exists() or sibling_path.is_symlink()):
                     try:
-                        _remove_plaintext_transcript_sibling_after_encryption(plaintext_path, transcript_path)
+                        if not _remove_transcript_file(sibling_path):
+                            raise RuntimeError(f"transcript sibling is missing: {sibling_path}")
                     except RuntimeError:
                         transcript_deleted = False
             if not transcript_deleted and transcript_path is not None:
                 transcript_deleted = _transcript_artifact_missing_but_safe(transcript_path)
                 if transcript_deleted:
-                    transcript_deleted = _transcript_plaintext_sibling_missing_but_safe(transcript_path)
+                    transcript_deleted = _transcript_sibling_missing_but_safe(transcript_path)
         if (
             (state.audio_path and not audio_deleted)
             or (state.log_path and not log_deleted)
