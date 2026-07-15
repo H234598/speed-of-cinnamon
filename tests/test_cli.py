@@ -221,6 +221,26 @@ class CliTest(unittest.TestCase):
             mocked_close.assert_called_once_with(42)
             mocked_remove.assert_called_once_with(path, storage_path)
 
+    def test_prepare_transient_transcript_cleans_path_when_owner_write_and_fd_close_are_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / ".transcript.tmp.txt"
+            storage_path = root / "transcript.txt"
+            with (
+                mock.patch.object(cli, "transcript_dir", return_value=root),
+                mock.patch.object(cli, "_prepare_private_file"),
+                mock.patch.object(cli.os, "open", return_value=42),
+                mock.patch.object(cli.os, "fstat", return_value=os.stat(__file__)),
+                mock.patch.object(cli, "_write_transient_transcript_owner", side_effect=KeyboardInterrupt),
+                mock.patch.object(cli, "_remove_transient_transcript_path") as mocked_remove,
+                mock.patch.object(cli.os, "close", side_effect=KeyboardInterrupt) as mocked_close,
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    cli._prepare_transient_transcript_path(path, storage_path)
+
+            mocked_close.assert_called_once_with(42)
+            mocked_remove.assert_called_once_with(path, storage_path)
+
     def test_prepare_private_file_preserves_success_when_parent_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "recording.wav"

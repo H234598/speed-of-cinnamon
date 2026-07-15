@@ -1579,7 +1579,7 @@ def _prepare_transient_transcript_path(path: Path, storage_path: Path) -> int | 
         if fd is not None:
             try:
                 os.close(fd)
-            except OSError:
+            except BaseException:
                 pass
         cleanup_created_path(exc)
         raise RuntimeError(f"failed to open transient transcript file identity: {path}") from exc
@@ -1587,7 +1587,7 @@ def _prepare_transient_transcript_path(path: Path, storage_path: Path) -> int | 
         if fd is not None:
             try:
                 os.close(fd)
-            except OSError:
+            except BaseException:
                 pass
         cleanup_created_path(exc)
         raise
@@ -1595,7 +1595,7 @@ def _prepare_transient_transcript_path(path: Path, storage_path: Path) -> int | 
         if fd is not None:
             try:
                 os.close(fd)
-            except OSError:
+            except BaseException:
                 pass
         cleanup_created_path(exc)
         raise
