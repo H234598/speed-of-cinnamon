@@ -1324,6 +1324,26 @@ class OutputTest(unittest.TestCase):
 
         self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["new text", "previous text"])
 
+    def test_insert_text_preserves_paste_error_when_clipboard_restore_is_interrupted(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output._which", return_value="/usr/bin/xdotool"),
+            mock.patch("speed_of_cinnamon.output._active_x_window_snapshot", return_value=("123", "Editor", "xed")),
+            mock.patch("speed_of_cinnamon.output._clipboard_paste_helper_available", return_value=True),
+            mock.patch("speed_of_cinnamon.output._clipboard_paste_writer_available", return_value=True),
+            mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "previous text")),
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
+            mock.patch(
+                "speed_of_cinnamon.output.set_clipboard",
+                side_effect=[None, KeyboardInterrupt("clipboard restore interrupted")],
+            ),
+            mock.patch("speed_of_cinnamon.output.paste_from_clipboard", side_effect=OutputError("paste failed")),
+        ):
+            with self.assertRaisesRegex(OutputError, "paste failed"):
+                insert_text("new text", "clipboard-paste")
+
     def test_insert_text_restores_text_clipboard_snapshot_without_stripping(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,

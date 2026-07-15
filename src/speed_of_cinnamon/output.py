@@ -1297,7 +1297,7 @@ def _restore_clipboard_snapshot_after_failed_paste(
         return
     try:
         set_clipboard(snapshot_text, allowed_helpers=allowed_helpers)
-    except OutputError as exc:
+    except BaseException as exc:
         log_event("warning", "clipboard_restore_after_failed_automatic_paste_failed", error=str(exc))
 
 
