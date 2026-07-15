@@ -438,6 +438,31 @@ class CliTest(unittest.TestCase):
         mocked_close.assert_any_call(456)
         mocked_unlink.assert_called_once()
 
+    def test_finalization_lock_cleans_up_when_lock_close_is_interrupted(self) -> None:
+        state_file = Path("/probe/state.json")
+
+        def close_fd(fd: int) -> None:
+            if fd == 123:
+                raise KeyboardInterrupt
+
+        with (
+            mock.patch.object(cli, "assert_no_symlink_ancestors"),
+            mock.patch.object(cli, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(cli.os, "open", return_value=123),
+            mock.patch.object(cli.os, "fstat", return_value=mock.Mock()),
+            mock.patch.object(cli, "_finalization_lock_identity_for_pid", return_value=None),
+            mock.patch.object(cli, "_write_all"),
+            mock.patch.object(cli.os, "fsync"),
+            mock.patch.object(cli, "_unlink_finalization_lock_at") as mocked_unlink,
+            mock.patch.object(cli.os, "close", side_effect=close_fd) as mocked_close,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                cli._acquire_finalization_lock(state_file)
+
+        mocked_close.assert_any_call(123)
+        mocked_close.assert_any_call(456)
+        mocked_unlink.assert_called_once()
+
     def test_ensure_private_text_file_keeps_existing_blacklist_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "blacklist.txt"

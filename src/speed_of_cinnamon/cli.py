@@ -490,6 +490,12 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                 except OSError:
                     pass
                 return None
+            except BaseException:
+                try:
+                    _unlink_finalization_lock_at(parent_fd, lock_path, expected_stat=created_stat)
+                except BaseException:
+                    pass
+                raise
             return lock_path
         return None
     finally:
