@@ -1084,6 +1084,21 @@ class ArtifactCryptoTest(unittest.TestCase):
                 with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "failed to read artifact"):
                     artifact_crypto.read_private_bytes(path, field_name="artifact")
 
+    def test_read_private_bytes_fd_cleanup_interrupt_does_not_mask_read_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "secret-artifact.socenc"
+            path.write_bytes(b"payload")
+            path.chmod(0o600)
+            with (
+                mock.patch("speed_of_cinnamon.artifact_crypto.assert_no_symlink_ancestors"),
+                mock.patch("speed_of_cinnamon.artifact_crypto.open_file_without_following_symlinks", return_value=123),
+                mock.patch("speed_of_cinnamon.artifact_crypto.assert_fd_is_regular_private_file"),
+                mock.patch("speed_of_cinnamon.artifact_crypto.os.fdopen", side_effect=ValueError("bad fd")),
+                mock.patch("speed_of_cinnamon.artifact_crypto.os.close", side_effect=KeyboardInterrupt),
+            ):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "failed to read artifact"):
+                    artifact_crypto.read_private_bytes(path, field_name="artifact")
+
     def test_private_passphrase_fdopen_value_error_is_wrapped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "passphrase.key"

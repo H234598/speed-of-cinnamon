@@ -1259,6 +1259,7 @@ def read_private_bytes(path: Path, *, field_name: str, max_bytes: int | None = N
         )
     except (OSError, RuntimeError) as exc:
         raise ArtifactCryptoError(f"failed to read {field_name}") from exc
+    primary_error: BaseException | None = None
     try:
         assert_fd_is_regular_private_file(fd, field_name=field_name)
         handle = os.fdopen(fd, "rb")
@@ -1266,13 +1267,23 @@ def read_private_bytes(path: Path, *, field_name: str, max_bytes: int | None = N
         with handle:
             data = handle.read(effective_max_bytes + 1)
     except Exception as exc:
-        raise ArtifactCryptoError(f"failed to read {field_name}") from exc
+        primary_error = ArtifactCryptoError(f"failed to read {field_name}")
+        raise primary_error from exc
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
+        cleanup_error: BaseException | None = None
         if fd >= 0:
             try:
                 os.close(fd)
-            except OSError:
-                pass
+            except BaseException as exc:
+                cleanup_error = exc
+        if cleanup_error is not None:
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise cleanup_error
     if len(data) > effective_max_bytes:
         raise ArtifactCryptoError(f"{field_name} is too large")
     return data
