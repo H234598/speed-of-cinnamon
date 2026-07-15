@@ -537,12 +537,12 @@ def _release_finalization_lock(lock_path: Path | None) -> None:
             if owner_identity is not None and owner_identity != current_identity:
                 return
             _unlink_finalization_lock_at(parent_fd, lock_path, expected_stat=current)
-        except OSError:
+        except BaseException:
             pass
     finally:
         try:
             os.close(parent_fd)
-        except OSError:
+        except BaseException:
             pass
 
 

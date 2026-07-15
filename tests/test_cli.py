@@ -6460,6 +6460,23 @@ class CliTest(unittest.TestCase):
 
         self.assertTrue(any(cli.stat_module.S_ISDIR(mode) for mode in fsync_modes))
 
+    def test_finalization_lock_release_survives_parent_close_interrupt(self) -> None:
+        lock_path = Path("/probe/state.finalizing")
+        current = mock.Mock(st_mode=cli.stat_module.S_IFREG | 0o600, st_nlink=1)
+
+        with (
+            mock.patch.object(cli, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(cli.os, "stat", return_value=current),
+            mock.patch.object(cli, "_read_finalization_lock_pid", return_value=os.getpid()),
+            mock.patch.object(cli, "_read_finalization_lock_identity", return_value=None),
+            mock.patch.object(cli, "_finalization_lock_identity_for_pid", return_value=None),
+            mock.patch.object(cli, "_unlink_finalization_lock_at") as mocked_unlink,
+            mock.patch.object(cli.os, "close", side_effect=KeyboardInterrupt),
+        ):
+            cli._release_finalization_lock(lock_path)
+
+        mocked_unlink.assert_called_once_with(456, lock_path, expected_stat=current)
+
     def test_finalization_lock_acquire_fsyncs_lock_file(self) -> None:
         fsync_modes: list[int] = []
         real_fsync = os.fsync
