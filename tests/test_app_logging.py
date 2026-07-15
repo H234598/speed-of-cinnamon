@@ -1192,6 +1192,38 @@ class AppLoggingTest(unittest.TestCase):
         self.assertEqual(content.count("first"), 1)
         self.assertEqual(content.count("second"), 1)
 
+    def test_maintain_logs_monthly_merge_does_not_duplicate_after_interrupted_source_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            first = log_dir / "speed-of-cinnamon-2026-05-30.log"
+            second = log_dir / "speed-of-cinnamon-2026-05-31.log"
+            first.write_text("first\n", encoding="utf-8")
+            second.write_text("second\n", encoding="utf-8")
+            first.chmod(0o600)
+            second.chmod(0o600)
+            real_unlink = os.unlink
+            interrupted = False
+
+            def unlink_once(name: object, *args: object, **kwargs: object) -> None:
+                nonlocal interrupted
+                if name == second.name and kwargs.get("dir_fd") is not None and not interrupted:
+                    interrupted = True
+                    raise KeyboardInterrupt
+                real_unlink(name, *args, **kwargs)
+
+            with mock.patch.object(app_logging.os, "unlink", side_effect=unlink_once):
+                with self.assertRaises(KeyboardInterrupt):
+                    app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
+
+            archive = log_dir / "speed-of-cinnamon-2026-05.log.gz"
+            app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
+            with gzip.open(archive, "rt", encoding="utf-8") as handle:
+                content = handle.read()
+
+        self.assertTrue(interrupted)
+        self.assertEqual(content.count("first"), 1)
+        self.assertEqual(content.count("second"), 1)
+
     def test_maintain_logs_monthly_merge_rejects_source_swap_before_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

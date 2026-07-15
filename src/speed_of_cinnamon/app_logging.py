@@ -907,14 +907,19 @@ def _merge_old_months(directory: Path, today: date) -> None:
             temp_name = ""
             os.fsync(parent_fd)
             archive_transaction_active = False
+            source_cleanup_errors: list[BaseException] = []
             for path in paths:
-                original_stat = source_stats.get(path)
-                if original_stat is None:
+                try:
+                    original_stat = source_stats.get(path)
+                    if original_stat is None:
+                        continue
+                    _assert_same_log_file_identity(path, original_stat, field_name="monthly log source")
+                except BaseException as source_error:
+                    source_cleanup_errors.append(source_error)
                     continue
-                _assert_same_log_file_identity(path, original_stat, field_name="monthly log source")
                 try:
                     os.unlink(path.name, dir_fd=parent_fd)
-                except OSError as delete_error:
+                except BaseException as delete_error:
                     cleanup_name = f"{path.name}.{secrets.token_hex(8)}.merged"
                     try:
                         _rename_without_replacing(
@@ -938,17 +943,46 @@ def _merge_old_months(directory: Path, today: date) -> None:
                         ):
                             raise RuntimeError("monthly log source changed before cleanup")
                     except OSError:
-                        raise delete_error
+                        if isinstance(delete_error, OSError):
+                            raise delete_error
+                        source_cleanup_errors.append(delete_error)
+                        continue
+                    except Exception:
+                        raise
+                    except BaseException as cleanup_error:
+                        _note_cleanup_failure(delete_error, cleanup_error)
+                        source_cleanup_errors.append(delete_error)
+                        continue
                     try:
                         os.unlink(cleanup_name, dir_fd=parent_fd)
                         os.fsync(parent_fd)
-                    except OSError:
+                    except OSError as cleanup_error:
+                        if not isinstance(delete_error, OSError):
+                            _note_cleanup_failure(delete_error, cleanup_error)
+                            source_cleanup_errors.append(delete_error)
+                            continue
                         # The archive already contains this source. Retain the
                         # moved cleanup copy rather than allowing a later run
                         # to merge the source a second time.
                         pass
+                    except Exception:
+                        raise
+                    except BaseException as cleanup_error:
+                        _note_cleanup_failure(delete_error, cleanup_error)
+                        source_cleanup_errors.append(delete_error)
+                        continue
+                    if not isinstance(delete_error, OSError):
+                        source_cleanup_errors.append(delete_error)
                     continue
-                os.fsync(parent_fd)
+                try:
+                    os.fsync(parent_fd)
+                except BaseException as source_error:
+                    source_cleanup_errors.append(source_error)
+            if source_cleanup_errors:
+                primary_source_error = source_cleanup_errors[0]
+                for source_error in source_cleanup_errors[1:]:
+                    _note_cleanup_failure(primary_source_error, source_error)
+                raise primary_source_error
             if archive_backup_moved and archive_backup_name is not None:
                 backup_path = directory / archive_backup_name
                 backup_stat = _assert_regular_unlinked_file(backup_path, field_name="monthly log archive backup")
