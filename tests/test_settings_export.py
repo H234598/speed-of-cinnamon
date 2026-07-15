@@ -626,6 +626,22 @@ class SettingsExportTest(unittest.TestCase):
         self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
         self.assertIn("cleanup denied", "\n".join(caught.exception.__notes__))
 
+    def test_write_export_preserves_primary_error_when_temp_cleanup_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            with (
+                mock.patch.object(
+                    settings_export_module,
+                    "_rename_without_replacing",
+                    side_effect=RuntimeError("activation failed"),
+                ),
+                mock.patch.object(settings_export_module.os, "unlink", side_effect=KeyboardInterrupt),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "activation failed") as caught:
+                    write_export(path, {"language": "en"})
+
+            self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
+
     @mock.patch("speed_of_cinnamon.settings_export._rename_without_replacing", side_effect=OSError("disk full"))
     def test_write_export_raises_when_atomic_activation_fails(self, mocked_rename: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:

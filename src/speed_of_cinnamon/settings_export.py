@@ -715,7 +715,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
             except BaseException as rollback_error:
                 _note_cleanup_failure(primary_error, rollback_error)
         if isinstance(exc, OSError):
-            cleanup_error: OSError | None = None
+            cleanup_error: BaseException | None = None
             if temp_name:
                 try:
                     os.unlink(temp_name, dir_fd=parent_fd)
@@ -723,8 +723,14 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                 except OSError as cleanup_exc:
                     try:
                         _scrub_temp_settings_export_file(parent_fd, temp_name)
-                    except (OSError, RuntimeError):
-                        pass
+                    except BaseException as scrub_error:
+                        _note_cleanup_failure(exc, scrub_error)
+                    cleanup_error = cleanup_exc
+                except BaseException as cleanup_exc:
+                    try:
+                        _scrub_temp_settings_export_file(parent_fd, temp_name)
+                    except BaseException as scrub_error:
+                        _note_cleanup_failure(exc, scrub_error)
                     cleanup_error = cleanup_exc
             if cleanup_error is not None:
                 error = SettingsExportError(f"failed to write settings export: {path}")
@@ -745,8 +751,14 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
             except OSError as cleanup_error:
                 try:
                     _scrub_temp_settings_export_file(parent_fd, temp_name)
-                except (OSError, RuntimeError):
-                    pass
+                except BaseException as scrub_error:
+                    _note_cleanup_failure(primary_error, scrub_error)
+                _note_cleanup_failure(primary_error, cleanup_error)
+            except BaseException as cleanup_error:
+                try:
+                    _scrub_temp_settings_export_file(parent_fd, temp_name)
+                except BaseException as scrub_error:
+                    _note_cleanup_failure(primary_error, scrub_error)
                 _note_cleanup_failure(primary_error, cleanup_error)
         raise
     finally:
