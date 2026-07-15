@@ -685,9 +685,22 @@ class AppLoggingTest(unittest.TestCase):
                 handler.emit(record)
 
             handler.close()
-
             self.assertTrue(handler._disabled)
             self.assertGreaterEqual(mocked_open.call_count, 1)
+
+    def test_file_handler_preserves_directory_validation_error_when_close_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "active.log"
+            handler = app_logging.SizeCappedJsonFileHandler(path, Path(tmp))
+            with (
+                mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
+                mock.patch.object(app_logging, "assert_fd_is_private_directory", side_effect=RuntimeError("not private")),
+                mock.patch.object(app_logging.os, "close", side_effect=KeyboardInterrupt),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "not private") as caught:
+                    handler._open()
+
+            self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
     def test_file_handler_disables_permanently_on_log_path_permission_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

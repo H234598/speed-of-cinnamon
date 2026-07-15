@@ -240,11 +240,22 @@ class SizeCappedJsonFileHandler(logging.Handler):
             except FileNotFoundError:
                 expected_stat = None
             parent_fd = ensure_directory_without_following_symlinks(self.path.parent, field_name="log directory")
+            parent_error: BaseException | None = None
             try:
                 assert_fd_is_private_directory(parent_fd, field_name="log directory")
+            except BaseException as exc:
+                parent_error = exc
+                raise
             finally:
-                with suppress(OSError):
+                try:
                     os.close(parent_fd)
+                except OSError:
+                    pass
+                except BaseException as cleanup_error:
+                    if parent_error is not None:
+                        _note_cleanup_failure(parent_error, cleanup_error)
+                    else:
+                        raise
             fd = open_file_without_following_symlinks(
                 self.path,
                 os.O_WRONLY | os.O_CREAT | os.O_APPEND,
