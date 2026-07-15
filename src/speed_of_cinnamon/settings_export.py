@@ -755,6 +755,11 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                 os.close(temp_fd)
             except OSError:
                 pass
+            except BaseException as cleanup_error:
+                if primary_error is not None:
+                    _note_cleanup_failure(primary_error, cleanup_error)
+                else:
+                    raise
         try:
             os.close(parent_fd)
         except OSError as cleanup_error:
@@ -763,6 +768,11 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
             else:
                 error = SettingsExportError("failed to close settings export directory")
                 raise error from cleanup_error
+        except BaseException as cleanup_error:
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise
     return payload
 
 

@@ -733,6 +733,29 @@ class SettingsExportTest(unittest.TestCase):
                 os.fstat(created_fds[0])
             self.assertEqual(list(Path(tmp).iterdir()), [])
 
+    def test_write_export_preserves_fdopen_error_when_temp_fd_close_is_interrupted(self) -> None:
+        def close(fd: int) -> None:
+            if fd == 123:
+                raise KeyboardInterrupt
+
+        with (
+            mock.patch.object(settings_export_module, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(settings_export_module, "assert_fd_is_private_directory"),
+            mock.patch.object(settings_export_module.os, "stat", side_effect=FileNotFoundError),
+            mock.patch.object(
+                settings_export_module,
+                "_create_private_temp_file",
+                return_value=(123, ".settings-export.json.tmp"),
+            ),
+            mock.patch.object(settings_export_module.os, "fdopen", side_effect=RuntimeError("fdopen failed")),
+            mock.patch.object(settings_export_module.os, "unlink"),
+            mock.patch.object(settings_export_module.os, "close", side_effect=close),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "fdopen failed") as caught:
+                write_export(Path("/probe/settings-export.json"), {"language": "en"})
+
+        self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
+
     def test_read_export_preserves_fd_validation_error_when_fd_close_fails(self) -> None:
         with (
             mock.patch.object(settings_export_module, "open_file_without_following_symlinks", return_value=123),
