@@ -4469,7 +4469,7 @@ def _temporary_benchmark_transcript_path() -> tuple[Path, os.stat_result]:
     finally:
         try:
             os.close(fd)
-        except OSError:
+        except BaseException:
             pass
     return Path(path_text), file_stat
 
