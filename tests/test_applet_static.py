@@ -2143,9 +2143,17 @@ class AppletStaticTest(unittest.TestCase):
     def test_subprocess_registration_failures_terminate_spawned_processes(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
-        start = source.index("let process = launcher.spawnv(args);")
-        end = source.index("let timeoutKey = \"process-timeout-\" + processToken;", start)
+        launch_start = source.index("let process = null;")
+        start = source.index("process = launcher.spawnv(args);", launch_start)
+        launch_end = source.index("let generation = this.spawnGeneration;", start)
+        end = source.index("let timeoutKey = \"process-timeout-\" + processToken;", launch_end)
+        launch_block = source[launch_start:launch_end]
         block = source[start:end]
+        self.assertIn("try {", launch_block)
+        self.assertIn("let launcher = new Gio.SubprocessLauncher({ flags: flags });", launch_block)
+        self.assertIn("launcher.setenv(key, String(env[key] || \"\"), true);", launch_block)
+        self.assertIn('this._recordLifecycleError("process-spawn", error);', launch_block)
+        self.assertIn("return null;", launch_block)
         self.assertIn("try {", block)
         self.assertIn("processToken = this._registerProcess(process, generation, options.resourceGroup);", block)
         self.assertIn("cancellable = new Gio.Cancellable();", block)

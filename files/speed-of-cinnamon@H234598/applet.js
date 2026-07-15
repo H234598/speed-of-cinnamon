@@ -10513,14 +10513,20 @@ MyApplet.prototype = {
     if (hasInput) {
       flags |= Gio.SubprocessFlags.STDIN_PIPE;
     }
-    let launcher = new Gio.SubprocessLauncher({ flags: flags });
-    env = env || {};
-    for (let key in env) {
-      if (Object.prototype.hasOwnProperty.call(env, key)) {
-        launcher.setenv(key, String(env[key] || ""), true);
+    let process = null;
+    try {
+      let launcher = new Gio.SubprocessLauncher({ flags: flags });
+      env = env || {};
+      for (let key in env) {
+        if (Object.prototype.hasOwnProperty.call(env, key)) {
+          launcher.setenv(key, String(env[key] || ""), true);
+        }
       }
+      process = launcher.spawnv(args);
+    } catch (error) {
+      this._recordLifecycleError("process-spawn", error);
+      return null;
     }
-    let process = launcher.spawnv(args);
     let generation = this.spawnGeneration;
     let processToken;
     try {
