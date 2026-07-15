@@ -1554,7 +1554,7 @@ def _prepare_transient_transcript_path(path: Path, storage_path: Path) -> int | 
     def cleanup_created_path(primary_error: BaseException) -> None:
         try:
             _remove_transient_transcript_path(path, storage_path)
-        except Exception as cleanup_error:
+        except BaseException as cleanup_error:
             raise RuntimeError(f"{primary_error}; {cleanup_error}") from cleanup_error
 
     try:

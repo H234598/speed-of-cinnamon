@@ -391,6 +391,24 @@ class CliTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "owner failed"):
                     cli._prepare_transient_transcript_path(path, storage_path)
 
+    def test_prepare_transient_transcript_preserves_owner_error_when_cleanup_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / ".transcript.tmp.txt"
+            storage_path = root / "transcript.txt"
+            file_stat = os.stat(__file__)
+            with (
+                mock.patch.object(cli, "transcript_dir", return_value=root),
+                mock.patch.object(cli, "_prepare_private_file"),
+                mock.patch.object(cli.os, "open", return_value=42),
+                mock.patch.object(cli.os, "fstat", return_value=file_stat),
+                mock.patch.object(cli, "_write_transient_transcript_owner", side_effect=RuntimeError("owner failed")),
+                mock.patch.object(cli.os, "close"),
+                mock.patch.object(cli, "_remove_transient_transcript_path", side_effect=KeyboardInterrupt("cleanup interrupted")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "owner failed; cleanup interrupted"):
+                    cli._prepare_transient_transcript_path(path, storage_path)
+
     def test_prepare_transient_transcript_removes_file_after_private_prepare_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
