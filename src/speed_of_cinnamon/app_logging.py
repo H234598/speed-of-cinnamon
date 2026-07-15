@@ -1197,6 +1197,8 @@ def _gzip_file(source: Path, target: Path) -> None:
                 activation_visible = True
             elif target_existing_stat is None and current_stat is None:
                 pass
+            elif target_existing_stat is not None and current_stat is None and target_backup_created:
+                target_removed = True
             elif target_removed and target_existing_stat is not None and current_stat is None:
                 pass
             elif target_existing_stat is not None and current_stat is not None and _same_target_inode(current_stat, target_existing_stat):

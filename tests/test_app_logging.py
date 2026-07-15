@@ -1438,6 +1438,37 @@ class AppLoggingTest(unittest.TestCase):
                 self.assertEqual(handle.read(), "old content\n")
             self.assertEqual(list(log_dir.glob("*.backup")), [])
 
+    def test_gzip_file_restores_target_when_target_unlink_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "source.log"
+            target = log_dir / "target.log.gz"
+            source.write_text("new content\n", encoding="utf-8")
+            source.chmod(0o600)
+            with gzip.open(target, "wt", encoding="utf-8") as handle:
+                handle.write("old content\n")
+            target.chmod(0o600)
+            real_unlink = os.unlink
+            interrupted = False
+
+            def unlink_then_interrupt(name: object, *args: object, **kwargs: object) -> None:
+                nonlocal interrupted
+                if name == target.name and not interrupted:
+                    interrupted = True
+                    real_unlink(name, *args, **kwargs)
+                    raise KeyboardInterrupt
+                real_unlink(name, *args, **kwargs)
+
+            with mock.patch.object(app_logging.os, "unlink", side_effect=unlink_then_interrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    app_logging._gzip_file(source, target)
+
+            self.assertTrue(interrupted)
+            self.assertTrue(source.exists())
+            with gzip.open(target, "rt", encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "old content\n")
+            self.assertEqual(list(log_dir.glob("*.backup")), [])
+
     def test_gzip_file_rejects_target_swap_during_backup_activation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
