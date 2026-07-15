@@ -625,22 +625,29 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                         or not _same_leaf_inode(current_target_stat, existing_stat)
                     ):
                         raise OSError("settings export path changed during backup activation")
-                    os.unlink(path.name, dir_fd=parent_fd)
                     backup_name = candidate_name
+                    os.unlink(path.name, dir_fd=parent_fd)
                     backup_moved = True
                     os.fsync(parent_fd)
                     break
                 except BaseException as exc:
                     if not backup_moved:
                         try:
-                            candidate_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
-                            if _same_leaf_inode(candidate_stat, existing_stat):
-                                os.unlink(candidate_name, dir_fd=parent_fd)
-                                os.fsync(parent_fd)
+                            os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
                         except FileNotFoundError:
-                            pass
+                            backup_moved = True
                         except BaseException as cleanup_error:
                             _note_cleanup_failure(exc, cleanup_error)
+                        else:
+                            try:
+                                candidate_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                                if _same_leaf_inode(candidate_stat, existing_stat):
+                                    os.unlink(candidate_name, dir_fd=parent_fd)
+                                    os.fsync(parent_fd)
+                            except FileNotFoundError:
+                                pass
+                            except BaseException as cleanup_error:
+                                _note_cleanup_failure(exc, cleanup_error)
                     raise
             if not backup_name:
                 raise OSError("failed to create settings export recovery backup")

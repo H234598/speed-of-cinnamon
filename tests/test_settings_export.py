@@ -839,6 +839,31 @@ class SettingsExportTest(unittest.TestCase):
             leftovers = [child for child in Path(tmp).iterdir() if child.name.startswith(".settings-export.json.")]
             self.assertEqual(leftovers, [])
 
+    def test_write_export_restores_target_when_backup_unlink_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text("old export\n", encoding="utf-8")
+            path.chmod(0o600)
+            real_unlink = os.unlink
+            interrupted = False
+
+            def unlink_then_interrupt(name: object, *args: object, **kwargs: object) -> None:
+                nonlocal interrupted
+                if name == path.name and not interrupted:
+                    interrupted = True
+                    real_unlink(name, *args, **kwargs)
+                    raise KeyboardInterrupt
+                real_unlink(name, *args, **kwargs)
+
+            with mock.patch.object(settings_export_module.os, "unlink", side_effect=unlink_then_interrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    write_export(path, {"language": "de"})
+
+            self.assertTrue(interrupted)
+            self.assertEqual(path.read_text(encoding="utf-8"), "old export\n")
+            self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.bak")))
+            self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.tmp")))
+
     def test_write_export_removes_temp_file_when_file_fsync_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
