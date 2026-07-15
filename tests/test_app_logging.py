@@ -542,6 +542,23 @@ class AppLoggingTest(unittest.TestCase):
 
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_gzip_file_preserves_source_inspection_error_when_fd_close_is_interrupted(self) -> None:
+        def close(fd: int) -> None:
+            if fd == 123:
+                raise KeyboardInterrupt
+
+        with (
+            mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".target.tmp")),
+            mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
+            mock.patch.object(app_logging.os, "fstat", side_effect=OSError("inspect failed")),
+            mock.patch.object(app_logging, "_unlink_log_temp"),
+            mock.patch.object(app_logging.os, "close", side_effect=close),
+        ):
+            with self.assertRaisesRegex(OSError, "inspect failed") as caught:
+                app_logging._gzip_file(Path("/probe/source.log"), Path("/probe/target.log.gz"))
+
+        self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
+
     def test_gzip_file_preserves_source_fdopen_error_when_close_fails(self) -> None:
         with (
             mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".target.tmp")),
@@ -622,6 +639,28 @@ class AppLoggingTest(unittest.TestCase):
 
             mocked_close.assert_any_call(456)
             mocked_close.assert_any_call(789)
+
+    def test_monthly_merge_preserves_fdopen_error_when_temp_fd_close_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "speed-of-cinnamon-2026-05-30.log"
+            source.write_text("source\n", encoding="utf-8")
+            source.chmod(0o600)
+
+            def close(fd: int) -> None:
+                if fd == 456:
+                    raise KeyboardInterrupt
+
+            with (
+                mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".archive.tmp")),
+                mock.patch.object(app_logging.os, "fdopen", side_effect=ValueError("temp fdopen failed")),
+                mock.patch.object(app_logging, "_unlink_log_temp"),
+                mock.patch.object(app_logging.os, "close", side_effect=close),
+            ):
+                with self.assertRaisesRegex(ValueError, "temp fdopen failed") as caught:
+                    app_logging._merge_old_months(log_dir, date(2026, 6, 1))
+
+            self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
     def test_monthly_merge_removes_temp_archive_when_copy_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

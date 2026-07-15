@@ -815,11 +815,15 @@ def _merge_old_months(directory: Path, today: date) -> None:
                     os.close(temp_fd)
                 except OSError as cleanup_error:
                     _note_cleanup_failure(exc, cleanup_error)
+                except BaseException as cleanup_error:
+                    _note_cleanup_failure(exc, cleanup_error)
                 raise
             except BaseException as exc:
                 try:
                     os.close(temp_fd)
                 except OSError as cleanup_error:
+                    _note_cleanup_failure(exc, cleanup_error)
+                except BaseException as cleanup_error:
                     _note_cleanup_failure(exc, cleanup_error)
                 raise
             with raw_output:
@@ -1211,10 +1215,14 @@ def _gzip_file(source: Path, target: Path) -> None:
                     os.close(source_fd)
                 except OSError as cleanup_error:
                     _note_cleanup_failure(exc, cleanup_error)
+                except BaseException as cleanup_error:
+                    _note_cleanup_failure(exc, cleanup_error)
                 source_fd = None
             try:
                 os.close(temp_fd)
             except OSError as cleanup_error:
+                _note_cleanup_failure(exc, cleanup_error)
+            except BaseException as cleanup_error:
                 _note_cleanup_failure(exc, cleanup_error)
             temp_fd = -1
             raise
@@ -1224,10 +1232,14 @@ def _gzip_file(source: Path, target: Path) -> None:
                     os.close(source_fd)
                 except OSError as cleanup_error:
                     _note_cleanup_failure(exc, cleanup_error)
+                except BaseException as cleanup_error:
+                    _note_cleanup_failure(exc, cleanup_error)
                 source_fd = None
             try:
                 os.close(temp_fd)
             except OSError as cleanup_error:
+                _note_cleanup_failure(exc, cleanup_error)
+            except BaseException as cleanup_error:
                 _note_cleanup_failure(exc, cleanup_error)
             temp_fd = -1
             raise
@@ -1240,10 +1252,14 @@ def _gzip_file(source: Path, target: Path) -> None:
                     os.close(source_fd)
                 except OSError as cleanup_error:
                     _note_cleanup_failure(exc, cleanup_error)
+                except BaseException as cleanup_error:
+                    _note_cleanup_failure(exc, cleanup_error)
                 source_fd = None
             try:
                 os.close(temp_fd)
             except OSError as cleanup_error:
+                _note_cleanup_failure(exc, cleanup_error)
+            except BaseException as cleanup_error:
                 _note_cleanup_failure(exc, cleanup_error)
             temp_fd = -1
             raise
@@ -1253,10 +1269,14 @@ def _gzip_file(source: Path, target: Path) -> None:
                     os.close(source_fd)
                 except OSError as cleanup_error:
                     _note_cleanup_failure(exc, cleanup_error)
+                except BaseException as cleanup_error:
+                    _note_cleanup_failure(exc, cleanup_error)
                 source_fd = None
             try:
                 os.close(temp_fd)
             except OSError as cleanup_error:
+                _note_cleanup_failure(exc, cleanup_error)
+            except BaseException as cleanup_error:
                 _note_cleanup_failure(exc, cleanup_error)
             temp_fd = -1
             raise
@@ -1272,6 +1292,8 @@ def _gzip_file(source: Path, target: Path) -> None:
                 os.close(temp_fd)
             except OSError as cleanup_error:
                 _note_cleanup_failure(exc, cleanup_error)
+            except BaseException as cleanup_error:
+                _note_cleanup_failure(exc, cleanup_error)
             temp_fd = -1
             raise
         except BaseException as exc:
@@ -1282,6 +1304,8 @@ def _gzip_file(source: Path, target: Path) -> None:
             try:
                 os.close(temp_fd)
             except OSError as cleanup_error:
+                _note_cleanup_failure(exc, cleanup_error)
+            except BaseException as cleanup_error:
                 _note_cleanup_failure(exc, cleanup_error)
             temp_fd = -1
             raise
