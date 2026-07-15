@@ -2828,7 +2828,7 @@ def _stabilize_recording_artifact_path(
         if parent_fd is not None:
             try:
                 os.close(parent_fd)
-            except OSError:
+            except BaseException:
                 pass
 
 

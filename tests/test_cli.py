@@ -5327,6 +5327,32 @@ class CliTest(unittest.TestCase):
             self.assertIsInstance(kwargs.get("directory_fd"), int)
             self.assertEqual(kwargs.get("field_name"), "stable recording artifact")
 
+    def test_stabilize_recording_artifact_preserves_success_when_parent_close_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings_root = Path(tmp)
+            temp_trimmed = recordings_root / "recording.trimmed-keep.flac"
+            temp_trimmed.write_bytes(b"trimmed-audio")
+            parent_fd = os.open(recordings_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_close = os.close
+
+            def close_wrapper(fd: int) -> None:
+                if fd == parent_fd:
+                    raise KeyboardInterrupt
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.object(cli, "ensure_directory_without_following_symlinks", return_value=parent_fd),
+                    mock.patch.object(cli.os, "close", side_effect=close_wrapper),
+                ):
+                    stable = cli._stabilize_recording_artifact_path(temp_trimmed)
+            finally:
+                real_close(parent_fd)
+
+            self.assertEqual(stable, recordings_root / "recording.flac")
+            self.assertEqual(stable.read_bytes(), b"trimmed-audio")
+            self.assertFalse(temp_trimmed.exists())
+
     def test_stabilize_recording_artifact_does_not_overwrite_unrelated_stable_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             recordings_root = Path(tmp) / "speed-of-cinnamon" / "recordings"
