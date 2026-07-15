@@ -617,11 +617,15 @@ def _open_log_source_file(
             os.close(fd)
         except OSError as cleanup_error:
             _note_cleanup_failure(exc, cleanup_error)
+        except BaseException as cleanup_error:
+            _note_cleanup_failure(exc, cleanup_error)
         raise
     except BaseException as exc:
         try:
             os.close(fd)
         except OSError as cleanup_error:
+            _note_cleanup_failure(exc, cleanup_error)
+        except BaseException as cleanup_error:
             _note_cleanup_failure(exc, cleanup_error)
         raise
     return fd
@@ -650,11 +654,15 @@ def _create_log_temp_file(directory: Path, *, prefix: str, suffix: str) -> tuple
             os.close(parent_fd)
         except OSError as cleanup_error:
             _note_cleanup_failure(exc, cleanup_error)
+        except BaseException as cleanup_error:
+            _note_cleanup_failure(exc, cleanup_error)
         raise
     except BaseException as exc:
         try:
             os.close(parent_fd)
         except OSError as cleanup_error:
+            _note_cleanup_failure(exc, cleanup_error)
+        except BaseException as cleanup_error:
             _note_cleanup_failure(exc, cleanup_error)
         raise
 

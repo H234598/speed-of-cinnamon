@@ -394,6 +394,18 @@ class AppLoggingTest(unittest.TestCase):
 
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_open_log_source_preserves_validation_error_when_fd_close_is_interrupted(self) -> None:
+        with (
+            mock.patch.object(app_logging, "_assert_regular_unlinked_file"),
+            mock.patch.object(app_logging, "open_file_without_following_symlinks", return_value=123),
+            mock.patch.object(app_logging, "assert_fd_is_regular_private_file", side_effect=RuntimeError("not regular")),
+            mock.patch.object(app_logging.os, "close", side_effect=KeyboardInterrupt),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "not regular") as caught:
+                app_logging._open_log_source_file(Path("/probe.log"), field_name="log source file")
+
+        self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
+
     def test_open_log_source_closes_fd_when_validation_is_interrupted(self) -> None:
         with (
             mock.patch.object(app_logging, "_assert_regular_unlinked_file", return_value=os.stat(__file__)),
@@ -584,6 +596,17 @@ class AppLoggingTest(unittest.TestCase):
             mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
             mock.patch.object(app_logging.os, "open", side_effect=OSError("temp open failed")),
             mock.patch.object(app_logging.os, "close", side_effect=OSError("close failed")),
+        ):
+            with self.assertRaisesRegex(OSError, "temp open failed") as caught:
+                app_logging._create_log_temp_file(Path("/probe"), prefix="daily", suffix=".tmp")
+
+        self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
+
+    def test_create_log_temp_preserves_open_error_when_parent_close_is_interrupted(self) -> None:
+        with (
+            mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(app_logging.os, "open", side_effect=OSError("temp open failed")),
+            mock.patch.object(app_logging.os, "close", side_effect=KeyboardInterrupt),
         ):
             with self.assertRaisesRegex(OSError, "temp open failed") as caught:
                 app_logging._create_log_temp_file(Path("/probe"), prefix="daily", suffix=".tmp")
