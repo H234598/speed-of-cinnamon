@@ -567,6 +567,18 @@ class AppLoggingTest(unittest.TestCase):
             mocked_close.assert_any_call(456)
             mocked_close.assert_any_call(789)
 
+    def test_monthly_merge_removes_temp_archive_when_copy_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "speed-of-cinnamon-2026-05-30.log"
+            source.write_text("source\n", encoding="utf-8")
+            source.chmod(0o600)
+            with mock.patch.object(app_logging, "_copy_log_content", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    app_logging._merge_old_months(log_dir, date(2026, 6, 1))
+
+            self.assertEqual(list(log_dir.glob("*.tmp")), [])
+
     def test_create_log_temp_preserves_open_error_when_parent_close_fails(self) -> None:
         with (
             mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
@@ -1323,12 +1335,26 @@ class AppLoggingTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.app_logging._rename_without_replacing", side_effect=PermissionError("replace failed")),
                 mock.patch("speed_of_cinnamon.app_logging.os.unlink", side_effect=PermissionError("cleanup denied")),
             ):
-                with self.assertRaisesRegex(RuntimeError, "failed to remove log temporary file"):
+                with self.assertRaisesRegex(PermissionError, "replace failed") as caught:
                     app_logging._gzip_file(source, target)
 
             self.assertTrue(source.exists())
             self.assertFalse(target.exists())
             self.assertTrue(list(log_dir.glob("*.tmp")))
+            self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
+
+    def test_gzip_file_removes_temp_archive_when_source_open_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "source.log"
+            target = log_dir / "target.log.gz"
+            source.write_text("content\n", encoding="utf-8")
+            source.chmod(0o600)
+            with mock.patch.object(app_logging, "_open_log_source_file", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    app_logging._gzip_file(source, target)
+
+            self.assertEqual(list(log_dir.glob("*.tmp")), [])
 
     def test_gzip_file_rejects_oversized_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -776,6 +776,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
         archive_activation_attempted = False
         archive_activation_stat: os.stat_result | None = None
         archive_transaction_active = False
+        primary_error: BaseException | None = None
         try:
             source_stats: dict[Path, os.stat_result] = {}
             try:
@@ -921,7 +922,8 @@ def _merge_old_months(directory: Path, today: date) -> None:
             _unlink_log_temp(parent_fd, temp_name)
             temp_name = ""
             continue
-        except Exception as primary_error:
+        except BaseException as exc:
+            primary_error = exc
             if archive_transaction_active:
                 try:
                     if archive_activation_attempted and archive_activation_stat is not None:
@@ -954,15 +956,23 @@ def _merge_old_months(directory: Path, today: date) -> None:
                             os.fsync(parent_fd)
                         else:
                             raise RuntimeError("monthly log archive target exists during rollback")
-                except Exception as rollback_error:
+                except BaseException as rollback_error:
                     _note_cleanup_failure(primary_error, rollback_error)
-            _unlink_log_temp(parent_fd, temp_name)
+            try:
+                _unlink_log_temp(parent_fd, temp_name)
+            except BaseException as cleanup_error:
+                _note_cleanup_failure(primary_error, cleanup_error)
             raise
         finally:
             try:
                 os.close(parent_fd)
             except OSError:
                 pass
+            except BaseException as cleanup_error:
+                if primary_error is not None:
+                    _note_cleanup_failure(primary_error, cleanup_error)
+                else:
+                    raise
 
 
 def _copy_stream_capped(source: Any, output: Any, *, source_path: Path) -> None:
@@ -1069,6 +1079,7 @@ def _gzip_file(source: Path, target: Path) -> None:
     target_activation_attempted = False
     target_removed = False
     target_transaction_active = False
+    primary_error: BaseException | None = None
 
     def _same_target_inode(first: os.stat_result, second: os.stat_result) -> bool:
         return (
@@ -1322,18 +1333,27 @@ def _gzip_file(source: Path, target: Path) -> None:
             os.fsync(parent_fd)
         _assert_same_log_file_identity(source, source_stat, field_name="log source file")
         _unlink_log_file_with_parent_fsync(source, source_stat, field_name="log source file")
-    except Exception as primary_error:
+    except BaseException as exc:
+        primary_error = exc
         try:
             _rollback_target_activation()
         except BaseException as rollback_error:
             _note_cleanup_failure(primary_error, rollback_error)
-        _unlink_log_temp(parent_fd, temp_name)
+        try:
+            _unlink_log_temp(parent_fd, temp_name)
+        except BaseException as cleanup_error:
+            _note_cleanup_failure(primary_error, cleanup_error)
         raise
     finally:
         try:
             os.close(parent_fd)
         except OSError:
             pass
+        except BaseException as cleanup_error:
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise
 
 
 def _enforce_file_size_limit(directory: Path, *, today: date | None = None) -> None:
