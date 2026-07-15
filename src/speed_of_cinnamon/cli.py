@@ -1639,7 +1639,7 @@ def _unlink_regular_leaf_with_parent_fsync(
     finally:
         try:
             os.close(parent_fd)
-        except OSError:
+        except BaseException:
             pass
 
 
@@ -1678,7 +1678,7 @@ def _remove_transient_transcript_path(
         if expected_fd is not None:
             try:
                 os.close(expected_fd)
-            except OSError:
+            except BaseException:
                 pass
 
 

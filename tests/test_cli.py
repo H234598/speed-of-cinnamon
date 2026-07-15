@@ -335,6 +335,60 @@ class CliTest(unittest.TestCase):
 
             self.assertFalse(path.exists())
 
+    def test_remove_transient_transcript_preserves_success_when_fd_close_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / ".transcript.tmp.txt"
+            storage_path = root / "transcript.txt"
+            path.write_text("temporary transcript\n", encoding="utf-8")
+            expected_fd = os.open(path, os.O_RDONLY)
+            real_close = os.close
+
+            def close_wrapper(fd: int) -> None:
+                if fd == expected_fd:
+                    raise KeyboardInterrupt
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.object(cli, "transcript_dir", return_value=root),
+                    mock.patch.object(cli, "_remove_transient_transcript_owner", return_value=True),
+                    mock.patch.object(cli.os, "close", side_effect=close_wrapper),
+                ):
+                    self.assertTrue(cli._remove_transient_transcript_path(path, storage_path, expected_fd=expected_fd))
+            finally:
+                real_close(expected_fd)
+
+            self.assertFalse(path.exists())
+
+    def test_remove_transient_transcript_preserves_success_when_parent_close_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / ".transcript.tmp.txt"
+            storage_path = root / "transcript.txt"
+            path.write_text("temporary transcript\n", encoding="utf-8")
+            parent_fd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_close = os.close
+
+            def close_wrapper(fd: int) -> None:
+                if fd == parent_fd:
+                    raise KeyboardInterrupt
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.object(cli, "transcript_dir", return_value=root),
+                    mock.patch.object(cli, "ensure_directory_without_following_symlinks", return_value=parent_fd),
+                    mock.patch.object(cli, "_remove_transient_transcript_owner", return_value=True) as mocked_owner,
+                    mock.patch.object(cli.os, "close", side_effect=close_wrapper),
+                ):
+                    self.assertTrue(cli._remove_transient_transcript_path(path, storage_path))
+            finally:
+                real_close(parent_fd)
+
+            mocked_owner.assert_called_once_with(path)
+            self.assertFalse(path.exists())
+
     def test_ensure_transcript_export_dir_preserves_success_when_fd_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
