@@ -112,6 +112,8 @@ def open_file_without_following_symlinks(
                     os.close(next_fd)
                 except OSError as next_close_error:
                     _note_cleanup_failure(close_error, next_close_error)
+                except BaseException as next_close_error:
+                    _note_cleanup_failure(close_error, next_close_error)
                 raise
             except BaseException as close_error:
                 try:
@@ -133,6 +135,8 @@ def open_file_without_following_symlinks(
                 try:
                     os.close(result_fd)
                 except OSError as result_close_error:
+                    _note_cleanup_failure(cleanup_error, result_close_error)
+                except BaseException as result_close_error:
                     _note_cleanup_failure(cleanup_error, result_close_error)
                 result_fd = None
             if primary_error is not None:
@@ -237,6 +241,8 @@ def ensure_directory_without_following_symlinks(path: Path, *, field_name: str =
                 try:
                     os.close(next_fd)
                 except OSError as next_close_error:
+                    _note_cleanup_failure(close_error, next_close_error)
+                except BaseException as next_close_error:
                     _note_cleanup_failure(close_error, next_close_error)
                 raise
             except BaseException as close_error:
@@ -577,6 +583,8 @@ def _write_atomically_without_following_symlinks(
                 os.fsync(parent_fd)
             except OSError as exc:
                 cleanup_error = exc
+            except BaseException as cleanup_exception:
+                _note_cleanup_failure(primary_error, cleanup_exception)
         if cleanup_error is not None:
             _note_cleanup_failure(primary_error, cleanup_error)
             raise

@@ -67,6 +67,26 @@ class PathSafetyTest(unittest.TestCase):
 
         self.assertEqual(close_calls, [100, 101, 100])
 
+    def test_open_file_preserves_directory_close_error_when_next_close_is_interrupted(self) -> None:
+        close_calls: list[int] = []
+
+        def fail_both_closes(fd: int) -> None:
+            close_calls.append(fd)
+            if fd == 100:
+                raise OSError("directory close failed")
+            if fd == 101:
+                raise KeyboardInterrupt
+
+        with (
+            mock.patch.object(path_safety.os, "open", side_effect=[100, 101]),
+            mock.patch.object(path_safety.os, "close", side_effect=fail_both_closes),
+        ):
+            with self.assertRaisesRegex(OSError, "directory close failed") as caught:
+                path_safety.open_file_without_following_symlinks(Path("/tmp/settings.json"), os.O_RDONLY)
+
+        self.assertIn("secure path cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertEqual(close_calls, [100, 101, 100])
+
     def test_open_file_closes_next_directory_when_previous_close_is_interrupted(self) -> None:
         close_calls: list[int] = []
         directory_close_attempts = 0
@@ -102,6 +122,26 @@ class PathSafetyTest(unittest.TestCase):
             with self.assertRaisesRegex(OSError, "directory close failed"):
                 path_safety.ensure_directory_without_following_symlinks(Path("/tmp/settings"))
 
+        self.assertEqual(close_calls, [100, 101, 100])
+
+    def test_ensure_directory_preserves_directory_close_error_when_next_close_is_interrupted(self) -> None:
+        close_calls: list[int] = []
+
+        def fail_both_closes(fd: int) -> None:
+            close_calls.append(fd)
+            if fd == 100:
+                raise OSError("directory close failed")
+            if fd == 101:
+                raise KeyboardInterrupt
+
+        with (
+            mock.patch.object(path_safety.os, "open", side_effect=[100, 101]),
+            mock.patch.object(path_safety.os, "close", side_effect=fail_both_closes),
+        ):
+            with self.assertRaisesRegex(OSError, "directory close failed") as caught:
+                path_safety.ensure_directory_without_following_symlinks(Path("/tmp/settings"))
+
+        self.assertIn("secure path cleanup failed", "\n".join(caught.exception.__notes__))
         self.assertEqual(close_calls, [100, 101, 100])
 
     def test_ensure_directory_closes_fd_when_open_raises_value_error(self) -> None:
@@ -333,6 +373,18 @@ class PathSafetyTest(unittest.TestCase):
             self.assertTrue(any(child.name.startswith(".settings.json.") and child.name.endswith(".tmp") for child in Path(tmp).iterdir()))
         self.assertIn("secure path cleanup failed", "\n".join(caught.exception.__notes__))
         self.assertIn("cleanup denied", "\n".join(caught.exception.__notes__))
+
+    def test_atomic_write_preserves_primary_error_when_temp_cleanup_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            with (
+                mock.patch.object(path_safety, "_rename_without_replacing", side_effect=OSError("disk full")),
+                mock.patch.object(path_safety.os, "unlink", side_effect=KeyboardInterrupt),
+            ):
+                with self.assertRaisesRegex(OSError, "disk full") as caught:
+                    path_safety.write_text_atomically_without_following_symlinks(target, "{}")
+
+        self.assertIn("secure path cleanup failed", "\n".join(caught.exception.__notes__))
 
     def test_atomic_write_does_not_clobber_target_created_during_activation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
