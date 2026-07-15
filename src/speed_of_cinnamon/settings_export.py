@@ -312,6 +312,11 @@ def _scrub_temp_settings_export_file(parent_fd: int, temp_name: str) -> None:
                 _note_cleanup_failure(primary_error, cleanup_error)
             else:
                 raise
+        except BaseException as cleanup_error:
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise
 
 
 def _read_text_capped_without_following_symlinks(path: Path) -> str:
@@ -337,6 +342,11 @@ def _read_text_capped_without_following_symlinks(path: Path) -> str:
             try:
                 os.close(fd)
             except OSError as cleanup_error:
+                if primary_error is not None:
+                    _note_cleanup_failure(primary_error, cleanup_error)
+                else:
+                    raise
+            except BaseException as cleanup_error:
                 if primary_error is not None:
                     _note_cleanup_failure(primary_error, cleanup_error)
                 else:
