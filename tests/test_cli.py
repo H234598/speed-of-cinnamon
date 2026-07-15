@@ -9747,6 +9747,34 @@ class CliTest(unittest.TestCase):
         self.assertTrue(payload["audio_deleted"])
         self.assertFalse(audio.exists())
 
+    def test_cancel_discards_plaintext_sibling_of_encrypted_transcript(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            transcripts_root = tmp_path / "speed-of-cinnamon" / "transcripts"
+            transcripts_root.mkdir(parents=True)
+            transcripts_root.parent.chmod(0o700)
+            encrypted_transcript = transcripts_root / "recorded.txt.socenc"
+            plaintext_transcript = transcripts_root / "recorded.txt"
+            encrypted_transcript.write_bytes(b"soc1")
+            plaintext_transcript.write_text("secret plaintext\n", encoding="utf-8")
+            state_file = tmp_path / "speed-of-cinnamon" / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="error", transcript_path=str(encrypted_transcript)))
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+            encrypted_exists = encrypted_transcript.exists()
+            plaintext_exists = plaintext_transcript.exists()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "idle")
+        self.assertTrue(payload["transcript_deleted"])
+        self.assertFalse(encrypted_exists)
+        self.assertFalse(plaintext_exists)
+        self.assertEqual(final_state.status, "idle")
+
     def test_cancel_does_not_touch_artifacts_while_finalization_lock_is_held(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

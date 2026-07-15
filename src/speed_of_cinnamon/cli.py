@@ -2639,6 +2639,13 @@ def _transcript_artifact_missing_but_safe(path: Path | None) -> bool:
     return False
 
 
+def _transcript_plaintext_sibling_missing_but_safe(path: Path | None) -> bool:
+    if not isinstance(path, Path) or not is_encrypted_path(path):
+        return True
+    plaintext_path = path.with_name(path.name.removesuffix(".socenc"))
+    return _transcript_artifact_missing_but_safe(plaintext_path)
+
+
 def _stabilize_recording_artifact_path(
     artifact_path: Path,
     *,
@@ -4163,8 +4170,17 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 transcript_deleted = _remove_transcript_file(transcript_path)
             except RuntimeError:
                 transcript_deleted = False
+            else:
+                if transcript_path is not None and is_encrypted_path(transcript_path):
+                    plaintext_path = transcript_path.with_name(transcript_path.name.removesuffix(".socenc"))
+                    try:
+                        _remove_plaintext_transcript_sibling_after_encryption(plaintext_path, transcript_path)
+                    except RuntimeError:
+                        transcript_deleted = False
             if not transcript_deleted and transcript_path is not None:
                 transcript_deleted = _transcript_artifact_missing_but_safe(transcript_path)
+                if transcript_deleted:
+                    transcript_deleted = _transcript_plaintext_sibling_missing_but_safe(transcript_path)
         if (
             (state.audio_path and not audio_deleted)
             or (state.log_path and not log_deleted)
