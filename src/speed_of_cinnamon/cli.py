@@ -451,8 +451,12 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                 if fd is not None:
                     try:
                         os.close(fd)
-                    except OSError:
+                    except BaseException:
                         pass
+                try:
+                    _unlink_finalization_lock_at(parent_fd, lock_path, expected_stat=created_stat)
+                except BaseException:
+                    pass
                 raise
 
             try:
@@ -465,21 +469,21 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
             except OSError:
                 try:
                     os.close(fd)
-                except OSError:
+                except BaseException:
                     pass
                 try:
                     _unlink_finalization_lock_at(parent_fd, lock_path, expected_stat=created_stat)
-                except OSError:
+                except BaseException:
                     pass
                 return None
             except BaseException:
                 try:
                     os.close(fd)
-                except OSError:
+                except BaseException:
                     pass
                 try:
                     _unlink_finalization_lock_at(parent_fd, lock_path, expected_stat=created_stat)
-                except OSError:
+                except BaseException:
                     pass
                 raise
             try:
@@ -487,7 +491,7 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
             except OSError:
                 try:
                     _unlink_finalization_lock_at(parent_fd, lock_path, expected_stat=created_stat)
-                except OSError:
+                except BaseException:
                     pass
                 return None
             except BaseException:
@@ -503,6 +507,13 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
             os.close(parent_fd)
         except OSError:
             pass
+        except BaseException:
+            if created_stat is not None:
+                try:
+                    _release_finalization_lock(lock_path)
+                except BaseException:
+                    pass
+            raise
 
 
 def _release_finalization_lock(lock_path: Path | None) -> None:
