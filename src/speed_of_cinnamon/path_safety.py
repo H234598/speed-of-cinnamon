@@ -601,13 +601,9 @@ def _write_atomically_without_following_symlinks(
         except OSError as cleanup_error:
             if primary_error is not None:
                 _note_cleanup_failure(primary_error, cleanup_error)
-            else:
-                raise
         except BaseException as cleanup_error:
             if primary_error is not None:
                 _note_cleanup_failure(primary_error, cleanup_error)
-            else:
-                raise
 
 
 def write_text_atomically_without_following_symlinks(

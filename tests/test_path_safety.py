@@ -653,6 +653,64 @@ class PathSafetyTest(unittest.TestCase):
 
         self.assertIn("secure path cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_atomic_write_preserves_success_when_parent_close_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            real_ensure = path_safety.ensure_directory_without_following_symlinks
+            real_close = os.close
+            parent_fds: list[int] = []
+
+            def ensure_wrapper(*args: object, **kwargs: object) -> int:
+                fd = real_ensure(*args, **kwargs)
+                parent_fds.append(fd)
+                return fd
+
+            def close_wrapper(fd: int) -> None:
+                if fd in parent_fds:
+                    raise OSError("parent close failed")
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.object(path_safety, "ensure_directory_without_following_symlinks", side_effect=ensure_wrapper),
+                    mock.patch.object(path_safety.os, "close", side_effect=close_wrapper),
+                ):
+                    path_safety.write_text_atomically_without_following_symlinks(target, "new")
+            finally:
+                for fd in parent_fds:
+                    real_close(fd)
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "new")
+
+    def test_atomic_write_preserves_success_when_parent_close_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            real_ensure = path_safety.ensure_directory_without_following_symlinks
+            real_close = os.close
+            parent_fds: list[int] = []
+
+            def ensure_wrapper(*args: object, **kwargs: object) -> int:
+                fd = real_ensure(*args, **kwargs)
+                parent_fds.append(fd)
+                return fd
+
+            def close_wrapper(fd: int) -> None:
+                if fd in parent_fds:
+                    raise KeyboardInterrupt
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.object(path_safety, "ensure_directory_without_following_symlinks", side_effect=ensure_wrapper),
+                    mock.patch.object(path_safety.os, "close", side_effect=close_wrapper),
+                ):
+                    path_safety.write_text_atomically_without_following_symlinks(target, "new")
+            finally:
+                for fd in parent_fds:
+                    real_close(fd)
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "new")
+
     def test_read_text_with_max_bytes_rejects_larger_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.txt"
