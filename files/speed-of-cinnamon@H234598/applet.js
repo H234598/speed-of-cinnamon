@@ -12117,6 +12117,9 @@ MyApplet.prototype = {
         completeOnce(String(stdout || ""));
       });
       if (!handle) {
+        if (tryFallback()) {
+          return true;
+        }
         completeOnce(null);
       }
       return Boolean(handle);
