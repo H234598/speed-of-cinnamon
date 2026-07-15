@@ -2120,7 +2120,7 @@ def _prepare_private_file(path: Path, *, field_name: str, exclusive: bool = True
     finally:
         try:
             os.close(parent_fd)
-        except OSError:
+        except BaseException:
             pass
     try:
         with os.fdopen(fd, "ab") as handle:

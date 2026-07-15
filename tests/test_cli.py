@@ -264,6 +264,29 @@ class CliTest(unittest.TestCase):
             self.assertTrue(path.exists())
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
+    def test_prepare_private_file_preserves_success_when_parent_close_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "recording.wav"
+            parent_fd = os.open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_close = os.close
+
+            def close_wrapper(fd: int) -> None:
+                if fd == parent_fd:
+                    raise KeyboardInterrupt
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.object(cli, "ensure_directory_without_following_symlinks", return_value=parent_fd),
+                    mock.patch.object(cli.os, "close", side_effect=close_wrapper),
+                ):
+                    cli._prepare_private_file(path, field_name="recording audio file")
+            finally:
+                real_close(parent_fd)
+
+            self.assertTrue(path.exists())
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
     def test_prepare_transient_transcript_preserves_owner_error_when_fd_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
