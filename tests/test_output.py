@@ -1971,6 +1971,9 @@ class OutputTest(unittest.TestCase):
                 self.assertIsNone(_acquire_clipboard_dedup_lock())
 
             self.assertGreaterEqual(mocked_close.call_count, 2)
+            self.assertFalse(
+                Path(tmp, "speed-of-cinnamon", output_module.CLIPBOARD_DEDUP_LOCK_FILE).exists()
+            )
 
     def test_clipboard_dedupe_lock_closes_fd_when_creation_stat_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1983,6 +1986,9 @@ class OutputTest(unittest.TestCase):
                     _acquire_clipboard_dedup_lock()
 
             self.assertGreaterEqual(mocked_close.call_count, 2)
+            self.assertFalse(
+                Path(tmp, "speed-of-cinnamon", output_module.CLIPBOARD_DEDUP_LOCK_FILE).exists()
+            )
 
     def test_clipboard_dedupe_lock_cleans_up_when_lock_write_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

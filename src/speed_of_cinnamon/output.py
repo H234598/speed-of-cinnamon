@@ -600,14 +600,22 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                 if created_fd is not None:
                     try:
                         os.close(created_fd)
-                    except OSError:
+                    except BaseException:
+                        pass
+                    try:
+                        _unlink_clipboard_lock_at(parent_fd, path, expected_stat=created_stat)
+                    except BaseException:
                         pass
                 return None
             except BaseException:
                 if created_fd is not None:
                     try:
                         os.close(created_fd)
-                    except OSError:
+                    except BaseException:
+                        pass
+                    try:
+                        _unlink_clipboard_lock_at(parent_fd, path, expected_stat=created_stat)
+                    except BaseException:
                         pass
                 raise
 
@@ -624,30 +632,30 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                 cleanup_stat = created_stat
                 try:
                     cleanup_stat = os.fstat(fd)
-                except OSError:
+                except BaseException:
                     pass
                 try:
                     os.close(fd)
-                except OSError:
+                except BaseException:
                     pass
                 try:
                     _unlink_clipboard_lock_at(parent_fd, path, expected_stat=cleanup_stat)
-                except OSError:
+                except BaseException:
                     pass
                 return None
             except BaseException:
                 cleanup_stat = created_stat
                 try:
                     cleanup_stat = os.fstat(fd)
-                except OSError:
+                except BaseException:
                     pass
                 try:
                     os.close(fd)
-                except OSError:
+                except BaseException:
                     pass
                 try:
                     _unlink_clipboard_lock_at(parent_fd, path, expected_stat=cleanup_stat)
-                except OSError:
+                except BaseException:
                     pass
                 raise
             try:
