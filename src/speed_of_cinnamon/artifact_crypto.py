@@ -1003,6 +1003,7 @@ def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subpr
     command = [_secret_tool_path(), *args]
     env = _filtered_environment()
     proc: subprocess.Popen[bytes] | None = None
+    primary_error: BaseException | None = None
     try:
         try:
             proc = subprocess.Popen(  # nosec B603
@@ -1043,15 +1044,25 @@ def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subpr
         stderr = _validate_secret_tool_output(stderr, field_name="stderr")
         return subprocess.CompletedProcess(command, returncode, stdout, stderr)
     except BaseException as exc:
+        primary_error = exc
         if proc is not None and not isinstance(exc, Exception):
             _stop_secret_tool_process(proc)
         raise
     finally:
+        cleanup_error: BaseException | None = None
         if proc is not None:
             for stream in (proc.stdin, proc.stdout, proc.stderr):
                 if stream is not None:
-                    with suppress(Exception):
+                    try:
                         stream.close()
+                    except BaseException as exc:
+                        if cleanup_error is None:
+                            cleanup_error = exc
+        if cleanup_error is not None:
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise cleanup_error
 
 
 def _parse_keyring_secret(raw: bytes) -> bytes | None:
