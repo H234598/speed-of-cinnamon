@@ -212,6 +212,17 @@ class PathsTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "temporary directory is not safe"):
                     paths._private_runtime_temp_root()
 
+    def test_private_temp_root_preserves_inspection_failure_when_close_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch("speed_of_cinnamon.paths.tempfile.gettempdir", return_value=tmp),
+                mock.patch("speed_of_cinnamon.paths.os.open", return_value=123),
+                mock.patch("speed_of_cinnamon.paths.os.fstat", side_effect=OSError("stat failed")),
+                mock.patch("speed_of_cinnamon.paths.os.close", side_effect=KeyboardInterrupt),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "temporary directory is not safe"):
+                    paths._private_runtime_temp_root()
+
     def test_private_temp_root_preserves_success_when_directory_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             opened_fds: list[int] = []

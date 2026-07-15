@@ -131,6 +131,11 @@ def _private_runtime_temp_root() -> Path:
                     _note_cleanup_failure(primary_error, cleanup_error)
                 else:
                     pass
+            except BaseException as cleanup_error:
+                if primary_error is not None:
+                    _note_cleanup_failure(primary_error, cleanup_error)
+                else:
+                    raise
     except (OSError, ValueError) as exc:
         raise RuntimeError("temporary directory is not safe") from exc
     assert_no_symlink_ancestors(private_root, field_name="temporary directory")
