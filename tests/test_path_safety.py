@@ -305,6 +305,30 @@ class PathSafetyTest(unittest.TestCase):
             self.assertEqual(list(Path(tmp).glob(".settings.json.*.bak")), [])
             self.assertEqual(list(Path(tmp).glob(".settings.json.*.tmp")), [])
 
+    def test_atomic_write_restores_target_when_backup_unlink_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            target.write_text("old", encoding="utf-8")
+            real_unlink = path_safety.os.unlink
+            interrupted = False
+
+            def unlink_then_interrupt(name: object, *args: object, **kwargs: object) -> None:
+                nonlocal interrupted
+                if name == target.name and not interrupted:
+                    interrupted = True
+                    real_unlink(name, *args, **kwargs)
+                    raise KeyboardInterrupt
+                real_unlink(name, *args, **kwargs)
+
+            with mock.patch.object(path_safety.os, "unlink", side_effect=unlink_then_interrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    path_safety.write_text_atomically_without_following_symlinks(target, "new")
+
+            self.assertTrue(interrupted)
+            self.assertEqual(target.read_text(encoding="utf-8"), "old")
+            self.assertEqual(list(Path(tmp).glob(".settings.json.*.bak")), [])
+            self.assertEqual(list(Path(tmp).glob(".settings.json.*.tmp")), [])
+
     def test_atomic_write_restores_existing_target_when_post_activation_inspection_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "settings.json"

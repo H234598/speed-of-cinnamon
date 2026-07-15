@@ -508,8 +508,14 @@ def _write_atomically_without_following_symlinks(
                         try:
                             candidate_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
                             if _same_leaf_inode(candidate_stat, target_stat):
-                                os.unlink(candidate_name, dir_fd=parent_fd)
-                                os.fsync(parent_fd)
+                                try:
+                                    os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+                                except FileNotFoundError:
+                                    backup_name = candidate_name
+                                    backup_moved = True
+                                else:
+                                    os.unlink(candidate_name, dir_fd=parent_fd)
+                                    os.fsync(parent_fd)
                         except FileNotFoundError:
                             pass
                         except BaseException as cleanup_error:
