@@ -92,11 +92,15 @@ def _locked_alarm_store(path: Path | None = None) -> Iterator[Path]:
             os.close(parent_fd)
         except OSError as cleanup_error:
             _note_lock_cleanup_failure(error, cleanup_error)
+        except BaseException as cleanup_error:
+            _note_lock_cleanup_failure(error, cleanup_error)
         raise error from exc
     except BaseException as exc:
         try:
             os.close(parent_fd)
         except OSError as cleanup_error:
+            _note_lock_cleanup_failure(exc, cleanup_error)
+        except BaseException as cleanup_error:
             _note_lock_cleanup_failure(exc, cleanup_error)
         raise
     primary_error: BaseException | None = None
@@ -109,18 +113,18 @@ def _locked_alarm_store(path: Path | None = None) -> Iterator[Path]:
         primary_error = exc
         raise
     finally:
-        cleanup_errors: list[OSError] = []
+        cleanup_errors: list[BaseException] = []
         try:
             fcntl.flock(fd, fcntl.LOCK_UN)
-        except OSError as cleanup_error:
+        except BaseException as cleanup_error:
             cleanup_errors.append(cleanup_error)
         try:
             os.close(fd)
-        except OSError as cleanup_error:
+        except BaseException as cleanup_error:
             cleanup_errors.append(cleanup_error)
         try:
             os.close(parent_fd)
-        except OSError as cleanup_error:
+        except BaseException as cleanup_error:
             cleanup_errors.append(cleanup_error)
         if cleanup_errors:
             if primary_error is not None:
