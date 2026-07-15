@@ -871,22 +871,29 @@ def _merge_old_months(directory: Path, today: date) -> None:
                             or not _same_log_inode(current_archive_stat, archive_stat)
                         ):
                             raise RuntimeError("monthly log archive changed during backup activation")
-                        os.unlink(archive.name, dir_fd=parent_fd)
                         archive_backup_name = candidate_name
+                        os.unlink(archive.name, dir_fd=parent_fd)
                         archive_backup_moved = True
                         os.fsync(parent_fd)
                         break
                     except BaseException as exc:
                         if not archive_backup_moved:
                             try:
-                                candidate_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
-                                if _same_log_inode(candidate_stat, archive_stat):
-                                    os.unlink(candidate_name, dir_fd=parent_fd)
-                                    os.fsync(parent_fd)
+                                os.stat(archive.name, dir_fd=parent_fd, follow_symlinks=False)
                             except FileNotFoundError:
-                                pass
+                                archive_backup_moved = True
                             except BaseException as cleanup_error:
                                 _note_cleanup_failure(exc, cleanup_error)
+                            else:
+                                try:
+                                    candidate_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                                    if _same_log_inode(candidate_stat, archive_stat):
+                                        os.unlink(candidate_name, dir_fd=parent_fd)
+                                        os.fsync(parent_fd)
+                                except FileNotFoundError:
+                                    pass
+                                except BaseException as cleanup_error:
+                                    _note_cleanup_failure(exc, cleanup_error)
                         raise
                 if archive_backup_name is None:
                     raise RuntimeError("failed to allocate monthly log archive backup")
