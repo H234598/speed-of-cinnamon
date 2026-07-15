@@ -4287,6 +4287,7 @@ MyApplet.prototype = {
     this.autoRelistenPendingToken = "";
     this.autoRelistenManualStopRequested = false;
     this.terminalWorkflowRunning = false;
+    this.terminalWorkflowToken = null;
     this.modelMenuRefreshToken = null;
     this.textModelMenuRefreshToken = null;
     this.historyRefreshToken = null;

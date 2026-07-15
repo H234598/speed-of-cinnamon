@@ -2995,6 +2995,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._runTeardownGuarded(\"teardown-menus\", () => this._destroyMenus());", source)
         self.assertIn("this._destroyAppletTooltip();", source)
         self.assertNotIn("new Applet.AppletPopupMenu(this, this.orientation)", source)
+        teardown_start = source.index("on_applet_removed_from_panel: function()")
+        teardown_end = source.index("\n  _baseArgs: function", teardown_start)
+        teardown_block = source[teardown_start:teardown_end]
+        self.assertIn("this.terminalWorkflowRunning = false;\n    this.terminalWorkflowToken = null;", teardown_block)
 
     def test_failed_target_signal_disconnect_remains_tracked(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
