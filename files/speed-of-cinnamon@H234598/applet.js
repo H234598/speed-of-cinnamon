@@ -8837,6 +8837,9 @@ MyApplet.prototype = {
     } else {
       terminationSucceeded = this._terminateProcessesByGroup("ollama", true);
     }
+    if (terminationSucceeded && this._hasTrackedProcessGroup("ollama")) {
+      terminationSucceeded = false;
+    }
     this.ollamaModelCleanupFailed = !terminationSucceeded;
     if (terminationSucceeded && hadOllamaModelCleanupFailure) {
       this._releaseBusyStateAfterProcessCleanup("ollama", "ollamaModelCleanupFailed", true);

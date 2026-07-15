@@ -3990,6 +3990,11 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         self.assertIn("let installToken = this.ollamaModelInstallToken;", block)
         self.assertIn("terminationSucceeded = this._terminateProcessesByGroup(\"ollama\", true);", block)
+        self.assertIn('if (terminationSucceeded && this._hasTrackedProcessGroup("ollama"))', block)
+        self.assertLess(
+            block.index('if (terminationSucceeded && this._hasTrackedProcessGroup("ollama"))'),
+            block.index("this.ollamaModelCleanupFailed = !terminationSucceeded;"),
+        )
         self.assertIn("if (this.ollamaModelInstallToken === installToken)", block)
         self.assertIn("this.ollamaModelInstallRunning = true;", block)
         self.assertIn("this.isCommandRunning = true;", block)
