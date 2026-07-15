@@ -1234,10 +1234,11 @@ class AppletStaticTest(unittest.TestCase):
         text_output_end = source.index("\n  _onTranscriptRetentionSettingsChanged:", text_output_start)
         text_output_block = source[text_output_start:text_output_end]
         self.assertIn("this._cancelTextInsertForSettingsChange();", text_output_block)
+        self.assertIn("this.customLimitPromptToken = null;", text_output_block)
         self.assertIn("this.autoPastePromptToken = null;", text_output_block)
         self.assertIn('this._terminateProcessesByGroup("settings-prompt")', text_output_block)
         self.assertLess(
-            text_output_block.index("this.autoPastePromptToken = null;"),
+            text_output_block.index("this.customLimitPromptToken = null;"),
             text_output_block.index('this._terminateProcessesByGroup("settings-prompt")')
         )
 
@@ -1249,6 +1250,7 @@ class AppletStaticTest(unittest.TestCase):
             end = source.index(next_method, start)
             block = source[start:end]
             self.assertIn("this.customLimitPromptToken = null;", block)
+            self.assertIn("this.autoPastePromptToken = null;", block)
             self.assertIn('this._terminateProcessesByGroup("settings-prompt")', block)
             self.assertLess(
                 block.index("this.customLimitPromptToken = null;"),

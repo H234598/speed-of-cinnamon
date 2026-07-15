@@ -4096,6 +4096,7 @@ MyApplet.prototype = {
   },
 
   _onTextOutputSettingsChanged: function() {
+    this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
     let promptCleanupSucceeded = this._terminateProcessesByGroup("settings-prompt") !== false;
     this._cancelTextInsertForSettingsChange();
@@ -4113,6 +4114,7 @@ MyApplet.prototype = {
 
   _onTranscriptRetentionSettingsChanged: function() {
     this.customLimitPromptToken = null;
+    this.autoPastePromptToken = null;
     let promptCleanupSucceeded = this._terminateProcessesByGroup("settings-prompt") !== false;
     this.maxTranscriptFiles = this._normalizeTranscriptLimit(this.maxTranscriptFiles);
     this._populateTranscriptStorageMenu();
@@ -4130,6 +4132,7 @@ MyApplet.prototype = {
 
   _onRecordingLimitSettingsChanged: function() {
     this.customLimitPromptToken = null;
+    this.autoPastePromptToken = null;
     let promptCleanupSucceeded = this._terminateProcessesByGroup("settings-prompt") !== false;
     this.maxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
     this._populateRecordingLimitMenu();
