@@ -255,16 +255,25 @@ def ensure_runtime_dirs() -> None:
         logs_dir(),
         models_dir(),
         ctranslate2_models_dir(),
-    ):
+        ):
         fd = ensure_directory_without_following_symlinks(directory, field_name="runtime directory")
+        primary_error: BaseException | None = None
         try:
             try:
                 os.fchmod(fd, 0o700)
             except OSError as exc:
                 raise RuntimeError("runtime directory could not be made private") from exc
             assert_fd_is_private_directory(fd, field_name="runtime directory")
+        except BaseException as exc:
+            primary_error = exc
+            raise
         finally:
             try:
                 os.close(fd)
             except OSError:
                 pass
+            except BaseException as cleanup_error:
+                if primary_error is not None:
+                    _note_cleanup_failure(primary_error, cleanup_error)
+                else:
+                    raise

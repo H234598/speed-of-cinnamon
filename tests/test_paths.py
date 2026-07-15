@@ -110,6 +110,17 @@ class PathsTest(unittest.TestCase):
             ):
                 self.assertEqual(directory.stat().st_mode & 0o077, 0)
 
+    def test_ensure_runtime_dirs_preserves_permission_error_when_close_is_interrupted(self) -> None:
+        with (
+            mock.patch.object(paths, "ensure_directory_without_following_symlinks", return_value=123),
+            mock.patch.object(paths.os, "fchmod", side_effect=OSError("permission denied")),
+            mock.patch.object(paths.os, "close", side_effect=KeyboardInterrupt),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "runtime directory could not be made private") as caught:
+                paths.ensure_runtime_dirs()
+
+        self.assertIn("runtime directory cleanup failed", "\n".join(caught.exception.__notes__))
+
     def test_safe_home_path_falls_back_when_home_is_symlinked(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
