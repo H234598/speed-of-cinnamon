@@ -255,14 +255,14 @@ def _read_finalization_lock_pid(lock_path: Path) -> int | None:
         if fd is not None:
             try:
                 os.close(fd)
-            except OSError:
+            except BaseException:
                 pass
         return None
     except BaseException:
         if fd is not None:
             try:
                 os.close(fd)
-            except OSError:
+            except BaseException:
                 pass
         raise
     try:

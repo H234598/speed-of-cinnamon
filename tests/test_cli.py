@@ -536,6 +536,69 @@ class CliTest(unittest.TestCase):
             with self.assertRaises(OSError):
                 os.fstat(target_fds[0])
 
+    def test_finalization_lock_pid_preserves_none_when_fd_close_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".state.finalizing"
+            path.write_text("123\n", encoding="ascii")
+            path.chmod(0o600)
+            real_open = os.open
+            real_close = os.close
+            target_fds: list[int] = []
+
+            def open_wrapper(*args: object, **kwargs: object) -> int:
+                fd = real_open(*args, **kwargs)
+                if args and args[0] == str(path):
+                    target_fds.append(fd)
+                return fd
+
+            def close_wrapper(fd: int) -> None:
+                real_close(fd)
+                if fd in target_fds:
+                    raise KeyboardInterrupt
+
+            with (
+                mock.patch.object(cli.os, "open", side_effect=open_wrapper),
+                mock.patch.object(cli.os, "fdopen", side_effect=ValueError("invalid descriptor mode")),
+                mock.patch.object(cli.os, "close", side_effect=close_wrapper),
+            ):
+                self.assertIsNone(cli._read_finalization_lock_pid(path))
+
+            self.assertEqual(len(target_fds), 1)
+            with self.assertRaises(OSError):
+                os.fstat(target_fds[0])
+
+    def test_finalization_lock_pid_preserves_interrupt_when_fd_close_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".state.finalizing"
+            path.write_text("123\n", encoding="ascii")
+            path.chmod(0o600)
+            real_open = os.open
+            real_close = os.close
+            target_fds: list[int] = []
+
+            def open_wrapper(*args: object, **kwargs: object) -> int:
+                fd = real_open(*args, **kwargs)
+                if args and args[0] == str(path):
+                    target_fds.append(fd)
+                return fd
+
+            def close_wrapper(fd: int) -> None:
+                real_close(fd)
+                if fd in target_fds:
+                    raise KeyboardInterrupt("close interrupted")
+
+            with (
+                mock.patch.object(cli.os, "open", side_effect=open_wrapper),
+                mock.patch.object(cli.os, "fdopen", side_effect=KeyboardInterrupt("fdopen interrupted")),
+                mock.patch.object(cli.os, "close", side_effect=close_wrapper),
+            ):
+                with self.assertRaisesRegex(KeyboardInterrupt, "fdopen interrupted"):
+                    cli._read_finalization_lock_pid(path)
+
+            self.assertEqual(len(target_fds), 1)
+            with self.assertRaises(OSError):
+                os.fstat(target_fds[0])
+
     def test_finalization_lock_pid_closes_descriptor_when_fdopen_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ".state.finalizing"
