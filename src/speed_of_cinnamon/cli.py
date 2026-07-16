@@ -4711,8 +4711,12 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
             payload["message"] = str(exc)
             return payload
         if not verified_alive:
-            payload["status"] = "recorded"
-            payload["message"] = "recording process has exited; run stop to transcribe"
+            if _is_recording_process_alive(state.pid):
+                payload["status"] = "error"
+                payload["message"] = "recording process identity does not match; recording state preserved"
+            else:
+                payload["status"] = "recorded"
+                payload["message"] = "recording process has exited; run stop to transcribe"
     if payload.get("status") in {"recording", "recorded"}:
         microphone_level = _recording_level_payload(state, state_path=store.path)
         if microphone_level is not None:

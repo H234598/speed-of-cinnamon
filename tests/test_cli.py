@@ -10006,6 +10006,31 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["microphone_level"]["percent"], 50)
         self.assertEqual(payload["microphone_level"]["source"], "recording-file")
 
+    @mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=True)
+    def test_status_reports_reused_recording_pid_as_error(self, mocked_alive: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            StateStore(state_file).write(
+                RecordingState(
+                    status="recording",
+                    pid=1234,
+                    process_identity="owner-identity",
+                )
+            )
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value="foreign-identity"),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["status", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("identity", payload["error"])
+        mocked_alive.assert_called()
+
     def test_status_redacts_microphone_level_errors(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
