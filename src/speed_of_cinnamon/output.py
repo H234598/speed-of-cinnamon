@@ -1240,7 +1240,7 @@ def _run_bounded_stdout_command(
                 continue
             try:
                 capture_file.close()
-            except (OSError, ValueError) as cleanup_error:
+            except BaseException as cleanup_error:
                 cleanup_failed = True
                 if primary_error is not None:
                     primary_error.add_note(f"bounded command output cleanup failed: {cleanup_error}")
