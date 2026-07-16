@@ -339,6 +339,20 @@ class SecurityParserTest(unittest.TestCase):
         self.assertEqual(sanitized, "[redacted name]")
         self.assertEqual(count, 1)
 
+    def test_apply_security_mode_masks_sensitive_values_when_labels_are_blacklisted(self) -> None:
+        cases = (
+            ("token: abc123", "token", "abc123", "[redacted token]"),
+            ("password: supersecret", "password", "supersecret", "[redacted password]"),
+            ("name: Max Mustermann", "name", "Max Mustermann", "[redacted name]"),
+        )
+        for text, blacklist_entry, secret, placeholder in cases:
+            with self.subTest(text=text):
+                sanitized, count = apply_security_mode(text, [blacklist_entry])
+
+                self.assertEqual(sanitized, placeholder)
+                self.assertEqual(count, 1)
+                self.assertNotIn(secret, sanitized)
+
     def test_apply_security_mode_masks_blacklist_items_case_insensitive(self) -> None:
         text = "Das GeHeIm hier steht. Und noch GEHEIM."
         sanitized, count = apply_security_mode(text, ["geheim"])

@@ -159,6 +159,25 @@ _SENSITIVE_PATTERNS = [
     (_CUSTOMER_ID_RE, "[redacted customer id]"),
     (_PHONE_RE, "[redacted phone]"),
 ]
+_SENSITIVE_PLACEHOLDER_RE = re.compile(
+    "|".join(
+        re.escape(placeholder)
+        for placeholder in (
+            "[redacted token]",
+            "[redacted password]",
+            "[redacted credentials]",
+            "[redacted name]",
+            "[redacted email]",
+            "[redacted iban]",
+            "[redacted bank data]",
+            "[redacted address]",
+            "[redacted id]",
+            "[redacted customer id]",
+            "[redacted phone]",
+            "[redacted card]",
+        )
+    )
+)
 
 _MULTILINE_SENSITIVE_RE = re.compile(
     rf"(?i)\b(?P<label>{_SPOKEN_SENSITIVE_LABEL_PATTERN})\b"
@@ -650,6 +669,32 @@ def _apply_name_redaction(text: str) -> tuple[str, int]:
     return _sub_with_normalized_projection(text, _NAME_RE, "[redacted name]")
 
 
+def _apply_blacklist_around_sensitive_placeholders(
+    text: str, pattern: re.Pattern[str]
+) -> tuple[str, int]:
+    pieces: list[str] = []
+    cursor = 0
+    redactions = 0
+    for placeholder_match in _SENSITIVE_PLACEHOLDER_RE.finditer(text):
+        segment, count = _sub_with_normalized_projection(
+            text[cursor:placeholder_match.start()],
+            pattern,
+            "[redacted blacklist item]",
+        )
+        pieces.append(segment)
+        pieces.append(placeholder_match.group(0))
+        redactions += count
+        cursor = placeholder_match.end()
+    segment, count = _sub_with_normalized_projection(
+        text[cursor:],
+        pattern,
+        "[redacted blacklist item]",
+    )
+    pieces.append(segment)
+    redactions += count
+    return "".join(pieces), redactions
+
+
 def parse_security_directives(text: str) -> SecurityParserResult:
     text = _assert_security_text(text)
     lines = text.splitlines()
@@ -680,10 +725,6 @@ def apply_security_mode(text: str, blacklist: list[str]) -> tuple[str, int]:
 
     clean = text
     redactions = 0
-    blacklist_pattern = _compile_blacklist_pattern(blacklist)
-    if blacklist_pattern is not None:
-        clean, count = _sub_with_normalized_projection(clean, blacklist_pattern, "[redacted blacklist item]")
-        redactions += count
     clean, count = _apply_multiline_sensitive_redaction(clean)
     redactions += count
     clean, count = _mask_cards(clean)
@@ -699,6 +740,10 @@ def apply_security_mode(text: str, blacklist: list[str]) -> tuple[str, int]:
             redactions += count
     clean, count = _apply_name_redaction(clean)
     redactions += count
+    blacklist_pattern = _compile_blacklist_pattern(blacklist)
+    if blacklist_pattern is not None:
+        clean, count = _apply_blacklist_around_sensitive_placeholders(clean, blacklist_pattern)
+        redactions += count
 
     return clean.strip(), redactions
 
