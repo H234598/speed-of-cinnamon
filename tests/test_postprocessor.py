@@ -124,6 +124,10 @@ class PostProcessorTest(unittest.TestCase):
         self.assertIn("Use Cinnamon terms.", rendered)
         self.assertIn("PipeWire", rendered)
 
+    def test_template_rejects_non_text_template(self) -> None:
+        with self.assertRaisesRegex(PostProcessError, "template must be text"):
+            render_postprocess_template(None, "hello", "en")  # type: ignore[arg-type]
+
     def test_template_rejects_oversized_personal_context(self) -> None:
         with self.assertRaisesRegex(PostProcessError, "personal context is too large"):
             render_postprocess_template(

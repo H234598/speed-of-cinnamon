@@ -283,6 +283,8 @@ def render_postprocess_template(
     personal_context: str = "",
     vocabulary: str = "",
 ) -> str:
+    if not isinstance(template, str) or isinstance(template, bool):
+        raise PostProcessError("template must be text")
     try:
         values = {
             "text": _quote(text),
