@@ -510,8 +510,9 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
         os.fchmod(temp_fd, 0o600)
         _write_all(temp_fd, payload)
         _fsync_fd(temp_fd)
-        os.close(temp_fd)
+        temp_fd_to_close = temp_fd
         temp_fd = -1
+        os.close(temp_fd_to_close)
         if replace:
             try:
                 existing_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)

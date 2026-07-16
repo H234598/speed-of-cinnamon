@@ -290,6 +290,50 @@ class ArtifactCryptoTest(unittest.TestCase):
             self.assertTrue(any(mode is not None and stat.S_ISDIR(mode) for mode in close_modes))
             self.assertFalse(any(child.name.startswith(".artifact.key.") and child.name.endswith(".tmp") for child in Path(tmp).iterdir()))
 
+    def test_default_passphrase_generation_does_not_retry_temp_fd_close(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.key"
+            real_close = artifact_crypto.os.close
+            real_fstat = artifact_crypto.os.fstat
+            close_calls: list[int] = []
+            post_interrupt_calls: list[int] = []
+            interrupted_fd: int | None = None
+
+            def close_after_close(fd: int) -> None:
+                nonlocal interrupted_fd
+                close_calls.append(fd)
+                if interrupted_fd is not None and fd == interrupted_fd:
+                    post_interrupt_calls.append(fd)
+                try:
+                    mode = real_fstat(fd).st_mode
+                except OSError:
+                    return real_close(fd)
+                if stat.S_ISREG(mode) and interrupted_fd is None:
+                    real_close(fd)
+                    interrupted_fd = fd
+                    raise OSError("temp close interrupted after close")
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: ""},
+                        clear=False,
+                    ),
+                    mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
+                    mock.patch.object(artifact_crypto.os, "close", side_effect=close_after_close),
+                ):
+                    with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be generated"):
+                        artifact_crypto._generate_default_passphrase_file(path)
+            finally:
+                if interrupted_fd is not None:
+                    with contextlib.suppress(OSError):
+                        real_close(interrupted_fd)
+
+            self.assertIsNotNone(interrupted_fd)
+            self.assertEqual(post_interrupt_calls, [])
+
     def test_default_passphrase_generation_cleanup_failure_truncates_temp_secret(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "artifact.key"
