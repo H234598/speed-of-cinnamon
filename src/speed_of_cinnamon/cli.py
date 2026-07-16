@@ -4327,6 +4327,21 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             if discarded_audio_path is not None
             else set()
         )
+        discarded_audio_present_before = False
+        if discarded_audio_path is not None:
+            audio_candidates = [discarded_audio_path]
+            audio_sibling = _recording_sibling_path(discarded_audio_path)
+            if audio_sibling is not None:
+                audio_candidates.append(audio_sibling)
+            discarded_audio_present_before = any(
+                _recording_artifact_stat(path) is not None for path in audio_candidates
+            )
+        discarded_log_present_before = (
+            discarded_log_path is not None and _recording_artifact_stat(discarded_log_path) is not None
+        )
+        discarded_inflight_present_before = {
+            path: _recording_artifact_stat(path) is not None for path in discarded_inflight_paths
+        }
         has_artifacts = bool(state.audio_path or state.log_path or state.transcript_path)
         has_recording_state = state.status in {"recording", "recorded", "processing", "finalizing", "error"}
         if not has_artifacts and not has_recording_state:
@@ -4349,7 +4364,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
 
         audio_deleted = _remove_recording_artifact(str(discarded_audio_path) if discarded_audio_path else None)
         log_deleted = remove_file(str(discarded_log_path) if discarded_log_path else None, suffix=".log")
-        if not audio_deleted and discarded_audio_path:
+        if not audio_deleted and discarded_audio_path and not discarded_audio_present_before:
             if Path(str(discarded_audio_path)).name.lower().endswith(ENCRYPTED_RECORDING_ARTIFACT_SUFFIXES):
                 audio_deleted = _recording_artifact_missing_but_safe(
                     str(discarded_audio_path),
@@ -4362,12 +4377,12 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     suffix=(".wav", ".flac"),
                     state_path=store.path,
                 )
-        if not log_deleted and discarded_log_path:
+        if not log_deleted and discarded_log_path and not discarded_log_present_before:
             log_deleted = _recording_artifact_missing_but_safe(str(discarded_log_path), suffix=".log", state_path=store.path)
         inflight_deleted = True
         for inflight_path in sorted(discarded_inflight_paths, key=lambda path: str(path)):
             deleted = _remove_recording_artifact(str(inflight_path))
-            if not deleted:
+            if not deleted and not discarded_inflight_present_before[inflight_path]:
                 suffix = ".socenc" if _is_encrypted_recording_artifact(inflight_path) else inflight_path.suffix.lower()
                 deleted = _recording_artifact_missing_but_safe(
                     str(inflight_path),

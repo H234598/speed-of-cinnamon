@@ -9398,6 +9398,53 @@ class CliTest(unittest.TestCase):
         self.assertEqual(final_state.status, "error")
         self.assertEqual(backup_files, [])
 
+    def test_cancel_preserves_state_when_delete_reports_post_delete_failure(self) -> None:
+        real_unlink = cli._unlink_regular_leaf_with_parent_fsync
+
+        def delete_then_report_failure(
+            path: Path,
+            *,
+            field_name: str,
+            expected_stat: object = None,
+        ) -> bool:
+            real_unlink(path, field_name=field_name, expected_stat=expected_stat)  # type: ignore[arg-type]
+            if field_name == "recording artifact":
+                raise RuntimeError("parent fsync failed after unlink")
+            return True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "recording.wav"
+            log = recordings / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_bytes(b"recorder log")
+            state_file = tmp_path / "state.json"
+            StateStore(state_file).write(RecordingState(status="finalizing", audio_path=str(audio), log_path=str(log)))
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch(
+                    "speed_of_cinnamon.cli._unlink_regular_leaf_with_parent_fsync",
+                    side_effect=delete_then_report_failure,
+                ),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = StateStore(state_file).read()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "error")
+        self.assertFalse(payload["audio_deleted"])
+        self.assertFalse(payload["log_deleted"])
+        self.assertEqual(final_state.status, "error")
+        self.assertEqual(final_state.audio_path, str(audio))
+        self.assertEqual(final_state.log_path, str(log))
+        self.assertFalse(audio.exists())
+        self.assertFalse(log.exists())
+
     def test_cancel_missing_outside_transcript_still_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
