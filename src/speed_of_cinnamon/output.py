@@ -811,9 +811,10 @@ def _reserve_clipboard_insertion_memory(
     if not cleaned and text != "":
         return None
     snapshot = _clipboard_insertion_snapshot()
+    insertion_at = time.monotonic()
     _LAST_CLIPBOARD_TEXT = cleaned
     _LAST_CLIPBOARD_METHOD = method
-    _LAST_CLIPBOARD_INSERTION = time.monotonic()
+    _LAST_CLIPBOARD_INSERTION = insertion_at
     _LAST_CLIPBOARD_CONTEXT = dedupe_context
     return snapshot
 
@@ -1511,7 +1512,11 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
         if insertion is None:
             return False
         lock_path, persistent_snapshot, persistent_snapshot_pending = insertion
-        snapshot = _reserve_clipboard_insertion_memory(text, method)
+        try:
+            snapshot = _reserve_clipboard_insertion_memory(text, method)
+        except BaseException:
+            _release_clipboard_dedup_lock(lock_path)
+            raise
         if snapshot is None:
             _release_clipboard_dedup_lock(lock_path)
             return False
@@ -1559,7 +1564,11 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
         if insertion is None:
             return False
         lock_path, persistent_snapshot, persistent_snapshot_pending = insertion
-        snapshot = _reserve_clipboard_insertion_memory(text, method, dedupe_context=dedupe_context)
+        try:
+            snapshot = _reserve_clipboard_insertion_memory(text, method, dedupe_context=dedupe_context)
+        except BaseException:
+            _release_clipboard_dedup_lock(lock_path)
+            raise
         if snapshot is None:
             _release_clipboard_dedup_lock(lock_path)
             return False

@@ -1799,6 +1799,32 @@ class OutputTest(unittest.TestCase):
             lock_path = Path(tmp) / "speed-of-cinnamon" / output_module.CLIPBOARD_DEDUP_LOCK_FILE
             self.assertFalse(lock_path.exists())
 
+    def test_insert_text_releases_dedupe_lock_when_memory_reservation_is_interrupted(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch(
+                "speed_of_cinnamon.output._reserve_clipboard_insertion_memory",
+                side_effect=KeyboardInterrupt,
+            ),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                insert_text("secure text", "clipboard")
+
+            lock_path = Path(tmp) / "speed-of-cinnamon" / output_module.CLIPBOARD_DEDUP_LOCK_FILE
+            self.assertFalse(lock_path.exists())
+
+    def test_clipboard_memory_reservation_is_unchanged_when_time_read_is_interrupted(self) -> None:
+        output_module._LAST_CLIPBOARD_TEXT = "old text"
+        output_module._LAST_CLIPBOARD_METHOD = "clipboard"
+        output_module._LAST_CLIPBOARD_INSERTION = 4.0
+        output_module._LAST_CLIPBOARD_CONTEXT = "old context"
+        with mock.patch("speed_of_cinnamon.output.time.monotonic", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                output_module._reserve_clipboard_insertion_memory("new text", "clipboard")
+
+        self.assertEqual(output_module._clipboard_insertion_snapshot(), ("old text", "clipboard", 4.0, "old context"))
+
     def test_insert_text_fails_closed_when_dedupe_state_is_invalid_utf8(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,
