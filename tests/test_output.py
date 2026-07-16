@@ -2403,7 +2403,7 @@ class OutputTest(unittest.TestCase):
                 self.assertIsNone(_acquire_clipboard_dedup_lock())
 
             self.assertGreaterEqual(mocked_close.call_count, 2)
-            self.assertFalse(
+            self.assertTrue(
                 Path(tmp, "speed-of-cinnamon", output_module.CLIPBOARD_DEDUP_LOCK_FILE).exists()
             )
 
@@ -2490,7 +2490,7 @@ class OutputTest(unittest.TestCase):
                     _acquire_clipboard_dedup_lock()
 
             self.assertGreaterEqual(mocked_close.call_count, 2)
-            self.assertFalse(
+            self.assertTrue(
                 Path(tmp, "speed-of-cinnamon", output_module.CLIPBOARD_DEDUP_LOCK_FILE).exists()
             )
 
@@ -2526,7 +2526,7 @@ class OutputTest(unittest.TestCase):
             finally:
                 real_close(parent_fd)
 
-            self.assertFalse((state_root / output_module.CLIPBOARD_DEDUP_LOCK_FILE).exists())
+            self.assertTrue((state_root / output_module.CLIPBOARD_DEDUP_LOCK_FILE).exists())
 
     def test_clipboard_dedupe_lock_releases_when_parent_close_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
