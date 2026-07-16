@@ -407,7 +407,7 @@ def _command_path(command: str) -> str:
     return str(command_path)
 
 
-def _recording_process_identity_for_pid(pid: int) -> str | None:
+def _recording_process_stat_fields(pid: int) -> list[str] | None:
     if pid <= 0:
         return None
     try:
@@ -416,10 +416,14 @@ def _recording_process_identity_for_pid(pid: int) -> str | None:
         return None
     try:
         close = raw.rindex(")")
-        rest = raw[close + 2 :].split()
+        return raw[close + 2 :].split()
     except ValueError:
         return None
-    if len(rest) < 20:
+
+
+def _recording_process_identity_for_pid(pid: int) -> str | None:
+    rest = _recording_process_stat_fields(pid)
+    if rest is None or len(rest) < 20:
         return None
     try:
         boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
@@ -1538,13 +1542,50 @@ def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
     return (left.st_dev, left.st_ino, left.st_mode) == (right.st_dev, right.st_ino, right.st_mode)
 
 
+def _process_group_has_live_processes(process_group_id: int) -> bool | None:
+    if process_group_id <= 0:
+        return None
+    try:
+        proc_entries = tuple(Path("/proc").iterdir())
+    except OSError:
+        return None
+    found_member = False
+    scan_incomplete = False
+    for proc_entry in proc_entries:
+        if not proc_entry.name.isdecimal():
+            continue
+        stat_fields = _recording_process_stat_fields(int(proc_entry.name))
+        if stat_fields is None or len(stat_fields) < 3:
+            scan_incomplete = True
+            continue
+        try:
+            member_group_id = int(stat_fields[2])
+        except ValueError:
+            scan_incomplete = True
+            continue
+        if member_group_id != process_group_id:
+            continue
+        found_member = True
+        if stat_fields[0] not in {"Z", "X", "x"}:
+            return True
+    if scan_incomplete:
+        return None
+    return False if found_member else None
+
+
 def _process_is_gone(process_target: str) -> bool:
     try:
-        os.kill(int(process_target), 0)
+        target = int(process_target)
+        os.kill(target, 0)
     except ProcessLookupError:
         return True
     except OSError:
         return False
+    if target < 0:
+        return _process_group_has_live_processes(-target) is False
+    if target > 0:
+        stat_fields = _recording_process_stat_fields(target)
+        return bool(stat_fields and stat_fields[0] in {"Z", "X", "x"})
     return False
 
 

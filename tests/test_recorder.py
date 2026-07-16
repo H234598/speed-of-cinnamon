@@ -2438,6 +2438,21 @@ Source #13
         self.assertEqual(mocked_kill.call_args_list[1].args[0], ["kill", "-TERM", "--", "-1234"])
         self.assertEqual(mocked_kill.call_args_list[2].args[0], ["kill", "-KILL", "--", "-1234"])
 
+    def test_stop_process_accepts_zombie_group_leader_as_stopped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            process = start_recorder(
+                RecorderCommand("sleep", ["sleep", "30"]),
+                Path(tmp) / "session.log",
+            )
+            try:
+                identity = recorder_module._recording_process_identity_for_pid(process.pid)
+                self.assertIsNotNone(identity)
+                self.assertTrue(stop_process(process.pid, timeout_seconds=1, expected_process_identity=identity))
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.wait()
+
     def test_stop_process_signals_pid_when_process_is_not_group_leader(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=999),
