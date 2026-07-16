@@ -1554,9 +1554,19 @@ def process_group_has_live_processes(process_group_id: int) -> bool | None:
     for proc_entry in proc_entries:
         if not proc_entry.name.isdecimal():
             continue
-        stat_fields = _recording_process_stat_fields(int(proc_entry.name))
+        proc_pid = int(proc_entry.name)
+        stat_fields = _recording_process_stat_fields(proc_pid)
         if stat_fields is None or len(stat_fields) < 3:
-            scan_incomplete = True
+            try:
+                member_group_id = os.getpgid(proc_pid)
+            except ProcessLookupError:
+                continue
+            except (OSError, OverflowError, ValueError):
+                scan_incomplete = True
+                continue
+            if member_group_id == process_group_id:
+                found_member = True
+                scan_incomplete = True
             continue
         try:
             member_group_id = int(stat_fields[2])
