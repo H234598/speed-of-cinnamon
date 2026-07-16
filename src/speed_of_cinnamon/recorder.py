@@ -76,7 +76,7 @@ def _close_fd_quietly(fd: int | None) -> None:
         return
     try:
         os.close(fd)
-    except (OSError, ValueError):
+    except BaseException:
         pass
 
 

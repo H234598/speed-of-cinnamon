@@ -65,6 +65,10 @@ def which_any(*commands: str) -> mock.Mock:
 
 
 class RecorderTest(unittest.TestCase):
+    def test_close_fd_quietly_swallows_interrupt(self) -> None:
+        with mock.patch.object(recorder_module.os, "close", side_effect=KeyboardInterrupt("close interrupted")):
+            recorder_module._close_fd_quietly(42)
+
     def _write_wav(self, path: Path, samples: list[int]) -> None:
         with wave.open(str(path), "wb") as handle:
             handle.setnchannels(1)
