@@ -2619,6 +2619,32 @@ class CliTest(unittest.TestCase):
         mocked_transcribe.assert_called_once()
         mocked_unlink.assert_called_once()
 
+    @mock.patch("speed_of_cinnamon.cli._unlink_regular_leaf_with_parent_fsync", side_effect=OSError("cleanup failed"))
+    @mock.patch("speed_of_cinnamon.cli.transcribe", side_effect=KeyboardInterrupt("benchmark interrupted"))
+    def test_benchmark_models_preserves_interrupt_when_cleanup_fails(
+        self,
+        mocked_transcribe: mock.Mock,
+        mocked_unlink: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            model_path = Path(tmp) / "ggml-tiny.bin"
+            self._write_wav(audio, [0, 100, -100])
+            model_path.write_bytes(b"model")
+            with (
+                mock.patch("speed_of_cinnamon.cli.model_path", return_value=model_path),
+                mock.patch("speed_of_cinnamon.cli.model_status", return_value={"downloaded": True}),
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+            ):
+                cli.ensure_runtime_dirs()
+                with self.assertRaises(KeyboardInterrupt) as context:
+                    cli._benchmark_model(audio, "de", cli.CATALOG[0])
+
+        self.assertEqual(str(context.exception), "benchmark interrupted")
+        self.assertIn("cleanup failed", "\n".join(context.exception.__notes__))
+        mocked_transcribe.assert_called_once()
+        mocked_unlink.assert_called_once()
+
     def test_benchmark_models_reports_missing_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"

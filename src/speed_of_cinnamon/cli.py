@@ -4596,6 +4596,7 @@ def _benchmark_model(audio_path: Path, language: str, model: ModelSpec) -> dict[
     text_path, text_path_stat = _temporary_benchmark_transcript_path()
     cleanup_error = ""
     transcribe_error = ""
+    base_transcribe_error: BaseException | None = None
     try:
         text = transcribe(
             audio_path=audio_path,
@@ -4613,6 +4614,9 @@ def _benchmark_model(audio_path: Path, language: str, model: ModelSpec) -> dict[
     except Exception as exc:
         text = ""
         transcribe_error = str(exc)
+    except BaseException as exc:
+        base_transcribe_error = exc
+        raise
     finally:
         try:
             _unlink_regular_leaf_with_parent_fsync(
@@ -4620,8 +4624,14 @@ def _benchmark_model(audio_path: Path, language: str, model: ModelSpec) -> dict[
                 field_name="benchmark transcript file",
                 expected_stat=text_path_stat,
             )
-        except Exception as exc:
-            cleanup_error = str(exc)
+        except BaseException as exc:
+            if base_transcribe_error is not None:
+                base_transcribe_error.add_note(f"benchmark transcript cleanup failed: {exc}")
+                raise base_transcribe_error.with_traceback(base_transcribe_error.__traceback__)
+            if isinstance(exc, Exception):
+                cleanup_error = str(exc)
+            else:
+                raise
 
     if cleanup_error:
         result["seconds"] = round(time.perf_counter() - started, 3)
