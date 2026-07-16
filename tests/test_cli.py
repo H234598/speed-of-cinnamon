@@ -5792,6 +5792,56 @@ class CliTest(unittest.TestCase):
             self.assertEqual(final_audio.read_bytes(), b"trimmed-audio")
             self.assertFalse(temp_trimmed.exists())
 
+    def test_finalize_preserves_stabilized_artifact_when_original_cleanup_reports_post_delete_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            original = recordings_root / "recording.wav"
+            temp_trimmed = recordings_root / "recording.trimmed-post-fsync.flac"
+            stable = recordings_root / "recording.flac"
+            log = recordings_root / "recording.log"
+            original.write_bytes(b"original-audio")
+            temp_trimmed.write_bytes(b"trimmed-audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="finalizing", audio_path=str(original), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=True)
+            real_remove = cli.remove_file
+
+            def remove_original_then_report_failure(path_value: str | None, **kwargs: object) -> bool:
+                if path_value == str(original):
+                    real_remove(path_value, **kwargs)
+                    return False
+                return real_remove(path_value, **kwargs)
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=original),
+                mock.patch(
+                    "speed_of_cinnamon.cli.detect_silent_recording",
+                    return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent"),
+                ),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", return_value=temp_trimmed),
+                mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.remove_file", side_effect=remove_original_then_report_failure),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "failed to delete recording artifact"):
+                    cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+            stable_exists = stable.exists()
+            original_exists = original.exists()
+
+        self.assertEqual(final_state.status, "error")
+        self.assertEqual(final_state.audio_path, str(stable))
+        self.assertTrue(stable_exists)
+        self.assertFalse(original_exists)
+
     @mock.patch("speed_of_cinnamon.cli._rename_without_replacing", wraps=cli._rename_without_replacing)
     def test_stabilize_recording_artifact_uses_secure_directory_fd_replace(self, mocked_rename: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:

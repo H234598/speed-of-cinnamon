@@ -4187,7 +4187,11 @@ def finalize_recording(
             post_done_cleanup_failures: list[tuple[str, str, str]] = []
             if remove_original_after_state_update:
                 if not remove_file(str(audio_path), suffix=audio_suffix):
-                    post_done_cleanup_failures.append(("audio_path", str(audio_path), "original recording artifact"))
+                    preserve_recording_artifacts_after_cleanup_failure = True
+                    preserved_audio_path = stabilized_audio_path or audio_path
+                    post_done_cleanup_failures.append(
+                        ("audio_path", str(preserved_audio_path), "original recording artifact")
+                    )
             _raise_recording_cleanup_failure(store, post_done_cleanup_failures)
             state = done
             status = done.status
