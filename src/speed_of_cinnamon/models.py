@@ -522,6 +522,8 @@ def _assert_download_url(
         raise ModelError(f"{field_name} must use http:// or https://")
     if not parsed.netloc:
         raise ModelError(f"{field_name} is missing network location")
+    if not parsed.hostname:
+        raise ModelError(f"{field_name} is missing hostname")
     if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
         raise ModelError(f"{field_name} must use https:// unless host is local loopback")
     try:

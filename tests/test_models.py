@@ -4256,6 +4256,12 @@ class ModelsTest(unittest.TestCase):
         with self.assertRaisesRegex(models.ModelError, "has invalid port"):
             models._assert_download_url("https://huggingface.co:bad/model.bin")
 
+    def test_assert_download_url_rejects_missing_hostname(self) -> None:
+        for value in ("https://:", "https://:443/model.bin", "https://@/model.bin"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(models.ModelError, "missing hostname"):
+                    models._assert_download_url(value)
+
     def test_assert_download_url_rejects_fragment(self) -> None:
         with self.assertRaisesRegex(models.ModelError, "must not contain fragment"):
             models._assert_download_url("https://huggingface.co/example/model.bin#token")
