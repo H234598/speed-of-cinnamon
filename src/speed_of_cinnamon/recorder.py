@@ -374,6 +374,11 @@ def _decode_ffmpeg_output(payload: object) -> str:
 
 def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
     try:
+        if process.poll() is not None:
+            return True
+    except (OSError, ValueError):
+        return False
+    try:
         os.killpg(process.pid, signal.SIGKILL)
         return True
     except ProcessLookupError:

@@ -80,6 +80,9 @@ class _FakePopen:
     def kill(self) -> None:
         self.returncode = -9
 
+    def poll(self) -> int | None:
+        return self.returncode
+
 
 class _RunnerPopen(_FakePopen):
     def __init__(self, runner: object, args: tuple[object, ...], kwargs: dict[str, object]) -> None:
@@ -125,6 +128,17 @@ class RecorderTest(unittest.TestCase):
     def test_close_fd_quietly_swallows_interrupt(self) -> None:
         with mock.patch.object(recorder_module.os, "close", side_effect=KeyboardInterrupt("close interrupted")):
             recorder_module._close_fd_quietly(42)
+
+    def test_reap_does_not_signal_already_reaped_recorder_process(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.return_value = 0
+        process.communicate.return_value = (b"", b"")
+        with mock.patch("speed_of_cinnamon.recorder.os.killpg") as mocked_killpg:
+            self.assertTrue(recorder_module._reap_timed_out_recorder_process(process))
+
+        mocked_killpg.assert_not_called()
+        process.communicate.assert_called_once_with(timeout=None)
 
     def _write_wav(self, path: Path, samples: list[int]) -> None:
         with wave.open(str(path), "wb") as handle:
