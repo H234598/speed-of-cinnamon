@@ -1596,6 +1596,25 @@ class RecorderTest(unittest.TestCase):
             self.assertFalse(log_path.exists())
         mocked_popen.assert_called_once()
 
+    def test_start_recorder_cleans_up_log_file_when_start_is_interrupted(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "session.log"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+                mock.patch(
+                    "speed_of_cinnamon.recorder.subprocess.Popen",
+                    side_effect=KeyboardInterrupt("process start interrupted"),
+                ),
+            ):
+                with self.assertRaises(KeyboardInterrupt) as context:
+                    start_recorder(command, log_path)
+
+            self.assertFalse(log_path.exists())
+
+        self.assertEqual(str(context.exception), "process start interrupted")
+
     @mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=OSError("boom"))
     def test_start_recorder_fsyncs_parent_when_start_failure_removes_log(self, mocked_popen: mock.Mock) -> None:
         from speed_of_cinnamon import recorder as recorder_module

@@ -1593,6 +1593,12 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
     except RecorderError:
         _cleanup_created_recorder_log(log_path, log_file, created_log)
         raise
+    except BaseException as exc:
+        try:
+            _cleanup_created_recorder_log(log_path, log_file, created_log)
+        except BaseException as cleanup_error:
+            exc.add_note(f"recorder log cleanup failed: {cleanup_error}")
+        raise
     finally:
         try:
             log_file.close()
