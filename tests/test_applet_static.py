@@ -3245,7 +3245,7 @@ class AppletStaticTest(unittest.TestCase):
         end = source.index("\n  _init:", start)
         block = source[start:end]
         self.assertIn("let normalizedDelay;", block)
-        self.assertIn("normalizedDelay = Number(delay || 1);", block)
+        self.assertIn("normalizedDelay = Number(delay === undefined || delay === null ? 1 : delay);", block)
         self.assertIn("if (!Number.isFinite(normalizedDelay))", block)
         self.assertIn('new Error("Timer delay is invalid")', block)
         self.assertIn('this._recordLifecycleError("timer-schedule", error);', block)

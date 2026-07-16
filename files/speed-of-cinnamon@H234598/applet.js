@@ -3011,7 +3011,7 @@ MyApplet.prototype = {
     let sourceRemovalSucceeded = false;
     let normalizedDelay;
     try {
-      normalizedDelay = Number(delay || 1);
+      normalizedDelay = Number(delay === undefined || delay === null ? 1 : delay);
       if (!Number.isFinite(normalizedDelay)) {
         throw new Error("Timer delay is invalid");
       }
