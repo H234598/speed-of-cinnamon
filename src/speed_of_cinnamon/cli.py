@@ -3628,7 +3628,7 @@ def finalize_recording(
     cleanup_rollback_backups: list[tuple[Path, Path]] = []
     preserve_recording_artifacts_after_cleanup_failure = False
 
-    def _backup_cleanup_file(path_text: str | None) -> Path | None:
+    def _backup_cleanup_file(path_text: str | None, *, suffix: str) -> Path | None:
         nonlocal audio_deleted, log_deleted, preserve_recording_artifacts_after_cleanup_failure
         if not path_text:
             return None
@@ -3637,6 +3637,12 @@ def finalize_recording(
         try:
             shutil.copy2(source, backup)
         except BaseException as exc:
+            if isinstance(exc, FileNotFoundError) and _recording_artifact_missing_but_safe(
+                path_text,
+                suffix=suffix,
+                state_path=store.path,
+            ):
+                return None
             try:
                 backup.unlink(missing_ok=True)
             except OSError as cleanup_exc:
@@ -3793,17 +3799,21 @@ def finalize_recording(
             artifact_cleanup = _enforce_recording_artifact_cap(state, state_path=store.path)
             cleanup_failures: list[tuple[str, str, str]] = []
             if not keep_recording_artifacts:
-                _backup_cleanup_file(str(audio_path))
-                _backup_cleanup_file(cleanup_log_path)
-                audio_deleted = remove_file(str(audio_path), suffix=audio_suffix)
-                log_deleted = remove_file(cleanup_log_path, suffix=".log")
+                audio_backup = _backup_cleanup_file(str(audio_path), suffix=audio_suffix)
+                log_backup = _backup_cleanup_file(cleanup_log_path, suffix=".log")
+                audio_deleted = audio_backup is None or remove_file(str(audio_path), suffix=audio_suffix)
+                log_deleted = (
+                    log_backup is None or remove_file(cleanup_log_path, suffix=".log")
+                    if cleanup_log_path
+                    else False
+                )
                 if not audio_deleted:
                     cleanup_failures.append(("audio_path", str(audio_path), "recording audio artifact"))
                 if cleanup_log_path and not log_deleted:
                     cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
             elif artifact_encryption != ARTIFACT_ENCRYPTION_OFF and cleanup_log_path:
-                _backup_cleanup_file(cleanup_log_path)
-                log_deleted = remove_file(cleanup_log_path, suffix=".log")
+                log_backup = _backup_cleanup_file(cleanup_log_path, suffix=".log")
+                log_deleted = log_backup is None or remove_file(cleanup_log_path, suffix=".log")
                 if not log_deleted:
                     cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
             if cleanup_failures:
@@ -3983,13 +3993,13 @@ def finalize_recording(
 
         cleanup_failures: list[tuple[str, str, str]] = []
         if cleanup_audio_path is not None:
-            _backup_cleanup_file(str(cleanup_audio_path))
-            audio_deleted = remove_file(str(cleanup_audio_path), suffix=audio_suffix)
+            audio_backup = _backup_cleanup_file(str(cleanup_audio_path), suffix=audio_suffix)
+            audio_deleted = audio_backup is None or remove_file(str(cleanup_audio_path), suffix=audio_suffix)
             if not audio_deleted:
                 cleanup_failures.append(("audio_path", str(cleanup_audio_path), "recording audio artifact"))
         if cleanup_log_path:
-            _backup_cleanup_file(cleanup_log_path)
-            log_deleted = remove_file(cleanup_log_path, suffix=".log")
+            log_backup = _backup_cleanup_file(cleanup_log_path, suffix=".log")
+            log_deleted = log_backup is None or remove_file(cleanup_log_path, suffix=".log")
             if not log_deleted:
                 cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
         if cleanup_failures:

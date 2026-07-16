@@ -7754,6 +7754,37 @@ class CliTest(unittest.TestCase):
             self.assertFalse(audio.exists())
             self.assertFalse(log.exists())
 
+    def test_finalize_treats_missing_recorder_log_as_already_deleted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "missing.log"
+            audio.write_bytes(b"audio")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="finalizing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=False)
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch(
+                    "speed_of_cinnamon.cli.detect_silent_recording",
+                    return_value=cli.SilenceDetectionResult(True, True, 2.0, 2.0, 0.0, 2.0, "silent"),
+                ),
+            ):
+                payload = cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+
+        self.assertEqual(payload["status"], "done")
+        self.assertTrue(payload["audio_deleted"])
+        self.assertTrue(payload["log_deleted"])
+        self.assertFalse(audio.exists())
+        self.assertEqual(final_state.audio_path, "")
+        self.assertEqual(final_state.log_path, "")
+
     def test_finalize_silent_recording_marks_error_when_artifact_cleanup_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
