@@ -475,7 +475,9 @@ def _create_recording_temp_file(audio_path: Path, *, marker: str, suffix: str) -
 def _recording_temp_path_matches_fd(path: Path, fd: int) -> bool:
     try:
         path_stat = os.stat(path, follow_symlinks=False)
-        fd_stat = os.fstat(fd)
+        fd_stat = _recording_temp_stat_for_fd(fd)
+        if fd_stat is None:
+            return False
     except OSError:
         return False
     return (
@@ -483,6 +485,17 @@ def _recording_temp_path_matches_fd(path: Path, fd: int) -> bool:
         and path_stat.st_dev == fd_stat.st_dev
         and path_stat.st_ino == fd_stat.st_ino
     )
+
+
+def _recording_temp_stat_for_fd(fd: int) -> os.stat_result | None:
+    try:
+        return os.fstat(fd)
+    except OSError:
+        proc_fd_path = Path("/proc/self/fd") / str(fd)
+        try:
+            return os.stat(proc_fd_path)
+        except OSError:
+            return None
 
 
 def _unlink_recording_path_if_same(path: Path, expected_stat: os.stat_result) -> None:
@@ -513,10 +526,7 @@ def _unlink_recording_path_if_same(path: Path, expected_stat: os.stat_result) ->
 
 
 def _cleanup_recording_temp_file(path: Path, fd: int) -> None:
-    try:
-        expected_stat = os.fstat(fd)
-    except OSError:
-        expected_stat = None
+    expected_stat = _recording_temp_stat_for_fd(fd)
     _close_fd_quietly(fd)
     if expected_stat is not None:
         _unlink_recording_path_if_same(path, expected_stat)
@@ -531,7 +541,9 @@ def _ffmpeg_output_path_for_fd(fd: int) -> str:
 
 def _inspect_and_close_recording_temp_file(path: Path, fd: int, *, field_name: str) -> tuple[int, bool, os.stat_result]:
     try:
-        output_stat = os.fstat(fd)
+        output_stat = _recording_temp_stat_for_fd(fd)
+        if output_stat is None:
+            raise RecorderError(f"failed to inspect {field_name}")
         output_size = output_stat.st_size
         output_matches_path = _recording_temp_path_matches_fd(path, fd)
     except OSError as exc:
@@ -784,7 +796,9 @@ def trim_recording_silence(
     trimmed_path: Path | None = None
     try:
         fd, trimmed_path = _create_recording_temp_file(audio_path, marker="trimmed", suffix=".flac")
-        temporary_stat = os.fstat(fd)
+        temporary_stat = _recording_temp_stat_for_fd(fd)
+        if temporary_stat is None:
+            raise RecorderError("failed to inspect ffmpeg silence trimming temporary file")
     except Exception:
         if fd is not None and trimmed_path is not None:
             _cleanup_recording_temp_file(trimmed_path, fd)
@@ -909,7 +923,9 @@ def reencode_recording_to_flac(audio_path: Path) -> Path:
     encoded_path: Path | None = None
     try:
         fd, encoded_path = _create_recording_temp_file(audio_path, marker="encoded", suffix=".flac")
-        temporary_stat = os.fstat(fd)
+        temporary_stat = _recording_temp_stat_for_fd(fd)
+        if temporary_stat is None:
+            raise RecorderError("failed to inspect ffmpeg FLAC conversion temporary file")
     except Exception:
         if fd is not None and encoded_path is not None:
             _cleanup_recording_temp_file(encoded_path, fd)

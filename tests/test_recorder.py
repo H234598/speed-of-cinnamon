@@ -817,6 +817,43 @@ class RecorderTest(unittest.TestCase):
                         reencode_recording_to_flac(audio)
             self.assertNotIn(str(audio), str(raised.exception))
 
+    def test_audio_transforms_clean_temp_when_fd_stat_needs_proc_fallback(self) -> None:
+        if not Path("/proc/self/fd").is_dir():
+            self.skipTest("/proc/self/fd unavailable")
+
+        for transform in (trim_recording_silence, reencode_recording_to_flac):
+            with self.subTest(transform=transform.__name__), tempfile.TemporaryDirectory() as tmp:
+                audio = Path(tmp) / "sample.wav"
+                audio.write_bytes(b"audio")
+                target_fd: int | None = None
+                real_create = recorder_module._create_recording_temp_file
+                real_fstat = recorder_module.os.fstat
+
+                def create_temp(*args: object, **kwargs: object) -> tuple[int, Path]:
+                    nonlocal target_fd
+                    target_fd, temp_path = real_create(*args, **kwargs)
+                    return target_fd, temp_path
+
+                def fail_temp_fstat(fd: int) -> os.stat_result:
+                    if target_fd is not None and fd == target_fd:
+                        raise OSError("temporary stat failed")
+                    return real_fstat(fd)
+
+                with (
+                    mock.patch.object(recorder_module, "_create_recording_temp_file", side_effect=create_temp),
+                    mock.patch.object(recorder_module, "_command_path", return_value="/usr/bin/ffmpeg"),
+                    mock.patch.object(
+                        recorder_module.subprocess,
+                        "run",
+                        return_value=subprocess.CompletedProcess(["ffmpeg"], 0, b"", b""),
+                    ),
+                    mock.patch.object(recorder_module.os, "fstat", side_effect=fail_temp_fstat),
+                ):
+                    with self.assertRaisesRegex(RecorderError, "produced empty output"):
+                        transform(audio)
+
+                self.assertEqual(list(Path(tmp).glob("*.flac")), [])
+
     def test_reencode_recording_to_flac_rejects_oversized_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
