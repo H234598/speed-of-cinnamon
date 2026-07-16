@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import gzip
 import json
 import logging
@@ -227,7 +228,9 @@ class SizeCappedJsonFileHandler(logging.Handler):
             return True
         except FileNotFoundError:
             return False
-        except OSError:
+        except OSError as exc:
+            if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+                return True
             return False
         finally:
             if parent_fd is not None:

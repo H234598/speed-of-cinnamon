@@ -948,6 +948,23 @@ class AppLoggingTest(unittest.TestCase):
             self.assertTrue(handler._disabled)
             self.assertGreaterEqual(mocked_open.call_count, 1)
 
+    def test_file_handler_disables_permanently_on_symlinked_log_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            real_dir = root / "real-logs"
+            real_dir.mkdir()
+            log_dir = root / "logs"
+            log_dir.symlink_to(real_dir, target_is_directory=True)
+            handler = app_logging.SizeCappedJsonFileHandler(log_dir / "active.log", log_dir)
+            handler.setFormatter(app_logging.JsonLogFormatter())
+            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+
+            handler.emit(record)
+            handler.close()
+
+            self.assertTrue(handler._disabled)
+            self.assertFalse((real_dir / "active.log").exists())
+
     def test_file_handler_preserves_directory_validation_error_when_close_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "active.log"
