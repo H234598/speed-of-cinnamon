@@ -4517,14 +4517,15 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('throw new Error("Cancellable cancellation is unavailable");', block)
         self.assertIn('throw new Error("Cancellable cancellation failed");', block)
 
-    def test_process_termination_reports_failed_force_exit(self) -> None:
+    def test_process_termination_uses_force_exit_without_invalid_exit_probe(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_terminateProcess: function(process)")
         end = source.index("\n  _terminateAllProcesses:", start)
         block = source[start:end]
-        self.assertIn('throw new Error("Process exit state API is unavailable");', block)
         self.assertIn('throw new Error("Process termination API is unavailable");', block)
-        self.assertIn('if (result === false)', block)
+        self.assertIn("process.force_exit();", block)
+        self.assertNotIn("get_if_exited", block)
+        self.assertNotIn("result === false", block)
         self.assertIn("return true;", block)
         self.assertIn("return false;", block)
 

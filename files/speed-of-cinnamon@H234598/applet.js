@@ -2554,18 +2554,10 @@ MyApplet.prototype = {
       return false;
     }
     try {
-      if (typeof process.get_if_exited !== "function") {
-        throw new Error("Process exit state API is unavailable");
+      if (typeof process.force_exit !== "function") {
+        throw new Error("Process termination API is unavailable");
       }
-      if (!process.get_if_exited()) {
-        if (typeof process.force_exit !== "function") {
-          throw new Error("Process termination API is unavailable");
-        }
-        let result = process.force_exit();
-        if (result === false) {
-          throw new Error("Process termination failed");
-        }
-      }
+      process.force_exit();
       return true;
     } catch (error) {
       this._recordLifecycleError("process-kill", error);
