@@ -356,7 +356,7 @@ class CliTest(unittest.TestCase):
                     cli._prepare_transient_transcript_path(path, storage_path)
 
             mocked_close.assert_called_once_with(42)
-            mocked_remove.assert_called_once_with(path, storage_path)
+            mocked_remove.assert_called_once_with(path, storage_path, expected_stat=os.stat(__file__))
 
     def test_prepare_transient_transcript_cleans_path_when_owner_write_and_fd_close_are_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -376,7 +376,7 @@ class CliTest(unittest.TestCase):
                     cli._prepare_transient_transcript_path(path, storage_path)
 
             mocked_close.assert_called_once_with(42)
-            mocked_remove.assert_called_once_with(path, storage_path)
+            mocked_remove.assert_called_once_with(path, storage_path, expected_stat=os.stat(__file__))
 
     def test_prepare_private_file_preserves_success_when_parent_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -514,6 +514,54 @@ class CliTest(unittest.TestCase):
                     cli._prepare_transient_transcript_path(path, storage_path)
 
             self.assertFalse(path.exists())
+
+    def test_prepare_transient_transcript_keeps_file_when_identity_stat_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / ".transcript.tmp.txt"
+            storage_path = root / "transcript.txt"
+
+            def fake_prepare(created_path: Path, *, field_name: str, exclusive: bool = True) -> None:
+                self.assertEqual(created_path, path)
+                created_path.write_text("private transcript\n", encoding="utf-8")
+
+            with (
+                mock.patch.object(cli, "transcript_dir", return_value=root),
+                mock.patch.object(cli, "_prepare_private_file", side_effect=fake_prepare),
+                mock.patch.object(cli.os, "fstat", side_effect=OSError("identity stat failed")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "failed to open transient transcript file identity"):
+                    cli._prepare_transient_transcript_path(path, storage_path)
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "private transcript\n")
+
+    def test_prepare_transient_transcript_keeps_replacement_after_owner_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / ".transcript.tmp.txt"
+            storage_path = root / "transcript.txt"
+            real_unlink = cli._unlink_regular_leaf_with_parent_fsync
+
+            def replace_before_unlink(
+                candidate: Path,
+                *,
+                field_name: str,
+                expected_stat: os.stat_result | None = None,
+            ) -> bool:
+                if field_name == "transient transcript file":
+                    candidate.unlink()
+                    candidate.write_text("replacement\n", encoding="utf-8")
+                return real_unlink(candidate, field_name=field_name, expected_stat=expected_stat)
+
+            with (
+                mock.patch.object(cli, "transcript_dir", return_value=root),
+                mock.patch.object(cli, "_write_transient_transcript_owner", side_effect=RuntimeError("owner failed")),
+                mock.patch.object(cli, "_unlink_regular_leaf_with_parent_fsync", side_effect=replace_before_unlink),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "owner failed"):
+                    cli._prepare_transient_transcript_path(path, storage_path)
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "replacement\n")
 
     def test_remove_transient_transcript_preserves_success_when_fd_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1669,9 +1669,11 @@ def _prepare_transient_transcript_path(path: Path, storage_path: Path) -> int | 
         raise RuntimeError(f"refusing to prepare unexpected transient transcript path: {path}")
     assert_no_symlink_ancestors(path, field_name="transient transcript file")
 
-    def cleanup_created_path(primary_error: BaseException) -> None:
+    def cleanup_created_path(primary_error: BaseException, expected_stat: os.stat_result | None = None) -> None:
+        if expected_stat is None:
+            return
         try:
-            _remove_transient_transcript_path(path, storage_path)
+            _remove_transient_transcript_path(path, storage_path, expected_stat=expected_stat)
         except BaseException as cleanup_error:
             if not isinstance(primary_error, Exception):
                 primary_error.add_note(f"transient transcript cleanup failed: {cleanup_error}")
@@ -1682,11 +1684,15 @@ def _prepare_transient_transcript_path(path: Path, storage_path: Path) -> int | 
         _prepare_private_file(path, field_name="transient transcript file")
     except _PrivateFilePrepareError as exc:
         if exc.created:
-            cleanup_created_path(exc)
+            cleanup_created_path(exc, getattr(exc, "created_stat", None))
+        raise
+    except BaseException as exc:
+        cleanup_created_path(exc, getattr(exc, "_speed_of_cinnamon_created_stat", None))
         raise
     nofollow_flag = getattr(os, "O_NOFOLLOW", 0)
     cloexec_flag = getattr(os, "O_CLOEXEC", 0)
     fd: int | None = None
+    file_stat: os.stat_result | None = None
     try:
         fd = os.open(path, os.O_RDONLY | nofollow_flag | cloexec_flag)
         file_stat = os.fstat(fd)
@@ -1702,7 +1708,7 @@ def _prepare_transient_transcript_path(path: Path, storage_path: Path) -> int | 
                 os.close(fd)
             except BaseException:
                 pass
-        cleanup_created_path(exc)
+        cleanup_created_path(exc, file_stat)
         raise RuntimeError(f"failed to open transient transcript file identity: {path}") from exc
     except RuntimeError as exc:
         if fd is not None:
@@ -1710,7 +1716,7 @@ def _prepare_transient_transcript_path(path: Path, storage_path: Path) -> int | 
                 os.close(fd)
             except BaseException:
                 pass
-        cleanup_created_path(exc)
+        cleanup_created_path(exc, file_stat)
         raise
     except BaseException as exc:
         if fd is not None:
@@ -1718,7 +1724,7 @@ def _prepare_transient_transcript_path(path: Path, storage_path: Path) -> int | 
                 os.close(fd)
             except BaseException:
                 pass
-        cleanup_created_path(exc)
+        cleanup_created_path(exc, file_stat)
         raise
 
 
@@ -1769,6 +1775,7 @@ def _remove_transient_transcript_path(
     storage_path: Path,
     *,
     expected_fd: int | None = None,
+    expected_stat: os.stat_result | None = None,
 ) -> bool:
     if path == storage_path:
         return False
@@ -1780,7 +1787,8 @@ def _remove_transient_transcript_path(
         return False
     try:
         assert_no_symlink_ancestors(path, field_name="transient transcript file")
-        expected_stat = os.fstat(expected_fd) if expected_fd is not None else None
+        if expected_fd is not None:
+            expected_stat = os.fstat(expected_fd)
         _unlink_regular_leaf_with_parent_fsync(
             path,
             field_name="transient transcript file",
@@ -2278,10 +2286,18 @@ def _write_text_atomic(path: Path, text: str) -> None:
 
 
 class _PrivateFilePrepareError(RuntimeError):
-    def __init__(self, message: str, *, created: bool, errno_value: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        created: bool,
+        errno_value: int | None = None,
+        created_stat: os.stat_result | None = None,
+    ) -> None:
         super().__init__(message)
         self.created = created
         self.errno = errno_value
+        self.created_stat = created_stat
 
 
 def _prepare_private_file(path: Path, *, field_name: str, exclusive: bool = True) -> None:
@@ -2309,6 +2325,30 @@ def _prepare_private_file(path: Path, *, field_name: str, exclusive: bool = True
             os.close(parent_fd)
         except BaseException:
             pass
+    created_stat: os.stat_result | None = None
+    if exclusive:
+        try:
+            created_stat = os.fstat(fd)
+        except OSError as exc:
+            try:
+                os.close(fd)
+            except BaseException:
+                pass
+            raise _PrivateFilePrepareError(
+                f"failed to prepare {field_name}: {path}",
+                created=True,
+                errno_value=exc.errno,
+            ) from exc
+        except BaseException as exc:
+            try:
+                setattr(exc, "_speed_of_cinnamon_created_stat", created_stat)
+            except BaseException:
+                pass
+            try:
+                os.close(fd)
+            except BaseException:
+                pass
+            raise
     try:
         with os.fdopen(fd, "ab") as handle:
             os.fchmod(handle.fileno(), 0o600)
@@ -2319,10 +2359,16 @@ def _prepare_private_file(path: Path, *, field_name: str, exclusive: bool = True
             pass
         raise _PrivateFilePrepareError(
             f"failed to prepare {field_name}: {path}",
-            created=True,
+            created=exclusive,
             errno_value=getattr(exc, "errno", None),
+            created_stat=created_stat,
         ) from exc
-    except BaseException:
+    except BaseException as exc:
+        if exclusive:
+            try:
+                setattr(exc, "_speed_of_cinnamon_created_stat", created_stat)
+            except BaseException:
+                pass
         try:
             os.close(fd)
         except BaseException:
