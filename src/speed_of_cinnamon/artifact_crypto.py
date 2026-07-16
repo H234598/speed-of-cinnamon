@@ -595,12 +595,22 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
                 os.unlink(temp_name, dir_fd=parent_fd)
                 temp_name = ""
                 _fsync_fd(parent_fd)
-                return _read_private_passphrase_file(path, allow_default_generation=False, rotate_weak_default=False)
+                try:
+                    return _read_private_passphrase_file(path, allow_default_generation=False, rotate_weak_default=False)
+                except BaseException as exc:
+                    primary_error = exc
+                    raise
             temp_name = ""
         _fsync_fd(parent_fd)
     except FileExistsError:
-        return _read_private_passphrase_file(path, allow_default_generation=False, rotate_weak_default=False)
+        try:
+            return _read_private_passphrase_file(path, allow_default_generation=False, rotate_weak_default=False)
+        except BaseException as exc:
+            primary_error = exc
+            raise
     except (OSError, RuntimeError) as exc:
+        if primary_error is not None:
+            raise
         primary_error = ArtifactCryptoError("artifact encryption passphrase file could not be generated")
         try:
             _rollback_passphrase_activation()

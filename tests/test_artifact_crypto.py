@@ -309,6 +309,81 @@ class ArtifactCryptoTest(unittest.TestCase):
             self.assertIn("artifact encryption cleanup failed", "\n".join(caught.exception.__notes__))
             self.assertIn("cleanup denied", "\n".join(caught.exception.__notes__))
 
+    def test_default_passphrase_generation_preserves_race_read_error_after_rename_conflict(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.key"
+            real_close = artifact_crypto.os.close
+            parent_fd = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY)
+            leaked_fds: list[int] = []
+
+            def close_parent_with_error(fd: int) -> None:
+                if fd == parent_fd:
+                    leaked_fds.append(fd)
+                    raise OSError("parent close failed")
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.object(artifact_crypto, "default_passphrase_file", return_value=path),
+                    mock.patch.object(artifact_crypto, "ensure_directory_without_following_symlinks", return_value=parent_fd),
+                    mock.patch.object(artifact_crypto, "_rename_without_replacing", side_effect=FileExistsError("target appeared")),
+                    mock.patch.object(
+                        artifact_crypto,
+                        "_read_private_passphrase_file",
+                        side_effect=artifact_crypto.ArtifactCryptoError("raced passphrase read failed"),
+                    ),
+                    mock.patch.object(artifact_crypto.os, "close", side_effect=close_parent_with_error),
+                ):
+                    with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "raced passphrase read failed") as caught:
+                        artifact_crypto._generate_default_passphrase_file(path)
+            finally:
+                for fd in leaked_fds:
+                    with contextlib.suppress(OSError):
+                        real_close(fd)
+
+            self.assertIn("artifact encryption cleanup failed", "\n".join(caught.exception.__notes__))
+            self.assertIn("parent close failed", "\n".join(caught.exception.__notes__))
+            self.assertFalse(list(Path(tmp).glob(".artifact.key.*.tmp")))
+
+    def test_default_passphrase_generation_preserves_race_read_error_after_temp_creation_conflict(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.key"
+            real_close = artifact_crypto.os.close
+            parent_fd = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY)
+            leaked_fds: list[int] = []
+
+            def close_parent_with_error(fd: int) -> None:
+                if fd == parent_fd:
+                    leaked_fds.append(fd)
+                    raise OSError("parent close failed")
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.object(artifact_crypto, "default_passphrase_file", return_value=path),
+                    mock.patch.object(artifact_crypto, "ensure_directory_without_following_symlinks", return_value=parent_fd),
+                    mock.patch.object(
+                        artifact_crypto,
+                        "_create_private_temp_passphrase_file",
+                        side_effect=FileExistsError("temporary name appeared"),
+                    ),
+                    mock.patch.object(
+                        artifact_crypto,
+                        "_read_private_passphrase_file",
+                        side_effect=artifact_crypto.ArtifactCryptoError("raced passphrase read failed"),
+                    ),
+                    mock.patch.object(artifact_crypto.os, "close", side_effect=close_parent_with_error),
+                ):
+                    with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "raced passphrase read failed") as caught:
+                        artifact_crypto._generate_default_passphrase_file(path)
+            finally:
+                for fd in leaked_fds:
+                    with contextlib.suppress(OSError):
+                        real_close(fd)
+
+            self.assertIn("artifact encryption cleanup failed", "\n".join(caught.exception.__notes__))
+            self.assertIn("parent close failed", "\n".join(caught.exception.__notes__))
+
     def test_scrub_temp_passphrase_preserves_inspection_error_when_fd_close_fails(self) -> None:
         with (
             mock.patch.object(artifact_crypto.os, "open", return_value=123),
