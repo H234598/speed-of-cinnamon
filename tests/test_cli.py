@@ -7970,6 +7970,55 @@ class CliTest(unittest.TestCase):
 
             self.assertEqual(list(recordings_root.glob(".cleanup.*.bak")), [])
 
+    def test_finalize_preserves_artifacts_when_later_cleanup_backup_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="finalizing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=False)
+            copy_count = 0
+
+            def copy_first_then_fail(source: Path, destination: Path, **_kwargs: object) -> None:
+                nonlocal copy_count
+                copy_count += 1
+                if copy_count == 1:
+                    destination.write_bytes(source.read_bytes())
+                    return
+                raise OSError("later backup storage failed")
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch(
+                    "speed_of_cinnamon.cli.detect_silent_recording",
+                    return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent"),
+                ),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("skip trim")),
+                mock.patch("speed_of_cinnamon.cli.reencode_recording_to_flac", side_effect=cli.RecorderError("skip encode")),
+                mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.shutil.copy2", side_effect=copy_first_then_fail),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "later backup storage failed"):
+                    cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+            self.assertTrue(audio.exists())
+            self.assertTrue(log.exists())
+            self.assertEqual(final_state.status, "error")
+            self.assertEqual(final_state.audio_path, str(audio))
+            self.assertEqual(final_state.log_path, str(log))
+            self.assertEqual(list(recordings_root.glob(".cleanup.*.bak")), [])
+
     def test_finalize_restores_artifacts_when_delete_reports_post_delete_failure(self) -> None:
         real_unlink = cli._unlink_regular_leaf_with_parent_fsync
 

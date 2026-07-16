@@ -3629,6 +3629,7 @@ def finalize_recording(
     preserve_recording_artifacts_after_cleanup_failure = False
 
     def _backup_cleanup_file(path_text: str | None) -> Path | None:
+        nonlocal audio_deleted, log_deleted, preserve_recording_artifacts_after_cleanup_failure
         if not path_text:
             return None
         source = Path(path_text)
@@ -3640,6 +3641,13 @@ def finalize_recording(
                 backup.unlink(missing_ok=True)
             except OSError as cleanup_exc:
                 exc.add_note(f"cleanup backup removal failed: {cleanup_exc}")
+            preserve_recording_artifacts_after_cleanup_failure = True
+            audio_deleted = False
+            log_deleted = False
+            try:
+                _restore_cleanup_backups()
+            except BaseException as restore_exc:
+                exc.add_note(f"cleanup backup restore failed: {restore_exc}")
             raise
         cleanup_rollback_backups.append((source, backup))
         return backup
@@ -3647,7 +3655,23 @@ def finalize_recording(
     def _restore_cleanup_backups() -> None:
         for original_path, backup_path in cleanup_rollback_backups:
             if backup_path.exists() and not original_path.exists():
-                shutil.copy2(backup_path, original_path)
+                parent_fd = ensure_directory_without_following_symlinks(
+                    original_path.parent,
+                    field_name="recording cleanup rollback directory",
+                )
+                try:
+                    _rename_without_replacing(
+                        backup_path.name,
+                        original_path.name,
+                        directory_fd=parent_fd,
+                        field_name="recording cleanup rollback artifact",
+                    )
+                    os.fsync(parent_fd)
+                finally:
+                    try:
+                        os.close(parent_fd)
+                    except BaseException:
+                        pass
             backup_path.unlink(missing_ok=True)
         cleanup_rollback_backups.clear()
 
