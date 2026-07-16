@@ -372,7 +372,7 @@ def _decode_ffmpeg_output(payload: object) -> str:
     return ""
 
 
-def _terminate_ffmpeg_process_group(process: subprocess.Popen[bytes]) -> bool:
+def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
     try:
         os.killpg(process.pid, signal.SIGKILL)
         return True
@@ -386,13 +386,30 @@ def _terminate_ffmpeg_process_group(process: subprocess.Popen[bytes]) -> bool:
         return False
 
 
-def _reap_timed_out_ffmpeg_process(process: subprocess.Popen[bytes]) -> bool:
-    terminated = _terminate_ffmpeg_process_group(process)
+def _reap_timed_out_recorder_process(process: subprocess.Popen[bytes]) -> bool:
+    terminated = _terminate_recorder_process_group(process)
     try:
         process.communicate(timeout=None if terminated else 1)
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return False
     return terminated
+
+
+def _communicate_recorder_process_bounded(
+    process: subprocess.Popen[bytes],
+    *,
+    timeout: int,
+    process_name: str,
+) -> None:
+    try:
+        process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        if not _reap_timed_out_recorder_process(process):
+            exc.add_note(f"{process_name} process cleanup was incomplete")
+        raise
+    except BaseException:
+        _reap_timed_out_recorder_process(process)
+        raise
 
 
 def _run_ffmpeg_bounded(
@@ -411,15 +428,7 @@ def _run_ffmpeg_bounded(
             shell=False,
             start_new_session=True,
         )
-        try:
-            proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired as exc:
-            if not _reap_timed_out_ffmpeg_process(proc):
-                exc.add_note("ffmpeg process cleanup was incomplete")
-            raise
-        except BaseException:
-            _reap_timed_out_ffmpeg_process(proc)
-            raise
+        _communicate_recorder_process_bounded(proc, timeout=timeout, process_name="ffmpeg")
         stdout = _read_ffmpeg_output(stdout_file, completed_output=getattr(proc, "stdout", None), field_name="stdout")
         stderr = _read_ffmpeg_output(stderr_file, completed_output=getattr(proc, "stderr", None), field_name="stderr")
         return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
@@ -1503,13 +1512,18 @@ def _run_pactl_command(command: list[str] | tuple[str, ...], *, required: bool) 
     try:
         with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
             try:
-                proc = subprocess.run(  # nosec B603
+                proc = subprocess.Popen(  # nosec B603
                     args=runtime_command,
                     stdout=stdout_file,
                     stderr=stderr_file,
-                    timeout=MAX_PACTL_TIMEOUT_SECONDS,
                     shell=False,
                     env=_filtered_environment(),
+                    start_new_session=True,
+                )
+                _communicate_recorder_process_bounded(
+                    proc,
+                    timeout=MAX_PACTL_TIMEOUT_SECONDS,
+                    process_name="pactl",
                 )
             except FileNotFoundError as exc:
                 raise RecorderError(f"{pactl} command not found") from exc

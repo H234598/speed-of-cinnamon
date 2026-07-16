@@ -103,6 +103,17 @@ class _RunnerPopen(_FakePopen):
         return self._result.stdout, self._result.stderr
 
 
+class _TimeoutPopen(_FakePopen):
+    def __init__(self, command: object) -> None:
+        super().__init__(subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b""))
+        self.returncode = None
+
+    def communicate(self, input: bytes | None = None, timeout: int | None = None) -> tuple[bytes | None, bytes | None]:
+        if timeout is not None:
+            raise subprocess.TimeoutExpired(cmd=self._result.args, timeout=timeout)
+        return b"", b""
+
+
 def _popen_from_run(runner: object):
     def factory(*args: object, **kwargs: object) -> _FakePopen:
         return _RunnerPopen(runner, args, kwargs)
@@ -2061,7 +2072,7 @@ class RecorderTest(unittest.TestCase):
 
         with (
             mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/pactl"),
-            mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
         ):
             result = _run_pactl_command(("pactl", "get-default-source"), required=False)
 
@@ -2077,7 +2088,7 @@ class RecorderTest(unittest.TestCase):
 
         with (
             mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/pactl"),
-            mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
         ):
             with self.assertRaisesRegex(RecorderError, "boom") as raised:
                 _run_pactl_command(["pactl", "list"], required=True)
@@ -2094,7 +2105,7 @@ class RecorderTest(unittest.TestCase):
 
         with (
             mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/pactl"),
-            mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
         ):
             with self.assertRaisesRegex(RecorderError, "\\[redacted pactl error\\]") as raised:
                 _run_pactl_command(["pactl", "list", "sources"], required=True)
@@ -2106,8 +2117,8 @@ class RecorderTest(unittest.TestCase):
         with (
             mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/pactl"),
             mock.patch(
-                "speed_of_cinnamon.recorder.subprocess.run",
-                side_effect=subprocess.TimeoutExpired(cmd=["pactl", "secret-token"], timeout=1),
+                "speed_of_cinnamon.recorder.subprocess.Popen",
+                return_value=_TimeoutPopen(["pactl", "secret-token"]),
             ),
         ):
             with self.assertRaisesRegex(RecorderError, "pactl command timed out") as raised:
@@ -2128,11 +2139,12 @@ class RecorderTest(unittest.TestCase):
 
         with (
             mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/pactl"),
-            mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=_popen_from_run(fake_run)) as mocked_popen,
         ):
             _run_pactl_command(["pactl"], required=False)
 
         self.assertEqual(calls, [["/usr/bin/pactl"]])
+        self.assertTrue(mocked_popen.call_args.kwargs["start_new_session"])
 
     def test_run_pactl_command_filters_dangerous_environment_variables(self) -> None:
         captured_env: dict[str, str] = {}
@@ -2159,7 +2171,7 @@ class RecorderTest(unittest.TestCase):
                 clear=True,
             ),
             mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/pactl"),
-            mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
         ):
             _run_pactl_command(["pactl"], required=True)
 
@@ -2168,6 +2180,43 @@ class RecorderTest(unittest.TestCase):
         self.assertEqual(captured_env["XDG_RUNTIME_DIR"], "/run/user/1000")
         self.assertEqual(captured_env["PULSE_SERVER"], "unix:/run/user/1000/pulse/native")
         self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+
+    def test_run_pactl_command_timeout_kills_process_group_descendants(self) -> None:
+        if not Path("/proc/self/stat").exists() or not hasattr(os, "killpg"):
+            self.skipTest("process group inspection unavailable")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            child_pid_path = Path(tmp) / "child.pid"
+            command = [
+                "pactl",
+                "-c",
+                f"sleep 30 & child=$!; echo $child > {child_pid_path}; wait $child",
+            ]
+            with (
+                mock.patch.object(recorder_module, "_command_path", return_value="/bin/sh"),
+                mock.patch.object(recorder_module, "MAX_PACTL_TIMEOUT_SECONDS", 1),
+            ):
+                with self.assertRaisesRegex(RecorderError, "pactl command timed out"):
+                    recorder_module._run_pactl_command(command, required=False)
+
+            child_pid: int | None = None
+            for _ in range(200):
+                try:
+                    child_pid = int(child_pid_path.read_text(encoding="utf-8").strip())
+                    break
+                except (FileNotFoundError, ValueError):
+                    time.sleep(0.01)
+            self.assertIsNotNone(child_pid)
+            assert child_pid is not None
+
+            for _ in range(200):
+                stat_fields = recorder_module._recording_process_stat_fields(child_pid)
+                if stat_fields is None or stat_fields[0] == "Z":
+                    break
+                time.sleep(0.01)
+            else:
+                os.kill(child_pid, 9)
+                self.fail(f"pactl descendant {child_pid} survived timeout")
 
     def test_run_kill_rejects_bad_command_shape(self) -> None:
         with self.assertRaisesRegex(RecorderError, "invalid kill command"):
@@ -2327,7 +2376,7 @@ Source #13
 
         with (
             mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/pactl"),
-            mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
         ):
             with self.assertRaisesRegex(RecorderError, "output exceeded"):
                 list_input_sources()
