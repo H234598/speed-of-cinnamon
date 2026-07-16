@@ -1697,6 +1697,7 @@ def _gzip_file(source: Path, target: Path) -> None:
             _unlink_target_backup()
             target_backup_created = False
             target_backup_name = ""
+            target_transaction_active = False
             os.fsync(parent_fd)
         target_transaction_active = False
         _assert_same_log_file_identity(source, source_stat, field_name="log source file")

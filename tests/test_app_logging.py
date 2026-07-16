@@ -1904,6 +1904,36 @@ class AppLoggingTest(unittest.TestCase):
                 self.assertEqual(handle.read(), "old content\n")
             self.assertEqual(list(log_dir.glob("*.backup")), [])
 
+    def test_gzip_file_keeps_new_target_when_post_backup_sync_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "source.log"
+            target = log_dir / "target.log.gz"
+            source.write_text("new content\n", encoding="utf-8")
+            source.chmod(0o600)
+            with gzip.open(target, "wt", encoding="utf-8") as handle:
+                handle.write("old content\n")
+            target.chmod(0o600)
+            real_fsync = os.fsync
+            directory_syncs = 0
+
+            def fail_post_backup_sync(fd: int) -> None:
+                nonlocal directory_syncs
+                if stat_module.S_ISDIR(os.fstat(fd).st_mode):
+                    directory_syncs += 1
+                    if directory_syncs == 5:
+                        raise OSError("post-backup sync failed")
+                real_fsync(fd)
+
+            with mock.patch.object(app_logging.os, "fsync", side_effect=fail_post_backup_sync):
+                with self.assertRaisesRegex(OSError, "post-backup sync failed"):
+                    app_logging._gzip_file(source, target)
+
+            self.assertTrue(source.exists())
+            with gzip.open(target, "rt", encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "new content\n")
+            self.assertEqual(list(log_dir.glob("*.backup")), [])
+
     def test_gzip_file_restores_target_when_target_unlink_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
