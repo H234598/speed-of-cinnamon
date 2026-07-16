@@ -119,7 +119,7 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
             _sanitize_setup_text(
                 recorder.get("detail"), "Install PipeWire, PulseAudio, or ALSA recording tools."
             ),
-            ["sudo dnf install -y pipewire-utils pulseaudio-utils alsa-utils"],
+            ["sudo dnf install -y pipewire-utils pulseaudio-utils alsa-utils coreutils"],
         )
 
     transcriber = _section(configured, "transcriber")

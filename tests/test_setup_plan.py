@@ -47,6 +47,24 @@ class SetupPlanTest(unittest.TestCase):
         self.assertIn("speed-of-cinnamon download-model tiny --json", plan["commands"])
         self.assertIn("Install or configure", plan["text"])
 
+    def test_recorder_step_includes_timeout_provider(self) -> None:
+        payload = {
+            "ok": False,
+            "configured": {
+                "recorder": {
+                    "ok": False,
+                    "detail": "timeout is required to enforce max-seconds with parecord",
+                },
+                "transcriber": {"ok": True},
+                "output": {"ok": True},
+                "postprocessor": {"ok": True},
+                "warnings": [],
+            },
+            "desktop": {"cinnamon": True},
+        }
+        plan = build_setup_plan(payload)
+        self.assertIn("coreutils", plan["commands"][0])
+
     def test_missing_custom_alias_transcriber_maps_to_command_step(self) -> None:
         payload = {
             "ok": False,
