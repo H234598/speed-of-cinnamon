@@ -3426,6 +3426,14 @@ class CliTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "openai-compatible url must not contain userinfo"):
             cli._validate_openai_compatible_http_url("https://@api.example.test/v1", "openai-compatible url")
 
+    def test_text_model_url_validators_reject_missing_hostname(self) -> None:
+        for value in ("https://:", "https://:123", "https://@"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(RuntimeError, "missing hostname"):
+                    cli._validate_ollama_http_url(value, field_name="ollama url")
+                with self.assertRaisesRegex(RuntimeError, "missing hostname"):
+                    cli._validate_openai_compatible_http_url(value, "openai-compatible url")
+
     @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models")
     def test_text_models_rejects_remote_plain_http_openai_url(self, mocked_list: mock.Mock) -> None:
         stdout = io.StringIO()

@@ -767,6 +767,8 @@ def _validate_ollama_http_url(url: str, *, field_name: str) -> str:
         raise RuntimeError(f"{field_name} is invalid") from exc
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise RuntimeError(f"{field_name} must use http:// or https://")
+    if not parsed.hostname:
+        raise RuntimeError(f"{field_name} is missing hostname")
     if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
         raise RuntimeError(f"{field_name} must use https:// unless host is local loopback")
     try:
@@ -788,6 +790,8 @@ def _validate_openai_compatible_http_url(url: str, field_name: str) -> str:
         raise RuntimeError(f"{field_name} is invalid") from exc
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise RuntimeError(f"{field_name} must use http:// or https://")
+    if not parsed.hostname:
+        raise RuntimeError(f"{field_name} is missing hostname")
     if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
         raise RuntimeError(f"{field_name} must use https:// unless host is local loopback")
     try:
