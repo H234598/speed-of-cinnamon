@@ -270,11 +270,8 @@ def ensure_runtime_dirs() -> None:
         finally:
             try:
                 os.close(fd)
-            except OSError as cleanup_error:
-                if primary_error is not None:
-                    _note_cleanup_failure(primary_error, cleanup_error)
-                else:
-                    raise
+            except OSError:
+                pass
             except BaseException as cleanup_error:
                 if primary_error is not None:
                     _note_cleanup_failure(primary_error, cleanup_error)
