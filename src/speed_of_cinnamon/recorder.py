@@ -865,6 +865,9 @@ def trim_recording_silence(
     except RecorderError:
         _unlink_recording_path_if_same(trimmed_path, temporary_stat)
         raise
+    except BaseException:
+        _unlink_recording_path_if_same(trimmed_path, temporary_stat)
+        raise
     if output_size == 0:
         _unlink_recording_path_if_same(trimmed_path, output_stat)
         raise RecorderError("ffmpeg silence trimming produced empty output")
@@ -979,6 +982,9 @@ def reencode_recording_to_flac(audio_path: Path) -> Path:
             field_name="ffmpeg FLAC conversion temporary file",
         )
     except RecorderError:
+        _unlink_recording_path_if_same(encoded_path, temporary_stat)
+        raise
+    except BaseException:
         _unlink_recording_path_if_same(encoded_path, temporary_stat)
         raise
     if output_size == 0:
