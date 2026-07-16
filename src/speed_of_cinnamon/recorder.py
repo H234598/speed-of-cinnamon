@@ -1081,8 +1081,10 @@ def read_recording_level(audio_path: Path) -> RecordingLevel:
             _close_fd_quietly(fd)
         raise
     try:
-        with os.fdopen(fd, "rb") as handle:
-            fd = None
+        handle = os.fdopen(fd, "rb")
+        fd = None
+        handle_primary_error: BaseException | None = None
+        try:
             size = os.fstat(handle.fileno()).st_size
             if size <= DEFAULT_WAV_DATA_OFFSET:
                 return RecordingLevel(False, 0, 0.0, 0.0, 0, "waiting for audio")
@@ -1095,10 +1097,24 @@ def read_recording_level(audio_path: Path) -> RecordingLevel:
                 return RecordingLevel(False, 0, 0.0, 0.0, 0, "waiting for audio")
             handle.seek(size - read_bytes)
             raw = handle.read(read_bytes)
+        except BaseException as exc:
+            handle_primary_error = exc
+            raise
+        finally:
+            try:
+                handle.close()
+            except BaseException as cleanup_error:
+                if handle_primary_error is not None:
+                    handle_primary_error.add_note(f"recorder audio cleanup failed: {cleanup_error}")
+                else:
+                    raise
     except (OSError, ValueError) as exc:
         if fd is not None:
             _close_fd_quietly(fd)
-        raise RecorderError("recording audio file is not readable") from exc
+        error = RecorderError("recording audio file is not readable")
+        for note in getattr(exc, "__notes__", ()):
+            error.add_note(note)
+        raise error from exc
     except BaseException:
         if fd is not None:
             _close_fd_quietly(fd)

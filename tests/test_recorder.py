@@ -611,6 +611,31 @@ class RecorderTest(unittest.TestCase):
 
         mocked_close.assert_called_once_with(42)
 
+    def test_read_recording_level_preserves_read_interrupt_when_handle_close_fails(self) -> None:
+        class _Handle:
+            def fileno(self) -> int:
+                return 42
+
+            def read(self, _size: int = -1) -> bytes:
+                raise KeyboardInterrupt("audio read interrupted")
+
+            def close(self) -> None:
+                raise OSError("audio close failed")
+
+        audio_path = Path("/tmp/sample.wav")
+        with (
+            mock.patch.object(recorder_module, "validate_recording_path", return_value=audio_path),
+            mock.patch.object(recorder_module, "_open_recording_artifact_leaf", return_value=42),
+            mock.patch.object(recorder_module, "assert_fd_is_regular_private_file"),
+            mock.patch.object(recorder_module.os, "fdopen", return_value=_Handle()),
+            mock.patch.object(recorder_module.os, "fstat", return_value=mock.Mock(st_size=100)),
+        ):
+            with self.assertRaisesRegex(KeyboardInterrupt, "audio read interrupted") as caught:
+                recorder_module.read_recording_level(audio_path)
+
+        self.assertIn("recorder audio cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertIn("audio close failed", "\n".join(caught.exception.__notes__))
+
     def test_silence_detection_preserves_result_on_audio_fd_close_failure(self) -> None:
         from speed_of_cinnamon import recorder as recorder_module
 
