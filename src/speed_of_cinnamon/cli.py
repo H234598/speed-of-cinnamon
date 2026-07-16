@@ -4298,9 +4298,15 @@ def finalize_recording(
         error_text = _redact_error_for_user(str(exc))
         # Refresh state once more on error so the most recent status is persisted.
         if state_marked_finalizing:
-            state = store.read()
-            if not isinstance(state, RecordingState):
-                state = store.read()
+            try:
+                refreshed_state = store.read()
+            except BaseException as state_refresh_error:
+                exc.add_note(f"finalization state refresh failed: {state_refresh_error}")
+            else:
+                if isinstance(refreshed_state, RecordingState):
+                    state = refreshed_state
+                else:
+                    exc.add_note("finalization state refresh returned invalid state")
             error_cleanup_failures: list[str] = []
             if trimmed_audio_path is not None and trimmed_audio_path != audio_path:
                 if not _remove_recording_artifact_if_present(

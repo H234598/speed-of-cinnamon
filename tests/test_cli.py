@@ -11774,6 +11774,43 @@ class CliTest(unittest.TestCase):
         self.assertTrue(audio_exists)
         self.assertTrue(log_exists)
 
+    def test_finalize_preserves_primary_error_when_state_refresh_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            audio = recordings / "recording.wav"
+            log = recordings / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            initial_state = store.read()
+            args = self._build_finalize_args(keep_recording_artifacts=True)
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch(
+                    "speed_of_cinnamon.cli.detect_silent_recording",
+                    return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent"),
+                ),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("trim failed")),
+                mock.patch("speed_of_cinnamon.cli.transcribe", side_effect=RuntimeError("transcribe failed")),
+                mock.patch.object(store, "read", side_effect=[initial_state, RuntimeError("state refresh failed")]),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "transcribe failed"):
+                    cli.finalize_recording(args, store, initial_state)
+
+            final_state = StateStore(state_file).read()
+            audio_exists = audio.exists()
+            log_exists = log.exists()
+
+        self.assertEqual(final_state.status, "error")
+        self.assertIn("transcribe failed", final_state.error)
+        self.assertTrue(audio_exists, f"state={final_state!r}")
+        self.assertTrue(log_exists)
+
     def test_finalize_keeps_audio_artifacts_when_error_state_update_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
