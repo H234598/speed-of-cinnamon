@@ -754,6 +754,25 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
         _fsync_fd(parent_fd)
         transaction_active = False
     except FileExistsError:
+        if replace and transaction_active and backup_created:
+            try:
+                if existing_stat is None:
+                    raise OSError("artifact encryption passphrase recovery backup identity is unavailable")
+                _scrub_temp_passphrase_file(parent_fd, backup_name, expected_stat=existing_stat)
+                _remove_expected_file(
+                    backup_name,
+                    existing_stat,
+                    description="artifact encryption passphrase recovery backup",
+                )
+                _fsync_fd(parent_fd)
+                backup_name = ""
+                backup_created = False
+                transaction_active = False
+            except BaseException as cleanup_error:
+                primary_error = ArtifactCryptoError(
+                    "artifact encryption passphrase recovery backup could not be removed"
+                )
+                raise primary_error from cleanup_error
         try:
             return _read_private_passphrase_file(path, allow_default_generation=False, rotate_weak_default=False)
         except BaseException as exc:

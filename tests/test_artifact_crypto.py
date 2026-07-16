@@ -709,6 +709,25 @@ class ArtifactCryptoTest(unittest.TestCase):
             leftovers = [child for child in Path(tmp).iterdir() if child.name.startswith(".artifact.key.") and child.name.endswith(".bak")]
             self.assertEqual(leftovers, [])
 
+    def test_default_passphrase_rotation_activation_conflict_removes_recovery_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.key"
+            path.write_text("short\n", encoding="utf-8")
+            path.chmod(0o600)
+
+            def conflict(*args: object, **kwargs: object) -> None:
+                path.write_text(STRONG_PASSPHRASE + "\n", encoding="utf-8")
+                path.chmod(0o600)
+                raise FileExistsError("target appeared")
+
+            with mock.patch.object(artifact_crypto, "default_passphrase_file", return_value=path), mock.patch.object(
+                artifact_crypto, "_rename_without_replacing", side_effect=conflict
+            ):
+                result = artifact_crypto._generate_default_passphrase_file(path, replace=True)
+
+            self.assertEqual(result, STRONG_PASSPHRASE)
+            self.assertFalse(list(Path(tmp).glob(".artifact.key.*.bak")))
+
     def test_passphrase_file_must_be_private(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "passphrase.txt"
