@@ -490,6 +490,24 @@ class AppLoggingTest(unittest.TestCase):
 
         mocked_close.assert_called_once_with(123)
 
+    def test_copy_log_content_preserves_read_interrupt_when_source_close_fails(self) -> None:
+        class _Source:
+            def read(self, _size: int = -1) -> bytes:
+                raise KeyboardInterrupt("log read interrupted")
+
+            def close(self) -> None:
+                raise OSError("source close failed")
+
+        with (
+            mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
+            mock.patch.object(app_logging.os, "fdopen", return_value=_Source()),
+        ):
+            with self.assertRaisesRegex(KeyboardInterrupt, "log read interrupted") as caught:
+                app_logging._copy_log_content(Path("/probe.log"), mock.Mock())
+
+        self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertIn("source close failed", "\n".join(caught.exception.__notes__))
+
     def test_unlink_log_file_preserves_success_when_parent_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

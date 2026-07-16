@@ -1086,13 +1086,38 @@ def _copy_log_content(
         except BaseException as cleanup_error:
             _note_cleanup_failure(exc, cleanup_error)
         raise
-    with source_file:
+    source_primary_error: BaseException | None = None
+    try:
         if path.suffix == ".gz":
-            with gzip.GzipFile(fileobj=source_file, mode="rb") as source:
+            source = gzip.GzipFile(fileobj=source_file, mode="rb")
+            gzip_primary_error: BaseException | None = None
+            try:
                 _copy_stream_capped(source, output, source_path=path)
+            except BaseException as exc:
+                gzip_primary_error = exc
+                raise
+            finally:
+                try:
+                    source.close()
+                except BaseException as cleanup_error:
+                    if gzip_primary_error is not None:
+                        _note_cleanup_failure(gzip_primary_error, cleanup_error)
+                    else:
+                        raise
         else:
             _copy_stream_capped(source_file, output, source_path=path)
         output.write(b"\n")
+    except BaseException as exc:
+        source_primary_error = exc
+        raise
+    finally:
+        try:
+            source_file.close()
+        except BaseException as cleanup_error:
+            if source_primary_error is not None:
+                _note_cleanup_failure(source_primary_error, cleanup_error)
+            else:
+                raise
 
 
 def _assert_same_log_file_identity(path: Path, expected_stat: os.stat_result, *, field_name: str) -> None:
