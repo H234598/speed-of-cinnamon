@@ -913,6 +913,22 @@ class SettingsExportTest(unittest.TestCase):
         ):
             settings_export_module._scrub_temp_settings_export_file(456, ".settings.tmp")
 
+    def test_scrub_temp_file_opens_nonblocking(self) -> None:
+        with (
+            mock.patch.object(settings_export_module.os, "open", return_value=123) as mocked_open,
+            mock.patch.object(
+                settings_export_module.os,
+                "fstat",
+                return_value=mock.Mock(st_mode=stat.S_IFREG, st_size=0),
+            ),
+            mock.patch.object(settings_export_module.os, "ftruncate"),
+            mock.patch.object(settings_export_module.os, "close"),
+        ):
+            settings_export_module._scrub_temp_settings_export_file(456, ".settings.tmp")
+
+        flags = mocked_open.call_args.args[1]
+        self.assertTrue(flags & getattr(os, "O_NONBLOCK", 0))
+
     def test_write_export_reports_parent_close_failure_after_successful_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
