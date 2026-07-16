@@ -3224,8 +3224,8 @@ MyApplet.prototype = {
     this._syncActiveLanguage();
     this._ensureVoiceModelCompatibleWithPrimaryLanguage(false);
     this._buildMenu();
-    this._registerHotkeys();
     this.lifecycleState = LIFECYCLE_RUNNING;
+    this._registerHotkeys();
     this._refreshStatus();
     this._scheduleSetupCheck();
     this._scheduleAlarmCheck(5);
