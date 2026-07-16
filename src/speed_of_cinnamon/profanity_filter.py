@@ -456,6 +456,11 @@ def compile_profanity_replacements(
     use_compact_patterns = text is not None
     candidate_chars: set[str] | None = None
     if text is not None:
+        candidate_chars = set(_normalize_profanity_candidate(text))
+        for _pattern, replacement in pairs[:MAX_PROFANITY_FILTER_ENTRIES]:
+            clean_replacement = _clean_editable_value(replacement, max_chars=MAX_PROFANITY_REPLACEMENT_CHARS)
+            if clean_replacement:
+                candidate_chars.update(_normalize_profanity_candidate(clean_replacement))
         ignorable_codepoints = {
             ord(char)
             for value in (
@@ -474,11 +479,6 @@ def compile_profanity_replacements(
             if unicodedata.category(char) in _MATCH_IGNORE_CATEGORIES
         }
         if ignorable_codepoints:
-            candidate_chars = set(_normalize_profanity_candidate(text))
-            for _pattern, replacement in pairs[:MAX_PROFANITY_FILTER_ENTRIES]:
-                clean_replacement = _clean_editable_value(replacement, max_chars=MAX_PROFANITY_REPLACEMENT_CHARS)
-                if clean_replacement:
-                    candidate_chars.update(_normalize_profanity_candidate(clean_replacement))
             escaped_codepoints = "".join(_regex_escape_codepoint(codepoint) for codepoint in sorted(ignorable_codepoints))
             ignorable_class = f"[{escaped_codepoints}]"
             boundary_class = f"[\\w{escaped_codepoints}]"

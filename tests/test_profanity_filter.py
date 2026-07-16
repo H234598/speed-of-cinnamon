@@ -74,6 +74,12 @@ class ProfanityFilterTest(unittest.TestCase):
 
         self.assertEqual(compile_profanity_replacements(pairs, text=text), ())
 
+    def test_compile_profanity_replacements_skips_impossible_rules_in_normal_text(self) -> None:
+        text = "hello world"
+        pairs = tuple((f"bad{index}", "safe") for index in range(500))
+
+        self.assertEqual(compile_profanity_replacements(pairs, text=text), ())
+
     def test_compile_profanity_replacements_keeps_replacement_chain_candidates(self) -> None:
         text = "f\u200boo"
         compiled = compile_profanity_replacements((("foo", "bar"), ("bar", "baz")), text=text)
