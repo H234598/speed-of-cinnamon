@@ -213,6 +213,8 @@ def _validate_remote_http_url(value: str, *, field_name: str) -> str:
         raise ValueError(f"{field_name} is invalid") from exc
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError(f"{field_name} must use http:// or https://")
+    if not parsed.hostname:
+        raise ValueError(f"{field_name} is missing hostname")
     if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
         raise ValueError(f"{field_name} must use https:// unless host is local loopback")
     try:

@@ -999,6 +999,12 @@ class DoctorTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "remote endpoint URL is invalid"):
             doctor._validate_remote_http_url("https://[::1", field_name="remote endpoint URL")
 
+    def test_validate_remote_http_url_rejects_missing_hostname(self) -> None:
+        for value in ("https://:", "https://:123", "https://@"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "remote endpoint URL is missing hostname"):
+                    doctor._validate_remote_http_url(value, field_name="remote endpoint URL")
+
     def test_parse_settings_json_rejects_large_payload(self) -> None:
         with self.assertRaisesRegex(ValueError, "settings JSON is too large"):
             doctor.parse_settings_json(json.dumps({"payload": "x" * (doctor.MAX_SETTINGS_JSON_CHARS + 1)}))
