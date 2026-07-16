@@ -14,6 +14,9 @@ from speed_of_cinnamon.settings_export import (
     MAX_SETTINGS_EXPORT_JSON_NODES,
     MAX_SETTINGS_TEXT_CHARS,
     MAX_SETTINGS_URL_CHARS,
+    MAX_OLLAMA_MODEL_CHARS,
+    MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
+    MAX_RECORDING_INPUT_DEVICE_CHARS,
     MAX_SETTINGS_EXPORT_PATH_CHARS,
     MAX_TYPING_DELAY_MS,
     MAX_ALARM_COUNT,
@@ -366,6 +369,18 @@ class SettingsExportTest(unittest.TestCase):
         long_url = "http://127.0.0.1:11434/" + ("x" * MAX_SETTINGS_URL_CHARS)
         with self.assertRaisesRegex(SettingsExportError, "setting ollama-url is too long"):
             build_export({"ollama-url": long_url})
+
+    def test_build_export_rejects_runtime_oversized_text_settings(self) -> None:
+        limits = {
+            "input-device": MAX_RECORDING_INPUT_DEVICE_CHARS,
+            "ollama-model": MAX_OLLAMA_MODEL_CHARS,
+            "openai-compatible-model": MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
+            "openai-compatible-text-model": MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
+        }
+        for key, limit in limits.items():
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(SettingsExportError, rf"setting {key} is too long"):
+                    build_export({key: "x" * (limit + 1)})
 
     def test_build_export_rejects_unknown_mode_values(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "setting insert-method has unsupported value"):

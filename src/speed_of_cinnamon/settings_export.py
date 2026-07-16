@@ -15,7 +15,8 @@ from .alarms import _dedupe_alarm_ids
 from .alarms import normalize_alarm
 from .http_safety import is_loopback_hostname
 from .paths import APP_ID
-from .recorder import MAX_RECORDING_SECONDS
+from .postprocessor import MAX_OLLAMA_MODEL_CHARS, MAX_OPENAI_COMPATIBLE_MODEL_CHARS
+from .recorder import MAX_RECORDING_INPUT_DEVICE_CHARS, MAX_RECORDING_SECONDS
 from .path_safety import (
     assert_fd_is_private_directory,
     assert_fd_is_regular_private_file,
@@ -469,7 +470,14 @@ def normalize_setting(key: str, value: Any) -> Any:
                 )
             return parsed
         return parsed
-    text_max_chars = MAX_SETTINGS_URL_CHARS if key in {"ollama-url", "openai-compatible-url"} else MAX_SETTINGS_TEXT_CHARS
+    text_max_chars = {
+        "input-device": MAX_RECORDING_INPUT_DEVICE_CHARS,
+        "ollama-model": MAX_OLLAMA_MODEL_CHARS,
+        "openai-compatible-model": MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
+        "openai-compatible-text-model": MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
+        "ollama-url": MAX_SETTINGS_URL_CHARS,
+        "openai-compatible-url": MAX_SETTINGS_URL_CHARS,
+    }.get(key, MAX_SETTINGS_TEXT_CHARS)
     text = _sanitize_text_field(value, field_name=f"setting {key}", max_chars=text_max_chars)
     _reject_secret_bearing_url_setting(key, text)
     allowed_values = _ALLOWED_SETTING_TEXT_VALUES.get(key)
