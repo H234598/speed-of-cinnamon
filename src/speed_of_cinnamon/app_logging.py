@@ -477,6 +477,12 @@ def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
             lambda match: f"{match.group(1)}=[redacted]",
         )
         redacted_value = _sub_with_ignored_projection(redacted_value, _BEARER_RE, "Bearer [redacted]")
+        redacted_value = _sub_with_ignored_projection(
+            redacted_value,
+            _URL_CREDENTIAL_RE,
+            lambda match: f"{match.group(1)}[redacted]@",
+        )
+        redacted_value = _sub_with_ignored_projection(redacted_value, _LOCAL_ABSOLUTE_PATH_RE, "[redacted path]")
         redacted_value = _sub_with_ignored_projection(redacted_value, _OPENAI_KEY_RE)
         redacted_value = _sub_with_ignored_projection(redacted_value, _SHORT_API_KEY_RE)
     else:

@@ -185,6 +185,17 @@ class AppLoggingTest(unittest.TestCase):
         self.assertEqual(sanitized, "https://[redacted]@example.test/path")
         self.assertNotIn("secret-token", sanitized)
 
+    def test_sanitize_text_redacts_obfuscated_url_credentials_and_paths(self) -> None:
+        for value, secret in (
+            ("http\u200b://secret-token@example.test/path", "secret-token"),
+            ("https:\u200b//secret-token@example.test/path", "secret-token"),
+            ("/t\u200bmp/private/transcript.txt", "/t\u200bmp"),
+            ("/ho\u200bme/teladi/.config/secret.txt", "/ho\u200bme"),
+        ):
+            with self.subTest(value=repr(value)):
+                sanitized = app_logging.sanitize_text(value, max_chars=120)
+                self.assertNotIn(secret, sanitized)
+
     def test_sanitize_text_redacts_local_absolute_paths(self) -> None:
         sanitized = app_logging.sanitize_text("failed to read /tmp/private/transcript.txt", max_chars=120)
         self.assertEqual(sanitized, "failed to read [redacted path]")
