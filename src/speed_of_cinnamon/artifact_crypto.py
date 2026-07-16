@@ -377,6 +377,7 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
     activation_stat: os.stat_result | None = None
     temporary_stat: os.stat_result | None = None
     existing_stat: os.stat_result | None = None
+    previous_payload: bytes | None = None
     transaction_active = False
     primary_error: BaseException | None = None
     cleanup_error: BaseException | None = None
@@ -416,8 +417,57 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
             second.st_size,
         )
 
+    def _read_previous_passphrase_payload(expected_stat: os.stat_result) -> bytes:
+        nonblock_flag = getattr(os, "O_NONBLOCK", 0)
+        fd = open_file_without_following_symlinks(
+            path,
+            os.O_RDONLY | nonblock_flag,
+            field_name="artifact encryption passphrase file",
+        )
+        primary_read_error: BaseException | None = None
+        try:
+            with os.fdopen(fd, "rb") as handle:
+                fd = -1
+                opened_stat = os.fstat(handle.fileno())
+                if not _same_pre_activation_identity(opened_stat, expected_stat):
+                    raise OSError("artifact encryption passphrase file changed before backup activation")
+                payload = handle.read(MAX_PASSPHRASE_FILE_BYTES + 1)
+                final_stat = os.fstat(handle.fileno())
+                if not _same_pre_activation_identity(final_stat, expected_stat):
+                    raise OSError("artifact encryption passphrase file changed while preparing rollback")
+        except BaseException as exc:
+            primary_read_error = exc
+            raise
+        finally:
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except BaseException as cleanup_read_error:
+                    if primary_read_error is not None:
+                        _note_cleanup_failure(primary_read_error, cleanup_read_error)
+                    else:
+                        raise
+        if len(payload) > MAX_PASSPHRASE_FILE_BYTES:
+            raise OSError("artifact encryption passphrase file is too large")
+        return payload
+
+    def _restore_previous_passphrase_payload() -> None:
+        if previous_payload is None:
+            raise OSError("artifact encryption passphrase rollback payload is unavailable")
+        try:
+            os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise OSError("artifact encryption passphrase target exists during rollback")
+        write_bytes_atomically_without_following_symlinks(
+            path,
+            previous_payload,
+            field_name="artifact encryption passphrase file",
+        )
+
     def _rollback_passphrase_activation() -> None:
-        nonlocal backup_created, target_removed
+        nonlocal backup_created, backup_name, target_removed
         if not transaction_active:
             return
         activation_visible = False
@@ -447,6 +497,18 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
                 os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
             except FileNotFoundError:
                 target_removed = True
+        if existing_stat is not None and target_removed and previous_payload is not None:
+            _restore_previous_passphrase_payload()
+            if backup_created:
+                try:
+                    os.unlink(backup_name, dir_fd=parent_fd)
+                except FileNotFoundError:
+                    pass
+                else:
+                    _fsync_fd(parent_fd)
+                backup_name = ""
+                backup_created = False
+            return
         if backup_created:
             if not activation_visible:
                 if target_removed:
@@ -522,6 +584,7 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
             if existing_stat is not None:
                 if not stat.S_ISREG(existing_stat.st_mode) or getattr(existing_stat, "st_nlink", 1) != 1:
                     raise ArtifactCryptoError("artifact encryption passphrase file is not safe to replace")
+                previous_payload = _read_previous_passphrase_payload(existing_stat)
                 for _ in range(100):
                     backup_name = f".{path.name}.{secrets.token_hex(8)}.bak"
                     try:
@@ -578,12 +641,9 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
             except OSError as stat_error:
                 raise OSError("artifact encryption passphrase file could not be inspected after activation") from stat_error
             _fsync_fd(parent_fd)
-            transaction_active = False
             if backup_created:
                 _scrub_temp_passphrase_file(parent_fd, backup_name)
                 os.unlink(backup_name, dir_fd=parent_fd)
-                backup_name = ""
-                backup_created = False
                 _fsync_fd(parent_fd)
         else:
             try:
@@ -604,6 +664,7 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
                     raise
             temp_name = ""
         _fsync_fd(parent_fd)
+        transaction_active = False
     except FileExistsError:
         try:
             return _read_private_passphrase_file(path, allow_default_generation=False, rotate_weak_default=False)
