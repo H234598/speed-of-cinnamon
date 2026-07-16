@@ -147,6 +147,13 @@ class OutputTest(unittest.TestCase):
 
         self.assertFalse(written)
 
+    def test_clipboard_dedup_state_fails_closed_when_state_probe_fails(self) -> None:
+        with mock.patch.object(output_module.Path, "exists", side_effect=OSError("state probe failed")):
+            self.assertEqual(
+                output_module._read_clipboard_dedup_state_entry(),
+                (False, ("", 0.0), False),
+            )
+
     def test_set_clipboard_prefers_xclip(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which") as mocked_which,
@@ -2278,6 +2285,22 @@ class OutputTest(unittest.TestCase):
                 _release_clipboard_dedup_lock(lock_path)
 
                 self.assertEqual(lock_path.read_text(encoding="utf-8"), f"{os.getpid()}\nforeign-identity\n")
+
+    def test_clipboard_dedupe_lock_release_ignores_parent_setup_interrupt(self) -> None:
+        with mock.patch.object(
+            output_module,
+            "ensure_directory_without_following_symlinks",
+            side_effect=KeyboardInterrupt("lock release interrupted"),
+        ):
+            _release_clipboard_dedup_lock(Path("/tmp/clipboard.lock"))
+
+    def test_clipboard_state_unlink_ignores_parent_setup_failure(self) -> None:
+        with mock.patch.object(
+            output_module,
+            "ensure_directory_without_following_symlinks",
+            side_effect=RuntimeError("state directory changed"),
+        ):
+            self.assertFalse(output_module._unlink_clipboard_state_file(Path("/tmp/clipboard-state")))
 
     def test_insert_text_preserves_paste_error_when_lock_release_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

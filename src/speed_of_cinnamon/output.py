@@ -272,7 +272,12 @@ def _read_clipboard_dedup_state_entry() -> tuple[bool, tuple[str, float], bool]:
         path = _clipboard_dedup_state_path()
     except RuntimeError:
         return False, ("", 0.0), False
-    if not path.exists() and not path.is_symlink():
+    try:
+        path_exists = path.exists()
+        path_is_symlink = path.is_symlink()
+    except OSError:
+        return False, ("", 0.0), False
+    if not path_exists and not path_is_symlink:
         return True, ("", 0.0), False
     try:
         raw = read_text_without_following_symlinks(
@@ -382,7 +387,6 @@ def _clipboard_lock_identity_for_pid(pid: int) -> str | None:
         raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").strip()
     except OSError:
         return None
-    acquired_path: Path | None = None
     try:
         close = raw.rindex(")")
         rest = raw[close + 2 :].split()
@@ -713,7 +717,7 @@ def _release_clipboard_dedup_lock(path: Path | None) -> None:
             path.parent,
             field_name="clipboard dedupe lock directory",
         )
-    except OSError:
+    except BaseException:
         return
     try:
         try:
@@ -825,7 +829,7 @@ def _unlink_clipboard_state_file(path: Path) -> bool:
             path.parent,
             field_name="clipboard dedupe state directory",
         )
-    except OSError:
+    except BaseException:
         return False
     try:
         try:
