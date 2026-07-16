@@ -278,6 +278,26 @@ class RecorderTest(unittest.TestCase):
 
             self.assertEqual([path.name for path in Path(tmp).glob("*trimmed*.wav")], [])
 
+    def test_trim_recording_leading_silence_cleans_temp_when_initial_stat_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            self._write_wav(audio, [0] * 1600 + [12000] * 1600)
+            real_fstat = os.fstat
+            calls = 0
+
+            def fail_initial_stat(fd: int) -> os.stat_result:
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise OSError("temporary stat failed")
+                return real_fstat(fd)
+
+            with mock.patch.object(recorder_module.os, "fstat", side_effect=fail_initial_stat):
+                with self.assertRaisesRegex(RecorderError, "failed to trim recording audio file"):
+                    trim_recording_leading_silence(audio, 0.1)
+
+            self.assertEqual([path.name for path in Path(tmp).glob("*trimmed*.wav")], [])
+
     def test_trim_recording_leading_silence_keeps_speech_on_fractional_start_frame(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"

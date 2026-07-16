@@ -674,6 +674,17 @@ def trim_recording_leading_silence(audio_path: Path, leading_silence_seconds: fl
     fd: int | None = None
     temp_path: Path | None = None
     temp_stat: os.stat_result | None = None
+
+    def cleanup_temp_output() -> None:
+        nonlocal fd
+        if temp_path is None:
+            return
+        if fd is not None:
+            _cleanup_recording_temp_file(temp_path, fd)
+            fd = None
+        elif temp_stat is not None:
+            _unlink_recording_path_if_same(temp_path, temp_stat)
+
     try:
         with os.fdopen(audio_fd, "rb") as audio_file:
             audio_fd = None
@@ -719,18 +730,15 @@ def trim_recording_leading_silence(audio_path: Path, leading_silence_seconds: fl
                     if not _recording_temp_path_matches_fd(temp_path, output_file.fileno()):
                         raise RecorderError("trimmed recording temporary file was replaced")
     except (OSError, wave.Error) as exc:
-        if temp_path is not None and temp_stat is not None:
-            _unlink_recording_path_if_same(temp_path, temp_stat)
+        cleanup_temp_output()
         raise RecorderError("failed to trim recording audio file") from exc
     except Exception as exc:
-        if temp_path is not None and temp_stat is not None:
-            _unlink_recording_path_if_same(temp_path, temp_stat)
+        cleanup_temp_output()
         if isinstance(exc, RecorderError):
             raise
         raise RecorderError("failed to write trimmed recording audio file") from exc
     except BaseException:
-        if temp_path is not None and temp_stat is not None:
-            _unlink_recording_path_if_same(temp_path, temp_stat)
+        cleanup_temp_output()
         raise
     finally:
         if audio_fd is not None:
