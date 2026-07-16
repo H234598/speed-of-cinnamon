@@ -169,6 +169,22 @@ class SecurityParserTest(unittest.TestCase):
         self.assertEqual(clean, text)
         self.assertEqual(redactions, 0)
 
+    def test_apply_security_mode_bounds_separator_heavy_email_scan_time(self) -> None:
+        text = ("1-" * ((_MAX_SECURITY_TEXT_CHARS + 1) // 2))[:_MAX_SECURITY_TEXT_CHARS]
+        started = time.perf_counter()
+
+        clean, redactions = apply_security_mode(text, [])
+
+        self.assertLess(time.perf_counter() - started, 3.0)
+        self.assertEqual(clean, text)
+        self.assertEqual(redactions, 0)
+
+    def test_apply_security_mode_masks_email_with_valid_length(self) -> None:
+        sanitized, count = apply_security_mode("Kontakt: first.last+tag@example.co.uk", [])
+
+        self.assertEqual(sanitized, "Kontakt: [redacted email]")
+        self.assertEqual(count, 1)
+
     def test_apply_security_mode_masks_spaced_iban_and_hyphenated_single_name(self) -> None:
         text = "mein name ist Jean-Luc und IBAN DE44 5001 0517 5407 3249 31"
         sanitized, count = apply_security_mode(text, [])

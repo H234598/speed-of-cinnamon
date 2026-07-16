@@ -41,7 +41,9 @@ _BLACKLIST_SHOW_RE = re.compile(
     r"(?:blacklist|blackliste|sperrliste)(?:\s+(?:anzeigen|anzeige|öffnen|open|show|zeigen|zeige))?)\s*$",
 )
 
-_EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+_EMAIL_RE = re.compile(
+    r"\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}\b"
+)
 _IBAN_RE = re.compile(r"\b[A-Za-z]{2}\d{2}(?:[ -]?[A-Z0-9]){11,30}\b", re.IGNORECASE)
 _PHONE_RE = re.compile(
     r"(?<!\d)(?:\+\d[\d\s().-]{7,20}\d|(?:\(?\d{2,5}\)?[\s.-]){1,3}\d{3,}|\d{10,15})(?!\d)"
