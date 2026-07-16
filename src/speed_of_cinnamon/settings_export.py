@@ -606,10 +606,16 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
         return (first.st_dev, first.st_ino, first.st_mode) == (second.st_dev, second.st_ino, second.st_mode)
 
     def _unlink_temp_if_same() -> None:
+        nonlocal temporary_stat
         if not temp_name:
             return
         if temporary_stat is None:
-            raise OSError("settings export temporary file identity is unavailable")
+            if temp_fd is None:
+                raise OSError("settings export temporary file identity is unavailable")
+            try:
+                temporary_stat = os.fstat(temp_fd)
+            except (OSError, ValueError) as exc:
+                raise OSError("settings export temporary file identity is unavailable") from exc
         current_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
         if (
             not _same_leaf_inode(current_stat, temporary_stat)
@@ -642,8 +648,8 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
         temp_fd, temp_name = _create_private_temp_file(parent_fd, path.name)
         try:
             temporary_stat = os.fstat(temp_fd)
-        except (OSError, ValueError):
-            temporary_stat = None
+        except (OSError, ValueError) as exc:
+            raise OSError("failed to inspect settings export temporary file") from exc
         try:
             handle = os.fdopen(temp_fd, "w", encoding="utf-8")
         except (OSError, ValueError) as exc:

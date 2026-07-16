@@ -779,6 +779,28 @@ class SettingsExportTest(unittest.TestCase):
                 os.fstat(created_fds[0])
             self.assertEqual(list(Path(tmp).iterdir()), [])
 
+    def test_write_export_does_not_write_when_initial_temp_identity_inspection_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            real_fstat = os.fstat
+            failed_regular_fstats = 0
+
+            def fail_once_for_temp_file(fd: int) -> os.stat_result:
+                nonlocal failed_regular_fstats
+                result = real_fstat(fd)
+                if stat.S_ISREG(result.st_mode) and failed_regular_fstats == 0:
+                    failed_regular_fstats += 1
+                    raise OSError("temp identity inspection failed")
+                return result
+
+            with mock.patch.object(settings_export_module.os, "fstat", side_effect=fail_once_for_temp_file):
+                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+                    write_export(path, {"language": "de", "personal-context": "SECRET"})
+
+            self.assertEqual(failed_regular_fstats, 1)
+            self.assertFalse(path.exists())
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
     def test_write_export_does_not_remove_replaced_temp_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
@@ -829,6 +851,7 @@ class SettingsExportTest(unittest.TestCase):
         with (
             mock.patch.object(settings_export_module, "ensure_directory_without_following_symlinks", return_value=456),
             mock.patch.object(settings_export_module, "assert_fd_is_private_directory"),
+            mock.patch.object(settings_export_module.os, "fstat", return_value=mock.Mock()),
             mock.patch.object(settings_export_module.os, "stat", side_effect=FileNotFoundError),
             mock.patch.object(
                 settings_export_module,
@@ -852,6 +875,7 @@ class SettingsExportTest(unittest.TestCase):
         with (
             mock.patch.object(settings_export_module, "ensure_directory_without_following_symlinks", return_value=456),
             mock.patch.object(settings_export_module, "assert_fd_is_private_directory"),
+            mock.patch.object(settings_export_module.os, "fstat", return_value=mock.Mock()),
             mock.patch.object(settings_export_module.os, "stat", side_effect=FileNotFoundError),
             mock.patch.object(
                 settings_export_module,
@@ -886,6 +910,7 @@ class SettingsExportTest(unittest.TestCase):
         with (
             mock.patch.object(settings_export_module, "ensure_directory_without_following_symlinks", return_value=456),
             mock.patch.object(settings_export_module, "assert_fd_is_private_directory"),
+            mock.patch.object(settings_export_module.os, "fstat", return_value=mock.Mock()),
             mock.patch.object(settings_export_module.os, "stat", side_effect=FileNotFoundError),
             mock.patch.object(
                 settings_export_module,
