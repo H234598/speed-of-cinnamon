@@ -655,14 +655,17 @@ def parse_security_directives(text: str) -> SecurityParserResult:
     lines = text.splitlines()
     kept: list[str] = []
     added: list[str] = []
+    added_keys: set[str] = set()
     show_blacklist = False
 
     for line in lines:
         match_add = _BLACKLIST_ADD_RE.match(line)
         if match_add:
             entry = _normalize_blacklist_entry(match_add.group(1))
-            if entry and entry not in added:
+            entry_key = entry.casefold()
+            if entry and entry_key not in added_keys:
                 added.append(entry)
+                added_keys.add(entry_key)
             continue
         if _BLACKLIST_SHOW_RE.match(line):
             show_blacklist = True
