@@ -1292,13 +1292,13 @@ def _restore_clipboard_snapshot_after_failed_paste(
     *,
     allowed_helpers: tuple[str, ...] | None = None,
 ) -> None:
-    if not snapshot_available:
-        return
-    if not _clipboard_still_contains_inserted_text(inserted_text):
-        return
-    if _clipboard_has_non_text_payload():
-        return
     try:
+        if not snapshot_available:
+            return
+        if not _clipboard_still_contains_inserted_text(inserted_text):
+            return
+        if _clipboard_has_non_text_payload():
+            return
         set_clipboard(snapshot_text, allowed_helpers=allowed_helpers)
     except BaseException as exc:
         log_event("warning", "clipboard_restore_after_failed_automatic_paste_failed", error=str(exc))
