@@ -569,6 +569,7 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
     except OSError:
         return None
     primary_error: BaseException | None = None
+    cleanup_failed = False
     try:
         for _attempt in range(2):
             now = time.time()
@@ -696,8 +697,9 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                 except BaseException:
                     pass
                 raise
-            return path
-        return None
+            break
+        if acquired_path is None:
+            return None
     except BaseException as exc:
         primary_error = exc
         raise
@@ -705,7 +707,15 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
         try:
             os.close(parent_fd)
         except OSError:
-            pass
+            if primary_error is not None:
+                primary_error.add_note("clipboard dedupe lock cleanup failed during parent FD close")
+            else:
+                if acquired_path is not None:
+                    try:
+                        _release_clipboard_dedup_lock(acquired_path)
+                    except BaseException:
+                        pass
+                cleanup_failed = True
         except BaseException:
             if primary_error is not None:
                 primary_error.add_note("clipboard dedupe lock cleanup failed during parent FD close")
@@ -716,6 +726,9 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                     except BaseException:
                         pass
                 raise
+    if cleanup_failed:
+        return None
+    return acquired_path
 
 
 def _release_clipboard_dedup_lock(path: Path | None) -> None:
