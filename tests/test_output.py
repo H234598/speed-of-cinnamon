@@ -604,6 +604,17 @@ class OutputTest(unittest.TestCase):
             with self.assertRaisesRegex(OutputError, "timed out"):
                 _run_with_input(["sleep"], "", timeout=1)
 
+    def test_reap_does_not_signal_already_reaped_process(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.return_value = 0
+        process.communicate.return_value = (b"", b"")
+        with mock.patch("speed_of_cinnamon.output.os.killpg") as mocked_killpg:
+            self.assertTrue(output_module._reap_timed_out_output_process(process))
+
+        mocked_killpg.assert_not_called()
+        process.communicate.assert_called_once_with(timeout=None)
+
     def test_output_process_is_reaped_when_wait_is_interrupted(self) -> None:
         for invoke in (
             lambda: _run_with_input(["cmd"], "input", resolved_command="/usr/bin/cmd"),

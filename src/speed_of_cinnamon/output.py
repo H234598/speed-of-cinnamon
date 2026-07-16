@@ -1093,6 +1093,11 @@ def _terminate_output_process_group(process: subprocess.Popen[bytes]) -> bool:
     if not process or not isinstance(process.pid, int) or process.pid <= 0:
         return False
     try:
+        if process.poll() is not None:
+            return True
+    except (OSError, ValueError):
+        return False
+    try:
         os.killpg(process.pid, signal.SIGKILL)
         return True
     except ProcessLookupError:
