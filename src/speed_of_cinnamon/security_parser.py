@@ -189,16 +189,56 @@ _MULTILINE_SENSITIVE_RE = re.compile(
     r"(?!\n[^\S\n]*(?:und|and)\b)[\s\S]){1,20000})"
 )
 
+_SENSITIVE_BLACKLIST_LABELS = frozenset(
+    {
+        "token",
+        "api_key",
+        "api key",
+        "secret",
+        "apikey",
+        "bearer",
+        "password",
+        "passwort",
+        "kennwort",
+        "passcode",
+        "iban",
+        "name",
+        "adresse",
+        "anschrift",
+        "address",
+        "kundennummer",
+        "kundennr",
+        "kunden-nr",
+        "customer id",
+        "customer number",
+        "client id",
+        "account id",
+        "ssn",
+        "tax id",
+    }
+)
+_SENSITIVE_BLACKLIST_LABEL_GUARD = r"(?!\s*(?::|=)|\s+)"
+
 
 @functools.lru_cache(maxsize=16)
-def _compile_blacklist_pattern_cached(entries: tuple[str, ...]) -> re.Pattern[str] | None:
+def _compile_blacklist_pattern_cached(
+    entries: tuple[str, ...], preserve_sensitive_labels: bool = False
+) -> re.Pattern[str] | None:
     if not entries:
         return None
-    escaped = "|".join(re.escape(entry) for entry in entries)
+    escaped_entries = []
+    for entry in entries:
+        escaped_entry = re.escape(entry)
+        if preserve_sensitive_labels and entry in _SENSITIVE_BLACKLIST_LABELS:
+            escaped_entry += _SENSITIVE_BLACKLIST_LABEL_GUARD
+        escaped_entries.append(escaped_entry)
+    escaped = "|".join(escaped_entries)
     return re.compile(rf"(?i)(?<!\w)(?:{escaped})(?!\w)")
 
 
-def _compile_blacklist_pattern(entries: list[str]) -> re.Pattern[str] | None:
+def _compile_blacklist_pattern(
+    entries: list[str], *, preserve_sensitive_labels: bool = False
+) -> re.Pattern[str] | None:
     normalized: list[str] = []
     total_bytes = 0
     seen: set[str] = set()
@@ -224,7 +264,7 @@ def _compile_blacklist_pattern(entries: list[str]) -> re.Pattern[str] | None:
     if not normalized:
         return None
     pattern_key = tuple(sorted(normalized, key=len, reverse=True))
-    return _compile_blacklist_pattern_cached(pattern_key)
+    return _compile_blacklist_pattern_cached(pattern_key, preserve_sensitive_labels)
 
 
 _DUPLICATE_SPACE_RE = re.compile(r"\s+")
@@ -726,6 +766,10 @@ def apply_security_mode(text: str, blacklist: list[str]) -> tuple[str, int]:
 
     clean = text
     redactions = 0
+    blacklist_pattern = _compile_blacklist_pattern(blacklist, preserve_sensitive_labels=True)
+    if blacklist_pattern is not None:
+        clean, count = _apply_blacklist_around_redaction_placeholders(clean, blacklist_pattern)
+        redactions += count
     clean, count = _apply_multiline_sensitive_redaction(clean)
     redactions += count
     clean, count = _mask_cards(clean)
@@ -741,9 +785,9 @@ def apply_security_mode(text: str, blacklist: list[str]) -> tuple[str, int]:
             redactions += count
     clean, count = _apply_name_redaction(clean)
     redactions += count
-    blacklist_pattern = _compile_blacklist_pattern(blacklist)
-    if blacklist_pattern is not None:
-        clean, count = _apply_blacklist_around_redaction_placeholders(clean, blacklist_pattern)
+    final_blacklist_pattern = _compile_blacklist_pattern(blacklist)
+    if final_blacklist_pattern is not None:
+        clean, count = _apply_blacklist_around_redaction_placeholders(clean, final_blacklist_pattern)
         redactions += count
 
     return clean.strip(), redactions
