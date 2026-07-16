@@ -5618,6 +5618,21 @@ class CliTest(unittest.TestCase):
             self.assertEqual(stable.read_bytes(), b"trimmed-audio")
             self.assertFalse(temp_trimmed.exists())
 
+    def test_stabilize_recording_artifact_restores_source_after_activation_fsync_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings_root = Path(tmp)
+            temp_trimmed = recordings_root / "recording.trimmed-fsync.flac"
+            stable = recordings_root / "recording.flac"
+            temp_trimmed.write_bytes(b"trimmed-audio")
+
+            with mock.patch.object(cli.os, "fsync", side_effect=OSError("activation fsync failed")):
+                with self.assertRaisesRegex(RuntimeError, "activation fsync failed"):
+                    cli._stabilize_recording_artifact_path(temp_trimmed)
+
+            self.assertTrue(temp_trimmed.exists())
+            self.assertEqual(temp_trimmed.read_bytes(), b"trimmed-audio")
+            self.assertFalse(stable.exists())
+
     def test_stabilize_recording_artifact_does_not_overwrite_unrelated_stable_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             recordings_root = Path(tmp) / "speed-of-cinnamon" / "recordings"

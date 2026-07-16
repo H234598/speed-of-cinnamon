@@ -2804,6 +2804,15 @@ def _stabilize_recording_artifact_path(
             current_target_stat = None
         activated = current_target_stat is not None and same_artifact_identity(current_target_stat, source_stat)
         if activated:
+            if target_stat is None:
+                _rename_without_replacing(
+                    stable_path.name,
+                    artifact_path.name,
+                    directory_fd=parent_fd,
+                    field_name="recording artifact path",
+                )
+                os.fsync(parent_fd)
+                return
             os.unlink(stable_path.name, dir_fd=parent_fd)
             os.fsync(parent_fd)
         elif target_removed and current_target_stat is not None:
@@ -2899,6 +2908,7 @@ def _stabilize_recording_artifact_path(
             os.unlink(stable_path.name, dir_fd=parent_fd)
             target_removed = True
             os.fsync(parent_fd)
+        transaction_active = True
         _rename_without_replacing(
             artifact_path.name,
             stable_path.name,
