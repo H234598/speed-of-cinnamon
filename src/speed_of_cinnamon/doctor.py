@@ -10,7 +10,14 @@ from typing import Any, Mapping
 
 from .http_safety import is_loopback_hostname
 from .models import default_ctranslate2_model_path, default_whisper_cpp_model_path, model_backend_for_path, model_supports_language
-from .postprocessor import DEFAULT_OPENAI_COMPATIBLE_MODEL, DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL, DEFAULT_OPENAI_COMPATIBLE_URL
+from .postprocessor import (
+    DEFAULT_OPENAI_COMPATIBLE_MODEL,
+    DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL,
+    DEFAULT_OPENAI_COMPATIBLE_URL,
+    MAX_OLLAMA_MODEL_CHARS,
+    MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
+    _openai_compatible_model_supports_text_polishing,
+)
 from .path_safety import assert_no_symlink_ancestors
 from .transcriber import MAX_LANGUAGE_CODE_CHARS, faster_whisper_available, normalize_backend
 
@@ -149,6 +156,18 @@ def _doctor_field_text(value: str, *, field_name: str) -> str:
     return normalized
 
 
+def _doctor_text_limit(value: str, *, field_name: str, max_chars: int) -> str | None:
+    if len(value) > max_chars:
+        return f"{field_name} is too large (max {max_chars} characters)"
+    try:
+        encoded_length = len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        return f"{field_name} contains invalid UTF-8"
+    if encoded_length > max_chars:
+        return f"{field_name} is too large (max {max_chars} bytes)"
+    return None
+
+
 def _valid_http_url(value: str) -> bool:
     if not isinstance(value, str) or isinstance(value, bool):
         return False
@@ -237,7 +256,7 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
     transcriber = _setting(settings, "transcriber", "auto").lower().replace("_", "-")
     command_template = _setting(settings, "transcriber-command")
     whisper_model = _setting(settings, "whisper-model", limit=False)
-    openai_compatible_model = _setting(settings, "openai-compatible-model", DEFAULT_OPENAI_COMPATIBLE_MODEL)
+    openai_compatible_model = _setting(settings, "openai-compatible-model", DEFAULT_OPENAI_COMPATIBLE_MODEL, limit=False)
     openai_compatible_url = _setting(settings, "openai-compatible-url", DEFAULT_OPENAI_COMPATIBLE_URL, limit=False)
     whisper_ok = _ok(checks, "whisper")
     whisper_cpp_ok = _ok(checks, "whisper-cli") or _ok(checks, "whisper.cpp") or _ok(checks, "pwcpp")
@@ -396,6 +415,13 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
                 "value": "openai-compatible",
                 "detail": "OpenAI-compatible speech model is required",
             }
+        model_detail = _doctor_text_limit(
+            openai_compatible_model,
+            field_name="OpenAI-compatible speech model",
+            max_chars=MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
+        )
+        if model_detail:
+            return {"ok": False, "value": "openai-compatible", "detail": model_detail}
         try:
             endpoint_display = _safe_remote_url_display(openai_compatible_url, field_name="OpenAI-compatible speech endpoint URL")
         except ValueError as exc:
@@ -478,9 +504,14 @@ def _output_status(
 def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
     backend = _setting(settings, "post-process-backend", "none").lower().replace("_", "-")
     command_template = _setting(settings, "post-process-command")
-    ollama_model = _setting(settings, "ollama-model")
+    ollama_model = _setting(settings, "ollama-model", limit=False)
     ollama_url = _setting(settings, "ollama-url", "http://127.0.0.1:11434", limit=False)
-    openai_compatible_model = _setting(settings, "openai-compatible-text-model", DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL)
+    openai_compatible_model = _setting(
+        settings,
+        "openai-compatible-text-model",
+        DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL,
+        limit=False,
+    )
     openai_compatible_url = _setting(settings, "openai-compatible-url", DEFAULT_OPENAI_COMPATIBLE_URL, limit=False)
     if backend in {"", "none", "off", "disabled"}:
         return {"ok": True, "value": "none", "detail": "text polishing disabled"}
@@ -493,6 +524,9 @@ def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
     if backend == "ollama":
         if not ollama_model:
             return {"ok": False, "value": "ollama", "detail": "Ollama model is required"}
+        model_detail = _doctor_text_limit(ollama_model, field_name="Ollama model", max_chars=MAX_OLLAMA_MODEL_CHARS)
+        if model_detail:
+            return {"ok": False, "value": "ollama", "detail": model_detail}
         try:
             endpoint_display = _safe_remote_url_display(ollama_url, field_name="Ollama URL")
         except ValueError as exc:
@@ -508,6 +542,19 @@ def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
                 "ok": False,
                 "value": "openai-compatible",
                 "detail": "OpenAI-compatible text model is required",
+            }
+        model_detail = _doctor_text_limit(
+            openai_compatible_model,
+            field_name="OpenAI-compatible text model",
+            max_chars=MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
+        )
+        if model_detail:
+            return {"ok": False, "value": "openai-compatible", "detail": model_detail}
+        if not _openai_compatible_model_supports_text_polishing(openai_compatible_model):
+            return {
+                "ok": False,
+                "value": "openai-compatible",
+                "detail": "OpenAI-compatible model is not allowed for text polishing",
             }
         try:
             endpoint_display = _safe_remote_url_display(openai_compatible_url, field_name="OpenAI-compatible API URL")

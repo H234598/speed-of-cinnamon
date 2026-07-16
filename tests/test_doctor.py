@@ -554,6 +554,19 @@ class DoctorTest(unittest.TestCase):
         self.assertIn("https://api.example.test", payload["configured"]["transcriber"]["detail"])
         self.assertNotIn("/v1", payload["configured"]["transcriber"]["detail"])
 
+    def test_external_api_transcriber_rejects_invalid_model_text(self) -> None:
+        for model, detail in (
+            ("x" * 241, "too large"),
+            ("\ud800", "invalid UTF-8"),
+        ):
+            with self.subTest(model=repr(model)):
+                status = doctor._transcriber_status(
+                    {"transcriber": "openai-compatible", "openai-compatible-model": model},
+                    {},
+                )
+                self.assertFalse(status["ok"])
+                self.assertIn(detail, status["detail"])
+
     def test_external_api_transcriber_rejects_invalid_url(self) -> None:
         payload = doctor.report({
             "recorder": "auto",
@@ -735,6 +748,17 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertFalse(payload["configured"]["postprocessor"]["ok"])
         self.assertIn("must not contain userinfo", payload["configured"]["postprocessor"]["detail"])
+
+    def test_postprocessor_rejects_invalid_model_text(self) -> None:
+        for backend, key, model, detail in (
+            ("ollama", "ollama-model", "x" * 241, "too large"),
+            ("ollama", "ollama-model", "\ud800", "invalid UTF-8"),
+            ("openai-compatible", "openai-compatible-text-model", "whisper-1", "not allowed"),
+        ):
+            with self.subTest(backend=backend, model=repr(model)):
+                status = doctor._postprocessor_status({"post-process-backend": backend, key: model})
+                self.assertFalse(status["ok"])
+                self.assertIn(detail, status["detail"])
 
     def test_openai_compatible_postprocessor_rejects_url_query_without_echoing_secret(self) -> None:
         tools = {"python3", "pw-record"}
