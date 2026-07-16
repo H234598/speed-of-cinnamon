@@ -615,6 +615,38 @@ class OutputTest(unittest.TestCase):
         mocked_killpg.assert_not_called()
         process.communicate.assert_called_once_with(timeout=None)
 
+    def test_reaped_process_group_cleanup_kills_live_descendants(self) -> None:
+        process = subprocess.Popen(
+            ["/bin/sh", "-c", "sleep 30 & child=$!; echo $child; exit 0"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        child_pid = int(process.stdout.readline())
+        process.wait()
+
+        def child_is_live() -> bool:
+            try:
+                state = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii").rsplit(")", 1)[1].split()[0]
+            except OSError:
+                return False
+            return state not in {"Z", "X", "x"}
+
+        try:
+            self.assertTrue(child_is_live())
+            self.assertTrue(output_module._terminate_output_process_group(process))
+            deadline = time.monotonic() + 2
+            while child_is_live() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertFalse(child_is_live())
+        finally:
+            try:
+                if child_is_live():
+                    os.kill(child_pid, 9)
+            except ProcessLookupError:
+                pass
+            process.communicate()
+
     def test_output_process_is_reaped_when_wait_is_interrupted(self) -> None:
         for invoke in (
             lambda: _run_with_input(["cmd"], "input", resolved_command="/usr/bin/cmd"),

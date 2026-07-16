@@ -1089,12 +1089,61 @@ def _bounded_command_output_bytes(
     return completed_output
 
 
+def _process_group_has_live_descendants(process_group_id: int) -> bool | None:
+    if not isinstance(process_group_id, int) or isinstance(process_group_id, bool) or process_group_id <= 0:
+        return None
+    try:
+        proc_entries = tuple(Path("/proc").iterdir())
+    except OSError:
+        return None
+    scan_incomplete = False
+    for proc_entry in proc_entries:
+        if not proc_entry.name.isdecimal():
+            continue
+        process_id = int(proc_entry.name)
+        try:
+            raw = proc_entry.joinpath("stat").read_text(encoding="ascii").strip()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            scan_incomplete = True
+            continue
+        try:
+            close = raw.rindex(")")
+            fields = raw[close + 2 :].split()
+            process_state = fields[0]
+            process_group = int(fields[2])
+            session_id = int(fields[3])
+        except (IndexError, ValueError):
+            scan_incomplete = True
+            continue
+        if process_id == process_group_id or process_group != process_group_id or session_id != process_group_id:
+            continue
+        if process_state not in {"Z", "X", "x"}:
+            return True
+    if scan_incomplete:
+        return None
+    return False
+
+
 def _terminate_output_process_group(process: subprocess.Popen[bytes]) -> bool:
     if not process or not isinstance(process.pid, int) or process.pid <= 0:
         return False
     try:
         if process.poll() is not None:
-            return True
+            descendants = _process_group_has_live_descendants(process.pid)
+            if descendants is not True:
+                return descendants is False
+            try:
+                raw = Path(f"/proc/{process.pid}/stat").read_text(encoding="ascii").strip()
+                close = raw.rindex(")")
+                process_state = raw[close + 2 :].split()[0]
+            except FileNotFoundError:
+                process_state = "gone"
+            except (OSError, IndexError, ValueError):
+                return False
+            if process_state not in {"Z", "X", "x", "gone"}:
+                return False
     except (OSError, ValueError):
         return False
     try:
