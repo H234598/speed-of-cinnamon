@@ -365,6 +365,10 @@ class SettingsExportTest(unittest.TestCase):
             build_export({"openai-compatible-url": "ftp://127.0.0.1:8000/v1"})
         with self.assertRaisesRegex(SettingsExportError, "openai-compatible-url has invalid port"):
             build_export({"openai-compatible-url": "https://api.example.test:bad/v1"})
+        with self.assertRaisesRegex(SettingsExportError, "setting openai-compatible-url is missing hostname"):
+            build_export({"openai-compatible-url": "https://:443/v1"})
+        with self.assertRaisesRegex(SettingsExportError, "setting ollama-url is missing hostname"):
+            build_export({"ollama-url": "https://@/v1"})
 
         long_url = "http://127.0.0.1:11434/" + ("x" * MAX_SETTINGS_URL_CHARS)
         with self.assertRaisesRegex(SettingsExportError, "setting ollama-url is too long"):

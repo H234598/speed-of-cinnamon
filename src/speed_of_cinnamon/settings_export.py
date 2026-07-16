@@ -414,6 +414,8 @@ def _reject_secret_bearing_url_setting(key: str, text: str) -> None:
         raise SettingsExportError(f"setting {key} is not a valid URL") from exc
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise SettingsExportError(f"setting {key} must use http:// or https://")
+    if not parsed.hostname:
+        raise SettingsExportError(f"setting {key} is missing hostname")
     if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
         raise SettingsExportError(f"setting {key} must use https:// unless host is local loopback")
     try:
