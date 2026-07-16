@@ -763,14 +763,20 @@ def _log_temp_stat_for_fd(fd: int) -> os.stat_result | None:
     try:
         return os.fstat(fd)
     except (OSError, ValueError):
-        return None
+        proc_fd_path = Path("/proc/self/fd") / str(fd)
+        try:
+            return os.stat(proc_fd_path)
+        except (OSError, ValueError):
+            return None
 
 
 def _log_temp_name_matches_fd(parent_fd: int, temp_name: str, fd: int) -> bool:
     try:
         path_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
-        fd_stat = os.fstat(fd)
-    except OSError:
+    except (OSError, ValueError):
+        return False
+    fd_stat = _log_temp_stat_for_fd(fd)
+    if fd_stat is None:
         return False
     return _same_log_temp_identity(path_stat, fd_stat)
 

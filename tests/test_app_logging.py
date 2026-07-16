@@ -828,6 +828,43 @@ class AppLoggingTest(unittest.TestCase):
 
             self.assertEqual(list(log_dir.glob("*.tmp")), [])
 
+    def test_monthly_merge_cleans_temp_when_initial_fd_stat_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "speed-of-cinnamon-2026-05-30.log"
+            source.write_text("private log payload\n", encoding="utf-8")
+            source.chmod(0o600)
+            real_fstat = app_logging.os.fstat
+            failed = False
+            real_copy = app_logging._copy_log_content
+
+            def fstat(fd: int) -> os.stat_result:
+                nonlocal failed
+                result = real_fstat(fd)
+                if not failed and stat_module.S_ISREG(result.st_mode) and result.st_size == 0:
+                    failed = True
+                    raise OSError("temporary identity inspection failed")
+                return result
+
+            def copy_then_fail(
+                path: Path,
+                output: gzip.GzipFile,
+                *,
+                expected_stat: os.stat_result | None = None,
+            ) -> None:
+                real_copy(path, output, expected_stat=expected_stat)
+                raise RuntimeError("copy failed after write")
+
+            with (
+                mock.patch.object(app_logging.os, "fstat", side_effect=fstat),
+                mock.patch.object(app_logging, "_copy_log_content", side_effect=copy_then_fail),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "copy failed after write"):
+                    app_logging._merge_old_months(log_dir, date(2026, 6, 1))
+
+            self.assertTrue(failed)
+            self.assertEqual(list(log_dir.glob("*.tmp")), [])
+
     def test_create_log_temp_preserves_open_error_when_parent_close_fails(self) -> None:
         with (
             mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
