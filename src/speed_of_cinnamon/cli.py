@@ -1555,6 +1555,9 @@ def _prepare_transient_transcript_path(path: Path, storage_path: Path) -> int | 
         try:
             _remove_transient_transcript_path(path, storage_path)
         except BaseException as cleanup_error:
+            if not isinstance(primary_error, Exception):
+                primary_error.add_note(f"transient transcript cleanup failed: {cleanup_error}")
+                raise primary_error.with_traceback(primary_error.__traceback__)
             raise RuntimeError(f"{primary_error}; {cleanup_error}") from cleanup_error
 
     try:
@@ -1749,8 +1752,8 @@ def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) ->
     except RuntimeError as exc:
         try:
             _rollback_encrypted_artifact_after_plaintext_cleanup_failure(encrypted_path, field_name="encrypted transcript file")
-        except RuntimeError as rollback_exc:
-            raise RuntimeError(f"{exc}; {rollback_exc}") from exc
+        except BaseException as rollback_exc:
+            _raise_encrypted_artifact_rollback_failure(exc, rollback_exc)
         raise
     return encrypted_path, effective_mode
 
@@ -1825,6 +1828,13 @@ def _rollback_encrypted_artifact_after_plaintext_cleanup_failure(encrypted_path:
         raise RuntimeError(f"failed to roll back encrypted artifact after plaintext cleanup failure: {encrypted_path}") from exc
 
 
+def _raise_encrypted_artifact_rollback_failure(primary_error: RuntimeError, rollback_error: BaseException) -> None:
+    if isinstance(rollback_error, Exception):
+        raise RuntimeError(f"{primary_error}; {rollback_error}") from primary_error
+    primary_error.add_note(f"encrypted artifact rollback failed: {rollback_error}")
+    raise primary_error.with_traceback(primary_error.__traceback__)
+
+
 def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tuple[Path, str]:
     mode = _artifact_encryption_mode(args)
     if mode == ARTIFACT_ENCRYPTION_OFF:
@@ -1863,8 +1873,8 @@ def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tu
     except RuntimeError as exc:
         try:
             _rollback_encrypted_artifact_after_plaintext_cleanup_failure(encrypted_path, field_name="encrypted recording artifact")
-        except RuntimeError as rollback_exc:
-            raise RuntimeError(f"{exc}; {rollback_exc}") from exc
+        except BaseException as rollback_exc:
+            _raise_encrypted_artifact_rollback_failure(exc, rollback_exc)
         raise
     return encrypted_path, effective_mode
 
@@ -2036,8 +2046,8 @@ def write_transcripts_export(
     except RuntimeError as exc:
         try:
             _rollback_encrypted_artifact_after_plaintext_cleanup_failure(encrypted_path, field_name="encrypted transcript export")
-        except RuntimeError as rollback_exc:
-            raise RuntimeError(f"{exc}; {rollback_exc}") from exc
+        except BaseException as rollback_exc:
+            _raise_encrypted_artifact_rollback_failure(exc, rollback_exc)
         raise
     return encrypted_path, count, used_mode
 
@@ -4612,6 +4622,9 @@ def _temporary_benchmark_transcript_path() -> tuple[Path, os.stat_result]:
                 field_name="benchmark transcript file",
             )
         except BaseException as cleanup_exc:
+            if not isinstance(exc, Exception):
+                exc.add_note(f"benchmark transcript cleanup failed: {cleanup_exc}")
+                raise exc.with_traceback(exc.__traceback__)
             raise RuntimeError(f"{exc}; failed to clean benchmark transcript file: {cleanup_exc}") from cleanup_exc
         raise
     finally:

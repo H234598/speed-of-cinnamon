@@ -96,6 +96,22 @@ class CliTest(unittest.TestCase):
 
             self.assertEqual(list(Path(tmp).iterdir()), [])
 
+    def test_temporary_benchmark_path_preserves_fstat_interrupt_when_cleanup_fails(self) -> None:
+        with (
+            mock.patch.object(cli.tempfile, "mkstemp", return_value=(42, "/tmp/.benchmark-test.tmp.txt")),
+            mock.patch.object(cli.os, "fstat", side_effect=KeyboardInterrupt("fstat interrupted")),
+            mock.patch.object(
+                cli,
+                "_unlink_regular_leaf_with_parent_fsync",
+                side_effect=KeyboardInterrupt("cleanup interrupted"),
+            ),
+            mock.patch.object(cli.os, "close"),
+        ):
+            with self.assertRaisesRegex(KeyboardInterrupt, "fstat interrupted") as caught:
+                cli._temporary_benchmark_transcript_path()
+
+        self.assertIn("benchmark transcript cleanup failed: cleanup interrupted", caught.exception.__notes__)
+
     def test_write_json_atomic_sets_private_permissions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "payload.json"
@@ -420,6 +436,34 @@ class CliTest(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(RuntimeError, "owner failed; cleanup interrupted"):
                     cli._prepare_transient_transcript_path(path, storage_path)
+
+    def test_prepare_transient_transcript_preserves_owner_interrupt_when_cleanup_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / ".transcript.tmp.txt"
+            storage_path = root / "transcript.txt"
+            file_stat = os.stat(__file__)
+            with (
+                mock.patch.object(cli, "transcript_dir", return_value=root),
+                mock.patch.object(cli, "_prepare_private_file"),
+                mock.patch.object(cli.os, "open", return_value=42),
+                mock.patch.object(cli.os, "fstat", return_value=file_stat),
+                mock.patch.object(
+                    cli,
+                    "_write_transient_transcript_owner",
+                    side_effect=KeyboardInterrupt("owner interrupted"),
+                ),
+                mock.patch.object(cli.os, "close"),
+                mock.patch.object(
+                    cli,
+                    "_remove_transient_transcript_path",
+                    side_effect=KeyboardInterrupt("cleanup interrupted"),
+                ),
+            ):
+                with self.assertRaisesRegex(KeyboardInterrupt, "owner interrupted") as caught:
+                    cli._prepare_transient_transcript_path(path, storage_path)
+
+            self.assertIn("transient transcript cleanup failed: cleanup interrupted", caught.exception.__notes__)
 
     def test_prepare_transient_transcript_removes_file_after_private_prepare_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1511,6 +1555,33 @@ class CliTest(unittest.TestCase):
 
         self.assertTrue(plaintext_exists)
         self.assertFalse(encrypted_exists)
+
+    def test_stored_transcript_preserves_cleanup_error_when_rollback_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = Path(tmp) / "input.txt"
+            encrypted_transcript = Path(f"{transcript}.socenc")
+            args = argparse.Namespace(artifact_encryption="passphrase")
+            with (
+                mock.patch.object(
+                    cli,
+                    "write_encrypted_bytes_atomically",
+                    return_value=(encrypted_transcript, "passphrase"),
+                ),
+                mock.patch.object(
+                    cli,
+                    "_remove_plaintext_transcript_sibling_after_encryption",
+                    side_effect=RuntimeError("plaintext cleanup failed"),
+                ),
+                mock.patch.object(
+                    cli,
+                    "_rollback_encrypted_artifact_after_plaintext_cleanup_failure",
+                    side_effect=KeyboardInterrupt("rollback interrupted"),
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "plaintext cleanup failed") as caught:
+                    cli._write_stored_transcript(transcript, "secret transcript\n", args)
+
+            self.assertIn("encrypted artifact rollback failed: rollback interrupted", caught.exception.__notes__)
 
     def test_stored_plaintext_transcript_removes_encrypted_sibling(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
