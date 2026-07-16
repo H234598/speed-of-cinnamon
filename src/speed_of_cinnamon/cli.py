@@ -4309,19 +4309,32 @@ def finalize_recording(
                     exc.add_note("finalization state refresh returned invalid state")
             error_cleanup_failures: list[str] = []
             if trimmed_audio_path is not None and trimmed_audio_path != audio_path:
-                if not _remove_recording_artifact_if_present(
-                    trimmed_audio_path,
-                    suffix=trimmed_audio_path.suffix.lower(),
-                ):
-                    error_cleanup_failures.append("transient trimmed recording artifact")
+                try:
+                    trimmed_audio_deleted = _remove_recording_artifact_if_present(
+                        trimmed_audio_path,
+                        suffix=trimmed_audio_path.suffix.lower(),
+                    )
+                except BaseException as cleanup_exc:
+                    cleanup_error = _redact_error_for_user(str(cleanup_exc))
+                    error_cleanup_failures.append(f"transient trimmed recording artifact ({cleanup_error})")
+                    exc.add_note(f"transient trimmed recording cleanup failed: {cleanup_error}")
+                else:
+                    if not trimmed_audio_deleted:
+                        error_cleanup_failures.append("transient trimmed recording artifact")
             stabilized_audio_deleted = False
             if stabilized_audio_path is not None and str(state.audio_path or "") != str(stabilized_audio_path):
-                stabilized_audio_deleted = _remove_recording_artifact_if_present(
-                    stabilized_audio_path,
-                    suffix=stabilized_audio_path.suffix.lower(),
-                )
-                if not stabilized_audio_deleted:
-                    error_cleanup_failures.append("stabilized recording artifact")
+                try:
+                    stabilized_audio_deleted = _remove_recording_artifact_if_present(
+                        stabilized_audio_path,
+                        suffix=stabilized_audio_path.suffix.lower(),
+                    )
+                except BaseException as cleanup_exc:
+                    cleanup_error = _redact_error_for_user(str(cleanup_exc))
+                    error_cleanup_failures.append(f"stabilized recording artifact ({cleanup_error})")
+                    exc.add_note(f"stabilized recording cleanup failed: {cleanup_error}")
+                else:
+                    if not stabilized_audio_deleted:
+                        error_cleanup_failures.append("stabilized recording artifact")
             if error_cleanup_failures:
                 error_text = (
                     f"{error_text}; failed to delete recording artifact(s): "
