@@ -653,6 +653,59 @@ class PathSafetyTest(unittest.TestCase):
 
         self.assertIn("secure path cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_atomic_write_preserves_primary_error_when_temporary_handle_close_fails(self) -> None:
+        class _Handle:
+            def __init__(self, fd: int) -> None:
+                self.fd = fd
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                self.close()
+                return False
+
+            def fileno(self) -> int:
+                return self.fd
+
+            def write(self, payload: str) -> int:
+                return len(payload)
+
+            def flush(self) -> None:
+                return None
+
+            def close(self) -> None:
+                raise OSError("temporary handle close failed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            real_fsync = os.fsync
+            handle: _Handle | None = None
+
+            def fdopen(fd: int, mode: str, **kwargs: object) -> _Handle:
+                nonlocal handle
+                del mode, kwargs
+                handle = _Handle(fd)
+                return handle
+
+            def fail_file_fsync(fd: int) -> None:
+                if handle is not None and fd == handle.fd:
+                    raise OSError("temporary file sync failed")
+                real_fsync(fd)
+
+            try:
+                with (
+                    mock.patch.object(path_safety.os, "fdopen", side_effect=fdopen),
+                    mock.patch.object(path_safety.os, "fsync", side_effect=fail_file_fsync),
+                ):
+                    with self.assertRaisesRegex(OSError, "temporary file sync failed") as caught:
+                        path_safety.write_text_atomically_without_following_symlinks(target, "new")
+            finally:
+                if handle is not None:
+                    os.close(handle.fd)
+
+            self.assertIn("temporary handle close failed", "\n".join(caught.exception.__notes__))
+
     def test_atomic_write_preserves_success_when_parent_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "settings.json"

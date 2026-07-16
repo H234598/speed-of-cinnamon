@@ -444,7 +444,8 @@ def _write_atomically_without_following_symlinks(
             except BaseException as cleanup_error:
                 _note_cleanup_failure(exc, cleanup_error)
             raise
-        with handle:
+        handle_primary_error: BaseException | None = None
+        try:
             try:
                 os.fchmod(handle.fileno(), 0o600)
             except OSError as exc:
@@ -453,6 +454,18 @@ def _write_atomically_without_following_symlinks(
             handle.flush()
             os.fsync(handle.fileno())
             temporary_stat = os.fstat(handle.fileno())
+        except BaseException as exc:
+            handle_primary_error = exc
+            raise
+        finally:
+            try:
+                handle.close()
+            except OSError as cleanup_error:
+                if handle_primary_error is not None:
+                    _note_cleanup_failure(handle_primary_error, cleanup_error)
+            except BaseException as cleanup_error:
+                if handle_primary_error is not None:
+                    _note_cleanup_failure(handle_primary_error, cleanup_error)
 
         try:
             current_target_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
