@@ -497,6 +497,23 @@ class AlarmTest(unittest.TestCase):
 
         self.assertEqual(closed_fds, [123, 456])
 
+    @mock.patch("speed_of_cinnamon.alarms.os.open", wraps=os.open)
+    def test_alarm_store_lock_opens_nonblocking(self, mocked_open: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            add_alarm("09:00", name="Morning", days="mon", path=path)
+
+        lock_name = f".{path.name}.lock"
+        self.assertTrue(
+            any(
+                args[0] == lock_name
+                and isinstance(args[1], int)
+                and args[1] & getattr(os, "O_NONBLOCK", 0)
+                and "dir_fd" in kwargs
+                for args, kwargs in mocked_open.call_args_list
+            )
+        )
+
     def test_alarm_store_lock_continues_cleanup_when_unlock_is_interrupted(self) -> None:
         closed_fds: list[int] = []
 

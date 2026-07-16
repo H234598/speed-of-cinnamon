@@ -83,9 +83,15 @@ def _locked_alarm_store(path: Path | None = None) -> Iterator[Path]:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
         raise RuntimeError("secure alarm store lock open is not supported on this platform")
+    nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     parent_fd = ensure_directory_without_following_symlinks(lock_path.parent, field_name="alarm store lock directory")
     try:
-        fd = os.open(lock_path.name, os.O_RDWR | os.O_CREAT | nofollow_flag, 0o600, dir_fd=parent_fd)
+        fd = os.open(
+            lock_path.name,
+            os.O_RDWR | os.O_CREAT | nofollow_flag | nonblock_flag,
+            0o600,
+            dir_fd=parent_fd,
+        )
     except OSError as exc:
         error = RuntimeError("failed to open alarm store lock file")
         try:
