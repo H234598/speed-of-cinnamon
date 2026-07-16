@@ -286,6 +286,7 @@ _TRUSTED_SCHEI_PATTERN_PREFIX = "schei(?:ss|ß)"
 _TRUSTED_SCHEI_SUFFIXES = frozenset(
     {"", "ding", "e?", "egal", "er", "haus", "kerl", "kopf", "laden", "spiel", "teil", "verein"}
 )
+_CASEFOLD_CANDIDATE_FOLD = str.maketrans({"ı": "i"})
 
 
 def _confusable_regex_source(char: str) -> str:
@@ -302,6 +303,17 @@ def _normalize_profanity_pattern(pattern: str) -> str:
             continue
         normalized.append(char.translate(_CONFUSABLE_FOLD))
     return "".join(normalized)
+
+
+def _normalize_profanity_candidate(value: str) -> str:
+    return _normalize_profanity_pattern(value).translate(_CASEFOLD_CANDIDATE_FOLD)
+
+
+def _profanity_pattern_has_candidate(pattern: str, candidate_chars: set[str]) -> bool:
+    if pattern in _TRUSTED_PROFANITY_PATTERNS and any(char in _REGEX_META_CHARS for char in pattern):
+        return all(char in candidate_chars for char in _normalize_profanity_candidate("schei"))
+    normalized = _normalize_profanity_candidate(pattern)
+    return bool(normalized) and all(char in candidate_chars for char in normalized)
 
 
 def _build_tolerant_profanity_pattern(
@@ -442,6 +454,7 @@ def compile_profanity_replacements(
     boundary_class = _IGNORABLE_BOUNDARY_CLASS
     gap_pattern = _IGNORABLE_GAP_PATTERN
     use_compact_patterns = text is not None
+    candidate_chars: set[str] | None = None
     if text is not None:
         ignorable_codepoints = {
             ord(char)
@@ -461,12 +474,18 @@ def compile_profanity_replacements(
             if unicodedata.category(char) in _MATCH_IGNORE_CATEGORIES
         }
         if ignorable_codepoints:
+            candidate_chars = set(_normalize_profanity_candidate(text))
+            for _pattern, replacement in pairs[:MAX_PROFANITY_FILTER_ENTRIES]:
+                clean_replacement = _clean_editable_value(replacement, max_chars=MAX_PROFANITY_REPLACEMENT_CHARS)
+                if clean_replacement:
+                    candidate_chars.update(_normalize_profanity_candidate(clean_replacement))
             escaped_codepoints = "".join(_regex_escape_codepoint(codepoint) for codepoint in sorted(ignorable_codepoints))
             ignorable_class = f"[{escaped_codepoints}]"
             boundary_class = f"[\\w{escaped_codepoints}]"
             gap_pattern = rf"{ignorable_class}*"
             use_compact_patterns = False
     compiled: list[tuple[re.Pattern[str], str]] = []
+    saw_valid_pattern = False
     for pattern, replacement in pairs[:MAX_PROFANITY_FILTER_ENTRIES]:
         clean_pattern = _clean_editable_value(pattern, max_chars=MAX_PROFANITY_PATTERN_CHARS)
         clean_replacement = _clean_editable_value(replacement, max_chars=MAX_PROFANITY_REPLACEMENT_CHARS)
@@ -483,10 +502,15 @@ def compile_profanity_replacements(
         )
         if not pattern_source:
             continue
+        saw_valid_pattern = True
+        if candidate_chars is not None and not _profanity_pattern_has_candidate(clean_pattern, candidate_chars):
+            continue
         try:
             compiled.append((re.compile(pattern_source, re.IGNORECASE), clean_replacement))
         except re.error:
             continue
     if compiled:
         return tuple(compiled)
+    if candidate_chars is not None and saw_valid_pattern:
+        return ()
     return compile_profanity_replacements(PROFANITY_REPLACEMENT_PAIRS, text=text)

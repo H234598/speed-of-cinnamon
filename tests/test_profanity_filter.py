@@ -68,6 +68,21 @@ class ProfanityFilterTest(unittest.TestCase):
 
         self.assertEqual(compiled[0][0].sub(compiled[0][1], text), "frog")
 
+    def test_compile_profanity_replacements_skips_impossible_rules_in_ignorable_text(self) -> None:
+        text = "\u200b" * 100_000
+        pairs = tuple((f"bad{index}", "safe") for index in range(500))
+
+        self.assertEqual(compile_profanity_replacements(pairs, text=text), ())
+
+    def test_compile_profanity_replacements_keeps_replacement_chain_candidates(self) -> None:
+        text = "f\u200boo"
+        compiled = compile_profanity_replacements((("foo", "bar"), ("bar", "baz")), text=text)
+
+        softened = text
+        for pattern, replacement in compiled:
+            softened = pattern.sub(replacement, softened)
+        self.assertEqual(softened, "baz")
+
     def test_compile_profanity_replacements_rejects_invalid_text_context(self) -> None:
         with self.assertRaisesRegex(ValueError, "text must be text"):
             compile_profanity_replacements((("fuck", "frog"),), text=123)  # type: ignore[arg-type]
