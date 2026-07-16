@@ -3822,6 +3822,9 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertIn("const CLI_TEXT_SETTINGS = {", source)
         self.assertIn("const MAX_SETTING_TEXT_CHARS = 4096;", source)
+        self.assertIn('const CLI_RUNTIME_TEXT_LIMITS = {', source)
+        self.assertIn('"input device": 256,', source)
+        self.assertIn('"whisper model": 240', source)
         self.assertIn("_coerceCliTextArg: function(value, fieldName)", source)
         self.assertIn("_coerceCliTextArgOrFallback: function(value, fieldName, fallback)", source)
         self.assertIn("_appendCliOptionWithinBudget: function(args, flag, value)", source)

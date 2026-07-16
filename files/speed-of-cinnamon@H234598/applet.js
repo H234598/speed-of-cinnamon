@@ -62,6 +62,15 @@ const MAX_CLI_ARG_COUNT = 128;
 const MAX_CLI_COMMAND_BYTES = 32768;
 const MAX_TEXT_INSERT_CHARS = 120000;
 const MAX_SETTING_TEXT_CHARS = 4096;
+const CLI_RUNTIME_TEXT_LIMITS = {
+  "input device": 256,
+  "ollama URL": 2048,
+  "ollama model": 240,
+  "openai-compatible URL": 2048,
+  "openai-compatible model": 240,
+  "openai-compatible text model": 240,
+  "whisper model": 240
+};
 const MAX_UI_MESSAGE_CHARS = 512;
 const MAX_MODEL_MENU_ENTRIES = 128;
 const TRUSTED_SPAWN_DIRS = ["/usr/bin", "/usr/local/bin", "/bin"];
@@ -10290,8 +10299,15 @@ MyApplet.prototype = {
     if (this._containsCliControlChars(normalized)) {
       throw new Error(String(fieldName || "value") + " contains invalid control character");
     }
-    if (normalized.length > MAX_SETTING_TEXT_CHARS) {
+    let maxChars = Object.prototype.hasOwnProperty.call(CLI_RUNTIME_TEXT_LIMITS, String(fieldName || ""))
+      ? CLI_RUNTIME_TEXT_LIMITS[String(fieldName || "")]
+      : MAX_SETTING_TEXT_CHARS;
+    if (normalized.length > maxChars) {
       throw new Error(String(fieldName || "value") + " is too long");
+    }
+    let valueBytes = ByteArray.fromString(normalized).length;
+    if (valueBytes > maxChars) {
+      throw new Error(String(fieldName || "value") + " is too large");
     }
     return normalized;
   },
