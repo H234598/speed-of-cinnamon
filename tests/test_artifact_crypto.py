@@ -554,6 +554,28 @@ class ArtifactCryptoTest(unittest.TestCase):
         flags = mocked_open.call_args.args[1]
         self.assertTrue(flags & getattr(os, "O_NONBLOCK", 0))
 
+    def test_scrub_temp_passphrase_rejects_hardlink_race(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            secret = root / "secret.tmp"
+            alias = root / "alias.tmp"
+            secret.write_bytes(b"secret")
+            expected_stat = secret.stat()
+            os.link(secret, alias)
+            parent_fd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                with self.assertRaisesRegex(OSError, "changed before scrubbing"):
+                    artifact_crypto._scrub_temp_passphrase_file(
+                        parent_fd,
+                        secret.name,
+                        expected_stat=expected_stat,
+                    )
+            finally:
+                os.close(parent_fd)
+
+            self.assertEqual(secret.read_bytes(), b"secret")
+            self.assertEqual(alias.read_bytes(), b"secret")
+
     def test_default_passphrase_rotation_rejects_target_swap_during_backup_activation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "artifact.key"

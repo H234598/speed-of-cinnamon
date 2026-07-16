@@ -342,6 +342,7 @@ def _scrub_temp_passphrase_file(
             file_stat.st_dev != expected_stat.st_dev
             or file_stat.st_ino != expected_stat.st_ino
             or file_stat.st_mode != expected_stat.st_mode
+            or getattr(file_stat, "st_nlink", 1) != getattr(expected_stat, "st_nlink", 1)
         ):
             raise OSError("artifact encryption passphrase temporary file changed before scrubbing")
         remaining = int(file_stat.st_size)
