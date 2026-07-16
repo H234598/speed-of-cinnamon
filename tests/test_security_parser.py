@@ -426,6 +426,18 @@ class SecurityParserTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 update_blacklist_file(path, ["neu"])
 
+    def test_update_blacklist_file_rejects_new_entry_at_capacity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            path.write_text("\n".join(f"entry-{index}" for index in range(_MAX_BLACKLIST_ENTRIES)) + "\n", encoding="utf-8")
+            path.chmod(0o600)
+            before = path.read_bytes()
+
+            with self.assertRaisesRegex(ValueError, "exceeds maximum entries"):
+                update_blacklist_file(path, ["new-entry"])
+
+            self.assertEqual(path.read_bytes(), before)
+
     def test_update_blacklist_file_writes_through_secure_temp_fd(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "blacklist.txt"

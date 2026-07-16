@@ -737,11 +737,11 @@ def update_blacklist_file(path: Path, added: list[str]) -> list[str]:
             entry_key = entry.casefold()
             if entry_key in existing_keys:
                 continue
+            if len(existing) >= _MAX_BLACKLIST_ENTRIES:
+                raise ValueError("blacklist file exceeds maximum entries")
             existing.append(entry)
             existing_keys.add(entry_key)
             changed = True
-            if len(existing) >= _MAX_BLACKLIST_ENTRIES:
-                break
         if len(existing) > _MAX_BLACKLIST_ENTRIES:
             existing = existing[:_MAX_BLACKLIST_ENTRIES]
             changed = True
