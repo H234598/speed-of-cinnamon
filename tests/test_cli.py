@@ -820,7 +820,23 @@ class CliTest(unittest.TestCase):
 
         mocked_close.assert_any_call(123)
         mocked_close.assert_any_call(456)
-        mocked_unlink.assert_called_once()
+        mocked_unlink.assert_not_called()
+
+    def test_finalization_lock_closes_descriptor_when_creation_stat_fails(self) -> None:
+        state_file = Path("/probe/state.json")
+        with (
+            mock.patch.object(cli, "assert_no_symlink_ancestors"),
+            mock.patch.object(cli, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(cli.os, "open", return_value=123),
+            mock.patch.object(cli.os, "fstat", side_effect=OSError("stat failed")),
+            mock.patch.object(cli, "_unlink_finalization_lock_at") as mocked_unlink,
+            mock.patch.object(cli.os, "close") as mocked_close,
+        ):
+            self.assertIsNone(cli._acquire_finalization_lock(state_file))
+
+        mocked_close.assert_any_call(123)
+        mocked_close.assert_any_call(456)
+        mocked_unlink.assert_not_called()
 
     def test_finalization_lock_cleans_up_when_write_is_interrupted(self) -> None:
         state_file = Path("/probe/state.json")
