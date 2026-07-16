@@ -827,18 +827,47 @@ def _merge_old_months(directory: Path, today: date) -> None:
                 except BaseException as cleanup_error:
                     _note_cleanup_failure(exc, cleanup_error)
                 raise
-            with raw_output:
-                with gzip.GzipFile(fileobj=raw_output, mode="wb") as output:
+            archive_block_error: BaseException | None = None
+            try:
+                output = gzip.GzipFile(fileobj=raw_output, mode="wb")
+                try:
                     for path in sorted(existing + paths, key=lambda item: item.name):
                         if not path.exists():
                             continue
                         source_stat = _assert_regular_unlinked_file(path, field_name="monthly log source")
                         source_stats[path] = source_stat
                         _copy_log_content(path, output, expected_stat=source_stat)
+                except BaseException as exc:
+                    archive_block_error = exc
+                    raise
+                finally:
+                    try:
+                        output.close()
+                    except BaseException as cleanup_error:
+                        if archive_block_error is not None:
+                            _note_cleanup_failure(archive_block_error, cleanup_error)
+                        else:
+                            archive_block_error = cleanup_error
+                if archive_block_error is not None:
+                    raise archive_block_error
                 raw_output.flush()
                 os.fsync(raw_output.fileno())
                 if not _log_temp_name_matches_fd(parent_fd, temp_name, raw_output.fileno()):
                     raise RuntimeError("monthly log temporary archive was replaced")
+            except BaseException as exc:
+                if archive_block_error is None:
+                    archive_block_error = exc
+                raise
+            finally:
+                try:
+                    raw_output.close()
+                except BaseException as cleanup_error:
+                    if archive_block_error is not None:
+                        _note_cleanup_failure(archive_block_error, cleanup_error)
+                    else:
+                        archive_block_error = cleanup_error
+            if archive_block_error is not None:
+                raise archive_block_error
             archive_activation_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
             if not stat_module.S_ISREG(archive_activation_stat.st_mode):
                 raise RuntimeError("monthly log temporary archive must be a regular file")

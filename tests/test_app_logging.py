@@ -708,6 +708,34 @@ class AppLoggingTest(unittest.TestCase):
 
             self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_monthly_merge_preserves_copy_error_when_temp_close_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "speed-of-cinnamon-2026-05-30.log"
+            source.write_text("source\n", encoding="utf-8")
+            source.chmod(0o600)
+            raw_output = mock.MagicMock()
+            raw_output.__enter__.return_value = raw_output
+            raw_output.__exit__.side_effect = lambda *_args: raw_output.close()
+            raw_output.close.side_effect = OSError("archive close failed")
+            gzip_output = mock.MagicMock()
+            gzip_output.__enter__.return_value = gzip_output
+            gzip_output.__exit__.return_value = False
+
+            with (
+                mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".archive.tmp")),
+                mock.patch.object(app_logging.os, "fdopen", return_value=raw_output),
+                mock.patch.object(app_logging.gzip, "GzipFile", return_value=gzip_output),
+                mock.patch.object(app_logging, "_copy_log_content", side_effect=RuntimeError("copy failed")),
+                mock.patch.object(app_logging, "_unlink_log_temp"),
+                mock.patch.object(app_logging.os, "close"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "copy failed") as caught:
+                    app_logging._merge_old_months(log_dir, date(2026, 6, 1))
+
+            self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
+            self.assertIn("archive close failed", "\n".join(caught.exception.__notes__))
+
     def test_monthly_merge_removes_temp_archive_when_copy_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
