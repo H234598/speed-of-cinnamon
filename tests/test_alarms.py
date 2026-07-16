@@ -216,6 +216,12 @@ class AlarmTest(unittest.TestCase):
         self.assertEqual(alarm_module.alarm_days({"days": ["noday"]}), [])
         self.assertIsNone(alarm_occurrence({"hour": 9, "minute": 0, "days": ["noday"]}, date(2026, 6, 1)))
 
+    def test_iter_dates_returns_empty_for_reversed_range(self) -> None:
+        self.assertEqual(
+            alarm_module.iter_dates(date(2026, 6, 2), date(2026, 6, 1)),
+            [],
+        )
+
     def test_repeat_day_parser_rejects_null_byte(self) -> None:
         with self.assertRaisesRegex(ValueError, "alarm days contains invalid null byte"):
             parse_repeat_days("mon\x00,fri")

@@ -639,7 +639,9 @@ def parse_local_datetime(value: str) -> datetime | None:
 
 def iter_dates(start: date, end: date) -> list[date]:
     days = (end - start).days
-    return [start + timedelta(days=offset) for offset in range(max(days, 0) + 1)]
+    if days < 0:
+        return []
+    return [start + timedelta(days=offset) for offset in range(days + 1)]
 
 
 def alarm_occurrence(alarm: dict[str, Any], day: date) -> datetime | None:
