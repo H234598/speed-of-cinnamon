@@ -4374,7 +4374,7 @@ MyApplet.prototype = {
     let safeInputDevice = this._coerceCliTextArgOrFallback(this.inputDevice, "input device", "");
     let safeTranscriberCommand = this._coerceCliTextArgOrFallback(this.transcriberCommand, "transcriber command", "");
     let safePostProcessCommand = this._coerceCliTextArgOrFallback(this.postProcessCommand, "post-process command", "");
-    let safeOllamaUrl = this._coerceCliTextArgOrFallback(this.ollamaUrl, "ollama URL", DEFAULT_OLLAMA_URL);
+    let safeOllamaUrl = this._validatedExternalApiUrlOrFallback(this.ollamaUrl, "ollama URL", DEFAULT_OLLAMA_URL);
     let safeOllamaModel = this._coerceCliTextArgOrFallback(this.ollamaModel, "ollama model", "");
     let safeOpenAiCompatibleUrl = this._validatedExternalApiUrlOrFallback(this.openaiCompatibleUrl, "openai-compatible URL", DEFAULT_OPENAI_COMPATIBLE_URL);
     let safeOpenAiCompatibleModel = this._coerceCliTextArgOrFallback(this.openaiCompatibleModel, "openai-compatible model", DEFAULT_OPENAI_COMPATIBLE_MODEL);
@@ -4585,7 +4585,7 @@ MyApplet.prototype = {
   },
 
   _installTextModelArgs: function(model) {
-    let safeOllamaUrl = this._coerceCliTextArg(this.ollamaUrl, "ollama URL");
+    let safeOllamaUrl = this._validatedExternalApiUrlOrFallback(this.ollamaUrl, "ollama URL", DEFAULT_OLLAMA_URL);
     let safeModel = this._coerceCliTextArg(model, "ollama model");
     let args = [this._cliCommand(), "install-text-model", "--backend", "ollama", "--model", safeModel, "--json"];
     if (safeOllamaUrl.trim() !== "") {
@@ -4647,7 +4647,7 @@ MyApplet.prototype = {
   },
 
   _textModelsArgs: function(backendOverride) {
-    let safeOllamaUrl = this._coerceCliTextArg(this.ollamaUrl, "ollama URL");
+    let safeOllamaUrl = this._validatedExternalApiUrlOrFallback(this.ollamaUrl, "ollama URL", DEFAULT_OLLAMA_URL);
     let safeOpenAiCompatibleUrl = this._validatedExternalApiUrlOrFallback(this.openaiCompatibleUrl, "openai-compatible URL", DEFAULT_OPENAI_COMPATIBLE_URL);
 
     let args = [this._cliCommand(), "text-models", "--json"];

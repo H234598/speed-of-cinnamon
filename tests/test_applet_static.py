@@ -3836,7 +3836,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let safePersonalContext = this._coerceCliTextArgOrFallback(this._singleLineCliTextValue(this.personalContext), "personal context", "");', source)
         self.assertIn('let safeVocabulary = this._coerceCliTextArgOrFallback(this._singleLineCliTextValue(this.vocabulary), "vocabulary", "");', source)
         self.assertIn("for (let key in CLI_TEXT_SETTINGS)", source)
-        self.assertIn('let safeOllamaUrl = this._coerceCliTextArgOrFallback(this.ollamaUrl, "ollama URL", DEFAULT_OLLAMA_URL);', source)
+        self.assertIn('let safeOllamaUrl = this._validatedExternalApiUrlOrFallback(this.ollamaUrl, "ollama URL", DEFAULT_OLLAMA_URL);', source)
         self.assertIn('let safeOpenAiCompatibleUrl = this._validatedExternalApiUrlOrFallback(this.openaiCompatibleUrl, "openai-compatible URL", DEFAULT_OPENAI_COMPATIBLE_URL);', source)
         self.assertIn("_coerceImportedSetting: function(key, value, fallback)", source)
 
