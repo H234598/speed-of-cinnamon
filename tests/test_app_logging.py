@@ -2108,6 +2108,34 @@ class AppLoggingTest(unittest.TestCase):
             self.assertEqual(state["rollback_stat_calls"], 2)
             self.assertEqual(target.read_text(encoding="utf-8"), "must survive\n")
 
+    def test_gzip_file_keeps_new_target_when_backup_unlink_outcome_is_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "source.log"
+            target = log_dir / "target.log.gz"
+            source.write_text("new content\n", encoding="utf-8")
+            source.chmod(0o600)
+            with gzip.open(target, "wt", encoding="utf-8") as handle:
+                handle.write("old content\n")
+            target.chmod(0o600)
+            real_unlink = app_logging.os.unlink
+
+            def unlink_then_fail(name: object, *args: object, **kwargs: object) -> None:
+                if isinstance(name, str) and name.endswith(".backup"):
+                    real_unlink(name, *args, **kwargs)
+                    raise OSError("backup unlink outcome unknown")
+                real_unlink(name, *args, **kwargs)
+
+            with mock.patch.object(app_logging.os, "unlink", side_effect=unlink_then_fail):
+                with self.assertRaisesRegex(OSError, "backup unlink outcome unknown") as caught:
+                    app_logging._gzip_file(source, target)
+
+            self.assertTrue(caught.exception.__notes__)
+            self.assertTrue(source.exists())
+            with gzip.open(target, "rt", encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "new content\n")
+            self.assertEqual(list(log_dir.glob("*.backup")), [])
+
     def test_gzip_file_reports_temp_cleanup_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
