@@ -4837,10 +4837,14 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
             payload["message"] = str(exc)
             return payload
         if not verified_alive:
+            current_process_identity = (
+                _recording_process_identity_for_pid(state.pid)
+                if state.pid is not None and state.process_identity
+                else None
+            )
             if (
-                state.pid is not None
-                and state.process_identity
-                and _recording_process_identity_for_pid(state.pid) is not None
+                current_process_identity is not None
+                and current_process_identity != state.process_identity
             ):
                 payload["status"] = "error"
                 payload["message"] = "recording process identity does not match; recording state preserved"

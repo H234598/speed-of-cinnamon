@@ -10249,6 +10249,40 @@ class CliTest(unittest.TestCase):
         self.assertIn("identity", payload["error"])
         mocked_alive.assert_called()
 
+    def test_status_reports_matching_zombie_recording_as_recorded(self) -> None:
+        process = subprocess.Popen(["/bin/true"], start_new_session=True)
+        try:
+            deadline = time.monotonic() + 2
+            process_state = ""
+            while time.monotonic() < deadline:
+                try:
+                    stat_text = Path(f"/proc/{process.pid}/stat").read_text(encoding="utf-8")
+                    process_state = stat_text.rsplit(")", 1)[1].split()[0]
+                except OSError:
+                    process_state = "gone"
+                if process_state in {"Z", "X", "x"}:
+                    break
+                time.sleep(0.01)
+            self.assertIn(process_state, {"Z", "X", "x"})
+
+            with tempfile.TemporaryDirectory() as tmp:
+                state_file = Path(tmp) / "state.json"
+                process_identity = cli._recording_process_identity_for_pid(process.pid)
+                self.assertIsNotNone(process_identity)
+                StateStore(state_file).write(
+                    RecordingState(
+                        status="recording",
+                        pid=process.pid,
+                        process_identity=process_identity or "",
+                    )
+                )
+                payload = cli.command_status(argparse.Namespace(state_file=str(state_file)))
+
+            self.assertEqual(payload["status"], "recorded")
+            self.assertIn("exited", payload["message"])
+        finally:
+            process.wait()
+
     def test_status_redacts_microphone_level_errors(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
