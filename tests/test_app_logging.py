@@ -1644,6 +1644,43 @@ class AppLoggingTest(unittest.TestCase):
                 self.assertEqual(handle.read(), "replacement content\n")
             self.assertEqual(list(log_dir.glob("*.backup")), [])
 
+    def test_gzip_file_does_not_remove_replaced_target_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "source.log"
+            target = log_dir / "target.log.gz"
+            source.write_text("new content\n", encoding="utf-8")
+            source.chmod(0o600)
+            with gzip.open(target, "wt", encoding="utf-8") as handle:
+                handle.write("old content\n")
+            target.chmod(0o600)
+            real_stat = app_logging.os.stat
+            backup_stat_calls = 0
+            replacement_backup: Path | None = None
+
+            def stat_then_swap(name: object, *args: object, **kwargs: object) -> os.stat_result:
+                nonlocal backup_stat_calls, replacement_backup
+                result = real_stat(name, *args, **kwargs)
+                if isinstance(name, str) and name.endswith(".backup"):
+                    backup_stat_calls += 1
+                    if backup_stat_calls == 2:
+                        backup_path = target.parent / name
+                        moved_path = backup_path.with_name(f"{backup_path.name}.moved")
+                        os.replace(backup_path, moved_path)
+                        backup_path.write_bytes(b"replacement backup")
+                        backup_path.chmod(0o600)
+                        replacement_backup = backup_path
+                        return real_stat(name, *args, **kwargs)
+                return result
+
+            with mock.patch.object(app_logging.os, "stat", side_effect=stat_then_swap):
+                with self.assertRaisesRegex(RuntimeError, "log target backup changed before cleanup"):
+                    app_logging._gzip_file(source, target)
+
+            self.assertEqual(backup_stat_calls, 2)
+            self.assertIsNotNone(replacement_backup)
+            self.assertEqual(replacement_backup.read_bytes(), b"replacement backup")
+
     def test_gzip_file_does_not_clobber_target_created_during_activation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

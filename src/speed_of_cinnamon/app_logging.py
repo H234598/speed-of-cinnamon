@@ -1254,6 +1254,7 @@ def _gzip_file(source: Path, target: Path) -> None:
     source_fd: int | None = None
     target_backup_name = ""
     target_backup_created = False
+    target_backup_stat: os.stat_result | None = None
     target_existing_stat: os.stat_result | None = None
     target_temp_stat: os.stat_result | None = None
     target_activation_stat: os.stat_result | None = None
@@ -1279,6 +1280,15 @@ def _gzip_file(source: Path, target: Path) -> None:
 
     def _same_activated_target(first: os.stat_result, second: os.stat_result) -> bool:
         return _same_target_inode(first, second) and getattr(first, "st_nlink", 1) == getattr(second, "st_nlink", 1)
+
+    def _unlink_target_backup() -> None:
+        if not target_backup_name or target_backup_stat is None:
+            raise RuntimeError("log target backup identity is unavailable")
+        current_backup_stat = os.stat(target_backup_name, dir_fd=parent_fd, follow_symlinks=False)
+        if not _same_target_inode(current_backup_stat, target_backup_stat):
+            raise RuntimeError("log target backup changed before cleanup")
+        os.unlink(target_backup_name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
 
     def _rollback_target_activation() -> None:
         nonlocal target_backup_created, target_backup_name, target_removed
@@ -1325,7 +1335,7 @@ def _gzip_file(source: Path, target: Path) -> None:
                     else:
                         raise RuntimeError("log target exists during activation rollback")
                 else:
-                    os.unlink(target_backup_name, dir_fd=parent_fd)
+                    _unlink_target_backup()
                     target_backup_created = False
                     target_backup_name = ""
                     os.fsync(parent_fd)
@@ -1529,6 +1539,7 @@ def _gzip_file(source: Path, target: Path) -> None:
                         raise RuntimeError("log target changed during backup activation")
                     target_backup_name = candidate_name
                     target_backup_created = True
+                    target_backup_stat = backup_stat
                     break
                 except BaseException as exc:
                     try:
@@ -1566,7 +1577,7 @@ def _gzip_file(source: Path, target: Path) -> None:
         os.fsync(parent_fd)
         target_transaction_active = False
         if target_backup_created:
-            os.unlink(target_backup_name, dir_fd=parent_fd)
+            _unlink_target_backup()
             target_backup_created = False
             target_backup_name = ""
             os.fsync(parent_fd)
