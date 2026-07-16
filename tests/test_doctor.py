@@ -251,9 +251,9 @@ class DoctorTest(unittest.TestCase):
             "whisper.cpp voice model path must be a file",
         )
 
-    def test_explicit_transcriber_rejects_model_for_other_backend(self) -> None:
+    def test_explicit_transcriber_uses_model_backend(self) -> None:
         checks = {
-            "whisper-cli": doctor.Check("whisper-cli", True, "/usr/bin/whisper-cli"),
+            "whisper-cli": doctor.Check("whisper-cli", False, "missing"),
             "faster-whisper": doctor.Check("faster-whisper", True, "available"),
         }
         with tempfile.TemporaryDirectory() as tmp:
@@ -263,8 +263,8 @@ class DoctorTest(unittest.TestCase):
                 {"transcriber": "whisper-cpp", "whisper-model": str(ctranslate2_model)},
                 checks,
             )
-            self.assertFalse(status["ok"])
-            self.assertEqual(status["detail"], "whisper.cpp voice model path must be a file")
+            self.assertTrue(status["ok"])
+            self.assertEqual(status["resolved"], "faster-whisper")
 
             whisper_cpp_model = Path(tmp) / "ggml-base.bin"
             whisper_cpp_model.write_bytes(b"model")
@@ -273,7 +273,7 @@ class DoctorTest(unittest.TestCase):
                 checks,
             )
             self.assertFalse(status["ok"])
-            self.assertEqual(status["detail"], "faster-whisper voice model path must be a directory")
+            self.assertEqual(status["detail"], "whisper.cpp command is missing")
 
     def test_explicit_whisper_cpp_uses_whisper_cpp_default_model(self) -> None:
         checks = {
