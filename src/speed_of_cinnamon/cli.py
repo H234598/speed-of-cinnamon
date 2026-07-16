@@ -911,6 +911,7 @@ def read_file_tail(path: Path, max_chars: int) -> str:
             except BaseException:
                 pass
         raise
+    primary_error: BaseException | None = None
     try:
         handle.seek(0, os.SEEK_END)
         size = handle.tell()
@@ -922,11 +923,17 @@ def read_file_tail(path: Path, max_chars: int) -> str:
             text = handle.read().decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ValueError(f"failed to decode file as UTF-8: {path}") from exc
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
         try:
             handle.close()
-        except BaseException:
-            pass
+        except BaseException as cleanup_error:
+            if primary_error is not None:
+                primary_error.add_note(f"file tail cleanup failed: {cleanup_error}")
+            else:
+                raise
     if _contains_escaped_null(text):
         raise ValueError(f"file tail contains invalid null byte: {path}")
     if len(text) > max_chars:

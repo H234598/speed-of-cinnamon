@@ -11166,6 +11166,21 @@ class CliTest(unittest.TestCase):
 
         handle.close.assert_called_once()
 
+    def test_read_file_tail_does_not_hide_handle_close_failure_after_success(self) -> None:
+        handle = mock.Mock()
+        handle.tell.return_value = 5
+        handle.read.return_value = b"hello"
+        handle.close.side_effect = OSError("tail close failed")
+        with (
+            mock.patch.object(cli.os, "open", return_value=11),
+            mock.patch.object(cli.os, "fdopen", return_value=handle),
+            mock.patch.object(cli, "assert_fd_is_regular_private_file"),
+        ):
+            with self.assertRaisesRegex(OSError, "tail close failed"):
+                cli.read_file_tail(Path("/tmp/sample.txt"), 10)
+
+        handle.close.assert_called_once()
+
     def test_read_file_tail_opens_without_following_symlinks(self) -> None:
         captured: dict[str, object] = {}
         handle = mock.Mock()
