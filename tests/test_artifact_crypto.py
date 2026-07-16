@@ -457,6 +457,43 @@ class ArtifactCryptoTest(unittest.TestCase):
 
             self.assertEqual(path.read_text(encoding="utf-8"), "short\n")
 
+    def test_default_passphrase_rotation_reports_target_change_during_activation_rollback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.key"
+            replacement = Path(tmp) / "replacement.key"
+            path.write_text("short\n", encoding="utf-8")
+            path.chmod(0o600)
+            replacement.write_text("replacement\n", encoding="utf-8")
+            replacement.chmod(0o600)
+            real_fsync = artifact_crypto._fsync_fd
+            directory_syncs = 0
+
+            def fail_after_activation_sync(fd: int) -> None:
+                nonlocal directory_syncs
+                if stat.S_ISDIR(os.fstat(fd).st_mode):
+                    directory_syncs += 1
+                    if directory_syncs == 2:
+                        replacement.replace(path)
+                        raise OSError("activation directory sync failed")
+                real_fsync(fd)
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: ""},
+                    clear=False,
+                ),
+                mock.patch.object(artifact_crypto, "default_passphrase_file", return_value=path),
+                mock.patch.object(artifact_crypto, "_fsync_fd", side_effect=fail_after_activation_sync),
+            ):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be generated") as caught:
+                    artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
+
+            notes = "\n".join(caught.exception.__notes__)
+            self.assertIn("target changed during rollback", notes)
+            self.assertNotIn("cannot access local variable", notes)
+            self.assertEqual(path.read_text(encoding="utf-8"), "replacement\n")
+
     def test_default_passphrase_rotation_restores_target_when_backup_unlink_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "artifact.key"

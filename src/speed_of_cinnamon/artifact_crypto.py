@@ -416,7 +416,7 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
         )
 
     def _rollback_passphrase_activation() -> None:
-        nonlocal backup_created
+        nonlocal backup_created, target_removed
         if not transaction_active:
             return
         activation_visible = False
