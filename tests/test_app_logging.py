@@ -1651,6 +1651,51 @@ class AppLoggingTest(unittest.TestCase):
             self.assertEqual(len(backups), 1)
             self.assertEqual(backups[0].read_text(encoding="utf-8"), "must survive\n")
 
+    def test_maintain_logs_preserves_archive_replacement_during_rollback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            old_archive = log_dir / "speed-of-cinnamon-2026-05.log.gz"
+            old_daily = log_dir / "speed-of-cinnamon-2026-05-30.log"
+            replacement = log_dir / "replacement.archive"
+            old_daily.write_text("may-30\n", encoding="utf-8")
+            old_daily.chmod(0o600)
+            with gzip.open(old_archive, "wt", encoding="utf-8") as handle:
+                handle.write("legacy\n")
+            old_archive.chmod(0o600)
+            replacement.write_text("must survive\n", encoding="utf-8")
+            real_fsync = app_logging.os.fsync
+            real_stat = app_logging.os.stat
+            state = {"directory_syncs": 0, "activation_failed": False, "rollback_stat_calls": 0}
+
+            def fail_activation_fsync(fd: int) -> None:
+                if stat_module.S_ISDIR(os.fstat(fd).st_mode):
+                    state["directory_syncs"] += 1
+                    if state["directory_syncs"] == 2:
+                        state["activation_failed"] = True
+                        raise OSError("activation fsync failed")
+                real_fsync(fd)
+
+            def stat_with_swap(name: object, *args: object, **kwargs: object) -> os.stat_result:
+                result = real_stat(name, *args, **kwargs)
+                if state["activation_failed"] and name == old_archive.name and kwargs.get("dir_fd") is not None:
+                    state["rollback_stat_calls"] += 1
+                    if state["rollback_stat_calls"] == 1:
+                        old_archive.unlink()
+                        replacement.rename(old_archive)
+                return result
+
+            with (
+                mock.patch.object(app_logging.os, "fsync", side_effect=fail_activation_fsync),
+                mock.patch.object(app_logging.os, "stat", side_effect=stat_with_swap),
+            ):
+                with self.assertRaisesRegex(OSError, "activation fsync failed") as caught:
+                    app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
+
+            self.assertIn("monthly log archive changed during activation rollback", "\n".join(caught.exception.__notes__))
+            self.assertEqual(state["directory_syncs"], 2)
+            self.assertEqual(state["rollback_stat_calls"], 2)
+            self.assertEqual(old_archive.read_text(encoding="utf-8"), "must survive\n")
+
     def test_maintain_logs_restores_archive_when_backup_unlink_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

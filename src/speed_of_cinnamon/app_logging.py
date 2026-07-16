@@ -1171,6 +1171,16 @@ def _merge_old_months(directory: Path, today: date) -> None:
                                 != getattr(archive_activation_stat, "st_nlink", 1)
                             ):
                                 raise RuntimeError("monthly log archive changed during activation rollback")
+                            current_stat = os.stat(archive.name, dir_fd=parent_fd, follow_symlinks=False)
+                            if (
+                                current_stat.st_dev != archive_activation_stat.st_dev
+                                or current_stat.st_ino != archive_activation_stat.st_ino
+                                or current_stat.st_mode != archive_activation_stat.st_mode
+                                or current_stat.st_size != archive_activation_stat.st_size
+                                or getattr(current_stat, "st_nlink", 1)
+                                != getattr(archive_activation_stat, "st_nlink", 1)
+                            ):
+                                raise RuntimeError("monthly log archive changed during activation rollback")
                             os.unlink(archive.name, dir_fd=parent_fd)
                             os.fsync(parent_fd)
                     if archive_backup_moved and archive_backup_name is not None:
