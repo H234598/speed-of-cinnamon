@@ -251,7 +251,7 @@ class StateStoreTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")
             lock_acquired = False
-            original_read = StateStore.read
+            original_read = StateStore._read_unlocked
 
             def fake_flock(fd: int, operation: int) -> None:
                 nonlocal lock_acquired
@@ -264,12 +264,22 @@ class StateStoreTest(unittest.TestCase):
 
             with (
                 mock.patch("speed_of_cinnamon.state.fcntl.flock", side_effect=fake_flock),
-                mock.patch.object(StateStore, "read", guarded_read),
+                mock.patch.object(StateStore, "_read_unlocked", guarded_read),
             ):
                 state = store.update(status="recording", language="de")
 
         self.assertEqual(state.status, "recording")
         self.assertEqual(state.language, "de")
+
+    def test_read_locks_before_loading_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            store = StateStore(path)
+            store.write(RecordingState(status="done"))
+            with mock.patch.object(store, "_locked", wraps=store._locked) as mocked_lock:
+                self.assertEqual(store.read().status, "done")
+
+        mocked_lock.assert_called_once_with()
 
     def test_state_lock_rejects_hardlinked_existing_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -298,7 +308,7 @@ class StateStoreTest(unittest.TestCase):
     def test_update_avoids_second_read_after_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")
-            with mock.patch.object(store, "read", wraps=store.read) as mocked_read:
+            with mock.patch.object(store, "_read_unlocked", wraps=store._read_unlocked) as mocked_read:
                 state = store.update(status="recording")
 
         self.assertEqual(state.status, "recording")

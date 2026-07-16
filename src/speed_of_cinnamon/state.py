@@ -319,6 +319,10 @@ class StateStore:
         return normalized
 
     def read(self) -> RecordingState:
+        with self._locked():
+            return self._read_unlocked()
+
+    def _read_unlocked(self) -> RecordingState:
         try:
             assert_no_symlink_ancestors(self.path, field_name="state file path")
             file_stat = self.path.lstat()
@@ -379,7 +383,7 @@ class StateStore:
 
     def update(self, **values: Any) -> RecordingState:
         with self._locked():
-            state = self.read()
+            state = self._read_unlocked()
             state_fields = {state_field.name for state_field in fields(RecordingState)}
             for key, value in values.items():
                 if key in state_fields:
