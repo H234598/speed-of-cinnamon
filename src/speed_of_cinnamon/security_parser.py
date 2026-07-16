@@ -159,7 +159,7 @@ _SENSITIVE_PATTERNS = [
     (_CUSTOMER_ID_RE, "[redacted customer id]"),
     (_PHONE_RE, "[redacted phone]"),
 ]
-_SENSITIVE_PLACEHOLDER_RE = re.compile(
+_REDACTION_PLACEHOLDER_RE = re.compile(
     "|".join(
         re.escape(placeholder)
         for placeholder in (
@@ -175,6 +175,7 @@ _SENSITIVE_PLACEHOLDER_RE = re.compile(
             "[redacted customer id]",
             "[redacted phone]",
             "[redacted card]",
+            "[redacted blacklist item]",
         )
     )
 )
@@ -669,13 +670,13 @@ def _apply_name_redaction(text: str) -> tuple[str, int]:
     return _sub_with_normalized_projection(text, _NAME_RE, "[redacted name]")
 
 
-def _apply_blacklist_around_sensitive_placeholders(
+def _apply_blacklist_around_redaction_placeholders(
     text: str, pattern: re.Pattern[str]
 ) -> tuple[str, int]:
     pieces: list[str] = []
     cursor = 0
     redactions = 0
-    for placeholder_match in _SENSITIVE_PLACEHOLDER_RE.finditer(text):
+    for placeholder_match in _REDACTION_PLACEHOLDER_RE.finditer(text):
         segment, count = _sub_with_normalized_projection(
             text[cursor:placeholder_match.start()],
             pattern,
@@ -742,7 +743,7 @@ def apply_security_mode(text: str, blacklist: list[str]) -> tuple[str, int]:
     redactions += count
     blacklist_pattern = _compile_blacklist_pattern(blacklist)
     if blacklist_pattern is not None:
-        clean, count = _apply_blacklist_around_sensitive_placeholders(clean, blacklist_pattern)
+        clean, count = _apply_blacklist_around_redaction_placeholders(clean, blacklist_pattern)
         redactions += count
 
     return clean.strip(), redactions
@@ -754,7 +755,7 @@ def apply_blacklist_mode(text: str, blacklist: list[str]) -> tuple[str, int]:
     pattern = _compile_blacklist_pattern(blacklist)
     if pattern is None:
         return clean.strip(), 0
-    clean, count = _sub_with_normalized_projection(clean, pattern, "[redacted blacklist item]")
+    clean, count = _apply_blacklist_around_redaction_placeholders(clean, pattern)
     return clean.strip(), count
 
 

@@ -395,6 +395,13 @@ class SecurityParserTest(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertEqual(sanitized, "visible [redacted blacklist item]")
 
+    def test_blacklist_redaction_is_idempotent(self) -> None:
+        sanitized, count = apply_blacklist_mode("redacted", ["redacted"])
+
+        self.assertEqual(sanitized, "[redacted blacklist item]")
+        self.assertEqual(count, 1)
+        self.assertEqual(apply_blacklist_mode(sanitized, ["redacted"]), (sanitized, 0))
+
     def test_apply_blacklist_mode_rejects_oversized_transcript(self) -> None:
         with self.assertRaisesRegex(ValueError, "transcript is too large"):
             apply_blacklist_mode("x" * (_MAX_SECURITY_TEXT_CHARS + 1), ["x"])
