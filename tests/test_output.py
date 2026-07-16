@@ -336,6 +336,17 @@ class OutputTest(unittest.TestCase):
 
         self.assertIn("stderr close failed", "\n".join(caught.exception.__notes__))
 
+    def test_run_with_input_wraps_capture_creation_failure(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"),
+            mock.patch(
+                "speed_of_cinnamon.output.tempfile.TemporaryFile",
+                side_effect=OSError("capture create failed"),
+            ),
+        ):
+            with self.assertRaisesRegex(OutputError, "failed to prepare output capture"):
+                _run_with_input(["cmd"], "input")
+
     def test_run_with_input_rejects_command_error_output(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             stderr = cast(BinaryIO, kwargs["stderr"])

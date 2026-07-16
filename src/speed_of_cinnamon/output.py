@@ -961,8 +961,11 @@ def _run_with_input(
     stderr_file = None
     primary_error: BaseException | None = None
     try:
-        stdout_file = tempfile.TemporaryFile()
-        stderr_file = tempfile.TemporaryFile()
+        try:
+            stdout_file = tempfile.TemporaryFile()
+            stderr_file = tempfile.TemporaryFile()
+        except (OSError, ValueError) as exc:
+            raise OutputError(f"{command} failed to prepare output capture: {exc}") from exc
         try:
             proc = subprocess.run(  # nosec B603
                 [runtime_command, *argv[1:]],
