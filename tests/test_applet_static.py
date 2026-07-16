@@ -3169,10 +3169,15 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._setStatusPreservingRecording("error", _("Status refresh failed: ") + safeError', source)
         self.assertIn("} finally {", source)
         self.assertIn("this._statusCommandRunning = false;", source)
-        self.assertIn("let statusApplyFailed = false;", source)
-        self.assertIn("statusApplyFailed = true;", source)
-        self.assertIn("if (statusApplyFailed && (this.status === \"recording\" || this.status === \"processing\"))", source)
-        self.assertIn('if (this.status === "recording" || this.status === "processing") {\n        this._scheduleStatusPoll();', source)
+        refresh_start = source.index("_refreshStatus: function() {")
+        refresh_end = source.index("\n  _hasCancelableRecordingWork:", refresh_start)
+        refresh_block = source[refresh_start:refresh_end]
+        self.assertIn('if (this.status === "recording" || this.status === "processing") {', refresh_block)
+        self.assertIn("this._scheduleStatusPoll();", refresh_block)
+        self.assertLess(
+            refresh_block.index("this._statusCommandRunning = false;"),
+            refresh_block.index("this._scheduleStatusPoll();"),
+        )
 
     def test_status_refresh_applies_only_latest_response(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -3199,6 +3204,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn("for (let i = 0; i < args.length; i++)", source[status_helper_index:status_helper_end])
         self.assertIn("if (!this._isStatusCommandArgs(normalizedArgs)) {", source[spawn_index:spawn_end])
         self.assertIn("this._statusRefreshToken++;", source[spawn_index:spawn_end])
+
+    def test_status_refresh_reschedules_after_stale_response(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_refreshStatus: function() {")
+        end = source.index("\n  _hasCancelableRecordingWork:", start)
+        block = source[start:end]
+        finally_index = block.index("} finally {")
+        self.assertIn("this._statusCommandRunning = false;", block[finally_index:])
+        self.assertIn(
+            'if (this.status === "recording" || this.status === "processing") {',
+            block[finally_index:],
+        )
+        self.assertIn("this._scheduleStatusPoll();", block[finally_index:])
 
     def test_status_refresh_errors_preserve_active_recording_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

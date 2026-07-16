@@ -5733,16 +5733,16 @@ MyApplet.prototype = {
     let statusRefreshToken = ++this._statusRefreshToken;
     try {
       this._spawnJson(this._statusArgs(), (payload) => {
-        let statusApplyFailed = false;
         try {
           this._applyPayload(payload, statusRefreshToken);
         } catch (err) {
-          statusApplyFailed = true;
           let safeError = this._sanitizeErrorMessage(err);
           this._setStatusPreservingRecording("error", _("Status refresh failed: ") + safeError, this.lastTranscript);
         } finally {
           this._statusCommandRunning = false;
-          if (statusApplyFailed && (this.status === "recording" || this.status === "processing")) {
+          // A local command may have invalidated this response while its poll timer expired.
+          // Always restore active polling after request completion.
+          if (this.status === "recording" || this.status === "processing") {
             this._scheduleStatusPoll();
           }
         }
