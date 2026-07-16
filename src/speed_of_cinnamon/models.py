@@ -584,14 +584,15 @@ def _huggingface_resolve_cache_redirect_matches(url: str, allowed_url: str) -> b
     repo, filename = allowed_parts
     redirect_parts = [part for part in urllib.parse.unquote(parsed.path).split("/") if part]
     repo_parts = [part for part in repo.split("/") if part]
-    expected_len = 3 + len(repo_parts) + 2
-    if len(redirect_parts) != expected_len:
+    filename_parts = [part for part in filename.split("/") if part]
+    prefix_length = 3 + len(repo_parts)
+    if len(redirect_parts) != prefix_length + 1 + len(filename_parts):
         return False
     if redirect_parts[:3] != ["api", "resolve-cache", "models"]:
         return False
-    if redirect_parts[3 : 3 + len(repo_parts)] != repo_parts:
+    if redirect_parts[3:prefix_length] != repo_parts:
         return False
-    return redirect_parts[-1] == filename
+    return redirect_parts[prefix_length + 1 :] == filename_parts
 
 
 def _huggingface_storage_redirect_matches(url: str, allowed_url: str) -> bool:

@@ -2132,6 +2132,30 @@ class ModelsTest(unittest.TestCase):
             self.assertEqual(downloaded, 2)
             self.assertEqual(tmp_path.read_bytes(), b"{}")
 
+    def test_download_url_allows_resolve_cache_redirect_for_nested_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source_url = "https://huggingface.co/example/repo/resolve/main/subdir/config.json"
+            with mock.patch(
+                "speed_of_cinnamon.models._open_model_download_url",
+                side_effect=[
+                    fake_redirect(
+                        source_url,
+                        "/api/resolve-cache/models/example/repo/ebe41f70/subdir/config.json",
+                    ),
+                    FakeResponseWithLength(b"{}", 2),
+                ],
+            ):
+                tmp_path, downloaded = models._download_url_to_file(
+                    source_url,
+                    Path(tmp),
+                    1024,
+                    "ct2-nested",
+                    prefix=".model.",
+                )
+
+            self.assertEqual(downloaded, 2)
+            self.assertEqual(tmp_path.read_bytes(), b"{}")
+
     def test_download_url_rejects_huggingface_resolve_cache_redirect_with_extra_path_segment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(models.ModelError, "redirect URL is not allowed"):
