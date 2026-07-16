@@ -50,11 +50,40 @@ class _FakePopen:
         return self.returncode
 
 
+class _TimeoutPopen(_FakePopen):
+    def __init__(self) -> None:
+        super().__init__(subprocess.CompletedProcess(["cmd"], 0))
+        self.returncode = None
+
+    def communicate(self, input: bytes | None = None, timeout: int | None = None) -> tuple[bytes | None, bytes | None]:
+        if timeout is not None:
+            raise subprocess.TimeoutExpired(cmd=["cmd"], timeout=timeout)
+        return b"", b""
+
+
+class _RunnerPopen(_FakePopen):
+    def __init__(self, runner: object, args: tuple[object, ...], kwargs: dict[str, object]) -> None:
+        super().__init__(subprocess.CompletedProcess([], 0, stdout=b"", stderr=b""))
+        self._runner = runner
+        self._args = args
+        self._kwargs = kwargs
+        self._completed = False
+
+    def communicate(self, input: bytes | None = None, timeout: int | None = None) -> tuple[bytes | None, bytes | None]:
+        if not self._completed:
+            call_kwargs = dict(self._kwargs)
+            call_kwargs["input"] = input
+            result = self._runner(*self._args, **call_kwargs)  # type: ignore[operator]
+            assert isinstance(result, subprocess.CompletedProcess)
+            self._result = result
+            self.returncode = result.returncode
+            self._completed = True
+        return self._result.stdout, self._result.stderr
+
+
 def _popen_from_run(runner: object):
     def factory(*args: object, **kwargs: object) -> _FakePopen:
-        result = runner(*args, **kwargs)  # type: ignore[operator]
-        assert isinstance(result, subprocess.CompletedProcess)
-        return _FakePopen(result)
+        return _RunnerPopen(runner, args, kwargs)
 
     return factory
 
@@ -183,10 +212,10 @@ class OutputTest(unittest.TestCase):
     def test_set_clipboard_prefers_xclip(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which") as mocked_which,
-            mock.patch("speed_of_cinnamon.output.subprocess.run") as mocked_run,
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen") as mocked_run,
         ):
             mocked_which.side_effect = lambda command, path=None: "found" if command == "xclip" else None
-            mocked_run.return_value = subprocess.CompletedProcess(["xclip"], 0)
+            mocked_run.return_value = _FakePopen(subprocess.CompletedProcess(["xclip"], 0))
 
             method = set_clipboard("hello")
 
@@ -219,7 +248,7 @@ class OutputTest(unittest.TestCase):
 
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xclip") as mocked_which,
-            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
         ):
             self.assertEqual(set_clipboard("hello"), "xclip")
 
@@ -229,14 +258,14 @@ class OutputTest(unittest.TestCase):
     def test_set_clipboard_falls_back_to_xsel(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which") as mocked_which,
-            mock.patch("speed_of_cinnamon.output.subprocess.run") as mocked_run,
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen") as mocked_run,
         ):
             mocked_which.side_effect = lambda command, path=None: {
                 "xclip": None,
                 "xsel": "found",
                 "wl-copy": None,
             }.get(command)
-            mocked_run.return_value = subprocess.CompletedProcess(["xsel"], 0)
+            mocked_run.return_value = _FakePopen(subprocess.CompletedProcess(["xsel"], 0))
 
             method = set_clipboard("hello")
 
@@ -324,8 +353,8 @@ class OutputTest(unittest.TestCase):
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/echo"),
             mock.patch(
-                "speed_of_cinnamon.output.subprocess.run",
-                return_value=subprocess.CompletedProcess(["echo"], 0, stdout=b"", stderr=b""),
+                "speed_of_cinnamon.output.subprocess.Popen",
+                return_value=_FakePopen(subprocess.CompletedProcess(["echo"], 0, stdout=b"", stderr=b"")),
             ),
         ):
             _run_with_input(("echo", "x"), "in")
@@ -334,8 +363,8 @@ class OutputTest(unittest.TestCase):
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/echo"),
             mock.patch(
-                "speed_of_cinnamon.output.subprocess.run",
-                return_value=subprocess.CompletedProcess(["echo"], 0, stdout=b"", stderr=b""),
+                "speed_of_cinnamon.output.subprocess.Popen",
+                return_value=_FakePopen(subprocess.CompletedProcess(["echo"], 0, stdout=b"", stderr=b"")),
             ),
             mock.patch("speed_of_cinnamon.output._filesize", side_effect=OSError("capture read failed")),
         ):
@@ -352,8 +381,8 @@ class OutputTest(unittest.TestCase):
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"),
             mock.patch(
-                "speed_of_cinnamon.output.subprocess.run",
-                return_value=subprocess.CompletedProcess(["cmd"], 1, stdout=b"", stderr=b""),
+                "speed_of_cinnamon.output.subprocess.Popen",
+                return_value=_FakePopen(subprocess.CompletedProcess(["cmd"], 1, stdout=b"", stderr=b"")),
             ),
             mock.patch("speed_of_cinnamon.output.tempfile.TemporaryFile", side_effect=[stdout_file, stderr_file]),
         ):
@@ -383,8 +412,8 @@ class OutputTest(unittest.TestCase):
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"),
             mock.patch(
-                "speed_of_cinnamon.output.subprocess.run",
-                return_value=subprocess.CompletedProcess(["cmd"], 0, stdout=b"", stderr=b""),
+                "speed_of_cinnamon.output.subprocess.Popen",
+                return_value=_FakePopen(subprocess.CompletedProcess(["cmd"], 0, stdout=b"", stderr=b"")),
             ),
             mock.patch("speed_of_cinnamon.output.tempfile.TemporaryFile", side_effect=[stdout_file, stderr_file]),
         ):
@@ -399,7 +428,7 @@ class OutputTest(unittest.TestCase):
 
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"),
-            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
         ):
             with self.assertRaisesRegex(OutputError, "failed with exit code 1"):
                 _run_with_input(["cmd"], "input")
@@ -407,7 +436,7 @@ class OutputTest(unittest.TestCase):
     def test_run_with_input_wraps_process_argument_value_error(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"),
-            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=ValueError("invalid process argument")),
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen", side_effect=ValueError("invalid process argument")),
         ):
             with self.assertRaisesRegex(OutputError, "cmd failed to execute"):
                 _run_with_input(["cmd"], "input")
@@ -420,7 +449,7 @@ class OutputTest(unittest.TestCase):
 
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"),
-            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
         ):
             with self.assertRaisesRegex(OutputError, "failed with exit code 1") as raised:
                 _run_with_input(["cmd"], "input")
@@ -462,7 +491,7 @@ class OutputTest(unittest.TestCase):
 
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"),
-            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
         ):
             _run_with_input(["cmd", "arg"], "input")
 
@@ -493,7 +522,7 @@ class OutputTest(unittest.TestCase):
                 clear=True,
             ),
             mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"),
-            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
         ):
             _run_with_input(["cmd"], "hello")
 
@@ -518,7 +547,7 @@ class OutputTest(unittest.TestCase):
 
         with (
             mock.patch("speed_of_cinnamon.output.os.environ.__getitem__", return_value=123),
-            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
         ):
             _run_with_input(["echo"], "hello")
 
@@ -528,7 +557,7 @@ class OutputTest(unittest.TestCase):
 
     def test_run_with_input_rejects_missing_command_when_resolved_path_missing(self) -> None:
         with mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/missing"):
-            with mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=FileNotFoundError("missing")):
+            with mock.patch("speed_of_cinnamon.output.subprocess.Popen", side_effect=FileNotFoundError("missing")):
                 with self.assertRaisesRegex(OutputError, "missing is not available"):
                     _run_with_input(["missing"], "input")
 
@@ -553,7 +582,10 @@ class OutputTest(unittest.TestCase):
             _run_with_input(["sleep"], "", timeout=0)
 
     def test_run_with_input_rejects_timeout(self) -> None:
-        with mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="cmd", timeout=1)):
+        with (
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen", return_value=_TimeoutPopen()),
+            mock.patch("speed_of_cinnamon.output._reap_timed_out_output_process", return_value=True),
+        ):
             with self.assertRaisesRegex(OutputError, "timed out"):
                 _run_with_input(["sleep"], "", timeout=1)
 
@@ -585,6 +617,34 @@ class OutputTest(unittest.TestCase):
         self.assertIsNone(result)
         self.assertFalse(live)
 
+    def test_run_with_input_timeout_kills_process_group_descendants(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "child.pid"
+            command = f"sleep 30 & child=$!; echo $child > {marker}; wait $child"
+            with self.assertRaisesRegex(OutputError, "timed out"):
+                _run_with_input(["sh", "-c", command], "", timeout=1)
+            child = int(marker.read_text(encoding="ascii"))
+
+            deadline = time.monotonic() + 2
+            live = True
+            while time.monotonic() < deadline:
+                try:
+                    raw = Path(f"/proc/{child}/stat").read_text(encoding="ascii")
+                    state = raw.rsplit(")", 1)[1].split()[0]
+                    live = state not in {"Z", "X", "x"}
+                except OSError:
+                    live = False
+                if not live:
+                    break
+                time.sleep(0.01)
+            if live:
+                try:
+                    os.kill(child, 9)
+                except ProcessLookupError:
+                    pass
+
+        self.assertFalse(live)
+
     def test_run_with_input_limits_output_size(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             stdout = cast(BinaryIO, kwargs["stdout"])
@@ -594,7 +654,7 @@ class OutputTest(unittest.TestCase):
         with mock.patch("speed_of_cinnamon.output.MAX_OUTPUT_CHARS", 100):
             with (
                 mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"),
-                mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+                mock.patch("speed_of_cinnamon.output.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
             ):
                 with self.assertRaisesRegex(OutputError, "too much output"):
                     _run_with_input(["cmd"], "input")
@@ -813,7 +873,7 @@ class OutputTest(unittest.TestCase):
 
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which", side_effect=fake_which),
-            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
             mock.patch("speed_of_cinnamon.output._active_x_window_matches_snapshot", return_value=True),
         ):
             paste_from_clipboard(expected_window_snapshot=("123", "Firefox", "Firefox"))
@@ -2772,7 +2832,7 @@ class OutputTest(unittest.TestCase):
 
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which", return_value="xdotool"),
-            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
             mock.patch("speed_of_cinnamon.output._active_x_window_snapshot", return_value=("123", "Editor", "xed")),
             mock.patch("speed_of_cinnamon.output._active_x_window_matches_snapshot", return_value=True),
         ):
