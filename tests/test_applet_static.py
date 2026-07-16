@@ -5525,7 +5525,11 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn("let completed = false;", block)
             self.assertIn("let completeOnce = (value) =>", block)
             if method == "_clipboardTargetList: function(":
-                self.assertIn("if (!handle) {\n        if (tryFallback()) {\n          return true;\n        }\n        completeOnce(null);\n      }", block)
+                self.assertIn("let subprocessCallbackDelivered = false;", block)
+                self.assertIn("let fallbackStarted = false;", block)
+                self.assertIn("subprocessCallbackDelivered = true;", block)
+                self.assertIn("if (!handle && !subprocessCallbackDelivered)", block)
+                self.assertIn("return Boolean(handle) || fallbackStarted;", block)
             else:
                 self.assertIn("if (!handle) {\n        completeOnce(null);\n      }", block)
             self.assertIn(f'this._recordLifecycleError("{error_group}", error);', block)
@@ -5933,7 +5937,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let timeout = this._findTrustedProgramInPath("timeout");', source)
         self.assertIn("let helper = this._findTrustedProgramInPath(program);", source)
         self.assertIn("if (!helper) {\n      if (tryFallback()) {\n        return true;\n      }\n      completeOnce(null);\n      return false;\n    }", source)
-        self.assertIn("if (!handle) {\n        if (tryFallback()) {\n          return true;\n        }\n        completeOnce(null);\n      }", source)
+        self.assertIn("if (!handle && !subprocessCallbackDelivered)", source)
+        self.assertIn("return Boolean(handle) || fallbackStarted;", source)
         self.assertIn('let command = [timeout, "--kill-after=1", String(CLIPBOARD_TARGET_TIMEOUT_SECONDS), helper];', source)
         self.assertIn("_clipboardNonTextPayloadTargets: function(targets)", source)
         self.assertIn("_clipboardPayloadSnapshot: function()", source)

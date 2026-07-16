@@ -12076,6 +12076,8 @@ MyApplet.prototype = {
       completed = true;
       complete(value);
     };
+    let subprocessCallbackDelivered = false;
+    let fallbackStarted = false;
     let commandTimeoutMs = Math.max(1, Number(timeoutMs || CLIPBOARD_COMMAND_TIMEOUT_MS));
     if (!isFinite(commandTimeoutMs)) {
       commandTimeoutMs = CLIPBOARD_COMMAND_TIMEOUT_MS;
@@ -12089,6 +12091,12 @@ MyApplet.prototype = {
       attempted.push(program);
     }
     let tryFallback = () => {
+      if (completed) {
+        return fallbackStarted;
+      }
+      if (fallbackStarted) {
+        return true;
+      }
       let remainingMs = commandDeadlineMs - Date.now();
       if (remainingMs <= 0 || !this._lifecycleAllowsWork()) {
         return false;
@@ -12106,7 +12114,8 @@ MyApplet.prototype = {
           fallback.attemptedPrograms,
           commandDeadlineMs
         );
-        return Boolean(fallbackHandle);
+        fallbackStarted = Boolean(fallbackHandle);
+        return fallbackStarted;
       } catch (error) {
         this._recordLifecycleError("clipboard-command-fallback", error);
         return false;
@@ -12135,6 +12144,7 @@ MyApplet.prototype = {
         maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
         resourceGroup: "clipboard",
       }, (stdout, stderr, result) => {
+        subprocessCallbackDelivered = true;
         if (result && result.cancelled) {
           completeOnce(null);
           return;
@@ -12148,13 +12158,13 @@ MyApplet.prototype = {
         }
         completeOnce(String(stdout || ""));
       });
-      if (!handle) {
+      if (!handle && !subprocessCallbackDelivered) {
         if (tryFallback()) {
           return true;
         }
         completeOnce(null);
       }
-      return Boolean(handle);
+      return Boolean(handle) || fallbackStarted;
     } catch (error) {
       this._recordLifecycleError("clipboard-command", error);
       if (tryFallback()) {
