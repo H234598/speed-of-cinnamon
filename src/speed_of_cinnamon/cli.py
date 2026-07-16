@@ -4169,7 +4169,7 @@ def finalize_recording(
             "audio_deleted": audio_deleted,
             "log_deleted": log_deleted,
         }
-    except Exception as exc:
+    except BaseException as exc:
         error_text = _redact_error_for_user(str(exc))
         # Refresh state once more on error so the most recent status is persisted.
         if state_marked_finalizing:
@@ -4269,7 +4269,10 @@ def finalize_recording(
                             f"{final_error_text}; failed to persist error cleanup state: {update_error}"
                         ) from update_exc
             _discard_cleanup_backups()
-        raise RuntimeError(str(error_update.get("error", error_text)) if state_marked_finalizing else error_text)
+        final_error = str(error_update.get("error", error_text)) if state_marked_finalizing else error_text
+        if isinstance(exc, Exception):
+            raise RuntimeError(final_error)
+        raise
     finally:
         _release_finalization_lock(lock_path)
 
