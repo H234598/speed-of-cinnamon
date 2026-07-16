@@ -10,6 +10,7 @@ import subprocess
 import time
 import tomllib
 import tempfile
+import threading
 import unittest
 import wave
 from contextlib import redirect_stdout
@@ -2694,6 +2695,23 @@ class CliTest(unittest.TestCase):
         opener_env = mocked_popen.call_args.kwargs["env"]
         self.assertNotIn("LD_PRELOAD", opener_env)
         self.assertNotIn("PYTHONPATH", opener_env)
+
+    def test_open_blacklist_document_reaps_opener_process(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            reaped = threading.Event()
+            process = mock.Mock()
+            process.wait.side_effect = lambda: reaped.set()
+            with (
+                mock.patch("speed_of_cinnamon.cli.blacklist_file", return_value=path),
+                mock.patch("speed_of_cinnamon.cli.ensure_runtime_dirs"),
+                mock.patch("speed_of_cinnamon.cli._which", return_value="xdg-open"),
+                mock.patch("speed_of_cinnamon.cli.subprocess.Popen", return_value=process),
+            ):
+                self.assertTrue(cli._open_blacklist_document())
+
+        self.assertTrue(reaped.wait(timeout=1))
+        process.wait.assert_called_once_with()
 
     def test_open_blacklist_document_wraps_process_argument_value_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

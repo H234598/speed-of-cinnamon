@@ -14,6 +14,7 @@ import shutil
 import stat as stat_module
 import subprocess  # nosec B404
 import sys
+import threading
 import time
 import tempfile
 import urllib.parse
@@ -1146,6 +1147,16 @@ def _profanity_replacements(text: str = "") -> tuple[tuple[re.Pattern[str], str]
     return compile_profanity_replacements(_profanity_replacement_pairs_from_file(), text=text)
 
 
+def _reap_background_process(process: subprocess.Popen[bytes]) -> None:
+    def reap() -> None:
+        try:
+            process.wait()
+        except BaseException:
+            pass
+
+    threading.Thread(target=reap, daemon=True).start()
+
+
 def _open_blacklist_document() -> bool:
     path = blacklist_file()
     try:
@@ -1157,24 +1168,26 @@ def _open_blacklist_document() -> bool:
     xdg_open = _which("xdg-open")
     if xdg_open:
         try:
-            subprocess.Popen(  # nosec B603
+            process = subprocess.Popen(  # nosec B603
                 [xdg_open, str(path)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 env=_filtered_environment(),
             )
+            _reap_background_process(process)
             return True
         except (OSError, ValueError):
             pass
     gio_open = _which("gio")
     if gio_open:
         try:
-            subprocess.Popen(  # nosec B603
+            process = subprocess.Popen(  # nosec B603
                 [gio_open, "open", str(path)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 env=_filtered_environment(),
             )
+            _reap_background_process(process)
             return True
         except (OSError, ValueError):
             pass
