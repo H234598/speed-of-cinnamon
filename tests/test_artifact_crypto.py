@@ -1008,6 +1008,17 @@ class ArtifactCryptoTest(unittest.TestCase):
                     artifact_crypto._run_secret_tool(args, input_text=input_text)  # type: ignore[arg-type]
                 mocked_secret_tool_path.assert_not_called()
 
+    def test_secret_tool_stop_does_not_signal_already_reaped_process(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.return_value = 0
+        with mock.patch("speed_of_cinnamon.artifact_crypto.os.killpg") as mocked_killpg:
+            artifact_crypto._stop_secret_tool_process(process)
+
+        mocked_killpg.assert_not_called()
+        process.kill.assert_not_called()
+        process.wait.assert_not_called()
+
     def test_secret_tool_rejects_oversized_output(self) -> None:
         fake_proc_holder: dict[str, object] = {}
 

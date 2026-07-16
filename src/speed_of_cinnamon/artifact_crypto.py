@@ -1016,6 +1016,13 @@ def _validate_secret_tool_args(args: object) -> list[str]:
 
 
 def _stop_secret_tool_process(proc: subprocess.Popen[bytes]) -> None:
+    poll = getattr(proc, "poll", None)
+    if callable(poll):
+        try:
+            if poll() is not None:
+                return
+        except BaseException:
+            return
     try:
         pid = proc.pid
         if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
