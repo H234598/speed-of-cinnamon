@@ -4552,6 +4552,28 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     return {"status": "recording", "message": error_text, "error": error_text}
                 # Continue through the normal finalizing/discard path so cancel also removes
                 # the artifacts left by a recorder whose leader was reaped.
+        elif state.pid is not None and state.process_identity:
+            current_process_identity = _recording_process_identity_for_pid(state.pid)
+            if current_process_identity is not None and current_process_identity != state.process_identity:
+                error_text = "recording process identity does not match; recording state preserved"
+                store.update(
+                    status=state.status,
+                    error=error_text,
+                    inserted=False,
+                )
+                return {"status": state.status, "message": error_text, "error": error_text}
+            stopped = stop_process(
+                _coerce_int(state.pid, field_name="state pid"),
+                expected_process_identity=state.process_identity,
+            )
+            if not stopped:
+                error_text = "recording process could not be stopped safely; recording state preserved"
+                store.update(
+                    status=state.status,
+                    error=error_text,
+                    inserted=False,
+                )
+                return {"status": state.status, "message": error_text, "error": error_text}
 
         discarded_audio_path = _normalized_state_recording_artifact_path(
             state.audio_path,

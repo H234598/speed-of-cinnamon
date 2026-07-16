@@ -9637,6 +9637,49 @@ class CliTest(unittest.TestCase):
         self.assertTrue(log_exists)
         mocked_stop.assert_not_called()
 
+    def test_cancel_preserves_non_recording_state_when_pid_identity_does_not_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "recording.wav"
+            log = recordings / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(
+                RecordingState(
+                    status="error",
+                    pid=1234,
+                    process_identity="owner-identity",
+                    audio_path=str(audio),
+                    log_path=str(log),
+                    error="cleanup failed",
+                )
+            )
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch.object(cli, "_recording_process_identity_for_pid", return_value="foreign-identity"),
+                mock.patch.object(cli, "stop_process") as mocked_stop,
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+            audio_exists = audio.exists()
+            log_exists = log.exists()
+
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("identity", payload["message"])
+        self.assertEqual(final_state.status, "error")
+        self.assertEqual(final_state.process_identity, "owner-identity")
+        self.assertTrue(audio_exists)
+        self.assertTrue(log_exists)
+        mocked_stop.assert_not_called()
+
     def test_cancel_with_only_invalid_audio_path_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
