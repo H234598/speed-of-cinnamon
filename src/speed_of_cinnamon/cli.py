@@ -930,12 +930,41 @@ def read_file_tail(path: Path, max_chars: int) -> str:
         size = handle.tell()
         if size <= max_bytes:
             handle.seek(0)
+            raw = handle.read()
         else:
             # Read up to three extra bytes so byte slicing cannot start inside
             # a valid four-byte UTF-8 code point.
-            handle.seek(max(size - max_bytes - 3, 0))
+            tail_start = size - max_bytes
+            read_start = max(tail_start - 3, 0)
+            handle.seek(read_start)
+            raw = handle.read()
+            leading_continuations = 0
+            while (
+                leading_continuations < tail_start - read_start
+                and leading_continuations < len(raw)
+                and (raw[leading_continuations] & 0xC0) == 0x80
+            ):
+                leading_continuations += 1
+            if leading_continuations:
+                prefix_start = max(read_start - 3, 0)
+                handle.seek(prefix_start)
+                prefix = handle.read(read_start - prefix_start)
+                combined = prefix + raw[:leading_continuations]
+                crossing_sequence = False
+                for candidate_start in range(max(0, len(prefix) - 3), len(prefix)):
+                    candidate = combined[candidate_start:]
+                    if len(candidate) <= len(prefix) - candidate_start:
+                        continue
+                    try:
+                        candidate.decode("utf-8")
+                    except UnicodeDecodeError:
+                        continue
+                    crossing_sequence = True
+                    break
+                if crossing_sequence:
+                    raw = raw[leading_continuations:]
         try:
-            text = handle.read().decode("utf-8")
+            text = raw.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ValueError(f"failed to decode file as UTF-8: {path}") from exc
     except BaseException as exc:

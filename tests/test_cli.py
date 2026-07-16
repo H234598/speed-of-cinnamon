@@ -11826,6 +11826,13 @@ class CliTest(unittest.TestCase):
 
             self.assertEqual(cli.read_file_tail(path, 1), "x")
 
+    def test_read_file_tail_handles_utf8_boundary_after_ascii_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "unicode-prefix.txt"
+            for prefix_length in range(32):
+                path.write_bytes((b"a" * prefix_length) + ("😀" * 8).encode("utf-8"))
+                self.assertEqual(cli.read_file_tail(path, 2), "😀😀")
+
     def test_read_file_tail_preserves_read_error_when_handle_close_is_interrupted(self) -> None:
         handle = mock.Mock()
         handle.tell.return_value = 4
