@@ -991,6 +991,11 @@ def _run_with_input(
             )
             proc.communicate(input=input_bytes, timeout=timeout)
         except FileNotFoundError as exc:
+            if "proc" in locals():
+                try:
+                    _reap_timed_out_output_process(proc)
+                except BaseException as cleanup_error:
+                    exc.add_note(f"{command} process cleanup failed: {cleanup_error}")
             raise OutputError(f"{command} is not available") from exc
         except subprocess.TimeoutExpired as exc:
             if "proc" in locals() and not _reap_timed_out_output_process(proc):

@@ -71,6 +71,11 @@ class _OSErrorPopen(_FakePopen):
         raise OSError("process wait failed")
 
 
+class _FileNotFoundPopen(_FakePopen):
+    def communicate(self, input: bytes | None = None, timeout: int | None = None) -> tuple[bytes | None, bytes | None]:
+        raise FileNotFoundError("process wait failed")
+
+
 class _RunnerPopen(_FakePopen):
     def __init__(self, runner: object, args: tuple[object, ...], kwargs: dict[str, object]) -> None:
         super().__init__(subprocess.CompletedProcess([], 0, stdout=b"", stderr=b""))
@@ -630,6 +635,16 @@ class OutputTest(unittest.TestCase):
                     except OutputError:
                         pass
                 mocked_reap.assert_called_once_with(process)
+
+    def test_output_process_is_reaped_when_wait_reports_missing_file(self) -> None:
+        process = _FileNotFoundPopen(subprocess.CompletedProcess(["cmd"], 0))
+        with (
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen", return_value=process),
+            mock.patch("speed_of_cinnamon.output._reap_timed_out_output_process") as mocked_reap,
+        ):
+            with self.assertRaisesRegex(OutputError, "is not available"):
+                _run_with_input(["cmd"], "input", resolved_command="/usr/bin/cmd")
+        mocked_reap.assert_called_once_with(process)
 
     def test_run_stdout_timeout_kills_process_group_descendants(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
