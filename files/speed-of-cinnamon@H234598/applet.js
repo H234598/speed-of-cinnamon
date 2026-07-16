@@ -2560,8 +2560,11 @@ MyApplet.prototype = {
       return false;
     }
     try {
-      let processGroupIdentity = this._findTrackedProcessGroupIdentity(process) ||
-        this._readProcessGroupIdentity(process);
+      let processGroupIdentity = this._findTrackedProcessGroupIdentity(process);
+      if (!processGroupIdentity && typeof process.get_identifier === "function") {
+        return false;
+      }
+      processGroupIdentity = processGroupIdentity || this._readProcessGroupIdentity(process);
       if (processGroupIdentity) {
         let currentProcessGroupIdentity = this._readProcessGroupIdentity(process);
         if (!currentProcessGroupIdentity || currentProcessGroupIdentity.pid !== processGroupIdentity.pid ||
