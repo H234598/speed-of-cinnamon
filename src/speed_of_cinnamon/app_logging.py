@@ -1422,6 +1422,9 @@ def _gzip_file(source: Path, target: Path) -> None:
             else:
                 raise RuntimeError("log target changed during activation rollback")
             if activation_visible:
+                current_stat = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
+                if expected_stat is None or not _same_activated_target(current_stat, expected_stat):
+                    raise RuntimeError("log target changed during activation rollback")
                 os.unlink(target.name, dir_fd=parent_fd)
                 os.fsync(parent_fd)
         if target_backup_created:

@@ -2064,6 +2064,50 @@ class AppLoggingTest(unittest.TestCase):
                 self.assertEqual(handle.read(), "old content\n")
             self.assertEqual(list(log_dir.glob("*.backup")), [])
 
+    def test_gzip_file_preserves_target_replacement_during_rollback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "source.log"
+            target = log_dir / "target.log.gz"
+            replacement = log_dir / "replacement.target"
+            source.write_text("new content\n", encoding="utf-8")
+            source.chmod(0o600)
+            with gzip.open(target, "wt", encoding="utf-8") as handle:
+                handle.write("old content\n")
+            target.chmod(0o600)
+            replacement.write_text("must survive\n", encoding="utf-8")
+            real_fsync = app_logging.os.fsync
+            real_stat = app_logging.os.stat
+            state = {"directory_syncs": 0, "activation_failed": False, "rollback_stat_calls": 0}
+
+            def fail_activation_fsync(fd: int) -> None:
+                if stat_module.S_ISDIR(os.fstat(fd).st_mode):
+                    state["directory_syncs"] += 1
+                    if state["directory_syncs"] == 3:
+                        state["activation_failed"] = True
+                        raise OSError("target activation fsync failed")
+                real_fsync(fd)
+
+            def stat_with_swap(name: object, *args: object, **kwargs: object) -> os.stat_result:
+                result = real_stat(name, *args, **kwargs)
+                if state["activation_failed"] and name == target.name and kwargs.get("dir_fd") is not None:
+                    state["rollback_stat_calls"] += 1
+                    if state["rollback_stat_calls"] == 1:
+                        target.unlink()
+                        replacement.rename(target)
+                return result
+
+            with (
+                mock.patch.object(app_logging.os, "fsync", side_effect=fail_activation_fsync),
+                mock.patch.object(app_logging.os, "stat", side_effect=stat_with_swap),
+            ):
+                with self.assertRaisesRegex(OSError, "target activation fsync failed") as caught:
+                    app_logging._gzip_file(source, target)
+
+            self.assertIn("log target changed during activation rollback", "\n".join(caught.exception.__notes__))
+            self.assertEqual(state["rollback_stat_calls"], 2)
+            self.assertEqual(target.read_text(encoding="utf-8"), "must survive\n")
+
     def test_gzip_file_reports_temp_cleanup_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
