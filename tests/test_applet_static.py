@@ -4537,6 +4537,9 @@ class AppletStaticTest(unittest.TestCase):
         termination_block = source[termination_start:termination_end]
         self.assertIn("this._findTrackedProcessGroupIdentity(process)", termination_block)
         self.assertIn("this._readProcessGroupIdentity(process)", termination_block)
+        self.assertIn("let currentProcessGroupIdentity = this._readProcessGroupIdentity(process);", termination_block)
+        self.assertIn("currentProcessGroupIdentity.startTime !== processGroupIdentity.startTime", termination_block)
+        self.assertIn("return false;", termination_block)
         self.assertIn("this._killProcessGroup(process, processGroupIdentity)", termination_block)
         self.assertIn("process.force_exit();", termination_block)
 

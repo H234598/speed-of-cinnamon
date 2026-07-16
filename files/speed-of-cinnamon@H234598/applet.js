@@ -2562,8 +2562,15 @@ MyApplet.prototype = {
     try {
       let processGroupIdentity = this._findTrackedProcessGroupIdentity(process) ||
         this._readProcessGroupIdentity(process);
-      if (processGroupIdentity && this._killProcessGroup(process, processGroupIdentity)) {
-        return true;
+      if (processGroupIdentity) {
+        let currentProcessGroupIdentity = this._readProcessGroupIdentity(process);
+        if (!currentProcessGroupIdentity || currentProcessGroupIdentity.pid !== processGroupIdentity.pid ||
+            currentProcessGroupIdentity.startTime !== processGroupIdentity.startTime) {
+          return false;
+        }
+        if (this._killProcessGroup(process, processGroupIdentity)) {
+          return true;
+        }
       }
       if (typeof process.force_exit !== "function") {
         throw new Error("Process termination API is unavailable");
