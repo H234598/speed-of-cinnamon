@@ -405,7 +405,10 @@ def _parse_model_size_bytes(value: str) -> int:
                 raise ModelError(f"invalid model size for {value!r}: {exc}") from exc
             if not math.isfinite(number) or number <= 0:
                 raise ModelError(f"invalid model size for {value!r}: must be positive")
-            parsed = int(number * factor)
+            try:
+                parsed = int(number * factor)
+            except (OverflowError, ValueError) as exc:
+                raise ModelError(f"invalid model size for {value!r}: {exc}") from exc
             if parsed <= 0:
                 raise ModelError(f"invalid model size for {value!r}: must be positive")
             return parsed
