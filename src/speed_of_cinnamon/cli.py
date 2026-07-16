@@ -4413,7 +4413,8 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
             if state.status in {"recorded", "processing"}:
                 return finalize_recording(args, store, state, finalization_lock_path=lock_path)
             return {"status": state.status, "message": "not recording"}
-        if _recording_process_verified_alive(state):
+        process_verified_alive = _recording_process_verified_alive(state)
+        if process_verified_alive:
             stopped = stop_process(
                 _coerce_int(state.pid, field_name="state pid"),
                 expected_process_identity=state.process_identity,
@@ -4426,6 +4427,14 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
                     inserted=False,
                 )
                 return {"status": "recording", "message": error_text, "error": error_text}
+        elif _is_recording_process_alive(state.pid):
+            error_text = "recording process identity does not match; recording state preserved"
+            store.update(
+                status="recording",
+                error=error_text,
+                inserted=False,
+            )
+            return {"status": "recording", "message": error_text, "error": error_text}
         state = store.update(
             status="recorded",
             pid=None,

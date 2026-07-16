@@ -11021,6 +11021,35 @@ class CliTest(unittest.TestCase):
         mocked_stop.assert_called_once_with(1234, expected_process_identity="owner-identity")
         mocked_finalize.assert_not_called()
 
+    @mock.patch("speed_of_cinnamon.cli.finalize_recording")
+    @mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=True)
+    def test_stop_preserves_state_when_recording_pid_was_reused(
+        self,
+        mocked_alive: mock.Mock,
+        mocked_finalize: mock.Mock,
+    ) -> None:
+        state = RecordingState(
+            status="recording",
+            pid=1234,
+            process_identity="owner-identity",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            store = StateStore(state_file)
+            store.write(state)
+            args = self._build_finalize_args(insert_method="none")
+            args.state_file = str(state_file)
+            with mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value="foreign-identity"):
+                result = cli.command_stop(args)
+            final_state = store.read()
+
+        self.assertEqual(result["status"], "recording")
+        self.assertIn("identity", result["error"])
+        self.assertEqual(final_state.status, "recording")
+        self.assertEqual(final_state.error, result["error"])
+        mocked_alive.assert_called()
+        mocked_finalize.assert_not_called()
+
     def test_stop_holds_finalization_lock_before_recorded_state_can_be_canceled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
