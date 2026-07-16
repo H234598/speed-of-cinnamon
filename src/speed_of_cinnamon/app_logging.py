@@ -681,23 +681,47 @@ def _create_log_temp_file(directory: Path, *, prefix: str, suffix: str) -> tuple
         raise
 
 
+def _same_log_temp_identity(first: os.stat_result, second: os.stat_result) -> bool:
+    return (
+        stat_module.S_ISREG(first.st_mode)
+        and stat_module.S_ISREG(second.st_mode)
+        and first.st_dev == second.st_dev
+        and first.st_ino == second.st_ino
+        and first.st_mode == second.st_mode
+        and getattr(first, "st_nlink", 1) == getattr(second, "st_nlink", 1)
+    )
+
+
+def _log_temp_stat_for_fd(fd: int) -> os.stat_result | None:
+    try:
+        return os.fstat(fd)
+    except (OSError, ValueError):
+        return None
+
+
 def _log_temp_name_matches_fd(parent_fd: int, temp_name: str, fd: int) -> bool:
     try:
         path_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
         fd_stat = os.fstat(fd)
     except OSError:
         return False
-    return (
-        stat_module.S_ISREG(path_stat.st_mode)
-        and path_stat.st_dev == fd_stat.st_dev
-        and path_stat.st_ino == fd_stat.st_ino
-    )
+    return _same_log_temp_identity(path_stat, fd_stat)
 
 
-def _unlink_log_temp(parent_fd: int, temp_name: str) -> None:
+def _unlink_log_temp(
+    parent_fd: int,
+    temp_name: str,
+    *,
+    expected_stat: os.stat_result | None = None,
+) -> None:
     if not temp_name:
         return
+    if expected_stat is None:
+        raise RuntimeError("cannot verify log temporary file before cleanup")
     try:
+        current_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
+        if not _same_log_temp_identity(current_stat, expected_stat):
+            raise RuntimeError("log temporary file changed before cleanup")
         os.unlink(temp_name, dir_fd=parent_fd)
         os.fsync(parent_fd)
     except OSError as exc:
@@ -802,6 +826,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
         if archive.exists():
             _assert_regular_unlinked_file(archive, field_name="monthly log archive")
         temp_fd, parent_fd, temp_name = _create_log_temp_file(directory, prefix=archive.stem, suffix=".tmp")
+        temp_stat = _log_temp_stat_for_fd(temp_fd)
         archive_backup_name: str | None = None
         archive_backup_moved = False
         archive_activation_attempted = False
@@ -1040,7 +1065,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
             archive_transaction_active = False
         except (gzip.BadGzipFile, EOFError, zlib.error):
             # Keep malformed archives intact so size-based cleanup can handle them.
-            _unlink_log_temp(parent_fd, temp_name)
+            _unlink_log_temp(parent_fd, temp_name, expected_stat=temp_stat)
             temp_name = ""
             continue
         except BaseException as exc:
@@ -1080,7 +1105,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
                 except BaseException as rollback_error:
                     _note_cleanup_failure(primary_error, rollback_error)
             try:
-                _unlink_log_temp(parent_fd, temp_name)
+                _unlink_log_temp(parent_fd, temp_name, expected_stat=temp_stat)
             except BaseException as cleanup_error:
                 _note_cleanup_failure(primary_error, cleanup_error)
             raise
@@ -1225,6 +1250,7 @@ def _gzip_file(source: Path, target: Path) -> None:
     if target.exists():
         _assert_regular_unlinked_file(target, field_name="log target file")
     temp_fd, parent_fd, temp_name = _create_log_temp_file(target.parent, prefix=target.stem, suffix=".tmp")
+    temp_stat = _log_temp_stat_for_fd(temp_fd)
     source_fd: int | None = None
     target_backup_name = ""
     target_backup_created = False
@@ -1553,7 +1579,7 @@ def _gzip_file(source: Path, target: Path) -> None:
         except BaseException as rollback_error:
             _note_cleanup_failure(primary_error, rollback_error)
         try:
-            _unlink_log_temp(parent_fd, temp_name)
+            _unlink_log_temp(parent_fd, temp_name, expected_stat=temp_stat)
         except BaseException as cleanup_error:
             _note_cleanup_failure(primary_error, cleanup_error)
         raise

@@ -575,6 +575,24 @@ class AppLoggingTest(unittest.TestCase):
 
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_unlink_log_temp_does_not_remove_replaced_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            temp_path = root / ".archive.tmp"
+            replacement = root / "replacement.log"
+            temp_path.write_bytes(b"temporary")
+            expected_stat = temp_path.stat()
+            replacement.write_bytes(b"replacement")
+            os.replace(replacement, temp_path)
+            parent_fd = os.open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                with self.assertRaisesRegex(RuntimeError, "changed before cleanup"):
+                    app_logging._unlink_log_temp(parent_fd, temp_path.name, expected_stat=expected_stat)
+            finally:
+                os.close(parent_fd)
+
+            self.assertEqual(temp_path.read_bytes(), b"replacement")
+
     def test_gzip_file_closes_source_when_source_inspection_fails(self) -> None:
         with (
             mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".target.tmp")),
