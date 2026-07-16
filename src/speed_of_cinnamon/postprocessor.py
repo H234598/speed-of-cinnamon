@@ -6,6 +6,7 @@ import math
 import os
 import re
 import shlex
+import time
 import urllib.parse
 import urllib.error
 import urllib.request
@@ -224,6 +225,16 @@ def _contains_http_header_control_chars(value: str) -> bool:
     return False
 
 
+def _set_response_socket_timeout(response: object, timeout: float) -> None:
+    file_pointer = getattr(response, "fp", None)
+    raw_stream = getattr(file_pointer, "raw", None)
+    socket = getattr(raw_stream, "_sock", None)
+    settimeout = getattr(socket, "settimeout", None)
+    if callable(settimeout):
+        with suppress(OSError, ValueError):
+            settimeout(timeout)
+
+
 def _assert_openai_compatible_text(
     value: str,
     *,
@@ -237,17 +248,37 @@ def _assert_openai_compatible_text(
     return _assert_text_length(value, field_name=field_name, max_chars=max_chars)
 
 
-def _read_response_text(response: object, max_bytes: int) -> str:
+def _read_response_text(response: object, max_bytes: int, *, timeout: int | float | None = None) -> str:
     if not hasattr(response, "read"):
         raise PostProcessError("remote response must be readable")
     if not isinstance(max_bytes, int) or isinstance(max_bytes, bool):
         raise PostProcessError("max response bytes must be an integer")
     if max_bytes < 0:
         raise PostProcessError("max response bytes must be non-negative")
+    if timeout is not None and (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or not math.isfinite(timeout)
+        or timeout <= 0
+    ):
+        raise PostProcessError("response timeout must be positive")
+    deadline = time.monotonic() + timeout if timeout is not None else None
     chunks: list[bytes] = []
     total = 0
     while True:
-        chunk = response.read(65536)
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise PostProcessError("remote response read timed out")
+            _set_response_socket_timeout(response, remaining)
+        try:
+            chunk = response.read(65536)
+        except TimeoutError as exc:
+            if deadline is not None:
+                raise PostProcessError("remote response read timed out") from exc
+            raise
+        if deadline is not None and time.monotonic() >= deadline:
+            raise PostProcessError("remote response read timed out")
         if not chunk:
             break
         if not isinstance(chunk, bytes):
@@ -266,9 +297,9 @@ def _read_response_text(response: object, max_bytes: int) -> str:
     return text
 
 
-def _read_http_error_text(error: urllib.error.HTTPError) -> str:
+def _read_http_error_text(error: urllib.error.HTTPError, *, timeout: int | float | None = None) -> str:
     try:
-        return _read_response_text(error, MAX_POSTPROCESS_JSON_BYTES)
+        return _read_response_text(error, MAX_POSTPROCESS_JSON_BYTES, timeout=timeout)
     except Exception:
         return ""
     finally:
@@ -422,7 +453,7 @@ def _read_json(request: urllib.request.Request, timeout: int) -> object:
     if not isinstance(timeout, int) or isinstance(timeout, bool):
         raise PostProcessError("timeout must be an integer")
     with _open_http_request(request, timeout=timeout, field_name="postprocess request") as response:
-        raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
+        raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES, timeout=timeout)
     try:
         return json.loads(raw)
     except RecursionError as exc:
@@ -543,7 +574,7 @@ def list_ollama_models(url: str = DEFAULT_OLLAMA_URL, timeout: int = 5) -> dict[
     try:
         data = _read_json(request, timeout)
     except urllib.error.HTTPError as exc:
-        detail = _sanitize_remote_error_detail(_read_http_error_text(exc) or exc.reason or str(exc))
+        detail = _sanitize_remote_error_detail(_read_http_error_text(exc, timeout=timeout) or exc.reason or str(exc))
         return {
             "available": False,
             "models": [],
@@ -651,7 +682,7 @@ def list_openai_compatible_models(
         request = urllib.request.Request(endpoint, headers=_openai_compatible_headers(api_key), method="GET")
         data = _read_json(request, timeout)
     except urllib.error.HTTPError as exc:
-        raw_error = _read_http_error_text(exc)
+        raw_error = _read_http_error_text(exc, timeout=timeout)
         detail = _sanitize_remote_error_detail(_openai_compatible_error_detail(raw_error) or exc.reason or str(exc))
         return {
             "available": False,
@@ -735,9 +766,9 @@ def post_process_with_ollama(
     )
     try:
         with _open_http_request(request, timeout=180, field_name="ollama post-process request") as response:
-            raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
+            raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES, timeout=180)
     except urllib.error.HTTPError as exc:
-        detail = _sanitize_remote_error_detail(_read_http_error_text(exc) or exc.reason or str(exc))
+        detail = _sanitize_remote_error_detail(_read_http_error_text(exc, timeout=180) or exc.reason or str(exc))
         raise PostProcessError(f"Ollama request failed ({exc.code}): {detail}") from exc
     except (OSError, ValueError, http.client.HTTPException) as exc:
         raise PostProcessError(f"Ollama request failed: {_sanitize_remote_error_detail(exc)}") from exc
@@ -919,12 +950,12 @@ def post_process_with_openai_compatible(
             method="POST",
         )
         with _open_http_request(request, timeout=180, field_name="openai-compatible post-process request") as response:
-            return _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
+            return _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES, timeout=180)
 
     try:
         raw = _request_chat_completion(payload)
     except urllib.error.HTTPError as exc:
-        raw_error = _read_http_error_text(exc)
+        raw_error = _read_http_error_text(exc, timeout=180)
         raw_detail = _openai_compatible_error_detail(raw_error) or exc.reason or str(exc)
         detail = _sanitize_remote_error_detail(raw_detail)
         if allow_service_tier_fallback and _is_flex_service_tier_rejected(raw_detail):
@@ -933,7 +964,7 @@ def post_process_with_openai_compatible(
             try:
                 raw = _request_chat_completion(fallback_payload)
             except urllib.error.HTTPError as fallback_exc:
-                raw_error = _read_http_error_text(fallback_exc)
+                raw_error = _read_http_error_text(fallback_exc, timeout=180)
                 fallback_detail = _sanitize_remote_error_detail(_openai_compatible_error_detail(raw_error) or fallback_exc.reason or str(fallback_exc))
                 raise PostProcessError(
                     f"OpenAI-compatible request failed ({fallback_exc.code}) at {_safe_url_display(endpoint, field_name='openai-compatible url')}: {fallback_detail}"

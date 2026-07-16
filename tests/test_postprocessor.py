@@ -308,6 +308,15 @@ class PostProcessorTest(unittest.TestCase):
         with self.assertRaisesRegex(PostProcessError, "remote response is too large"):
             _read_response_text(response, 2)
 
+    def test_read_response_text_enforces_total_timeout(self) -> None:
+        response = FakeChunkedResponse([b"partial"])
+
+        with (
+            mock.patch("speed_of_cinnamon.postprocessor.time.monotonic", side_effect=[0.0, 2.0]),
+            self.assertRaisesRegex(PostProcessError, "remote response read timed out"),
+        ):
+            _read_response_text(response, 100, timeout=1)
+
     def test_post_process_with_ollama_rejects_invalid_utf8_response(self) -> None:
         with mock.patch(
             "speed_of_cinnamon.postprocessor._open_http_request",
