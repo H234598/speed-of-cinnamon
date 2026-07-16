@@ -772,6 +772,31 @@ class SettingsExportTest(unittest.TestCase):
 
         self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_write_export_preserves_fdopen_error_when_temp_fd_close_fails(self) -> None:
+        def close(fd: int) -> None:
+            if fd == 123:
+                raise OSError("temp close failed")
+
+        with (
+            mock.patch.object(settings_export_module, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(settings_export_module, "assert_fd_is_private_directory"),
+            mock.patch.object(settings_export_module.os, "stat", side_effect=FileNotFoundError),
+            mock.patch.object(
+                settings_export_module,
+                "_create_private_temp_file",
+                return_value=(123, ".settings-export.json.tmp"),
+            ),
+            mock.patch.object(settings_export_module.os, "fdopen", side_effect=RuntimeError("fdopen failed")),
+            mock.patch.object(settings_export_module.os, "unlink"),
+            mock.patch.object(settings_export_module.os, "fsync"),
+            mock.patch.object(settings_export_module.os, "close", side_effect=close),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "fdopen failed") as caught:
+                write_export(Path("/probe/settings-export.json"), {"language": "en"})
+
+        self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertIn("temp close failed", "\n".join(caught.exception.__notes__))
+
     def test_write_export_preserves_write_error_when_temporary_handle_close_fails(self) -> None:
         class _Handle:
             def fileno(self) -> int:

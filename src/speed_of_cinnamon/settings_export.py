@@ -790,8 +790,11 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
         if temp_fd is not None:
             try:
                 os.close(temp_fd)
-            except OSError:
-                pass
+            except OSError as cleanup_error:
+                if primary_error is not None:
+                    _note_cleanup_failure(primary_error, cleanup_error)
+                else:
+                    raise
             except BaseException as cleanup_error:
                 if primary_error is not None:
                     _note_cleanup_failure(primary_error, cleanup_error)
