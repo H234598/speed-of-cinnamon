@@ -679,6 +679,10 @@ def trim_recording_leading_silence(audio_path: Path, leading_silence_seconds: fl
         or not math.isfinite(leading_silence_seconds)
     ):
         raise RecorderError("leading silence seconds must be numeric")
+    try:
+        audio_path = validate_recording_path(audio_path, suffix=".wav")
+    except RuntimeError as exc:
+        raise RecorderError(str(exc)) from exc
     if leading_silence_seconds <= 0:
         return audio_path
     audio_fd: int | None = None

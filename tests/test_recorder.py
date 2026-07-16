@@ -364,6 +364,16 @@ class RecorderTest(unittest.TestCase):
             with self.assertRaisesRegex(RecorderError, "recording artifact path must not pass through a symlink"):
                 trim_recording_leading_silence(audio, 0.1)
 
+    def test_trim_recording_leading_silence_validates_path_before_noop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            real = Path(tmp) / "real.wav"
+            real.write_bytes(b"audio")
+            link = Path(tmp) / "link.wav"
+            link.symlink_to(real)
+
+            with self.assertRaisesRegex(RecorderError, "recording artifact path must not pass through a symlink"):
+                trim_recording_leading_silence(link, 0)
+
     def test_trim_recording_silence_converts_to_flac(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
