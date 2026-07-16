@@ -1542,7 +1542,7 @@ def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
     return (left.st_dev, left.st_ino, left.st_mode) == (right.st_dev, right.st_ino, right.st_mode)
 
 
-def _process_group_has_live_processes(process_group_id: int) -> bool | None:
+def process_group_has_live_processes(process_group_id: int) -> bool | None:
     if process_group_id <= 0:
         return None
     try:
@@ -1582,7 +1582,7 @@ def _process_is_gone(process_target: str) -> bool:
     except OSError:
         return False
     if target < 0:
-        return _process_group_has_live_processes(-target) is False
+        return process_group_has_live_processes(-target) is False
     if target > 0:
         stat_fields = _recording_process_stat_fields(target)
         return bool(stat_fields and stat_fields[0] in {"Z", "X", "x"})

@@ -4870,6 +4870,42 @@ class CliTest(unittest.TestCase):
             self.assertFalse(final_state.process_identity)
             mocked_stop.assert_called_once_with(1234, expected_process_identity="stale-process-identity")
 
+    def test_start_locked_does_not_treat_reaped_recorder_leader_as_active(self) -> None:
+        process = subprocess.Popen(["/bin/true"], start_new_session=True)
+        try:
+            deadline = time.monotonic() + 2
+            process_state = ""
+            while time.monotonic() < deadline:
+                try:
+                    stat_text = Path(f"/proc/{process.pid}/stat").read_text(encoding="utf-8")
+                    process_state = stat_text.rsplit(")", 1)[1].split()[0]
+                except OSError:
+                    process_state = "gone"
+                if process_state in {"Z", "X", "x"}:
+                    break
+                time.sleep(0.01)
+            self.assertIn(process_state, {"Z", "X", "x"})
+
+            with tempfile.TemporaryDirectory() as tmp:
+                store = StateStore(Path(tmp) / "state.json")
+                process_identity = cli._recording_process_identity_for_pid(process.pid)
+                self.assertIsNotNone(process_identity)
+                store.write(
+                    RecordingState(
+                        status="recording",
+                        pid=process.pid,
+                        process_identity=process_identity or "",
+                    )
+                )
+                result = cli._command_start_locked(argparse.Namespace(), store)
+                final_state = store.read()
+
+            self.assertEqual(result["status"], "error")
+            self.assertNotEqual(result["message"], "already recording")
+            self.assertEqual(final_state.status, "error")
+        finally:
+            process.wait()
+
     def test_start_locked_preserves_state_when_stale_recorder_group_cannot_be_stopped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

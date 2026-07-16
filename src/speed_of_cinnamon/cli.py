@@ -110,6 +110,7 @@ from .recorder import (
     read_recording_level,
     reencode_recording_to_flac,
     normalize_input_device,
+    process_group_has_live_processes,
     start_recorder,
     stop_process,
     trim_recording_silence,
@@ -2703,6 +2704,17 @@ def _recording_process_verified_alive(state: RecordingState) -> bool:
     return current_identity == expected_identity
 
 
+def _recording_process_verified_active(state: RecordingState) -> bool:
+    if not _recording_process_verified_alive(state):
+        return False
+    if not _process_is_zombie(state.pid):
+        return True
+    # start_recorder() creates one process group per recording. A zombie leader
+    # can remain while a descendant is still recording; unknown /proc state is
+    # treated as active so start never risks creating a second recorder.
+    return process_group_has_live_processes(state.pid) is not False
+
+
 def _raise_if_state_unreadable(state: RecordingState) -> None:
     if state.error.startswith("state file "):
         raise RuntimeError(state.error)
@@ -3463,7 +3475,7 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
             state_path=store.path,
             require_recordings_dir=False,
         )
-        if _recording_process_verified_alive(current):
+        if _recording_process_verified_active(current):
             return {
                 "status": "recording",
                 "message": "already recording",
@@ -4737,7 +4749,7 @@ def command_toggle(args: argparse.Namespace) -> dict[str, object]:
         args.confirm_plaintext_output = True
         return command_stop(args)
     if state.status == "recording":
-        if _recording_process_verified_alive(state):
+        if _recording_process_verified_active(state):
             args.confirm_plaintext_output = True
             return command_stop(args)
         if state.audio_path:
@@ -4758,7 +4770,7 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
         return payload
     if state.status == "recording":
         try:
-            verified_alive = _recording_process_verified_alive(state)
+            verified_alive = _recording_process_verified_active(state)
         except RuntimeError as exc:
             payload["status"] = "error"
             payload["message"] = str(exc)
