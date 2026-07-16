@@ -1006,8 +1006,14 @@ def _run_with_input(
                     exc.add_note(f"{command} process cleanup failed: {cleanup_error}")
             raise OutputError(f"{command} is not available") from exc
         except subprocess.TimeoutExpired as exc:
-            if "proc" in locals() and not _reap_timed_out_output_process(proc):
-                exc.add_note(f"{command} process group could not be terminated")
+            if "proc" in locals():
+                try:
+                    terminated = _reap_timed_out_output_process(proc)
+                except BaseException as cleanup_error:
+                    exc.add_note(f"{command} process cleanup failed: {cleanup_error}")
+                else:
+                    if not terminated:
+                        exc.add_note(f"{command} process group could not be terminated")
             raise OutputError(f"{command} timed out after {timeout}s") from exc
         except (OSError, ValueError) as exc:
             if "proc" in locals():
@@ -1203,7 +1209,10 @@ def _run_bounded_stdout_command(
             completed_stdout, completed_stderr = proc.communicate(input=b"", timeout=timeout)
         except subprocess.TimeoutExpired as exc:
             if "proc" in locals():
-                _reap_timed_out_output_process(proc)
+                try:
+                    _reap_timed_out_output_process(proc)
+                except BaseException as cleanup_error:
+                    exc.add_note(f"bounded command process cleanup failed: {cleanup_error}")
             primary_error = exc
         except (FileNotFoundError, OSError, ValueError) as exc:
             if "proc" in locals():

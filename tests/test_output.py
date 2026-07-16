@@ -689,6 +689,33 @@ class OutputTest(unittest.TestCase):
                 _run_with_input(["cmd"], "input", resolved_command="/usr/bin/cmd")
         mocked_reap.assert_called_once_with(process)
 
+    def test_timeout_preserves_primary_error_when_process_cleanup_is_interrupted(self) -> None:
+        process = _TimeoutPopen()
+        with (
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen", return_value=process),
+            mock.patch(
+                "speed_of_cinnamon.output._reap_timed_out_output_process",
+                side_effect=KeyboardInterrupt("cleanup interrupted"),
+            ),
+        ):
+            with self.assertRaisesRegex(OutputError, "timed out") as caught:
+                _run_with_input(["cmd"], "input", resolved_command="/usr/bin/cmd")
+
+        self.assertIsInstance(caught.exception.__cause__, subprocess.TimeoutExpired)
+        self.assertIn("cleanup interrupted", "\n".join(caught.exception.__cause__.__notes__))
+
+        process = _TimeoutPopen()
+        with (
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen", return_value=process),
+            mock.patch(
+                "speed_of_cinnamon.output._reap_timed_out_output_process",
+                side_effect=KeyboardInterrupt("cleanup interrupted"),
+            ),
+        ):
+            self.assertIsNone(
+                output_module._run_stdout_raw(["cmd"], timeout=1, resolved_command="/usr/bin/cmd")
+            )
+
     def test_run_stdout_timeout_kills_process_group_descendants(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             marker = Path(tmp) / "child.pid"
