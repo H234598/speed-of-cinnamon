@@ -447,6 +447,7 @@ def _read_clipboard_dedup_lock_lines_at(parent_fd: int, name: str) -> list[str] 
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     fd: int | None = None
     primary_error: BaseException | None = None
+    cleanup_failed = False
     try:
         fd = os.open(name, os.O_RDONLY | nofollow_flag | nonblock_flag, dir_fd=parent_fd)
         file_stat = os.fstat(fd)
@@ -466,11 +467,15 @@ def _read_clipboard_dedup_lock_lines_at(parent_fd: int, name: str) -> list[str] 
             except OSError:
                 if primary_error is not None:
                     primary_error.add_note("clipboard lock cleanup failed during FD close")
+                else:
+                    cleanup_failed = True
             except BaseException as cleanup_error:
                 if primary_error is not None:
                     primary_error.add_note(f"clipboard lock cleanup failed: {cleanup_error}")
                 else:
                     raise
+    if cleanup_failed:
+        return None
     if len(raw) > MAX_CLIPBOARD_DEDUP_LOCK_BYTES:
         return None
     try:

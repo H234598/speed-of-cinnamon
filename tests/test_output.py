@@ -1257,6 +1257,15 @@ class OutputTest(unittest.TestCase):
 
         self.assertIn("clipboard lock cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_clipboard_lock_read_fails_closed_when_fd_close_fails(self) -> None:
+        with (
+            mock.patch.object(output_module.os, "open", return_value=123),
+            mock.patch.object(output_module.os, "fstat", return_value=os.stat(__file__)),
+            mock.patch.object(output_module.os, "read", return_value=b"123\n"),
+            mock.patch.object(output_module.os, "close", side_effect=OSError("close failed")),
+        ):
+            self.assertIsNone(output_module._read_clipboard_dedup_lock_lines_at(456, "lock"))
+
     def test_insert_text_ignores_expired_pending_duplicate_when_stale_lock_is_recovered(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):
