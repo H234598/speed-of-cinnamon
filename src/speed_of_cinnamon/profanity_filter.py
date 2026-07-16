@@ -282,6 +282,10 @@ _CONFUSABLE_REGEX_EQUIVALENTS: dict[str, str] = {
     "x": "xхХ",
     "y": "yуУ",
 }
+_TRUSTED_SCHEI_PATTERN_PREFIX = "schei(?:ss|ß)"
+_TRUSTED_SCHEI_SUFFIXES = frozenset(
+    {"", "ding", "e?", "egal", "er", "haus", "kerl", "kopf", "laden", "spiel", "teil", "verein"}
+)
 
 
 def _confusable_regex_source(char: str) -> str:
@@ -313,6 +317,30 @@ def _build_tolerant_profanity_pattern(
     return rf"(?<!{boundary_class}){gap_pattern}{source}{gap_pattern}(?!{boundary_class})"
 
 
+def _build_tolerant_trusted_profanity_pattern(
+    pattern: str,
+    *,
+    boundary_class: str,
+    gap_pattern: str,
+) -> str:
+    if not pattern.startswith(_TRUSTED_SCHEI_PATTERN_PREFIX):
+        return ""
+    suffix = pattern[len(_TRUSTED_SCHEI_PATTERN_PREFIX) :]
+    if suffix not in _TRUSTED_SCHEI_SUFFIXES:
+        return ""
+
+    def _literal_source(value: str) -> str:
+        return gap_pattern.join(re.escape(char) for char in value)
+
+    source = _literal_source("schei")
+    source += gap_pattern + rf"(?:{_literal_source('ss')}|{_literal_source('ß')})"
+    if suffix == "e?":
+        source += gap_pattern + r"e?"
+    elif suffix:
+        source += gap_pattern + _literal_source(suffix)
+    return rf"(?<!{boundary_class}){gap_pattern}{source}{gap_pattern}(?!{boundary_class})"
+
+
 def _safe_profanity_pattern_source(
     pattern: str,
     *,
@@ -320,6 +348,13 @@ def _safe_profanity_pattern_source(
     gap_pattern: str = _IGNORABLE_GAP_PATTERN,
 ) -> str:
     if pattern in _TRUSTED_PROFANITY_PATTERNS and any(char in _REGEX_META_CHARS for char in pattern):
+        tolerant_trusted_pattern = _build_tolerant_trusted_profanity_pattern(
+            pattern,
+            boundary_class=boundary_class,
+            gap_pattern=gap_pattern,
+        )
+        if tolerant_trusted_pattern:
+            return tolerant_trusted_pattern
         return rf"(?<!{boundary_class}){gap_pattern}(?:{pattern}){gap_pattern}(?!{boundary_class})"
     return _build_tolerant_profanity_pattern(pattern, boundary_class=boundary_class, gap_pattern=gap_pattern)
 
@@ -452,4 +487,6 @@ def compile_profanity_replacements(
             compiled.append((re.compile(pattern_source, re.IGNORECASE), clean_replacement))
         except re.error:
             continue
-    return tuple(compiled) or PROFANITY_REPLACEMENTS
+    if compiled:
+        return tuple(compiled)
+    return compile_profanity_replacements(PROFANITY_REPLACEMENT_PAIRS, text=text)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from speed_of_cinnamon.profanity_filter import (
+    PROFANITY_REPLACEMENT_PAIRS,
     compile_profanity_replacements,
     parse_profanity_replacement_list,
 )
@@ -77,6 +78,16 @@ class ProfanityFilterTest(unittest.TestCase):
         self.assertEqual(len(compiled), 1)
         self.assertEqual(compiled[0][1], "frog")
 
+    def test_compile_profanity_replacements_uses_tolerant_defaults_for_invalid_pairs(self) -> None:
+        text = "fu\u200bck"
+        compiled = compile_profanity_replacements((("\u0308", "invalid"),), text=text)
+
+        softened = text
+        for pattern, replacement in compiled:
+            softened = pattern.sub(replacement, softened)
+
+        self.assertEqual(softened, "Frickelfrosch")
+
     def test_default_profanity_replacements_preserve_trusted_regex_patterns(self) -> None:
         from speed_of_cinnamon.profanity_filter import PROFANITY_REPLACEMENTS
 
@@ -86,6 +97,16 @@ class ProfanityFilterTest(unittest.TestCase):
 
         self.assertNotIn("scheiße", soften)
         self.assertNotIn("scheisse", soften)
+
+    def test_compile_profanity_replacements_blocks_zero_width_in_trusted_regex_patterns(self) -> None:
+        text = "schei\u200bße und schei\u200bßhaus"
+        compiled = compile_profanity_replacements(PROFANITY_REPLACEMENT_PAIRS, text=text)
+
+        softened = text
+        for pattern, replacement in compiled:
+            softened = pattern.sub(replacement, softened)
+
+        self.assertEqual(softened, "Glitzerkram und Glitzerhaus")
 
 
 if __name__ == "__main__":
