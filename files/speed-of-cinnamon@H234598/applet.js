@@ -10924,6 +10924,9 @@ MyApplet.prototype = {
         let inputBytes = ByteArray.fromString(options.inputText);
         if (stdin && stdin.write_all_async) {
           stdin.write_all_async(inputBytes, GLib.PRIORITY_DEFAULT, cancellable, (stream, result) => {
+            if (done) {
+              return;
+            }
             try {
               assertInputWriteSucceeded(stream.write_all_finish(result));
               closeInput(stream);

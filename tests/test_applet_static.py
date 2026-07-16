@@ -4436,6 +4436,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("inputPending = false;", stdin_block)
         self.assertIn("finishWhenReady();", stdin_block)
         self.assertIn("finish({ error: error }, true);", stdin_block)
+        self.assertIn("if (done) {\n              return;\n            }\n            try {", stdin_block)
 
         group_start = source.index("_terminateProcessesByGroup: function(group, notifyCallback)")
         group_end = source.index("\n  _cancelAllCancellables:", group_start)
