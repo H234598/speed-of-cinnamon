@@ -2046,7 +2046,7 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
         if tmp_path is not None:
             try:
                 _clear_model_checksum_cache(tmp_path)
-            except (OSError, ModelError) as cleanup_error:
+            except BaseException as cleanup_error:
                 _note_cleanup_failure(primary_error, cleanup_error)
             try:
                 _unlink_model_file_leaf(tmp_path, root, field_name="temporary model file")
@@ -2055,7 +2055,10 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
             except (OSError, ModelError) as cleanup_error:
                 _note_cleanup_failure(primary_error, cleanup_error)
         if replaced_path:
-            _clear_model_checksum_cache(path)
+            try:
+                _clear_model_checksum_cache(path)
+            except BaseException as cleanup_error:
+                _note_cleanup_failure(primary_error, cleanup_error)
             if backup_path is not None:
                 try:
                     _restore_model_file_backup(
