@@ -12316,6 +12316,28 @@ class CliTest(unittest.TestCase):
                 path.write_bytes((b"a" * prefix_length) + ("😀" * 8).encode("utf-8"))
                 self.assertEqual(cli.read_file_tail(path, 2), "😀😀")
 
+    def test_read_file_tail_bounds_each_read_to_initial_file_size(self) -> None:
+        for size, expected_read_size in ((5, 5), (100, 43)):
+            with self.subTest(size=size):
+                read_sizes: list[int] = []
+                handle = mock.Mock()
+                handle.tell.return_value = size
+
+                def read_limited(read_size: int) -> bytes:
+                    read_sizes.append(read_size)
+                    return b"a" * read_size
+
+                handle.read.side_effect = read_limited
+                with (
+                    mock.patch.object(cli, "assert_no_symlink_ancestors"),
+                    mock.patch.object(cli.os, "open", return_value=11),
+                    mock.patch.object(cli, "assert_fd_is_regular_private_file"),
+                    mock.patch.object(cli.os, "fdopen", return_value=handle),
+                ):
+                    cli.read_file_tail(Path("/tmp/sample.txt"), 10)
+
+                self.assertEqual(read_sizes, [expected_read_size])
+
     def test_read_file_tail_preserves_read_error_when_handle_close_is_interrupted(self) -> None:
         handle = mock.Mock()
         handle.tell.return_value = 4

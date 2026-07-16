@@ -954,14 +954,14 @@ def read_file_tail(path: Path, max_chars: int) -> str:
         size = handle.tell()
         if size <= max_bytes:
             handle.seek(0)
-            raw = handle.read()
+            raw = handle.read(size)
         else:
             # Read up to three extra bytes so byte slicing cannot start inside
             # a valid four-byte UTF-8 code point.
             tail_start = size - max_bytes
             read_start = max(tail_start - 3, 0)
             handle.seek(read_start)
-            raw = handle.read()
+            raw = handle.read(size - read_start)
             leading_continuations = 0
             while (
                 leading_continuations < tail_start - read_start
