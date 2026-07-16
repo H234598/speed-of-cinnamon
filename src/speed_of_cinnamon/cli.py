@@ -396,6 +396,8 @@ def _unlink_finalization_lock_at(
 
 def _acquire_finalization_lock(state_path: Path) -> Path | None:
     lock_path = _finalization_lock_path(state_path)
+    acquired_path: Path | None = None
+    cleanup_failed = False
     try:
         assert_no_symlink_ancestors(lock_path, field_name="finalization lock path")
     except RuntimeError:
@@ -513,13 +515,20 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                 except BaseException:
                     pass
                 raise
-            return lock_path
-        return None
+            acquired_path = lock_path
+            break
+        if acquired_path is None:
+            return None
     finally:
         try:
             os.close(parent_fd)
         except OSError:
-            pass
+            if acquired_path is not None:
+                try:
+                    _release_finalization_lock(acquired_path)
+                except BaseException:
+                    pass
+            cleanup_failed = True
         except BaseException:
             if created_stat is not None:
                 try:
@@ -527,6 +536,9 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                 except BaseException:
                     pass
             raise
+    if cleanup_failed:
+        return None
+    return acquired_path
 
 
 def _release_finalization_lock(lock_path: Path | None) -> None:

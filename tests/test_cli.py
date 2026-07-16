@@ -893,6 +893,33 @@ class CliTest(unittest.TestCase):
         mocked_close.assert_any_call(456)
         mocked_release.assert_called_once_with(cli._finalization_lock_path(state_file))
 
+    def test_finalization_lock_fails_closed_when_parent_close_fails(self) -> None:
+        state_file = Path("/probe/state.json")
+        parent_close_attempts = 0
+
+        def close_fd(fd: int) -> None:
+            nonlocal parent_close_attempts
+            if fd == 456:
+                parent_close_attempts += 1
+                if parent_close_attempts == 1:
+                    raise OSError("parent close failed")
+
+        with (
+            mock.patch.object(cli, "assert_no_symlink_ancestors"),
+            mock.patch.object(cli, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(cli.os, "open", return_value=123),
+            mock.patch.object(cli.os, "fstat", return_value=mock.Mock()),
+            mock.patch.object(cli, "_finalization_lock_identity_for_pid", return_value=None),
+            mock.patch.object(cli, "_write_all"),
+            mock.patch.object(cli.os, "fsync"),
+            mock.patch.object(cli, "_release_finalization_lock") as mocked_release,
+            mock.patch.object(cli.os, "close", side_effect=close_fd),
+        ):
+            self.assertIsNone(cli._acquire_finalization_lock(state_file))
+
+        self.assertEqual(parent_close_attempts, 1)
+        mocked_release.assert_called_once_with(cli._finalization_lock_path(state_file))
+
     def test_ensure_private_text_file_keeps_existing_blacklist_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "blacklist.txt"
