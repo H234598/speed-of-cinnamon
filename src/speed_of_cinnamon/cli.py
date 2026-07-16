@@ -131,6 +131,8 @@ from .transcriber import (
 )
 from .profanity_filter import (
     MAX_PROFANITY_FILTER_BYTES,
+    _compile_profanity_replacements_with_hints,
+    _normalize_profanity_candidate,
     PROFANITY_REPLACEMENTS,
     PROFANITY_REPLACEMENT_PAIRS,
     compile_profanity_replacements,
@@ -1115,7 +1117,12 @@ def soften_profanity_text(text: str) -> str:
     if isinstance(text, bool) or not isinstance(text, str):
         raise RuntimeError("text must be text")
     output = text
-    for pattern, replacement in _profanity_replacements(text):
+    normalized_output: str | None = None
+    for pattern, replacement, pattern_hint in _profanity_replacements(text):
+        if normalized_output is None:
+            normalized_output = _normalize_profanity_candidate(output)
+        if pattern_hint not in normalized_output:
+            continue
         if len(output) > MAX_PROFANITY_OUTPUT_CHARS:
             break
         projected_chars = len(output)
@@ -1132,6 +1139,7 @@ def soften_profanity_text(text: str) -> str:
             output = pattern.sub(replace, output)
         except _ProfanityOutputLimitExceeded:
             break
+        normalized_output = None
     return output
 
 
@@ -1174,8 +1182,8 @@ def _profanity_replacement_pairs_from_file() -> tuple[tuple[str, str], ...]:
     return parse_profanity_replacement_list(text)
 
 
-def _profanity_replacements(text: str = "") -> tuple[tuple[re.Pattern[str], str], ...]:
-    return compile_profanity_replacements(_profanity_replacement_pairs_from_file(), text=text)
+def _profanity_replacements(text: str = "") -> tuple[tuple[re.Pattern[str], str, str], ...]:
+    return _compile_profanity_replacements_with_hints(_profanity_replacement_pairs_from_file(), text=text)
 
 
 def _reap_background_process(process: subprocess.Popen[bytes]) -> None:

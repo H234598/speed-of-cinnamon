@@ -12860,6 +12860,13 @@ class CliTest(unittest.TestCase):
                 path.write_text("f.*k -> Regenbogenmuffin\n(.+)+ -> Sicherheitskeks\n", encoding="utf-8")
                 self.assertEqual(cli.prepare_output_text("fuck f.*k (.+)+", False, False, True), "fuck Regenbogenmuffin Sicherheitskeks")
 
+    def test_soften_profanity_text_rechecks_hints_after_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}):
+                path = cli._ensure_editable_profanity_filter_file()
+                path.write_text("x -> ab\nab -> z\n", encoding="utf-8")
+                self.assertEqual(cli.soften_profanity_text("x"), "z")
+
     def test_soften_profanity_text_bounds_expanding_replacement_chains(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}):

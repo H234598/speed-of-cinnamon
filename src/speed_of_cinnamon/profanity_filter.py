@@ -444,11 +444,11 @@ def parse_profanity_replacement_list(text: str) -> tuple[tuple[str, str], ...]:
     return tuple(pairs) or PROFANITY_REPLACEMENT_PAIRS
 
 
-def compile_profanity_replacements(
+def _compile_profanity_replacements_with_hints(
     pairs: tuple[tuple[str, str], ...],
     *,
     text: str | None = None,
-) -> tuple[tuple[re.Pattern[str], str], ...]:
+) -> tuple[tuple[re.Pattern[str], str, str], ...]:
     if text is not None and (not isinstance(text, str) or isinstance(text, bool)):
         raise ValueError("text must be text")
     boundary_class = _IGNORABLE_BOUNDARY_CLASS
@@ -484,7 +484,7 @@ def compile_profanity_replacements(
             boundary_class = f"[\\w{escaped_codepoints}]"
             gap_pattern = rf"{ignorable_class}*"
             use_compact_patterns = False
-    compiled: list[tuple[re.Pattern[str], str]] = []
+    compiled: list[tuple[re.Pattern[str], str, str]] = []
     saw_valid_pattern = False
     for pattern, replacement in pairs[:MAX_PROFANITY_FILTER_ENTRIES]:
         clean_pattern = _clean_editable_value(pattern, max_chars=MAX_PROFANITY_PATTERN_CHARS)
@@ -506,11 +506,27 @@ def compile_profanity_replacements(
         if candidate_chars is not None and not _profanity_pattern_has_candidate(clean_pattern, candidate_chars):
             continue
         try:
-            compiled.append((re.compile(pattern_source, re.IGNORECASE), clean_replacement))
+            pattern_hint = (
+                _normalize_profanity_candidate("schei")
+                if clean_pattern in _TRUSTED_PROFANITY_PATTERNS and any(char in _REGEX_META_CHARS for char in clean_pattern)
+                else _normalize_profanity_candidate(clean_pattern)
+            )
+            compiled.append((re.compile(pattern_source, re.IGNORECASE), clean_replacement, pattern_hint))
         except re.error:
             continue
     if compiled:
         return tuple(compiled)
     if candidate_chars is not None and saw_valid_pattern:
         return ()
-    return compile_profanity_replacements(PROFANITY_REPLACEMENT_PAIRS, text=text)
+    return _compile_profanity_replacements_with_hints(PROFANITY_REPLACEMENT_PAIRS, text=text)
+
+
+def compile_profanity_replacements(
+    pairs: tuple[tuple[str, str], ...],
+    *,
+    text: str | None = None,
+) -> tuple[tuple[re.Pattern[str], str], ...]:
+    return tuple(
+        (pattern, replacement)
+        for pattern, replacement, _hint in _compile_profanity_replacements_with_hints(pairs, text=text)
+    )
