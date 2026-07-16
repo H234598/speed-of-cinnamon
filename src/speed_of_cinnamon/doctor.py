@@ -459,6 +459,7 @@ def _output_status(
     wayland_paste = applet and _ok(checks, "wtype")
     paste_ok = x11_paste or wayland_paste
     cli_clipboard = _ok(checks, "xclip") or _ok(checks, "xsel") or _ok(checks, "wl-copy")
+    cli_paste_writer = _ok(checks, "xclip") or _ok(checks, "xsel")
 
     if insert_method == "none":
         return {"ok": True, "value": "none", "paste_ok": False, "detail": "text insertion disabled"}
@@ -474,12 +475,14 @@ def _output_status(
             ),
         }
     if insert_method == "clipboard-paste":
-        copy_ok = cinnamon_clipboard or cli_clipboard
+        copy_ok = cinnamon_clipboard or cli_paste_writer
         ok = copy_ok and (paste_ok or cinnamon_clipboard)
         if cinnamon_clipboard:
             detail = "Cinnamon clipboard copy works"
+        elif cli_paste_writer:
+            detail = "CLI clipboard helper available"
         else:
-            detail = "CLI clipboard helper available" if cli_clipboard else "install xclip, xsel, or wl-clipboard for clipboard output"
+            detail = "install xclip or xsel for CLI automatic paste"
         if x11_paste:
             detail += "; xdotool paste works"
         elif wayland_paste:

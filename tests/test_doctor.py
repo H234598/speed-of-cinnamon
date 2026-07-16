@@ -107,6 +107,19 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(payload["configured"]["output"]["ok"])
         self.assertIn("xdotool", payload["configured"]["output"]["detail"])
 
+    def test_cli_clipboard_paste_does_not_claim_wl_copy_writer(self) -> None:
+        tools = {"python3", "pw-record", "pactl", "xdotool", "wl-copy"}
+        settings = {
+            "recorder": "auto",
+            "transcriber": "command",
+            "transcriber-command": "printf ok",
+            "insert-method": "clipboard-paste",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
+            payload = doctor.report(settings)
+        self.assertFalse(payload["configured"]["output"]["ok"])
+        self.assertIn("xclip or xsel", payload["configured"]["output"]["detail"])
+
     def test_cli_clipboard_paste_accepts_display_when_session_type_missing(self) -> None:
         tools = {"python3", "pw-record", "pactl", "xdotool", "xsel"}
         env = {
