@@ -6,6 +6,7 @@ import math
 import os
 import re
 import secrets
+import signal
 import shutil
 import subprocess  # nosec B404
 import sys
@@ -371,6 +372,29 @@ def _decode_ffmpeg_output(payload: object) -> str:
     return ""
 
 
+def _terminate_ffmpeg_process_group(process: subprocess.Popen[bytes]) -> bool:
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+        return True
+    except ProcessLookupError:
+        return True
+    except (OSError, ValueError):
+        try:
+            process.kill()
+        except (OSError, ValueError):
+            return False
+        return False
+
+
+def _reap_timed_out_ffmpeg_process(process: subprocess.Popen[bytes]) -> bool:
+    terminated = _terminate_ffmpeg_process_group(process)
+    try:
+        process.communicate(timeout=None if terminated else 1)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return False
+    return terminated
+
+
 def _run_ffmpeg_bounded(
     command: list[str],
     *,
@@ -378,15 +402,24 @@ def _run_ffmpeg_bounded(
     pass_fds: tuple[int, ...],
 ) -> subprocess.CompletedProcess[bytes]:
     with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
-        proc = subprocess.run(  # nosec B603
+        proc = subprocess.Popen(  # nosec B603
             command,
-            check=False,
             stdout=stdout_file,
             stderr=stderr_file,
-            timeout=timeout,
             env=_filtered_environment(),
             pass_fds=pass_fds,
+            shell=False,
+            start_new_session=True,
         )
+        try:
+            proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            if not _reap_timed_out_ffmpeg_process(proc):
+                exc.add_note("ffmpeg process cleanup was incomplete")
+            raise
+        except BaseException:
+            _reap_timed_out_ffmpeg_process(proc)
+            raise
         stdout = _read_ffmpeg_output(stdout_file, completed_output=getattr(proc, "stdout", None), field_name="stdout")
         stderr = _read_ffmpeg_output(stderr_file, completed_output=getattr(proc, "stderr", None), field_name="stderr")
         return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)

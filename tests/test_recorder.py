@@ -4,6 +4,7 @@ from __future__ import annotations
 import subprocess
 import os
 import tempfile
+import time
 import unittest
 import wave
 from pathlib import Path
@@ -63,6 +64,50 @@ def which_only(command: str) -> mock.Mock:
 def which_any(*commands: str) -> mock.Mock:
     allowed = set(commands)
     return mock.Mock(side_effect=lambda name, path=None: f"/usr/bin/{name}" if name in allowed else None)
+
+
+class _FakePopen:
+    def __init__(self, result: subprocess.CompletedProcess[bytes]) -> None:
+        self._result = result
+        self.pid = 12345
+        self.returncode = result.returncode
+        self.stdout = result.stdout
+        self.stderr = result.stderr
+
+    def communicate(self, input: bytes | None = None, timeout: int | None = None) -> tuple[bytes | None, bytes | None]:
+        return self._result.stdout, self._result.stderr
+
+    def kill(self) -> None:
+        self.returncode = -9
+
+
+class _RunnerPopen(_FakePopen):
+    def __init__(self, runner: object, args: tuple[object, ...], kwargs: dict[str, object]) -> None:
+        super().__init__(subprocess.CompletedProcess([], 0, stdout=b"", stderr=b""))
+        self._runner = runner
+        self._args = args
+        self._kwargs = kwargs
+        self._completed = False
+
+    def communicate(self, input: bytes | None = None, timeout: int | None = None) -> tuple[bytes | None, bytes | None]:
+        if not self._completed:
+            call_kwargs = dict(self._kwargs)
+            call_kwargs["input"] = input
+            result = self._runner(*self._args, **call_kwargs)  # type: ignore[operator]
+            assert isinstance(result, subprocess.CompletedProcess)
+            self._result = result
+            self.returncode = result.returncode
+            self.stdout = result.stdout
+            self.stderr = result.stderr
+            self._completed = True
+        return self._result.stdout, self._result.stderr
+
+
+def _popen_from_run(runner: object):
+    def factory(*args: object, **kwargs: object) -> _FakePopen:
+        return _RunnerPopen(runner, args, kwargs)
+
+    return factory
 
 
 class RecorderTest(unittest.TestCase):
@@ -129,7 +174,7 @@ class RecorderTest(unittest.TestCase):
             )
             completed = subprocess.CompletedProcess(["ffmpeg"], 0, stdout="", stderr=stderr)
             with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
-                with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=completed) as mocked_run:
+                with mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=_FakePopen(completed)) as mocked_run:
                     result = detect_silent_recording(audio)
 
             self.assertEqual(result, SilenceDetectionResult(True, True, 2.0, 2.0, 0.0, 2.0, "silent recording"))
@@ -139,7 +184,41 @@ class RecorderTest(unittest.TestCase):
         input_path = argv[argv.index("-i") + 1]
         self.assertTrue(str(input_path).startswith("/proc/self/fd/"))
         self.assertEqual(mocked_run.call_args.kwargs["pass_fds"], (int(str(input_path).rsplit("/", 1)[-1]),))
+        self.assertTrue(mocked_run.call_args.kwargs["start_new_session"])
         self.assertNotIsInstance(argv, str)
+
+    def test_run_ffmpeg_timeout_kills_process_group_descendants(self) -> None:
+        if not Path("/proc/self/stat").exists() or not hasattr(os, "killpg"):
+            self.skipTest("process group inspection unavailable")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            child_pid_path = Path(tmp) / "child.pid"
+            command = [
+                "/bin/sh",
+                "-c",
+                f"sleep 30 & child=$!; echo $child > {child_pid_path}; wait $child",
+            ]
+            with self.assertRaises(subprocess.TimeoutExpired):
+                recorder_module._run_ffmpeg_bounded(command, timeout=1, pass_fds=())
+
+            child_pid: int | None = None
+            for _ in range(200):
+                try:
+                    child_pid = int(child_pid_path.read_text(encoding="utf-8").strip())
+                    break
+                except (FileNotFoundError, ValueError):
+                    time.sleep(0.01)
+            self.assertIsNotNone(child_pid)
+            assert child_pid is not None
+
+            for _ in range(200):
+                stat_fields = recorder_module._recording_process_stat_fields(child_pid)
+                if stat_fields is None or stat_fields[0] == "Z":
+                    break
+                time.sleep(0.01)
+            else:
+                os.kill(child_pid, 9)
+                self.fail(f"ffmpeg descendant {child_pid} survived timeout")
 
     def test_detect_silent_recording_uses_file_backed_ffmpeg_output(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
@@ -159,7 +238,7 @@ class RecorderTest(unittest.TestCase):
             audio.write_bytes(b"RIFF" + b"\x00" * 44)
             with (
                 mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"),
-                mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=fake_run),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
             ):
                 result = detect_silent_recording(audio)
 
@@ -177,7 +256,7 @@ class RecorderTest(unittest.TestCase):
             audio.write_bytes(b"RIFF" + b"\x00" * 44)
             with (
                 mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"),
-                mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=fake_run),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
             ):
                 result = detect_silent_recording(audio)
 
@@ -196,7 +275,7 @@ class RecorderTest(unittest.TestCase):
                 stderr=(b"Duration: 00:00:" + b"9" * 400),
             )
             with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
-                with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=completed):
+                with mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=_FakePopen(completed)):
                     result = detect_silent_recording(audio)
 
         self.assertFalse(result.analyzed)
@@ -216,7 +295,7 @@ class RecorderTest(unittest.TestCase):
             )
             completed = subprocess.CompletedProcess(["ffmpeg"], 0, stdout="", stderr=stderr)
             with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
-                with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=completed):
+                with mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=_FakePopen(completed)):
                     result = detect_silent_recording(audio)
 
         self.assertFalse(result.silent)
@@ -393,8 +472,8 @@ class RecorderTest(unittest.TestCase):
 
             with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
                 with mock.patch(
-                    "speed_of_cinnamon.recorder.subprocess.run",
-                    side_effect=lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0]),
+                    "speed_of_cinnamon.recorder.subprocess.Popen",
+                    side_effect=_popen_from_run(lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0])),
                 ) as mocked_run:
                     trimmed = trim_recording_silence(audio)
                     trimmed_exists = trimmed.exists()
@@ -437,8 +516,8 @@ class RecorderTest(unittest.TestCase):
 
             with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
                 with mock.patch(
-                    "speed_of_cinnamon.recorder.subprocess.run",
-                    side_effect=lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0]),
+                    "speed_of_cinnamon.recorder.subprocess.Popen",
+                    side_effect=_popen_from_run(lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0])),
                 ):
                     trimmed = trim_recording_silence(audio)
                     trimmed.unlink(missing_ok=True)
@@ -737,7 +816,7 @@ class RecorderTest(unittest.TestCase):
             audio.write_bytes(b"audio")
             completed = subprocess.CompletedProcess(["ffmpeg"], 0, stdout=b"", stderr=b"")
             with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
-                with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=completed):
+                with mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=_FakePopen(completed)):
                     with self.assertRaisesRegex(RecorderError, "ffmpeg silence trimming produced empty output") as raised:
                         trim_recording_silence(audio)
             self.assertNotIn(str(audio), str(raised.exception))
@@ -754,7 +833,7 @@ class RecorderTest(unittest.TestCase):
             with (
                 mock.patch("speed_of_cinnamon.recorder.MAX_FFMPEG_ARTIFACT_BYTES", 4),
                 mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"),
-                mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=lambda *args, **kwargs: oversized_output(args[0])),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=_popen_from_run(lambda *args, **kwargs: oversized_output(args[0]))),
             ):
                 with self.assertRaisesRegex(RecorderError, "exceeded safe artifact size limit"):
                     trim_recording_silence(audio)
@@ -790,8 +869,8 @@ class RecorderTest(unittest.TestCase):
             completed = subprocess.CompletedProcess(["ffmpeg"], 0, stdout=b"", stderr=b"")
             with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
                 with mock.patch(
-                    "speed_of_cinnamon.recorder.subprocess.run",
-                    side_effect=lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0]),
+                    "speed_of_cinnamon.recorder.subprocess.Popen",
+                    side_effect=_popen_from_run(lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0])),
                 ) as mocked_run:
                     output = reencode_recording_to_flac(audio)
                     output_exists = output.exists()
@@ -834,7 +913,7 @@ class RecorderTest(unittest.TestCase):
             audio.write_bytes(b"audio")
             completed = subprocess.CompletedProcess(["ffmpeg"], 0, stdout=b"", stderr=b"")
             with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
-                with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=completed):
+                with mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=_FakePopen(completed)):
                     with self.assertRaisesRegex(RecorderError, "ffmpeg FLAC conversion produced empty output") as raised:
                         reencode_recording_to_flac(audio)
             self.assertNotIn(str(audio), str(raised.exception))
@@ -866,8 +945,8 @@ class RecorderTest(unittest.TestCase):
                     mock.patch.object(recorder_module, "_command_path", return_value="/usr/bin/ffmpeg"),
                     mock.patch.object(
                         recorder_module.subprocess,
-                        "run",
-                        return_value=subprocess.CompletedProcess(["ffmpeg"], 0, b"", b""),
+                        "Popen",
+                        return_value=_FakePopen(subprocess.CompletedProcess(["ffmpeg"], 0, b"", b"")),
                     ),
                     mock.patch.object(recorder_module.os, "fstat", side_effect=fail_temp_fstat),
                 ):
@@ -888,7 +967,7 @@ class RecorderTest(unittest.TestCase):
             with (
                 mock.patch("speed_of_cinnamon.recorder.MAX_FFMPEG_ARTIFACT_BYTES", 4),
                 mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"),
-                mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=lambda *args, **kwargs: oversized_output(args[0])),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=_popen_from_run(lambda *args, **kwargs: oversized_output(args[0]))),
             ):
                 with self.assertRaisesRegex(RecorderError, "exceeded safe artifact size limit"):
                     reencode_recording_to_flac(audio)
@@ -911,8 +990,8 @@ class RecorderTest(unittest.TestCase):
             audio.write_bytes(b"audio")
             with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
                 with mock.patch(
-                    "speed_of_cinnamon.recorder.subprocess.run",
-                    side_effect=lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0]),
+                    "speed_of_cinnamon.recorder.subprocess.Popen",
+                    side_effect=_popen_from_run(lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0])),
                 ):
                     with mock.patch.object(recorder_module, "_recording_temp_path_matches_fd", return_value=False):
                         with self.assertRaisesRegex(RecorderError, "temporary file was replaced"):
@@ -930,8 +1009,8 @@ class RecorderTest(unittest.TestCase):
             with (
                 mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"),
                 mock.patch(
-                    "speed_of_cinnamon.recorder.subprocess.run",
-                    side_effect=lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0]),
+                    "speed_of_cinnamon.recorder.subprocess.Popen",
+                    side_effect=_popen_from_run(lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0])),
                 ),
                 mock.patch.object(
                     recorder_module,
@@ -956,8 +1035,8 @@ class RecorderTest(unittest.TestCase):
             with (
                 mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"),
                 mock.patch(
-                    "speed_of_cinnamon.recorder.subprocess.run",
-                    side_effect=lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0]),
+                    "speed_of_cinnamon.recorder.subprocess.Popen",
+                    side_effect=_popen_from_run(lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0])),
                 ),
                 mock.patch.object(
                     recorder_module,
@@ -982,8 +1061,8 @@ class RecorderTest(unittest.TestCase):
             with (
                 mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"),
                 mock.patch(
-                    "speed_of_cinnamon.recorder.subprocess.run",
-                    side_effect=lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0]),
+                    "speed_of_cinnamon.recorder.subprocess.Popen",
+                    side_effect=_popen_from_run(lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0])),
                 ),
                 mock.patch.object(
                     recorder_module,
@@ -1008,8 +1087,8 @@ class RecorderTest(unittest.TestCase):
             with (
                 mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"),
                 mock.patch(
-                    "speed_of_cinnamon.recorder.subprocess.run",
-                    side_effect=lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0]),
+                    "speed_of_cinnamon.recorder.subprocess.Popen",
+                    side_effect=_popen_from_run(lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0])),
                 ),
                 mock.patch.object(
                     recorder_module,
@@ -1028,7 +1107,7 @@ class RecorderTest(unittest.TestCase):
             audio.write_bytes(b"audio")
             failed = subprocess.CompletedProcess(["ffmpeg"], 1, stdout=b"", stderr=b"bad audio")
             with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
-                with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=failed):
+                with mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=_FakePopen(failed)):
                     with self.assertRaisesRegex(RecorderError, "bad audio"):
                         trim_recording_silence(audio)
 
@@ -1045,7 +1124,7 @@ class RecorderTest(unittest.TestCase):
             audio.write_bytes(b"audio")
             failed = subprocess.CompletedProcess(["ffmpeg"], 1, stdout=b"", stderr=f"failed {audio} token secret".encode())
             with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
-                with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=failed):
+                with mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=_FakePopen(failed)):
                     with self.assertRaisesRegex(RecorderError, "\\[redacted ffmpeg error\\]") as raised:
                         trim_recording_silence(audio)
             self.assertNotIn(str(audio), str(raised.exception))
@@ -1063,7 +1142,7 @@ class RecorderTest(unittest.TestCase):
             audio.write_bytes(b"audio")
             with (
                 mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"),
-                mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=fake_run),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
             ):
                 with self.assertRaisesRegex(RecorderError, "exceeded safe output limit"):
                     trim_recording_silence(audio)
@@ -1074,7 +1153,7 @@ class RecorderTest(unittest.TestCase):
             audio.write_bytes(b"audio")
             failed = subprocess.CompletedProcess(["ffmpeg"], 1, stdout=b"", stderr=b"encoder failed")
             with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
-                with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=failed):
+                with mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=_FakePopen(failed)):
                     with self.assertRaisesRegex(RecorderError, "encoder failed"):
                         reencode_recording_to_flac(audio)
 
@@ -1084,7 +1163,7 @@ class RecorderTest(unittest.TestCase):
             audio.write_bytes(b"audio")
             failed = subprocess.CompletedProcess(["ffmpeg"], 1, stdout=b"", stderr=f"failed {audio} token secret".encode())
             with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
-                with mock.patch("speed_of_cinnamon.recorder.subprocess.run", return_value=failed):
+                with mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=_FakePopen(failed)):
                     with self.assertRaisesRegex(RecorderError, "\\[redacted ffmpeg error\\]") as raised:
                         reencode_recording_to_flac(audio)
             self.assertNotIn(str(audio), str(raised.exception))
@@ -1108,7 +1187,7 @@ class RecorderTest(unittest.TestCase):
             error = OSError(f"failed {audio} token secret")
             with (
                 mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"),
-                mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=error),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=error),
             ):
                 result = detect_silent_recording(audio)
 
