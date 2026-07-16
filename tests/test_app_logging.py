@@ -75,6 +75,18 @@ class AppLoggingTest(unittest.TestCase):
                     "[redacted error details]",
                 )
 
+    def test_sanitize_text_redacts_multiword_credential_values(self) -> None:
+        for value in (
+            "password: correct horse battery staple",
+            "passphrase=correct horse battery staple",
+            "token correct horse battery staple",
+        ):
+            with self.subTest(value=value):
+                sanitized = app_logging.sanitize_text(value, max_chars=200)
+                self.assertNotIn("correct", sanitized)
+                self.assertNotIn("battery", sanitized)
+                self.assertNotIn("staple", sanitized)
+
     def test_sanitize_error_message_preserves_short_failed_error_details(self) -> None:
         self.assertEqual(
             app_logging.sanitize_error_message("ls failed: missing permission", max_chars=120),

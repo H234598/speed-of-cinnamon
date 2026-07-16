@@ -57,12 +57,13 @@ _CREDENTIAL_KEY_PATTERN = (
     r"bearer|token|access[_ -]?token|refresh[_ -]?token|id[_ -]?token|api[_ -]?key|apikey|"
     r"client[_ -]?secret|private[_ -]?key|secret[_ -]?key|secret|password|passwd|passphrase"
 )
-_TOKEN_RE = re.compile(rf"(?i)\b({_CREDENTIAL_KEY_PATTERN})\b\s*[:=]\s*[^,\s;]+")
+_TOKEN_RE = re.compile(rf"(?i)\b({_CREDENTIAL_KEY_PATTERN})\b\s*[:=]\s*[^,\s;]+(?:[ \t]+[^,\s;]+)*")
 _BARE_CREDENTIAL_RE = re.compile(
     r"(?i)\b(token|access[_ -]?token|refresh[_ -]?token|id[_ -]?token|api[_ -]?key|apikey|"
     r"client[_ -]?secret|private[_ -]?key|secret[_ -]?key|password|passwd|passphrase)\b\s+"
     r"(?:(?:is|are|was|were)\s+)?"
     r"(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required|not|empty)\b)[^,\s;]+"
+    r"(?:[ \t]+[^,\s;]+)*"
 )
 _BEARER_RE = re.compile(r"(?i)\bbearer\s+[^,\s;]+")
 _OPENAI_KEY_RE = re.compile(r"\b(?:sk|sess)-[A-Za-z0-9_\-]{12,}\b")
