@@ -366,6 +366,17 @@ def _same_model_temporary_identity(first: os.stat_result, second: os.stat_result
     )
 
 
+def _same_model_directory_identity(first: os.stat_result, second: os.stat_result) -> bool:
+    return (
+        stat_module.S_ISDIR(first.st_mode)
+        and stat_module.S_ISDIR(second.st_mode)
+        and first.st_dev == second.st_dev
+        and first.st_ino == second.st_ino
+        and first.st_mode == second.st_mode
+        and getattr(first, "st_nlink", 1) == getattr(second, "st_nlink", 1)
+    )
+
+
 def _hash_model_file(path: Path) -> tuple[str, os.stat_result]:
     fd = _open_model_hash_file(path)
     try:
@@ -1203,7 +1214,7 @@ def _remove_model_directory_leaf(
             raise ModelError(f"{field_name} must not be a symlink: {path}")
         if not stat_module.S_ISDIR(file_stat.st_mode):
             raise ModelError(f"{field_name} must be a directory: {path}")
-        if expected_stat is not None and not _same_model_artifact_identity(file_stat, expected_stat):
+        if expected_stat is not None and not _same_model_directory_identity(file_stat, expected_stat):
             raise ModelError(f"{field_name} changed before cleanup: {path}")
         shutil.rmtree(path.name, dir_fd=parent_fd)
         os.fsync(parent_fd)
@@ -1240,7 +1251,7 @@ def _remove_model_directory_if_same(
             current_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
         except FileNotFoundError:
             return False
-        if not stat_module.S_ISDIR(current_stat.st_mode) or not _same_model_artifact_identity(current_stat, expected_stat):
+        if not stat_module.S_ISDIR(current_stat.st_mode) or not _same_model_directory_identity(current_stat, expected_stat):
             raise ModelError(f"{field_name} changed before cleanup: {path}")
         shutil.rmtree(path.name, dir_fd=parent_fd)
         os.fsync(parent_fd)
@@ -1693,6 +1704,12 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
             assert_no_symlink_ancestors(tmp_dir, field_name="model temporary directory")
         except RuntimeError as exc:
             raise ModelError(str(exc)) from exc
+        try:
+            tmp_dir_stat = tmp_dir.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise ModelError(f"failed to inspect model temporary directory: {tmp_dir}") from exc
+        if not stat_module.S_ISDIR(tmp_dir_stat.st_mode):
+            raise ModelError(f"model temporary path is not a directory: {tmp_dir}")
 
         size_limit = _download_size_limit(model)
         if model.files and not model.repo_id:
@@ -1749,11 +1766,11 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
         if tmp_dir is None:
             raise ModelError(f"model temporary directory is unavailable: {model.name}")
         try:
-            tmp_dir_stat = tmp_dir.stat(follow_symlinks=False)
+            current_tmp_dir_stat = tmp_dir.stat(follow_symlinks=False)
         except OSError as exc:
             raise ModelError(f"failed to inspect model temporary directory: {tmp_dir}") from exc
-        if not stat_module.S_ISDIR(tmp_dir_stat.st_mode):
-            raise ModelError(f"model temporary path is not a directory: {tmp_dir}")
+        if tmp_dir_stat is None or not _same_model_directory_identity(current_tmp_dir_stat, tmp_dir_stat):
+            raise ModelError(f"model temporary directory changed during download: {tmp_dir}")
         if path.exists() and path.is_dir():
             _assert_safe_model_directory(path)
         backup_dir: Path | None = None
@@ -1818,9 +1835,14 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                 except (OSError, ModelError):
                     raise ModelError(f"failed to remove model backup after successful download: {backup_dir}") from cleanup_exc
     except BaseException:
-        if tmp_dir is not None:
+        if tmp_dir is not None and tmp_dir_stat is not None:
             with suppress(OSError, ModelError):
-                _remove_model_directory_leaf(tmp_dir, root, field_name="model temporary directory")
+                _remove_model_directory_leaf(
+                    tmp_dir,
+                    root,
+                    field_name="model temporary directory",
+                    expected_stat=tmp_dir_stat,
+                )
         raise
     finally:
         try:

@@ -4,6 +4,7 @@ import json
 import hashlib
 import io
 import os
+import shutil
 import tempfile
 import time
 import unittest
@@ -1862,9 +1863,15 @@ class ModelsTest(unittest.TestCase):
         cleanup_calls: list[tuple[Path, Path, str]] = []
         original_remove_directory = models._remove_model_directory_leaf
 
-        def record_remove_directory(path: Path, root: Path, *, field_name: str = "model directory") -> bool:
+        def record_remove_directory(
+            path: Path,
+            root: Path,
+            *,
+            field_name: str = "model directory",
+            expected_stat: os.stat_result | None = None,
+        ) -> bool:
             cleanup_calls.append((path, root, field_name))
-            return original_remove_directory(path, root, field_name=field_name)
+            return original_remove_directory(path, root, field_name=field_name, expected_stat=expected_stat)
 
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -1879,6 +1886,56 @@ class ModelsTest(unittest.TestCase):
         cleanup_path, cleanup_root, field_name = cleanup_calls[0]
         self.assertEqual(cleanup_root, cleanup_path.parent)
         self.assertEqual(field_name, "model temporary directory")
+
+    def test_download_directory_model_does_not_remove_replaced_temporary_directory(self) -> None:
+        data = b"small model file"
+        spec = models.ModelSpec(
+            name="ct2-directory-cleanup-swap",
+            filename="ct2-directory-cleanup-swap",
+            size="2 KiB",
+            sha1="",
+            description="ct2 directory cleanup swap",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-directory-cleanup-swap",
+            files=("config.json",),
+            file_sha1s=file_sha1s_for(("config.json",), data),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}):
+            path = models.model_path(spec)
+
+            class ReplacingErrorResponse:
+                def __init__(self) -> None:
+                    self.calls = 0
+
+                def __enter__(self) -> "ReplacingErrorResponse":
+                    return self
+
+                def __exit__(self, *_args: object) -> None:
+                    temporary = next(path.parent.glob(f".{spec.filename}.*"))
+                    if not temporary.is_dir():
+                        raise AssertionError("temporary directory missing")
+                    shutil.rmtree(temporary)
+                    temporary.mkdir(mode=0o700)
+                    (temporary / "VICTIM").write_bytes(b"victim")
+
+                def read(self, _size: int = -1) -> bytes:
+                    self.calls += 1
+                    if self.calls == 1:
+                        return b"partial"
+                    raise OSError("network failed")
+
+            with (
+                mock.patch.object(models, "CATALOG", (spec,)),
+                mock.patch.object(models, "_open_model_download_url", return_value=ReplacingErrorResponse()),
+            ):
+                with self.assertRaisesRegex(OSError, "network failed"):
+                    models.download_model(spec.name)
+
+            temporary_dirs = [item for item in path.parent.glob(f".{spec.filename}.*") if item.is_dir()]
+            self.assertEqual(len(temporary_dirs), 1)
+            self.assertEqual((temporary_dirs[0] / "VICTIM").read_bytes(), b"victim")
 
     def test_multifile_model_symlink_path_is_not_downloaded(self) -> None:
         data = b"small model file"
