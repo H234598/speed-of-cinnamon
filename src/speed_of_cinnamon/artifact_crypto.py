@@ -453,6 +453,7 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
             first.st_mode,
             first.st_uid,
             first.st_gid,
+            getattr(first, "st_nlink", 1),
             first.st_size,
         ) == (
             second.st_dev,
@@ -460,6 +461,7 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
             second.st_mode,
             second.st_uid,
             second.st_gid,
+            getattr(second, "st_nlink", 1),
             second.st_size,
         )
 
