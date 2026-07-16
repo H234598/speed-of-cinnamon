@@ -1288,6 +1288,13 @@ def _transcript_display_name(path: Path) -> str:
     return _sanitize_transcript_metadata_text(path.name)
 
 
+def _transcript_modified_at(mtime: float) -> str:
+    try:
+        return datetime.fromtimestamp(mtime, timezone.utc).isoformat()
+    except (OSError, OverflowError, TypeError, ValueError):
+        return "unknown"
+
+
 def _redact_history_previews(transcripts: list[dict[str, object]]) -> list[dict[str, object]]:
     redacted: list[dict[str, object]] = []
     for entry in transcripts:
@@ -1966,7 +1973,7 @@ def _collect_transcript_history(limit: int = 10) -> tuple[list[dict[str, object]
             continue
         if not text:
             continue
-        modified_at = datetime.fromtimestamp(mtime, timezone.utc).isoformat()
+        modified_at = _transcript_modified_at(mtime)
         entries.append(
             {
                 "path": str(path),
@@ -2020,7 +2027,7 @@ def build_transcripts_document(
             continue
         display_text = _sanitize_transcript_display_text(text)
         display_name = _transcript_display_name(path)
-        modified_at = datetime.fromtimestamp(mtime, timezone.utc).isoformat()
+        modified_at = _transcript_modified_at(mtime)
         entry = [
             f"===== {display_name} =====",
             f"Modified: {modified_at}",

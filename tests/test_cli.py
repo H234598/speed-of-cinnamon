@@ -4120,6 +4120,25 @@ class CliTest(unittest.TestCase):
         self.assertIn("newer.txt", payload["transcripts"][0]["path"])
         self.assertEqual(payload["transcripts"][0]["preview"], "newer text with more words")
 
+    def test_history_and_document_survive_out_of_range_mtime(self) -> None:
+        path = Path("/tmp/transcript-with-invalid-mtime.txt")
+        with (
+            mock.patch.object(cli, "transcript_dir", return_value=path.parent),
+            mock.patch.object(
+                cli,
+                "_transcript_history_candidates",
+                side_effect=lambda _directory: iter([(10**20, path)]),
+            ),
+            mock.patch.object(cli, "_read_stored_transcript_text", return_value="safe text\n"),
+        ):
+            history = cli.read_transcript_history(1)
+            document, count, truncated = cli.build_transcripts_document(1)
+
+        self.assertEqual(history[0]["modified_at"], "unknown")
+        self.assertIn("Modified: unknown", document)
+        self.assertEqual(count, 1)
+        self.assertFalse(truncated)
+
     def test_transcripts_document_contains_full_transcript_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
