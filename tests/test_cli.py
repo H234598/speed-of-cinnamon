@@ -3795,6 +3795,31 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("cli-path", import_payload["settings"])
         self.assertEqual(alarms["alarms"][0]["name"], "Standup")
 
+    @mock.patch("speed_of_cinnamon.cli.ensure_runtime_dirs")
+    @mock.patch("speed_of_cinnamon.cli.read_export")
+    @mock.patch("speed_of_cinnamon.cli.save_alarm_store")
+    @mock.patch("speed_of_cinnamon.cli._locked_alarm_store")
+    def test_settings_import_locks_alarm_store_before_persisting(
+        self,
+        mocked_lock: mock.Mock,
+        mocked_save: mock.Mock,
+        mocked_read: mock.Mock,
+        mocked_ensure_dirs: mock.Mock,
+    ) -> None:
+        locked_path = Path("/tmp/locked-alarms.json")
+        mocked_lock.return_value.__enter__.return_value = locked_path
+        mocked_read.return_value = {
+            "version": 1,
+            "settings": {},
+            "alarms": {"alarms": [], "last_checked_at": ""},
+        }
+
+        result = cli.command_settings_import(argparse.Namespace(input="/tmp/settings.json", confirm_plaintext_settings_output=False))
+
+        mocked_lock.assert_called_once_with()
+        mocked_save.assert_called_once_with(mocked_read.return_value["alarms"], locked_path)
+        self.assertEqual(result["status"], "done")
+
     def test_settings_export_import_supports_home_tilde_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"
@@ -6015,6 +6040,7 @@ class CliTest(unittest.TestCase):
             recordings_dir = Path(tmp) / "speed-of-cinnamon" / "recordings"
             transcript_dir.mkdir(parents=True)
             recordings_dir.mkdir(parents=True)
+            (Path(tmp) / "speed-of-cinnamon").chmod(0o700)
             (transcript_dir / "secret.txt").write_text("secret dictated words\n", encoding="utf-8")
             audio_path = recordings_dir / "secret.flac"
             log_path = recordings_dir / "secret.log"

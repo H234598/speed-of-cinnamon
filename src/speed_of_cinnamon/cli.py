@@ -24,6 +24,7 @@ from pathlib import Path
 from . import __version__
 from . import doctor
 from .alarms import (
+    _locked_alarm_store,
     add_alarm,
     check_due_alarms,
     list_alarm_payload,
@@ -5182,7 +5183,8 @@ def command_settings_import(args: argparse.Namespace) -> dict[str, object]:
         max_chars=_settings_json_path_limit(args.input),
     )
     payload = read_export(path)
-    save_alarm_store(payload["alarms"])
+    with _locked_alarm_store() as store_path:
+        save_alarm_store(payload["alarms"], store_path)
     include_settings = _coerce_bool(
         getattr(args, "confirm_plaintext_settings_output", False),
         field_name="confirm_plaintext_settings_output",
