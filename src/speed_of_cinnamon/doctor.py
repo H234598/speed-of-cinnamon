@@ -21,7 +21,13 @@ from .postprocessor import (
 )
 from .path_safety import assert_no_symlink_ancestors
 from .recorder import MAX_RECORDING_SECONDS
-from .transcriber import MAX_LANGUAGE_CODE_CHARS, MAX_TRANSCRIBER_TEXT_CHARS, faster_whisper_available, normalize_backend
+from .transcriber import (
+    MAX_LANGUAGE_CODE_CHARS,
+    MAX_TRANSCRIBER_TEXT_CHARS,
+    _validate_ctranslate2_model_tree,
+    faster_whisper_available,
+    normalize_backend,
+)
 
 
 _TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -336,6 +342,7 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
                 local_model_kind = "file"
             elif local_model_path.is_dir():
                 local_model_kind = "directory"
+                _validate_ctranslate2_model_tree(local_model_path, field_name="voice model path")
             if local_model_kind == "directory" and not model_backend:
                 model_backend = "faster-whisper"
             model_ok = local_model_exists and (

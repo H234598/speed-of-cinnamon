@@ -472,6 +472,21 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(payload["configured"]["transcriber"]["ok"])
         self.assertIn("faster-whisper is missing", payload["configured"]["transcriber"]["detail"])
 
+    def test_doctor_rejects_unsafe_faster_whisper_model_tree(self) -> None:
+        checks = {"faster-whisper": doctor.Check("faster-whisper", True, "available")}
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "ct2-model"
+            model.mkdir()
+            real_file = Path(tmp) / "real-model.bin"
+            real_file.write_bytes(b"model")
+            (model / "model.bin").symlink_to(real_file)
+            status = doctor._transcriber_status(
+                {"transcriber": "faster-whisper", "whisper-model": str(model)},
+                checks,
+            )
+        self.assertFalse(status["ok"])
+        self.assertEqual(status["detail"], "voice model path is invalid")
+
     def test_auto_prefers_configured_model_over_whisper_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             model = Path(tmp) / "ct2-model"
