@@ -686,7 +686,12 @@ def _read_private_passphrase_file(
     try:
         assert_no_symlink_ancestors(path, field_name="artifact encryption passphrase file")
         _stat_private_passphrase_parent(path)
-        fd = open_file_without_following_symlinks(path, os.O_RDONLY, field_name="artifact encryption passphrase file")
+        nonblock_flag = getattr(os, "O_NONBLOCK", 0)
+        fd = open_file_without_following_symlinks(
+            path,
+            os.O_RDONLY | nonblock_flag,
+            field_name="artifact encryption passphrase file",
+        )
     except (OSError, RuntimeError) as exc:
         raise ArtifactCryptoError("artifact encryption passphrase file could not be read") from exc
     try:

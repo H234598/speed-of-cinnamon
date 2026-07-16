@@ -1280,6 +1280,32 @@ class ArtifactCryptoTest(unittest.TestCase):
                 with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be read"):
                     artifact_crypto._read_private_passphrase_file(path)
 
+    def test_private_passphrase_open_is_nonblocking(self) -> None:
+        with (
+            mock.patch.object(artifact_crypto, "default_passphrase_file", return_value=Path("/other/default.key")),
+            mock.patch.object(artifact_crypto, "assert_no_symlink_ancestors"),
+            mock.patch.object(artifact_crypto, "_stat_private_passphrase_parent"),
+            mock.patch.object(
+                artifact_crypto,
+                "open_file_without_following_symlinks",
+                return_value=123,
+            ) as mocked_open,
+            mock.patch.object(artifact_crypto, "assert_fd_is_regular_private_file"),
+            mock.patch.object(artifact_crypto, "_assert_no_posix_acl"),
+            mock.patch.object(
+                artifact_crypto.os,
+                "fstat",
+                return_value=SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=os.getuid()),
+            ),
+            mock.patch.object(artifact_crypto.os, "fdopen", side_effect=ValueError("bad fd")),
+            mock.patch.object(artifact_crypto.os, "close"),
+        ):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be read"):
+                artifact_crypto._read_private_passphrase_file(Path("/does-not-matter/passphrase.key"))
+
+        flags = mocked_open.call_args.args[1]
+        self.assertTrue(flags & getattr(os, "O_NONBLOCK", 0))
+
     def test_private_passphrase_fd_cleanup_does_not_mask_read_error(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=Path("/other/default.key")),
