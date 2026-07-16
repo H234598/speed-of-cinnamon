@@ -239,11 +239,22 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
     whisper_model = _setting(settings, "whisper-model", limit=False)
     openai_compatible_model = _setting(settings, "openai-compatible-model", DEFAULT_OPENAI_COMPATIBLE_MODEL)
     openai_compatible_url = _setting(settings, "openai-compatible-url", DEFAULT_OPENAI_COMPATIBLE_URL, limit=False)
-    local_model = whisper_model or default_ctranslate2_model_path(language) or default_whisper_cpp_model_path(language)
     whisper_ok = _ok(checks, "whisper")
     whisper_cpp_ok = _ok(checks, "whisper-cli") or _ok(checks, "whisper.cpp") or _ok(checks, "pwcpp")
     faster_whisper_ok = _ok(checks, "faster-whisper")
     transcriber = normalize_backend(transcriber)
+    if transcriber == "auto" and command_template:
+        local_model = ""
+    elif whisper_model and transcriber in {"auto", "whisper-cpp", "faster-whisper"}:
+        local_model = whisper_model
+    elif transcriber == "whisper-cpp":
+        local_model = default_whisper_cpp_model_path(language)
+    elif transcriber == "faster-whisper":
+        local_model = default_ctranslate2_model_path(language)
+    elif transcriber == "auto" and not command_template:
+        local_model = default_ctranslate2_model_path(language) or default_whisper_cpp_model_path(language)
+    else:
+        local_model = ""
 
     model_backend = ""
     local_model_exists = False
