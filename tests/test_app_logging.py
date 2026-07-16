@@ -508,6 +508,34 @@ class AppLoggingTest(unittest.TestCase):
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
         self.assertIn("source close failed", "\n".join(caught.exception.__notes__))
 
+    def test_gzip_file_preserves_copy_error_when_input_close_fails(self) -> None:
+        input_file = mock.MagicMock()
+        input_file.__enter__.return_value = input_file
+        input_file.__exit__.side_effect = lambda *_args: input_file.close()
+        input_file.close.side_effect = OSError("source close failed")
+        raw_output = mock.MagicMock()
+        raw_output.__enter__.return_value = raw_output
+        raw_output.__exit__.return_value = False
+        gzip_output = mock.MagicMock()
+        gzip_output.__enter__.return_value = gzip_output
+        gzip_output.__exit__.return_value = False
+
+        with (
+            mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".target.tmp")),
+            mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
+            mock.patch.object(app_logging.os, "fstat", return_value=os.stat(__file__)),
+            mock.patch.object(app_logging.os, "fdopen", side_effect=[input_file, raw_output]),
+            mock.patch.object(app_logging.gzip, "GzipFile", return_value=gzip_output),
+            mock.patch.object(app_logging, "_copy_stream_capped", side_effect=RuntimeError("copy failed")),
+            mock.patch.object(app_logging, "_unlink_log_temp"),
+            mock.patch.object(app_logging.os, "close"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "copy failed") as caught:
+                app_logging._gzip_file(Path("/probe/source.log"), Path("/probe/target.log.gz"))
+
+        self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertIn("source close failed", "\n".join(caught.exception.__notes__))
+
     def test_unlink_log_file_preserves_success_when_parent_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -1377,13 +1377,49 @@ def _gzip_file(source: Path, target: Path) -> None:
                 _note_cleanup_failure(exc, cleanup_error)
             temp_fd = -1
             raise
-        with input_file, raw_output:
-            with gzip.GzipFile(fileobj=raw_output, mode="wb") as output_file:
+        block_error: BaseException | None = None
+        try:
+            output_file = gzip.GzipFile(fileobj=raw_output, mode="wb")
+            try:
                 _copy_stream_capped(input_file, output_file, source_path=source)
+            except BaseException as exc:
+                block_error = exc
+                raise
+            finally:
+                try:
+                    output_file.close()
+                except BaseException as cleanup_error:
+                    if block_error is not None:
+                        _note_cleanup_failure(block_error, cleanup_error)
+                    else:
+                        block_error = cleanup_error
+            if block_error is not None:
+                raise block_error
             raw_output.flush()
             os.fsync(raw_output.fileno())
             if not _log_temp_name_matches_fd(parent_fd, temp_name, raw_output.fileno()):
                 raise RuntimeError("log temporary archive was replaced")
+        except BaseException as exc:
+            if block_error is None:
+                block_error = exc
+            raise
+        finally:
+            try:
+                raw_output.close()
+            except BaseException as cleanup_error:
+                if block_error is not None:
+                    _note_cleanup_failure(block_error, cleanup_error)
+                else:
+                    block_error = cleanup_error
+            try:
+                input_file.close()
+            except BaseException as cleanup_error:
+                if block_error is not None:
+                    _note_cleanup_failure(block_error, cleanup_error)
+                else:
+                    block_error = cleanup_error
+        if block_error is not None:
+            raise block_error
         target_temp_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
         if not stat_module.S_ISREG(target_temp_stat.st_mode) or getattr(target_temp_stat, "st_nlink", 1) != 1:
             raise RuntimeError("log temporary archive must be a private regular file")
