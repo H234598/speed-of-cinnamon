@@ -4394,23 +4394,35 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
         transcript_deleted = True
         if state.transcript_path:
             transcript_path: Path | None = None
+            transcript_sibling_path: Path | None = None
+            transcript_present_before = False
+            transcript_sibling_present_before = False
             try:
                 transcript_path = _normalized_state_artifact_path(
                     _assert_clean_text(state.transcript_path, field_name="transcript path", max_chars=MAX_PATH_CHARS),
                     state_path=store.path,
                 )
+                transcript_present_before = transcript_path is not None and (
+                    transcript_path.exists() or transcript_path.is_symlink()
+                )
+                transcript_sibling_path = _transcript_sibling_path(transcript_path)
+                transcript_sibling_present_before = transcript_sibling_path is not None and (
+                    transcript_sibling_path.exists() or transcript_sibling_path.is_symlink()
+                )
                 transcript_deleted = _remove_transcript_file(transcript_path)
+                if not transcript_deleted and not transcript_present_before:
+                    transcript_deleted = _transcript_artifact_missing_but_safe(transcript_path)
+                if transcript_sibling_path is not None and transcript_sibling_present_before:
+                    if not _remove_transcript_file(transcript_sibling_path):
+                        raise RuntimeError(f"transcript sibling is missing: {transcript_sibling_path}")
             except RuntimeError:
                 transcript_deleted = False
-            else:
-                sibling_path = _transcript_sibling_path(transcript_path)
-                if sibling_path is not None and (sibling_path.exists() or sibling_path.is_symlink()):
-                    try:
-                        if not _remove_transcript_file(sibling_path):
-                            raise RuntimeError(f"transcript sibling is missing: {sibling_path}")
-                    except RuntimeError:
-                        transcript_deleted = False
-            if not transcript_deleted and transcript_path is not None:
+            if (
+                not transcript_deleted
+                and transcript_path is not None
+                and not transcript_present_before
+                and not transcript_sibling_present_before
+            ):
                 transcript_deleted = _transcript_artifact_missing_but_safe(transcript_path)
                 if transcript_deleted:
                     transcript_deleted = _transcript_sibling_missing_but_safe(transcript_path)
