@@ -347,6 +347,24 @@ class OutputTest(unittest.TestCase):
             with self.assertRaisesRegex(OutputError, "failed to prepare output capture"):
                 _run_with_input(["cmd"], "input")
 
+    def test_run_with_input_wraps_capture_close_failure(self) -> None:
+        stdout_file = mock.MagicMock()
+        stdout_file.tell.return_value = 0
+        stdout_file.close.side_effect = OSError("stdout close failed")
+        stderr_file = mock.MagicMock()
+        stderr_file.tell.return_value = 0
+
+        with (
+            mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"),
+            mock.patch(
+                "speed_of_cinnamon.output.subprocess.run",
+                return_value=subprocess.CompletedProcess(["cmd"], 0, stdout=b"", stderr=b""),
+            ),
+            mock.patch("speed_of_cinnamon.output.tempfile.TemporaryFile", side_effect=[stdout_file, stderr_file]),
+        ):
+            with self.assertRaisesRegex(OutputError, "output cleanup failed"):
+                _run_with_input(["cmd"], "input")
+
     def test_run_with_input_rejects_command_error_output(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             stderr = cast(BinaryIO, kwargs["stderr"])

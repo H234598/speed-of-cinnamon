@@ -1015,7 +1015,7 @@ def _run_with_input(
             first_cleanup_error = cleanup_errors[0]
             for cleanup_error in cleanup_errors[1:]:
                 first_cleanup_error.add_note(f"{command} output cleanup failed: {cleanup_error}")
-            raise first_cleanup_error
+            raise OutputError(f"{command} output cleanup failed: {first_cleanup_error}") from first_cleanup_error
 
 
 def _command_path(command: str) -> str:
