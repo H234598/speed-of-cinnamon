@@ -3366,6 +3366,7 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
         *,
         expected_process_identity: str | None = None,
     ) -> None:
+        artifacts_safe_to_remove = process is None
         if process is not None:
             try:
                 stopped = stop_process(
@@ -3373,20 +3374,30 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
                     expected_process_identity=expected_process_identity,
                     allow_unverified_process=expected_process_identity is None,
                 )
-                if not stopped:
+                if stopped:
+                    artifacts_safe_to_remove = True
+                else:
                     try:
                         process_gone = process.poll() is not None
                     except BaseException:
                         process_gone = False
+                    artifacts_safe_to_remove = process_gone
                     if not process_gone:
                         primary_error.add_note("recorder process could not be stopped safely")
             except BaseException as cleanup_error:
                 primary_error.add_note(f"recorder process cleanup failed: {cleanup_error}")
-        try:
-            if not cleanup_started_artifacts():
-                primary_error.add_note("recorder artifacts could not be cleaned")
-        except BaseException as cleanup_error:
-            primary_error.add_note(f"recorder artifact cleanup failed: {cleanup_error}")
+                try:
+                    artifacts_safe_to_remove = process.poll() is not None
+                except BaseException:
+                    artifacts_safe_to_remove = False
+        if artifacts_safe_to_remove:
+            try:
+                if not cleanup_started_artifacts():
+                    primary_error.add_note("recorder artifacts could not be cleaned")
+            except BaseException as cleanup_error:
+                primary_error.add_note(f"recorder artifact cleanup failed: {cleanup_error}")
+        else:
+            primary_error.add_note("recorder artifacts preserved because process stop was not confirmed")
 
     def reset_recording_artifacts() -> None:
         nonlocal audio_path, log_path
