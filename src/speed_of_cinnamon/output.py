@@ -877,6 +877,12 @@ def _unlink_clipboard_state_file(path: Path) -> bool:
             return False
         if getattr(current, "st_nlink", 1) != 1:
             return False
+        try:
+            latest = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        if not _same_clipboard_lock_snapshot(latest, current):
+            return False
         os.unlink(path.name, dir_fd=parent_fd)
         os.fsync(parent_fd)
         return True
