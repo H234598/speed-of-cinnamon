@@ -75,6 +75,17 @@ class DoctorTest(unittest.TestCase):
                 self.assertFalse(status["ok"])
                 self.assertEqual(status["detail"], detail)
 
+    def test_transcriber_rejects_oversized_command_template(self) -> None:
+        status = doctor._transcriber_status(
+            {
+                "transcriber": "command",
+                "transcriber-command": "x" * (doctor.MAX_TRANSCRIBER_TEXT_CHARS + 1),
+            },
+            {},
+        )
+        self.assertFalse(status["ok"])
+        self.assertIn("command template is too large", status["detail"])
+
     def test_applet_pipeline_requires_cinnamon_session(self) -> None:
         tools = {"python3", "pw-record", "pactl", "xdotool"}
         env = {"XDG_CURRENT_DESKTOP": "GNOME", "XDG_SESSION_TYPE": "x11", "DESKTOP_SESSION": "gnome"}
@@ -772,6 +783,16 @@ class DoctorTest(unittest.TestCase):
                 status = doctor._postprocessor_status({"post-process-backend": backend, key: model})
                 self.assertFalse(status["ok"])
                 self.assertIn(detail, status["detail"])
+
+    def test_postprocessor_rejects_command_chain_oversized_template(self) -> None:
+        status = doctor._postprocessor_status(
+            {
+                "post-process-backend": "command",
+                "post-process-command": "x" * (doctor.MAX_COMMAND_LENGTH_CHARS + 1),
+            }
+        )
+        self.assertFalse(status["ok"])
+        self.assertIn("post-process command is too large", status["detail"])
 
     def test_openai_compatible_postprocessor_rejects_url_query_without_echoing_secret(self) -> None:
         tools = {"python3", "pw-record"}

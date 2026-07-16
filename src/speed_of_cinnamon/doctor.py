@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from .command_chain import MAX_COMMAND_LENGTH_CHARS
 from .http_safety import is_loopback_hostname
 from .models import default_ctranslate2_model_path, default_whisper_cpp_model_path, model_backend_for_path, model_supports_language
 from .postprocessor import (
@@ -19,7 +20,7 @@ from .postprocessor import (
     _openai_compatible_model_supports_text_polishing,
 )
 from .path_safety import assert_no_symlink_ancestors
-from .transcriber import MAX_LANGUAGE_CODE_CHARS, faster_whisper_available, normalize_backend
+from .transcriber import MAX_LANGUAGE_CODE_CHARS, MAX_TRANSCRIBER_TEXT_CHARS, faster_whisper_available, normalize_backend
 
 
 _TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -254,7 +255,7 @@ def _recorder_status(settings: Mapping[str, object], checks: Mapping[str, Check]
 def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Check]) -> dict[str, object]:
     language = _setting(settings, "language", "en")
     transcriber = _setting(settings, "transcriber", "auto").lower().replace("_", "-")
-    command_template = _setting(settings, "transcriber-command")
+    command_template = _setting(settings, "transcriber-command", limit=False)
     whisper_model = _setting(settings, "whisper-model", limit=False)
     openai_compatible_model = _setting(settings, "openai-compatible-model", DEFAULT_OPENAI_COMPATIBLE_MODEL, limit=False)
     openai_compatible_url = _setting(settings, "openai-compatible-url", DEFAULT_OPENAI_COMPATIBLE_URL, limit=False)
@@ -280,6 +281,13 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
             "value": transcriber or "auto",
             "detail": f"language is too large (max {MAX_LANGUAGE_CODE_CHARS} bytes)",
         }
+    command_detail = _doctor_text_limit(
+        command_template,
+        field_name="command template",
+        max_chars=MAX_TRANSCRIBER_TEXT_CHARS,
+    )
+    if command_detail:
+        return {"ok": False, "value": transcriber or "auto", "detail": command_detail}
     if transcriber == "auto" and command_template:
         local_model = ""
     elif whisper_model and transcriber in {"auto", "whisper-cpp", "faster-whisper"}:
@@ -506,7 +514,7 @@ def _output_status(
 
 def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
     backend = _setting(settings, "post-process-backend", "none").lower().replace("_", "-")
-    command_template = _setting(settings, "post-process-command")
+    command_template = _setting(settings, "post-process-command", limit=False)
     ollama_model = _setting(settings, "ollama-model", limit=False)
     ollama_url = _setting(settings, "ollama-url", "http://127.0.0.1:11434", limit=False)
     openai_compatible_model = _setting(
@@ -519,6 +527,13 @@ def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
     if backend in {"", "none", "off", "disabled"}:
         return {"ok": True, "value": "none", "detail": "text polishing disabled"}
     if backend in {"command", "custom"}:
+        command_detail = _doctor_text_limit(
+            command_template,
+            field_name="post-process command",
+            max_chars=MAX_COMMAND_LENGTH_CHARS,
+        )
+        if command_detail:
+            return {"ok": False, "value": "command", "detail": command_detail}
         return {
             "ok": True,
             "value": "command",
