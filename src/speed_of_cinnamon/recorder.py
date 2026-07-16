@@ -285,6 +285,13 @@ def _contains_http_header_control_chars(value: str) -> bool:
     return False
 
 
+def _is_finite_number(value: int | float) -> bool:
+    try:
+        return math.isfinite(value)
+    except (OverflowError, TypeError):
+        return False
+
+
 @dataclass(frozen=True)
 class RecordingLevel:
     ok: bool
@@ -571,7 +578,7 @@ def _parse_ffmpeg_duration(text: str) -> float:
 
 
 def _parse_silence_seconds(text: str, duration_seconds: float) -> tuple[float, float]:
-    if duration_seconds <= 0 or not math.isfinite(duration_seconds):
+    if duration_seconds <= 0 or not _is_finite_number(duration_seconds):
         return 0.0, 0.0
     intervals: list[tuple[float, float]] = []
     current_start: float | None = None
@@ -676,7 +683,7 @@ def trim_recording_leading_silence(audio_path: Path, leading_silence_seconds: fl
     if (
         not isinstance(leading_silence_seconds, (int, float))
         or isinstance(leading_silence_seconds, bool)
-        or not math.isfinite(leading_silence_seconds)
+        or not _is_finite_number(leading_silence_seconds)
     ):
         raise RecorderError("leading silence seconds must be numeric")
     try:
@@ -783,7 +790,7 @@ def trim_recording_silence(
     if (
         not isinstance(duration_seconds, (int, float))
         or isinstance(duration_seconds, bool)
-        or not math.isfinite(duration_seconds)
+        or not _is_finite_number(duration_seconds)
     ):
         raise RecorderError("silence trim duration must be numeric")
     if duration_seconds <= 0:
@@ -1695,7 +1702,7 @@ def stop_process(
         raise RecorderError("allow_unverified_process must be boolean")
     if not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool):
         raise RecorderError("timeout_seconds must be numeric")
-    if not math.isfinite(timeout_seconds):
+    if not _is_finite_number(timeout_seconds):
         raise RecorderError("timeout_seconds must be finite")
     if timeout_seconds <= 0:
         raise RecorderError("timeout_seconds must be positive")

@@ -347,7 +347,7 @@ class RecorderTest(unittest.TestCase):
             audio = Path(tmp) / "sample.wav"
             self._write_wav(audio, [0, 12000])
 
-            for value in (float("nan"), float("inf"), float("-inf")):
+            for value in (float("nan"), float("inf"), float("-inf"), 10**1000):
                 with self.subTest(value=value):
                     with self.assertRaisesRegex(RecorderError, "leading silence seconds must be numeric"):
                         trim_recording_leading_silence(audio, value)
@@ -766,7 +766,7 @@ class RecorderTest(unittest.TestCase):
             audio = Path(tmp) / "sample.wav"
             audio.write_bytes(b"audio")
 
-            for value in (float("nan"), float("inf"), float("-inf")):
+            for value in (float("nan"), float("inf"), float("-inf"), 10**1000):
                 with self.subTest(value=value):
                     with self.assertRaisesRegex(RecorderError, "silence trim duration must be numeric"):
                         trim_recording_silence(audio, duration_seconds=value)
@@ -2297,8 +2297,10 @@ Source #13
             stop_process(1234, timeout_seconds="5")  # type: ignore[arg-type]
 
     def test_stop_process_rejects_infinite_timeout(self) -> None:
-        with self.assertRaisesRegex(RecorderError, "timeout_seconds must be finite"):
-            stop_process(1234, timeout_seconds=float("inf"))
+        for value in (float("inf"), 10**1000):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(RecorderError, "timeout_seconds must be finite"):
+                    stop_process(1234, timeout_seconds=value)
 
     def test_stop_process_rejects_unboundedly_large_timeout(self) -> None:
         with mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill:
