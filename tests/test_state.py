@@ -220,6 +220,23 @@ class StateStoreTest(unittest.TestCase):
 
         self.assertEqual(close_calls, [456, 123])
 
+    @mock.patch("speed_of_cinnamon.state.os.open", wraps=os.open)
+    def test_state_lock_opens_nonblocking(self, mocked_open: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            StateStore(path).write(RecordingState())
+
+        lock_name = f".{path.name}.lock"
+        self.assertTrue(
+            any(
+                args[0] == lock_name
+                and isinstance(args[1], int)
+                and args[1] & getattr(os, "O_NONBLOCK", 0)
+                and "dir_fd" in kwargs
+                for args, kwargs in mocked_open.call_args_list
+            )
+        )
+
     def test_write_and_update_are_persistent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")

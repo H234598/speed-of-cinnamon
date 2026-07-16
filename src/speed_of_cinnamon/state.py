@@ -127,10 +127,16 @@ class StateStore:
         nofollow_flag = getattr(os, "O_NOFOLLOW", None)
         if nofollow_flag is None:
             raise RuntimeError("secure state lock open is not supported on this platform")
+        nonblock_flag = getattr(os, "O_NONBLOCK", 0)
         parent_fd = ensure_directory_without_following_symlinks(lock_path.parent, field_name="state lock directory")
         try:
             assert_fd_is_private_directory(parent_fd, field_name="state lock directory")
-            fd = os.open(lock_path.name, os.O_RDWR | os.O_CREAT | nofollow_flag, 0o600, dir_fd=parent_fd)
+            fd = os.open(
+                lock_path.name,
+                os.O_RDWR | os.O_CREAT | nofollow_flag | nonblock_flag,
+                0o600,
+                dir_fd=parent_fd,
+            )
         except RuntimeError as exc:
             try:
                 os.close(parent_fd)
