@@ -2287,6 +2287,7 @@ MyApplet.prototype = {
       process: process,
       generation: generation,
       group: String(group || "process"),
+      processGroupIdentity: this._readProcessGroupIdentity(process),
     };
     let registry = null;
     let registrationAttempted = false;
@@ -2354,6 +2355,7 @@ MyApplet.prototype = {
         this._orphanedProcesses = [];
       }
       let key = registryToken ? String(registryToken) : "";
+      let processGroupIdentity = this._readProcessGroupIdentity(process);
       let knownEntry = this._orphanedProcesses.find((entry) => entry && entry.process === process);
       if (knownEntry) {
         if (key && !knownEntry.registryToken) {
@@ -2362,6 +2364,9 @@ MyApplet.prototype = {
         if (terminationSucceeded === true) {
           knownEntry.terminationSucceeded = true;
         }
+        if (!knownEntry.processGroupIdentity && processGroupIdentity) {
+          knownEntry.processGroupIdentity = processGroupIdentity;
+        }
       } else {
         let entry = {
           process: process,
@@ -2369,6 +2374,7 @@ MyApplet.prototype = {
           group: String(group || "process"),
           registryToken: key,
           terminationSucceeded: terminationSucceeded === true,
+          processGroupIdentity: processGroupIdentity,
         };
         this._orphanedProcesses.push(entry);
         if (this._orphanedProcesses.indexOf(entry) < 0) {
@@ -2554,6 +2560,11 @@ MyApplet.prototype = {
       return false;
     }
     try {
+      let processGroupIdentity = this._findTrackedProcessGroupIdentity(process) ||
+        this._readProcessGroupIdentity(process);
+      if (processGroupIdentity && this._killProcessGroup(process, processGroupIdentity)) {
+        return true;
+      }
       if (typeof process.force_exit !== "function") {
         throw new Error("Process termination API is unavailable");
       }
@@ -2561,6 +2572,78 @@ MyApplet.prototype = {
       return true;
     } catch (error) {
       this._recordLifecycleError("process-kill", error);
+      return false;
+    }
+  },
+
+  _findTrackedProcessGroupIdentity: function(process) {
+    let registries = [
+      this._resourceRegistry && this._resourceRegistry.processes,
+      this._orphanedProcesses,
+    ];
+    for (let registry of registries) {
+      if (!registry) {
+        continue;
+      }
+      for (let token in registry) {
+        if (!Object.prototype.hasOwnProperty.call(registry, token)) {
+          continue;
+        }
+        let entry = registry[token];
+        if (entry && entry.process === process && entry.processGroupIdentity) {
+          return entry.processGroupIdentity;
+        }
+      }
+    }
+    return null;
+  },
+
+  _readProcessGroupIdentity: function(process) {
+    try {
+      if (!process || typeof process.get_identifier !== "function") {
+        return null;
+      }
+      let pid = String(process.get_identifier() || "").trim();
+      if (!/^[1-9][0-9]*$/.test(pid)) {
+        return null;
+      }
+      let contents = GLib.file_get_contents("/proc/" + pid + "/stat");
+      if (!contents || contents[0] !== true) {
+        return null;
+      }
+      let stat = ByteArray.toString(contents[1] || "");
+      let commandEnd = stat.lastIndexOf(") ");
+      if (commandEnd < 0) {
+        return null;
+      }
+      let fields = stat.slice(commandEnd + 2).trim().split(/\s+/);
+      if (fields.length <= 19 || fields[2] !== pid || fields[3] !== pid || !/^[0-9]+$/.test(fields[19])) {
+        return null;
+      }
+      return {
+        pid: pid,
+        startTime: fields[19],
+      };
+    } catch (error) {
+      return null;
+    }
+  },
+
+  _killProcessGroup: function(process, identity) {
+    try {
+      let currentIdentity = this._readProcessGroupIdentity(process);
+      if (!currentIdentity || !identity || currentIdentity.pid !== identity.pid ||
+          currentIdentity.startTime !== identity.startTime) {
+        return false;
+      }
+      let kill = this._findTrustedProgramInPath("kill");
+      if (!kill) {
+        return false;
+      }
+      let result = GLib.spawn_sync(null, [kill, "-KILL", "--", "-" + identity.pid], null, 0, null);
+      return Boolean(result && result[0] === true && result[3] === 0);
+    } catch (error) {
+      this._recordLifecycleError("process-group-kill", error);
       return false;
     }
   },
@@ -10280,6 +10363,17 @@ MyApplet.prototype = {
     return normalized;
   },
 
+  _wrapSubprocessArgs: function(args) {
+    if (!Array.isArray(args) || args.length === 0) {
+      return args;
+    }
+    let setsid = this._findTrustedProgramInPath("setsid");
+    if (!setsid) {
+      return args;
+    }
+    return [setsid, "--"].concat(args);
+  },
+
   _coerceCliTextArg: function(value, fieldName) {
     if (value !== undefined && value !== null && typeof value !== "string") {
       throw new Error(String(fieldName || "value") + " must be text");
@@ -10537,7 +10631,8 @@ MyApplet.prototype = {
           launcher.setenv(key, String(env[key] || ""), true);
         }
       }
-      process = launcher.spawnv(args);
+      let spawnArgs = this._wrapSubprocessArgs(args);
+      process = launcher.spawnv(spawnArgs);
     } catch (error) {
       this._recordLifecycleError("process-spawn", error);
       return null;

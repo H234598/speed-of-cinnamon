@@ -2146,7 +2146,7 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         launch_start = source.index("let process = null;")
-        start = source.index("process = launcher.spawnv(args);", launch_start)
+        start = source.index("process = launcher.spawnv(spawnArgs);", launch_start)
         launch_end = source.index("let generation = this.spawnGeneration;", start)
         end = source.index("let timeoutKey = \"process-timeout-\" + processToken;", launch_end)
         launch_block = source[launch_start:launch_end]
@@ -4528,6 +4528,32 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn("result === false", block)
         self.assertIn("return true;", block)
         self.assertIn("return false;", block)
+
+    def test_subprocess_tree_cleanup_uses_identity_checked_private_session(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        termination_start = source.index("_terminateProcess: function(process)")
+        termination_end = source.index("\n  _terminateAllProcesses:", termination_start)
+        termination_block = source[termination_start:termination_end]
+        self.assertIn("this._findTrackedProcessGroupIdentity(process)", termination_block)
+        self.assertIn("this._readProcessGroupIdentity(process)", termination_block)
+        self.assertIn("this._killProcessGroup(process, processGroupIdentity)", termination_block)
+        self.assertIn("process.force_exit();", termination_block)
+
+        wrap_start = source.index("_wrapSubprocessArgs: function(args)")
+        wrap_end = source.index("\n  _coerceCliTextArg:", wrap_start)
+        wrap_block = source[wrap_start:wrap_end]
+        self.assertIn('this._findTrustedProgramInPath("setsid")', wrap_block)
+        self.assertIn('return [setsid, "--"].concat(args);', wrap_block)
+
+        identity_start = source.index("_readProcessGroupIdentity: function(process)")
+        identity_end = source.index("\n  _killProcessGroup:", identity_start)
+        identity_block = source[identity_start:identity_end]
+        self.assertIn('"/proc/" + pid + "/stat"', identity_block)
+        self.assertIn('stat.lastIndexOf(") ")', identity_block)
+        self.assertIn("fields[2] !== pid || fields[3] !== pid", identity_block)
+        self.assertIn("fields[19]", identity_block)
+        self.assertIn("currentIdentity.startTime !== identity.startTime", source)
+        self.assertIn('"-" + identity.pid', source)
 
     def test_keyboard_group_cancel_notifies_active_insert_cleanup(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
