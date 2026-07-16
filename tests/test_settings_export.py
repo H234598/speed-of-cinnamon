@@ -584,6 +584,16 @@ class SettingsExportTest(unittest.TestCase):
         with self.assertRaisesRegex(SettingsExportError, "settings export alarms must be an object"):
             normalize_alarm_store(True)  # type: ignore[arg-type]
 
+    def test_normalize_alarm_store_assigns_unique_alarm_ids(self) -> None:
+        payload = normalize_alarm_store({
+            "alarms": [
+                {"id": "meeting", "hour": 9, "minute": 0, "days": ["mon"]},
+                {"id": "meeting", "hour": 10, "minute": 0, "days": ["mon"]},
+            ],
+        })
+
+        self.assertEqual([alarm["id"] for alarm in payload["alarms"]], ["meeting", "meeting-2"])
+
     def test_read_export_rejects_boolean_numeric_setting(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"

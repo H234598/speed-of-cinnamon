@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 
 from . import __version__
 from .alarms import MAX_ALARM_COUNT, STORE_VERSION as ALARM_STORE_VERSION
+from .alarms import _dedupe_alarm_ids
 from .alarms import normalize_alarm
 from .http_safety import is_loopback_hostname
 from .paths import APP_ID
@@ -485,7 +486,7 @@ def normalize_alarm_store(value: Any) -> dict[str, Any]:
             continue
     return {
         "version": ALARM_STORE_VERSION,
-        "alarms": normalized_alarms,
+        "alarms": _dedupe_alarm_ids(normalized_alarms),
         "last_checked_at": last_checked_at,
     }
 
