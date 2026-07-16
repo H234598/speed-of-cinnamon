@@ -8342,6 +8342,62 @@ class CliTest(unittest.TestCase):
             self.assertEqual(final_state.audio_path, str(audio))
             self.assertEqual(final_state.log_path, str(log))
 
+    def test_finalize_preserves_cleanup_backups_when_original_becomes_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="finalizing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=False)
+
+            def replace_with_dangling_symlink(path_value: str, **_kwargs: object) -> bool:
+                path = Path(path_value)
+                path.unlink()
+                path.symlink_to(tmp_path / f"missing-{path.name}")
+                return False
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch(
+                    "speed_of_cinnamon.cli.detect_silent_recording",
+                    return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent"),
+                ),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("skip trim")),
+                mock.patch("speed_of_cinnamon.cli.reencode_recording_to_flac", side_effect=cli.RecorderError("skip encode")),
+                mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.remove_file", side_effect=replace_with_dangling_symlink),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "recording cleanup original changed before rollback"):
+                    cli.finalize_recording(args, store, store.read())
+
+            self.assertTrue(audio.is_symlink())
+            self.assertTrue(log.is_symlink())
+            self.assertEqual(len(list(recordings_root.glob(".cleanup.*.bak"))), 2)
+
+    def test_cleanup_backup_copy_rejects_symlink_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            outside = root / "outside.wav"
+            source = root / "recording.wav"
+            backup = root / ".cleanup.recording.bak"
+            outside.write_bytes(b"outside")
+            source.symlink_to(outside)
+
+            with self.assertRaises(OSError):
+                cli._copy_recording_artifact_to_backup(source, backup, expected_stat=source.lstat())
+
+            self.assertFalse(backup.exists())
+
     def test_finalize_removes_partial_cleanup_backup_when_backup_copy_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -8373,7 +8429,7 @@ class CliTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="transcript"),
                 mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True),
                 mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
-                mock.patch("speed_of_cinnamon.cli.shutil.copy2", side_effect=partial_copy),
+                mock.patch("speed_of_cinnamon.cli._copy_recording_artifact_to_backup", side_effect=partial_copy),
             ):
                 with self.assertRaisesRegex(RuntimeError, "backup storage failed"):
                     cli.finalize_recording(args, store, store.read())
@@ -8416,7 +8472,7 @@ class CliTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="transcript"),
                 mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True),
                 mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
-                mock.patch("speed_of_cinnamon.cli.shutil.copy2", side_effect=copy_first_then_fail),
+                mock.patch("speed_of_cinnamon.cli._copy_recording_artifact_to_backup", side_effect=copy_first_then_fail),
             ):
                 with self.assertRaisesRegex(RuntimeError, "later backup storage failed"):
                     cli.finalize_recording(args, store, store.read())
