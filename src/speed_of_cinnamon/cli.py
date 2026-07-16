@@ -1766,6 +1766,13 @@ def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) ->
                 if not _remove_transcript_file(encrypted_sibling):
                     raise RuntimeError(f"encrypted transcript sibling is missing: {encrypted_sibling}")
             except RuntimeError as exc:
+                try:
+                    _rollback_plaintext_transcript_after_sibling_cleanup_failure(path)
+                except BaseException as rollback_exc:
+                    if isinstance(rollback_exc, Exception):
+                        raise RuntimeError(f"{exc}; {rollback_exc}") from exc
+                    exc.add_note(f"plaintext transcript rollback failed: {rollback_exc}")
+                    raise exc.with_traceback(exc.__traceback__)
                 raise RuntimeError(
                     f"failed to remove encrypted transcript sibling after plaintext storage: {encrypted_sibling}"
                 ) from exc
@@ -1801,6 +1808,13 @@ def _remove_plaintext_transcript_sibling_after_encryption(storage_path: Path, en
         return
     if not _remove_transcript_file(plaintext_path):
         raise RuntimeError(f"failed to remove plaintext transcript artifact after encryption: {plaintext_path}")
+
+
+def _rollback_plaintext_transcript_after_sibling_cleanup_failure(path: Path) -> None:
+    if not path.exists() and not path.is_symlink():
+        return
+    if not _remove_transcript_file(path) and (path.exists() or path.is_symlink()):
+        raise RuntimeError(f"failed to roll back plaintext transcript artifact: {path}")
 
 
 def _remove_plaintext_export_sibling_after_encryption(storage_path: Path, encrypted_path: Path) -> None:

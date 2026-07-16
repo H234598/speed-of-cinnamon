@@ -1642,6 +1642,34 @@ class CliTest(unittest.TestCase):
         self.assertEqual(plaintext, "new plaintext\n")
         self.assertFalse(encrypted_transcript.exists())
 
+    def test_stored_plaintext_transcript_removes_new_file_when_sibling_cleanup_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_root = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_root.mkdir(parents=True)
+            transcript = transcript_root / "input.txt"
+            encrypted_transcript = Path(f"{transcript}.socenc")
+            encrypted_transcript.write_bytes(b"old encrypted transcript")
+            args = argparse.Namespace(artifact_encryption="off")
+            real_remove_transcript = cli._remove_transcript_file
+
+            def fail_encrypted_sibling_cleanup(path: Path) -> bool:
+                if path == encrypted_transcript:
+                    return False
+                return real_remove_transcript(path)
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}, clear=False),
+                mock.patch.object(cli, "_remove_transcript_file", side_effect=fail_encrypted_sibling_cleanup),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "failed to remove encrypted transcript sibling"):
+                    cli._write_stored_transcript(transcript, "new plaintext\n", args)
+
+            plaintext_exists = transcript.exists()
+            encrypted_exists = encrypted_transcript.exists()
+
+        self.assertFalse(plaintext_exists)
+        self.assertTrue(encrypted_exists)
+
     def test_stored_transcript_reads_case_insensitive_encrypted_suffix(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             transcript = Path(tmp) / "recorded.txt"
