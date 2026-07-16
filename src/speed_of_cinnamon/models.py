@@ -1442,7 +1442,7 @@ def _model_file_sha1s(model: ModelSpec) -> dict[str, str]:
     for checksum in expected_hashes.values():
         if not _is_valid_checksum(checksum):
             raise ModelError(f"model catalog entry {model.name} has invalid per-file checksum")
-    return expected_hashes
+    return {filename: checksum.lower() for filename, checksum in expected_hashes.items()}
 
 
 def _download_url_to_file(url: str, tmp_dir: Path, size_limit: int, model_name: str, *, prefix: str) -> tuple[Path, int]:

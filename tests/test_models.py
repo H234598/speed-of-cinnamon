@@ -1414,6 +1414,27 @@ class ModelsTest(unittest.TestCase):
             (path / "model.bin").write_bytes(b"tampered")
             self.assertEqual(models.default_ctranslate2_model_path(), "")
 
+    def test_ctranslate2_verification_accepts_uppercase_file_checksum(self) -> None:
+        data = b"config"
+        spec = models.ModelSpec(
+            name="ct2-uppercase-checksum",
+            filename="ct2-uppercase-checksum",
+            size="1 KiB",
+            sha1="",
+            description="ct2 uppercase checksum",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-uppercase-checksum",
+            files=("config.json",),
+            file_sha1s=(("config.json", hashlib.sha1(data).hexdigest().upper()),),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "model"
+            path.mkdir()
+            (path / "config.json").write_bytes(data)
+
+            self.assertTrue(models._model_is_verified(spec, path))
+
     def test_download_model_limits_multifile_downloads_by_remaining_total_size(self) -> None:
         spec = models.ModelSpec(
             name="ct2-aggregate-limit",
