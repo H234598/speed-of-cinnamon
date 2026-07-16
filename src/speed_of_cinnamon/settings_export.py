@@ -28,6 +28,7 @@ from .path_safety import (
 EXPORT_VERSION = 2
 MAX_SETTINGS_EXPORT_BYTES = 1_000_000
 MAX_SETTINGS_TEXT_CHARS = 4_096
+MAX_SETTINGS_URL_CHARS = 2_048
 MAX_SETTINGS_EXPORT_PATH_CHARS = 4_096
 MAX_SETTINGS_EXPORT_JSON_DEPTH = 24
 MAX_SETTINGS_EXPORT_JSON_TOKENS = 20_000
@@ -380,19 +381,26 @@ def _read_text_capped_without_following_symlinks(path: Path) -> str:
                     raise
 
 
-def _sanitize_text_field(value: object, *, field_name: str) -> str:
+def _sanitize_text_field(
+    value: object,
+    *,
+    field_name: str,
+    max_chars: int | None = None,
+) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         raise SettingsExportError(f"{field_name} must be text")
+    if max_chars is None:
+        max_chars = MAX_SETTINGS_TEXT_CHARS
     text = str(value or "")
     if _contains_escaped_null(text):
         raise SettingsExportError(f"{field_name} contains invalid null byte")
     if _contains_http_header_control_chars(text):
         raise SettingsExportError(f"{field_name} contains invalid control character")
     text = text.strip()
-    if len(text) > MAX_SETTINGS_TEXT_CHARS:
+    if len(text) > max_chars:
         raise SettingsExportError(f"{field_name} is too long")
-    if _utf8_byte_count(text, field_name=field_name) > MAX_SETTINGS_TEXT_CHARS:
-        raise SettingsExportError(f"{field_name} is too long (max {MAX_SETTINGS_TEXT_CHARS} bytes)")
+    if _utf8_byte_count(text, field_name=field_name) > max_chars:
+        raise SettingsExportError(f"{field_name} is too long (max {max_chars} bytes)")
     return text
 
 
@@ -461,7 +469,8 @@ def normalize_setting(key: str, value: Any) -> Any:
                 )
             return parsed
         return parsed
-    text = _sanitize_text_field(value, field_name=f"setting {key}")
+    text_max_chars = MAX_SETTINGS_URL_CHARS if key in {"ollama-url", "openai-compatible-url"} else MAX_SETTINGS_TEXT_CHARS
+    text = _sanitize_text_field(value, field_name=f"setting {key}", max_chars=text_max_chars)
     _reject_secret_bearing_url_setting(key, text)
     allowed_values = _ALLOWED_SETTING_TEXT_VALUES.get(key)
     if allowed_values is not None and text not in allowed_values:

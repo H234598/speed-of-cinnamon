@@ -13,6 +13,7 @@ from speed_of_cinnamon.settings_export import (
     MAX_SETTINGS_EXPORT_JSON_DEPTH,
     MAX_SETTINGS_EXPORT_JSON_NODES,
     MAX_SETTINGS_TEXT_CHARS,
+    MAX_SETTINGS_URL_CHARS,
     MAX_SETTINGS_EXPORT_PATH_CHARS,
     MAX_TYPING_DELAY_MS,
     MAX_ALARM_COUNT,
@@ -361,6 +362,10 @@ class SettingsExportTest(unittest.TestCase):
             build_export({"openai-compatible-url": "ftp://127.0.0.1:8000/v1"})
         with self.assertRaisesRegex(SettingsExportError, "openai-compatible-url has invalid port"):
             build_export({"openai-compatible-url": "https://api.example.test:bad/v1"})
+
+        long_url = "http://127.0.0.1:11434/" + ("x" * MAX_SETTINGS_URL_CHARS)
+        with self.assertRaisesRegex(SettingsExportError, "setting ollama-url is too long"):
+            build_export({"ollama-url": long_url})
 
     def test_build_export_rejects_unknown_mode_values(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "setting insert-method has unsupported value"):
