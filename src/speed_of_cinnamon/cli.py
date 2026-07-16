@@ -323,6 +323,22 @@ def _finalization_lock_identity_for_pid(pid: int) -> str | None:
     return f"{boot_id}:{start_time}"
 
 
+def _process_is_zombie(pid: int) -> bool:
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").strip()
+        close = raw.rindex(")")
+        rest = raw[close + 2 :].split()
+    except (OSError, ValueError):
+        return False
+    return bool(rest and rest[0] in {"Z", "X", "x"})
+
+
+def _process_is_running(pid: int) -> bool:
+    return process_is_alive(pid) and not _process_is_zombie(pid)
+
+
 def _read_finalization_lock_identity(lock_path: Path) -> str | None:
     try:
         raw = read_text_without_following_symlinks(
@@ -443,7 +459,7 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                     return None
                 owner_pid = _read_finalization_lock_pid(lock_path)
                 owner_identity = _read_finalization_lock_identity(lock_path)
-                if owner_pid is not None and process_is_alive(owner_pid):
+                if owner_pid is not None and _process_is_running(owner_pid):
                     if owner_identity is None:
                         return None
                     owner_current_identity = _finalization_lock_identity_for_pid(owner_pid)
@@ -1447,7 +1463,7 @@ def _transient_transcript_owner_is_active(path: Path) -> bool:
     owner_pid, owner_identity = _read_transient_transcript_owner(path)
     if owner_pid is None:
         return False
-    if not process_is_alive(owner_pid):
+    if not _process_is_running(owner_pid):
         return False
     if owner_identity is None:
         return True
@@ -3130,7 +3146,7 @@ def _is_finalization_lock_active(state_path: Path) -> bool:
     owner_pid = _read_finalization_lock_pid(lock_path)
     if not owner_pid:
         return True
-    if not process_is_alive(owner_pid):
+    if not _process_is_running(owner_pid):
         return False
     owner_identity = _read_finalization_lock_identity(lock_path)
     if owner_identity is None:

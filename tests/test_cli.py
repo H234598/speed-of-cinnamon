@@ -7332,6 +7332,41 @@ class CliTest(unittest.TestCase):
 
         self.assertIsNone(acquired)
 
+    def test_finalization_lock_reclaims_zombie_owner(self) -> None:
+        process = subprocess.Popen(["true"])
+        try:
+            stat_path = Path(f"/proc/{process.pid}/stat")
+            deadline = time.monotonic() + 2
+            process_state = ""
+            while time.monotonic() < deadline:
+                try:
+                    raw = stat_path.read_text(encoding="ascii")
+                    process_state = raw.rsplit(")", 1)[1].split()[0]
+                except OSError:
+                    break
+                if process_state == "Z":
+                    break
+                time.sleep(0.01)
+            self.assertEqual(process_state, "Z")
+
+            with tempfile.TemporaryDirectory() as tmp:
+                state_file = Path(tmp) / "state.json"
+                lock_path = cli._finalization_lock_path(state_file)
+                identity = cli._finalization_lock_identity_for_pid(process.pid)
+                self.assertIsNotNone(identity)
+                lock_path.write_text(f"{process.pid}\n{identity}\n", encoding="ascii")
+                lock_path.chmod(0o600)
+
+                acquired = cli._acquire_finalization_lock(state_file)
+                try:
+                    self.assertEqual(acquired, lock_path)
+                finally:
+                    cli._release_finalization_lock(acquired)
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+
     @mock.patch("speed_of_cinnamon.cli.os.open", wraps=os.open)
     def test_finalization_lock_uses_secure_directory_fd_open(self, mocked_open: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:
