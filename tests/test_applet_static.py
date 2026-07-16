@@ -4527,7 +4527,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("process.force_exit();", block)
         self.assertNotIn("get_if_exited", block)
         self.assertNotIn("result === false", block)
-        self.assertIn('if (!processGroupIdentity && typeof process.get_identifier === "function")', block)
+        self.assertIn('let hasIdentifier = typeof process.get_identifier === "function";', block)
+        self.assertIn('let processIdentifier = hasIdentifier ? String(process.get_identifier() || "").trim() : "";', block)
+        self.assertIn('if (hasIdentifier && !processIdentifier) {\n        return true;', block)
+        self.assertIn('if (!processGroupIdentity && hasIdentifier)', block)
         self.assertIn("return true;", block)
         self.assertIn("return false;", block)
 

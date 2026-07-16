@@ -2560,8 +2560,13 @@ MyApplet.prototype = {
       return false;
     }
     try {
+      let hasIdentifier = typeof process.get_identifier === "function";
+      let processIdentifier = hasIdentifier ? String(process.get_identifier() || "").trim() : "";
+      if (hasIdentifier && !processIdentifier) {
+        return true;
+      }
       let processGroupIdentity = this._findTrackedProcessGroupIdentity(process);
-      if (!processGroupIdentity && typeof process.get_identifier === "function") {
+      if (!processGroupIdentity && hasIdentifier) {
         return false;
       }
       processGroupIdentity = processGroupIdentity || this._readProcessGroupIdentity(process);
