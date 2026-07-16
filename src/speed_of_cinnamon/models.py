@@ -1866,7 +1866,7 @@ def _restore_model_file_backup(
             expected_target_stat,
             field_name="model restore target",
         )
-    elif path.exists():
+    elif path.exists() or path.is_symlink():
         raise ModelError(f"model restore target must be absent: {path}")
     _replace_model_sibling_path(backup_path, path, root, field_name="model backup path")
 
@@ -2080,14 +2080,10 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
                     )
                 except (OSError, ModelError) as cleanup_exc:
                     raise ModelError(f"failed to remove partially installed model file after download failure: {path}") from cleanup_exc
-        elif backup_path is not None and not path.exists():
+        elif backup_path is not None and not path.exists() and not path.is_symlink():
             try:
                 _restore_model_file_backup(path, backup_path)
             except (OSError, ModelError) as restore_exc:
-                try:
-                    _remove_model_backup_path(backup_path)
-                except (OSError, ModelError):
-                    pass
                 raise ModelError(f"failed to restore existing model file after download failure: {path}") from restore_exc
             if previous_cache_entry_exists and previous_cache_entry is not None:
                 _model_checksum_cache[str(path)] = dict(previous_cache_entry)
