@@ -331,9 +331,22 @@ def _read_text_capped_without_following_symlinks(path: Path) -> str:
         file_stat = os.fstat(fd)
         if file_stat.st_size > MAX_SETTINGS_EXPORT_BYTES:
             raise SettingsExportError(f"settings export is too large: {path}")
-        with os.fdopen(fd, "r", encoding="utf-8") as handle:
-            fd = -1
+        handle = os.fdopen(fd, "r", encoding="utf-8")
+        fd = -1
+        handle_primary_error: BaseException | None = None
+        try:
             return handle.read(MAX_SETTINGS_EXPORT_BYTES + 1)
+        except BaseException as exc:
+            handle_primary_error = exc
+            raise
+        finally:
+            try:
+                handle.close()
+            except BaseException as cleanup_error:
+                if handle_primary_error is not None:
+                    _note_cleanup_failure(handle_primary_error, cleanup_error)
+                else:
+                    raise
     except BaseException as exc:
         primary_error = exc
         raise
@@ -582,7 +595,8 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
         except (OSError, ValueError) as exc:
             raise OSError("failed to open settings export temporary file") from exc
         temp_fd = None
-        with handle:
+        handle_primary_error: BaseException | None = None
+        try:
             try:
                 os.fchmod(handle.fileno(), 0o600)
             except OSError:
@@ -591,6 +605,17 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
             handle.flush()
             os.fsync(handle.fileno())
             temporary_stat = os.fstat(handle.fileno())
+        except BaseException as exc:
+            handle_primary_error = exc
+            raise
+        finally:
+            try:
+                handle.close()
+            except BaseException as cleanup_error:
+                if handle_primary_error is not None:
+                    _note_cleanup_failure(handle_primary_error, cleanup_error)
+                else:
+                    raise
         if temporary_stat is None:
             raise OSError("settings export temporary file identity is unavailable")
         try:

@@ -772,6 +772,43 @@ class SettingsExportTest(unittest.TestCase):
 
         self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_write_export_preserves_write_error_when_temporary_handle_close_fails(self) -> None:
+        class _Handle:
+            def fileno(self) -> int:
+                return 123
+
+            def write(self, _payload: str) -> int:
+                raise OSError("write failed")
+
+            def flush(self) -> None:
+                return None
+
+            def close(self) -> None:
+                raise OSError("close failed")
+
+        with (
+            mock.patch.object(settings_export_module, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(settings_export_module, "assert_fd_is_private_directory"),
+            mock.patch.object(settings_export_module.os, "stat", side_effect=FileNotFoundError),
+            mock.patch.object(
+                settings_export_module,
+                "_create_private_temp_file",
+                return_value=(123, ".settings-export.json.tmp"),
+            ),
+            mock.patch.object(settings_export_module.os, "fdopen", return_value=_Handle()),
+            mock.patch.object(settings_export_module.os, "fchmod"),
+            mock.patch.object(settings_export_module.os, "unlink"),
+            mock.patch.object(settings_export_module.os, "fsync"),
+            mock.patch.object(settings_export_module.os, "close"),
+        ):
+            with self.assertRaisesRegex(SettingsExportError, "failed to write settings export") as caught:
+                write_export(Path("/probe/settings-export.json"), {"language": "en"})
+
+        self.assertIsNotNone(caught.exception.__cause__)
+        self.assertIn("write failed", str(caught.exception.__cause__))
+        self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertIn("close failed", "\n".join(caught.exception.__notes__))
+
     def test_read_export_preserves_fd_validation_error_when_fd_close_fails(self) -> None:
         with (
             mock.patch.object(settings_export_module, "open_file_without_following_symlinks", return_value=123),
@@ -786,6 +823,26 @@ class SettingsExportTest(unittest.TestCase):
                 settings_export_module._read_text_capped_without_following_symlinks(Path("/settings.json"))
 
         self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
+
+    def test_read_export_preserves_read_interrupt_when_handle_close_fails(self) -> None:
+        class _Handle:
+            def read(self, _size: int = -1) -> str:
+                raise KeyboardInterrupt("read interrupted")
+
+            def close(self) -> None:
+                raise OSError("close failed")
+
+        with (
+            mock.patch.object(settings_export_module, "open_file_without_following_symlinks", return_value=123),
+            mock.patch.object(settings_export_module, "assert_fd_is_regular_private_file"),
+            mock.patch.object(settings_export_module.os, "fstat", return_value=mock.Mock(st_size=0)),
+            mock.patch.object(settings_export_module.os, "fdopen", return_value=_Handle()),
+        ):
+            with self.assertRaisesRegex(KeyboardInterrupt, "read interrupted") as caught:
+                settings_export_module._read_text_capped_without_following_symlinks(Path("/settings.json"))
+
+        self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertIn("close failed", "\n".join(caught.exception.__notes__))
 
     def test_read_export_preserves_fd_validation_error_when_fd_close_is_interrupted(self) -> None:
         with (
