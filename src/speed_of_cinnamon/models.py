@@ -1430,7 +1430,7 @@ def _model_is_downloaded(model: ModelSpec, path: Path) -> bool:
             if not _model_file_is_regular(file_path):
                 return False
         return True
-    return stat_module.S_ISREG(path_stat.st_mode)
+    return _model_file_is_regular(path)
 
 
 def _model_file_is_regular(path: Path) -> bool:

@@ -2057,6 +2057,34 @@ class ModelsTest(unittest.TestCase):
 
         self.assertFalse(status["downloaded"])
 
+    def test_single_file_model_status_rejects_hardlink_without_raising(self) -> None:
+        data = b"single model"
+        spec = models.ModelSpec(
+            name="single-hardlink-status",
+            filename="ggml-single-hardlink-status.bin",
+            size="2 KiB",
+            sha1=hashlib.sha1(data).hexdigest(),
+            description="single-file hardlink status",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+        ):
+            path = models.model_path(spec)
+            outside = Path(tmp) / "outside-model.bin"
+            outside.write_bytes(data)
+            path.parent.mkdir(parents=True)
+            try:
+                os.link(outside, path)
+            except OSError as exc:
+                self.skipTest(f"hardlinks unavailable: {exc}")
+
+            status = models.model_status(spec, verify=True)
+
+        self.assertFalse(status["downloaded"])
+        self.assertFalse(status["verified"])
+
     def test_sha1_file_rejects_symlinked_intermediate_model_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
