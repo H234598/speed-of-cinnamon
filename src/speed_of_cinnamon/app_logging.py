@@ -12,6 +12,7 @@ import string
 import unicodedata
 import time
 import zlib
+from collections.abc import Callable
 from itertools import islice
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -419,9 +420,13 @@ def sanitize_value(key: str, value: object) -> object:
     return sanitize_text(str(value), max_chars=MAX_LOG_FIELD_CHARS)
 
 
-def _sub_with_ignored_projection(text: str, pattern: re.Pattern[str]) -> str:
+def _sub_with_ignored_projection(
+    text: str,
+    pattern: re.Pattern[str],
+    replacement: str | Callable[[re.Match[str]], str] = "[redacted]",
+) -> str:
     if not any(unicodedata.category(char) in _LOG_MATCH_IGNORE_CATEGORIES for char in text):
-        return pattern.sub("[redacted]", text)
+        return pattern.sub(replacement, text)
     normalized: list[str] = []
     index_map: list[int] = []
     for source_index, char in enumerate(text):
@@ -449,7 +454,7 @@ def _sub_with_ignored_projection(text: str, pattern: re.Pattern[str]) -> str:
         if original_start < cursor:
             original_start = cursor
         pieces.append(text[cursor:original_start])
-        pieces.append("[redacted]")
+        pieces.append(replacement(match) if callable(replacement) else replacement)
         cursor = original_end
     if not pieces:
         return text
@@ -460,8 +465,23 @@ def _sub_with_ignored_projection(text: str, pattern: re.Pattern[str]) -> str:
 def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         return "[invalid]"
-    redacted_value = _sub_with_ignored_projection(value, _OPENAI_KEY_RE)
-    redacted_value = _sub_with_ignored_projection(redacted_value, _SHORT_API_KEY_RE)
+    if any(unicodedata.category(char) in _LOG_MATCH_IGNORE_CATEGORIES for char in value):
+        redacted_value = _sub_with_ignored_projection(
+            value,
+            _TOKEN_RE,
+            lambda match: f"{match.group(1)}=[redacted]",
+        )
+        redacted_value = _sub_with_ignored_projection(
+            redacted_value,
+            _BARE_CREDENTIAL_RE,
+            lambda match: f"{match.group(1)}=[redacted]",
+        )
+        redacted_value = _sub_with_ignored_projection(redacted_value, _BEARER_RE, "Bearer [redacted]")
+        redacted_value = _sub_with_ignored_projection(redacted_value, _OPENAI_KEY_RE)
+        redacted_value = _sub_with_ignored_projection(redacted_value, _SHORT_API_KEY_RE)
+    else:
+        redacted_value = _OPENAI_KEY_RE.sub("[redacted]", value)
+        redacted_value = _SHORT_API_KEY_RE.sub("[redacted]", redacted_value)
     if redacted_value != value:
         value = redacted_value
     if (

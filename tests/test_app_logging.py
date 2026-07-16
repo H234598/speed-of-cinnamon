@@ -131,11 +131,20 @@ class AppLoggingTest(unittest.TestCase):
         self.assertEqual(app_logging.sanitize_text("sess-standalone", max_chars=120), "[redacted]")
 
     def test_sanitize_text_redacts_token_like_values_with_ignored_unicode(self) -> None:
-        for value in ("s\u200bk-secret-token", "sk-\u200bsecret-token", "s\u0308k-secret-token"):
+        for value in (
+            "s\u200bk-secret-token",
+            "sk-\u200bsecret-token",
+            "s\u0308k-secret-token",
+            "t\u200boken abc123",
+            "pass\u200bword: hunter2",
+            "api\u200b key abc123",
+        ):
             with self.subTest(value=repr(value)):
                 sanitized = app_logging.sanitize_text(value, max_chars=120)
 
-                self.assertEqual(sanitized, "[redacted]")
+                self.assertNotIn("abc123", sanitized)
+                self.assertNotIn("hunter2", sanitized)
+                self.assertNotIn("secret-token", sanitized)
 
     def test_sanitize_text_redacts_common_structured_credentials(self) -> None:
         for message in (
