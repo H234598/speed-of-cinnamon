@@ -1581,6 +1581,38 @@ class AppLoggingTest(unittest.TestCase):
             self.assertTrue(old_daily.exists())
             self.assertTrue(any(stat_module.S_ISDIR(mode) for mode in fsync_modes))
 
+    def test_maintain_logs_restores_archive_after_activation_fsync_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            old_archive = log_dir / "speed-of-cinnamon-2026-05.log.gz"
+            old_daily = log_dir / "speed-of-cinnamon-2026-05-30.log"
+            old_daily.write_text("may-30\n", encoding="utf-8")
+            old_daily.chmod(0o600)
+            with gzip.open(old_archive, "wt", encoding="utf-8") as handle:
+                handle.write("legacy\n")
+            old_archive.chmod(0o600)
+            real_fsync = app_logging.os.fsync
+            directory_syncs = 0
+
+            def fail_activation_fsync(fd: int) -> None:
+                nonlocal directory_syncs
+                if stat_module.S_ISDIR(os.fstat(fd).st_mode):
+                    directory_syncs += 1
+                    if directory_syncs == 2:
+                        raise OSError("activation fsync failed")
+                real_fsync(fd)
+
+            with mock.patch.object(app_logging.os, "fsync", side_effect=fail_activation_fsync):
+                with self.assertRaisesRegex(OSError, "activation fsync failed"):
+                    app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
+
+            self.assertEqual(directory_syncs, 4)
+            self.assertTrue(old_archive.exists())
+            with gzip.open(old_archive, "rt", encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "legacy\n")
+            self.assertTrue(old_daily.exists())
+            self.assertFalse(list(log_dir.glob("*.backup")))
+
     def test_maintain_logs_restores_archive_when_backup_unlink_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

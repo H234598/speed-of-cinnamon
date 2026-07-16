@@ -1042,6 +1042,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
                 field_name="monthly log archive",
             )
             temp_name = ""
+            archive_activation_stat = os.stat(archive.name, dir_fd=parent_fd, follow_symlinks=False)
             os.fsync(parent_fd)
             source_cleanup_errors: list[BaseException] = []
             for path in paths:
