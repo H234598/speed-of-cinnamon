@@ -248,9 +248,22 @@ def _read_finalization_lock_pid(lock_path: Path) -> int | None:
         assert_no_symlink_ancestors(lock_path, field_name="finalization lock")
         fd = os.open(str(lock_path), os.O_RDONLY | nofollow_flag | nonblock_flag)
         assert_fd_is_regular_private_file(fd, field_name="finalization lock", require_private_mode=True)
-        with os.fdopen(fd, "rb") as handle:
-            fd = None
+        handle = os.fdopen(fd, "rb")
+        fd = None
+        read_error: BaseException | None = None
+        try:
             raw = handle.read(512)
+        except BaseException as exc:
+            read_error = exc
+            raise
+        finally:
+            try:
+                handle.close()
+            except BaseException as cleanup_error:
+                if read_error is not None:
+                    read_error.add_note(f"finalization lock cleanup failed: {cleanup_error}")
+                else:
+                    raise
     except (OSError, RuntimeError, ValueError):
         if fd is not None:
             try:

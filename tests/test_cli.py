@@ -745,6 +745,19 @@ class CliTest(unittest.TestCase):
             with self.assertRaises(OSError):
                 os.fstat(target_fds[0])
 
+    def test_finalization_lock_pid_preserves_read_interrupt_when_handle_close_fails(self) -> None:
+        handle = mock.MagicMock()
+        handle.read.side_effect = KeyboardInterrupt("lock read interrupted")
+        handle.close.side_effect = OSError("lock close failed")
+
+        with (
+            mock.patch.object(cli.os, "open", return_value=123),
+            mock.patch.object(cli, "assert_fd_is_regular_private_file"),
+            mock.patch.object(cli.os, "fdopen", return_value=handle),
+        ):
+            with self.assertRaisesRegex(KeyboardInterrupt, "lock read interrupted"):
+                cli._read_finalization_lock_pid(Path("/probe/.state.finalizing"))
+
     def test_finalization_lock_pid_closes_descriptor_when_fdopen_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ".state.finalizing"
