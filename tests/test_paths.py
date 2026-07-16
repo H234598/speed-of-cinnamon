@@ -121,6 +121,16 @@ class PathsTest(unittest.TestCase):
 
         self.assertIn("runtime directory cleanup failed", "\n".join(caught.exception.__notes__))
 
+    def test_ensure_runtime_dirs_reports_successful_close_failure(self) -> None:
+        with (
+            mock.patch.object(paths, "ensure_directory_without_following_symlinks", return_value=123),
+            mock.patch.object(paths.os, "fchmod"),
+            mock.patch.object(paths, "assert_fd_is_private_directory"),
+            mock.patch.object(paths.os, "close", side_effect=OSError("close failed")),
+        ):
+            with self.assertRaisesRegex(OSError, "close failed"):
+                paths.ensure_runtime_dirs()
+
     def test_safe_home_path_falls_back_when_home_is_symlinked(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
