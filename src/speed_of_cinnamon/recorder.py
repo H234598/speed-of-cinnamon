@@ -375,7 +375,19 @@ def _decode_ffmpeg_output(payload: object) -> str:
 def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
     try:
         if process.poll() is not None:
-            return True
+            group_live = process_group_has_live_processes(process.pid)
+            if group_live is not True:
+                return group_live is False
+            try:
+                raw = Path(f"/proc/{process.pid}/stat").read_text(encoding="ascii").strip()
+                close = raw.rindex(")")
+                process_state = raw[close + 2 :].split()[0]
+            except FileNotFoundError:
+                process_state = "gone"
+            except (OSError, IndexError, ValueError):
+                return False
+            if process_state not in {"Z", "X", "x", "gone"}:
+                return False
     except (OSError, ValueError):
         return False
     try:

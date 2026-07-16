@@ -140,6 +140,35 @@ class RecorderTest(unittest.TestCase):
         mocked_killpg.assert_not_called()
         process.communicate.assert_called_once_with(timeout=None)
 
+    def test_reaped_process_group_cleanup_kills_live_descendants(self) -> None:
+        process = subprocess.Popen(
+            ["/bin/sh", "-c", "sleep 30 & child=$!; echo $child; exit 0"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        child_pid = int(process.stdout.readline())
+        process.wait()
+
+        def child_is_live() -> bool:
+            stat_fields = recorder_module._recording_process_stat_fields(child_pid)
+            return stat_fields is not None and stat_fields[0] not in {"Z", "X", "x"}
+
+        try:
+            self.assertTrue(child_is_live())
+            self.assertTrue(recorder_module._terminate_recorder_process_group(process))
+            deadline = time.monotonic() + 2
+            while child_is_live() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertFalse(child_is_live())
+        finally:
+            try:
+                if child_is_live():
+                    os.kill(child_pid, 9)
+            except ProcessLookupError:
+                pass
+            process.communicate()
+
     def _write_wav(self, path: Path, samples: list[int]) -> None:
         with wave.open(str(path), "wb") as handle:
             handle.setnchannels(1)
