@@ -1242,6 +1242,29 @@ class ArtifactCryptoTest(unittest.TestCase):
 
         self.assertTrue(getattr(fake_proc_holder["proc"], "killed"))
 
+    def test_secret_tool_stream_cleanup_failure_is_controlled(self) -> None:
+        class BrokenStream:
+            def close(self) -> None:
+                raise OSError("stream close failed")
+
+        class FakePopen:
+            def __init__(self, command: list[str], **kwargs: object) -> None:
+                self.command = command
+                self.stdin = None
+                self.stdout = BrokenStream()
+                self.stderr = BrokenStream()
+
+            def wait(self, timeout: int | None = None) -> int:
+                return 0
+
+        with (
+            mock.patch("speed_of_cinnamon.artifact_crypto._secret_tool_path", return_value="/usr/bin/secret-tool"),
+            mock.patch("speed_of_cinnamon.artifact_crypto.subprocess.Popen", side_effect=FakePopen),
+            mock.patch("speed_of_cinnamon.artifact_crypto._read_secret_tool_pipes_bounded", return_value=(b"", b"")),
+        ):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "streams could not be closed safely"):
+                artifact_crypto._run_secret_tool(["lookup", "application", "test"])
+
     def test_keyring_decryption_does_not_create_missing_keyring_key(self) -> None:
         key = bytes(range(32))
         with mock.patch("speed_of_cinnamon.artifact_crypto._load_keyring_key", return_value=key):

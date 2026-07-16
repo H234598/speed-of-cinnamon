@@ -1246,7 +1246,7 @@ def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subpr
             if primary_error is not None:
                 _note_cleanup_failure(primary_error, cleanup_error)
             elif isinstance(cleanup_error, Exception):
-                raise ArtifactCryptoError(f"failed to read {field_name}") from cleanup_error
+                raise ArtifactCryptoError("Secret Service keyring helper streams could not be closed safely") from cleanup_error
             else:
                 raise cleanup_error
 
