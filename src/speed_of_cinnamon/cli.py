@@ -2152,10 +2152,7 @@ def _prepare_private_file(path: Path, *, field_name: str, exclusive: bool = True
             pass
     try:
         with os.fdopen(fd, "ab") as handle:
-            try:
-                os.fchmod(handle.fileno(), 0o600)
-            except OSError:
-                pass
+            os.fchmod(handle.fileno(), 0o600)
     except (OSError, ValueError) as exc:
         try:
             os.close(fd)

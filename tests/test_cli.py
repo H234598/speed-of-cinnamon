@@ -166,6 +166,18 @@ class CliTest(unittest.TestCase):
 
             self.assertEqual(path.read_bytes(), b"old")
 
+    def test_prepare_private_file_fails_closed_when_fchmod_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            path.write_text("secret\n", encoding="utf-8")
+            path.chmod(0o644)
+            with mock.patch.object(cli.os, "fchmod", side_effect=OSError("chmod failed")):
+                with self.assertRaisesRegex(cli._PrivateFilePrepareError, "failed to prepare blacklist file"):
+                    cli._prepare_private_file(path, field_name="blacklist file", exclusive=False)
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "secret\n")
+            self.assertEqual(path.stat().st_mode & 0o777, 0o644)
+
     def test_prepare_private_file_rejects_symlinked_parent_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
