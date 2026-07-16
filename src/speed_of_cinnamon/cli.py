@@ -3009,9 +3009,17 @@ def _safe_regular_child_files(directory: Path, suffixes: tuple[str, ...], *, fie
 
 def _is_finalization_lock_active(state_path: Path) -> bool:
     lock_path = _finalization_lock_path(state_path)
+    try:
+        lock_stat = lock_path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    if not stat_module.S_ISREG(lock_stat.st_mode) or getattr(lock_stat, "st_nlink", 1) != 1:
+        return True
     owner_pid = _read_finalization_lock_pid(lock_path)
     if not owner_pid:
-        return False
+        return True
     if not process_is_alive(owner_pid):
         return False
     owner_identity = _read_finalization_lock_identity(lock_path)

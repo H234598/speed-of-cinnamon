@@ -7282,6 +7282,15 @@ class CliTest(unittest.TestCase):
             finally:
                 cli._release_finalization_lock(acquired)
 
+    def test_finalization_lock_activity_fails_closed_when_pid_is_unreadable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            lock_path.write_text("not-a-pid\n", encoding="ascii")
+            lock_path.chmod(0o600)
+
+            self.assertTrue(cli._is_finalization_lock_active(state_file))
+
     def test_toggle_rejects_null_personal_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
