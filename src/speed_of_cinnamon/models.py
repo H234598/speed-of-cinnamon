@@ -1713,6 +1713,14 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
             try:
                 _replace_model_sibling_path(path, backup_dir, root, field_name="model backup directory")
             except (OSError, ModelError) as exc:
+                # The helper can raise after moving the directory when parent fsync fails.
+                if not path.exists() and backup_dir.exists():
+                    try:
+                        _replace_model_sibling_path(backup_dir, path, root, field_name="model path")
+                    except (OSError, ModelError) as restore_exc:
+                        raise ModelError(
+                            f"failed to restore existing model directory after backup failure: {path}"
+                        ) from restore_exc
                 raise ModelError(f"failed to prepare existing model directory backup: {path}") from exc
             _assert_safe_model_directory(path)
         try:
