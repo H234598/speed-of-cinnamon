@@ -85,6 +85,8 @@ def _add_step(
     commands: list[str] | None = None,
     optional: bool = False,
 ) -> None:
+    if any(step.get("id") == step_id for step in steps):
+        return
     steps.append(
         {
             "id": step_id,
@@ -126,7 +128,31 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
     if not _coerce_plan_bool(transcriber, "ok"):
         value = normalize_backend(str(transcriber.get("value") or "auto"))
         detail = _sanitize_setup_text(transcriber.get("detail"), "Configure a local ASR backend.")
-        if value == "command":
+        detail_lower = detail.casefold()
+        model_language_mismatch = "model does not support language" in detail_lower or "english-only" in detail_lower
+        language_error = any(
+            marker in detail_lower
+            for marker in (
+                "language must",
+                "language is too",
+                "language contains",
+                "simple language code",
+            )
+        )
+        if model_language_mismatch or (
+            value in {"whisper-cpp", "faster-whisper", "auto"}
+            and ("model not found" in detail_lower or "model path" in detail_lower)
+        ):
+            _add_step(
+                steps,
+                "voice-model",
+                "Download or select a voice model",
+                detail,
+                ["speed-of-cinnamon download-model ct2-base-int8 --json"],
+            )
+        elif language_error:
+            _add_step(steps, "language", "Configure a valid language code", detail)
+        elif value == "command":
             _add_step(
                 steps,
                 "custom-transcriber",
@@ -139,16 +165,6 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
                 "external-api-transcriber",
                 "Configure the External API speech model",
                 detail,
-            )
-        elif value in {"whisper-cpp", "faster-whisper", "auto"} and (
-            "model not found" in detail.lower() or "model path" in detail.lower()
-        ):
-            _add_step(
-                steps,
-                "voice-model",
-                "Download or select a voice model",
-                detail,
-                ["speed-of-cinnamon download-model ct2-base-int8 --json"],
             )
         else:
             _add_step(
@@ -196,7 +212,19 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
     if not _coerce_plan_bool(postprocessor, "ok"):
         value = str(postprocessor.get("value") or "")
         detail = _sanitize_setup_text(postprocessor.get("detail"), "Configure text polishing.")
-        if value == "ollama":
+        detail_lower = detail.casefold()
+        language_error = any(
+            marker in detail_lower
+            for marker in (
+                "language must",
+                "language is too",
+                "language contains",
+                "simple language code",
+            )
+        )
+        if language_error:
+            _add_step(steps, "language", "Configure a valid language code", detail)
+        elif value == "ollama":
             _add_step(
                 steps,
                 "ollama-text-model",

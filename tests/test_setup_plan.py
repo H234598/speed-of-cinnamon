@@ -202,6 +202,67 @@ class SetupPlanTest(unittest.TestCase):
         plan = build_setup_plan(payload)
         self.assertEqual(plan["steps"][0]["id"], "voice-model")
 
+    def test_incompatible_voice_model_gets_voice_model_step(self) -> None:
+        payload = {
+            "ok": False,
+            "configured": {
+                "recorder": {"ok": True},
+                "transcriber": {
+                    "ok": False,
+                    "value": "whisper-cpp",
+                    "detail": "English-only whisper.cpp model does not support language de; use a multilingual model",
+                },
+                "output": {"ok": True},
+                "postprocessor": {"ok": True},
+                "warnings": [],
+            },
+            "desktop": {"cinnamon": True},
+        }
+        plan = build_setup_plan(payload)
+        self.assertEqual(plan["steps"][0]["id"], "voice-model")
+
+    def test_invalid_language_gets_language_step(self) -> None:
+        payload = {
+            "ok": False,
+            "configured": {
+                "recorder": {"ok": True},
+                "transcriber": {
+                    "ok": False,
+                    "value": "command",
+                    "detail": "language is too large (max 64 characters)",
+                },
+                "output": {"ok": True},
+                "postprocessor": {"ok": True},
+                "warnings": [],
+            },
+            "desktop": {"cinnamon": True},
+        }
+        plan = build_setup_plan(payload)
+        self.assertEqual(plan["steps"][0]["id"], "language")
+
+    def test_duplicate_setup_step_ids_are_collapsed(self) -> None:
+        payload = {
+            "ok": False,
+            "configured": {
+                "recorder": {"ok": True},
+                "transcriber": {
+                    "ok": False,
+                    "value": "command",
+                    "detail": "language is too large",
+                },
+                "output": {"ok": True},
+                "postprocessor": {
+                    "ok": False,
+                    "value": "ollama",
+                    "detail": "language must be a simple language code",
+                },
+                "warnings": [],
+            },
+            "desktop": {"cinnamon": True},
+        }
+        plan = build_setup_plan(payload)
+        self.assertEqual([step["id"] for step in plan["steps"]], ["language"])
+
     def test_applet_plan_marks_non_cinnamon_session_not_ready(self) -> None:
         payload = {
             "ok": False,
