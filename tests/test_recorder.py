@@ -1569,6 +1569,21 @@ class RecorderTest(unittest.TestCase):
         self.assertTrue(captured["flags"] & os.O_EXCL)
         self.assertTrue(captured["flags"] & os.O_NOFOLLOW)
 
+    def test_open_recorder_log_removes_created_file_when_validation_fails(self) -> None:
+        from speed_of_cinnamon import recorder as recorder_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "session.log"
+            with mock.patch.object(
+                recorder_module,
+                "assert_fd_is_regular_private_file",
+                side_effect=RuntimeError("validation failed"),
+            ):
+                with self.assertRaisesRegex(RecorderError, "validation failed"):
+                    recorder_module._open_recorder_log_file(log_path)
+
+            self.assertFalse(log_path.exists())
+
     def test_start_recorder_rejects_symlink_log_leaf_after_validation(self) -> None:
         command = RecorderCommand(name="noop", argv=["true"])
         with tempfile.TemporaryDirectory() as tmp:

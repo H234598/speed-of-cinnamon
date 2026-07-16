@@ -1527,6 +1527,20 @@ def _open_recorder_log_file(log_path: Path) -> tuple[io.BufferedWriter, bool]:
         raise RecorderError("failed to open recorder log file") from exc
     created = False
     fd: int | None = None
+
+    def cleanup_created_log_fd(primary: BaseException) -> None:
+        if not created or fd is None:
+            return
+        try:
+            expected_stat = os.fstat(fd)
+        except BaseException as cleanup_error:
+            primary.add_note(f"recorder log cleanup inspection failed: {cleanup_error}")
+            return
+        try:
+            _unlink_recorder_log_if_same(log_path, expected_stat)
+        except BaseException as cleanup_error:
+            primary.add_note(f"recorder log cleanup failed: {cleanup_error}")
+
     try:
         try:
             fd = os.open(log_path.name, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_EXCL | nofollow_flag, 0o600, dir_fd=parent_fd)
@@ -1538,23 +1552,16 @@ def _open_recorder_log_file(log_path: Path) -> tuple[io.BufferedWriter, bool]:
         handle = os.fdopen(fd, "ab")
         fd = None
         return handle, created
-    except RecorderError:
+    except RecorderError as exc:
+        cleanup_created_log_fd(exc)
         raise
     except RuntimeError as exc:
+        cleanup_created_log_fd(exc)
         raise RecorderError(str(exc)) from exc
     except (OSError, ValueError) as exc:
         raise RecorderError("failed to open recorder log file") from exc
     except BaseException as exc:
-        if created and fd is not None:
-            try:
-                expected_stat = os.fstat(fd)
-            except BaseException as cleanup_error:
-                exc.add_note(f"recorder log cleanup inspection failed: {cleanup_error}")
-            else:
-                try:
-                    _unlink_recorder_log_if_same(log_path, expected_stat)
-                except BaseException as cleanup_error:
-                    exc.add_note(f"recorder log cleanup failed: {cleanup_error}")
+        cleanup_created_log_fd(exc)
         raise
     finally:
         if fd is not None:
