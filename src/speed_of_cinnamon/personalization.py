@@ -163,9 +163,12 @@ def command_environment(personal_context: str = "", vocabulary: str = "") -> dic
     prompt = "\n\n".join(prompt_sections)
 
     env = _filtered_environment()
-    env["SPEED_OF_CINNAMON_CONTEXT"] = context
-    env["SPEED_OF_CINNAMON_VOCABULARY"] = "\n".join(terms)
-    env["SPEED_OF_CINNAMON_PROMPT"] = prompt
+    # Process environments cannot carry literal control characters through
+    # command_chain validation. Keep prompt formatting in API output, flatten
+    # only values exported to child-process environments.
+    env["SPEED_OF_CINNAMON_CONTEXT"] = context.replace("\n", " ")
+    env["SPEED_OF_CINNAMON_VOCABULARY"] = " ".join(terms)
+    env["SPEED_OF_CINNAMON_PROMPT"] = prompt.replace("\n", " ")
     return env
 
 

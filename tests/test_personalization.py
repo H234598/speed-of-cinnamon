@@ -99,8 +99,15 @@ class PersonalizationTest(unittest.TestCase):
         env = command_environment("Use project terms.", "PipeWire")
         self.assertEqual(env["SPEED_OF_CINNAMON_CONTEXT"], "Use project terms.")
         self.assertEqual(env["SPEED_OF_CINNAMON_VOCABULARY"], "PipeWire")
-        self.assertIn("Vocabulary:\n- PipeWire", env["SPEED_OF_CINNAMON_PROMPT"])
+        self.assertIn("Vocabulary: - PipeWire", env["SPEED_OF_CINNAMON_PROMPT"])
         self.assertIn("PATH", env)
+
+    def test_command_environment_flattens_multiline_values(self) -> None:
+        env = command_environment("line one\nline two", "PipeWire\nCinnamon")
+
+        self.assertEqual(env["SPEED_OF_CINNAMON_CONTEXT"], "line one line two")
+        self.assertEqual(env["SPEED_OF_CINNAMON_VOCABULARY"], "PipeWire Cinnamon")
+        self.assertNotIn("\n", env["SPEED_OF_CINNAMON_PROMPT"])
 
     def test_command_environment_rejects_oversized_payload(self) -> None:
         with self.assertRaisesRegex(ValueError, "personal context is too large"):
