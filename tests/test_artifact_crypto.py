@@ -462,6 +462,35 @@ class ArtifactCryptoTest(unittest.TestCase):
             self.assertIn("artifact encryption cleanup failed", "\n".join(caught.exception.__notes__))
             self.assertIn("parent close failed", "\n".join(caught.exception.__notes__))
 
+    def test_default_passphrase_generation_does_not_remove_replaced_temp_file_after_activation_conflict(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "artifact.key"
+            victim = root / "victim.txt"
+            victim.write_text("must survive", encoding="utf-8")
+            replaced_temp_name: str | None = None
+
+            def conflict(source_name: str, target_name: str, *, directory_fd: int, field_name: str) -> None:
+                nonlocal replaced_temp_name
+                replaced_temp_name = source_name
+                path.write_text(STRONG_PASSPHRASE + "\n", encoding="utf-8")
+                path.chmod(0o600)
+                (root / source_name).unlink()
+                victim.rename(root / source_name)
+                raise FileExistsError("target appeared")
+
+            with (
+                mock.patch.object(artifact_crypto, "default_passphrase_file", return_value=path),
+                mock.patch.object(artifact_crypto, "_rename_without_replacing", side_effect=conflict),
+            ):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be generated"):
+                    artifact_crypto._generate_default_passphrase_file(path)
+
+            self.assertIsNotNone(replaced_temp_name)
+            replaced_temp = root / replaced_temp_name
+            self.assertTrue(replaced_temp.exists())
+            self.assertEqual(replaced_temp.read_text(encoding="utf-8"), "must survive")
+
     def test_scrub_temp_passphrase_preserves_inspection_error_when_fd_close_fails(self) -> None:
         with (
             mock.patch.object(artifact_crypto.os, "open", return_value=123),
@@ -587,6 +616,43 @@ class ArtifactCryptoTest(unittest.TestCase):
             self.assertIn("target changed during rollback", notes)
             self.assertNotIn("cannot access local variable", notes)
             self.assertEqual(path.read_text(encoding="utf-8"), "replacement\n")
+
+    def test_default_passphrase_rotation_preserves_replaced_recovery_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "artifact.key"
+            replacement = root / "replacement.key"
+            path.write_text("short\n", encoding="utf-8")
+            path.chmod(0o600)
+            replacement.write_text("must survive", encoding="utf-8")
+            real_fsync = artifact_crypto._fsync_fd
+            directory_syncs = 0
+
+            def fail_after_activation_sync(fd: int) -> None:
+                nonlocal directory_syncs
+                if stat.S_ISDIR(os.fstat(fd).st_mode):
+                    directory_syncs += 1
+                    if directory_syncs == 2:
+                        backups = list(root.glob(".artifact.key.*.bak"))
+                        self.assertEqual(len(backups), 1)
+                        backup = backups[0]
+                        backup.unlink()
+                        replacement.rename(backup)
+                        raise OSError("activation directory sync failed")
+                real_fsync(fd)
+            with (
+                mock.patch.object(artifact_crypto, "default_passphrase_file", return_value=path),
+                mock.patch.object(artifact_crypto, "_fsync_fd", side_effect=fail_after_activation_sync),
+            ):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be generated") as caught:
+                    artifact_crypto._generate_default_passphrase_file(path, replace=True)
+
+            notes = "\n".join(caught.exception.__notes__)
+            self.assertIn("recovery backup changed before cleanup", notes)
+            self.assertEqual(path.read_text(encoding="utf-8"), "short\n")
+            backups = list(root.glob(".artifact.key.*.bak"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_text(encoding="utf-8"), "must survive")
 
     def test_default_passphrase_rotation_restores_target_when_backup_unlink_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

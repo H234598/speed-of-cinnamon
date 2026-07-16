@@ -318,7 +318,12 @@ def _temp_passphrase_cleanup_error() -> ArtifactCryptoError:
     return ArtifactCryptoError("artifact encryption passphrase temporary file could not be removed")
 
 
-def _scrub_temp_passphrase_file(parent_fd: int, temp_name: str) -> None:
+def _scrub_temp_passphrase_file(
+    parent_fd: int,
+    temp_name: str,
+    *,
+    expected_stat: os.stat_result | None = None,
+) -> None:
     if not temp_name:
         return
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
@@ -330,7 +335,15 @@ def _scrub_temp_passphrase_file(parent_fd: int, temp_name: str) -> None:
     try:
         file_stat = os.fstat(fd)
         if not stat.S_ISREG(file_stat.st_mode):
+            if expected_stat is not None:
+                raise OSError("artifact encryption passphrase temporary file changed before scrubbing")
             return
+        if expected_stat is not None and (
+            file_stat.st_dev != expected_stat.st_dev
+            or file_stat.st_ino != expected_stat.st_ino
+            or file_stat.st_mode != expected_stat.st_mode
+        ):
+            raise OSError("artifact encryption passphrase temporary file changed before scrubbing")
         remaining = int(file_stat.st_size)
         if remaining > 0:
             os.lseek(fd, 0, os.SEEK_SET)
@@ -400,6 +413,37 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
 
     def _same_leaf_inode(first: os.stat_result, second: os.stat_result) -> bool:
         return (first.st_dev, first.st_ino, first.st_mode) == (second.st_dev, second.st_ino, second.st_mode)
+
+    def _assert_expected_file(name: str, expected_stat: os.stat_result | None, *, description: str) -> None:
+        if expected_stat is None:
+            raise OSError(f"{description} identity is unavailable")
+        current_stat = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if not _same_leaf_inode(current_stat, expected_stat):
+            raise OSError(f"{description} changed before cleanup")
+
+    def _remove_expected_file(name: str, expected_stat: os.stat_result | None, *, description: str) -> None:
+        _assert_expected_file(name, expected_stat, description=description)
+        os.unlink(name, dir_fd=parent_fd)
+
+    def _remove_temporary_file() -> None:
+        nonlocal temp_name
+        if not temp_name:
+            return
+        try:
+            _assert_expected_file(
+                temp_name,
+                temporary_stat,
+                description="artifact encryption passphrase temporary file",
+            )
+        except FileNotFoundError:
+            temp_name = ""
+            return
+        _remove_expected_file(
+            temp_name,
+            temporary_stat,
+            description="artifact encryption passphrase temporary file",
+        )
+        temp_name = ""
 
     def _same_pre_activation_identity(first: os.stat_result, second: os.stat_result) -> bool:
         return (
@@ -501,7 +545,11 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
             else:
                 raise OSError("artifact encryption passphrase target changed during rollback")
             if activation_visible:
-                os.unlink(path.name, dir_fd=parent_fd)
+                _remove_expected_file(
+                    path.name,
+                    expected_stat,
+                    description="artifact encryption passphrase target",
+                )
                 _fsync_fd(parent_fd)
         elif backup_created:
             try:
@@ -512,7 +560,11 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
             _restore_previous_passphrase_payload()
             if backup_created:
                 try:
-                    os.unlink(backup_name, dir_fd=parent_fd)
+                    _remove_expected_file(
+                        backup_name,
+                        existing_stat,
+                        description="artifact encryption passphrase recovery backup",
+                    )
                 except FileNotFoundError:
                     pass
                 else:
@@ -526,6 +578,11 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
                     try:
                         os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
                     except FileNotFoundError:
+                        _assert_expected_file(
+                            backup_name,
+                            existing_stat,
+                            description="artifact encryption passphrase recovery backup",
+                        )
                         _rename_without_replacing(
                             backup_name,
                             path.name,
@@ -537,12 +594,21 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
                     else:
                         raise OSError("artifact encryption passphrase target exists during rollback")
                 else:
-                    os.unlink(backup_name, dir_fd=parent_fd)
+                    _remove_expected_file(
+                        backup_name,
+                        existing_stat,
+                        description="artifact encryption passphrase recovery backup",
+                    )
                     _fsync_fd(parent_fd)
             else:
                 try:
                     os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
                 except FileNotFoundError:
+                    _assert_expected_file(
+                        backup_name,
+                        existing_stat,
+                        description="artifact encryption passphrase recovery backup",
+                    )
                     _rename_without_replacing(
                         backup_name,
                         path.name,
@@ -621,7 +687,11 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
                         ):
                             raise OSError("artifact encryption passphrase file changed during backup activation")
                         backup_created = True
-                        os.unlink(path.name, dir_fd=parent_fd)
+                        _remove_expected_file(
+                            path.name,
+                            existing_stat,
+                            description="artifact encryption passphrase target",
+                        )
                         target_removed = True
                         _fsync_fd(parent_fd)
                         break
@@ -630,7 +700,11 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
                             try:
                                 candidate_stat = os.stat(backup_name, dir_fd=parent_fd, follow_symlinks=False)
                                 if _same_leaf_inode(candidate_stat, existing_stat):
-                                    os.unlink(backup_name, dir_fd=parent_fd)
+                                    _remove_expected_file(
+                                        backup_name,
+                                        existing_stat,
+                                        description="artifact encryption passphrase recovery backup",
+                                    )
                                     _fsync_fd(parent_fd)
                             except FileNotFoundError:
                                 pass
@@ -653,8 +727,12 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
                 raise OSError("artifact encryption passphrase file could not be inspected after activation") from stat_error
             _fsync_fd(parent_fd)
             if backup_created:
-                _scrub_temp_passphrase_file(parent_fd, backup_name)
-                os.unlink(backup_name, dir_fd=parent_fd)
+                _scrub_temp_passphrase_file(parent_fd, backup_name, expected_stat=existing_stat)
+                _remove_expected_file(
+                    backup_name,
+                    existing_stat,
+                    description="artifact encryption passphrase recovery backup",
+                )
                 _fsync_fd(parent_fd)
         else:
             try:
@@ -665,8 +743,7 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
                     field_name="artifact encryption passphrase file",
                 )
             except FileExistsError:
-                os.unlink(temp_name, dir_fd=parent_fd)
-                temp_name = ""
+                _remove_temporary_file()
                 _fsync_fd(parent_fd)
                 try:
                     return _read_private_passphrase_file(path, allow_default_generation=False, rotate_weak_default=False)
@@ -706,11 +783,11 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
                 cleanup_error = exc
         if temp_name and parent_fd >= 0:
             try:
-                os.unlink(temp_name, dir_fd=parent_fd)
+                _remove_temporary_file()
                 _fsync_fd(parent_fd)
             except BaseException as exc:
                 with suppress(BaseException):
-                    _scrub_temp_passphrase_file(parent_fd, temp_name)
+                    _scrub_temp_passphrase_file(parent_fd, temp_name, expected_stat=temporary_stat)
                 if cleanup_error is None:
                     cleanup_error = exc
         if parent_fd >= 0:
