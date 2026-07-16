@@ -548,6 +548,9 @@ class PathSafetyTest(unittest.TestCase):
             def read(self, _size: int = -1):
                 raise OSError("read failure")
 
+            def close(self):
+                return None
+
         with (
             mock.patch.object(path_safety, "open_file_without_following_symlinks", return_value=123),
             mock.patch.object(path_safety, "assert_fd_is_regular_private_file"),
@@ -558,6 +561,31 @@ class PathSafetyTest(unittest.TestCase):
                 path_safety.read_text_without_following_symlinks(Path("/does-not-matter.txt"))
 
         mocked_close.assert_not_called()
+
+    def test_read_text_preserves_read_interrupt_when_handle_close_fails(self) -> None:
+        class _FailingHandle:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                raise OSError("close failure")
+
+            def read(self, _size: int = -1):
+                raise KeyboardInterrupt("read interrupted")
+
+            def close(self):
+                raise OSError("close failure")
+
+        with (
+            mock.patch.object(path_safety, "open_file_without_following_symlinks", return_value=123),
+            mock.patch.object(path_safety, "assert_fd_is_regular_private_file"),
+            mock.patch.object(path_safety.os, "fdopen", return_value=_FailingHandle()),
+        ):
+            with self.assertRaisesRegex(KeyboardInterrupt, "read interrupted") as caught:
+                path_safety.read_text_without_following_symlinks(Path("/does-not-matter.txt"))
+
+        self.assertIn("secure path cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertIn("close failure", "\n".join(caught.exception.__notes__))
 
     def test_read_text_rejects_expected_file_swap_before_read(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

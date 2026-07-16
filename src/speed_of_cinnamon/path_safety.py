@@ -330,8 +330,23 @@ def read_text_without_following_symlinks(
         except BaseException as cleanup_error:
             _note_cleanup_failure(exc, cleanup_error)
         raise
-    with handle:
+    primary_error: BaseException | None = None
+    try:
         payload = handle.read(effective_max_bytes + 1)
+    except Exception as exc:
+        primary_error = exc
+        raise
+    except BaseException as exc:
+        primary_error = exc
+        raise
+    finally:
+        try:
+            handle.close()
+        except BaseException as cleanup_error:
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise
     if len(payload) > effective_max_bytes:
         raise OSError(f"{field_name} is too large")
     return payload.decode(encoding)
