@@ -9,6 +9,7 @@ import re
 import secrets
 import stat as stat_module
 import string
+import unicodedata
 import time
 import zlib
 from itertools import islice
@@ -65,6 +66,7 @@ _BARE_CREDENTIAL_RE = re.compile(
 _BEARER_RE = re.compile(r"(?i)\bbearer\s+[^,\s;]+")
 _OPENAI_KEY_RE = re.compile(r"\b(?:sk|sess)-[A-Za-z0-9_\-]{12,}\b")
 _SHORT_API_KEY_RE = re.compile(r"\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b")
+_LOG_MATCH_IGNORE_CATEGORIES = frozenset({"Mn", "Mc", "Me", "Cf"})
 _URL_CREDENTIAL_RE = re.compile(r"([a-z][a-z0-9+.-]{0,255}+://)([^/@\s]+)@")
 _LOCAL_ABSOLUTE_PATH_RE = re.compile(
     r"(?i)(?:(?<=^)|(?<=[\s\"'`=:(]))/(?:home|root|run|tmp|var|etc|usr|opt|mnt|media|dev|proc|sys)/[^\s,;)]*"
@@ -417,11 +419,49 @@ def sanitize_value(key: str, value: object) -> object:
     return sanitize_text(str(value), max_chars=MAX_LOG_FIELD_CHARS)
 
 
+def _sub_with_ignored_projection(text: str, pattern: re.Pattern[str]) -> str:
+    if not any(unicodedata.category(char) in _LOG_MATCH_IGNORE_CATEGORIES for char in text):
+        return pattern.sub("[redacted]", text)
+    normalized: list[str] = []
+    index_map: list[int] = []
+    for source_index, char in enumerate(text):
+        for normalized_char in unicodedata.normalize("NFKD", char).casefold():
+            if unicodedata.category(normalized_char) in _LOG_MATCH_IGNORE_CATEGORIES:
+                continue
+            normalized.append(normalized_char)
+            index_map.append(source_index)
+    normalized_text = "".join(normalized)
+    if not normalized_text:
+        return text
+    pieces: list[str] = []
+    cursor = 0
+    for match in pattern.finditer(normalized_text):
+        if match.start() >= len(index_map) or match.end() - 1 >= len(index_map):
+            continue
+        original_start = index_map[match.start()]
+        original_end = index_map[match.end() - 1] + 1
+        while original_start > cursor and unicodedata.category(text[original_start - 1]) in _LOG_MATCH_IGNORE_CATEGORIES:
+            original_start -= 1
+        while original_end < len(text) and unicodedata.category(text[original_end]) in _LOG_MATCH_IGNORE_CATEGORIES:
+            original_end += 1
+        if original_end <= cursor:
+            continue
+        if original_start < cursor:
+            original_start = cursor
+        pieces.append(text[cursor:original_start])
+        pieces.append("[redacted]")
+        cursor = original_end
+    if not pieces:
+        return text
+    pieces.append(text[cursor:])
+    return "".join(pieces)
+
+
 def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         return "[invalid]"
-    redacted_value = _OPENAI_KEY_RE.sub("[redacted]", value)
-    redacted_value = _SHORT_API_KEY_RE.sub("[redacted]", redacted_value)
+    redacted_value = _sub_with_ignored_projection(value, _OPENAI_KEY_RE)
+    redacted_value = _sub_with_ignored_projection(redacted_value, _SHORT_API_KEY_RE)
     if redacted_value != value:
         value = redacted_value
     if (
