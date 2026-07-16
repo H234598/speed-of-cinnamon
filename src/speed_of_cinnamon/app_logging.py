@@ -1391,6 +1391,13 @@ def _gzip_file(source: Path, target: Path) -> None:
         os.unlink(target_backup_name, dir_fd=parent_fd)
         os.fsync(parent_fd)
 
+    def _assert_target_backup_identity() -> None:
+        if not target_backup_name or target_backup_stat is None:
+            raise RuntimeError("log target backup identity is unavailable")
+        current_backup_stat = os.stat(target_backup_name, dir_fd=parent_fd, follow_symlinks=False)
+        if not _same_target_inode(current_backup_stat, target_backup_stat):
+            raise RuntimeError("log target backup changed during activation rollback")
+
     def _rollback_target_activation() -> None:
         nonlocal target_backup_created, target_backup_name, target_removed
         if not target_transaction_active:
@@ -1423,6 +1430,7 @@ def _gzip_file(source: Path, target: Path) -> None:
                     try:
                         os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
                     except FileNotFoundError:
+                        _assert_target_backup_identity()
                         _rename_without_replacing(
                             target_backup_name,
                             target.name,
@@ -1444,6 +1452,7 @@ def _gzip_file(source: Path, target: Path) -> None:
                 try:
                     os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
                 except FileNotFoundError:
+                    _assert_target_backup_identity()
                     _rename_without_replacing(
                         target_backup_name,
                         target.name,
@@ -1676,12 +1685,12 @@ def _gzip_file(source: Path, target: Path) -> None:
         temp_name = ""
         target_activation_stat = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
         os.fsync(parent_fd)
-        target_transaction_active = False
         if target_backup_created:
             _unlink_target_backup()
             target_backup_created = False
             target_backup_name = ""
             os.fsync(parent_fd)
+        target_transaction_active = False
         _assert_same_log_file_identity(source, source_stat, field_name="log source file")
         _unlink_log_file_with_parent_fsync(source, source_stat, field_name="log source file")
     except BaseException as exc:

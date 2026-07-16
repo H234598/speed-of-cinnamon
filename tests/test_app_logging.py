@@ -1980,7 +1980,7 @@ class AppLoggingTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "log target backup changed before cleanup"):
                     app_logging._gzip_file(source, target)
 
-            self.assertEqual(backup_stat_calls, 2)
+            self.assertEqual(backup_stat_calls, 3)
             self.assertIsNotNone(replacement_backup)
             self.assertEqual(replacement_backup.read_bytes(), b"replacement backup")
 
@@ -2031,6 +2031,32 @@ class AppLoggingTest(unittest.TestCase):
 
             with mock.patch("speed_of_cinnamon.app_logging._rename_without_replacing", side_effect=fail_activation_rename):
                 with self.assertRaisesRegex(PermissionError, "replace failed"):
+                    app_logging._gzip_file(source, target)
+
+            self.assertTrue(source.exists())
+            with gzip.open(target, "rt", encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "old content\n")
+            self.assertEqual(list(log_dir.glob("*.backup")), [])
+
+    def test_gzip_file_rolls_back_when_target_backup_cleanup_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "source.log"
+            target = log_dir / "target.log.gz"
+            source.write_text("new content\n", encoding="utf-8")
+            source.chmod(0o600)
+            with gzip.open(target, "wt", encoding="utf-8") as handle:
+                handle.write("old content\n")
+            target.chmod(0o600)
+            real_unlink = app_logging.os.unlink
+
+            def fail_backup_unlink(name: object, *args: object, **kwargs: object) -> None:
+                if isinstance(name, str) and name.endswith(".backup"):
+                    raise PermissionError("backup cleanup failed")
+                real_unlink(name, *args, **kwargs)
+
+            with mock.patch.object(app_logging.os, "unlink", side_effect=fail_backup_unlink):
+                with self.assertRaisesRegex(PermissionError, "backup cleanup failed"):
                     app_logging._gzip_file(source, target)
 
             self.assertTrue(source.exists())
