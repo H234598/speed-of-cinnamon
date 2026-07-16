@@ -122,7 +122,13 @@ def _coerce_desktop_env(name: str) -> str:
     return _doctor_field_text(value, field_name=name).lower()
 
 
-def _setting(settings: Mapping[str, object], key: str, default: str = "") -> str:
+def _setting(
+    settings: Mapping[str, object],
+    key: str,
+    default: str = "",
+    *,
+    limit: bool = True,
+) -> str:
     value = settings.get(key, default)
     if value is None:
         return default
@@ -130,7 +136,8 @@ def _setting(settings: Mapping[str, object], key: str, default: str = "") -> str
         raise ValueError(f"setting {key} must be text")
     if _contains_http_header_control_chars(value):
         raise ValueError(f"setting {key} contains invalid control character")
-    return _doctor_field_text(value, field_name=f"setting {key}")
+    normalized = value.strip()
+    return _doctor_field_text(normalized, field_name=f"setting {key}") if limit else normalized
 
 
 def _doctor_field_text(value: str, *, field_name: str) -> str:
@@ -229,9 +236,9 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
     language = _setting(settings, "language", "en")
     transcriber = _setting(settings, "transcriber", "auto").lower().replace("_", "-")
     command_template = _setting(settings, "transcriber-command")
-    whisper_model = _setting(settings, "whisper-model")
+    whisper_model = _setting(settings, "whisper-model", limit=False)
     openai_compatible_model = _setting(settings, "openai-compatible-model", DEFAULT_OPENAI_COMPATIBLE_MODEL)
-    openai_compatible_url = _setting(settings, "openai-compatible-url", DEFAULT_OPENAI_COMPATIBLE_URL)
+    openai_compatible_url = _setting(settings, "openai-compatible-url", DEFAULT_OPENAI_COMPATIBLE_URL, limit=False)
     local_model = whisper_model or default_ctranslate2_model_path(language) or default_whisper_cpp_model_path(language)
     whisper_ok = _ok(checks, "whisper")
     whisper_cpp_ok = _ok(checks, "whisper-cli") or _ok(checks, "whisper.cpp") or _ok(checks, "pwcpp")
@@ -422,9 +429,9 @@ def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
     backend = _setting(settings, "post-process-backend", "none").lower().replace("_", "-")
     command_template = _setting(settings, "post-process-command")
     ollama_model = _setting(settings, "ollama-model")
-    ollama_url = _setting(settings, "ollama-url", "http://127.0.0.1:11434")
+    ollama_url = _setting(settings, "ollama-url", "http://127.0.0.1:11434", limit=False)
     openai_compatible_model = _setting(settings, "openai-compatible-text-model", DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL)
-    openai_compatible_url = _setting(settings, "openai-compatible-url", DEFAULT_OPENAI_COMPATIBLE_URL)
+    openai_compatible_url = _setting(settings, "openai-compatible-url", DEFAULT_OPENAI_COMPATIBLE_URL, limit=False)
     if backend in {"", "none", "off", "disabled"}:
         return {"ok": True, "value": "none", "detail": "text polishing disabled"}
     if backend in {"command", "custom"}:

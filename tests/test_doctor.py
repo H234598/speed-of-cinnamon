@@ -194,6 +194,27 @@ class DoctorTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["configured"]["transcriber"]["value"], "whisper-cpp")
 
+    def test_whisper_cpp_accepts_existing_long_model_path(self) -> None:
+        tools = {"python3", "pw-record", "whisper-cli"}
+        with tempfile.TemporaryDirectory() as tmp:
+            model_dir = Path(tmp)
+            for index in range(3):
+                model_dir /= f"segment-{index}-" + ("x" * 180)
+                model_dir.mkdir()
+            model = model_dir / "ggml-base.bin"
+            model.write_bytes(b"model")
+            self.assertGreater(len(str(model)), doctor.MAX_DOCTOR_FIELD_CHARS)
+            settings = {
+                "recorder": "auto",
+                "transcriber": "whisper-cpp",
+                "whisper-model": str(model),
+                "insert-method": "none",
+            }
+            with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
+                payload = doctor.report(settings)
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["configured"]["transcriber"]["ok"])
+
     def test_auto_asr_can_use_downloaded_whisper_cpp_model(self) -> None:
         tools = {"python3", "pw-record", "whisper-cli"}
         with tempfile.TemporaryDirectory() as tmp:
@@ -555,6 +576,29 @@ class DoctorTest(unittest.TestCase):
         with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
             payload = doctor.report(settings)
         self.assertTrue(payload["ok"])
+
+    def test_openai_compatible_postprocessor_accepts_long_endpoint_path(self) -> None:
+        endpoint = "http://127.0.0.1:8000/" + ("v" * (doctor.MAX_DOCTOR_FIELD_CHARS + 20))
+        result = doctor._postprocessor_status(
+            {
+                "post-process-backend": "openai-compatible",
+                "openai-compatible-text-model": "local-polisher",
+                "openai-compatible-url": endpoint,
+            }
+        )
+        self.assertTrue(result["ok"])
+
+    def test_openai_compatible_transcriber_accepts_long_endpoint_path(self) -> None:
+        endpoint = "http://127.0.0.1:8000/" + ("v" * (doctor.MAX_DOCTOR_FIELD_CHARS + 20))
+        result = doctor._transcriber_status(
+            {
+                "transcriber": "openai-compatible",
+                "openai-compatible-model": "whisper-large-v3",
+                "openai-compatible-url": endpoint,
+            },
+            {},
+        )
+        self.assertTrue(result["ok"])
 
     def test_openai_compatible_postprocessor_does_not_echo_url_path_secret(self) -> None:
         tools = {"python3", "pw-record"}
