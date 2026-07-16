@@ -6,6 +6,7 @@ import stat
 import subprocess
 import unittest
 import tempfile
+import time
 from pathlib import Path
 from typing import BinaryIO, cast
 from unittest import mock
@@ -31,6 +32,31 @@ from speed_of_cinnamon.output import (
     set_clipboard,
     type_text,
 )
+
+
+class _FakePopen:
+    def __init__(self, result: subprocess.CompletedProcess[bytes]) -> None:
+        self._result = result
+        self.pid = 12345
+        self.returncode = result.returncode
+
+    def communicate(self, input: bytes | None = None, timeout: int | None = None) -> tuple[bytes | None, bytes | None]:
+        return self._result.stdout, self._result.stderr
+
+    def kill(self) -> None:
+        self.returncode = -9
+
+    def wait(self, timeout: int | None = None) -> int:
+        return self.returncode
+
+
+def _popen_from_run(runner: object):
+    def factory(*args: object, **kwargs: object) -> _FakePopen:
+        result = runner(*args, **kwargs)  # type: ignore[operator]
+        assert isinstance(result, subprocess.CompletedProcess)
+        return _FakePopen(result)
+
+    return factory
 
 
 class OutputTest(unittest.TestCase):
@@ -531,6 +557,34 @@ class OutputTest(unittest.TestCase):
             with self.assertRaisesRegex(OutputError, "timed out"):
                 _run_with_input(["sleep"], "", timeout=1)
 
+    def test_run_stdout_timeout_kills_process_group_descendants(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "child.pid"
+            command = f"sleep 30 & child=$!; echo $child > {marker}; wait $child"
+            result = output_module._run_stdout_raw(["sh", "-c", command], timeout=1)
+            child = int(marker.read_text(encoding="ascii"))
+
+            deadline = time.monotonic() + 2
+            live = True
+            while time.monotonic() < deadline:
+                try:
+                    raw = Path(f"/proc/{child}/stat").read_text(encoding="ascii")
+                    state = raw.rsplit(")", 1)[1].split()[0]
+                    live = state not in {"Z", "X", "x"}
+                except OSError:
+                    live = False
+                if not live:
+                    break
+                time.sleep(0.01)
+            if live:
+                try:
+                    os.kill(child, 9)
+                except ProcessLookupError:
+                    pass
+
+        self.assertIsNone(result)
+        self.assertFalse(live)
+
     def test_run_with_input_limits_output_size(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             stdout = cast(BinaryIO, kwargs["stdout"])
@@ -592,7 +646,7 @@ class OutputTest(unittest.TestCase):
 
         with (
             unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
-            unittest.mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+            unittest.mock.patch("speed_of_cinnamon.output.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
         ):
             _run_stdout(["xdotool", "-h"])
 
@@ -602,7 +656,7 @@ class OutputTest(unittest.TestCase):
         with (
             unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
             unittest.mock.patch(
-                "speed_of_cinnamon.output.subprocess.run",
+                "speed_of_cinnamon.output.subprocess.Popen",
                 side_effect=ValueError("invalid process argument"),
             ),
         ):
@@ -612,8 +666,8 @@ class OutputTest(unittest.TestCase):
         with (
             unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
             unittest.mock.patch(
-                "speed_of_cinnamon.output.subprocess.run",
-                return_value=subprocess.CompletedProcess(["xdotool"], 0, stdout=b"ok", stderr=b""),
+                "speed_of_cinnamon.output.subprocess.Popen",
+                return_value=_FakePopen(subprocess.CompletedProcess(["xdotool"], 0, stdout=b"ok", stderr=b"")),
             ),
             unittest.mock.patch("speed_of_cinnamon.output._filesize", side_effect=OSError("capture read failed")),
         ):
@@ -631,8 +685,8 @@ class OutputTest(unittest.TestCase):
         with (
             unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
             unittest.mock.patch(
-                "speed_of_cinnamon.output.subprocess.run",
-                return_value=subprocess.CompletedProcess(["xdotool"], 0, stdout=b"", stderr=b""),
+                "speed_of_cinnamon.output.subprocess.Popen",
+                return_value=_FakePopen(subprocess.CompletedProcess(["xdotool"], 0, stdout=b"", stderr=b"")),
             ),
             unittest.mock.patch(
                 "speed_of_cinnamon.output.tempfile.TemporaryFile",
@@ -653,7 +707,7 @@ class OutputTest(unittest.TestCase):
 
         with (
             unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
-            unittest.mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+            unittest.mock.patch("speed_of_cinnamon.output.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
         ):
             self.assertEqual(_run_stdout(["xdotool", "-h"]), "file output")
 
@@ -666,7 +720,7 @@ class OutputTest(unittest.TestCase):
 
         with (
             unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
-            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
         ):
             self.assertEqual(_run_stdout(["xdotool", "--help"]), "")
 
@@ -674,8 +728,8 @@ class OutputTest(unittest.TestCase):
         with (
             unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
             mock.patch(
-                "speed_of_cinnamon.output.subprocess.run",
-                return_value=subprocess.CompletedProcess(["xdotool"], 0, stdout=b"x", stderr=b""),
+                "speed_of_cinnamon.output.subprocess.Popen",
+                return_value=_FakePopen(subprocess.CompletedProcess(["xdotool"], 0, stdout=b"x", stderr=b"")),
             ),
         ):
             self.assertEqual(_run_stdout(("xdotool", "-h")), "x")
@@ -688,7 +742,7 @@ class OutputTest(unittest.TestCase):
 
         with (
             unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
-            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
         ):
             self.assertEqual(_run_stdout(["xdotool", "--help"]), "")
 
@@ -700,7 +754,7 @@ class OutputTest(unittest.TestCase):
 
         with (
             unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
-            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
         ):
             self.assertEqual(_run_stdout(["xdotool", "--help"]), "")
 
@@ -708,8 +762,8 @@ class OutputTest(unittest.TestCase):
         with (
             unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
             mock.patch(
-                "speed_of_cinnamon.output.subprocess.run",
-                return_value=subprocess.CompletedProcess(["xdotool"], 0, stdout=b"ok\xff", stderr=b""),
+                "speed_of_cinnamon.output.subprocess.Popen",
+                return_value=_FakePopen(subprocess.CompletedProcess(["xdotool"], 0, stdout=b"ok\xff", stderr=b"")),
             ),
         ):
             self.assertEqual(_run_stdout(["xdotool", "--help"]), "")
@@ -718,8 +772,8 @@ class OutputTest(unittest.TestCase):
         with (
             unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
             mock.patch(
-                "speed_of_cinnamon.output.subprocess.run",
-                return_value=subprocess.CompletedProcess(["xdotool"], 0, stdout=b"abc\x00def", stderr=b""),
+                "speed_of_cinnamon.output.subprocess.Popen",
+                return_value=_FakePopen(subprocess.CompletedProcess(["xdotool"], 0, stdout=b"abc\x00def", stderr=b"")),
             ),
         ):
             self.assertEqual(_run_stdout(["xdotool", "--help"]), "")
@@ -853,7 +907,7 @@ class OutputTest(unittest.TestCase):
 
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
-            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
         ):
             self.assertEqual(_active_window_paste_key(), "ctrl+shift+v")
 
@@ -871,7 +925,7 @@ class OutputTest(unittest.TestCase):
 
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
-            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
         ):
             self.assertEqual(_active_window_paste_key(), "ctrl+v")
 
@@ -891,7 +945,7 @@ class OutputTest(unittest.TestCase):
 
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
-            mock.patch("speed_of_cinnamon.output.subprocess.run", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
         ):
             self.assertEqual(_active_window_paste_key(), "ctrl+shift+v")
 
@@ -1500,7 +1554,7 @@ class OutputTest(unittest.TestCase):
         proc = subprocess.CompletedProcess(["xclip"], 0, stdout=b" previous text \n\n", stderr=b"")
         with (
             mock.patch.object(output_module, "_which", side_effect=lambda name: "/usr/bin/xclip" if name == "xclip" else None),
-            mock.patch("speed_of_cinnamon.output.subprocess.run", return_value=proc),
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen", return_value=_FakePopen(proc)),
         ):
             available, text = output_module._read_text_clipboard_snapshot()
 

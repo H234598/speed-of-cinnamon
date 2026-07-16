@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import signal
 import shutil
 import stat
 import subprocess  # nosec B404
@@ -1069,6 +1070,22 @@ def _bounded_command_output_bytes(
     return completed_output
 
 
+def _terminate_output_process_group(process: subprocess.Popen[bytes]) -> bool:
+    if not process or not isinstance(process.pid, int) or process.pid <= 0:
+        return False
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+        return True
+    except ProcessLookupError:
+        return True
+    except (OSError, ValueError):
+        try:
+            process.kill()
+        except (OSError, ValueError):
+            return False
+        return False
+
+
 def _run_bounded_stdout_command(
     argv: list[str] | tuple[str, ...],
     *,
@@ -1084,21 +1101,32 @@ def _run_bounded_stdout_command(
         stdout_file = tempfile.TemporaryFile()
         stderr_file = tempfile.TemporaryFile()
         try:
-            proc = subprocess.run(  # nosec B603
+            proc = subprocess.Popen(  # nosec B603
                 [runtime_command, *argv[1:]],
-                input=b"",
-                text=False,
+                stdin=subprocess.PIPE,
                 stdout=stdout_file,
                 stderr=stderr_file,
-                timeout=timeout,
                 shell=False,
                 env=_filtered_environment(),
+                start_new_session=True,
             )
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError, ValueError) as exc:
+            completed_stdout, completed_stderr = proc.communicate(input=b"", timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            terminated = "proc" in locals() and _terminate_output_process_group(proc)
+            if "proc" in locals() and not terminated:
+                try:
+                    proc.wait(timeout=1)
+                except (subprocess.TimeoutExpired, OSError, ValueError):
+                    pass
+            if "proc" in locals():
+                try:
+                    proc.communicate(timeout=1 if not terminated else None)
+                except (OSError, ValueError, subprocess.TimeoutExpired):
+                    pass
+            primary_error = exc
+        except (FileNotFoundError, OSError, ValueError) as exc:
             primary_error = exc
         else:
-            completed_stdout = proc.stdout if isinstance(proc.stdout, bytes) else None
-            completed_stderr = proc.stderr if isinstance(proc.stderr, bytes) else None
             try:
                 output = _bounded_command_output_bytes(stdout_file, completed_stdout)
                 error_output = _bounded_command_output_bytes(stderr_file, completed_stderr)
