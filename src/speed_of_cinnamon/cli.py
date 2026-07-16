@@ -3098,12 +3098,16 @@ def _is_finalization_lock_active(state_path: Path) -> bool:
 def _inflight_recording_artifact_paths(audio_path: Path) -> set[Path]:
     if not isinstance(audio_path, Path):
         return set()
+    if _is_encrypted_recording_artifact(audio_path):
+        audio_path = _plaintext_recording_sibling_for_encrypted_path(audio_path)
+        if audio_path is None:
+            return set()
     if audio_path.suffix.lower() not in {".wav", ".flac"}:
         return set()
     artifact_paths: set[Path] = set()
     escaped_stem = glob.escape(audio_path.stem)
     for marker in (".trimmed-", ".encoded-"):
-        for suffix in (".wav", ".flac"):
+        for suffix in (".wav", ".flac", ".wav.socenc", ".flac.socenc"):
             for path in audio_path.parent.glob(f"{escaped_stem}{marker}*{suffix}"):
                 artifact_paths.add(path)
     return artifact_paths

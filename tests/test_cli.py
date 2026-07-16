@@ -5614,6 +5614,25 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(paths, {active_trimmed})
 
+    def test_inflight_recording_artifact_paths_include_encrypted_variants(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp)
+            active_audio = recordings / "active.flac.socenc"
+            active_trimmed = recordings / "active.trimmed-final.flac"
+            active_encrypted_trimmed = recordings / "active.trimmed-final.flac.socenc"
+            active_encrypted_encoded = recordings / "active.encoded-final.wav.socenc"
+            active_audio.write_bytes(b"encrypted audio")
+            active_trimmed.write_bytes(b"trimmed")
+            active_encrypted_trimmed.write_bytes(b"encrypted trimmed")
+            active_encrypted_encoded.write_bytes(b"encrypted encoded")
+
+            paths = cli._inflight_recording_artifact_paths(active_audio)
+
+        self.assertEqual(
+            paths,
+            {active_trimmed, active_encrypted_trimmed, active_encrypted_encoded},
+        )
+
     def test_cleanup_deletes_temporary_recording_artifacts_without_live_finalization_signal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
