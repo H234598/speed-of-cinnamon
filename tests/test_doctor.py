@@ -215,6 +215,25 @@ class DoctorTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertTrue(payload["configured"]["transcriber"]["ok"])
 
+    def test_whisper_cpp_rejects_directory_with_model_filename(self) -> None:
+        tools = {"python3", "pw-record", "whisper-cli"}
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "ggml-base.bin"
+            model.mkdir()
+            settings = {
+                "recorder": "auto",
+                "transcriber": "whisper-cpp",
+                "whisper-model": str(model),
+                "insert-method": "none",
+            }
+            with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
+                payload = doctor.report(settings)
+        self.assertFalse(payload["configured"]["transcriber"]["ok"])
+        self.assertEqual(
+            payload["configured"]["transcriber"]["detail"],
+            "whisper.cpp voice model must be a file",
+        )
+
     def test_auto_asr_can_use_downloaded_whisper_cpp_model(self) -> None:
         tools = {"python3", "pw-record", "whisper-cli"}
         with tempfile.TemporaryDirectory() as tmp:

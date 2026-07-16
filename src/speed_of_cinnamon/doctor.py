@@ -246,6 +246,8 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
     transcriber = normalize_backend(transcriber)
 
     model_backend = ""
+    local_model_exists = False
+    local_model_kind = ""
     local_model_is_invalid = bool(
         local_model and (_contains_escaped_null(local_model) or _contains_http_header_control_chars(local_model))
     )
@@ -254,9 +256,18 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
             local_model_path = Path(local_model).expanduser()
             assert_no_symlink_ancestors(local_model_path, field_name="voice model path")
             model_backend = model_backend_for_path(local_model_path)
-            if local_model_path.is_dir() and not model_backend:
+            local_model_exists = local_model_path.exists()
+            if local_model_path.is_file():
+                local_model_kind = "file"
+            elif local_model_path.is_dir():
+                local_model_kind = "directory"
+            if local_model_kind == "directory" and not model_backend:
                 model_backend = "faster-whisper"
-            model_ok = local_model_path.exists()
+            model_ok = local_model_exists and (
+                (model_backend == "whisper-cpp" and local_model_kind == "file")
+                or (model_backend == "faster-whisper" and local_model_kind == "directory")
+                or (not model_backend and local_model_kind in {"file", "directory"})
+            )
         except (OSError, ValueError, RuntimeError):
             return {
                 "ok": False,
@@ -272,6 +283,14 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
     def _model_problem(value: str, *, explicit_backend: str = "") -> dict[str, object] | None:
         if local_model_is_invalid:
             return {"ok": False, "value": value, "detail": "voice model path is invalid"}
+        if local_model and not local_model_exists:
+            return {"ok": False, "value": value, "detail": "voice model not found"}
+        if local_model and not model_ok:
+            if model_backend == "whisper-cpp":
+                return {"ok": False, "value": value, "detail": "whisper.cpp voice model must be a file"}
+            if model_backend == "faster-whisper":
+                return {"ok": False, "value": value, "detail": "faster-whisper voice model must be a directory"}
+            return {"ok": False, "value": value, "detail": "voice model path is invalid"}
         if local_model and not local_model_language_ok:
             if explicit_backend == "whisper-cpp":
                 return {
@@ -284,8 +303,6 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
                 "value": value,
                 "detail": f"voice model does not support language {language}; use a compatible model",
             }
-        if local_model and not model_ok:
-            return {"ok": False, "value": value, "detail": "voice model not found"}
         return None
 
     def _model_backend_status(value: str, expected_backend: str = "") -> dict[str, object]:
