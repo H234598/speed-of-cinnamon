@@ -711,6 +711,40 @@ class PathSafetyTest(unittest.TestCase):
 
             self.assertEqual(target.read_text(encoding="utf-8"), "new")
 
+    def test_atomic_write_preserves_success_when_recovery_backup_cleanup_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            target.write_text("old", encoding="utf-8")
+            real_unlink = path_safety.os.unlink
+
+            def fail_backup_cleanup(name: object, *args: object, **kwargs: object) -> None:
+                if isinstance(name, str) and name.endswith(".bak"):
+                    raise OSError("backup cleanup failed")
+                real_unlink(name, *args, **kwargs)
+
+            with mock.patch.object(path_safety.os, "unlink", side_effect=fail_backup_cleanup):
+                path_safety.write_text_atomically_without_following_symlinks(target, "new")
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "new")
+            self.assertEqual(len(list(Path(tmp).glob(".settings.json.*.bak"))), 1)
+
+    def test_atomic_write_preserves_success_when_recovery_backup_cleanup_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            target.write_text("old", encoding="utf-8")
+            real_unlink = path_safety.os.unlink
+
+            def interrupt_backup_cleanup(name: object, *args: object, **kwargs: object) -> None:
+                if isinstance(name, str) and name.endswith(".bak"):
+                    raise KeyboardInterrupt("backup cleanup interrupted")
+                real_unlink(name, *args, **kwargs)
+
+            with mock.patch.object(path_safety.os, "unlink", side_effect=interrupt_backup_cleanup):
+                path_safety.write_text_atomically_without_following_symlinks(target, "new")
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "new")
+            self.assertEqual(len(list(Path(tmp).glob(".settings.json.*.bak"))), 1)
+
     def test_read_text_with_max_bytes_rejects_larger_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.txt"

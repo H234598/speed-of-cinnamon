@@ -544,8 +544,13 @@ def _write_atomically_without_following_symlinks(
                 raise OSError(f"{field_name} recovery backup is not safe")
             if target_stat is None or not _same_leaf_identity(backup_stat, target_stat):
                 raise OSError(f"{field_name} recovery backup changed before cleanup")
-            os.unlink(backup_name, dir_fd=parent_fd)
-            os.fsync(parent_fd)
+            try:
+                os.unlink(backup_name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+            except OSError:
+                pass
+            except BaseException:
+                pass
     except BaseException as exc:
         primary_error = exc
         if transaction_active:
