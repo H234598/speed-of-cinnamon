@@ -475,6 +475,14 @@ class AlarmTest(unittest.TestCase):
             self.assertTrue(lock_path.exists())
             self.assertTrue(backing.exists())
 
+    def test_alarm_store_lock_rejects_non_private_parent_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chmod(tmp, 0o777)
+            path = Path(tmp) / "alarms.json"
+
+            with self.assertRaisesRegex(RuntimeError, "alarm store lock directory must be private"):
+                add_alarm("09:00", name="Morning", days="mon", path=path)
+
     def test_alarm_store_lock_closes_parent_when_lock_close_fails(self) -> None:
         closed_fds: list[int] = []
 
@@ -486,6 +494,7 @@ class AlarmTest(unittest.TestCase):
         with (
             mock.patch.object(alarm_module, "_assert_clean_path"),
             mock.patch.object(alarm_module, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(alarm_module, "assert_fd_is_private_directory"),
             mock.patch.object(alarm_module, "assert_fd_is_regular_private_file"),
             mock.patch.object(alarm_module.os, "open", return_value=123),
             mock.patch.object(alarm_module.os, "close", side_effect=close),
@@ -524,6 +533,7 @@ class AlarmTest(unittest.TestCase):
         with (
             mock.patch.object(alarm_module, "_assert_clean_path"),
             mock.patch.object(alarm_module, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(alarm_module, "assert_fd_is_private_directory"),
             mock.patch.object(alarm_module, "assert_fd_is_regular_private_file"),
             mock.patch.object(alarm_module.os, "open", return_value=123),
             mock.patch.object(alarm_module.os, "close", side_effect=closed_fds.append),
@@ -539,6 +549,7 @@ class AlarmTest(unittest.TestCase):
         with (
             mock.patch.object(alarm_module, "_assert_clean_path"),
             mock.patch.object(alarm_module, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(alarm_module, "assert_fd_is_private_directory"),
             mock.patch.object(alarm_module.os, "open", side_effect=OSError("lock open failed")),
             mock.patch.object(alarm_module.os, "close", side_effect=OSError("parent close failed")),
         ):
@@ -552,6 +563,7 @@ class AlarmTest(unittest.TestCase):
         with (
             mock.patch.object(alarm_module, "_assert_clean_path"),
             mock.patch.object(alarm_module, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(alarm_module, "assert_fd_is_private_directory"),
             mock.patch.object(alarm_module.os, "open", side_effect=KeyboardInterrupt),
             mock.patch.object(alarm_module.os, "close") as mocked_close,
         ):

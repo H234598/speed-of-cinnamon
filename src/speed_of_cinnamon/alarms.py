@@ -13,6 +13,7 @@ from typing import Any, Iterator
 from .paths import alarms_file
 from .path_safety import (
     assert_no_symlink_ancestors,
+    assert_fd_is_private_directory,
     assert_fd_is_regular_private_file,
     assert_safe_path_components,
     ensure_directory_without_following_symlinks,
@@ -86,6 +87,7 @@ def _locked_alarm_store(path: Path | None = None) -> Iterator[Path]:
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     parent_fd = ensure_directory_without_following_symlinks(lock_path.parent, field_name="alarm store lock directory")
     try:
+        assert_fd_is_private_directory(parent_fd, field_name="alarm store lock directory")
         fd = os.open(
             lock_path.name,
             os.O_RDWR | os.O_CREAT | nofollow_flag | nonblock_flag,
