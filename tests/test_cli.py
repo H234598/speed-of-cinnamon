@@ -8612,6 +8612,49 @@ class CliTest(unittest.TestCase):
             self.assertEqual(final_state.transcript_path, "")
             self.assertEqual(list(transcript_root.glob("*.txt")), [])
 
+    def test_finalize_preserves_primary_error_if_transcript_cleanup_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            transcript_root = tmp_path / "speed-of-cinnamon" / "transcripts"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="finalizing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=True)
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch(
+                    "speed_of_cinnamon.cli.detect_silent_recording",
+                    return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent"),
+                ),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("skip trim")),
+                mock.patch("speed_of_cinnamon.cli.reencode_recording_to_flac", side_effect=cli.RecorderError("skip encode")),
+                mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.insert_text", side_effect=RuntimeError("paste failed")),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
+                mock.patch(
+                    "speed_of_cinnamon.cli._remove_transcript_file",
+                    side_effect=KeyboardInterrupt("cleanup interrupted"),
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "paste failed"):
+                    cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+            transcript_files = list(transcript_root.glob("*.txt"))
+
+        self.assertEqual(final_state.status, "error")
+        self.assertIn("paste failed", final_state.error)
+        self.assertIn("cleanup interrupted", final_state.error)
+        self.assertEqual(final_state.transcript_path, "")
+        self.assertEqual(len(transcript_files), 1)
+
     def test_finalize_removes_written_transcript_even_if_error_state_update_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

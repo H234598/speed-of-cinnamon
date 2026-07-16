@@ -4347,8 +4347,10 @@ def finalize_recording(
             if written_text_path is not None and not preserve_written_text_on_error:
                 try:
                     _remove_transcript_file(written_text_path)
-                except RuntimeError as cleanup_exc:
-                    error_update["error"] = f"{error_text}; {cleanup_exc}"
+                except BaseException as cleanup_exc:
+                    cleanup_error = _redact_error_for_user(str(cleanup_exc))
+                    error_update["error"] = f"{error_text}; {cleanup_error}"
+                    exc.add_note(f"transcript cleanup failed: {cleanup_error}")
                 else:
                     error_update["transcript"] = ""
                     error_update["transcript_path"] = ""
