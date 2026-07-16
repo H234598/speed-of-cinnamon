@@ -1777,7 +1777,9 @@ def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) ->
                     f"failed to remove encrypted transcript sibling after plaintext storage: {encrypted_sibling}"
                 ) from exc
         return path, ARTIFACT_ENCRYPTION_OFF
+    encrypted_target_existed = False
     try:
+        encrypted_target_existed = _path_exists_or_is_symlink(encrypted_path_for(path))
         encrypted_path, effective_mode = write_encrypted_bytes_atomically(
             path,
             payload,
@@ -1790,10 +1792,14 @@ def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) ->
     try:
         _remove_plaintext_transcript_sibling_after_encryption(path, encrypted_path)
     except RuntimeError as exc:
-        try:
-            _rollback_encrypted_artifact_after_plaintext_cleanup_failure(encrypted_path, field_name="encrypted transcript file")
-        except BaseException as rollback_exc:
-            _raise_encrypted_artifact_rollback_failure(exc, rollback_exc)
+        if not encrypted_target_existed:
+            try:
+                _rollback_encrypted_artifact_after_plaintext_cleanup_failure(
+                    encrypted_path,
+                    field_name="encrypted transcript file",
+                )
+            except BaseException as rollback_exc:
+                _raise_encrypted_artifact_rollback_failure(exc, rollback_exc)
         raise
     return encrypted_path, effective_mode
 
@@ -1893,7 +1899,9 @@ def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tu
                         f"failed to remove encrypted recording sibling after plaintext storage: {encrypted_sibling}"
                     )
         return path, ARTIFACT_ENCRYPTION_OFF
+    encrypted_target_existed = False
     try:
+        encrypted_target_existed = _path_exists_or_is_symlink(encrypted_path_for(path))
         payload = read_decrypted_bytes_from_file(
             path,
             kind="recording",
@@ -1918,10 +1926,14 @@ def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tu
     try:
         _remove_plaintext_recording_sibling_after_encryption(path, encrypted_path)
     except RuntimeError as exc:
-        try:
-            _rollback_encrypted_artifact_after_plaintext_cleanup_failure(encrypted_path, field_name="encrypted recording artifact")
-        except BaseException as rollback_exc:
-            _raise_encrypted_artifact_rollback_failure(exc, rollback_exc)
+        if not encrypted_target_existed:
+            try:
+                _rollback_encrypted_artifact_after_plaintext_cleanup_failure(
+                    encrypted_path,
+                    field_name="encrypted recording artifact",
+                )
+            except BaseException as rollback_exc:
+                _raise_encrypted_artifact_rollback_failure(exc, rollback_exc)
         raise
     return encrypted_path, effective_mode
 
@@ -2081,6 +2093,7 @@ def write_transcripts_export(
     if plaintext:
         _write_text_atomic(output_path, content)
         return output_path, count, ARTIFACT_ENCRYPTION_OFF
+    encrypted_target_existed = _path_exists_or_is_symlink(encrypted_path_for(output_path))
     encrypted_path, used_mode = write_encrypted_bytes_atomically(
         output_path,
         content.encode("utf-8"),
@@ -2091,10 +2104,14 @@ def write_transcripts_export(
     try:
         _remove_plaintext_export_sibling_after_encryption(output_path, encrypted_path)
     except RuntimeError as exc:
-        try:
-            _rollback_encrypted_artifact_after_plaintext_cleanup_failure(encrypted_path, field_name="encrypted transcript export")
-        except BaseException as rollback_exc:
-            _raise_encrypted_artifact_rollback_failure(exc, rollback_exc)
+        if not encrypted_target_existed:
+            try:
+                _rollback_encrypted_artifact_after_plaintext_cleanup_failure(
+                    encrypted_path,
+                    field_name="encrypted transcript export",
+                )
+            except BaseException as rollback_exc:
+                _raise_encrypted_artifact_rollback_failure(exc, rollback_exc)
         raise
     return encrypted_path, count, used_mode
 
@@ -2763,6 +2780,16 @@ def _transcript_sibling_path(path: Path | None) -> Path | None:
     if is_encrypted_path(path):
         return path.with_name(path.name[:-len(".socenc")])
     return encrypted_path_for(path)
+
+
+def _path_exists_or_is_symlink(path: Path) -> bool:
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
 
 
 def _transcript_sibling_missing_but_safe(path: Path | None) -> bool:

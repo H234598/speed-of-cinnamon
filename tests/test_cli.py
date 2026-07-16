@@ -1617,6 +1617,38 @@ class CliTest(unittest.TestCase):
         self.assertTrue(plaintext_exists)
         self.assertFalse(encrypted_exists)
 
+    def test_stored_transcript_keeps_new_encrypted_file_when_plaintext_cleanup_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_root = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_root.mkdir(parents=True)
+            transcript = transcript_root / "input.txt"
+            transcript.write_text("stale plaintext\n", encoding="utf-8")
+            args = argparse.Namespace(artifact_encryption="passphrase")
+            env = {
+                "XDG_STATE_HOME": tmp,
+                artifact_crypto.PASSPHRASE_ENV: artifact_crypto._b64encode(bytes(range(32))),
+            }
+            with mock.patch.dict(os.environ, env, clear=False):
+                encrypted_transcript, _mode = artifact_crypto.write_encrypted_bytes_atomically(
+                    transcript,
+                    b"old encrypted transcript\n",
+                    "passphrase",
+                    kind="transcript",
+                    field_name="transcript file",
+                )
+                with (
+                    mock.patch.object(cli, "_remove_transcript_file", return_value=False),
+                    self.assertRaisesRegex(RuntimeError, "failed to remove plaintext transcript artifact"),
+                ):
+                    cli._write_stored_transcript(transcript, "new encrypted transcript\n", args)
+                encrypted_payload = artifact_crypto.read_decrypted_bytes_from_file(
+                    encrypted_transcript,
+                    kind="transcript",
+                    field_name="transcript file",
+                )
+
+        self.assertEqual(encrypted_payload, b"new encrypted transcript\n")
+
     def test_stored_transcript_preserves_cleanup_error_when_rollback_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             transcript = Path(tmp) / "input.txt"
