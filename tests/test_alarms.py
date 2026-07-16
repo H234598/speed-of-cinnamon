@@ -338,6 +338,19 @@ class AlarmTest(unittest.TestCase):
 
         self.assertEqual(payload["count"], 0)
 
+    def test_read_only_alarm_operations_lock_store(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            save_alarm_store({"alarms": [], "last_checked_at": ""}, path)
+
+            with mock.patch.object(alarm_module, "_locked_alarm_store", wraps=alarm_module._locked_alarm_store) as mocked_lock:
+                list_alarm_payload(path)
+            mocked_lock.assert_called_once_with(path)
+
+            with mock.patch.object(alarm_module, "_locked_alarm_store", wraps=alarm_module._locked_alarm_store) as mocked_lock:
+                check_due_alarms(path=path, now=datetime(2026, 6, 1, 9, 10), mark=False)
+            mocked_lock.assert_called_once_with(path)
+
     def test_add_alarm_rejects_full_store_without_dropping_existing_alarms(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"

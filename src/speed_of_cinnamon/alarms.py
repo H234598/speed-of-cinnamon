@@ -497,7 +497,8 @@ def alarm_public_payload(alarm: dict[str, Any]) -> dict[str, Any]:
 
 
 def list_alarm_payload(path: Path | None = None, now: datetime | None = None) -> dict[str, Any]:
-    store = load_alarm_store(path)
+    with _locked_alarm_store(path) as store_path:
+        store = load_alarm_store(store_path)
     alarms = [alarm_public_payload(alarm) for alarm in store["alarms"]]
     return {
         "status": "done",
@@ -683,15 +684,13 @@ def check_due_alarms(
 ) -> dict[str, Any]:
     mark = _coerce_required_bool(mark, field_name="mark")
     current = _normalize_local_datetime(now or now_local(), field_name="now")
-    if mark:
-        with _locked_alarm_store(path) as store_path:
-            return _check_due_alarms_locked(
-                path=store_path,
-                current=current,
-                mark=mark,
-                catch_up_minutes=catch_up_minutes,
-            )
-    return _check_due_alarms_locked(path=path, current=current, mark=mark, catch_up_minutes=catch_up_minutes)
+    with _locked_alarm_store(path) as store_path:
+        return _check_due_alarms_locked(
+            path=store_path,
+            current=current,
+            mark=mark,
+            catch_up_minutes=catch_up_minutes,
+        )
 
 
 def _check_due_alarms_locked(

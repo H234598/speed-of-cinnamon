@@ -3795,6 +3795,31 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("cli-path", import_payload["settings"])
         self.assertEqual(alarms["alarms"][0]["name"], "Standup")
 
+    @mock.patch("speed_of_cinnamon.cli.write_export")
+    @mock.patch("speed_of_cinnamon.cli.load_alarm_store")
+    @mock.patch("speed_of_cinnamon.cli._locked_alarm_store")
+    def test_settings_export_locks_alarm_store_before_reading(
+        self,
+        mocked_lock: mock.Mock,
+        mocked_load: mock.Mock,
+        mocked_write: mock.Mock,
+    ) -> None:
+        locked_path = Path("/tmp/locked-alarms.json")
+        mocked_lock.return_value.__enter__.return_value = locked_path
+        mocked_load.return_value = {"alarms": [], "last_checked_at": ""}
+        mocked_write.return_value = {"settings": {}, "alarms": {"alarms": []}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = cli.command_settings_export(argparse.Namespace(
+                settings_json="{}",
+                settings_json_stdin=False,
+                output=str(Path(tmp) / "settings.json"),
+            ))
+
+        mocked_lock.assert_called_once_with()
+        mocked_load.assert_called_once_with(locked_path)
+        self.assertEqual(result["status"], "done")
+
     @mock.patch("speed_of_cinnamon.cli.ensure_runtime_dirs")
     @mock.patch("speed_of_cinnamon.cli.read_export")
     @mock.patch("speed_of_cinnamon.cli.save_alarm_store")

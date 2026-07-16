@@ -5164,7 +5164,9 @@ def command_settings_export(args: argparse.Namespace) -> dict[str, object]:
         default=default_settings_export_file(),
         max_chars=_settings_json_path_limit(args.output),
     )
-    payload = write_export(path, settings, load_alarm_store())
+    with _locked_alarm_store() as store_path:
+        alarm_store = load_alarm_store(store_path)
+    payload = write_export(path, settings, alarm_store)
     return {
         "status": "done",
         "message": "settings exported",
