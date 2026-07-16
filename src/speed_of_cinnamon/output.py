@@ -997,6 +997,11 @@ def _run_with_input(
                 exc.add_note(f"{command} process group could not be terminated")
             raise OutputError(f"{command} timed out after {timeout}s") from exc
         except (OSError, ValueError) as exc:
+            if "proc" in locals():
+                try:
+                    _reap_timed_out_output_process(proc)
+                except BaseException as cleanup_error:
+                    exc.add_note(f"{command} process cleanup failed: {cleanup_error}")
             raise OutputError(f"{command} failed to execute: {exc}") from exc
         except BaseException as exc:
             if "proc" in locals():
@@ -1134,6 +1139,11 @@ def _run_bounded_stdout_command(
                 _reap_timed_out_output_process(proc)
             primary_error = exc
         except (FileNotFoundError, OSError, ValueError) as exc:
+            if "proc" in locals():
+                try:
+                    _reap_timed_out_output_process(proc)
+                except BaseException as cleanup_error:
+                    exc.add_note(f"bounded command process cleanup failed: {cleanup_error}")
             primary_error = exc
         except BaseException as exc:
             if "proc" in locals():
