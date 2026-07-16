@@ -134,6 +134,8 @@ def _validate_http_url(url: str, *, field_name: str, allow_query_fragment: bool 
         raise PostProcessError(f"{field_name} must use http:// or https://")
     if not parsed.netloc:
         raise PostProcessError(f"{field_name} is missing network location")
+    if not parsed.hostname:
+        raise PostProcessError(f"{field_name} is missing hostname")
     try:
         parsed.port
     except ValueError as exc:

@@ -22,6 +22,7 @@ from speed_of_cinnamon.postprocessor import (
     _openai_compatible_headers,
     _open_http_request,
     _validate_same_origin_redirect,
+    _validate_http_url,
     _format_model_size,
     _normalize_ollama_model,
     post_process_text,
@@ -670,6 +671,12 @@ class PostProcessorTest(unittest.TestCase):
                 openai_compatible_model="local",
                 openai_compatible_url="https://[::1",
             )
+
+    def test_http_url_rejects_missing_hostname(self) -> None:
+        for value in ("https://:", "https://:123", "https://@"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(PostProcessError, "remote url is missing hostname"):
+                    _validate_http_url(value, field_name="remote url")
 
     def test_openai_compatible_backend_rejects_remote_plain_http_url(self) -> None:
         with self.assertRaisesRegex(PostProcessError, "must use https:// unless host is local loopback"):
