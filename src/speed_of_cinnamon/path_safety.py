@@ -463,9 +463,13 @@ def _write_atomically_without_following_symlinks(
             except OSError as cleanup_error:
                 if handle_primary_error is not None:
                     _note_cleanup_failure(handle_primary_error, cleanup_error)
+                else:
+                    raise
             except BaseException as cleanup_error:
                 if handle_primary_error is not None:
                     _note_cleanup_failure(handle_primary_error, cleanup_error)
+                else:
+                    raise
 
         try:
             current_target_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
