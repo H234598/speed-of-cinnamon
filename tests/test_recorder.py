@@ -2654,6 +2654,19 @@ Source #13
         self.assertFalse(result)
         mocked_kill.assert_not_called()
 
+    def test_stop_process_does_not_kill_reused_zombie_pid(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.recorder.os.getpgid", side_effect=ProcessLookupError),
+            mock.patch("speed_of_cinnamon.recorder._process_group_exists", return_value=True),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="foreign-identity"),
+            mock.patch("speed_of_cinnamon.recorder._process_is_gone", return_value=True),
+            mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
+        ):
+            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+
+        self.assertFalse(result)
+        mocked_kill.assert_not_called()
+
     def test_stop_process_cleans_group_after_leader_was_reaped(self) -> None:
         group_checks = 0
 

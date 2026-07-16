@@ -1847,7 +1847,7 @@ def stop_process(
             and _process_is_gone(str(pid))
             and _process_group_exists(pid)
         ):
-            return True
+            return _recording_process_identity_for_pid(pid) is None
         return False
 
     if not target_identity_still_safe():
