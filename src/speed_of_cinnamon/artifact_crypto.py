@@ -323,7 +323,8 @@ def _scrub_temp_passphrase_file(parent_fd: int, temp_name: str) -> None:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
         raise ArtifactCryptoError("secure artifact encryption passphrase temporary file scrubbing is not supported")
-    fd = os.open(temp_name, os.O_WRONLY | nofollow_flag, dir_fd=parent_fd)
+    nonblock_flag = getattr(os, "O_NONBLOCK", 0)
+    fd = os.open(temp_name, os.O_WRONLY | nofollow_flag | nonblock_flag, dir_fd=parent_fd)
     primary_error: BaseException | None = None
     try:
         file_stat = os.fstat(fd)

@@ -402,6 +402,22 @@ class ArtifactCryptoTest(unittest.TestCase):
         ):
             artifact_crypto._scrub_temp_passphrase_file(456, ".artifact.key.tmp")
 
+    def test_scrub_temp_passphrase_opens_nonblocking(self) -> None:
+        with (
+            mock.patch.object(artifact_crypto.os, "open", return_value=123) as mocked_open,
+            mock.patch.object(
+                artifact_crypto.os,
+                "fstat",
+                return_value=mock.Mock(st_mode=stat.S_IFREG, st_size=0),
+            ),
+            mock.patch.object(artifact_crypto.os, "ftruncate"),
+            mock.patch.object(artifact_crypto.os, "close"),
+        ):
+            artifact_crypto._scrub_temp_passphrase_file(456, ".artifact.key.tmp")
+
+        flags = mocked_open.call_args.args[1]
+        self.assertTrue(flags & getattr(os, "O_NONBLOCK", 0))
+
     def test_default_passphrase_rotation_rejects_target_swap_during_backup_activation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "artifact.key"
