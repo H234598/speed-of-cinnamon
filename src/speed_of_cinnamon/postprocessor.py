@@ -47,6 +47,7 @@ MAX_POSTPROCESS_URL_CHARS = 2_048
 MAX_OPENAI_COMPATIBLE_API_KEY_CHARS = 4_096
 MAX_OPENAI_COMPATIBLE_MODEL_CHARS = 240
 MAX_OLLAMA_MODEL_CHARS = 240
+MAX_MODEL_LIST_ENTRIES = 1_000
 OPENAI_COMPATIBLE_TEXT_MODEL_EXCLUDED_PREFIXES = (
     "ada-",
     "babbage-",
@@ -613,6 +614,12 @@ def list_ollama_models(url: str = DEFAULT_OLLAMA_URL, timeout: int = 5) -> dict[
             "models": [],
             "message": "Ollama is running but returned no model list",
         }
+    if len(raw_models) > MAX_MODEL_LIST_ENTRIES:
+        return {
+            "available": False,
+            "models": [],
+            "message": f"Ollama returned too many model entries (max {MAX_MODEL_LIST_ENTRIES})",
+        }
     models = [model for item in raw_models if (model := _normalize_ollama_model(item))]
     models.sort(key=lambda item: str(item["name"]).lower())
     return {
@@ -722,6 +729,12 @@ def list_openai_compatible_models(
             "available": True,
             "models": [],
             "message": "OpenAI-compatible API returned no model list",
+        }
+    if len(raw_models) > MAX_MODEL_LIST_ENTRIES:
+        return {
+            "available": False,
+            "models": [],
+            "message": f"OpenAI-compatible API returned too many model entries (max {MAX_MODEL_LIST_ENTRIES})",
         }
     models = [model for item in raw_models if (model := _normalize_openai_compatible_model(item))]
     models.sort(key=lambda item: str(item["name"]).lower())

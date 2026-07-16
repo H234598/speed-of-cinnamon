@@ -28,6 +28,7 @@ from speed_of_cinnamon.postprocessor import (
     post_process_with_openai_compatible,
     MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
     MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
+    MAX_MODEL_LIST_ENTRIES,
     MAX_POSTPROCESS_JSON_BYTES,
     MAX_POSTPROCESS_PROMPT_CHARS,
     MAX_POSTPROCESS_URL_CHARS,
@@ -1433,6 +1434,15 @@ class PostProcessorTest(unittest.TestCase):
         self.assertEqual(result["models"], [])
         self.assertIn("invalid JSON", result["message"])
 
+    def test_list_ollama_models_rejects_oversized_model_list(self) -> None:
+        payload = {"models": [{"name": f"model-{index}"} for index in range(MAX_MODEL_LIST_ENTRIES + 1)]}
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", return_value=FakeResponse(payload)):
+            result = list_ollama_models("http://127.0.0.1:11434/")
+
+        self.assertFalse(result["available"])
+        self.assertEqual(result["models"], [])
+        self.assertIn("too many model entries", result["message"])
+
     def test_list_openai_compatible_models_reads_models_endpoint(self) -> None:
         payload = {
             "object": "list",
@@ -1479,6 +1489,15 @@ class PostProcessorTest(unittest.TestCase):
         self.assertTrue(result["available"])
         self.assertEqual([model["name"] for model in result["models"]], ["local-safe"])
         self.assertEqual(result["models"][0]["description"], "")
+
+    def test_list_openai_compatible_models_rejects_oversized_model_list(self) -> None:
+        payload = {"data": [{"id": f"local-{index}"} for index in range(MAX_MODEL_LIST_ENTRIES + 1)]}
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", return_value=FakeResponse(payload)):
+            result = list_openai_compatible_models("http://127.0.0.1:8000/v1/")
+
+        self.assertFalse(result["available"])
+        self.assertEqual(result["models"], [])
+        self.assertIn("too many model entries", result["message"])
 
     def test_list_openai_compatible_models_keeps_text_models_only(self) -> None:
         payload = {
