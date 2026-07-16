@@ -18,6 +18,7 @@ from .postprocessor import (
     MAX_OLLAMA_MODEL_CHARS,
     MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
     _openai_compatible_model_supports_text_polishing,
+    _safe_prompt_language,
 )
 from .path_safety import assert_no_symlink_ancestors
 from .recorder import MAX_RECORDING_SECONDS
@@ -541,6 +542,7 @@ def _output_status(
 def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
     backend = _setting(settings, "post-process-backend", "none").lower().replace("_", "-")
     command_template = _setting(settings, "post-process-command", limit=False)
+    language = _setting(settings, "language", "en", limit=False)
     ollama_model = _setting(settings, "ollama-model", limit=False)
     ollama_url = _setting(settings, "ollama-url", "http://127.0.0.1:11434", limit=False)
     openai_compatible_model = _setting(
@@ -550,6 +552,14 @@ def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
         limit=False,
     )
     openai_compatible_url = _setting(settings, "openai-compatible-url", DEFAULT_OPENAI_COMPATIBLE_URL, limit=False)
+    simple_language_required = backend in {"ollama", "openai-compatible", "openai", "local-openai"} or (
+        backend in {"command", "custom"} and "{language}" in command_template
+    )
+    if simple_language_required:
+        try:
+            _safe_prompt_language(language)
+        except RuntimeError as exc:
+            return {"ok": False, "value": backend, "detail": str(exc)}
     if backend in {"", "none", "off", "disabled"}:
         return {"ok": True, "value": "none", "detail": "text polishing disabled"}
     if backend in {"command", "custom"}:
