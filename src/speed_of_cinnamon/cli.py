@@ -3363,6 +3363,34 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
         log_deleted = remove_started_artifact(log_path, ".log")
         return audio_deleted and log_deleted
 
+    def cleanup_unpersisted_startup(
+        primary_error: BaseException,
+        process: subprocess.Popen[bytes] | None,
+        *,
+        expected_process_identity: str | None = None,
+    ) -> None:
+        if process is not None:
+            try:
+                stopped = stop_process(
+                    process.pid,
+                    expected_process_identity=expected_process_identity,
+                    allow_unverified_process=expected_process_identity is None,
+                )
+                if not stopped:
+                    try:
+                        process_gone = process.poll() is not None
+                    except BaseException:
+                        process_gone = False
+                    if not process_gone:
+                        primary_error.add_note("recorder process could not be stopped safely")
+            except BaseException as cleanup_error:
+                primary_error.add_note(f"recorder process cleanup failed: {cleanup_error}")
+        try:
+            if not cleanup_started_artifacts():
+                primary_error.add_note("recorder artifacts could not be cleaned")
+        except BaseException as cleanup_error:
+            primary_error.add_note(f"recorder artifact cleanup failed: {cleanup_error}")
+
     def reset_recording_artifacts() -> None:
         nonlocal audio_path, log_path
         if not cleanup_started_artifacts():
@@ -3374,6 +3402,7 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
     command: RecorderCommand | None = None
     proc: subprocess.Popen[bytes] | None = None
     for recorder_preference in recorder_preferences:
+        candidate_proc: subprocess.Popen[bytes] | None = None
         try:
             candidate = choose_recorder(recorder_preference, audio_path, max_seconds, normalized_input_device)
             candidate_proc = start_recorder(candidate, log_path)
@@ -3385,8 +3414,16 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
                 raise
             reset_recording_artifacts()
             continue
-        time.sleep(RECORDER_START_GRACE_SECONDS)
-        if candidate_proc.poll() is None:
+        except BaseException as exc:
+            cleanup_unpersisted_startup(exc, candidate_proc)
+            raise
+        try:
+            time.sleep(RECORDER_START_GRACE_SECONDS)
+            candidate_running = candidate_proc.poll() is None
+        except BaseException as exc:
+            cleanup_unpersisted_startup(exc, candidate_proc)
+            raise
+        if candidate_running:
             command = candidate
             proc = candidate_proc
             break
@@ -3444,6 +3481,13 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
             raise RuntimeError(f"{state_error}; recorder process could not be stopped safely") from state_error
         if not cleanup_started_artifacts():
             raise RuntimeError(f"{state_error}; recorder artifacts could not be cleaned") from state_error
+        raise
+    except BaseException as state_error:
+        cleanup_unpersisted_startup(
+            state_error,
+            proc,
+            expected_process_identity=process_identity,
+        )
         raise
     artifact_cleanup = _enforce_recording_artifact_cap(state, state_path=store.path)
     cleanup_failed_paths = _cleanup_failed_paths(artifact_cleanup)

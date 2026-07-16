@@ -9500,6 +9500,52 @@ class CliTest(unittest.TestCase):
         mocked_stop.assert_called_once_with(23456, expected_process_identity="proc-identity")
         self.assertEqual(artifacts, [])
 
+    def test_start_preserves_interrupt_and_cleans_artifacts_during_startup_grace(self) -> None:
+        proc = mock.Mock()
+        proc.pid = 23456
+        proc.poll.return_value = None
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.choose_recorder", return_value=RecorderCommand("test-recorder", [])),
+                mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=proc),
+                mock.patch("speed_of_cinnamon.cli.time.sleep", side_effect=KeyboardInterrupt("startup interrupted")),
+                mock.patch("speed_of_cinnamon.cli.stop_process", return_value=True) as mocked_stop,
+            ):
+                with self.assertRaises(KeyboardInterrupt) as context:
+                    cli.run(["start", "--state-file", str(state_file)])
+            artifacts = list(recordings.glob("*")) if recordings.exists() else []
+
+        self.assertEqual(str(context.exception), "startup interrupted")
+        mocked_stop.assert_called_once_with(23456, expected_process_identity=None, allow_unverified_process=True)
+        self.assertEqual(artifacts, [])
+
+    def test_start_preserves_interrupt_and_cleans_artifacts_when_state_write_is_interrupted(self) -> None:
+        proc = mock.Mock()
+        proc.pid = 23456
+        proc.poll.return_value = None
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.choose_recorder", return_value=RecorderCommand("test-recorder", [])),
+                mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=proc),
+                mock.patch("speed_of_cinnamon.cli.time.sleep"),
+                mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value="proc-identity"),
+                mock.patch("speed_of_cinnamon.cli.stop_process", return_value=True) as mocked_stop,
+                mock.patch("speed_of_cinnamon.cli.StateStore.write", side_effect=KeyboardInterrupt("state interrupted")),
+            ):
+                with self.assertRaises(KeyboardInterrupt) as context:
+                    cli.run(["start", "--state-file", str(state_file)])
+            artifacts = list(recordings.glob("*")) if recordings.exists() else []
+
+        self.assertEqual(str(context.exception), "state interrupted")
+        mocked_stop.assert_called_once_with(23456, expected_process_identity="proc-identity", allow_unverified_process=False)
+        self.assertEqual(artifacts, [])
+
     def test_start_preserves_artifacts_when_state_write_cleanup_cannot_stop_recorder(self) -> None:
         proc = mock.Mock()
         proc.pid = 23456
