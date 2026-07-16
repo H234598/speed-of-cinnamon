@@ -726,6 +726,29 @@ class AppLoggingTest(unittest.TestCase):
         mocked_close.assert_any_call(456)
         mocked_close.assert_any_call(789)
 
+    def test_gzip_file_preserves_output_fdopen_error_when_input_close_is_interrupted(self) -> None:
+        input_file = mock.Mock()
+        input_file.close.side_effect = KeyboardInterrupt("input close interrupted")
+        with (
+            mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".target.tmp")),
+            mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
+            mock.patch.object(app_logging.os, "fstat", return_value=os.stat(__file__)),
+            mock.patch.object(
+                app_logging.os,
+                "fdopen",
+                side_effect=[input_file, ValueError("output fdopen failed")],
+            ),
+            mock.patch.object(app_logging, "_unlink_log_temp"),
+            mock.patch.object(app_logging.os, "close") as mocked_close,
+        ):
+            with self.assertRaisesRegex(ValueError, "output fdopen failed") as caught:
+                app_logging._gzip_file(Path("/probe/source.log"), Path("/probe/target.log.gz"))
+
+        input_file.close.assert_called_once_with()
+        mocked_close.assert_any_call(456)
+        mocked_close.assert_any_call(789)
+        self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
+
     def test_monthly_merge_closes_temp_fd_when_fdopen_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

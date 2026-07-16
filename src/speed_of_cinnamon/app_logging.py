@@ -1504,7 +1504,7 @@ def _gzip_file(source: Path, target: Path) -> None:
         except Exception as exc:
             try:
                 input_file.close()
-            except Exception as cleanup_error:
+            except BaseException as cleanup_error:
                 _note_cleanup_failure(exc, cleanup_error)
             try:
                 os.close(temp_fd)
