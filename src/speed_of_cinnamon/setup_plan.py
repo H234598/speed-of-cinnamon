@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping
 
+from .app_logging import _sub_with_ignored_projection, sanitize_text
 from .transcriber import normalize_backend
 
 MAX_SETUP_DETAIL_CHARS = 800
@@ -20,7 +21,8 @@ _SECRET_PATTERNS = (
 def _sanitize_setup_text(value: object, fallback: str = "") -> str:
     text = str(value if value is not None else fallback)
     for pattern in _SECRET_PATTERNS:
-        text = pattern.sub("[redacted]", text)
+        text = _sub_with_ignored_projection(text, pattern, "[redacted]")
+    text = sanitize_text(text, max_chars=MAX_SETUP_DETAIL_CHARS)
     text = "".join(" " if ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F else char for char in text)
     text = " ".join(text.split())
     if not text:

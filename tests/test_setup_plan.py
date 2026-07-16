@@ -273,6 +273,31 @@ class SetupPlanTest(unittest.TestCase):
         self.assertNotIn("\x85", plan["text"])
         self.assertNotIn("recorder missing\nCommands:\n  sudo dnf install evil", plan["text"])
 
+    def test_setup_plan_redacts_obfuscated_credentials(self) -> None:
+        secret_values = (
+            "secret-token",
+            "hunter2",
+            "abcdefghijklmnop",
+        )
+        detail = "api\u200bkey=secret-token; pass\u200bword: hunter2; ghp_\u200babcdefghijklmnop"
+        payload = {
+            "ok": False,
+            "configured": {
+                "recorder": {"ok": False, "detail": detail},
+                "transcriber": {"ok": True},
+                "output": {"ok": True},
+                "postprocessor": {"ok": True},
+                "warnings": [],
+            },
+            "desktop": {"cinnamon": True},
+        }
+
+        plan = build_setup_plan(payload)
+
+        for secret in secret_values:
+            self.assertNotIn(secret, plan["text"])
+        self.assertIn("[redacted]", plan["text"])
+
     def test_setup_plan_truncates_oversized_details(self) -> None:
         payload = {
             "ok": False,
