@@ -355,6 +355,17 @@ def _same_model_artifact_identity(first: os.stat_result, second: os.stat_result)
     )
 
 
+def _same_model_temporary_identity(first: os.stat_result, second: os.stat_result) -> bool:
+    return (
+        stat_module.S_ISREG(first.st_mode)
+        and stat_module.S_ISREG(second.st_mode)
+        and first.st_dev == second.st_dev
+        and first.st_ino == second.st_ino
+        and first.st_mode == second.st_mode
+        and getattr(first, "st_nlink", 1) == getattr(second, "st_nlink", 1)
+    )
+
+
 def _hash_model_file(path: Path) -> tuple[str, os.stat_result]:
     fd = _open_model_hash_file(path)
     try:
@@ -1480,19 +1491,29 @@ def _download_url_to_file(url: str, tmp_dir: Path, size_limit: int, model_name: 
     return _download_url_to_file_with_fd(url, tmp_dir, None, size_limit, model_name, prefix=prefix)
 
 
-def _unlink_temporary_download_name(parent_fd: int, temporary_name: str) -> None:
+def _unlink_temporary_download_name(
+    parent_fd: int,
+    temporary_name: str,
+    *,
+    expected_stat: os.stat_result | None = None,
+) -> None:
+    if expected_stat is None:
+        raise ModelError("temporary model file identity is unavailable")
     try:
+        current_stat = os.stat(temporary_name, dir_fd=parent_fd, follow_symlinks=False)
+        if not _same_model_temporary_identity(current_stat, expected_stat):
+            raise ModelError("temporary model file changed before cleanup")
         os.unlink(temporary_name, dir_fd=parent_fd)
         os.fsync(parent_fd)
     except OSError as exc:
         raise ModelError("failed to remove temporary model file") from exc
 
 
-def _unlink_temporary_download_path(path: Path) -> None:
+def _unlink_temporary_download_path(path: Path, *, expected_stat: os.stat_result | None = None) -> None:
     parent_fd: int | None = None
     try:
         parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name="model temporary directory")
-        _unlink_temporary_download_name(parent_fd, path.name)
+        _unlink_temporary_download_name(parent_fd, path.name, expected_stat=expected_stat)
     finally:
         if parent_fd is not None:
             try:
@@ -1570,6 +1591,7 @@ def _download_url_to_file_with_fd(
     temporary_name: str | None = None
     tmp_path: Path | None = None
     tmp_fd: int | None = None
+    temporary_stat: os.stat_result | None = None
     primary_error: BaseException | None = None
     try:
         temporary_name, tmp_fd = _create_temporary_file_in_parent_directory(tmp_dir_fd, prefix=prefix)
@@ -1580,6 +1602,10 @@ def _download_url_to_file_with_fd(
             raise OSError("failed to open temporary model file") from exc
         tmp_fd = None
         with output:
+            try:
+                temporary_stat = os.fstat(output.fileno())
+            except (OSError, ValueError) as exc:
+                raise OSError("failed to inspect temporary model file") from exc
             try:
                 os.fchmod(output.fileno(), 0o600)
             except OSError:
@@ -1625,9 +1651,9 @@ def _download_url_to_file_with_fd(
         primary_error = exc
         try:
             if tmp_dir_fd is not None and temporary_name is not None:
-                _unlink_temporary_download_name(tmp_dir_fd, temporary_name)
+                _unlink_temporary_download_name(tmp_dir_fd, temporary_name, expected_stat=temporary_stat)
             elif tmp_path is not None:
-                _unlink_temporary_download_path(tmp_path)
+                _unlink_temporary_download_path(tmp_path, expected_stat=temporary_stat)
         except BaseException as cleanup_error:
             _note_cleanup_failure(primary_error, cleanup_error)
         raise

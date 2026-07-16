@@ -1645,6 +1645,44 @@ class ModelsTest(unittest.TestCase):
             with self.assertRaises(OSError):
                 os.fstat(created_fds[0])
 
+    def test_download_url_closes_temporary_file_when_identity_inspection_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            created_fds: list[int] = []
+            real_create = models._create_temporary_file_in_parent_directory
+            real_fstat = models.os.fstat
+            failed = False
+
+            def create_temp_file(parent_fd: int, *, prefix: str) -> tuple[str, int]:
+                temp_name, fd = real_create(parent_fd, prefix=prefix)
+                created_fds.append(fd)
+                return temp_name, fd
+
+            def fstat(fd: int) -> os.stat_result:
+                nonlocal failed
+                if fd in created_fds and not failed:
+                    failed = True
+                    raise OSError("fstat failed")
+                return real_fstat(fd)
+
+            with (
+                mock.patch.object(models, "_create_temporary_file_in_parent_directory", side_effect=create_temp_file),
+                mock.patch.object(models.os, "fstat", side_effect=fstat),
+            ):
+                with self.assertRaisesRegex(OSError, "failed to inspect temporary model file"):
+                    models._download_url_to_file(
+                        models.HUGGING_FACE_BASE_URL + "/ggml-test.bin",
+                        Path(tmp),
+                        1024,
+                        "test",
+                        prefix=".test.",
+                    )
+
+            self.assertTrue(failed)
+            self.assertEqual(len(created_fds), 1)
+            with self.assertRaises(OSError):
+                os.fstat(created_fds[0])
+            self.assertEqual(len(list(Path(tmp).glob("*.tmp"))), 1)
+
     def test_download_model_removes_fd_temporary_file_when_response_too_large(self) -> None:
         spec = models.ModelSpec(
             name="test-single-tdir-too-large",
@@ -1727,6 +1765,43 @@ class ModelsTest(unittest.TestCase):
                     prefix=".test.",
                 )
             self.assertEqual([], list(Path(tmp).iterdir()))
+
+    def test_download_url_does_not_remove_replaced_temporary_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+
+            class ReplacingErrorResponse:
+                def __init__(self) -> None:
+                    self.calls = 0
+
+                def __enter__(self) -> "ReplacingErrorResponse":
+                    return self
+
+                def __exit__(self, *_args: object) -> None:
+                    temporary = next(directory.glob("*.tmp"))
+                    temporary.unlink()
+                    temporary.write_bytes(b"victim")
+
+                def read(self, _size: int = -1) -> bytes:
+                    self.calls += 1
+                    if self.calls == 1:
+                        return b"partial"
+                    raise OSError("network failed")
+
+            with mock.patch.object(models, "_open_model_download_url", return_value=ReplacingErrorResponse()):
+                with self.assertRaisesRegex(OSError, "network failed") as caught:
+                    models._download_url_to_file(
+                        models.HUGGING_FACE_BASE_URL + "/ggml-test.bin",
+                        directory,
+                        1024,
+                        "test",
+                        prefix=".test.",
+                    )
+
+            leftovers = list(directory.glob("*.tmp"))
+            self.assertEqual(len(leftovers), 1)
+            self.assertEqual(leftovers[0].read_bytes(), b"victim")
+            self.assertIn("model artifact cleanup failed", "\n".join(caught.exception.__notes__))
 
     def test_download_directory_model_uses_fd_based_temporary_directory(self) -> None:
         data = b"small model file"
@@ -3860,7 +3935,10 @@ class ModelsTest(unittest.TestCase):
                     mock.patch.object(models, "ensure_directory_without_following_symlinks", return_value=parent_fd),
                     mock.patch.object(models.os, "close", side_effect=close_wrapper),
                 ):
-                    models._unlink_temporary_download_path(temporary)
+                    models._unlink_temporary_download_path(
+                        temporary,
+                        expected_stat=temporary.stat(follow_symlinks=False),
+                    )
             finally:
                 real_close(parent_fd)
 
