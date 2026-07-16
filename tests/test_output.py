@@ -297,6 +297,18 @@ class OutputTest(unittest.TestCase):
         ):
             _run_with_input(("echo", "x"), "in")
 
+    def test_run_with_input_wraps_output_capture_read_failure(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/echo"),
+            mock.patch(
+                "speed_of_cinnamon.output.subprocess.run",
+                return_value=subprocess.CompletedProcess(["echo"], 0, stdout=b"", stderr=b""),
+            ),
+            mock.patch("speed_of_cinnamon.output._filesize", side_effect=OSError("capture read failed")),
+        ):
+            with self.assertRaisesRegex(OutputError, "output could not be read"):
+                _run_with_input(("echo", "x"), "in")
+
     def test_run_with_input_rejects_command_error_output(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             stderr = cast(BinaryIO, kwargs["stderr"])
@@ -537,6 +549,17 @@ class OutputTest(unittest.TestCase):
                 "speed_of_cinnamon.output.subprocess.run",
                 side_effect=ValueError("invalid process argument"),
             ),
+        ):
+            self.assertEqual(_run_stdout(["xdotool", "--help"]), "")
+
+    def test_run_stdout_returns_empty_when_output_capture_read_fails(self) -> None:
+        with (
+            unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
+            unittest.mock.patch(
+                "speed_of_cinnamon.output.subprocess.run",
+                return_value=subprocess.CompletedProcess(["xdotool"], 0, stdout=b"ok", stderr=b""),
+            ),
+            unittest.mock.patch("speed_of_cinnamon.output._filesize", side_effect=OSError("capture read failed")),
         ):
             self.assertEqual(_run_stdout(["xdotool", "--help"]), "")
 

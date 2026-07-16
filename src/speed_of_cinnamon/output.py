@@ -938,9 +938,14 @@ def _run_with_input(
         except (OSError, ValueError) as exc:
             raise OutputError(f"{command} failed to execute: {exc}") from exc
 
-        if _filesize(stdout_file) > max_output_chars:
+        try:
+            stdout_size = _filesize(stdout_file)
+            stderr_size = _filesize(stderr_file)
+        except (OSError, ValueError) as exc:
+            raise OutputError(f"{command} output could not be read") from exc
+        if stdout_size > max_output_chars:
             raise OutputError(f"{command} produced too much output")
-        if _filesize(stderr_file) > max_output_chars:
+        if stderr_size > max_output_chars:
             raise OutputError(f"{command} produced too much error output")
 
         if proc.returncode != 0:
@@ -1008,8 +1013,11 @@ def _run_bounded_stdout_command(
             return None
         completed_stdout = proc.stdout if isinstance(proc.stdout, bytes) else None
         completed_stderr = proc.stderr if isinstance(proc.stderr, bytes) else None
-        output = _bounded_command_output_bytes(stdout_file, completed_stdout)
-        error_output = _bounded_command_output_bytes(stderr_file, completed_stderr)
+        try:
+            output = _bounded_command_output_bytes(stdout_file, completed_stdout)
+            error_output = _bounded_command_output_bytes(stderr_file, completed_stderr)
+        except (OSError, ValueError):
+            return None
     if output is None or error_output is None:
         return None
     return proc.returncode, output, error_output
