@@ -219,6 +219,24 @@ class DoctorTest(unittest.TestCase):
         self.assertTrue(payload["configured"]["recorder"]["ok"])
         self.assertIn("arecord", payload["configured"]["recorder"]["detail"])
 
+    def test_parecord_requires_timeout_when_recording_is_limited(self) -> None:
+        checks = {
+            "parecord": doctor.Check("parecord", True, "/usr/bin/parecord"),
+            "timeout": doctor.Check("timeout", False, "missing"),
+        }
+        status = doctor._recorder_status({"recorder": "parecord", "max-seconds": 30}, checks)
+        self.assertFalse(status["ok"])
+        self.assertIn("timeout is required", status["detail"])
+
+        status = doctor._recorder_status({"recorder": "parecord", "max-seconds": 0}, checks)
+        self.assertTrue(status["ok"])
+
+    def test_recorder_status_rejects_invalid_recording_limit(self) -> None:
+        with self.assertRaisesRegex(ValueError, "max-seconds must be an integer"):
+            doctor._recorder_status({"recorder": "auto", "max-seconds": "30"}, {})
+        with self.assertRaisesRegex(ValueError, "between 0"):
+            doctor._recorder_status({"recorder": "auto", "max-seconds": -1}, {})
+
     def test_whisper_cpp_requires_existing_model_path(self) -> None:
         tools = {"python3", "pw-record", "whisper-cli"}
         with tempfile.TemporaryDirectory() as tmp:

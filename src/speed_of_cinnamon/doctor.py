@@ -20,6 +20,7 @@ from .postprocessor import (
     _openai_compatible_model_supports_text_polishing,
 )
 from .path_safety import assert_no_symlink_ancestors
+from .recorder import MAX_RECORDING_SECONDS
 from .transcriber import MAX_LANGUAGE_CODE_CHARS, MAX_TRANSCRIBER_TEXT_CHARS, faster_whisper_available, normalize_backend
 
 
@@ -59,6 +60,7 @@ def run_checks() -> list[Check]:
         command_check("wl-copy", "wl-clipboard"),
         command_check("wtype", "wtype"),
         command_check("notify-send", "libnotify"),
+        command_check("timeout", "coreutils"),
         command_check("whisper", "python3-openai-whisper or pipx/pip whisper"),
         command_check("whisper-cli", "whisper.cpp"),
         command_check("whisper.cpp", "whisper.cpp"),
@@ -231,9 +233,20 @@ def _safe_remote_url_display(value: str, *, field_name: str) -> str:
 
 def _recorder_status(settings: Mapping[str, object], checks: Mapping[str, Check]) -> dict[str, object]:
     recorder = _setting(settings, "recorder", "auto").lower()
+    max_seconds = settings.get("max-seconds", 30)
+    if isinstance(max_seconds, bool) or not isinstance(max_seconds, int):
+        raise ValueError("setting max-seconds must be an integer")
+    if max_seconds < 0 or max_seconds > MAX_RECORDING_SECONDS:
+        raise ValueError(f"setting max-seconds must be between 0 and {MAX_RECORDING_SECONDS}")
     recorder_names = ("pw-record", "parecord", "arecord")
+
+    def _available(name: str) -> bool:
+        return _ok(checks, name) and not (
+            name == "parecord" and max_seconds > 0 and not _ok(checks, "timeout")
+        )
+
     if recorder in {"", "auto"}:
-        available = [name for name in recorder_names if _ok(checks, name)]
+        available = [name for name in recorder_names if _available(name)]
         return {
             "ok": bool(available),
             "value": "auto",
@@ -245,6 +258,12 @@ def _recorder_status(settings: Mapping[str, object], checks: Mapping[str, Check]
         }
     if recorder not in recorder_names:
         return {"ok": False, "value": recorder, "detail": f"unknown recorder: {recorder}"}
+    if recorder == "parecord" and max_seconds > 0 and not _ok(checks, "timeout"):
+        return {
+            "ok": False,
+            "value": recorder,
+            "detail": "timeout is required to enforce max-seconds with parecord",
+        }
     return {
         "ok": _ok(checks, recorder),
         "value": recorder,
