@@ -2164,6 +2164,42 @@ class OutputTest(unittest.TestCase):
                 Path(tmp, "speed-of-cinnamon", output_module.CLIPBOARD_DEDUP_LOCK_FILE).exists()
             )
 
+    def test_clipboard_dedupe_lock_fails_closed_when_child_fd_close_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "speed-of-cinnamon"
+            state_root.mkdir()
+            parent_fd = os.open(state_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_close = os.close
+            child_close_failed = False
+            parent_closed = False
+
+            def close(fd: int) -> None:
+                nonlocal child_close_failed, parent_closed
+                if fd != parent_fd and not child_close_failed:
+                    child_close_failed = True
+                    raise OSError("child close failed")
+                if fd == parent_fd:
+                    parent_closed = True
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+                    mock.patch.object(
+                        output_module,
+                        "ensure_directory_without_following_symlinks",
+                        return_value=parent_fd,
+                    ),
+                    mock.patch.object(output_module.os, "close", side_effect=close),
+                ):
+                    self.assertIsNone(_acquire_clipboard_dedup_lock())
+            finally:
+                if not parent_closed:
+                    real_close(parent_fd)
+
+            self.assertTrue(child_close_failed)
+            self.assertFalse((state_root / output_module.CLIPBOARD_DEDUP_LOCK_FILE).exists())
+
     def test_clipboard_dedupe_lock_closes_fd_when_creation_stat_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with (

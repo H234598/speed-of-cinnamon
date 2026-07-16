@@ -685,7 +685,11 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                 acquired_path = path
                 os.close(fd)
             except OSError:
-                pass
+                try:
+                    _release_clipboard_dedup_lock(path)
+                except BaseException:
+                    pass
+                return None
             except BaseException:
                 try:
                     _release_clipboard_dedup_lock(path)
