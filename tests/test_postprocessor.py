@@ -991,6 +991,26 @@ class PostProcessorTest(unittest.TestCase):
         self.assertEqual(first_body["service_tier"], "flex")
         self.assertNotIn("service_tier", second_body)
 
+    def test_openai_compatible_flex_fallback_contains_non_text_http_reason(self) -> None:
+        error = urllib.error.HTTPError(
+            "https://api.openai.com/v1/chat/completions",
+            400,
+            object(),
+            {},
+            io.BytesIO(b""),
+        )
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=error):
+            with self.assertRaisesRegex(PostProcessError, r"failed \(400\)"):
+                post_process_text(
+                    "hello cinnamon",
+                    "en",
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-4o-mini",
+                    openai_compatible_url="https://api.openai.com/v1",
+                    openai_compatible_api_key="secret",
+                    openai_compatible_service_tier_fallback=True,
+                )
+
     def test_openai_compatible_backend_uses_explicit_api_key(self) -> None:
         requests = []
 

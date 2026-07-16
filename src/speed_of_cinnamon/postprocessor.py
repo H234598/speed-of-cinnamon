@@ -421,7 +421,9 @@ def _is_openai_api_endpoint(endpoint: str) -> bool:
     return (parsed.hostname or "").lower() == "api.openai.com"
 
 
-def _is_flex_service_tier_rejected(detail: str) -> bool:
+def _is_flex_service_tier_rejected(detail: object) -> bool:
+    if not isinstance(detail, str):
+        return False
     normalized = detail.lower()
     if "service_tier" not in normalized and "service tier" not in normalized:
         return False
