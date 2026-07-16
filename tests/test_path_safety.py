@@ -599,6 +599,32 @@ class PathSafetyTest(unittest.TestCase):
             with self.assertRaisesRegex(OSError, "changed before reading"):
                 path_safety.read_text_without_following_symlinks(path, expected_stat=expected_stat)
 
+    def test_read_text_rejects_same_inode_mutation_after_initial_check(self) -> None:
+        class _MutatingHandle:
+            def __init__(self, fd: int) -> None:
+                self.fd = fd
+
+            def fileno(self) -> int:
+                return self.fd
+
+            def read(self, _size: int = -1) -> bytes:
+                path.write_text("changed-after-check\n", encoding="utf-8")
+                path.chmod(0o600)
+                return b"original\n"
+
+            def close(self) -> None:
+                os.close(self.fd)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.txt"
+            path.write_text("original\n", encoding="utf-8")
+            path.chmod(0o600)
+            expected_stat = path.lstat()
+
+            with mock.patch.object(path_safety.os, "fdopen", side_effect=lambda fd, _mode: _MutatingHandle(fd)):
+                with self.assertRaisesRegex(OSError, "changed while reading"):
+                    path_safety.read_text_without_following_symlinks(path, expected_stat=expected_stat)
+
     def test_read_text_closes_fd_when_fdopen_fails(self) -> None:
         with (
             mock.patch.object(path_safety, "open_file_without_following_symlinks", return_value=123),

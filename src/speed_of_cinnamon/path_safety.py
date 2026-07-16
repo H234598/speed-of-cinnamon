@@ -291,6 +291,7 @@ def read_text_without_following_symlinks(
             )
         except RuntimeError as exc:
             raise OSError(str(exc)) from exc
+        opened_stat: os.stat_result | None = None
         if expected_stat is not None:
             opened_stat = os.fstat(fd)
             if (
@@ -333,6 +334,28 @@ def read_text_without_following_symlinks(
     primary_error: BaseException | None = None
     try:
         payload = handle.read(effective_max_bytes + 1)
+        if expected_stat is not None and opened_stat is not None:
+            final_stat = os.fstat(handle.fileno())
+            if (
+                final_stat.st_dev != opened_stat.st_dev
+                or final_stat.st_ino != opened_stat.st_ino
+                or final_stat.st_mode != opened_stat.st_mode
+                or final_stat.st_size != opened_stat.st_size
+                or getattr(final_stat, "st_nlink", 1) != getattr(opened_stat, "st_nlink", 1)
+                or final_stat.st_mtime_ns != opened_stat.st_mtime_ns
+                or final_stat.st_ctime_ns != opened_stat.st_ctime_ns
+            ):
+                raise OSError(f"{field_name} changed while reading")
+            try:
+                final_path_stat = path.lstat()
+            except FileNotFoundError as exc:
+                raise OSError(f"{field_name} changed while reading") from exc
+            if (
+                final_path_stat.st_dev != final_stat.st_dev
+                or final_path_stat.st_ino != final_stat.st_ino
+                or final_path_stat.st_mode != final_stat.st_mode
+            ):
+                raise OSError(f"{field_name} changed while reading")
     except Exception as exc:
         primary_error = exc
         raise
