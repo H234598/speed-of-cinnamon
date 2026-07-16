@@ -2840,6 +2840,18 @@ def _stabilize_recording_artifact_path(
                 )
                 os.fsync(parent_fd)
                 return
+            if backup_name:
+                try:
+                    os.stat(backup_name, dir_fd=parent_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    _rename_without_replacing(
+                        stable_path.name,
+                        artifact_path.name,
+                        directory_fd=parent_fd,
+                        field_name="recording artifact path",
+                    )
+                    os.fsync(parent_fd)
+                    return
             os.unlink(stable_path.name, dir_fd=parent_fd)
             os.fsync(parent_fd)
         elif target_removed and current_target_stat is not None:
@@ -2946,14 +2958,14 @@ def _stabilize_recording_artifact_path(
         if not same_artifact_identity(activated_stat, source_stat):
             raise RuntimeError(f"stable recording artifact changed during activation: {stable_path}")
         os.fsync(parent_fd)
-        transaction_active = False
         if backup_name:
             backup_stat = os.stat(backup_name, dir_fd=parent_fd, follow_symlinks=False)
             if not same_artifact_identity(backup_stat, target_stat):
                 raise RuntimeError(f"stable recording artifact backup changed before cleanup: {stable_path}")
             os.unlink(backup_name, dir_fd=parent_fd)
-            backup_name = ""
             os.fsync(parent_fd)
+            backup_name = ""
+        transaction_active = False
         return stable_path
     except (OSError, RuntimeError) as exc:
         try:

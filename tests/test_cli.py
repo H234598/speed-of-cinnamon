@@ -5767,6 +5767,33 @@ class CliTest(unittest.TestCase):
             self.assertEqual(temp_trimmed.read_bytes(), b"trimmed-audio")
             self.assertFalse(stable.exists())
 
+    def test_stabilize_recording_artifact_restores_source_when_backup_cleanup_fsync_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings_root = Path(tmp)
+            temp_trimmed = recordings_root / "recording.trimmed-backup-fsync.flac"
+            stable = recordings_root / "recording.flac"
+            temp_trimmed.write_bytes(b"trimmed-audio")
+            stable.write_bytes(b"old-audio")
+            real_fsync = os.fsync
+            directory_fsyncs = 0
+
+            def fail_backup_cleanup_fsync(fd: int) -> None:
+                nonlocal directory_fsyncs
+                if cli.stat_module.S_ISDIR(os.fstat(fd).st_mode):
+                    directory_fsyncs += 1
+                    if directory_fsyncs == 3:
+                        raise OSError("backup cleanup fsync failed")
+                real_fsync(fd)
+
+            with mock.patch.object(cli.os, "fsync", side_effect=fail_backup_cleanup_fsync):
+                with self.assertRaisesRegex(RuntimeError, "backup cleanup fsync failed"):
+                    cli._stabilize_recording_artifact_path(temp_trimmed, replace_existing_path=stable)
+
+            self.assertTrue(temp_trimmed.exists())
+            self.assertEqual(temp_trimmed.read_bytes(), b"trimmed-audio")
+            self.assertFalse(stable.exists())
+            self.assertEqual(list(recordings_root.glob(".recording.flac.*.bak")), [])
+
     def test_stabilize_recording_artifact_does_not_overwrite_unrelated_stable_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             recordings_root = Path(tmp) / "speed-of-cinnamon" / "recordings"
