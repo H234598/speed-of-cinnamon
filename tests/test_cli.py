@@ -11105,6 +11105,36 @@ class CliTest(unittest.TestCase):
         mocked_alive.assert_called()
         mocked_finalize.assert_not_called()
 
+    @mock.patch("speed_of_cinnamon.cli.finalize_recording", return_value={"status": "done"})
+    @mock.patch("speed_of_cinnamon.cli.stop_process", return_value=True)
+    @mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=False)
+    def test_stop_cleans_reaped_recorder_group_before_finalizing(
+        self,
+        mocked_alive: mock.Mock,
+        mocked_stop: mock.Mock,
+        mocked_finalize: mock.Mock,
+    ) -> None:
+        state = RecordingState(
+            status="recording",
+            pid=1234,
+            process_identity="owner-identity",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            store = StateStore(state_file)
+            store.write(state)
+            args = self._build_finalize_args(insert_method="none")
+            args.state_file = str(state_file)
+            with mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value=None):
+                result = cli.command_stop(args)
+            final_state = store.read()
+
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(final_state.status, "recorded")
+        mocked_alive.assert_called()
+        mocked_stop.assert_called_once_with(1234, expected_process_identity="owner-identity")
+        mocked_finalize.assert_called_once()
+
     def test_stop_holds_finalization_lock_before_recorded_state_can_be_canceled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -11253,6 +11283,43 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["status"], "idle")
         mocked_alive.assert_called_once_with(1234)
         mocked_stop.assert_not_called()
+
+    @mock.patch("speed_of_cinnamon.cli.stop_process", return_value=True)
+    @mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=False)
+    def test_cancel_cleans_reaped_recorder_group_before_discarding(
+        self,
+        mocked_alive: mock.Mock,
+        mocked_stop: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "recording.wav"
+            audio.write_bytes(b"audio")
+            state_file = tmp_path / "state.json"
+            StateStore(state_file).write(
+                RecordingState(
+                    status="recording",
+                    pid=1234,
+                    process_identity="owner-identity",
+                    audio_path=str(audio),
+                )
+            )
+            args = self._build_finalize_args(insert_method="none")
+            args.state_file = str(state_file)
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value=None),
+            ):
+                result = cli.command_cancel(args)
+            final_state = StateStore(state_file).read()
+
+        self.assertEqual(result["status"], "idle")
+        self.assertEqual(final_state.status, "idle")
+        self.assertFalse(audio.exists())
+        mocked_alive.assert_called()
+        mocked_stop.assert_called_once_with(1234, expected_process_identity="owner-identity")
 
     @mock.patch("speed_of_cinnamon.cli.stop_process", return_value=False)
     @mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=True)

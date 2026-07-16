@@ -4420,6 +4420,9 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
                 return finalize_recording(args, store, state, finalization_lock_path=lock_path)
             return {"status": state.status, "message": "not recording"}
         process_verified_alive = _recording_process_verified_alive(state)
+        current_process_identity = None
+        if not process_verified_alive and state.pid is not None and state.process_identity:
+            current_process_identity = _recording_process_identity_for_pid(state.pid)
         if process_verified_alive:
             stopped = stop_process(
                 _coerce_int(state.pid, field_name="state pid"),
@@ -4433,7 +4436,7 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
                     inserted=False,
                 )
                 return {"status": "recording", "message": error_text, "error": error_text}
-        elif _is_recording_process_alive(state.pid):
+        elif current_process_identity is not None:
             error_text = "recording process identity does not match; recording state preserved"
             store.update(
                 status="recording",
@@ -4441,6 +4444,19 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
                 inserted=False,
             )
             return {"status": "recording", "message": error_text, "error": error_text}
+        elif state.pid is not None and state.process_identity:
+            stopped = stop_process(
+                _coerce_int(state.pid, field_name="state pid"),
+                expected_process_identity=state.process_identity,
+            )
+            if not stopped:
+                error_text = "recording process could not be stopped safely; recording state preserved"
+                store.update(
+                    status="recording",
+                    error=error_text,
+                    inserted=False,
+                )
+                return {"status": "recording", "message": error_text, "error": error_text}
         state = store.update(
             status="recorded",
             pid=None,
@@ -4467,21 +4483,42 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
         state = store.read()
         _raise_if_state_unreadable(state)
         initial_status = state.status
-        if state.status == "recording" and _recording_process_verified_alive(state):
-            stopped = stop_process(
-                _coerce_int(state.pid, field_name="state pid"),
-                expected_process_identity=state.process_identity,
-            )
-            if not stopped:
-                error_text = "recording process could not be stopped safely; recording state preserved"
-                store.update(
-                    status="recording",
-                    error=error_text,
-                    inserted=False,
+        if state.status == "recording":
+            process_verified_alive = _recording_process_verified_alive(state)
+            if process_verified_alive:
+                stopped = stop_process(
+                    _coerce_int(state.pid, field_name="state pid"),
+                    expected_process_identity=state.process_identity,
                 )
-                return {"status": "recording", "message": error_text, "error": error_text}
-            # Continue through the normal finalizing/discard path so cancel also removes
-            # the artifacts produced by the just-stopped recording.
+                if not stopped:
+                    error_text = "recording process could not be stopped safely; recording state preserved"
+                    store.update(
+                        status="recording",
+                        error=error_text,
+                        inserted=False,
+                    )
+                    return {"status": "recording", "message": error_text, "error": error_text}
+                # Continue through the normal finalizing/discard path so cancel also removes
+                # the artifacts produced by the just-stopped recording.
+            elif (
+                state.pid is not None
+                and state.process_identity
+                and _recording_process_identity_for_pid(state.pid) is None
+            ):
+                stopped = stop_process(
+                    _coerce_int(state.pid, field_name="state pid"),
+                    expected_process_identity=state.process_identity,
+                )
+                if not stopped:
+                    error_text = "recording process could not be stopped safely; recording state preserved"
+                    store.update(
+                        status="recording",
+                        error=error_text,
+                        inserted=False,
+                    )
+                    return {"status": "recording", "message": error_text, "error": error_text}
+                # Continue through the normal finalizing/discard path so cancel also removes
+                # the artifacts left by a recorder whose leader was reaped.
 
         discarded_audio_path = _normalized_state_recording_artifact_path(
             state.audio_path,
@@ -4711,7 +4748,11 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
             payload["message"] = str(exc)
             return payload
         if not verified_alive:
-            if _is_recording_process_alive(state.pid):
+            if (
+                state.pid is not None
+                and state.process_identity
+                and _recording_process_identity_for_pid(state.pid) is not None
+            ):
                 payload["status"] = "error"
                 payload["message"] = "recording process identity does not match; recording state preserved"
             else:
