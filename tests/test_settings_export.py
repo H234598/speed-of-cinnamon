@@ -977,6 +977,40 @@ class SettingsExportTest(unittest.TestCase):
             self.assertTrue(path.exists())
             self.assertGreaterEqual(mocked_fsync.call_count, 2)
 
+    def test_write_export_preserves_success_when_recovery_backup_cleanup_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text("old export\n", encoding="utf-8")
+            real_unlink = os.unlink
+
+            def fail_backup_cleanup(name: object, *args: object, **kwargs: object) -> None:
+                if isinstance(name, str) and name.endswith(".bak"):
+                    raise OSError("backup cleanup failed")
+                real_unlink(name, *args, **kwargs)
+
+            with mock.patch.object(settings_export_module.os, "unlink", side_effect=fail_backup_cleanup):
+                write_export(path, {"language": "de"})
+
+            self.assertEqual(read_export(path)["settings"]["language"], "de")
+            self.assertEqual(len(list(Path(tmp).glob(".settings-export.json.*.bak"))), 1)
+
+    def test_write_export_preserves_success_when_recovery_backup_cleanup_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text("old export\n", encoding="utf-8")
+            real_unlink = os.unlink
+
+            def interrupt_backup_cleanup(name: object, *args: object, **kwargs: object) -> None:
+                if isinstance(name, str) and name.endswith(".bak"):
+                    raise KeyboardInterrupt("backup cleanup interrupted")
+                real_unlink(name, *args, **kwargs)
+
+            with mock.patch.object(settings_export_module.os, "unlink", side_effect=interrupt_backup_cleanup):
+                write_export(path, {"language": "de"})
+
+            self.assertEqual(read_export(path)["settings"]["language"], "de")
+            self.assertEqual(len(list(Path(tmp).glob(".settings-export.json.*.bak"))), 1)
+
     def test_write_export_rolls_back_after_activation_parent_fsync_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"

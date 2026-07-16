@@ -708,8 +708,13 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                 raise OSError("settings export recovery backup is not safe")
             if existing_stat is None or not _same_leaf_identity(backup_stat, existing_stat):
                 raise OSError("settings export recovery backup changed before cleanup")
-            os.unlink(backup_name, dir_fd=parent_fd)
-            os.fsync(parent_fd)
+            try:
+                os.unlink(backup_name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+            except OSError:
+                pass
+            except BaseException:
+                pass
     except BaseException as exc:
         primary_error = exc
         if transaction_active:
