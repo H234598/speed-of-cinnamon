@@ -3406,15 +3406,13 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
     audio_path, log_path = _allocate_recording_artifacts()
 
     def remove_started_artifact(path: Path, suffix: str) -> bool:
-        if remove_file(str(path), suffix=suffix):
-            return True
         try:
             path.lstat()
         except FileNotFoundError:
             return True
         except OSError:
             return False
-        return False
+        return remove_file(str(path), suffix=suffix)
 
     def cleanup_started_artifacts() -> bool:
         audio_deleted = remove_started_artifact(audio_path, ".wav")

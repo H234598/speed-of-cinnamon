@@ -9990,6 +9990,47 @@ class CliTest(unittest.TestCase):
         mocked_stop.assert_called_once_with(23456, allow_unverified_process=True)
         self.assertTrue(artifacts)
 
+    def test_start_reports_post_delete_artifact_cleanup_failure(self) -> None:
+        proc = mock.Mock()
+        proc.pid = 23456
+        proc.poll.return_value = None
+        real_unlink = cli._unlink_regular_leaf_with_parent_fsync
+
+        def delete_then_report_failure(
+            path: Path,
+            *,
+            field_name: str,
+            expected_stat: object = None,
+        ) -> bool:
+            real_unlink(path, field_name=field_name, expected_stat=expected_stat)  # type: ignore[arg-type]
+            if field_name == "recording artifact":
+                raise RuntimeError("parent fsync failed after unlink")
+            return True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            stdout = io.StringIO()
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.choose_recorder", return_value=RecorderCommand("test-recorder", [])),
+                mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=proc),
+                mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value=None),
+                mock.patch("speed_of_cinnamon.cli.stop_process", return_value=True),
+                mock.patch(
+                    "speed_of_cinnamon.cli._unlink_regular_leaf_with_parent_fsync",
+                    side_effect=delete_then_report_failure,
+                ),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["start", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            artifacts = list(recordings.glob("*")) if recordings.exists() else []
+
+        self.assertEqual(code, 1)
+        self.assertIn("recorder artifacts could not be cleaned", payload["error"])
+        self.assertEqual(artifacts, [])
+
     def test_start_auto_falls_back_when_first_recorder_exits_immediately(self) -> None:
         failed_proc = mock.Mock()
         failed_proc.pid = 23456
