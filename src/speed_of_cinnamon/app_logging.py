@@ -1177,6 +1177,13 @@ def _merge_old_months(directory: Path, today: date) -> None:
                         try:
                             os.stat(archive.name, dir_fd=parent_fd, follow_symlinks=False)
                         except FileNotFoundError:
+                            backup_path = directory / archive_backup_name
+                            backup_stat = _assert_regular_unlinked_file(
+                                backup_path,
+                                field_name="monthly log archive backup",
+                            )
+                            if not _same_log_inode(backup_stat, archive_stat):
+                                raise RuntimeError("monthly log archive backup changed during rollback")
                             _rename_without_replacing(
                                 archive_backup_name,
                                 archive.name,

@@ -1613,6 +1613,44 @@ class AppLoggingTest(unittest.TestCase):
             self.assertTrue(old_daily.exists())
             self.assertFalse(list(log_dir.glob("*.backup")))
 
+    def test_maintain_logs_does_not_restore_replaced_backup_during_rollback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            old_archive = log_dir / "speed-of-cinnamon-2026-05.log.gz"
+            old_daily = log_dir / "speed-of-cinnamon-2026-05-30.log"
+            replacement = log_dir / "replacement.backup"
+            old_daily.write_text("may-30\n", encoding="utf-8")
+            old_daily.chmod(0o600)
+            with gzip.open(old_archive, "wt", encoding="utf-8") as handle:
+                handle.write("legacy\n")
+            old_archive.chmod(0o600)
+            replacement.write_text("must survive\n", encoding="utf-8")
+            real_fsync = app_logging.os.fsync
+            directory_syncs = 0
+
+            def fail_backup_fsync(fd: int) -> None:
+                nonlocal directory_syncs
+                if stat_module.S_ISDIR(os.fstat(fd).st_mode):
+                    directory_syncs += 1
+                    if directory_syncs == 1:
+                        backups = list(log_dir.glob(f".{old_archive.name}.*.backup"))
+                        self.assertEqual(len(backups), 1)
+                        backup = backups[0]
+                        backup.unlink()
+                        replacement.rename(backup)
+                        raise OSError("backup fsync failed")
+                real_fsync(fd)
+
+            with mock.patch.object(app_logging.os, "fsync", side_effect=fail_backup_fsync):
+                with self.assertRaisesRegex(OSError, "backup fsync failed"):
+                    app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
+
+            self.assertEqual(directory_syncs, 2)
+            self.assertFalse(old_archive.exists())
+            backups = list(log_dir.glob(f".{old_archive.name}.*.backup"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_text(encoding="utf-8"), "must survive\n")
+
     def test_maintain_logs_restores_archive_when_backup_unlink_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
