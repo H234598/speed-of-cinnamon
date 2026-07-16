@@ -3223,8 +3223,8 @@ MyApplet.prototype = {
     this._syncExternalApiConfigOnStartup();
     this._syncActiveLanguage();
     this._ensureVoiceModelCompatibleWithPrimaryLanguage(false);
-    this._buildMenu();
     this.lifecycleState = LIFECYCLE_RUNNING;
+    this._buildMenu();
     this._registerHotkeys();
     this._refreshStatus();
     this._scheduleSetupCheck();

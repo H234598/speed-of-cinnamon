@@ -3187,6 +3187,10 @@ class AppletStaticTest(unittest.TestCase):
         init_block = source[init_start:init_end]
         self.assertLess(
             init_block.index("this.lifecycleState = LIFECYCLE_RUNNING;"),
+            init_block.index("this._buildMenu();"),
+        )
+        self.assertLess(
+            init_block.index("this.lifecycleState = LIFECYCLE_RUNNING;"),
             init_block.index("this._registerHotkeys();"),
         )
         self.assertLess(
