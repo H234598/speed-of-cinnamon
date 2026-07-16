@@ -1845,6 +1845,24 @@ class OutputTest(unittest.TestCase):
             lock_path = Path(tmp) / "speed-of-cinnamon" / output_module.CLIPBOARD_DEDUP_LOCK_FILE
             self.assertFalse(lock_path.exists())
 
+    def test_insert_text_preserves_clipboard_error_when_state_restore_is_interrupted(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch(
+                "speed_of_cinnamon.output._begin_clipboard_insertion",
+                return_value=(Path(tmp) / "lock", ("a" * 64, 1.0), False),
+            ),
+            mock.patch(
+                "speed_of_cinnamon.output._write_clipboard_dedup_fingerprint_state",
+                side_effect=[True, KeyboardInterrupt("state restore interrupted")],
+            ),
+            mock.patch("speed_of_cinnamon.output.set_clipboard", side_effect=OutputError("copy failed")),
+            mock.patch("speed_of_cinnamon.output._release_clipboard_dedup_lock"),
+        ):
+            with self.assertRaisesRegex(OutputError, "copy failed"):
+                insert_text("secure text", "clipboard")
+
     def test_insert_text_clipboard_paste_fails_closed_when_dedupe_state_cannot_persist(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,

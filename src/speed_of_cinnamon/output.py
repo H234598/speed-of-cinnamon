@@ -848,12 +848,15 @@ def _clear_clipboard_dedup_state() -> None:
 
 
 def _restore_clipboard_dedup_state(snapshot: tuple[str, float], *, pending: bool = False) -> None:
-    fingerprint, at = snapshot
-    if fingerprint:
-        if not _write_clipboard_dedup_fingerprint_state(fingerprint, at, pending=pending):
-            _clear_clipboard_dedup_state()
-        return
-    _clear_clipboard_dedup_state()
+    try:
+        fingerprint, at = snapshot
+        if fingerprint:
+            if not _write_clipboard_dedup_fingerprint_state(fingerprint, at, pending=pending):
+                _clear_clipboard_dedup_state()
+            return
+        _clear_clipboard_dedup_state()
+    except BaseException as exc:
+        log_event("warning", "clipboard_dedup_state_restore_failed", error=str(exc))
 
 
 def _clipboard_insertion_snapshot() -> tuple[str, str | None, float, str | None]:
