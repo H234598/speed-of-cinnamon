@@ -1075,6 +1075,51 @@ class ArtifactCryptoTest(unittest.TestCase):
 
         self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 2)
 
+    def test_secret_tool_timeout_kills_child_process_group(self) -> None:
+        if not Path("/proc").is_dir():
+            self.skipTest("process state inspection requires /proc")
+        child_pid: int | None = None
+        child_state: str | None = None
+        with tempfile.TemporaryDirectory() as tmp:
+            helper = Path(tmp) / "secret-tool-helper"
+            child_pid_path = Path(tmp) / "child.pid"
+            helper.write_text(
+                "#!/bin/sh\n"
+                "/bin/sleep 30 &\n"
+                "child_pid=$!\n"
+                "printf '%s\\n' \"$child_pid\" > \"$2\"\n"
+                "wait \"$child_pid\"\n",
+                encoding="ascii",
+            )
+            helper.chmod(0o700)
+            try:
+                with (
+                    mock.patch("speed_of_cinnamon.artifact_crypto._secret_tool_path", return_value=str(helper)),
+                    mock.patch("speed_of_cinnamon.artifact_crypto._SECRET_TOOL_TIMEOUT_SECONDS", 0.1),
+                ):
+                    with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "request timed out"):
+                        artifact_crypto._run_secret_tool(["lookup", str(child_pid_path)])
+
+                deadline = artifact_crypto.time.monotonic() + 2
+                while artifact_crypto.time.monotonic() < deadline:
+                    try:
+                        child_pid = int(child_pid_path.read_text(encoding="ascii").strip())
+                        raw = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii")
+                        child_state = raw.rsplit(")", 1)[1].split()[0]
+                    except (OSError, ValueError):
+                        child_state = None
+                        break
+                    if child_state in {"Z", "X", "x"}:
+                        break
+                    artifact_crypto.time.sleep(0.01)
+
+                self.assertIsNotNone(child_pid)
+                self.assertIn(child_state, {None, "Z", "X", "x"})
+            finally:
+                if child_pid is not None:
+                    with contextlib.suppress(OSError):
+                        os.kill(child_pid, 9)
+
     def test_secret_tool_wait_failure_is_controlled(self) -> None:
         fake_proc_holder: dict[str, object] = {}
 

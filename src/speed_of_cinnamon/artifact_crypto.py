@@ -4,6 +4,7 @@ import base64
 import errno
 import json
 import os
+import signal
 import secrets
 import shutil
 import stat
@@ -1015,8 +1016,14 @@ def _validate_secret_tool_args(args: object) -> list[str]:
 
 
 def _stop_secret_tool_process(proc: subprocess.Popen[bytes]) -> None:
-    with suppress(BaseException):
-        proc.kill()
+    try:
+        pid = proc.pid
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+            raise ValueError("invalid secret-tool process pid")
+        os.killpg(pid, signal.SIGKILL)
+    except BaseException:
+        with suppress(BaseException):
+            proc.kill()
     with suppress(BaseException):
         proc.wait(timeout=1)
 
@@ -1091,6 +1098,7 @@ def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subpr
                 stderr=subprocess.PIPE,
                 shell=False,
                 env=env,
+                start_new_session=True,
             )
         except (OSError, ValueError) as exc:
             raise ArtifactCryptoError("Secret Service keyring helper could not be started") from exc
