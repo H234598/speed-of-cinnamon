@@ -1575,6 +1575,7 @@ def _open_recorder_log_file(log_path: Path) -> tuple[io.BufferedWriter, bool]:
         cleanup_created_log_fd(exc)
         raise RecorderError(str(exc)) from exc
     except (OSError, ValueError) as exc:
+        cleanup_created_log_fd(exc)
         raise RecorderError("failed to open recorder log file") from exc
     except BaseException as exc:
         cleanup_created_log_fd(exc)
