@@ -3553,6 +3553,15 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
             break
         detail = read_log_excerpt(log_path) or f"exit code {candidate_proc.returncode}"
         startup_errors.append(f"{candidate.name} exited immediately: {detail}")
+        try:
+            stopped = stop_process(candidate_proc.pid, allow_unverified_process=True)
+        except BaseException as cleanup_error:
+            if isinstance(cleanup_error, Exception):
+                raise RuntimeError(f"{startup_errors[-1]}; recorder process cleanup failed") from cleanup_error
+            cleanup_error.add_note(f"recorder process cleanup failed: {cleanup_error}")
+            raise
+        if not stopped:
+            raise RuntimeError(f"{startup_errors[-1]}; recorder process could not be stopped safely")
         if args.recorder != "auto":
             if not cleanup_started_artifacts():
                 raise RuntimeError("failed to clean recording artifacts after recorder exited") from None

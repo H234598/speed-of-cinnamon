@@ -10239,6 +10239,7 @@ class CliTest(unittest.TestCase):
                     return_value=RecorderCommand("pw-record", ["pw-record"]),
                 ) as mocked_choose,
                 mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=failed_proc),
+                mock.patch("speed_of_cinnamon.cli.stop_process", return_value=True) as mocked_stop,
                 redirect_stdout(stdout),
             ):
                 code = cli.run(["start", "--recorder", "pw-record", "--state-file", str(state_file), "--json"])
@@ -10248,6 +10249,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("pw-record exited immediately", payload["error"])
         self.assertEqual([call.args[0] for call in mocked_choose.call_args_list], ["pw-record"])
+        mocked_stop.assert_called_once_with(23456, allow_unverified_process=True)
         self.assertEqual(recording_artifacts, [])
 
     def test_start_explicit_recorder_redacts_immediate_exit_log_tail(self) -> None:
