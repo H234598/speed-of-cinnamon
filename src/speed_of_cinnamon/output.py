@@ -1035,7 +1035,14 @@ def _run_bounded_stdout_command(
     timeout: int,
     runtime_command: str,
 ) -> tuple[int, bytes, bytes] | None:
-    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+    stdout_file = None
+    stderr_file = None
+    result: tuple[int, bytes, bytes] | None = None
+    primary_error: BaseException | None = None
+    cleanup_failed = False
+    try:
+        stdout_file = tempfile.TemporaryFile()
+        stderr_file = tempfile.TemporaryFile()
         try:
             proc = subprocess.run(  # nosec B603
                 [runtime_command, *argv[1:]],
@@ -1047,18 +1054,37 @@ def _run_bounded_stdout_command(
                 shell=False,
                 env=_filtered_environment(),
             )
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError, ValueError):
-            return None
-        completed_stdout = proc.stdout if isinstance(proc.stdout, bytes) else None
-        completed_stderr = proc.stderr if isinstance(proc.stderr, bytes) else None
-        try:
-            output = _bounded_command_output_bytes(stdout_file, completed_stdout)
-            error_output = _bounded_command_output_bytes(stderr_file, completed_stderr)
-        except (OSError, ValueError):
-            return None
-    if output is None or error_output is None:
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError, ValueError) as exc:
+            primary_error = exc
+        else:
+            completed_stdout = proc.stdout if isinstance(proc.stdout, bytes) else None
+            completed_stderr = proc.stderr if isinstance(proc.stderr, bytes) else None
+            try:
+                output = _bounded_command_output_bytes(stdout_file, completed_stdout)
+                error_output = _bounded_command_output_bytes(stderr_file, completed_stderr)
+            except (OSError, ValueError) as exc:
+                primary_error = exc
+            else:
+                if output is not None and error_output is not None:
+                    result = proc.returncode, output, error_output
+    except (OSError, ValueError) as exc:
+        primary_error = exc
+    except BaseException as exc:
+        primary_error = exc
+        raise
+    finally:
+        for capture_file in (stderr_file, stdout_file):
+            if capture_file is None:
+                continue
+            try:
+                capture_file.close()
+            except (OSError, ValueError) as cleanup_error:
+                cleanup_failed = True
+                if primary_error is not None:
+                    primary_error.add_note(f"bounded command output cleanup failed: {cleanup_error}")
+    if cleanup_failed:
         return None
-    return proc.returncode, output, error_output
+    return result
 
 
 def _run_stdout(

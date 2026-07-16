@@ -590,6 +590,28 @@ class OutputTest(unittest.TestCase):
         ):
             self.assertEqual(_run_stdout(["xdotool", "--help"]), "")
 
+    def test_run_stdout_returns_empty_when_capture_close_fails(self) -> None:
+        stdout_file = mock.MagicMock()
+        stdout_file.tell.return_value = 0
+        stdout_file.read.return_value = b""
+        stderr_file = mock.MagicMock()
+        stderr_file.tell.return_value = 0
+        stderr_file.read.return_value = b""
+        stderr_file.close.side_effect = OSError("stderr close failed")
+
+        with (
+            unittest.mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/xdotool"),
+            unittest.mock.patch(
+                "speed_of_cinnamon.output.subprocess.run",
+                return_value=subprocess.CompletedProcess(["xdotool"], 0, stdout=b"", stderr=b""),
+            ),
+            unittest.mock.patch(
+                "speed_of_cinnamon.output.tempfile.TemporaryFile",
+                side_effect=[stdout_file, stderr_file],
+            ),
+        ):
+            self.assertEqual(_run_stdout(["xdotool", "--help"]), "")
+
     def test_run_stdout_uses_file_backed_output_capture(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             command = args[0] if args else kwargs["args"]
