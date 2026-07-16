@@ -31,6 +31,12 @@ class ArtifactCryptoTest(unittest.TestCase):
         with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "path is not safe"):
             artifact_crypto.encrypted_path_for(Path("artifact\nspoof.txt"))
 
+    def test_encrypted_path_helpers_accept_case_insensitive_suffix(self) -> None:
+        path = Path("/tmp/recording.FLAC.SOCENC")
+
+        self.assertTrue(artifact_crypto.is_encrypted_path(path))
+        self.assertEqual(artifact_crypto.encrypted_path_for(path), path)
+
     def test_base64_decoder_rejects_non_alphabet_characters(self) -> None:
         for value in ("YWJj!", "YW Jj"):
             with self.subTest(value=value):

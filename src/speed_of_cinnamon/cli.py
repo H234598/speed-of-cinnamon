@@ -1794,7 +1794,7 @@ def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) ->
 def _remove_plaintext_transcript_sibling_after_encryption(storage_path: Path, encrypted_path: Path) -> None:
     if encrypted_path == storage_path or not is_encrypted_path(encrypted_path):
         return
-    plaintext_path = encrypted_path.with_name(encrypted_path.name.removesuffix(".socenc"))
+    plaintext_path = encrypted_path.with_name(encrypted_path.name[:-len(".socenc")])
     if plaintext_path != storage_path:
         raise RuntimeError(f"unexpected encrypted transcript sibling path: {encrypted_path}")
     if not plaintext_path.exists() and not plaintext_path.is_symlink():
@@ -1806,7 +1806,7 @@ def _remove_plaintext_transcript_sibling_after_encryption(storage_path: Path, en
 def _remove_plaintext_export_sibling_after_encryption(storage_path: Path, encrypted_path: Path) -> None:
     if encrypted_path == storage_path or not is_encrypted_path(encrypted_path):
         return
-    plaintext_path = encrypted_path.with_name(encrypted_path.name.removesuffix(".socenc"))
+    plaintext_path = encrypted_path.with_name(encrypted_path.name[:-len(".socenc")])
     if plaintext_path != storage_path:
         raise RuntimeError(f"unexpected encrypted transcript export sibling path: {encrypted_path}")
     if not plaintext_path.exists() and not plaintext_path.is_symlink():
@@ -2747,7 +2747,7 @@ def _transcript_sibling_path(path: Path | None) -> Path | None:
     if not isinstance(path, Path) or not _is_transcript_artifact(path):
         return None
     if is_encrypted_path(path):
-        return path.with_name(path.name.removesuffix(".socenc"))
+        return path.with_name(path.name[:-len(".socenc")])
     return encrypted_path_for(path)
 
 

@@ -1642,6 +1642,35 @@ class CliTest(unittest.TestCase):
         self.assertEqual(plaintext, "new plaintext\n")
         self.assertFalse(encrypted_transcript.exists())
 
+    def test_stored_transcript_reads_case_insensitive_encrypted_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = Path(tmp) / "recorded.txt"
+            with mock.patch.dict(
+                os.environ,
+                {artifact_crypto.PASSPHRASE_ENV: artifact_crypto._b64encode(bytes(range(32)))},
+                clear=False,
+            ):
+                encrypted_path, _mode = artifact_crypto.write_encrypted_bytes_atomically(
+                    transcript,
+                    b"secret transcript\n",
+                    "passphrase",
+                    kind="transcript",
+                    field_name="transcript file",
+                )
+                uppercase_path = encrypted_path.with_name("recorded.txt.SOCENC")
+                encrypted_path.rename(uppercase_path)
+                content = cli._read_stored_transcript_text(uppercase_path)
+
+        self.assertEqual(content, "secret transcript\n")
+
+    def test_case_insensitive_encrypted_recording_sibling_is_plaintext_path(self) -> None:
+        encrypted_path = Path("recording.flac.SOCENC")
+
+        self.assertEqual(
+            cli._plaintext_recording_sibling_for_encrypted_path(encrypted_path),
+            Path("recording.flac"),
+        )
+
     def test_write_stored_transcript_rejects_unencodable_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             transcript = Path(tmp) / "input.txt"

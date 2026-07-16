@@ -154,13 +154,13 @@ def encrypted_path_for(path: Path) -> Path:
         assert_safe_path_components(path, field_name="encrypted artifact path")
     except RuntimeError as exc:
         raise ArtifactCryptoError("encrypted artifact path is not safe") from exc
-    if path.name.endswith(ENCRYPTED_SUFFIX):
+    if path.name.casefold().endswith(ENCRYPTED_SUFFIX):
         return path
     return path.with_name(path.name + ENCRYPTED_SUFFIX)
 
 
 def is_encrypted_path(path: Path) -> bool:
-    return isinstance(path, Path) and path.name.endswith(ENCRYPTED_SUFFIX)
+    return isinstance(path, Path) and path.name.casefold().endswith(ENCRYPTED_SUFFIX)
 
 
 def is_encrypted_payload(payload: bytes) -> bool:
