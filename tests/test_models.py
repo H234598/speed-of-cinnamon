@@ -2823,6 +2823,44 @@ class ModelsTest(unittest.TestCase):
         self.assertEqual(payload["removed_orphans"], 0)
         self.assertTrue(orphan_exists)
 
+    def test_model_orphan_cleanup_rejects_candidate_swap_before_delete(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_path = root / "model.bin"
+            orphan = root / ".model.bin.0123456789abcdef.tmp"
+            replacement = root / "replacement.bin"
+            orphan.write_bytes(b"old orphan")
+            old_mtime = time.time() - models.MODEL_ORPHAN_CLEANUP_MIN_AGE_SECONDS - 60
+            os.utime(orphan, (old_mtime, old_mtime))
+            real_unlink = models._unlink_model_file_leaf
+            swapped = False
+
+            def replace_candidate(
+                candidate: Path,
+                candidate_root: Path,
+                *,
+                field_name: str = "model file",
+                expected_stat: os.stat_result | None = None,
+            ) -> bool:
+                nonlocal swapped
+                if candidate == orphan and not swapped:
+                    orphan.replace(replacement)
+                    orphan.write_bytes(b"new orphan")
+                    swapped = True
+                return real_unlink(
+                    candidate,
+                    candidate_root,
+                    field_name=field_name,
+                    expected_stat=expected_stat,
+                )
+
+            with mock.patch.object(models, "_unlink_model_file_leaf", side_effect=replace_candidate):
+                with self.assertRaisesRegex(models.ModelError, "model orphan file changed before cleanup"):
+                    models._remove_model_orphan_paths(model_path, root)
+
+            self.assertEqual(orphan.read_bytes(), b"new orphan")
+            self.assertEqual(replacement.read_bytes(), b"old orphan")
+
     def test_remove_model_rejects_symlink_randomized_orphan(self) -> None:
         spec = models.ModelSpec(
             name="test-orphan-symlink-remove",

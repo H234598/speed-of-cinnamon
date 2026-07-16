@@ -1068,7 +1068,13 @@ def _replace_model_sibling_path(source: Path, target: Path, root: Path, *, field
             pass
 
 
-def _unlink_model_file_leaf(path: Path, root: Path, *, field_name: str = "model file") -> bool:
+def _unlink_model_file_leaf(
+    path: Path,
+    root: Path,
+    *,
+    field_name: str = "model file",
+    expected_stat: os.stat_result | None = None,
+) -> bool:
     _assert_path_within_model_root(path, root, field_name=field_name)
     try:
         assert_no_symlink_ancestors(path.parent, field_name=f"{field_name} parent")
@@ -1092,6 +1098,8 @@ def _unlink_model_file_leaf(path: Path, root: Path, *, field_name: str = "model 
             raise ModelError(f"{field_name} must not be a symlink: {path}")
         if not stat_module.S_ISREG(file_stat.st_mode):
             raise ModelError(f"{field_name} must be a regular file: {path}")
+        if expected_stat is not None and not _same_model_artifact_identity(file_stat, expected_stat):
+            raise ModelError(f"{field_name} changed before cleanup: {path}")
         os.unlink(path.name, dir_fd=parent_fd)
         os.fsync(parent_fd)
         return True
@@ -1141,7 +1149,13 @@ def _unlink_model_file_if_same(
                 pass
 
 
-def _remove_model_directory_leaf(path: Path, root: Path, *, field_name: str = "model directory") -> bool:
+def _remove_model_directory_leaf(
+    path: Path,
+    root: Path,
+    *,
+    field_name: str = "model directory",
+    expected_stat: os.stat_result | None = None,
+) -> bool:
     _assert_path_within_model_root(path, root, field_name=field_name)
     if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
         raise ModelError("secure recursive model directory removal is not supported on this platform")
@@ -1167,6 +1181,8 @@ def _remove_model_directory_leaf(path: Path, root: Path, *, field_name: str = "m
             raise ModelError(f"{field_name} must not be a symlink: {path}")
         if not stat_module.S_ISDIR(file_stat.st_mode):
             raise ModelError(f"{field_name} must be a directory: {path}")
+        if expected_stat is not None and not _same_model_artifact_identity(file_stat, expected_stat):
+            raise ModelError(f"{field_name} changed before cleanup: {path}")
         shutil.rmtree(path.name, dir_fd=parent_fd)
         os.fsync(parent_fd)
         return True
@@ -1860,11 +1876,21 @@ def _remove_model_orphan_paths(path: Path, root: Path, *, allow_suffixless: bool
             if scan_started_at - candidate_stat.st_mtime < MODEL_ORPHAN_CLEANUP_MIN_AGE_SECONDS:
                 continue
             if stat_module.S_ISDIR(candidate_stat.st_mode):
-                if _remove_model_directory_leaf(candidate, root, field_name="model orphan directory"):
+                if _remove_model_directory_leaf(
+                    candidate,
+                    root,
+                    field_name="model orphan directory",
+                    expected_stat=candidate_stat,
+                ):
                     removed += 1
                 continue
             if stat_module.S_ISREG(candidate_stat.st_mode):
-                if _unlink_model_file_leaf(candidate, root, field_name="model orphan file"):
+                if _unlink_model_file_leaf(
+                    candidate,
+                    root,
+                    field_name="model orphan file",
+                    expected_stat=candidate_stat,
+                ):
                     removed += 1
                 continue
     except BaseException as exc:
