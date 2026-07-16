@@ -948,7 +948,7 @@ def _validated_catalog_path_fragment(value: str, *, field_name: str) -> Path:
     if not normalized:
         raise ModelError(f"{field_name} is required")
     path = Path(normalized)
-    if path.is_absolute() or any(part == ".." for part in path.parts):
+    if path == Path(".") or path.is_absolute() or any(part in {".", ".."} for part in path.parts):
         raise ModelError(f"{field_name} must be a relative path without parent traversal")
     return path
 

@@ -3341,6 +3341,41 @@ class ModelsTest(unittest.TestCase):
         with self.assertRaisesRegex(models.ModelError, "model filename must be a relative path without parent traversal"):
             models.model_path(spec)
 
+    def test_model_path_rejects_catalog_filename_that_is_model_root(self) -> None:
+        spec = models.ModelSpec(
+            name="root",
+            filename=".",
+            size="1 KiB",
+            sha1=hashlib.sha1(b"root").hexdigest(),
+            description="model root path",
+        )
+
+        with self.assertRaisesRegex(models.ModelError, "model filename must be a relative path without parent traversal"):
+            models.model_path(spec)
+
+    def test_remove_model_rejects_root_filename_without_deleting_model_root(self) -> None:
+        spec = models.ModelSpec(
+            name="root-remove",
+            filename=".",
+            size="1 KiB",
+            sha1=hashlib.sha1(b"root").hexdigest(),
+            description="model root removal path",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+        ):
+            root = models._model_root(spec)
+            root.mkdir(parents=True)
+            marker = root / "keep.txt"
+            marker.write_text("keep", encoding="utf-8")
+
+            with self.assertRaisesRegex(models.ModelError, "model filename must be a relative path without parent traversal"):
+                models.remove_model(spec.name)
+
+            self.assertEqual(marker.read_text(encoding="utf-8"), "keep")
+
     def test_model_path_rejects_catalog_filename_control_character(self) -> None:
         spec = models.ModelSpec(
             name="control",
