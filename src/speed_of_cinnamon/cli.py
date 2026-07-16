@@ -120,7 +120,13 @@ from .settings_export import MAX_SETTINGS_EXPORT_PATH_CHARS
 from .setup_plan import build_setup_plan
 from .state import RecordingState, StateStore, now_iso, process_is_alive
 from .text_utils import sanitize_special_chars
-from .transcriber import MAX_AUDIO_PATH_CHARS, normalize_backend, validate_audio_file, transcribe
+from .transcriber import (
+    MAX_AUDIO_PATH_CHARS,
+    MAX_LANGUAGE_CODE_CHARS,
+    normalize_backend,
+    validate_audio_file,
+    transcribe,
+)
 from .profanity_filter import (
     MAX_PROFANITY_FILTER_BYTES,
     PROFANITY_REPLACEMENTS,
@@ -826,7 +832,7 @@ def _validate_pipeline_text_args(
     *,
     language: str,
 ) -> str:
-    language = _assert_clean_text(language, field_name="language", max_chars=MAX_PATH_CHARS)
+    language = _assert_clean_text(language, field_name="language", max_chars=MAX_LANGUAGE_CODE_CHARS)
     _assert_clean_text(args.personal_context, field_name="personal context", max_chars=MAX_TRANSCRIBER_TEXT_CHARS)
     _assert_clean_text(args.vocabulary, field_name="vocabulary", max_chars=MAX_TRANSCRIBER_TEXT_CHARS)
     _assert_clean_text(args.transcriber_command, field_name="transcriber command", max_chars=MAX_TRANSCRIBER_TEXT_CHARS)

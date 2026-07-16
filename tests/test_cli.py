@@ -7171,6 +7171,36 @@ class CliTest(unittest.TestCase):
         self.assertIn("personal context is too large", payload["error"])
         self.assertEqual(final_state.status, "processing")
 
+    @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="")
+    @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
+    def test_transcribe_file_rejects_overlong_language_before_transcribing(
+        self,
+        mocked_validate: mock.Mock,
+        mocked_transcribe: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            mocked_validate.return_value = audio
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--language",
+                    "x" * 65,
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf transcript",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 1)
+        self.assertIn("language is too large", payload["error"])
+        mocked_transcribe.assert_not_called()
+
     def test_stop_rejects_invalid_state_audio_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "state.json"
