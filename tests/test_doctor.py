@@ -234,6 +234,30 @@ class DoctorTest(unittest.TestCase):
             "whisper.cpp voice model path must be a file",
         )
 
+    def test_explicit_transcriber_rejects_model_for_other_backend(self) -> None:
+        checks = {
+            "whisper-cli": doctor.Check("whisper-cli", True, "/usr/bin/whisper-cli"),
+            "faster-whisper": doctor.Check("faster-whisper", True, "available"),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            ctranslate2_model = Path(tmp) / "base"
+            ctranslate2_model.mkdir()
+            status = doctor._transcriber_status(
+                {"transcriber": "whisper-cpp", "whisper-model": str(ctranslate2_model)},
+                checks,
+            )
+            self.assertFalse(status["ok"])
+            self.assertEqual(status["detail"], "whisper.cpp voice model path must be a file")
+
+            whisper_cpp_model = Path(tmp) / "ggml-base.bin"
+            whisper_cpp_model.write_bytes(b"model")
+            status = doctor._transcriber_status(
+                {"transcriber": "faster-whisper", "whisper-model": str(whisper_cpp_model)},
+                checks,
+            )
+            self.assertFalse(status["ok"])
+            self.assertEqual(status["detail"], "faster-whisper voice model path must be a directory")
+
     def test_auto_asr_can_use_downloaded_whisper_cpp_model(self) -> None:
         tools = {"python3", "pw-record", "whisper-cli"}
         with tempfile.TemporaryDirectory() as tmp:
