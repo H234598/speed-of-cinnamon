@@ -364,6 +364,18 @@ def _clipboard_dedup_lock_path() -> Path:
     return path
 
 
+def _clipboard_lock_pid_is_zombie(pid: int) -> bool:
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").strip()
+        close = raw.rindex(")")
+        rest = raw[close + 2 :].split()
+    except (OSError, ValueError):
+        return False
+    return bool(rest and rest[0] in {"Z", "X", "x"})
+
+
 def _clipboard_lock_pid_is_running(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -377,7 +389,7 @@ def _clipboard_lock_pid_is_running(pid: int) -> bool:
         return False
     except OSError:
         return True
-    return True
+    return not _clipboard_lock_pid_is_zombie(pid)
 
 
 def _clipboard_lock_identity_for_pid(pid: int) -> str | None:

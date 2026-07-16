@@ -2571,6 +2571,42 @@ class OutputTest(unittest.TestCase):
 
                 self.assertEqual(lock_path.read_text(encoding="utf-8"), "12345\nowner-identity\n")
 
+    def test_clipboard_dedupe_lock_reclaims_zombie_owner(self) -> None:
+        process = subprocess.Popen(["true"])
+        try:
+            stat_path = Path(f"/proc/{process.pid}/stat")
+            deadline = output_module.time.monotonic() + 2
+            process_state = ""
+            while output_module.time.monotonic() < deadline:
+                try:
+                    raw = stat_path.read_text(encoding="ascii")
+                    process_state = raw.rsplit(")", 1)[1].split()[0]
+                except OSError:
+                    break
+                if process_state == "Z":
+                    break
+                output_module.time.sleep(0.01)
+            self.assertEqual(process_state, "Z")
+
+            with tempfile.TemporaryDirectory() as tmp:
+                with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):
+                    lock_path = output_module.state_dir() / output_module.CLIPBOARD_DEDUP_LOCK_FILE
+                    lock_path.parent.mkdir(parents=True, exist_ok=True)
+                    identity = output_module._clipboard_lock_identity_for_pid(process.pid)
+                    self.assertIsNotNone(identity)
+                    lock_path.write_text(f"{process.pid}\n{identity}\n", encoding="ascii")
+                    lock_path.chmod(0o600)
+
+                    acquired = _acquire_clipboard_dedup_lock()
+                    try:
+                        self.assertEqual(acquired, lock_path)
+                    finally:
+                        _release_clipboard_dedup_lock(acquired)
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+
     def test_clipboard_dedupe_lock_reclaims_stale_pid_only_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):
