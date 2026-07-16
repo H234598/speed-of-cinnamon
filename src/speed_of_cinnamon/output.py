@@ -544,6 +544,7 @@ def _unlink_clipboard_lock_at(
 
 
 def _acquire_clipboard_dedup_lock() -> Path | None:
+    acquired_path: Path | None = None
     try:
         path = _clipboard_dedup_lock_path()
     except RuntimeError:
@@ -558,6 +559,7 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
         )
     except OSError:
         return None
+    primary_error: BaseException | None = None
     try:
         for _attempt in range(2):
             now = time.time()
@@ -683,18 +685,24 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                 raise
             return path
         return None
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
         try:
             os.close(parent_fd)
         except OSError:
             pass
         except BaseException:
-            if acquired_path is not None:
-                try:
-                    _release_clipboard_dedup_lock(acquired_path)
-                except BaseException:
-                    pass
-            raise
+            if primary_error is not None:
+                primary_error.add_note("clipboard dedupe lock cleanup failed during parent FD close")
+            else:
+                if acquired_path is not None:
+                    try:
+                        _release_clipboard_dedup_lock(acquired_path)
+                    except BaseException:
+                        pass
+                raise
 
 
 def _release_clipboard_dedup_lock(path: Path | None) -> None:

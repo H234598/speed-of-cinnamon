@@ -2085,6 +2085,40 @@ class OutputTest(unittest.TestCase):
                 Path(tmp, "speed-of-cinnamon", output_module.CLIPBOARD_DEDUP_LOCK_FILE).exists()
             )
 
+    def test_clipboard_dedupe_lock_preserves_creation_interrupt_when_parent_close_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "speed-of-cinnamon"
+            state_root.mkdir()
+            parent_fd = os.open(state_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_close = os.close
+
+            def close(fd: int) -> None:
+                if fd == parent_fd:
+                    raise KeyboardInterrupt("parent close interrupted")
+                real_close(fd)
+
+            try:
+                with (
+                    mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+                    mock.patch.object(
+                        output_module,
+                        "ensure_directory_without_following_symlinks",
+                        return_value=parent_fd,
+                    ),
+                    mock.patch.object(
+                        output_module.os,
+                        "fstat",
+                        side_effect=KeyboardInterrupt("stat interrupted"),
+                    ),
+                    mock.patch.object(output_module.os, "close", side_effect=close),
+                ):
+                    with self.assertRaisesRegex(KeyboardInterrupt, "stat"):
+                        _acquire_clipboard_dedup_lock()
+            finally:
+                real_close(parent_fd)
+
+            self.assertFalse((state_root / output_module.CLIPBOARD_DEDUP_LOCK_FILE).exists())
+
     def test_clipboard_dedupe_lock_releases_when_parent_close_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_root = Path(tmp) / "speed-of-cinnamon"
