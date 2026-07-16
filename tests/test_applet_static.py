@@ -3179,6 +3179,17 @@ class AppletStaticTest(unittest.TestCase):
             refresh_block.index("this._scheduleStatusPoll();"),
         )
 
+    def test_initial_status_refresh_starts_after_lifecycle_is_running(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        init_start = source.index("_init: function(metadata, orientation, panelHeight, instanceId)")
+        init_end = source.index("\n  _bindSettings:", init_start)
+        init_block = source[init_start:init_end]
+        self.assertLess(
+            init_block.index("this.lifecycleState = LIFECYCLE_RUNNING;"),
+            init_block.index("this._refreshStatus();"),
+        )
+
     def test_status_refresh_applies_only_latest_response(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
