@@ -155,6 +155,7 @@ MAX_TRANSCRIPT_HISTORY_TEXT_CHARS = 4_000
 MAX_TRANSCRIPTS_DOCUMENT_CHARS = 180_000
 MAX_TRANSCRIPTS_DOCUMENT_JSON_BYTES = 240_000
 MAX_TRANSCRIPTS_EXPORT_CHARS = 64_000_000
+MAX_PROFANITY_OUTPUT_CHARS = 2_000_000
 HISTORY_PREVIEW_REDACTED_TEXT = "[transcript preview redacted]"
 HISTORY_METADATA_REDACTED_TEXT = "[transcript metadata redacted]"
 TRANSCRIPT_DISPLAY_CONTROL_RE = re.compile(r"[\x00-\x09\x0b-\x1f\x7f-\x9f\u2028\u2029]")
@@ -1106,12 +1107,31 @@ def _match_replacement_case(original: str, replacement: str) -> str:
     return replacement
 
 
+class _ProfanityOutputLimitExceeded(Exception):
+    pass
+
+
 def soften_profanity_text(text: str) -> str:
     if isinstance(text, bool) or not isinstance(text, str):
         raise RuntimeError("text must be text")
     output = text
     for pattern, replacement in _profanity_replacements(text):
-        output = pattern.sub(lambda match, value=replacement: _match_replacement_case(match.group(0), value), output)
+        if len(output) > MAX_PROFANITY_OUTPUT_CHARS:
+            break
+        projected_chars = len(output)
+
+        def replace(match: re.Match[str], value: str = replacement) -> str:
+            nonlocal projected_chars
+            replacement_value = _match_replacement_case(match.group(0), value)
+            projected_chars += len(replacement_value) - len(match.group(0))
+            if projected_chars > MAX_PROFANITY_OUTPUT_CHARS:
+                raise _ProfanityOutputLimitExceeded
+            return replacement_value
+
+        try:
+            output = pattern.sub(replace, output)
+        except _ProfanityOutputLimitExceeded:
+            break
     return output
 
 
