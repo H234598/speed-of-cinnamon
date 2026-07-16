@@ -1644,6 +1644,41 @@ class AppLoggingTest(unittest.TestCase):
             self.assertTrue(old_daily.exists())
             self.assertEqual(list(log_dir.glob("*.backup")), [])
 
+    def test_maintain_logs_does_not_remove_replaced_archive_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            old_archive = log_dir / "speed-of-cinnamon-2026-05.log.gz"
+            old_daily = log_dir / "speed-of-cinnamon-2026-05-30.log"
+            replacement = log_dir / "replacement.backup"
+            old_daily.write_text("may-30\n", encoding="utf-8")
+            old_daily.chmod(0o600)
+            with gzip.open(old_archive, "wt", encoding="utf-8") as handle:
+                handle.write("legacy\n")
+            old_archive.chmod(0o600)
+            replacement.write_text("must survive\n", encoding="utf-8")
+            real_assert = app_logging._assert_regular_unlinked_file
+            swapped = False
+
+            def assert_with_swap(path: Path, *, field_name: str) -> os.stat_result:
+                nonlocal swapped
+                if field_name == "monthly log archive backup" and not swapped:
+                    backups = list(log_dir.glob(f".{old_archive.name}.*.backup"))
+                    self.assertEqual(len(backups), 1)
+                    backup = backups[0]
+                    backup.unlink()
+                    replacement.rename(backup)
+                    swapped = True
+                return real_assert(path, field_name=field_name)
+
+            with mock.patch.object(app_logging, "_assert_regular_unlinked_file", side_effect=assert_with_swap):
+                with self.assertRaisesRegex(RuntimeError, "monthly log archive backup changed before deletion"):
+                    app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
+
+            self.assertTrue(swapped)
+            backups = list(log_dir.glob("*.backup"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_text(encoding="utf-8"), "must survive\n")
+
     def test_maintain_logs_monthly_merge_does_not_overwrite_existing_backup_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

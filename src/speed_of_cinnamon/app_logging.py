@@ -1139,6 +1139,8 @@ def _merge_old_months(directory: Path, today: date) -> None:
             if archive_backup_moved and archive_backup_name is not None:
                 backup_path = directory / archive_backup_name
                 backup_stat = _assert_regular_unlinked_file(backup_path, field_name="monthly log archive backup")
+                if not _same_log_inode(backup_stat, archive_stat):
+                    raise RuntimeError("monthly log archive backup changed before deletion")
                 _unlink_log_file_with_parent_fsync(
                     backup_path,
                     backup_stat,
