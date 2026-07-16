@@ -12,7 +12,7 @@ from .http_safety import is_loopback_hostname
 from .models import default_ctranslate2_model_path, default_whisper_cpp_model_path, model_backend_for_path, model_supports_language
 from .postprocessor import DEFAULT_OPENAI_COMPATIBLE_MODEL, DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL, DEFAULT_OPENAI_COMPATIBLE_URL
 from .path_safety import assert_no_symlink_ancestors
-from .transcriber import faster_whisper_available, normalize_backend
+from .transcriber import MAX_LANGUAGE_CODE_CHARS, faster_whisper_available, normalize_backend
 
 
 _TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -243,6 +243,24 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
     whisper_cpp_ok = _ok(checks, "whisper-cli") or _ok(checks, "whisper.cpp") or _ok(checks, "pwcpp")
     faster_whisper_ok = _ok(checks, "faster-whisper")
     transcriber = normalize_backend(transcriber)
+    if not language:
+        return {"ok": False, "value": transcriber or "auto", "detail": "language must not be empty"}
+    try:
+        language_bytes = len(language.encode("utf-8"))
+    except UnicodeEncodeError:
+        return {"ok": False, "value": transcriber or "auto", "detail": "language contains invalid UTF-8"}
+    if len(language) > MAX_LANGUAGE_CODE_CHARS:
+        return {
+            "ok": False,
+            "value": transcriber or "auto",
+            "detail": f"language is too large (max {MAX_LANGUAGE_CODE_CHARS} characters)",
+        }
+    if language_bytes > MAX_LANGUAGE_CODE_CHARS:
+        return {
+            "ok": False,
+            "value": transcriber or "auto",
+            "detail": f"language is too large (max {MAX_LANGUAGE_CODE_CHARS} bytes)",
+        }
     if transcriber == "auto" and command_template:
         local_model = ""
     elif whisper_model and transcriber in {"auto", "whisper-cpp", "faster-whisper"}:

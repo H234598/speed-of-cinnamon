@@ -58,6 +58,23 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(payload["configured"]["output"]["paste_ok"])
         self.assertEqual(payload["configured"]["warnings"], ["automatic paste is unavailable; Cinnamon clipboard copy still works"])
 
+    def test_transcriber_rejects_language_values_transcriber_rejects(self) -> None:
+        checks = {"whisper": doctor.Check("whisper", True, "/usr/bin/whisper")}
+        cases = (
+            ("", "language must not be empty"),
+            ("x" * (doctor.MAX_LANGUAGE_CODE_CHARS + 1), "language is too large (max 64 characters)"),
+            ("😀" * 17, "language is too large (max 64 bytes)"),
+            ("\ud800", "language contains invalid UTF-8"),
+        )
+        for language, detail in cases:
+            with self.subTest(language=repr(language)):
+                status = doctor._transcriber_status(
+                    {"language": language, "transcriber": "command", "transcriber-command": "printf ok"},
+                    checks,
+                )
+                self.assertFalse(status["ok"])
+                self.assertEqual(status["detail"], detail)
+
     def test_applet_pipeline_requires_cinnamon_session(self) -> None:
         tools = {"python3", "pw-record", "pactl", "xdotool"}
         env = {"XDG_CURRENT_DESKTOP": "GNOME", "XDG_SESSION_TYPE": "x11", "DESKTOP_SESSION": "gnome"}
