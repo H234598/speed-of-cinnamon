@@ -1682,6 +1682,18 @@ def _remove_transient_transcript_path(
                 pass
 
 
+def _raise_transcription_cleanup_failure(
+    transcription_error: BaseException | None,
+    cleanup_error: BaseException,
+) -> None:
+    if transcription_error is None:
+        raise cleanup_error
+    if isinstance(transcription_error, Exception):
+        raise RuntimeError(f"{transcription_error}; {cleanup_error}") from cleanup_error
+    transcription_error.add_note(f"transcript cleanup failed: {cleanup_error}")
+    raise transcription_error.with_traceback(transcription_error.__traceback__)
+
+
 def _raise_recording_cleanup_failure(store: StateStore, failures: list[tuple[str, str, str]]) -> None:
     if not failures:
         return
@@ -3731,7 +3743,7 @@ def finalize_recording(
             transcript_audio_path = trimmed_audio_path
         except RecorderError:
             transcript_audio_path = audio_path
-        transcription_error: Exception | None = None
+        transcription_error: BaseException | None = None
         try:
             text = transcribe(
                 audio_path=transcript_audio_path,
@@ -3744,7 +3756,7 @@ def finalize_recording(
                 vocabulary=args.vocabulary,
                 **_openai_compatible_transcribe_kwargs(args, normalized_transcriber),
             )
-        except Exception as exc:
+        except BaseException as exc:
             transcription_error = exc
             raise
         finally:
@@ -3760,10 +3772,8 @@ def finalize_recording(
                         suffix=trimmed_audio_path.suffix.lower(),
                     ):
                         raise RuntimeError(f"failed to delete transient trimmed recording artifact: {trimmed_audio_path}")
-            except RuntimeError as cleanup_exc:
-                if transcription_error is not None:
-                    raise RuntimeError(f"{transcription_error}; {cleanup_exc}") from cleanup_exc
-                raise
+            except BaseException as cleanup_exc:
+                _raise_transcription_cleanup_failure(transcription_error, cleanup_exc)
 
         if _is_empty_transcript_text(text):
             text = ""
@@ -5104,7 +5114,7 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
     artifact_encryption = _artifact_encryption_mode(args)
     transcriber_text_path = _transcript_work_path(text_path, artifact_encryption)
     transient_text_stat = _prepare_transient_transcript_path(transcriber_text_path, text_path)
-    transcription_error: Exception | None = None
+    transcription_error: BaseException | None = None
     try:
         text = transcribe(
             audio_path=audio_path,
@@ -5117,7 +5127,7 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
             vocabulary=args.vocabulary,
             **_openai_compatible_transcribe_kwargs(args, normalized_transcriber),
         )
-    except Exception as exc:
+    except BaseException as exc:
         transcription_error = exc
         raise
     finally:
@@ -5127,10 +5137,8 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
                 text_path,
                 expected_fd=transient_text_stat,
             )
-        except RuntimeError as cleanup_exc:
-            if transcription_error is not None:
-                raise RuntimeError(f"{transcription_error}; {cleanup_exc}") from cleanup_exc
-            raise
+        except BaseException as cleanup_exc:
+            _raise_transcription_cleanup_failure(transcription_error, cleanup_exc)
     if _is_empty_transcript_text(text):
         text = ""
         security_post_processing = _empty_security_post_processing()

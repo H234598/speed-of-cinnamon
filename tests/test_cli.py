@@ -1663,6 +1663,36 @@ class CliTest(unittest.TestCase):
         self.assertIn("transcriber failed", payload["error"])
         self.assertIn("failed to delete transient transcript file", payload["error"])
 
+    @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
+    def test_transcribe_file_preserves_interrupt_when_cleanup_also_fails(
+        self,
+        mocked_validate: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            mocked_validate.return_value = audio
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}, clear=False),
+                mock.patch("speed_of_cinnamon.cli.transcribe", side_effect=KeyboardInterrupt("transcriber interrupted")),
+                mock.patch(
+                    "speed_of_cinnamon.cli._remove_transient_transcript_path",
+                    side_effect=OSError("cleanup failed"),
+                ),
+            ):
+                with self.assertRaises(KeyboardInterrupt) as context:
+                    cli.run([
+                        "transcribe-file",
+                        str(audio),
+                        "--transcriber",
+                        "command",
+                        "--transcriber-command",
+                        "printf test",
+                    ])
+
+        self.assertEqual(str(context.exception), "transcriber interrupted")
+        self.assertIn("cleanup failed", "\n".join(context.exception.__notes__))
+
     @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="encrypted ok")
     @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
     def test_transcribe_file_can_confirm_plaintext_output_with_encrypted_storage(
