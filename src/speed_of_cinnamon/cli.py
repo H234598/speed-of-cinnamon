@@ -4528,11 +4528,16 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     return {"status": "recording", "message": error_text, "error": error_text}
                 # Continue through the normal finalizing/discard path so cancel also removes
                 # the artifacts produced by the just-stopped recording.
-            elif (
-                state.pid is not None
-                and state.process_identity
-                and _recording_process_identity_for_pid(state.pid) is None
-            ):
+            elif state.pid is not None and state.process_identity:
+                current_process_identity = _recording_process_identity_for_pid(state.pid)
+                if current_process_identity is not None:
+                    error_text = "recording process identity does not match; recording state preserved"
+                    store.update(
+                        status="recording",
+                        error=error_text,
+                        inserted=False,
+                    )
+                    return {"status": "recording", "message": error_text, "error": error_text}
                 stopped = stop_process(
                     _coerce_int(state.pid, field_name="state pid"),
                     expected_process_identity=state.process_identity,

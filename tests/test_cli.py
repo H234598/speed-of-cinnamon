@@ -9594,6 +9594,49 @@ class CliTest(unittest.TestCase):
         self.assertTrue(audio_exists)
         self.assertTrue(log_exists)
 
+    def test_cancel_preserves_state_when_recording_pid_identity_does_not_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "recording.wav"
+            log = recordings / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(
+                RecordingState(
+                    status="recording",
+                    pid=1234,
+                    process_identity="owner-identity",
+                    audio_path=str(audio),
+                    log_path=str(log),
+                )
+            )
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch.object(cli, "_recording_process_verified_alive", return_value=False),
+                mock.patch.object(cli, "_recording_process_identity_for_pid", return_value="foreign-identity"),
+                mock.patch.object(cli, "stop_process") as mocked_stop,
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+            audio_exists = audio.exists()
+            log_exists = log.exists()
+
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "recording")
+        self.assertIn("identity", payload["message"])
+        self.assertEqual(final_state.status, "recording")
+        self.assertEqual(final_state.process_identity, "owner-identity")
+        self.assertTrue(audio_exists)
+        self.assertTrue(log_exists)
+        mocked_stop.assert_not_called()
+
     def test_cancel_with_only_invalid_audio_path_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -11325,7 +11368,7 @@ class CliTest(unittest.TestCase):
 
     @mock.patch("speed_of_cinnamon.cli.stop_process")
     @mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=True)
-    def test_cancel_running_recording_does_not_signal_reused_pid(self, mocked_alive: mock.Mock, mocked_stop: mock.Mock) -> None:
+    def test_cancel_running_recording_preserves_state_for_reused_pid(self, mocked_alive: mock.Mock, mocked_stop: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             recordings = tmp_path / "speed-of-cinnamon" / "recordings"
@@ -11349,9 +11392,14 @@ class CliTest(unittest.TestCase):
             ):
                 code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
             payload = json.loads(stdout.getvalue())
+            final_state = StateStore(state_file).read()
+            audio_exists = audio.exists()
 
-        self.assertEqual(code, 0)
-        self.assertEqual(payload["status"], "idle")
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "recording")
+        self.assertIn("identity", payload["message"])
+        self.assertEqual(final_state.status, "recording")
+        self.assertTrue(audio_exists)
         mocked_alive.assert_called_once_with(1234)
         mocked_stop.assert_not_called()
 
