@@ -1055,6 +1055,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
                     source_cleanup_errors.append(source_error)
                     continue
                 try:
+                    _assert_same_log_file_identity(path, original_stat, field_name="monthly log source")
                     os.unlink(path.name, dir_fd=parent_fd)
                     archive_rollback_safe = False
                 except BaseException as delete_error:

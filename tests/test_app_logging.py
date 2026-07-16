@@ -1516,6 +1516,34 @@ class AppLoggingTest(unittest.TestCase):
             self.assertTrue(may_daily.exists())
             self.assertEqual(may_daily.read_text(encoding="utf-8"), "attacker\n")
 
+    def test_maintain_logs_monthly_merge_rejects_source_swap_after_initial_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "speed-of-cinnamon-2026-05-30.log"
+            replacement = log_dir / "replacement.log"
+            source.write_text("source\n", encoding="utf-8")
+            source.chmod(0o600)
+            replacement.write_text("must survive\n", encoding="utf-8")
+            real_assert = app_logging._assert_same_log_file_identity
+            source_checks = 0
+
+            def assert_with_swap(path: Path, expected_stat: os.stat_result, *, field_name: str) -> None:
+                nonlocal source_checks
+                source_checks += 1
+                if source_checks == 2:
+                    source.unlink()
+                    replacement.rename(source)
+                real_assert(path, expected_stat, field_name=field_name)
+
+            with mock.patch.object(app_logging, "_assert_same_log_file_identity", side_effect=assert_with_swap):
+                with self.assertRaisesRegex(RuntimeError, "monthly log source changed before cleanup"):
+                    app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
+
+            self.assertEqual(source_checks, 2)
+            merged_sources = list(log_dir.glob("*.merged"))
+            self.assertEqual(len(merged_sources), 1)
+            self.assertEqual(merged_sources[0].read_text(encoding="utf-8"), "must survive\n")
+
     def test_maintain_logs_merge_retain_existing_archive_on_replace_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
