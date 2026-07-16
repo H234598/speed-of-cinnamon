@@ -1596,7 +1596,6 @@ def process_group_has_live_processes(process_group_id: int) -> bool | None:
         proc_entries = tuple(Path("/proc").iterdir())
     except OSError:
         return None
-    found_member = False
     scan_incomplete = False
     for proc_entry in proc_entries:
         if not proc_entry.name.isdecimal():
@@ -1612,7 +1611,6 @@ def process_group_has_live_processes(process_group_id: int) -> bool | None:
                 scan_incomplete = True
                 continue
             if member_group_id == process_group_id:
-                found_member = True
                 scan_incomplete = True
             continue
         try:
@@ -1622,12 +1620,11 @@ def process_group_has_live_processes(process_group_id: int) -> bool | None:
             continue
         if member_group_id != process_group_id:
             continue
-        found_member = True
         if stat_fields[0] not in {"Z", "X", "x"}:
             return True
     if scan_incomplete:
         return None
-    return False if found_member else None
+    return False
 
 
 def _process_is_gone(process_target: str) -> bool:

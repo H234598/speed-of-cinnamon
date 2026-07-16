@@ -2510,6 +2510,7 @@ Source #13
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
             mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", side_effect=changing_identity),
             mock.patch("speed_of_cinnamon.recorder.os.kill", return_value=None),
+            mock.patch("speed_of_cinnamon.recorder.process_group_has_live_processes", return_value=True),
             mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2]),
             mock.patch("speed_of_cinnamon.recorder.time.sleep"),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
@@ -2555,6 +2556,7 @@ Source #13
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
             mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
             mock.patch("speed_of_cinnamon.recorder.os.kill", return_value=None),
+            mock.patch("speed_of_cinnamon.recorder.process_group_has_live_processes", return_value=True),
             mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2]),
             mock.patch("speed_of_cinnamon.recorder.time.sleep"),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
@@ -2580,6 +2582,12 @@ Source #13
                 side_effect=ProcessLookupError,
             ),
         ):
+            result = recorder_module.process_group_has_live_processes(1234)
+
+        self.assertFalse(result)
+
+    def test_process_group_scan_reports_empty_group_as_stopped(self) -> None:
+        with mock.patch("speed_of_cinnamon.recorder.Path.iterdir", return_value=()):
             result = recorder_module.process_group_has_live_processes(1234)
 
         self.assertFalse(result)
