@@ -586,13 +586,27 @@ def _parse_silence_seconds(text: str, duration_seconds: float) -> tuple[float, f
     for line in text.splitlines():
         start_match = _SILENCE_START_RE.search(line)
         if start_match:
-            current_start = max(0.0, float(start_match.group(1)))
+            try:
+                parsed_start = float(start_match.group(1))
+            except (OverflowError, ValueError):
+                current_start = None
+                continue
+            current_start = max(0.0, parsed_start) if math.isfinite(parsed_start) else None
             continue
         end_match = _SILENCE_END_RE.search(line)
         if not end_match:
             continue
-        end = min(duration_seconds, max(0.0, float(end_match.group(1))))
-        silence_duration = max(0.0, float(end_match.group(2)))
+        try:
+            parsed_end = float(end_match.group(1))
+            parsed_duration = float(end_match.group(2))
+        except (OverflowError, ValueError):
+            current_start = None
+            continue
+        if not math.isfinite(parsed_end) or not math.isfinite(parsed_duration):
+            current_start = None
+            continue
+        end = min(duration_seconds, max(0.0, parsed_end))
+        silence_duration = max(0.0, parsed_duration)
         start = current_start if current_start is not None else max(0.0, end - silence_duration)
         intervals.append((min(start, duration_seconds), end))
         if leading_silence_seconds == 0.0 and start <= 0.0:

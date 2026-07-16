@@ -21,6 +21,7 @@ from speed_of_cinnamon.recorder import (
     _file_size,
     _completed_output_bytes,
     _decode_ffmpeg_output,
+    _parse_silence_seconds,
     _wav_data_offset,
     choose_recorder,
     detect_silent_recording,
@@ -222,6 +223,17 @@ class RecorderTest(unittest.TestCase):
         self.assertEqual(result.leading_silence_seconds, 1.25)
         self.assertEqual(result.silence_seconds, 1.5)
         self.assertEqual(result.speech_seconds, 2.0)
+
+    def test_parse_silence_seconds_ignores_nonfinite_intervals(self) -> None:
+        huge = "9" * 400
+
+        self.assertEqual(
+            _parse_silence_seconds(
+                f"silence_start: 0\nsilence_end: {huge} | silence_duration: {huge}",
+                10.0,
+            ),
+            (0.0, 0.0),
+        )
 
     def test_trim_recording_leading_silence_removes_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
