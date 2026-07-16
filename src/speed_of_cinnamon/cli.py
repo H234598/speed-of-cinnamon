@@ -931,7 +931,9 @@ def read_file_tail(path: Path, max_chars: int) -> str:
         if size <= max_bytes:
             handle.seek(0)
         else:
-            handle.seek(size - max_bytes)
+            # Read up to three extra bytes so byte slicing cannot start inside
+            # a valid four-byte UTF-8 code point.
+            handle.seek(max(size - max_bytes - 3, 0))
         try:
             text = handle.read().decode("utf-8")
         except UnicodeDecodeError as exc:
