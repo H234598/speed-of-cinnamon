@@ -2579,6 +2579,7 @@ MyApplet.prototype = {
         if (this._killProcessGroup(process, processGroupIdentity)) {
           return true;
         }
+        return false;
       }
       if (typeof process.force_exit !== "function") {
         throw new Error("Process termination API is unavailable");

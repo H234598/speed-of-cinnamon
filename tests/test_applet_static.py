@@ -4546,6 +4546,15 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("return false;", termination_block)
         self.assertIn("this._killProcessGroup(process, processGroupIdentity)", termination_block)
         self.assertIn("process.force_exit();", termination_block)
+        self.assertIn(
+            "if (this._killProcessGroup(process, processGroupIdentity)) {\n"
+            "          return true;\n"
+            "        }\n"
+            "        return false;\n"
+            "      }\n"
+            "      if (typeof process.force_exit !== \"function\")",
+            termination_block,
+        )
 
         wrap_start = source.index("_wrapSubprocessArgs: function(args)")
         wrap_end = source.index("\n  _coerceCliTextArg:", wrap_start)
