@@ -316,6 +316,26 @@ class OutputTest(unittest.TestCase):
             with self.assertRaisesRegex(OutputError, "output could not be read"):
                 _run_with_input(("echo", "x"), "in")
 
+    def test_run_with_input_preserves_process_error_when_capture_close_fails(self) -> None:
+        stdout_file = mock.MagicMock()
+        stdout_file.tell.return_value = 0
+        stderr_file = mock.MagicMock()
+        stderr_file.tell.return_value = 0
+        stderr_file.close.side_effect = OSError("stderr close failed")
+
+        with (
+            mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/cmd"),
+            mock.patch(
+                "speed_of_cinnamon.output.subprocess.run",
+                return_value=subprocess.CompletedProcess(["cmd"], 1, stdout=b"", stderr=b""),
+            ),
+            mock.patch("speed_of_cinnamon.output.tempfile.TemporaryFile", side_effect=[stdout_file, stderr_file]),
+        ):
+            with self.assertRaisesRegex(OutputError, "failed with exit code 1") as caught:
+                _run_with_input(["cmd"], "input")
+
+        self.assertIn("stderr close failed", "\n".join(caught.exception.__notes__))
+
     def test_run_with_input_rejects_command_error_output(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             stderr = cast(BinaryIO, kwargs["stderr"])

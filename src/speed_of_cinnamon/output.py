@@ -932,7 +932,12 @@ def _run_with_input(
 
     input_bytes = _validate_text_input(text)
 
-    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+    stdout_file = None
+    stderr_file = None
+    primary_error: BaseException | None = None
+    try:
+        stdout_file = tempfile.TemporaryFile()
+        stderr_file = tempfile.TemporaryFile()
         try:
             proc = subprocess.run(  # nosec B603
                 [runtime_command, *argv[1:]],
@@ -963,6 +968,26 @@ def _run_with_input(
 
         if proc.returncode != 0:
             raise OutputError(f"{command} failed with exit code {proc.returncode}")
+    except BaseException as exc:
+        primary_error = exc
+        raise
+    finally:
+        cleanup_errors: list[BaseException] = []
+        for capture_file in (stderr_file, stdout_file):
+            if capture_file is None:
+                continue
+            try:
+                capture_file.close()
+            except BaseException as cleanup_error:
+                if primary_error is not None:
+                    primary_error.add_note(f"{command} output cleanup failed: {cleanup_error}")
+                else:
+                    cleanup_errors.append(cleanup_error)
+        if cleanup_errors:
+            first_cleanup_error = cleanup_errors[0]
+            for cleanup_error in cleanup_errors[1:]:
+                first_cleanup_error.add_note(f"{command} output cleanup failed: {cleanup_error}")
+            raise first_cleanup_error
 
 
 def _command_path(command: str) -> str:
