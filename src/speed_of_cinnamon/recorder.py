@@ -1619,7 +1619,7 @@ def process_group_has_live_processes(process_group_id: int) -> bool | None:
             continue
         proc_pid = int(proc_entry.name)
         stat_fields = _recording_process_stat_fields(proc_pid)
-        if stat_fields is None or len(stat_fields) < 3:
+        if stat_fields is None or len(stat_fields) < 4:
             try:
                 member_group_id = os.getpgid(proc_pid)
             except ProcessLookupError:
@@ -1632,10 +1632,11 @@ def process_group_has_live_processes(process_group_id: int) -> bool | None:
             continue
         try:
             member_group_id = int(stat_fields[2])
+            member_session_id = int(stat_fields[3])
         except ValueError:
             scan_incomplete = True
             continue
-        if member_group_id != process_group_id:
+        if member_group_id != process_group_id or member_session_id != process_group_id:
             continue
         if stat_fields[0] not in {"Z", "X", "x"}:
             return True
@@ -1660,14 +1661,47 @@ def _process_is_gone(process_target: str) -> bool:
     return False
 
 
+def _process_group_has_recorder_session(process_group_id: int) -> bool | None:
+    if process_group_id <= 0:
+        return False
+    try:
+        proc_entries = tuple(Path("/proc").iterdir())
+    except OSError:
+        return False
+    scan_incomplete = False
+    for proc_entry in proc_entries:
+        if not proc_entry.name.isdecimal():
+            continue
+        stat_fields = _recording_process_stat_fields(int(proc_entry.name))
+        if stat_fields is None or len(stat_fields) < 4:
+            scan_incomplete = True
+            continue
+        try:
+            member_group_id = int(stat_fields[2])
+            member_session_id = int(stat_fields[3])
+        except ValueError:
+            scan_incomplete = True
+            continue
+        if member_group_id == process_group_id and member_session_id == process_group_id:
+            return True
+    if scan_incomplete:
+        return None
+    return False
+
+
 def _process_group_exists(process_group_id: int) -> bool:
+    if process_group_id <= 0:
+        return False
+    session_present = _process_group_has_recorder_session(process_group_id)
+    if session_present is not False:
+        return session_present is True
     try:
         os.kill(-process_group_id, 0)
     except PermissionError:
         return True
     except (OSError, OverflowError, ValueError):
         return False
-    return True
+    return False
 
 
 def _open_recorder_log_file(log_path: Path) -> tuple[io.BufferedWriter, bool]:
@@ -1860,6 +1894,7 @@ def stop_process(
             and expected_process_identity
             and _process_is_gone(str(pid))
             and _process_group_exists(pid)
+            and _process_group_has_recorder_session(pid) is True
         ):
             return _recording_process_identity_for_pid(pid) is None
         return False

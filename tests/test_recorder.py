@@ -2635,6 +2635,18 @@ Source #13
 
         self.assertFalse(result)
 
+    def test_process_group_scan_ignores_foreign_session(self) -> None:
+        entries = (Path("/proc/100"),)
+        with (
+            mock.patch("speed_of_cinnamon.recorder.Path.iterdir", return_value=entries),
+            mock.patch(
+                "speed_of_cinnamon.recorder._recording_process_stat_fields",
+                return_value=["S", "1", "1234", "9999"],
+            ),
+        ):
+            self.assertFalse(recorder_module.process_group_has_live_processes(1234))
+            self.assertFalse(recorder_module._process_group_exists(1234))
+
     def test_stop_process_accepts_zombie_group_leader_as_stopped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             process = start_recorder(
@@ -2709,7 +2721,8 @@ Source #13
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", side_effect=ProcessLookupError),
             mock.patch("speed_of_cinnamon.recorder._process_group_exists", return_value=True),
-            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="foreign-identity"),
+            mock.patch("speed_of_cinnamon.recorder._process_group_has_recorder_session", return_value=False),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value=None),
             mock.patch("speed_of_cinnamon.recorder._process_is_gone", return_value=True),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
@@ -2731,6 +2744,7 @@ Source #13
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", side_effect=ProcessLookupError),
             mock.patch("speed_of_cinnamon.recorder._process_group_exists", return_value=True) as mocked_group_exists,
+            mock.patch("speed_of_cinnamon.recorder._process_group_has_recorder_session", return_value=True),
             mock.patch("speed_of_cinnamon.recorder._recording_process_identity_matches", return_value=False),
             mock.patch("speed_of_cinnamon.recorder._process_is_gone", side_effect=process_gone),
             mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2]),
