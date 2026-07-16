@@ -1270,6 +1270,40 @@ class AppLoggingTest(unittest.TestCase):
         self.assertEqual(content.count("first"), 1)
         self.assertEqual(content.count("second"), 1)
 
+    def test_monthly_merge_rolls_back_when_source_quarantine_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "speed-of-cinnamon-2026-05-30.log"
+            source.write_text("same\n", encoding="utf-8")
+            source.chmod(0o600)
+            real_unlink = os.unlink
+            real_rename = app_logging._rename_without_replacing
+
+            def fail_source_unlink(name: object, *args: object, **kwargs: object) -> None:
+                if name == source.name and kwargs.get("dir_fd") is not None:
+                    raise PermissionError("source unlink failed")
+                real_unlink(name, *args, **kwargs)
+
+            def fail_source_quarantine(src: object, dst: object, *args: object, **kwargs: object) -> None:
+                if src == source.name:
+                    raise OSError("source quarantine move failed")
+                real_rename(src, dst, *args, **kwargs)
+
+            with (
+                mock.patch.object(app_logging.os, "unlink", side_effect=fail_source_unlink),
+                mock.patch.object(app_logging, "_rename_without_replacing", side_effect=fail_source_quarantine),
+            ):
+                with self.assertRaisesRegex(PermissionError, "source unlink failed"):
+                    app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
+
+            archive = log_dir / "speed-of-cinnamon-2026-05.log.gz"
+            self.assertFalse(archive.exists())
+            self.assertTrue(source.exists())
+
+            app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
+            with gzip.open(archive, "rt", encoding="utf-8") as handle:
+                self.assertEqual(handle.read().count("same"), 1)
+
     def test_maintain_logs_monthly_merge_rejects_source_swap_before_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

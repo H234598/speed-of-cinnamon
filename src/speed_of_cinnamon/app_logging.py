@@ -805,6 +805,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
         archive_activation_attempted = False
         archive_activation_stat: os.stat_result | None = None
         archive_transaction_active = False
+        archive_rollback_safe = True
         primary_error: BaseException | None = None
         try:
             source_stats: dict[Path, os.stat_result] = {}
@@ -906,7 +907,6 @@ def _merge_old_months(directory: Path, today: date) -> None:
             )
             temp_name = ""
             os.fsync(parent_fd)
-            archive_transaction_active = False
             source_cleanup_errors: list[BaseException] = []
             for path in paths:
                 try:
@@ -915,10 +915,12 @@ def _merge_old_months(directory: Path, today: date) -> None:
                         continue
                     _assert_same_log_file_identity(path, original_stat, field_name="monthly log source")
                 except BaseException as source_error:
+                    archive_rollback_safe = False
                     source_cleanup_errors.append(source_error)
                     continue
                 try:
                     os.unlink(path.name, dir_fd=parent_fd)
+                    archive_rollback_safe = False
                 except BaseException as delete_error:
                     cleanup_name = f"{path.name}.{secrets.token_hex(8)}.merged"
                     try:
@@ -928,6 +930,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
                             directory_fd=parent_fd,
                             field_name="monthly log source",
                         )
+                        archive_rollback_safe = False
                         os.fsync(parent_fd)
                         moved_stat = _assert_regular_unlinked_file(
                             path.with_name(cleanup_name),
@@ -943,13 +946,21 @@ def _merge_old_months(directory: Path, today: date) -> None:
                         ):
                             raise RuntimeError("monthly log source changed before cleanup")
                     except OSError:
+                        try:
+                            _assert_same_log_file_identity(path, original_stat, field_name="monthly log source")
+                        except BaseException:
+                            archive_rollback_safe = False
                         if isinstance(delete_error, OSError):
                             raise delete_error
                         source_cleanup_errors.append(delete_error)
+                        if archive_rollback_safe:
+                            break
                         continue
                     except Exception:
+                        archive_rollback_safe = False
                         raise
                     except BaseException as cleanup_error:
+                        archive_rollback_safe = False
                         _note_cleanup_failure(delete_error, cleanup_error)
                         source_cleanup_errors.append(delete_error)
                         continue
@@ -957,6 +968,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
                         os.unlink(cleanup_name, dir_fd=parent_fd)
                         os.fsync(parent_fd)
                     except OSError as cleanup_error:
+                        archive_rollback_safe = False
                         if not isinstance(delete_error, OSError):
                             _note_cleanup_failure(delete_error, cleanup_error)
                             source_cleanup_errors.append(delete_error)
@@ -966,8 +978,10 @@ def _merge_old_months(directory: Path, today: date) -> None:
                         # to merge the source a second time.
                         pass
                     except Exception:
+                        archive_rollback_safe = False
                         raise
                     except BaseException as cleanup_error:
+                        archive_rollback_safe = False
                         _note_cleanup_failure(delete_error, cleanup_error)
                         source_cleanup_errors.append(delete_error)
                         continue
@@ -977,6 +991,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
                 try:
                     os.fsync(parent_fd)
                 except BaseException as source_error:
+                    archive_rollback_safe = False
                     source_cleanup_errors.append(source_error)
             if source_cleanup_errors:
                 primary_source_error = source_cleanup_errors[0]
@@ -991,6 +1006,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
                     backup_stat,
                     field_name="monthly log archive backup",
                 )
+            archive_transaction_active = False
         except (gzip.BadGzipFile, EOFError, zlib.error):
             # Keep malformed archives intact so size-based cleanup can handle them.
             _unlink_log_temp(parent_fd, temp_name)
@@ -998,7 +1014,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
             continue
         except BaseException as exc:
             primary_error = exc
-            if archive_transaction_active:
+            if archive_transaction_active and archive_rollback_safe:
                 try:
                     if archive_activation_attempted and archive_activation_stat is not None:
                         try:
