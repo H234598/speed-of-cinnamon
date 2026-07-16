@@ -5792,6 +5792,8 @@ def run(argv: list[str] | None = None) -> int:
         if command_name == "cancel" and isinstance(exit_code, int) and not isinstance(exit_code, bool) and 0 <= exit_code <= 255:
             return exit_code
         return 0 if status != "error" and not payload.get("error") else 1
+    except BrokenPipeError:
+        return 1
     except Exception as exc:
         error_message = _redact_error_for_user(str(exc))
         log_event(

@@ -58,6 +58,27 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["status"], "error")
         self.assertNotIn("Infinity", stdout.getvalue())
 
+    def test_run_does_not_retry_output_after_broken_pipe(self) -> None:
+        parser = argparse.ArgumentParser()
+        parser.parse_args = mock.Mock(
+            return_value=argparse.Namespace(
+                command="test",
+                json=True,
+                log_level="INFO",
+                handler=lambda _args: {"status": "done"},
+            )
+        )
+        with (
+            mock.patch.object(cli, "build_parser", return_value=parser),
+            mock.patch.object(cli, "configure_logging"),
+            mock.patch.object(cli, "log_event"),
+            mock.patch.object(cli, "print_result", side_effect=BrokenPipeError("pipe closed")) as print_result,
+        ):
+            code = cli.run([])
+
+        self.assertEqual(code, 1)
+        print_result.assert_called_once()
+
     def test_temporary_benchmark_path_preserves_result_on_fd_close_failure(self) -> None:
         file_stat = os.stat(__file__)
         with (
