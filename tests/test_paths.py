@@ -157,6 +157,15 @@ class PathsTest(unittest.TestCase):
             ):
                 self.assertEqual(paths.xdg_cache_home(), Path("/tmp") / f"{paths.APP_ID}-{os.getuid()}" / ".cache")
 
+    def test_private_temp_root_falls_back_from_unencodable_or_null_tempdir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            for tempdir in (f"{tmp}/\ud800", f"{tmp}/root\x00"):
+                with self.subTest(tempdir=repr(tempdir)):
+                    with mock.patch("speed_of_cinnamon.paths.tempfile.gettempdir", return_value=tempdir):
+                        root = paths._private_runtime_temp_root()
+
+                    self.assertEqual(root, Path("/tmp") / f"{paths.APP_ID}-{os.getuid()}")
+
     def test_safe_home_path_rejects_symlinked_private_temp_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

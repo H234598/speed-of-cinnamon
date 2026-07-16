@@ -86,13 +86,22 @@ def _xdg_path(environment_variable: str, default: Path | Callable[[], Path]) -> 
 
 
 def _private_runtime_temp_root() -> Path:
-    temp_root = Path(tempfile.gettempdir())
-    if not temp_root.is_absolute():
-        temp_root = Path("/tmp")  # nosec B108
     try:
+        temp_root = Path(tempfile.gettempdir())
+        temp_root_text = str(temp_root)
+        if (
+            not temp_root.is_absolute()
+            or _contains_escaped_null(temp_root_text)
+            or _contains_control_chars(temp_root_text)
+            or len(temp_root_text) > MAX_XDG_PATH_CHARS
+            or _is_oversized_utf8_text(temp_root_text, max_chars=MAX_XDG_PATH_CHARS)
+        ):
+            raise RuntimeError("temporary directory is invalid")
+        assert_safe_path_components(temp_root, field_name="temporary directory")
         assert_no_symlink_ancestors(temp_root, field_name="temporary directory")
-    except RuntimeError:
+    except (OSError, RuntimeError, TypeError, ValueError):
         temp_root = Path("/tmp")  # nosec B108
+        assert_safe_path_components(temp_root, field_name="temporary directory")
         assert_no_symlink_ancestors(temp_root, field_name="temporary directory")
     uid = os.getuid() if hasattr(os, "getuid") else os.getpid()
     private_root = temp_root / f"{APP_ID}-{uid}"
