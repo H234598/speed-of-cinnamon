@@ -10040,6 +10040,29 @@ class CliTest(unittest.TestCase):
         mocked_stop.assert_called_once_with(23456, expected_process_identity=None, allow_unverified_process=True)
         self.assertTrue(artifacts)
 
+    def test_start_preserves_artifacts_when_exited_leader_stop_is_unconfirmed(self) -> None:
+        proc = mock.Mock()
+        proc.pid = 23456
+        proc.poll.return_value = 1
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.choose_recorder", return_value=RecorderCommand("test-recorder", [])),
+                mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=proc),
+                mock.patch("speed_of_cinnamon.cli.time.sleep", side_effect=KeyboardInterrupt("startup interrupted")),
+                mock.patch("speed_of_cinnamon.cli.stop_process", return_value=False) as mocked_stop,
+            ):
+                with self.assertRaises(KeyboardInterrupt) as context:
+                    cli.run(["start", "--state-file", str(state_file)])
+            artifacts = list(recordings.glob("*")) if recordings.exists() else []
+
+        self.assertEqual(str(context.exception), "startup interrupted")
+        self.assertIn("process stop was not confirmed", "\n".join(context.exception.__notes__))
+        mocked_stop.assert_called_once_with(23456, expected_process_identity=None, allow_unverified_process=True)
+        self.assertTrue(artifacts)
+
     def test_start_preserves_interrupt_and_cleans_artifacts_when_state_write_is_interrupted(self) -> None:
         proc = mock.Mock()
         proc.pid = 23456

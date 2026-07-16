@@ -3497,15 +3497,17 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
                         process_gone = process.poll() is not None
                     except BaseException:
                         process_gone = False
-                    artifacts_safe_to_remove = process_gone
-                    if not process_gone:
+                        artifacts_safe_to_remove = False
                         primary_error.add_note("recorder process could not be stopped safely")
+                    else:
+                        artifacts_safe_to_remove = False
+                        if not process_gone:
+                            primary_error.add_note("recorder process could not be stopped safely")
+                        else:
+                            primary_error.add_note("recorder process stop was not confirmed")
             except BaseException as cleanup_error:
                 primary_error.add_note(f"recorder process cleanup failed: {cleanup_error}")
-                try:
-                    artifacts_safe_to_remove = process.poll() is not None
-                except BaseException:
-                    artifacts_safe_to_remove = False
+                artifacts_safe_to_remove = False
         if artifacts_safe_to_remove:
             try:
                 if not cleanup_started_artifacts():
