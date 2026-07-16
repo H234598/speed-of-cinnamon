@@ -4548,6 +4548,7 @@ class AppletStaticTest(unittest.TestCase):
         wrap_end = source.index("\n  _coerceCliTextArg:", wrap_start)
         wrap_block = source[wrap_start:wrap_end]
         self.assertIn('this._findTrustedProgramInPath("setsid")', wrap_block)
+        self.assertIn('throw new Error("setsid is unavailable; refusing ungrouped subprocess");', wrap_block)
         self.assertIn('return [setsid, "--"].concat(args);', wrap_block)
 
         identity_start = source.index("_readProcessGroupIdentity: function(process)")

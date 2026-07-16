@@ -10379,7 +10379,7 @@ MyApplet.prototype = {
     }
     let setsid = this._findTrustedProgramInPath("setsid");
     if (!setsid) {
-      return args;
+      throw new Error("setsid is unavailable; refusing ungrouped subprocess");
     }
     return [setsid, "--"].concat(args);
   },
