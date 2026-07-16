@@ -998,6 +998,13 @@ def _run_with_input(
             raise OutputError(f"{command} timed out after {timeout}s") from exc
         except (OSError, ValueError) as exc:
             raise OutputError(f"{command} failed to execute: {exc}") from exc
+        except BaseException as exc:
+            if "proc" in locals():
+                try:
+                    _reap_timed_out_output_process(proc)
+                except BaseException as cleanup_error:
+                    exc.add_note(f"{command} process cleanup failed: {cleanup_error}")
+            raise
 
         try:
             stdout_size = _filesize(stdout_file)
@@ -1128,6 +1135,14 @@ def _run_bounded_stdout_command(
             primary_error = exc
         except (FileNotFoundError, OSError, ValueError) as exc:
             primary_error = exc
+        except BaseException as exc:
+            if "proc" in locals():
+                try:
+                    _reap_timed_out_output_process(proc)
+                except BaseException as cleanup_error:
+                    exc.add_note(f"bounded command process cleanup failed: {cleanup_error}")
+            primary_error = exc
+            raise
         else:
             try:
                 output = _bounded_command_output_bytes(stdout_file, completed_stdout)
