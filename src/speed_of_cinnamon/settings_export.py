@@ -272,7 +272,12 @@ def _create_private_temp_file(parent_fd: int, final_name: str) -> tuple[int, str
     raise SettingsExportError("failed to create settings export temp file")
 
 
-def _scrub_temp_settings_export_file(parent_fd: int, temp_name: str) -> None:
+def _scrub_temp_settings_export_file(
+    parent_fd: int,
+    temp_name: str,
+    *,
+    expected_stat: os.stat_result | None = None,
+) -> None:
     if not temp_name:
         return
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
@@ -285,6 +290,13 @@ def _scrub_temp_settings_export_file(parent_fd: int, temp_name: str) -> None:
         file_stat = os.fstat(fd)
         if not stat_module.S_ISREG(file_stat.st_mode):
             return
+        if expected_stat is not None and (
+            file_stat.st_dev != expected_stat.st_dev
+            or file_stat.st_ino != expected_stat.st_ino
+            or file_stat.st_mode != expected_stat.st_mode
+            or getattr(file_stat, "st_nlink", 1) != getattr(expected_stat, "st_nlink", 1)
+        ):
+            raise SettingsExportError("settings export temp file changed before scrubbing")
         remaining = int(file_stat.st_size)
         if remaining > 0:
             os.lseek(fd, 0, os.SEEK_SET)
@@ -576,6 +588,25 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
     def _same_leaf_inode(first: os.stat_result, second: os.stat_result) -> bool:
         return (first.st_dev, first.st_ino, first.st_mode) == (second.st_dev, second.st_ino, second.st_mode)
 
+    def _unlink_temp_if_same() -> None:
+        if not temp_name:
+            return
+        if temporary_stat is None:
+            raise OSError("settings export temporary file identity is unavailable")
+        current_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            not _same_leaf_inode(current_stat, temporary_stat)
+            or getattr(current_stat, "st_nlink", 1) != getattr(temporary_stat, "st_nlink", 1)
+        ):
+            raise OSError("settings export temporary file changed before cleanup")
+        os.unlink(temp_name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
+
+    def _scrub_temp_if_same() -> None:
+        if temporary_stat is None:
+            raise OSError("settings export temporary file identity is unavailable")
+        _scrub_temp_settings_export_file(parent_fd, temp_name, expected_stat=temporary_stat)
+
     try:
         try:
             assert_fd_is_private_directory(parent_fd, field_name="settings export directory")
@@ -592,6 +623,10 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
         if existing_stat is not None and getattr(existing_stat, "st_nlink", 1) != 1:
             raise SettingsExportError(f"settings export path must not be hardlinked: {path}")
         temp_fd, temp_name = _create_private_temp_file(parent_fd, path.name)
+        try:
+            temporary_stat = os.fstat(temp_fd)
+        except (OSError, ValueError):
+            temporary_stat = None
         try:
             handle = os.fdopen(temp_fd, "w", encoding="utf-8")
         except (OSError, ValueError) as exc:
@@ -750,17 +785,16 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
             cleanup_error: BaseException | None = None
             if temp_name:
                 try:
-                    os.unlink(temp_name, dir_fd=parent_fd)
-                    os.fsync(parent_fd)
+                    _unlink_temp_if_same()
                 except OSError as cleanup_exc:
                     try:
-                        _scrub_temp_settings_export_file(parent_fd, temp_name)
+                        _scrub_temp_if_same()
                     except BaseException as scrub_error:
                         _note_cleanup_failure(exc, scrub_error)
                     cleanup_error = cleanup_exc
                 except BaseException as cleanup_exc:
                     try:
-                        _scrub_temp_settings_export_file(parent_fd, temp_name)
+                        _scrub_temp_if_same()
                     except BaseException as scrub_error:
                         _note_cleanup_failure(exc, scrub_error)
                     cleanup_error = cleanup_exc
@@ -778,17 +812,16 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
             raise error from exc
         if temp_name:
             try:
-                os.unlink(temp_name, dir_fd=parent_fd)
-                os.fsync(parent_fd)
+                _unlink_temp_if_same()
             except OSError as cleanup_error:
                 try:
-                    _scrub_temp_settings_export_file(parent_fd, temp_name)
+                    _scrub_temp_if_same()
                 except BaseException as scrub_error:
                     _note_cleanup_failure(primary_error, scrub_error)
                 _note_cleanup_failure(primary_error, cleanup_error)
             except BaseException as cleanup_error:
                 try:
-                    _scrub_temp_settings_export_file(parent_fd, temp_name)
+                    _scrub_temp_if_same()
                 except BaseException as scrub_error:
                     _note_cleanup_failure(primary_error, scrub_error)
                 _note_cleanup_failure(primary_error, cleanup_error)
