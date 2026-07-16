@@ -1171,6 +1171,39 @@ class ArtifactCryptoTest(unittest.TestCase):
 
         self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 2)
 
+    def test_secret_tool_wait_uses_remaining_request_deadline(self) -> None:
+        fake_proc_holder: dict[str, object] = {}
+
+        class FakePopen:
+            def __init__(self, command: list[str], **kwargs: object) -> None:
+                self.command = command
+                self.returncode = 0
+                self.wait_timeout: float | None = None
+                self.stdin = None
+                self.stdout = self_outer._pipe_reader(b"")
+                self.stderr = self_outer._pipe_reader(b"")
+                fake_proc_holder["proc"] = self
+
+            def wait(self, timeout: float | None = None) -> int:
+                self.wait_timeout = timeout
+                return self.returncode
+
+        self_outer = self
+
+        with (
+            mock.patch("speed_of_cinnamon.artifact_crypto._secret_tool_path", return_value="/usr/bin/secret-tool"),
+            mock.patch("speed_of_cinnamon.artifact_crypto._SECRET_TOOL_TIMEOUT_SECONDS", 10.0),
+            mock.patch(
+                "speed_of_cinnamon.artifact_crypto._read_secret_tool_pipes_bounded",
+                return_value=(b"", b""),
+            ),
+            mock.patch("speed_of_cinnamon.artifact_crypto.time.monotonic", side_effect=[100.0, 104.0]),
+            mock.patch("speed_of_cinnamon.artifact_crypto.subprocess.Popen", side_effect=FakePopen),
+        ):
+            artifact_crypto._run_secret_tool(["lookup", "application", "test"])
+
+        self.assertEqual(getattr(fake_proc_holder["proc"], "wait_timeout"), 6.0)
+
     def test_secret_tool_timeout_kills_child_process_group(self) -> None:
         if not Path("/proc").is_dir():
             self.skipTest("process state inspection requires /proc")

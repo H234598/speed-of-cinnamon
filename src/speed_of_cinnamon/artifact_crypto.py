@@ -1222,7 +1222,11 @@ def _stop_secret_tool_process(proc: subprocess.Popen[bytes]) -> None:
         proc.wait(timeout=1)
 
 
-def _read_secret_tool_pipes_bounded(proc: subprocess.Popen[bytes]) -> tuple[bytes, bytes]:
+def _read_secret_tool_pipes_bounded(
+    proc: subprocess.Popen[bytes],
+    *,
+    deadline: float | None = None,
+) -> tuple[bytes, bytes]:
     try:
         stdout = proc.stdout
         stderr = proc.stderr
@@ -1243,7 +1247,8 @@ def _read_secret_tool_pipes_bounded(proc: subprocess.Popen[bytes]) -> tuple[byte
             _stop_secret_tool_process(proc)
             raise ArtifactCryptoError("Secret Service keyring helper output could not be captured safely") from exc
         active[fd] = field_name
-    deadline = time.monotonic() + _SECRET_TOOL_TIMEOUT_SECONDS
+    if deadline is None:
+        deadline = time.monotonic() + _SECRET_TOOL_TIMEOUT_SECONDS
     while active:
         if time.monotonic() >= deadline:
             _stop_secret_tool_process(proc)
@@ -1296,6 +1301,7 @@ def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subpr
             )
         except (OSError, ValueError) as exc:
             raise ArtifactCryptoError("Secret Service keyring helper could not be started") from exc
+        deadline = time.monotonic() + _SECRET_TOOL_TIMEOUT_SECONDS
         if input_text is not None:
             try:
                 stdin = proc.stdin
@@ -1311,9 +1317,9 @@ def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subpr
             except Exception as exc:
                 _stop_secret_tool_process(proc)
                 raise ArtifactCryptoError("Secret Service keyring helper input could not be sent safely") from exc
-        stdout, stderr = _read_secret_tool_pipes_bounded(proc)
+        stdout, stderr = _read_secret_tool_pipes_bounded(proc, deadline=deadline)
         try:
-            returncode = proc.wait(timeout=_SECRET_TOOL_TIMEOUT_SECONDS)
+            returncode = proc.wait(timeout=max(0.0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired as exc:
             _stop_secret_tool_process(proc)
             raise ArtifactCryptoError("Secret Service keyring request timed out") from exc
