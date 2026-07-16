@@ -1528,6 +1528,18 @@ def _open_recorder_log_file(log_path: Path) -> tuple[io.BufferedWriter, bool]:
         raise RecorderError(str(exc)) from exc
     except (OSError, ValueError) as exc:
         raise RecorderError("failed to open recorder log file") from exc
+    except BaseException as exc:
+        if created and fd is not None:
+            try:
+                expected_stat = os.fstat(fd)
+            except BaseException as cleanup_error:
+                exc.add_note(f"recorder log cleanup inspection failed: {cleanup_error}")
+            else:
+                try:
+                    _unlink_recorder_log_if_same(log_path, expected_stat)
+                except BaseException as cleanup_error:
+                    exc.add_note(f"recorder log cleanup failed: {cleanup_error}")
+        raise
     finally:
         if fd is not None:
             _close_fd_quietly(fd)

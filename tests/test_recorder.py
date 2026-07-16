@@ -1329,6 +1329,19 @@ class RecorderTest(unittest.TestCase):
 
             self.assertTrue(log_path.exists())
 
+    def test_start_recorder_cleans_log_when_log_fdopen_is_interrupted(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "session.log"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.os.fdopen", side_effect=KeyboardInterrupt("fdopen interrupted")),
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    start_recorder(command, log_path)
+
+            self.assertFalse(log_path.exists())
+
     def test_start_recorder_does_not_mask_started_process_when_log_close_fails(self) -> None:
         command = RecorderCommand(name="noop", argv=["true"])
         log_file = mock.Mock()
