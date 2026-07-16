@@ -699,6 +699,7 @@ def _open_model_download_response(
         try:
             return _open_model_download_url(current_url, timeout=30)
         except urllib.error.HTTPError as exc:
+            primary_error: BaseException | None = None
             try:
                 redirect_url = _model_download_redirect_target(exc, current_url)
                 if redirect_url is None:
@@ -713,9 +714,19 @@ def _open_model_download_response(
                 ):
                     raise ModelError("model download redirect URL is not allowed") from exc
                 current_url = redirect_url
+            except BaseException as error:
+                primary_error = error
+                raise
             finally:
-                with suppress(Exception):
+                try:
                     exc.close()
+                except OSError:
+                    pass
+                except BaseException as cleanup_error:
+                    if primary_error is not None:
+                        _note_cleanup_failure(primary_error, cleanup_error)
+                    else:
+                        raise
     raise ModelError("model download has too many redirects")
 
 

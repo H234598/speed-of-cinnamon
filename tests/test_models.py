@@ -53,7 +53,7 @@ class FakeRedirectResponse(FakeResponseWithLength):
 
 
 def fake_redirect(url: str, location: str) -> urllib.error.HTTPError:
-    return urllib.error.HTTPError(url, 302, "Found", {"Location": location}, None)
+    return urllib.error.HTTPError(url, 302, "Found", {"Location": location}, io.BytesIO())
 
 
 def file_sha1s_for(files: tuple[str, ...], data: bytes) -> tuple[tuple[str, str], ...]:
@@ -2109,6 +2109,31 @@ class ModelsTest(unittest.TestCase):
 
         self.assertIsInstance(response, FakeResponseWithLength)
         self.assertTrue(error.fp.closed)
+
+    def test_download_redirect_preserves_error_when_http_error_close_is_interrupted(self) -> None:
+        error = urllib.error.HTTPError(
+            models.TINY_DE_MODEL_URL,
+            302,
+            "Found",
+            {"Location": "https://evil.example/model.bin"},
+            io.BytesIO(),
+        )
+        original_close = error.close
+        error.close = mock.Mock(side_effect=KeyboardInterrupt("close interrupted"))
+
+        with mock.patch("speed_of_cinnamon.models._open_model_download_url", side_effect=error):
+            with self.assertRaisesRegex(models.ModelError, "redirect URL host is not allowed") as caught:
+                models._open_model_download_response(
+                    models.TINY_DE_MODEL_URL,
+                    allowed_hosts={models.HUGGING_FACE_DOWNLOAD_HOST},
+                    redirect_allowed_hosts=models.HUGGING_FACE_STORAGE_REDIRECT_HOSTS
+                    | {models.HUGGING_FACE_DOWNLOAD_HOST},
+                    allowed_urls={models.TINY_DE_MODEL_URL},
+                )
+
+        self.assertIn("model artifact cleanup failed", "\n".join(caught.exception.__notes__))
+        error.close.assert_called_once_with()
+        original_close()
 
     def test_download_url_allows_huggingface_resolve_cache_redirect_for_same_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
