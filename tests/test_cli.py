@@ -8988,6 +8988,105 @@ class CliTest(unittest.TestCase):
         self.assertFalse(log.exists())
         self.assertEqual(backup_files, [])
 
+    def test_finalize_does_not_remove_replaced_cleanup_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "speech.wav"
+            log = recordings_root / "speech.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=False)
+            real_remove = cli.remove_file
+            replacement_written = False
+
+            def replace_backup_then_remove(path_value: str | None, **kwargs: object) -> bool:
+                nonlocal replacement_written
+                if not replacement_written:
+                    backup_files = sorted(recordings_root.glob(".cleanup.*.bak"))
+                    self.assertEqual(len(backup_files), 1)
+                    replacement = backup_files[0].with_name("replacement-backup")
+                    replacement.write_bytes(b"foreign backup")
+                    os.replace(replacement, backup_files[0])
+                    replacement_written = True
+                return real_remove(path_value, **kwargs)
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch(
+                    "speed_of_cinnamon.cli.detect_silent_recording",
+                    return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent"),
+                ),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("skip trim")),
+                mock.patch("speed_of_cinnamon.cli.reencode_recording_to_flac", side_effect=cli.RecorderError("skip encode")),
+                mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.remove_file", side_effect=replace_backup_then_remove),
+            ):
+                payload = cli.finalize_recording(args, store, store.read())
+
+            backup_files = sorted(recordings_root.glob(".cleanup.*.bak"))
+            backup_contents = backup_files[0].read_bytes() if backup_files else None
+
+        self.assertEqual(payload["status"], "done")
+        self.assertEqual(len(backup_files), 1)
+        self.assertEqual(backup_contents, b"foreign backup")
+
+    def test_finalize_reports_missing_cleanup_backup_during_rollback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "speech.wav"
+            log = recordings_root / "speech.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=False)
+            real_remove = cli.remove_file
+
+            def delete_backup_after_audio_remove(path_value: str | None, **kwargs: object) -> bool:
+                result = real_remove(path_value, **kwargs)
+                if path_value == str(audio):
+                    backup_files = sorted(recordings_root.glob(".cleanup.*.bak"))
+                    self.assertEqual(len(backup_files), 1)
+                    backup_files[0].unlink()
+                    return False
+                return result
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch(
+                    "speed_of_cinnamon.cli.detect_silent_recording",
+                    return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent"),
+                ),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("skip trim")),
+                mock.patch("speed_of_cinnamon.cli.reencode_recording_to_flac", side_effect=cli.RecorderError("skip encode")),
+                mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.remove_file", side_effect=delete_backup_after_audio_remove),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "recording cleanup backup is missing"):
+                    cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+
+        self.assertEqual(final_state.status, "error")
+        self.assertEqual(final_state.audio_path, str(audio))
+        self.assertFalse(audio.exists())
+
     def test_finalize_persists_multiline_transcript_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

@@ -3700,7 +3700,7 @@ def finalize_recording(
     written_text_path: Path | None = None
     artifact_encryption = ARTIFACT_ENCRYPTION_OFF
     preserve_written_text_on_error = False
-    cleanup_rollback_backups: list[tuple[Path, Path]] = []
+    cleanup_rollback_backups: list[tuple[Path, Path, os.stat_result]] = []
     preserve_recording_artifacts_after_cleanup_failure = False
 
     def _backup_cleanup_file(path_text: str | None, *, suffix: str) -> Path | None:
@@ -3711,6 +3711,9 @@ def finalize_recording(
         backup = source.with_name(f".cleanup.{secrets.token_hex(8)}.bak")
         try:
             shutil.copy2(source, backup)
+            backup_stat = _recording_artifact_stat(backup)
+            if backup_stat is None:
+                raise RuntimeError(f"cleanup backup is not a safe regular file: {backup}")
         except BaseException as exc:
             if isinstance(exc, FileNotFoundError) and _recording_artifact_missing_but_safe(
                 path_text,
@@ -3719,8 +3722,14 @@ def finalize_recording(
             ):
                 return None
             try:
-                backup.unlink(missing_ok=True)
-            except OSError as cleanup_exc:
+                partial_stat = _recording_artifact_stat(backup)
+                if partial_stat is not None:
+                    _unlink_regular_leaf_with_parent_fsync(
+                        backup,
+                        field_name="recording cleanup backup",
+                        expected_stat=partial_stat,
+                    )
+            except BaseException as cleanup_exc:
                 exc.add_note(f"cleanup backup removal failed: {cleanup_exc}")
             preserve_recording_artifacts_after_cleanup_failure = True
             audio_deleted = False
@@ -3730,17 +3739,39 @@ def finalize_recording(
             except BaseException as restore_exc:
                 exc.add_note(f"cleanup backup restore failed: {restore_exc}")
             raise
-        cleanup_rollback_backups.append((source, backup))
+        cleanup_rollback_backups.append((source, backup, backup_stat))
         return backup
 
     def _restore_cleanup_backups() -> None:
-        for original_path, backup_path in cleanup_rollback_backups:
-            if backup_path.exists() and not original_path.exists():
-                parent_fd = ensure_directory_without_following_symlinks(
-                    original_path.parent,
-                    field_name="recording cleanup rollback directory",
-                )
+        for original_path, backup_path, expected_backup_stat in cleanup_rollback_backups:
+            parent_fd = ensure_directory_without_following_symlinks(
+                original_path.parent,
+                field_name="recording cleanup rollback directory",
+            )
+            try:
                 try:
+                    current_backup_stat = os.stat(
+                        backup_path.name,
+                        dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
+                except FileNotFoundError:
+                    current_backup_stat = None
+                try:
+                    current_original_stat = os.stat(
+                        original_path.name,
+                        dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
+                except FileNotFoundError:
+                    current_original_stat = None
+                if current_backup_stat is None:
+                    if current_original_stat is None:
+                        raise RuntimeError(f"recording cleanup backup is missing: {backup_path}")
+                    continue
+                if not _same_leaf_identity(current_backup_stat, expected_backup_stat):
+                    raise RuntimeError(f"recording cleanup backup changed before rollback: {backup_path}")
+                if current_original_stat is None:
                     _rename_without_replacing(
                         backup_path.name,
                         original_path.name,
@@ -3748,17 +3779,31 @@ def finalize_recording(
                         field_name="recording cleanup rollback artifact",
                     )
                     os.fsync(parent_fd)
-                finally:
-                    try:
-                        os.close(parent_fd)
-                    except BaseException:
-                        pass
-            backup_path.unlink(missing_ok=True)
+                else:
+                    os.unlink(backup_path.name, dir_fd=parent_fd)
+                    os.fsync(parent_fd)
+            finally:
+                try:
+                    os.close(parent_fd)
+                except BaseException:
+                    pass
         cleanup_rollback_backups.clear()
 
     def _discard_cleanup_backups() -> None:
-        for _, backup_path in cleanup_rollback_backups:
-            backup_path.unlink(missing_ok=True)
+        for _, backup_path, expected_backup_stat in cleanup_rollback_backups:
+            try:
+                current_backup_stat = backup_path.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                continue
+            if not _same_leaf_identity(current_backup_stat, expected_backup_stat):
+                continue
+            _unlink_regular_leaf_with_parent_fsync(
+                backup_path,
+                field_name="recording cleanup backup",
+                expected_stat=expected_backup_stat,
+            )
         cleanup_rollback_backups.clear()
 
     def _remove_recording_artifact_if_present(path: Path, *, suffix: str) -> bool:
