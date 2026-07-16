@@ -838,6 +838,13 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
                     or current_stat.st_mode != rotation_stat.st_mode
                 ):
                     raise RuntimeError("active log changed during rotation")
+                current_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+                if (
+                    current_stat.st_dev != rotation_stat.st_dev
+                    or current_stat.st_ino != rotation_stat.st_ino
+                    or current_stat.st_mode != rotation_stat.st_mode
+                ):
+                    raise RuntimeError("active log changed during rotation")
                 # Keep candidate if unlink outcome is ambiguous; process can
                 # die after the syscall but before Python records success.
                 source_unlink_attempted = True

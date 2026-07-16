@@ -1199,6 +1199,32 @@ class AppLoggingTest(unittest.TestCase):
             self.assertFalse(active.exists())
             self.assertEqual(candidate.read_text(encoding="utf-8"), "active\n")
 
+    def test_rotate_active_rejects_source_swap_before_unlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            active = root / f"speed-of-cinnamon-{date.today().isoformat()}.log"
+            replacement = root / "replacement.log"
+            active.write_text("active\n", encoding="utf-8")
+            replacement.write_text("must survive\n", encoding="utf-8")
+            real_stat = app_logging.os.stat
+            source_stat_calls = 0
+
+            def stat_with_swap(name: object, *args: object, **kwargs: object) -> os.stat_result:
+                nonlocal source_stat_calls
+                if name == active.name and kwargs.get("dir_fd") is not None:
+                    source_stat_calls += 1
+                    if source_stat_calls == 2:
+                        active.unlink()
+                        replacement.rename(active)
+                return real_stat(name, *args, **kwargs)
+
+            with mock.patch.object(app_logging.os, "stat", side_effect=stat_with_swap):
+                with self.assertRaisesRegex(RuntimeError, "active log changed during rotation"):
+                    app_logging._rotate_active_if_needed(active, force=True)
+
+            self.assertEqual(source_stat_calls, 2)
+            self.assertEqual(active.read_text(encoding="utf-8"), "must survive\n")
+
     def test_configure_logging_rejects_symlinked_active_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
