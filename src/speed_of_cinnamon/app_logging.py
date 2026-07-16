@@ -718,7 +718,7 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
         if not candidate.exists() and not candidate.is_symlink():
             parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name="log directory")
             candidate_linked = False
-            source_unlinked = False
+            source_unlink_attempted = False
             primary_error: BaseException | None = None
             try:
                 rotation_stat = _assert_regular_unlinked_file(path, field_name="active log file")
@@ -741,12 +741,14 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
                     or current_stat.st_mode != rotation_stat.st_mode
                 ):
                     raise RuntimeError("active log changed during rotation")
+                # Keep candidate if unlink outcome is ambiguous; process can
+                # die after the syscall but before Python records success.
+                source_unlink_attempted = True
                 os.unlink(path.name, dir_fd=parent_fd)
-                source_unlinked = True
                 os.fsync(parent_fd)
             except BaseException as exc:
                 primary_error = exc
-                if candidate_linked and not source_unlinked:
+                if candidate_linked and not source_unlink_attempted:
                     try:
                         candidate_stat = os.stat(candidate.name, dir_fd=parent_fd, follow_symlinks=False)
                         if (

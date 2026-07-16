@@ -1062,6 +1062,26 @@ class AppLoggingTest(unittest.TestCase):
                 "active\n",
             )
 
+    def test_rotate_active_preserves_candidate_when_source_unlink_outcome_is_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            active = Path(tmp) / f"speed-of-cinnamon-{date.today().isoformat()}.log"
+            active.write_text("active\n", encoding="utf-8")
+            candidate = active.with_name(f"{active.stem}.1{active.suffix}")
+            real_unlink = app_logging.os.unlink
+
+            def unlink_then_fail(name: str, *, dir_fd: int | None = None) -> None:
+                if name == active.name and dir_fd is not None:
+                    real_unlink(name, dir_fd=dir_fd)
+                    raise OSError("source unlink outcome unknown")
+                real_unlink(name, dir_fd=dir_fd)
+
+            with mock.patch.object(app_logging.os, "unlink", side_effect=unlink_then_fail):
+                with self.assertRaisesRegex(OSError, "source unlink outcome unknown"):
+                    app_logging._rotate_active_if_needed(active, force=True)
+
+            self.assertFalse(active.exists())
+            self.assertEqual(candidate.read_text(encoding="utf-8"), "active\n")
+
     def test_configure_logging_rejects_symlinked_active_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
