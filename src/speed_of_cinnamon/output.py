@@ -869,7 +869,10 @@ def _restore_clipboard_dedup_state(snapshot: tuple[str, float], *, pending: bool
             return
         _clear_clipboard_dedup_state()
     except BaseException as exc:
-        log_event("warning", "clipboard_dedup_state_restore_failed", error=str(exc))
+        try:
+            log_event("warning", "clipboard_dedup_state_restore_failed", error=str(exc))
+        except BaseException:
+            pass
 
 
 def _clipboard_insertion_snapshot() -> tuple[str, str | None, float, str | None]:
@@ -1373,7 +1376,10 @@ def _restore_clipboard_snapshot_after_failed_paste(
             return
         set_clipboard(snapshot_text, allowed_helpers=allowed_helpers)
     except BaseException as exc:
-        log_event("warning", "clipboard_restore_after_failed_automatic_paste_failed", error=str(exc))
+        try:
+            log_event("warning", "clipboard_restore_after_failed_automatic_paste_failed", error=str(exc))
+        except BaseException:
+            pass
 
 
 def paste_from_clipboard(expected_window_snapshot: tuple[str, str, str] | None = None) -> None:

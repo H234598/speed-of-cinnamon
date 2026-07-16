@@ -1983,6 +1983,16 @@ class OutputTest(unittest.TestCase):
             with self.assertRaisesRegex(OutputError, "copy failed"):
                 insert_text("secure text", "clipboard")
 
+    def test_clipboard_dedup_restore_ignores_logging_failure(self) -> None:
+        with (
+            mock.patch(
+                "speed_of_cinnamon.output._write_clipboard_dedup_fingerprint_state",
+                side_effect=OSError("state restore failed"),
+            ),
+            mock.patch("speed_of_cinnamon.output.log_event", side_effect=RuntimeError("logging failed")),
+        ):
+            output_module._restore_clipboard_dedup_state(("a" * 64, 1.0))
+
     def test_insert_text_clipboard_paste_fails_closed_when_dedupe_state_cannot_persist(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -2625,6 +2635,15 @@ class OutputTest(unittest.TestCase):
             )
 
         self.assertEqual(calls, ["xclip"])
+
+    def test_clipboard_restore_ignores_logging_failure(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch("speed_of_cinnamon.output.set_clipboard", side_effect=OutputError("restore failed")),
+            mock.patch("speed_of_cinnamon.output.log_event", side_effect=RuntimeError("logging failed")),
+        ):
+            output_module._restore_clipboard_snapshot_after_failed_paste("new text", True, "old text")
 
     def test_insert_text_restores_dedupe_state_when_paste_helper_exec_fails_before_keypress(self) -> None:
         with (
