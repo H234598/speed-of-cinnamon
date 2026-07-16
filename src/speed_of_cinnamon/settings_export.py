@@ -630,6 +630,21 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
             raise OSError("settings export temporary file identity is unavailable")
         _scrub_temp_settings_export_file(parent_fd, temp_name, expected_stat=temporary_stat)
 
+    def _assert_recovery_backup_identity() -> None:
+        if not backup_moved:
+            return
+        try:
+            current_backup_stat = os.stat(backup_name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError as exc:
+            raise OSError("settings export recovery backup disappeared during rollback") from exc
+        if (
+            existing_stat is None
+            or not stat_module.S_ISREG(current_backup_stat.st_mode)
+            or getattr(current_backup_stat, "st_nlink", 1) != 1
+            or not _same_leaf_identity(current_backup_stat, existing_stat)
+        ):
+            raise OSError("settings export recovery backup changed during rollback")
+
     try:
         try:
             assert_fd_is_private_directory(parent_fd, field_name="settings export directory")
@@ -778,6 +793,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
         primary_error = exc
         if transaction_active:
             try:
+                _assert_recovery_backup_identity()
                 if activation_attempted:
                     try:
                         current_target_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)

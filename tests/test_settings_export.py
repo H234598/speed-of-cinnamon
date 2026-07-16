@@ -1133,6 +1133,37 @@ class SettingsExportTest(unittest.TestCase):
             leftovers = [child for child in Path(tmp).iterdir() if child.name.startswith(".settings-export.json.")]
             self.assertEqual(leftovers, [])
 
+    def test_write_export_keeps_new_target_when_recovery_backup_is_replaced_during_rollback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text("old export\n", encoding="utf-8")
+            path.chmod(0o600)
+            real_fsync = os.fsync
+            directory_syncs = 0
+            replacement = Path(tmp) / "replacement.json"
+            replacement.write_text("replacement export\n", encoding="utf-8")
+
+            def fail_after_replacing_backup(fd: int) -> None:
+                nonlocal directory_syncs
+                mode = os.fstat(fd).st_mode
+                if stat.S_ISDIR(mode):
+                    directory_syncs += 1
+                    if directory_syncs == 2:
+                        backups = list(Path(tmp).glob(".settings-export.json.*.bak"))
+                        self.assertEqual(len(backups), 1)
+                        replacement.replace(backups[0])
+                        raise OSError("activation directory sync failed")
+                real_fsync(fd)
+
+            with mock.patch.object(settings_export_module.os, "fsync", side_effect=fail_after_replacing_backup):
+                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+                    write_export(path, {"language": "de"})
+
+            self.assertEqual(read_export(path)["settings"]["language"], "de")
+            backups = list(Path(tmp).glob(".settings-export.json.*.bak"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_text(encoding="utf-8"), "replacement export\n")
+
     def test_write_export_restores_target_when_backup_unlink_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
