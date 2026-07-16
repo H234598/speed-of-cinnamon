@@ -2562,18 +2562,22 @@ MyApplet.prototype = {
     try {
       let hasIdentifier = typeof process.get_identifier === "function";
       let processIdentifier = hasIdentifier ? String(process.get_identifier() || "").trim() : "";
-      if (hasIdentifier && !processIdentifier) {
+      let processGroupIdentity = this._findTrackedProcessGroupIdentity(process);
+      if (hasIdentifier && !processIdentifier && !processGroupIdentity) {
         return true;
       }
-      let processGroupIdentity = this._findTrackedProcessGroupIdentity(process);
       if (!processGroupIdentity && hasIdentifier) {
         return false;
       }
       processGroupIdentity = processGroupIdentity || this._readProcessGroupIdentity(process);
       if (processGroupIdentity) {
         let currentProcessGroupIdentity = this._readProcessGroupIdentity(process);
-        if (!currentProcessGroupIdentity || currentProcessGroupIdentity.pid !== processGroupIdentity.pid ||
-            currentProcessGroupIdentity.startTime !== processGroupIdentity.startTime) {
+        if (currentProcessGroupIdentity &&
+            (currentProcessGroupIdentity.pid !== processGroupIdentity.pid ||
+             currentProcessGroupIdentity.startTime !== processGroupIdentity.startTime)) {
+          return false;
+        }
+        if (!currentProcessGroupIdentity && processIdentifier) {
           return false;
         }
         if (this._killProcessGroup(process, processGroupIdentity)) {
@@ -2645,11 +2649,97 @@ MyApplet.prototype = {
     }
   },
 
+  _processGroupState: function(identity) {
+    try {
+      if (!identity || !/^[1-9][0-9]*$/.test(String(identity.pid || "")) ||
+          !/^[0-9]+$/.test(String(identity.startTime || ""))) {
+        return "invalid";
+      }
+      let groupPid = String(identity.pid);
+      let procPath = "/proc/" + groupPid + "/stat";
+      let leaderContents = null;
+      let leaderPathExists = false;
+      try {
+        leaderPathExists = GLib.file_test(procPath, GLib.FileTest.EXISTS);
+        leaderContents = GLib.file_get_contents(procPath);
+      } catch (error) {
+        if (leaderPathExists) {
+          return "invalid";
+        }
+        leaderContents = null;
+      }
+      if ((!leaderContents || leaderContents[0] !== true) && leaderPathExists) {
+        return "invalid";
+      }
+      if (leaderContents && leaderContents[0] === true) {
+        let leaderStat = ByteArray.toString(leaderContents[1] || "");
+        let leaderEnd = leaderStat.lastIndexOf(") ");
+        if (leaderEnd < 0) {
+          return "invalid";
+        }
+        let leaderFields = leaderStat.slice(leaderEnd + 2).trim().split(/\s+/);
+        if (leaderFields.length <= 19 || leaderFields[2] !== groupPid || leaderFields[3] !== groupPid ||
+            leaderFields[19] !== String(identity.startTime)) {
+          return "invalid";
+        }
+        return "live";
+      }
+
+      let procDirectory = Gio.File.new_for_path("/proc");
+      let enumerator = procDirectory.enumerate_children(
+        "standard::name",
+        Gio.FileQueryInfoFlags.NONE,
+        null
+      );
+      let memberFound = false;
+      try {
+        while (true) {
+          let info = enumerator.next_file(null);
+          if (!info) {
+            break;
+          }
+          let memberPid = String(info.get_name() || "");
+          if (!/^[1-9][0-9]*$/.test(memberPid) || memberPid === groupPid) {
+            continue;
+          }
+          let contents;
+          try {
+            contents = GLib.file_get_contents("/proc/" + memberPid + "/stat");
+          } catch (error) {
+            return "invalid";
+          }
+          if (!contents || contents[0] !== true) {
+            return "invalid";
+          }
+          let stat = ByteArray.toString(contents[1] || "");
+          let commandEnd = stat.lastIndexOf(") ");
+          if (commandEnd < 0) {
+            return "invalid";
+          }
+          let fields = stat.slice(commandEnd + 2).trim().split(/\s+/);
+          if (fields.length <= 19) {
+            return "invalid";
+          }
+          if (fields[2] === groupPid && fields[3] === groupPid) {
+            memberFound = true;
+          }
+        }
+      } finally {
+        enumerator.close(null);
+      }
+      return memberFound ? "live" : "stopped";
+    } catch (error) {
+      return "invalid";
+    }
+  },
+
   _killProcessGroup: function(process, identity) {
     try {
-      let currentIdentity = this._readProcessGroupIdentity(process);
-      if (!currentIdentity || !identity || currentIdentity.pid !== identity.pid ||
-          currentIdentity.startTime !== identity.startTime) {
+      let groupState = this._processGroupState(identity);
+      if (groupState === "stopped") {
+        return true;
+      }
+      if (groupState !== "live") {
         return false;
       }
       let kill = this._findTrustedProgramInPath("kill");
@@ -10692,6 +10782,8 @@ MyApplet.prototype = {
     let processExited = false;
     let processSuccessful = false;
     let processWaitError = null;
+    let processWaitStarted = false;
+    let terminationFailed = false;
     let cleanupComplete = false;
     let callbackDelivered = false;
     let setupFailed = false;
@@ -10743,6 +10835,9 @@ MyApplet.prototype = {
       let terminationSucceeded = true;
       if (terminate) {
         terminationSucceeded = this._terminateProcess(process);
+        if (!terminationSucceeded) {
+          terminationFailed = true;
+        }
       }
       let cancellationSucceeded = true;
       try {
@@ -10818,7 +10913,41 @@ MyApplet.prototype = {
       return null;
     }
 
+    let startProcessWait = () => {
+      if (processWaitStarted || done || !ended.stdout || !ended.stderr || inputPending) {
+        return;
+      }
+      processWaitStarted = true;
+      try {
+        process.wait_check_async(cancellable, (source, result) => {
+          if (done) {
+            return;
+          }
+          try {
+            let waitResult = source.wait_check_finish(result);
+            if (waitResult !== true) {
+              throw new Error("Subprocess exit status check failed");
+            }
+            processExited = true;
+            processSuccessful = true;
+          } catch (error) {
+            processWaitError = error;
+            if (terminationFailed) {
+              finish({ error: error }, true);
+              return;
+            }
+            processExited = true;
+          }
+          finishWhenReady();
+        });
+      } catch (error) {
+        processWaitError = error;
+        finish({ error: error }, true);
+      }
+    };
+
     let finishWhenReady = () => {
+      startProcessWait();
       if (!processExited || !ended.stdout || !ended.stderr || inputPending) {
         return;
       }
@@ -10884,33 +11013,9 @@ MyApplet.prototype = {
       return null;
     }
 
-    try {
-      if (!process.wait_check_async || !process.wait_check_finish) {
-        setupFailed = true;
-        finish({ error: "Subprocess exit status API unavailable" }, true);
-      } else {
-        process.wait_check_async(cancellable, (source, result) => {
-          if (done) {
-            return;
-          }
-          processExited = true;
-          try {
-            let waitResult = source.wait_check_finish(result);
-            if (waitResult !== true) {
-              throw new Error("Subprocess exit status check failed");
-            }
-            processSuccessful = true;
-          } catch (error) {
-            processWaitError = error;
-          }
-          finishWhenReady();
-        });
-      }
-    } catch (error) {
+    if (!process.wait_check_async || !process.wait_check_finish) {
       setupFailed = true;
-      processExited = true;
-      processWaitError = error;
-      finishWhenReady();
+      finish({ error: "Subprocess exit status API unavailable" }, true);
     }
 
     try {
@@ -10969,6 +11074,9 @@ MyApplet.prototype = {
         setupFailed = true;
         finish({ error: error }, true);
       }
+    }
+    if (!setupFailed && !done) {
+      finishWhenReady();
     }
     if (setupFailed || done) {
       return null;

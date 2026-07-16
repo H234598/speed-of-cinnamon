@@ -4529,7 +4529,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn("result === false", block)
         self.assertIn('let hasIdentifier = typeof process.get_identifier === "function";', block)
         self.assertIn('let processIdentifier = hasIdentifier ? String(process.get_identifier() || "").trim() : "";', block)
-        self.assertIn('if (hasIdentifier && !processIdentifier) {\n        return true;', block)
+        self.assertIn('if (hasIdentifier && !processIdentifier && !processGroupIdentity) {\n        return true;', block)
         self.assertIn('if (!processGroupIdentity && hasIdentifier)', block)
         self.assertIn("return true;", block)
         self.assertIn("return false;", block)
@@ -4570,7 +4570,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('stat.lastIndexOf(") ")', identity_block)
         self.assertIn("fields[2] !== pid || fields[3] !== pid", identity_block)
         self.assertIn("fields[19]", identity_block)
-        self.assertIn("currentIdentity.startTime !== identity.startTime", source)
+        self.assertIn("currentProcessGroupIdentity.startTime !== processGroupIdentity.startTime", source)
+        self.assertIn("_processGroupState: function(identity)", source)
+        self.assertIn('return memberFound ? "live" : "stopped";', source)
+        self.assertIn("let groupState = this._processGroupState(identity);", source)
         self.assertIn('"-" + identity.pid', source)
 
     def test_keyboard_group_cancel_notifies_active_insert_cleanup(self) -> None:
