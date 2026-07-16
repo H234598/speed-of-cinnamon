@@ -371,7 +371,9 @@ def _output_status(
     x11_flag = _coerce_payload_bool(desktop, "x11")
     cinnamon_clipboard = applet and cinnamon_flag
     x11_paste = x11_flag and _ok(checks, "xdotool")
-    wayland_paste = _ok(checks, "wtype")
+    # Applet owns Wayland keyboard insertion. Backend output currently has
+    # only the verifiable X11 xdotool path.
+    wayland_paste = applet and _ok(checks, "wtype")
     paste_ok = x11_paste or wayland_paste
     cli_clipboard = _ok(checks, "xclip") or _ok(checks, "xsel") or _ok(checks, "wl-copy")
 
@@ -401,8 +403,10 @@ def _output_status(
             detail += "; wtype paste works"
         elif cinnamon_clipboard:
             detail += "; install xdotool for automatic paste on Cinnamon X11"
-        else:
+        elif applet:
             detail += "; install xdotool or wtype for paste"
+        else:
+            detail += "; install xdotool for CLI automatic paste"
         return {"ok": ok, "value": "clipboard-paste", "paste_ok": paste_ok, "detail": detail}
     if insert_method == "type":
         return {

@@ -129,6 +129,26 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(payload["desktop"]["x11"])
         self.assertFalse(payload["configured"]["output"]["paste_ok"])
 
+    def test_cli_does_not_claim_wtype_support_for_clipboard_paste(self) -> None:
+        tools = {"python3", "pw-record", "pactl", "xsel", "wtype"}
+        env = {
+            "XDG_CURRENT_DESKTOP": "X-Cinnamon",
+            "XDG_SESSION_TYPE": "wayland",
+            "DESKTOP_SESSION": "cinnamon",
+        }
+        settings = {
+            "recorder": "auto",
+            "transcriber": "command",
+            "transcriber-command": "printf ok",
+            "insert-method": "clipboard-paste",
+        }
+        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)), mock.patch.dict(os.environ, env):
+            payload = doctor.report(settings)
+
+        self.assertFalse(payload["configured"]["output"]["ok"])
+        self.assertFalse(payload["configured"]["output"]["paste_ok"])
+        self.assertIn("CLI automatic paste", payload["configured"]["output"]["detail"])
+
     def test_direct_typing_requires_xdotool_on_x11(self) -> None:
         tools = {"python3", "pw-record", "pactl"}
         env = {"XDG_CURRENT_DESKTOP": "X-Cinnamon", "XDG_SESSION_TYPE": "x11", "DESKTOP_SESSION": "cinnamon"}
