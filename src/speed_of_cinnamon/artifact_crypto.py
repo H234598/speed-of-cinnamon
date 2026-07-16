@@ -734,6 +734,9 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
                     description="artifact encryption passphrase recovery backup",
                 )
                 _fsync_fd(parent_fd)
+                backup_name = ""
+                backup_created = False
+                transaction_active = False
         else:
             try:
                 _rename_without_replacing(
