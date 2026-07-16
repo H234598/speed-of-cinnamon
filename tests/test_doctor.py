@@ -231,7 +231,7 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(payload["configured"]["transcriber"]["ok"])
         self.assertEqual(
             payload["configured"]["transcriber"]["detail"],
-            "whisper.cpp voice model must be a file",
+            "whisper.cpp voice model path must be a file",
         )
 
     def test_auto_asr_can_use_downloaded_whisper_cpp_model(self) -> None:

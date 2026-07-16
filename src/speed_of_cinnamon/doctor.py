@@ -287,9 +287,9 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
             return {"ok": False, "value": value, "detail": "voice model not found"}
         if local_model and not model_ok:
             if model_backend == "whisper-cpp":
-                return {"ok": False, "value": value, "detail": "whisper.cpp voice model must be a file"}
+                return {"ok": False, "value": value, "detail": "whisper.cpp voice model path must be a file"}
             if model_backend == "faster-whisper":
-                return {"ok": False, "value": value, "detail": "faster-whisper voice model must be a directory"}
+                return {"ok": False, "value": value, "detail": "faster-whisper voice model path must be a directory"}
             return {"ok": False, "value": value, "detail": "voice model path is invalid"}
         if local_model and not local_model_language_ok:
             if explicit_backend == "whisper-cpp":

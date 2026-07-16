@@ -165,6 +165,25 @@ class SetupPlanTest(unittest.TestCase):
         self.assertEqual(plan["steps"][0]["id"], "asr-backend")
         self.assertIn("python3 -m pip install --user faster-whisper", plan["commands"])
 
+    def test_invalid_voice_model_path_gets_voice_model_step(self) -> None:
+        payload = {
+            "ok": False,
+            "configured": {
+                "recorder": {"ok": True},
+                "transcriber": {
+                    "ok": False,
+                    "value": "whisper-cpp",
+                    "detail": "whisper.cpp voice model path must be a file",
+                },
+                "output": {"ok": True},
+                "postprocessor": {"ok": True},
+                "warnings": [],
+            },
+            "desktop": {"cinnamon": True},
+        }
+        plan = build_setup_plan(payload)
+        self.assertEqual(plan["steps"][0]["id"], "voice-model")
+
     def test_applet_plan_marks_non_cinnamon_session_not_ready(self) -> None:
         payload = {
             "ok": False,
