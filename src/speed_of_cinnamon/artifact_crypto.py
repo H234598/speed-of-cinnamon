@@ -425,29 +425,39 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
             os.O_RDONLY | nonblock_flag,
             field_name="artifact encryption passphrase file",
         )
+        handle: Any | None = None
         primary_read_error: BaseException | None = None
         try:
-            with os.fdopen(fd, "rb") as handle:
-                fd = -1
-                opened_stat = os.fstat(handle.fileno())
-                if not _same_pre_activation_identity(opened_stat, expected_stat):
-                    raise OSError("artifact encryption passphrase file changed before backup activation")
-                payload = handle.read(MAX_PASSPHRASE_FILE_BYTES + 1)
-                final_stat = os.fstat(handle.fileno())
-                if not _same_pre_activation_identity(final_stat, expected_stat):
-                    raise OSError("artifact encryption passphrase file changed while preparing rollback")
+            handle = os.fdopen(fd, "rb")
+            fd = -1
+            opened_stat = os.fstat(handle.fileno())
+            if not _same_pre_activation_identity(opened_stat, expected_stat):
+                raise OSError("artifact encryption passphrase file changed before backup activation")
+            payload = handle.read(MAX_PASSPHRASE_FILE_BYTES + 1)
+            final_stat = os.fstat(handle.fileno())
+            if not _same_pre_activation_identity(final_stat, expected_stat):
+                raise OSError("artifact encryption passphrase file changed while preparing rollback")
         except BaseException as exc:
             primary_read_error = exc
             raise
         finally:
+            cleanup_read_error: BaseException | None = None
+            if handle is not None:
+                try:
+                    handle.close()
+                except BaseException as exc:
+                    cleanup_read_error = exc
             if fd >= 0:
                 try:
                     os.close(fd)
-                except BaseException as cleanup_read_error:
-                    if primary_read_error is not None:
-                        _note_cleanup_failure(primary_read_error, cleanup_read_error)
-                    else:
-                        raise
+                except BaseException as exc:
+                    if cleanup_read_error is None:
+                        cleanup_read_error = exc
+            if cleanup_read_error is not None:
+                if primary_read_error is not None:
+                    _note_cleanup_failure(primary_read_error, cleanup_read_error)
+                else:
+                    raise cleanup_read_error
         if len(payload) > MAX_PASSPHRASE_FILE_BYTES:
             raise OSError("artifact encryption passphrase file is too large")
         return payload
@@ -756,6 +766,8 @@ def _read_private_passphrase_file(
         )
     except (OSError, RuntimeError) as exc:
         raise ArtifactCryptoError("artifact encryption passphrase file could not be read") from exc
+    handle: Any | None = None
+    primary_error: BaseException | None = None
     try:
         try:
             assert_fd_is_regular_private_file(
@@ -774,15 +786,39 @@ def _read_private_passphrase_file(
             raise ArtifactCryptoError("artifact encryption passphrase file must be private")
         _assert_no_posix_acl(path, field_name="artifact encryption passphrase file")
         try:
-            with os.fdopen(fd, "rb") as handle:
-                fd = -1
-                payload = handle.read(MAX_PASSPHRASE_FILE_BYTES + 1)
+            handle = os.fdopen(fd, "rb")
+            fd = -1
+            payload = handle.read(MAX_PASSPHRASE_FILE_BYTES + 1)
         except Exception as exc:
-            raise ArtifactCryptoError("artifact encryption passphrase file could not be read") from exc
+            primary_error = ArtifactCryptoError("artifact encryption passphrase file could not be read")
+            raise primary_error from exc
+        except BaseException as exc:
+            primary_error = exc
+            raise
+    except BaseException as exc:
+        if primary_error is None:
+            primary_error = exc
+        raise
     finally:
+        cleanup_error: BaseException | None = None
+        if handle is not None:
+            try:
+                handle.close()
+            except BaseException as exc:
+                cleanup_error = exc
         if fd >= 0:
-            with suppress(BaseException):
+            try:
                 os.close(fd)
+            except BaseException as exc:
+                if cleanup_error is None:
+                    cleanup_error = exc
+        if cleanup_error is not None:
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            elif isinstance(cleanup_error, Exception):
+                raise ArtifactCryptoError("artifact encryption passphrase file could not be read") from cleanup_error
+            else:
+                raise cleanup_error
     if len(payload) > MAX_PASSPHRASE_FILE_BYTES:
         raise ArtifactCryptoError("artifact encryption passphrase file is too large")
     try:
@@ -1209,6 +1245,8 @@ def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subpr
         if cleanup_error is not None:
             if primary_error is not None:
                 _note_cleanup_failure(primary_error, cleanup_error)
+            elif isinstance(cleanup_error, Exception):
+                raise ArtifactCryptoError(f"failed to read {field_name}") from cleanup_error
             else:
                 raise cleanup_error
 
@@ -1407,13 +1445,13 @@ def read_private_bytes(path: Path, *, field_name: str, max_bytes: int | None = N
         )
     except (OSError, RuntimeError) as exc:
         raise ArtifactCryptoError(f"failed to read {field_name}") from exc
+    handle: Any | None = None
     primary_error: BaseException | None = None
     try:
         assert_fd_is_regular_private_file(fd, field_name=field_name)
         handle = os.fdopen(fd, "rb")
         fd = -1
-        with handle:
-            data = handle.read(effective_max_bytes + 1)
+        data = handle.read(effective_max_bytes + 1)
     except Exception as exc:
         primary_error = ArtifactCryptoError(f"failed to read {field_name}")
         raise primary_error from exc
@@ -1422,14 +1460,22 @@ def read_private_bytes(path: Path, *, field_name: str, max_bytes: int | None = N
         raise
     finally:
         cleanup_error: BaseException | None = None
+        if handle is not None:
+            try:
+                handle.close()
+            except BaseException as exc:
+                cleanup_error = exc
         if fd >= 0:
             try:
                 os.close(fd)
             except BaseException as exc:
-                cleanup_error = exc
+                if cleanup_error is None:
+                    cleanup_error = exc
         if cleanup_error is not None:
             if primary_error is not None:
                 _note_cleanup_failure(primary_error, cleanup_error)
+            elif isinstance(cleanup_error, Exception):
+                raise ArtifactCryptoError(f"failed to read {field_name}") from cleanup_error
             else:
                 raise cleanup_error
     if len(data) > effective_max_bytes:

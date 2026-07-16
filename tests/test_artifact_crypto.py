@@ -1406,6 +1406,25 @@ class ArtifactCryptoTest(unittest.TestCase):
                 with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "failed to read artifact"):
                     artifact_crypto.read_private_bytes(path, field_name="artifact")
 
+    def test_read_private_bytes_handle_cleanup_interrupt_does_not_mask_read_error(self) -> None:
+        class FailingHandle:
+            def read(self, _limit: int) -> bytes:
+                raise OSError("read failed")
+
+            def close(self) -> None:
+                raise KeyboardInterrupt("close interrupted")
+
+        with (
+            mock.patch("speed_of_cinnamon.artifact_crypto.assert_no_symlink_ancestors"),
+            mock.patch("speed_of_cinnamon.artifact_crypto.open_file_without_following_symlinks", return_value=123),
+            mock.patch("speed_of_cinnamon.artifact_crypto.assert_fd_is_regular_private_file"),
+            mock.patch("speed_of_cinnamon.artifact_crypto.os.fdopen", return_value=FailingHandle()),
+        ):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "failed to read artifact") as caught:
+                artifact_crypto.read_private_bytes(Path("/does-not-matter/artifact"), field_name="artifact")
+
+        self.assertIn("close interrupted", "\n".join(caught.exception.__notes__))
+
     def test_private_passphrase_fdopen_value_error_is_wrapped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "passphrase.key"
@@ -1478,6 +1497,32 @@ class ArtifactCryptoTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be read"):
                 artifact_crypto._read_private_passphrase_file(Path("/does-not-matter/passphrase.key"))
+
+    def test_private_passphrase_handle_cleanup_interrupt_does_not_mask_read_error(self) -> None:
+        class FailingHandle:
+            def read(self, _limit: int) -> bytes:
+                raise OSError("read failed")
+
+            def close(self) -> None:
+                raise KeyboardInterrupt("close interrupted")
+
+        with (
+            mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=Path("/other/default.key")),
+            mock.patch("speed_of_cinnamon.artifact_crypto.assert_no_symlink_ancestors"),
+            mock.patch("speed_of_cinnamon.artifact_crypto._stat_private_passphrase_parent"),
+            mock.patch("speed_of_cinnamon.artifact_crypto.open_file_without_following_symlinks", return_value=123),
+            mock.patch("speed_of_cinnamon.artifact_crypto.assert_fd_is_regular_private_file"),
+            mock.patch("speed_of_cinnamon.artifact_crypto._assert_no_posix_acl"),
+            mock.patch(
+                "speed_of_cinnamon.artifact_crypto.os.fstat",
+                return_value=SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=os.getuid()),
+            ),
+            mock.patch("speed_of_cinnamon.artifact_crypto.os.fdopen", return_value=FailingHandle()),
+        ):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be read") as caught:
+                artifact_crypto._read_private_passphrase_file(Path("/does-not-matter/passphrase.key"))
+
+        self.assertIn("close interrupted", "\n".join(caught.exception.__notes__))
 
     def test_write_encrypted_bytes_error_does_not_leak_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
