@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from speed_of_cinnamon.setup_plan import build_setup_plan
+from speed_of_cinnamon.setup_plan import _sanitize_setup_text, build_setup_plan
 
 
 class SetupPlanTest(unittest.TestCase):
@@ -297,6 +297,12 @@ class SetupPlanTest(unittest.TestCase):
         for secret in secret_values:
             self.assertNotIn(secret, plan["text"])
         self.assertIn("[redacted]", plan["text"])
+
+    def test_setup_plan_redacts_multiword_labeled_credentials(self) -> None:
+        detail = "password: correct horse battery staple; api_key=multi word secret"
+        sanitized = _sanitize_setup_text(detail)
+        self.assertNotIn("correct horse battery staple", sanitized)
+        self.assertNotIn("multi word secret", sanitized)
 
     def test_setup_plan_truncates_oversized_details(self) -> None:
         payload = {
