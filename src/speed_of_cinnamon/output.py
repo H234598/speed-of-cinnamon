@@ -1299,6 +1299,8 @@ def _process_group_has_live_descendants(process_group_id: int) -> bool | None:
     except OSError:
         return None
     scan_incomplete = False
+    same_session_different_group = False
+    group_live = False
     for proc_entry in proc_entries:
         if not proc_entry.name.isdecimal():
             continue
@@ -1319,21 +1321,26 @@ def _process_group_has_live_descendants(process_group_id: int) -> bool | None:
         except (IndexError, ValueError):
             scan_incomplete = True
             continue
-        if process_id == process_group_id or process_group != process_group_id or session_id != process_group_id:
+        if session_id != process_group_id:
             continue
-        if process_state not in {"Z", "X", "x"}:
-            return True
-    if scan_incomplete:
+        if process_group != process_group_id:
+            same_session_different_group = True
+            continue
+        if process_id != process_group_id and process_state not in {"Z", "X", "x"}:
+            group_live = True
+    if scan_incomplete or same_session_different_group:
         return None
-    return False
+    return group_live
 
 
 def _terminate_output_process_group(process: subprocess.Popen[bytes]) -> bool:
     if not process or not isinstance(process.pid, int) or process.pid <= 0:
         return False
     try:
+        descendants = _process_group_has_live_descendants(process.pid)
+        if descendants is None:
+            return False
         if process.returncode is not None:
-            descendants = _process_group_has_live_descendants(process.pid)
             if descendants is not True:
                 return descendants is False
             try:

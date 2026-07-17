@@ -653,6 +653,18 @@ class OutputTest(unittest.TestCase):
         mocked_killpg.assert_called_once_with(1234, output_module.signal.SIGKILL)
         process.communicate.assert_called_once_with(timeout=None)
 
+    def test_live_process_cleanup_fails_closed_when_group_scan_is_incomplete(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.returncode = None
+        with (
+            mock.patch("speed_of_cinnamon.output._process_group_has_live_descendants", return_value=None),
+            mock.patch("speed_of_cinnamon.output.os.killpg") as mocked_killpg,
+        ):
+            self.assertFalse(output_module._terminate_output_process_group(process))
+
+        mocked_killpg.assert_not_called()
+
     def test_reaped_process_group_cleanup_kills_live_descendants(self) -> None:
         process = subprocess.Popen(
             ["/bin/sh", "-c", "sleep 30 & child=$!; echo $child; exit 0"],
@@ -2591,6 +2603,13 @@ class OutputTest(unittest.TestCase):
     def test_output_process_scan_decode_errors_fail_closed(self) -> None:
         error = UnicodeDecodeError("ascii", b"\xff", 0, 1, "invalid process name")
         with mock.patch.object(output_module.Path, "read_text", side_effect=error):
+            self.assertIsNone(output_module._process_group_has_live_descendants(1234))
+
+    def test_output_process_scan_fails_closed_for_same_session_different_group(self) -> None:
+        with (
+            mock.patch.object(output_module.Path, "iterdir", return_value=(Path("/proc/100"),)),
+            mock.patch.object(output_module.Path, "read_text", return_value="100 (child) S 1 9999 1234"),
+        ):
             self.assertIsNone(output_module._process_group_has_live_descendants(1234))
 
     def test_clipboard_dedupe_lock_closes_fd_when_creation_stat_fails(self) -> None:
