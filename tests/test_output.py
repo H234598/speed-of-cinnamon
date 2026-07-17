@@ -1560,7 +1560,6 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output.time.time", return_value=5.0),
         ):
             self.assertTrue(output_module._write_clipboard_dedup_state("previous text", 1.0))
-            initial_state = output_module._read_clipboard_dedup_state()
             with (
                 mock.patch("speed_of_cinnamon.output.set_clipboard"),
                 mock.patch("speed_of_cinnamon.output.paste_from_clipboard", side_effect=OutputError("paste failed")),
@@ -1680,7 +1679,6 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output.time.time", return_value=5.0),
         ):
             self.assertTrue(output_module._write_clipboard_dedup_state("previous text", 1.0))
-            initial_state = output_module._read_clipboard_dedup_state()
             state_path = Path(tmp) / "speed-of-cinnamon" / output_module.CLIPBOARD_DEDUP_STATE_FILE
 
             def fake_paste(*args: object, **kwargs: object) -> None:

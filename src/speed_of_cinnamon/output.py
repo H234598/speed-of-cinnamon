@@ -9,7 +9,6 @@ import secrets
 import stat
 import subprocess  # nosec B404
 import tempfile
-import io
 import os
 import threading
 import time
@@ -211,14 +210,14 @@ def _contains_http_header_control_chars(value: str) -> bool:
     return False
 
 
-def _filesize(file: io.BufferedRandom) -> int:
+def _filesize(file: BinaryIO) -> int:
     if not hasattr(file, "seek") or not hasattr(file, "tell"):
         raise OutputError("file must be a binary file handle")
     file.seek(0, 2)
     return file.tell()
 
 
-def _read_file_head(file: io.BufferedRandom, max_chars: int) -> str:
+def _read_file_head(file: BinaryIO, max_chars: int) -> str:
     if not hasattr(file, "seek") or not hasattr(file, "read"):
         raise OutputError("file must be a binary file handle")
     if not isinstance(max_chars, int) or isinstance(max_chars, bool):
@@ -1090,10 +1089,13 @@ class _BoundedOutputCapture:
             raise OSError("bounded output capture failed") from errors[0]
 
     def _drain(self) -> None:
+        read_fd = self._read_fd
+        if read_fd is None:
+            return
         try:
             while True:
                 try:
-                    chunk = os.read(self._read_fd, 64 * 1024)
+                    chunk = os.read(read_fd, 64 * 1024)
                 except InterruptedError:
                     continue
                 if not chunk:
@@ -1126,7 +1128,7 @@ class _BoundedOutputCapture:
             self._error = exc
         finally:
             try:
-                os.close(self._read_fd)
+                os.close(read_fd)
             except OSError:
                 pass
 
@@ -1204,7 +1206,7 @@ def _run_with_input(
                 exc.add_note(f"{command} output capture cleanup failed: {cleanup_error}")
             raise OutputError(f"{command} failed to prepare output capture: {exc}") from exc
         try:
-            proc = subprocess.Popen(  # nosec B603
+            proc = subprocess.Popen(  # type: ignore[call-overload]  # nosec B603
                 [runtime_command, *argv[1:]],
                 stdin=subprocess.PIPE,
                 stdout=stdout_capture,
@@ -1290,8 +1292,8 @@ def _run_with_input(
                     cleanup_errors.append(cleanup_error)
         if cleanup_errors:
             first_cleanup_error = cleanup_errors[0]
-            for cleanup_error in cleanup_errors[1:]:
-                first_cleanup_error.add_note(f"{command} output cleanup failed: {cleanup_error}")
+            for additional_error in cleanup_errors[1:]:
+                first_cleanup_error.add_note(f"{command} output cleanup failed: {additional_error}")
             raise OutputError(f"{command} output cleanup failed: {first_cleanup_error}") from first_cleanup_error
 
 
@@ -1439,7 +1441,7 @@ def _run_bounded_stdout_command(
         stdout_capture = _BoundedOutputCapture(stdout_file, MAX_OUTPUT_CHARS)
         stderr_capture = _BoundedOutputCapture(stderr_file, MAX_OUTPUT_CHARS)
         try:
-            proc = subprocess.Popen(  # nosec B603
+            proc = subprocess.Popen(  # type: ignore[call-overload]  # nosec B603
                 [runtime_command, *argv[1:]],
                 stdin=subprocess.PIPE,
                 stdout=stdout_capture,
