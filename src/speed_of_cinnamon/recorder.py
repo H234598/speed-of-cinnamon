@@ -808,6 +808,10 @@ def detect_silent_recording(audio_path: Path) -> SilenceDetectionResult:
         if audio_fd is not None:
             _close_fd_quietly(audio_fd)
         return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, str(exc))
+    except BaseException:
+        if audio_fd is not None:
+            _close_fd_quietly(audio_fd)
+        raise
     try:
         input_path = _ffmpeg_output_path_for_fd(audio_fd)
         # argv-only ffmpeg invocation with trusted binary resolution.

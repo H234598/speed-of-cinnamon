@@ -1394,6 +1394,22 @@ class RecorderTest(unittest.TestCase):
         self.assertFalse(result.silent)
         self.assertIn("ffmpeg missing", result.detail)
 
+    def test_detect_silent_recording_closes_audio_fd_when_ffmpeg_lookup_is_interrupted(self) -> None:
+        audio_path = Path("/probe/sample.wav")
+        with (
+            mock.patch.object(
+                recorder_module,
+                "_open_private_recording_audio_file",
+                return_value=(audio_path, 42),
+            ),
+            mock.patch.object(recorder_module, "_command_path", side_effect=KeyboardInterrupt("lookup interrupted")),
+            mock.patch.object(recorder_module, "_close_fd_quietly") as mocked_close,
+        ):
+            with self.assertRaisesRegex(KeyboardInterrupt, "lookup interrupted"):
+                recorder_module.detect_silent_recording(audio_path)
+
+        mocked_close.assert_called_once_with(42)
+
     def test_detect_silent_recording_redacts_subprocess_exception_detail(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "secret-token-recording.wav"
