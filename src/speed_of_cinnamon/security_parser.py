@@ -31,6 +31,15 @@ def _note_lock_cleanup_failure(primary: BaseException, cleanup_error: BaseExcept
     primary.add_note(f"blacklist lock cleanup failed: {cleanup_error}")
 
 
+def _flock_retry(fd: int, operation: int) -> None:
+    while True:
+        try:
+            fcntl.flock(fd, operation)
+            return
+        except InterruptedError:
+            continue
+
+
 _BLACKLIST_ADD_RE = re.compile(
     r"(?im)^\s*(?:blacklisteintrag|blacklist\s*eintrag)\b[\s:,-]*(.+?)\s*$",
 )
@@ -576,7 +585,7 @@ def _acquire_blacklist_lock(path: Path) -> int:
             os.fchmod(fd, 0o600)
         except OSError:
             pass
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        _flock_retry(fd, fcntl.LOCK_EX)
         assert_fd_is_regular_private_file(fd, field_name="blacklist lock file", require_private_mode=True)
     except (MemoryError, RecursionError) as exc:
         error = ValueError("failed to lock blacklist file")
@@ -633,7 +642,7 @@ def _acquire_blacklist_lock(path: Path) -> int:
 def _release_blacklist_lock(fd: int) -> None:
     primary_error: BaseException | None = None
     try:
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        _flock_retry(fd, fcntl.LOCK_UN)
     except (MemoryError, RecursionError) as exc:
         primary_error = OSError("blacklist lock could not be released")
         raise primary_error from exc

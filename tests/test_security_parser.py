@@ -22,6 +22,22 @@ from speed_of_cinnamon.security_parser import (
 
 
 class SecurityParserTest(unittest.TestCase):
+    def test_blacklist_lock_retries_interrupted_exclusive_lock(self) -> None:
+        operations: list[int] = []
+
+        def interrupt_first_lock(_fd: int, operation: int) -> None:
+            operations.append(operation)
+            if len(operations) == 1:
+                raise InterruptedError()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            with mock.patch.object(security_parser.fcntl, "flock", side_effect=interrupt_first_lock):
+                fd = security_parser._acquire_blacklist_lock(path)
+                security_parser._release_blacklist_lock(fd)
+
+        self.assertEqual(operations, [fcntl.LOCK_EX, fcntl.LOCK_EX, fcntl.LOCK_UN])
+
     def test_parse_security_directives_extracts_blacklist_entries_and_show_command(self) -> None:
         text = "blacklisteintrag: geheim\nBlacklist anzeigen"
         directives = parse_security_directives(text)
