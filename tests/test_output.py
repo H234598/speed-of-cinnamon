@@ -608,11 +608,24 @@ class OutputTest(unittest.TestCase):
         process = mock.Mock()
         process.pid = 1234
         process.poll.return_value = 0
+        process.returncode = 0
         process.communicate.return_value = (b"", b"")
         with mock.patch("speed_of_cinnamon.output.os.killpg") as mocked_killpg:
             self.assertTrue(output_module._reap_timed_out_output_process(process))
 
         mocked_killpg.assert_not_called()
+        process.communicate.assert_called_once_with(timeout=None)
+
+    def test_reap_kills_unreaped_process_group_before_waiting(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.returncode = None
+        process.poll.side_effect = AssertionError("must not reap leader before group kill")
+        process.communicate.return_value = (b"", b"")
+        with mock.patch("speed_of_cinnamon.output.os.killpg") as mocked_killpg:
+            self.assertTrue(output_module._reap_timed_out_output_process(process))
+
+        mocked_killpg.assert_called_once_with(1234, output_module.signal.SIGKILL)
         process.communicate.assert_called_once_with(timeout=None)
 
     def test_reaped_process_group_cleanup_kills_live_descendants(self) -> None:

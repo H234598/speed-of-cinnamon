@@ -1144,7 +1144,7 @@ def _terminate_output_process_group(process: subprocess.Popen[bytes]) -> bool:
     if not process or not isinstance(process.pid, int) or process.pid <= 0:
         return False
     try:
-        if process.poll() is not None:
+        if process.returncode is not None:
             descendants = _process_group_has_live_descendants(process.pid)
             if descendants is not True:
                 return descendants is False
