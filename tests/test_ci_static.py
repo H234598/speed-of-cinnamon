@@ -1041,6 +1041,8 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("source = archive.extractfile(member)", dist_verifier)
         self.assertIn("os.O_WRONLY | os.O_CREAT | os.O_EXCL", dist_verifier)
         self.assertIn("dist archive contains duplicate file entry", dist_verifier)
+        self.assertIn("def validate_member_mode(member)", dist_verifier)
+        self.assertIn("stat.S_IMODE(member.mode)", dist_verifier)
         self.assertNotIn("archive.extract(member, target)", dist_verifier)
 
     def test_verify_dist_uses_private_snapshot_for_tar_tooling(self) -> None:

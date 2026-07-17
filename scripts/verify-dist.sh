@@ -163,6 +163,7 @@ fi
 python3 - "$tarball_snapshot" "$tmp_dir" "${MAX_DIST_MEMBERS}" "${MAX_DIST_PATH_CHARS}" "${MAX_DIST_PATH_DEPTH}" "${MAX_DIST_FILE_BYTES}" "${MAX_DIST_TOTAL_EXTRACTED_BYTES}" <<'PY'
 import os
 import pathlib
+import stat
 import tarfile
 import sys
 
@@ -182,6 +183,27 @@ def member_target(member_name):
     if not path.resolve(strict=False).is_relative_to(target_root):
         raise SystemExit(f"dist archive path escapes target: {member_name}")
     return path
+
+
+def validate_member_mode(member):
+    if member.mode is None:
+        raise SystemExit(f"dist archive member has no mode: {member.name}")
+    permissions = stat.S_IMODE(member.mode)
+    if permissions & 0o7000:
+        raise SystemExit(f"dist archive member has disallowed setuid/setgid/sticky bits: {member.name}")
+    if permissions & 0o022:
+        raise SystemExit(f"dist archive member is group/world writable: {member.name}")
+    if member.isdir():
+        if permissions & 0o777 > 0o755:
+            raise SystemExit(f"dist archive directory has disallowed permissions: {member.name}")
+        return
+    file_permissions = permissions & 0o777
+    if file_permissions & 0o111:
+        if file_permissions != 0o755:
+            raise SystemExit(f"dist archive executable file has disallowed permissions: {member.name}")
+    elif file_permissions > 0o644:
+        raise SystemExit(f"dist archive non-executable file has disallowed permissions: {member.name}")
+
 
 with tarfile.open(tarball_snapshot, "r:gz") as archive:
     package_root = None
@@ -203,6 +225,7 @@ with tarfile.open(tarball_snapshot, "r:gz") as archive:
             raise SystemExit(f"dist archive path is too deep: {member.name}")
         if not (member.isfile() or member.isdir()):
             raise SystemExit(f"dist archive contains unsupported entry type: {member.name}")
+        validate_member_mode(member)
         if member.name.startswith("/"):
             raise SystemExit(f"dist archive path is absolute: {member.name}")
         if ".." in member.name.split("/"):
