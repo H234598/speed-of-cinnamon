@@ -2634,6 +2634,114 @@ class ModelsTest(unittest.TestCase):
             self.assertFalse(models.model_path(spec).exists())
             self.assertFalse(list(models.model_path(spec).parent.glob(f".{spec.filename}.*")))
 
+    def test_download_model_preserves_target_changed_before_single_file_backup(self) -> None:
+        old_data = b"old model"
+        new_data = b"new model"
+        foreign_data = b"foreign target"
+        spec = models.ModelSpec(
+            name="target-changed-before-backup",
+            filename="ggml-target-changed-before-backup.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(new_data).hexdigest(),
+            description="target changed before backup",
+        )
+        real_replace = models._replace_model_sibling_path
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(new_data)),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            path.write_bytes(old_data)
+            replacement = path.with_name("replacement.bin")
+
+            def replace_after_target_swap(
+                source: Path,
+                target: Path,
+                root: Path,
+                *,
+                field_name: str = "model path",
+                expected_source_stat: os.stat_result | None = None,
+            ) -> None:
+                if source == path and target.name.endswith(".backup"):
+                    replacement.write_bytes(foreign_data)
+                    replacement.replace(path)
+                real_replace(
+                    source,
+                    target,
+                    root,
+                    field_name=field_name,
+                    expected_source_stat=expected_source_stat,
+                )
+
+            with mock.patch.object(models, "_replace_model_sibling_path", side_effect=replace_after_target_swap):
+                with self.assertRaisesRegex(models.ModelError, "source changed before activation"):
+                    models.download_model(spec.name, force=True)
+
+            self.assertEqual(path.read_bytes(), foreign_data)
+            self.assertFalse(list(path.parent.glob(f".{path.name}.*.backup")))
+            self.assertFalse(list(path.parent.glob(f".{path.name}.*.tmp")))
+
+    def test_download_model_preserves_target_changed_before_multifile_backup(self) -> None:
+        data = b"new model file"
+        foreign_data = b"foreign target"
+        spec = models.ModelSpec(
+            name="ct2-target-changed-before-backup",
+            filename="ct2-target-changed-before-backup",
+            size="2 KiB",
+            sha1="",
+            description="ct2 target changed before backup",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-target-changed-before-backup",
+            files=("config.json",),
+            file_sha1s=file_sha1s_for(("config.json",), data),
+        )
+        real_replace = models._replace_model_sibling_path
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
+        ):
+            path = models.model_path(spec)
+            path.mkdir(parents=True)
+            (path / "old.txt").write_bytes(b"old model")
+            replacement = path.with_name("replacement")
+
+            def replace_after_target_swap(
+                source: Path,
+                target: Path,
+                root: Path,
+                *,
+                field_name: str = "model path",
+                expected_source_stat: os.stat_result | None = None,
+            ) -> None:
+                if source == path and target.name.endswith(".backup"):
+                    replacement.mkdir()
+                    (replacement / "foreign.txt").write_bytes(foreign_data)
+                    shutil.rmtree(path)
+                    replacement.replace(path)
+                real_replace(
+                    source,
+                    target,
+                    root,
+                    field_name=field_name,
+                    expected_source_stat=expected_source_stat,
+                )
+
+            with mock.patch.object(models, "_replace_model_sibling_path", side_effect=replace_after_target_swap):
+                with self.assertRaisesRegex(models.ModelError, "failed to prepare existing model directory backup"):
+                    models.download_model(spec.name, force=True)
+
+            self.assertEqual((path / "foreign.txt").read_bytes(), foreign_data)
+            self.assertFalse(list(path.parent.glob(f".{spec.filename}.*.backup")))
+            self.assertFalse(list(path.parent.glob(f".{spec.filename}.*.tmp")))
+
     def test_download_model_removes_new_multifile_directory_after_activation_fsync_failure(self) -> None:
         data = b"small model file"
         spec = models.ModelSpec(

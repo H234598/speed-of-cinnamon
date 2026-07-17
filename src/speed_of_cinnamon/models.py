@@ -2000,7 +2000,13 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
             if backup_dir.exists() or backup_dir.is_symlink():
                 raise ModelError(f"model backup path already exists: {backup_dir}")
             try:
-                _replace_model_sibling_path(path, backup_dir, root, field_name="model backup directory")
+                _replace_model_sibling_path(
+                    path,
+                    backup_dir,
+                    root,
+                    field_name="model backup directory",
+                    expected_source_stat=backup_dir_stat,
+                )
             except (OSError, ModelError) as exc:
                 # The helper can raise after moving the directory when parent fsync fails.
                 if not path.exists() and backup_dir.exists():
@@ -2292,7 +2298,13 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
                 _assert_path_within_model_root(backup_path, root)
                 if backup_path.exists() or backup_path.is_symlink():
                     raise ModelError(f"model backup path already exists: {backup_path}")
-                _replace_model_sibling_path(path, backup_path, root, field_name="model backup path")
+                _replace_model_sibling_path(
+                    path,
+                    backup_path,
+                    root,
+                    field_name="model backup path",
+                    expected_source_stat=backup_path_stat,
+                )
             _assert_model_path_for_atomic_replace(path, root, field_name="model path")
             # The helper can raise after activation when the parent fsync fails.
             try:
