@@ -9,7 +9,6 @@ import secrets
 import shutil
 import stat
 import subprocess  # nosec B404
-import tempfile
 import time
 from contextlib import suppress
 from dataclasses import dataclass
@@ -446,6 +445,8 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
             raise OSError(f"{description} changed before cleanup")
 
     def _remove_expected_file(name: str, expected_stat: os.stat_result | None, *, description: str) -> None:
+        if expected_stat is None:
+            raise OSError(f"{description} identity is unavailable")
         _assert_expected_file(name, expected_stat, description=description)
         for _ in range(100):
             cleanup_name = f"{name}.{secrets.token_hex(8)}.cleanup"
@@ -852,11 +853,12 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
             _note_cleanup_failure(primary_error, rollback_error)
         raise
     finally:
+        cleanup_failure: BaseException | None = None
         if temp_fd >= 0:
             try:
                 os.close(temp_fd)
             except BaseException as exc:
-                cleanup_error = exc
+                cleanup_failure = exc
         if temp_name and parent_fd >= 0:
             try:
                 _remove_temporary_file()
@@ -864,19 +866,19 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
             except BaseException as exc:
                 with suppress(BaseException):
                     _scrub_temp_passphrase_file(parent_fd, temp_name, expected_stat=temporary_stat)
-                if cleanup_error is None:
-                    cleanup_error = exc
+                if cleanup_failure is None:
+                    cleanup_failure = exc
         if parent_fd >= 0:
             try:
                 os.close(parent_fd)
             except BaseException as exc:
-                if cleanup_error is None:
-                    cleanup_error = exc
-        if cleanup_error is not None:
+                if cleanup_failure is None:
+                    cleanup_failure = exc
+        if cleanup_failure is not None:
             if primary_error is not None:
-                _note_cleanup_failure(primary_error, cleanup_error)
+                _note_cleanup_failure(primary_error, cleanup_failure)
             else:
-                raise _temp_passphrase_cleanup_error() from cleanup_error
+                raise _temp_passphrase_cleanup_error() from cleanup_failure
     return passphrase
 
 

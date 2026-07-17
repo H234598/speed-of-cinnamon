@@ -1959,16 +1959,15 @@ class ArtifactCryptoTest(unittest.TestCase):
 
     def test_encrypt_with_surrogate_passphrase_raises_controlled_error(self) -> None:
         surrogate_passphrase = "".join(chr(0xD800 + (index % 128)) for index in range(40))
-        with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch(
-                "speed_of_cinnamon.artifact_crypto.os.environ",
-                {
-                    artifact_crypto.PASSPHRASE_ENV: surrogate_passphrase,
-                    artifact_crypto.PASSPHRASE_FILE_ENV: "",
-                },
-            ):
-                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "valid UTF-8"):
-                    artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
+        with mock.patch(
+            "speed_of_cinnamon.artifact_crypto.os.environ",
+            {
+                artifact_crypto.PASSPHRASE_ENV: surrogate_passphrase,
+                artifact_crypto.PASSPHRASE_FILE_ENV: "",
+            },
+        ):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "valid UTF-8"):
+                artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
 
     def test_explicit_passphrase_path_with_surrogate_raises_controlled_error(self) -> None:
         bad_path = "".join(chr(0xD800 + (index % 128)) for index in range(2))
