@@ -190,6 +190,14 @@ class ModelsTest(unittest.TestCase):
         with self.assertRaises(OSError):
             os.fstat(target_fds[0])
 
+    def test_sha1_file_wraps_fdopen_memory_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "model.bin"
+            path.write_bytes(b"model")
+            with mock.patch.object(models.os, "fdopen", side_effect=MemoryError("fd exhausted")):
+                with self.assertRaisesRegex(models.ModelError, "fd exhausted"):
+                    models._sha1_file_without_cache(path)
+
     def test_sha1_file_rejects_model_change_during_checksum(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "model.bin"

@@ -415,11 +415,9 @@ def _open_model_hash_file(path: Path) -> int:
     try:
         fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name="model file")
         assert_fd_is_regular_private_file(fd, field_name="model file")
-    except OSError as exc:
-        raise ModelError(str(exc)) from exc
-    except RuntimeError as exc:
+    except (OSError, RuntimeError, MemoryError, RecursionError) as exc:
         if fd is not None:
-            with suppress(OSError):
+            with suppress(OSError, ValueError, MemoryError, RecursionError):
                 os.close(fd)
         raise ModelError(str(exc)) from exc
     return fd
@@ -506,7 +504,7 @@ def _hash_model_file(path: Path) -> tuple[str, os.stat_result]:
             if not _same_model_hash_snapshot(final_stat, opened_stat):
                 raise OSError("model file changed during checksum")
             return digest.hexdigest(), final_stat
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, MemoryError, RecursionError) as exc:
         raise ModelError(str(exc)) from exc
     finally:
         if fd >= 0:
