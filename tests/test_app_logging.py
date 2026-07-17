@@ -600,10 +600,47 @@ class AppLoggingTest(unittest.TestCase):
 
             self.assertFalse(path.exists())
 
+    def test_unlink_log_file_preserves_replacement_after_cleanup_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "source.log"
+            replacement = root / "replacement.log"
+            path.write_bytes(b"owned log")
+            replacement.write_bytes(b"foreign log")
+            expected_stat = path.stat(follow_symlinks=False)
+            real_stat = app_logging.os.stat
+            path_stat_calls = 0
+
+            def stat_then_replace(
+                name: object,
+                *args: object,
+                **kwargs: object,
+            ) -> os.stat_result:
+                nonlocal path_stat_calls
+                result = real_stat(name, *args, **kwargs)
+                if name == path.name and kwargs.get("dir_fd") is not None:
+                    path_stat_calls += 1
+                    if path_stat_calls == 1:
+                        path.unlink()
+                        replacement.replace(path)
+                return result
+
+            with mock.patch.object(app_logging.os, "stat", side_effect=stat_then_replace):
+                with self.assertRaisesRegex(RuntimeError, "log file changed before deletion"):
+                    app_logging._unlink_log_file_with_parent_fsync(
+                        path,
+                        expected_stat,
+                        field_name="log file",
+                    )
+
+            self.assertEqual(path.read_bytes(), b"foreign log")
+            self.assertFalse(list(root.glob("source.log.*.cleanup")))
+
     def test_unlink_log_file_preserves_delete_error_when_parent_close_is_interrupted(self) -> None:
         with (
             mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
             mock.patch.object(app_logging.os, "stat", return_value=os.stat(__file__)),
+            mock.patch.object(app_logging, "_rename_without_replacing"),
             mock.patch.object(app_logging.os, "unlink", side_effect=OSError("delete failed")),
             mock.patch.object(app_logging.os, "close", side_effect=KeyboardInterrupt),
         ):
@@ -1831,7 +1868,7 @@ class AppLoggingTest(unittest.TestCase):
             with mock.patch.object(
                 app_logging.secrets,
                 "token_hex",
-                side_effect=["temp", "fixed", "free"],
+                side_effect=["temp", "fixed", "free", "cleanup"],
             ):
                 app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 
@@ -2353,7 +2390,7 @@ class AppLoggingTest(unittest.TestCase):
             unlink_calls = [
                 (args, kwargs)
                 for args, kwargs in mocked_unlink.call_args_list
-                if args and args[0] == source.name
+                if args and args[0].startswith(f"{source.name}.") and args[0].endswith(".cleanup")
             ]
             self.assertEqual(len(unlink_calls), 1)
             self.assertIsInstance(unlink_calls[0][1].get("dir_fd"), int)
@@ -2426,7 +2463,7 @@ class AppLoggingTest(unittest.TestCase):
             unlink_calls = [
                 (args, kwargs)
                 for args, kwargs in mocked_unlink.call_args_list
-                if args and args[0] == oldest.name
+                if args and args[0].startswith(f"{oldest.name}.") and args[0].endswith(".cleanup")
             ]
             self.assertEqual(len(unlink_calls), 1)
             self.assertIsInstance(unlink_calls[0][1].get("dir_fd"), int)

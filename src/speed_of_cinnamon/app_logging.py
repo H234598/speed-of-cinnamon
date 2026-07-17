@@ -1338,6 +1338,17 @@ def _assert_same_log_file_identity(path: Path, expected_stat: os.stat_result, *,
         raise RuntimeError(f"{field_name} changed before deletion: {path}")
 
 
+def _same_log_claim_identity(current: os.stat_result, expected: os.stat_result) -> bool:
+    return (
+        current.st_dev == expected.st_dev
+        and current.st_ino == expected.st_ino
+        and current.st_mode == expected.st_mode
+        and current.st_size == expected.st_size
+        and getattr(current, "st_nlink", 1) == getattr(expected, "st_nlink", 1)
+        and current.st_mtime_ns == expected.st_mtime_ns
+    )
+
+
 def _unlink_log_file_with_parent_fsync(path: Path, expected_stat: os.stat_result, *, field_name: str) -> bool:
     parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name=f"{field_name} directory")
     primary_error: BaseException | None = None
@@ -1358,9 +1369,37 @@ def _unlink_log_file_with_parent_fsync(path: Path, expected_stat: os.stat_result
             raise RuntimeError(f"{field_name} changed before deletion: {path}")
         if not stat_module.S_ISREG(current_stat.st_mode):
             raise RuntimeError(f"{field_name} must be a regular file: {path}")
-        os.unlink(path.name, dir_fd=parent_fd)
-        os.fsync(parent_fd)
-        return True
+        for _ in range(100):
+            cleanup_name = f"{path.name}.{secrets.token_hex(8)}.cleanup"
+            try:
+                _rename_without_replacing(
+                    path.name,
+                    cleanup_name,
+                    directory_fd=parent_fd,
+                    field_name=f"{field_name} cleanup",
+                )
+            except FileExistsError:
+                continue
+            try:
+                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                if not stat_module.S_ISREG(claimed_stat.st_mode) or not _same_log_claim_identity(claimed_stat, current_stat):
+                    raise RuntimeError(f"{field_name} changed before deletion: {path}")
+                os.unlink(cleanup_name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+            except BaseException as exc:
+                try:
+                    _rename_without_replacing(
+                        cleanup_name,
+                        path.name,
+                        directory_fd=parent_fd,
+                        field_name=f"{field_name} cleanup restore",
+                    )
+                    os.fsync(parent_fd)
+                except BaseException as restore_error:
+                    _note_cleanup_failure(exc, restore_error)
+                raise
+            return True
+        raise RuntimeError(f"failed to claim {field_name} cleanup path: {path}")
     except BaseException as exc:
         primary_error = exc
         raise
