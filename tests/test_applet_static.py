@@ -5628,6 +5628,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._setStatus("ready", _("Auto Relisten cancelled"), this.lastTranscript);', cancel_block)
         self.assertIn("let effectiveStatus = typeof statusOverride === \"string\" ? statusOverride : this.status;", work_block)
         self.assertIn('(effectiveStatus === "error" && this.recordingArtifactsPresent)', work_block)
+        self.assertIn('(effectiveStatus === "processing" && this.recordingArtifactsPresent)', work_block)
 
         apply_start = source.index("_applyPayload: function(payload, statusRefreshToken)")
         apply_end = source.index("\n  _artifactEncryptionWarningKey:", apply_start)
@@ -5638,6 +5639,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('"audio_path_present", "log_path_present", "transcript_path_present"', artifact_block)
         self.assertIn("payload.audio_deleted === false", artifact_block)
         self.assertIn('if (status === "idle" || status === "done")', artifact_block)
+
+        preserving_start = source.index("_setStatusPreservingRecording: function(status, message, transcript)")
+        preserving_end = source.index("\n  _setStatus: function", preserving_start)
+        self.assertIn("this.cancelItem.setSensitive(this._hasCancelableRecordingWork());", source[preserving_start:preserving_end])
+        self.assertIn("this.recordingArtifactsPresent = true;", source[apply_start:apply_end])
 
     def test_cancel_prepares_arguments_before_setting_busy_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

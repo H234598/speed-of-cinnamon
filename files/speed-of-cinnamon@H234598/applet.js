@@ -5966,6 +5966,7 @@ MyApplet.prototype = {
     let effectiveStatus = typeof statusOverride === "string" ? statusOverride : this.status;
     return effectiveStatus === "recording" || effectiveStatus === "recorded" ||
       (effectiveStatus === "error" && this.recordingArtifactsPresent) ||
+      (effectiveStatus === "processing" && this.recordingArtifactsPresent) ||
       this.autoRelistenPending ||
       (this.isCommandRunning && this.notificationSessionActive && Boolean(this._recordingCommandToken));
   },
@@ -5989,6 +5990,9 @@ MyApplet.prototype = {
       payload.log_deleted === false ||
       payload.transcript_deleted === false
     ) {
+      this.recordingArtifactsPresent = true;
+    }
+    if (status === "recording" || status === "recorded" || status === "processing") {
       this.recordingArtifactsPresent = true;
     }
     if (status === "idle" || status === "done") {
@@ -11284,6 +11288,9 @@ MyApplet.prototype = {
         (preserveRecordingOnError || (typeof statusRefreshToken === "number" && this._hasActiveRecordingState()))
       ) || (preserveRecordingOnError && activeBackendStatus);
       if (preserveActiveRecordingState) {
+        if (preserveRecordingOnError) {
+          this.recordingArtifactsPresent = true;
+        }
         this._setStatusPreservingRecording("error", errorMessage, this.lastTranscript);
         this._scheduleStatusPoll();
       } else {
@@ -14020,6 +14027,9 @@ MyApplet.prototype = {
         : this._uiMessageText(safeMessage);
       if (typeof transcript === "string" && transcript !== "") {
         this.lastTranscript = transcript;
+      }
+      if (this.cancelItem) {
+        this.cancelItem.setSensitive(this._hasCancelableRecordingWork());
       }
       this._updatePanel();
     } catch (error) {
