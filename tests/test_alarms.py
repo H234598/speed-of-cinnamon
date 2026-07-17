@@ -1129,6 +1129,13 @@ class AlarmTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "alarm store could not be rendered"):
                     save_alarm_store({}, path)
 
+    def test_save_alarm_store_wraps_json_recursion_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            with mock.patch.object(alarm_module.json, "dumps", side_effect=RecursionError("too deep")):
+                with self.assertRaisesRegex(RuntimeError, "alarm store could not be rendered"):
+                    save_alarm_store({}, path)
+
     @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
     def test_save_alarm_store_uses_secure_directory_relative_replace(self, mocked_open: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:

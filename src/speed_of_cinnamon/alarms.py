@@ -421,7 +421,7 @@ def save_alarm_store(store: dict[str, Any], path: Path | None = None) -> None:
     }
     try:
         rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-    except MemoryError as exc:
+    except (MemoryError, RecursionError) as exc:
         raise RuntimeError("alarm store could not be rendered") from exc
     try:
         rendered_bytes = len(rendered.encode("utf-8"))
