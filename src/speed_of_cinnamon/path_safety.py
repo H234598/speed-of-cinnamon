@@ -820,7 +820,7 @@ def _write_atomically_without_following_symlinks(
                         raise OSError(f"{field_name} target exists during rollback")
             except BaseException as rollback_error:
                 _note_cleanup_failure(primary_error, rollback_error)
-        cleanup_error: OSError | None = None
+        temporary_cleanup_error: OSError | None = None
         if temp_name:
             try:
                 if temporary_stat is None:
@@ -832,11 +832,11 @@ def _write_atomically_without_following_symlinks(
                 ):
                     _fsync_fd(parent_fd)
             except OSError as exc:
-                cleanup_error = exc
+                temporary_cleanup_error = exc
             except BaseException as cleanup_exception:
                 _note_cleanup_failure(primary_error, cleanup_exception)
-        if cleanup_error is not None:
-            _note_cleanup_failure(primary_error, cleanup_error)
+        if temporary_cleanup_error is not None:
+            _note_cleanup_failure(primary_error, temporary_cleanup_error)
         if isinstance(primary_error, (MemoryError, RecursionError)):
             raise OSError(f"{field_name} could not be written") from primary_error
         raise
