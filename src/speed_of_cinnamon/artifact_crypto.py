@@ -1519,7 +1519,10 @@ def encrypt_bytes(payload: bytes, requested_mode: object, *, kind: str) -> tuple
         "ciphertext": _b64encode(ciphertext),
         **metadata,
     }
-    rendered = json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+    try:
+        rendered = json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+    except (MemoryError, RecursionError) as exc:
+        raise ArtifactCryptoError("encrypted artifact envelope could not be rendered") from exc
     if len(rendered) > MAX_ENCRYPTED_ARTIFACT_BYTES:
         raise ArtifactCryptoError("encrypted artifact payload is too large")
     return rendered, key_material.mode
