@@ -928,7 +928,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                         raise OSError("settings export target exists during rollback")
             except BaseException as rollback_error:
                 _note_cleanup_failure(primary_error, rollback_error)
-        if isinstance(exc, OSError):
+        if isinstance(exc, (MemoryError, OSError, RecursionError)):
             cleanup_error: BaseException | None = None
             if temp_name:
                 try:

@@ -954,6 +954,36 @@ class SettingsExportTest(unittest.TestCase):
         self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
         self.assertIn("close failed", "\n".join(caught.exception.__notes__))
 
+    def test_write_export_wraps_temporary_write_memory_error(self) -> None:
+        class _Handle:
+            def __init__(self, fd: int) -> None:
+                self.fd = fd
+
+            def fileno(self) -> int:
+                return self.fd
+
+            def write(self, _payload: str) -> int:
+                raise MemoryError("write exhausted")
+
+            def flush(self) -> None:
+                return None
+
+            def close(self) -> None:
+                os.close(self.fd)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+
+            def fdopen(fd: int, _mode: str, **_kwargs: object) -> _Handle:
+                return _Handle(fd)
+
+            with mock.patch.object(settings_export_module.os, "fdopen", side_effect=fdopen):
+                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+                    write_export(path, {"language": "en"})
+
+            self.assertFalse(path.exists())
+            self.assertEqual(list(Path(tmp).glob(".settings-export.json.*.tmp")), [])
+
     def test_read_export_preserves_fd_validation_error_when_fd_close_fails(self) -> None:
         with (
             mock.patch.object(settings_export_module, "open_file_without_following_symlinks", return_value=123),
