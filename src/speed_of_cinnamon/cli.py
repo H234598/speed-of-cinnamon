@@ -4139,6 +4139,7 @@ def finalize_recording(
     cleanup_rollback_backups: list[tuple[Path, Path, os.stat_result, os.stat_result]] = []
     cleanup_backup_restore_failed = False
     preserve_recording_artifacts_after_cleanup_failure = False
+    preserved_encrypted_audio_path: Path | None = None
 
     def _backup_cleanup_file(path_text: str | None, *, suffix: str) -> Path | None:
         nonlocal audio_deleted, log_deleted, preserve_recording_artifacts_after_cleanup_failure
@@ -4371,6 +4372,8 @@ def finalize_recording(
             elif done_audio_path:
                 plaintext_done_audio_path = Path(done_audio_path)
                 encrypted_audio_path, recording_encryption = _encrypt_kept_recording_artifact(plaintext_done_audio_path, args)
+                if recording_encryption != ARTIFACT_ENCRYPTION_OFF and is_encrypted_path(encrypted_audio_path):
+                    preserved_encrypted_audio_path = encrypted_audio_path
                 if encrypted_audio_path != plaintext_done_audio_path:
                     done_audio_path = str(encrypted_audio_path)
                 if artifact_encryption != ARTIFACT_ENCRYPTION_OFF:
@@ -4564,6 +4567,8 @@ def finalize_recording(
         if keep_recording_artifacts and done_audio_path:
             plaintext_done_audio_path = Path(done_audio_path)
             encrypted_audio_path, recording_encryption = _encrypt_kept_recording_artifact(plaintext_done_audio_path, args)
+            if recording_encryption != ARTIFACT_ENCRYPTION_OFF and is_encrypted_path(encrypted_audio_path):
+                preserved_encrypted_audio_path = encrypted_audio_path
             if encrypted_audio_path != plaintext_done_audio_path:
                 done_audio_path = str(encrypted_audio_path)
                 stabilized_audio_path = encrypted_audio_path
@@ -4708,7 +4713,11 @@ def finalize_recording(
                     if not trimmed_audio_deleted:
                         error_cleanup_failures.append("transient trimmed recording artifact")
             stabilized_audio_deleted = False
-            if stabilized_audio_path is not None and str(state.audio_path or "") != str(stabilized_audio_path):
+            if (
+                stabilized_audio_path is not None
+                and stabilized_audio_path != preserved_encrypted_audio_path
+                and str(state.audio_path or "") != str(stabilized_audio_path)
+            ):
                 try:
                     stabilized_audio_deleted = _remove_recording_artifact_if_present(
                         stabilized_audio_path,
@@ -4733,6 +4742,11 @@ def finalize_recording(
                 "stopped_at": now_iso(),
                 "error": error_text,
             }
+            if (
+                preserved_encrypted_audio_path is not None
+                and _recording_artifact_stat(preserved_encrypted_audio_path) is not None
+            ):
+                error_update["audio_path"] = str(preserved_encrypted_audio_path)
             if (
                 stabilized_audio_path is not None
                 and str(state.audio_path or "") == str(stabilized_audio_path)
