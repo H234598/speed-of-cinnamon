@@ -3299,9 +3299,8 @@ class AppletStaticTest(unittest.TestCase):
         toggle_end = source.index("\n  _restartApplet:", toggle_start)
         toggle_block = source[toggle_start:toggle_end]
         self.assertIn("let hasExistingRecordingWork = this._hasActiveRecordingState();", toggle_block)
-        self.assertIn("hasExistingRecordingWork || this.cancelPendingWhileCommandRunning", toggle_block)
         self.assertIn("this._applyPayloadSafely(", toggle_block)
-        self.assertIn("undefined,\n        hasExistingRecordingWork || this.cancelPendingWhileCommandRunning", toggle_block)
+        self.assertIn("undefined,\n        true", toggle_block)
 
         cancel_start = source.index("_cancelRecording: function(statusOverride)")
         cancel_end = source.index("\n  _invalidateBackgroundCallbacksForRecording:", cancel_start)

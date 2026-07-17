@@ -5908,7 +5908,7 @@ MyApplet.prototype = {
       this._applyPayloadSafely(
         payload,
         undefined,
-        hasExistingRecordingWork || this.cancelPendingWhileCommandRunning
+        true
       );
     });
   },
