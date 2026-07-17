@@ -1702,6 +1702,34 @@ class AppLoggingTest(unittest.TestCase):
             self.assertTrue(old_daily.exists())
             self.assertTrue(any(stat_module.S_ISDIR(mode) for mode in fsync_modes))
 
+    def test_maintain_logs_preserves_archive_replacement_after_target_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            old_archive = log_dir / "speed-of-cinnamon-2026-05.log.gz"
+            old_daily = log_dir / "speed-of-cinnamon-2026-05-30.log"
+            replacement = log_dir / "replacement.archive"
+            old_daily.write_text("may-30\n", encoding="utf-8")
+            old_daily.chmod(0o600)
+            with gzip.open(old_archive, "wt", encoding="utf-8") as handle:
+                handle.write("legacy\n")
+            old_archive.chmod(0o600)
+            replacement.write_text("must survive\n", encoding="utf-8")
+            real_rename = app_logging._rename_without_replacing
+
+            def rename_then_swap(src: object, dst: object, *args: object, **kwargs: object) -> None:
+                if src == old_archive.name and str(dst).endswith(".cleanup"):
+                    old_archive.unlink()
+                    replacement.replace(old_archive)
+                real_rename(src, dst, *args, **kwargs)
+
+            with mock.patch.object(app_logging, "_rename_without_replacing", side_effect=rename_then_swap):
+                with self.assertRaisesRegex(RuntimeError, "monthly log archive changed before deletion"):
+                    app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
+
+            self.assertEqual(old_archive.read_text(encoding="utf-8"), "must survive\n")
+            self.assertTrue(old_daily.exists())
+            self.assertEqual(list(log_dir.glob("*.backup")), [])
+
     def test_maintain_logs_restores_archive_after_activation_fsync_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
@@ -1791,7 +1819,7 @@ class AppLoggingTest(unittest.TestCase):
             def fail_activation_fsync(fd: int) -> None:
                 if stat_module.S_ISDIR(os.fstat(fd).st_mode):
                     state["directory_syncs"] += 1
-                    if state["directory_syncs"] == 2:
+                    if state["directory_syncs"] == 3:
                         state["activation_failed"] = True
                         raise OSError("activation fsync failed")
                 real_fsync(fd)
@@ -1813,7 +1841,7 @@ class AppLoggingTest(unittest.TestCase):
                     app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 
             self.assertIn("monthly log archive changed during activation rollback", "\n".join(caught.exception.__notes__))
-            self.assertEqual(state["directory_syncs"], 2)
+            self.assertEqual(state["directory_syncs"], 3)
             self.assertEqual(state["rollback_stat_calls"], 2)
             self.assertEqual(old_archive.read_text(encoding="utf-8"), "must survive\n")
 
@@ -1832,7 +1860,7 @@ class AppLoggingTest(unittest.TestCase):
 
             def unlink_then_interrupt(name: object, *args: object, **kwargs: object) -> None:
                 nonlocal interrupted
-                if name == old_archive.name and not interrupted:
+                if isinstance(name, str) and name.endswith(".cleanup") and not interrupted:
                     interrupted = True
                     real_unlink(name, *args, **kwargs)
                     raise KeyboardInterrupt
@@ -1899,7 +1927,7 @@ class AppLoggingTest(unittest.TestCase):
             with mock.patch.object(
                 app_logging.secrets,
                 "token_hex",
-                side_effect=["temp", "fixed", "free", "cleanup"],
+                side_effect=["temp", "fixed", "free", "target-cleanup", "cleanup"],
             ):
                 app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 

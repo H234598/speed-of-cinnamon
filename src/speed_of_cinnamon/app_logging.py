@@ -1079,7 +1079,12 @@ def _merge_old_months(directory: Path, today: date) -> None:
                         ):
                             raise RuntimeError("monthly log archive changed during backup activation")
                         archive_backup_name = candidate_name
-                        os.unlink(archive.name, dir_fd=parent_fd)
+                        if not _unlink_log_file_with_parent_fsync(
+                            archive,
+                            current_archive_stat,
+                            field_name="monthly log archive",
+                        ):
+                            raise RuntimeError("monthly log archive disappeared before activation")
                         archive_backup_moved = True
                         os.fsync(parent_fd)
                         break
