@@ -1275,6 +1275,29 @@ class RecorderTest(unittest.TestCase):
             self.assertNotIn(str(audio), str(raised.exception))
             self.assertNotIn("secret", str(raised.exception))
 
+    def test_audio_transforms_clean_temp_when_ffmpeg_error_is_invalid_utf8(self) -> None:
+        def invalid_error(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            stderr = kwargs["stderr"]
+            assert hasattr(stderr, "write")
+            stderr.write(b"\xff")
+            return subprocess.CompletedProcess(args[0], 1, stdout=b"", stderr=b"")
+
+        for transform in (trim_recording_silence, reencode_recording_to_flac):
+            with self.subTest(transform=transform.__name__), tempfile.TemporaryDirectory() as tmp:
+                audio = Path(tmp) / "sample.wav"
+                audio.write_bytes(b"audio")
+                with (
+                    mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"),
+                    mock.patch(
+                        "speed_of_cinnamon.recorder.subprocess.Popen",
+                        side_effect=_popen_from_run(invalid_error),
+                    ),
+                ):
+                    with self.assertRaisesRegex(RecorderError, "invalid UTF-8"):
+                        transform(audio)
+
+                self.assertEqual(list(Path(tmp).glob("*.flac")), [])
+
     def test_detect_silent_recording_fails_open_when_ffmpeg_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"

@@ -1003,10 +1003,14 @@ def trim_recording_silence(
             _close_fd_quietly(audio_fd)
             audio_fd = None
     if proc.returncode != 0:
-        detail = _decode_ffmpeg_output(proc.stderr)
-        if detail and _contains_escaped_null(detail):
-            detail = ""
-        detail = _sanitize_ffmpeg_error_detail(detail)
+        try:
+            detail = _decode_ffmpeg_output(proc.stderr)
+            if detail and _contains_escaped_null(detail):
+                detail = ""
+            detail = _sanitize_ffmpeg_error_detail(detail)
+        except BaseException:
+            _cleanup_recording_temp_file(trimmed_path, fd)
+            raise
         _cleanup_recording_temp_file(trimmed_path, fd)
         raise RecorderError(detail or "ffmpeg silence trimming failed")
     try:
@@ -1124,10 +1128,14 @@ def reencode_recording_to_flac(audio_path: Path) -> Path:
             _close_fd_quietly(audio_fd)
             audio_fd = None
     if proc.returncode != 0:
-        detail = _decode_ffmpeg_output(proc.stderr)
-        if detail and _contains_escaped_null(detail):
-            detail = ""
-        detail = _sanitize_ffmpeg_error_detail(detail)
+        try:
+            detail = _decode_ffmpeg_output(proc.stderr)
+            if detail and _contains_escaped_null(detail):
+                detail = ""
+            detail = _sanitize_ffmpeg_error_detail(detail)
+        except BaseException:
+            _cleanup_recording_temp_file(encoded_path, fd)
+            raise
         _cleanup_recording_temp_file(encoded_path, fd)
         raise RecorderError(detail or "ffmpeg FLAC conversion failed")
     try:
