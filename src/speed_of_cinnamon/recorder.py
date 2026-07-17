@@ -1318,12 +1318,22 @@ def read_recording_level(audio_path: Path) -> RecordingLevel:
             data_offset = _wav_data_offset(header)
             if data_offset is None or data_offset >= size:
                 return RecordingLevel(False, 0, 0.0, 0.0, 0, "waiting for audio")
-            data_bytes = max(0, size - data_offset)
+            data_end = size
+            if (
+                header[:4] == b"RIFF"
+                and len(header) >= 8
+                and int.from_bytes(header[4:8], "little") + 8 == size
+                and data_offset >= 4
+            ):
+                declared_data_end = data_offset + int.from_bytes(header[data_offset - 4 : data_offset], "little")
+                if data_offset <= declared_data_end <= size:
+                    data_end = declared_data_end
+            data_bytes = max(0, data_end - data_offset)
             read_bytes = min(MAX_RECORDING_LEVEL_BYTES, data_bytes)
             read_bytes -= read_bytes % 2
             if read_bytes <= 0:
                 return RecordingLevel(False, 0, 0.0, 0.0, 0, "waiting for audio")
-            handle.seek(size - read_bytes)
+            handle.seek(data_end - read_bytes)
             raw = handle.read(read_bytes)
         except BaseException as exc:
             handle_primary_error = exc

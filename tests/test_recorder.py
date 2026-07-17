@@ -227,6 +227,29 @@ class RecorderTest(unittest.TestCase):
         self.assertEqual(level.samples, 4)
         self.assertEqual(level.detail, "silence")
 
+    def test_read_recording_level_ignores_trailing_riff_chunk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            fmt = b"fmt " + (16).to_bytes(4, "little") + b"\x01\x00\x01\x00\x80>\x00\x00\x00}\x00\x00\x02\x00\x10\x00"
+            body = (
+                b"WAVE"
+                + fmt
+                + b"data"
+                + (4).to_bytes(4, "little")
+                + b"\x00\x00\x00\x00"
+                + b"JUNK"
+                + (4).to_bytes(4, "little")
+                + b"\xff\x7f\xff\x7f"
+            )
+            audio.write_bytes(b"RIFF" + len(body).to_bytes(4, "little") + body)
+
+            level = read_recording_level(audio)
+
+        self.assertTrue(level.ok)
+        self.assertEqual(level.percent, 0)
+        self.assertEqual(level.samples, 2)
+        self.assertEqual(level.detail, "silence")
+
     def test_wav_data_offset_skips_data_text_inside_metadata_chunk(self) -> None:
         header = (
             b"RIFF"
