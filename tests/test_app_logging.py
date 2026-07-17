@@ -2031,6 +2031,48 @@ class AppLoggingTest(unittest.TestCase):
             self.assertIsNotNone(replacement_backup)
             self.assertEqual(replacement_backup.read_bytes(), b"replacement backup")
 
+    def test_gzip_file_preserves_target_backup_changed_after_cleanup_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "source.log"
+            target = log_dir / "target.log.gz"
+            replacement = log_dir / "replacement.backup"
+            source.write_text("new content\n", encoding="utf-8")
+            source.chmod(0o600)
+            with gzip.open(target, "wt", encoding="utf-8") as handle:
+                handle.write("old content\n")
+            target.chmod(0o600)
+            replacement.write_bytes(b"replacement backup")
+            replacement.chmod(0o600)
+            real_stat = app_logging.os.stat
+            backup_stat_calls = 0
+
+            def stat_then_swap_after_cleanup_check(
+                name: object,
+                *args: object,
+                **kwargs: object,
+            ) -> os.stat_result:
+                nonlocal backup_stat_calls
+                result = real_stat(name, *args, **kwargs)
+                if isinstance(name, str) and name.endswith(".backup"):
+                    backup_stat_calls += 1
+                    if backup_stat_calls == 2:
+                        backup_path = target.parent / name
+                        backup_path.unlink()
+                        replacement.replace(backup_path)
+                return result
+
+            with mock.patch.object(app_logging.os, "stat", side_effect=stat_then_swap_after_cleanup_check):
+                with self.assertRaisesRegex(RuntimeError, "log target backup changed before cleanup"):
+                    app_logging._gzip_file(source, target)
+
+            self.assertEqual(source.read_text(encoding="utf-8"), "new content\n")
+            with gzip.open(target, "rt", encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "new content\n")
+            backups = list(log_dir.glob("*.backup"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_bytes(), b"replacement backup")
+
     def test_gzip_file_does_not_clobber_target_created_during_activation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
@@ -2098,7 +2140,7 @@ class AppLoggingTest(unittest.TestCase):
             real_unlink = app_logging.os.unlink
 
             def fail_backup_unlink(name: object, *args: object, **kwargs: object) -> None:
-                if isinstance(name, str) and name.endswith(".backup"):
+                if isinstance(name, str) and name.endswith(".cleanup"):
                     raise PermissionError("backup cleanup failed")
                 real_unlink(name, *args, **kwargs)
 
@@ -2168,7 +2210,7 @@ class AppLoggingTest(unittest.TestCase):
             real_unlink = app_logging.os.unlink
 
             def unlink_then_fail(name: object, *args: object, **kwargs: object) -> None:
-                if isinstance(name, str) and name.endswith(".backup"):
+                if isinstance(name, str) and name.endswith(".cleanup"):
                     real_unlink(name, *args, **kwargs)
                     raise OSError("backup unlink outcome unknown")
                 real_unlink(name, *args, **kwargs)

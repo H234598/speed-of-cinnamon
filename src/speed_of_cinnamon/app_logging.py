@@ -1391,8 +1391,37 @@ def _gzip_file(source: Path, target: Path) -> None:
         current_backup_stat = os.stat(target_backup_name, dir_fd=parent_fd, follow_symlinks=False)
         if not _same_target_inode(current_backup_stat, target_backup_stat):
             raise RuntimeError("log target backup changed before cleanup")
-        os.unlink(target_backup_name, dir_fd=parent_fd)
-        os.fsync(parent_fd)
+        for _ in range(100):
+            cleanup_name = f"{target_backup_name}.{secrets.token_hex(8)}.cleanup"
+            try:
+                _rename_without_replacing(
+                    target_backup_name,
+                    cleanup_name,
+                    directory_fd=parent_fd,
+                    field_name="log target backup cleanup",
+                )
+            except FileExistsError:
+                continue
+            try:
+                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                if not _same_target_inode(claimed_stat, target_backup_stat):
+                    raise RuntimeError("log target backup changed before cleanup")
+                os.unlink(cleanup_name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+            except BaseException as exc:
+                try:
+                    _rename_without_replacing(
+                        cleanup_name,
+                        target_backup_name,
+                        directory_fd=parent_fd,
+                        field_name="log target backup restore",
+                    )
+                    os.fsync(parent_fd)
+                except BaseException as restore_error:
+                    _note_cleanup_failure(exc, restore_error)
+                raise
+            return
+        raise RuntimeError("log target backup cleanup path could not be claimed")
 
     def _assert_target_backup_identity() -> None:
         if not target_backup_name or target_backup_stat is None:
