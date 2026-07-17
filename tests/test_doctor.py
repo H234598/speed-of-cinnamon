@@ -1106,6 +1106,21 @@ class DoctorTest(unittest.TestCase):
     def test_ok_rejects_non_check_object(self) -> None:
         self.assertFalse(doctor._ok({"python3": {"ok": True}}, "python3"))  # type: ignore[arg-type]
 
+    def test_status_handles_non_check_entries_without_crashing(self) -> None:
+        recorder_status = doctor._recorder_status(
+            {"recorder": "arecord"},
+            {"arecord": {"ok": True}},  # type: ignore[arg-type]
+        )
+        self.assertFalse(recorder_status["ok"])
+        self.assertEqual(recorder_status["detail"], "arecord missing")
+
+        transcriber_status = doctor._transcriber_status(
+            {"transcriber": "whisper"},
+            {"whisper": {"ok": True}},  # type: ignore[arg-type]
+        )
+        self.assertFalse(transcriber_status["ok"])
+        self.assertEqual(transcriber_status["detail"], "whisper command missing")
+
     def test_output_status_rejects_non_boolean_desktop_flags(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "cinnamon must be a boolean"):
             doctor._output_status(

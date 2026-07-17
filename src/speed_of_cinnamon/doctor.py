@@ -105,6 +105,11 @@ def _ok(checks: Mapping[str, Check], name: str) -> bool:
     return False
 
 
+def _check_detail(checks: Mapping[str, Check], name: str, fallback: str) -> str:
+    check = checks.get(name)
+    return check.detail if isinstance(check, Check) else fallback
+
+
 def _coerce_payload_bool(payload: Mapping[str, Any], key: str) -> bool:
     value = payload.get(key)
     if isinstance(value, bool):
@@ -287,7 +292,7 @@ def _recorder_status(settings: Mapping[str, object], checks: Mapping[str, Check]
     return {
         "ok": _ok(checks, recorder),
         "value": recorder,
-        "detail": checks[recorder].detail if recorder in checks else f"{recorder} missing",
+        "detail": _check_detail(checks, recorder, f"{recorder} missing"),
     }
 
 
@@ -461,7 +466,7 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
         return {
             "ok": whisper_ok,
             "value": "whisper",
-            "detail": checks["whisper"].detail if "whisper" in checks else "whisper command missing",
+            "detail": _check_detail(checks, "whisper", "whisper command missing"),
         }
     if transcriber == "openai-compatible":
         if not openai_compatible_model:
