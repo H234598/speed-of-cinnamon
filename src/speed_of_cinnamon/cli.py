@@ -5480,6 +5480,11 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
     if state.error.startswith("state file "):
         payload["status"] = "error"
         return payload
+    if state.status not in {"recording", "recorded", "processing", "finalizing"} and _is_finalization_lock_active(store.path):
+        payload["status"] = "finalizing"
+        payload["message"] = "recording lifecycle in progress; wait for completion"
+        payload["error"] = ""
+        return payload
     if state.status == "recording":
         try:
             verified_alive = _recording_process_verified_active(state)
