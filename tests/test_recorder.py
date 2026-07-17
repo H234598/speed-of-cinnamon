@@ -1076,7 +1076,6 @@ class RecorderTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
             audio.write_bytes(b"audio")
-            completed = subprocess.CompletedProcess(["ffmpeg"], 0, stdout=b"", stderr=b"")
             with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
                 with mock.patch(
                     "speed_of_cinnamon.recorder.subprocess.Popen",
