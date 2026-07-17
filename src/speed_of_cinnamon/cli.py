@@ -5470,23 +5470,33 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
                 payload["error"] = payload["message"]
                 payload["inserted"] = False
             else:
-                current_audio_path = _normalized_state_recording_artifact_path(
-                    state.audio_path,
-                    suffix=(".wav", ".flac", ".socenc"),
-                    state_path=store.path,
-                    require_recordings_dir=False,
+                process_group_state = (
+                    process_group_has_live_processes(state.pid)
+                    if state.pid is not None and state.process_identity
+                    else False
                 )
-                current_audio_stat = _recording_artifact_stat(current_audio_path) if current_audio_path else None
-                if current_audio_stat is None or current_audio_stat.st_size == 0:
-                    payload["status"] = "error"
-                    payload["message"] = "recording exited before audio was saved"
-                    payload["error"] = payload["message"]
-                    payload["inserted"] = False
-                else:
-                    payload["status"] = "recorded"
-                    payload["message"] = "recording process has exited; run stop to transcribe"
+                if process_group_state is not False:
+                    payload["status"] = "recording"
+                    payload["message"] = "recording process group is still active; run stop to transcribe"
                     payload["error"] = ""
-                    payload["inserted"] = False
+                else:
+                    current_audio_path = _normalized_state_recording_artifact_path(
+                        state.audio_path,
+                        suffix=(".wav", ".flac", ".socenc"),
+                        state_path=store.path,
+                        require_recordings_dir=False,
+                    )
+                    current_audio_stat = _recording_artifact_stat(current_audio_path) if current_audio_path else None
+                    if current_audio_stat is None or current_audio_stat.st_size == 0:
+                        payload["status"] = "error"
+                        payload["message"] = "recording exited before audio was saved"
+                        payload["error"] = payload["message"]
+                        payload["inserted"] = False
+                    else:
+                        payload["status"] = "recorded"
+                        payload["message"] = "recording process has exited; run stop to transcribe"
+                        payload["error"] = ""
+                        payload["inserted"] = False
     if payload.get("status") in {"recording", "recorded"}:
         microphone_level = _recording_level_payload(state, state_path=store.path)
         if microphone_level is not None:

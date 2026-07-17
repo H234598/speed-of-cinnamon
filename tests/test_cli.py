@@ -11012,6 +11012,33 @@ class CliTest(unittest.TestCase):
         finally:
             process.wait()
 
+    def test_status_keeps_reaped_recording_active_when_process_group_lives(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "recording.wav"
+            audio.write_bytes(b"audio")
+            state_file = Path(tmp) / "state.json"
+            StateStore(state_file).write(
+                RecordingState(
+                    status="recording",
+                    pid=1234,
+                    process_identity="owner-identity",
+                    audio_path=str(audio),
+                )
+            )
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=False),
+                mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value=None),
+                mock.patch("speed_of_cinnamon.cli.process_group_has_live_processes", return_value=True),
+            ):
+                payload = cli.command_status(argparse.Namespace(state_file=str(state_file)))
+
+        self.assertEqual(payload["status"], "recording")
+        self.assertIn("process group is still active", payload["message"])
+        self.assertEqual(payload["error"], "")
+
     def test_status_reports_exited_recording_without_audio_as_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "state.json"
