@@ -8114,12 +8114,17 @@ MyApplet.prototype = {
     let port = "";
     if (authority.charAt(0) === "[") {
       let closing = authority.indexOf("]");
-      if (closing < 0) {
+      let bracketHost = closing >= 0 ? authority.slice(1, closing) : "";
+      if (closing <= 1 || authority.indexOf("[", 1) >= 0 || authority.indexOf("]", closing + 1) >= 0 ||
+          !/^[0-9A-Fa-f:.]+$/.test(bracketHost) || bracketHost.indexOf(":") < 0) {
         throw new Error(field + " has invalid host");
       }
       host = authority.slice(0, closing + 1);
       port = authority.slice(closing + 1);
     } else {
+      if (authority.indexOf("[") >= 0 || authority.indexOf("]") >= 0) {
+        throw new Error(field + " has invalid host");
+      }
       let colon = authority.lastIndexOf(":");
       if (colon >= 0) {
         if (authority.indexOf(":") !== colon) {

@@ -407,6 +407,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("Number(ipv4Loopback[index]) > 255", block)
         self.assertIn("let validIpv4Loopback = Boolean(ipv4Loopback);", block)
 
+    def test_external_api_urls_reject_malformed_bracket_hosts(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_validateExternalApiUrl: function(value, fieldName)")
+        end = source.index("\n  _validatedExternalApiConfig:", start)
+        block = source[start:end]
+        self.assertIn('let bracketHost = closing >= 0 ? authority.slice(1, closing) : "";', block)
+        self.assertIn("closing <= 1", block)
+        self.assertIn("!/^[0-9A-Fa-f:.]+$/.test(bracketHost)", block)
+        self.assertIn('authority.indexOf("[", 1)', block)
+        self.assertIn('authority.indexOf("]", closing + 1)', block)
+        self.assertIn('authority.indexOf("]") >= 0', block)
+
     def test_openai_compatible_settings_urls_are_validated_before_cli_spawn(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         self.assertIn("_validatedExternalApiUrlOrFallback: function(value, fieldName, fallback)", source)
