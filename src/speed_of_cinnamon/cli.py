@@ -2929,6 +2929,9 @@ def active_artifact_paths(
     path = _normalized_state_artifact_path(state.transcript_path, state_path=state_path)
     if path:
         paths.add(path)
+        sibling_path = _transcript_sibling_path(path)
+        if sibling_path is not None:
+            paths.add(sibling_path)
     if state_path is not None and state.status == "finalizing":
         paths.update(_finalizing_inflight_artifact_paths(state_path, state))
     return paths

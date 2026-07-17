@@ -4909,6 +4909,47 @@ class CliTest(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(payload["status"], "done")
 
+    def test_cleanup_keeps_transcript_sibling_of_active_state_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            state_dir = tmp_path / "speed-of-cinnamon"
+            transcript_dir = state_dir / "transcripts"
+            state_dir.mkdir(parents=True)
+            state_dir.chmod(0o700)
+            transcript_dir.mkdir()
+            encrypted = transcript_dir / "active.txt.socenc"
+            plaintext = transcript_dir / "active.txt"
+            encrypted.write_bytes(b"soc1")
+            plaintext.write_text("secret", encoding="utf-8")
+            old = time.time() - 86400
+            os.utime(encrypted, (old, old))
+            os.utime(plaintext, (old, old))
+            state_file = state_dir / "state.json"
+            StateStore(state_file).write(
+                RecordingState(status="error", transcript_path=str(encrypted))
+            )
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "cleanup",
+                    "--state-file",
+                    str(state_file),
+                    "--keep-transcripts",
+                    "0",
+                    "--keep-recordings",
+                    "0",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+            encrypted_exists = encrypted.exists()
+            plaintext_exists = plaintext.exists()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["deleted_transcripts"], 0)
+        self.assertEqual(payload["skipped_active_path_count"], 2)
+        self.assertTrue(encrypted_exists)
+        self.assertTrue(plaintext_exists)
+
     def test_cleanup_keeps_relative_recording_artifacts_under_state_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
