@@ -581,6 +581,35 @@ class SecurityParserTest(unittest.TestCase):
 
         mocked_close.assert_called_once_with(456)
 
+    def test_blacklist_lock_wraps_open_memory_error(self) -> None:
+        with (
+            mock.patch.object(security_parser, "assert_no_symlink_ancestors"),
+            mock.patch.object(security_parser, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(security_parser.os, "open", side_effect=MemoryError("open exhausted")),
+            mock.patch.object(security_parser.os, "close") as mocked_close,
+        ):
+            with self.assertRaisesRegex(ValueError, "failed to open blacklist lock file"):
+                security_parser._acquire_blacklist_lock(Path("/probe/blacklist.txt"))
+
+        mocked_close.assert_called_once_with(456)
+
+    def test_blacklist_lock_wraps_validation_memory_error(self) -> None:
+        with (
+            mock.patch.object(security_parser, "assert_no_symlink_ancestors"),
+            mock.patch.object(security_parser, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(security_parser.os, "open", return_value=123),
+            mock.patch.object(
+                security_parser,
+                "assert_fd_is_regular_private_file",
+                side_effect=MemoryError("validation exhausted"),
+            ),
+            mock.patch.object(security_parser.os, "close") as mocked_close,
+        ):
+            with self.assertRaisesRegex(ValueError, "failed to lock blacklist file"):
+                security_parser._acquire_blacklist_lock(Path("/probe/blacklist.txt"))
+
+        self.assertEqual(mocked_close.call_args_list, [mock.call(123), mock.call(456)])
+
     def test_blacklist_lock_closes_fd_when_validation_is_interrupted(self) -> None:
         with (
             mock.patch.object(security_parser, "assert_no_symlink_ancestors"),

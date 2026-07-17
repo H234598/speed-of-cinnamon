@@ -479,7 +479,7 @@ def _safe_blacklist_path(path: Path) -> Path:
 def _read_blacklist(path: Path, *, strict: bool = False) -> list[str]:
     try:
         path = _safe_blacklist_path(path)
-    except RuntimeError as exc:
+    except (MemoryError, RecursionError, RuntimeError) as exc:
         raise ValueError("blacklist file path is not safe") from exc
     try:
         file_stat = path.lstat()
@@ -538,22 +538,29 @@ def _acquire_blacklist_lock(path: Path) -> int:
     lock_path = path.with_name(f".{path.name}.lock")
     try:
         assert_no_symlink_ancestors(lock_path, field_name="blacklist lock file")
-    except RuntimeError as exc:
+    except (MemoryError, RecursionError, RuntimeError) as exc:
         raise ValueError("blacklist lock file path is not safe") from exc
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
         raise ValueError("secure blacklist lock open is not supported on this platform")
     try:
         parent_fd = ensure_directory_without_following_symlinks(lock_path.parent, field_name="blacklist lock directory")
-    except (OSError, RuntimeError) as exc:
+    except (MemoryError, RecursionError, OSError, RuntimeError) as exc:
         raise ValueError("blacklist lock file path is not safe") from exc
     try:
         fd = os.open(lock_path.name, os.O_RDWR | os.O_CREAT | nofollow_flag, 0o600, dir_fd=parent_fd)
+    except (MemoryError, RecursionError) as exc:
+        error = ValueError("failed to open blacklist lock file")
+        try:
+            os.close(parent_fd)
+        except BaseException as cleanup_error:
+            _note_lock_cleanup_failure(error, cleanup_error)
+        raise error from exc
     except OSError as exc:
         error = ValueError("failed to open blacklist lock file")
         try:
             os.close(parent_fd)
-        except OSError as cleanup_error:
+        except BaseException as cleanup_error:
             _note_lock_cleanup_failure(error, cleanup_error)
         raise error from exc
     except BaseException as exc:
@@ -571,24 +578,41 @@ def _acquire_blacklist_lock(path: Path) -> int:
             pass
         fcntl.flock(fd, fcntl.LOCK_EX)
         assert_fd_is_regular_private_file(fd, field_name="blacklist lock file", require_private_mode=True)
+    except (MemoryError, RecursionError) as exc:
+        error = ValueError("failed to lock blacklist file")
+        primary_error = error
+        try:
+            os.close(fd)
+        except BaseException as cleanup_error:
+            _note_lock_cleanup_failure(error, cleanup_error)
+        raise error from exc
     except (OSError, RuntimeError) as exc:
         error = ValueError("failed to lock blacklist file")
         primary_error = error
         try:
             os.close(fd)
-        except OSError as cleanup_error:
+        except BaseException as cleanup_error:
             _note_lock_cleanup_failure(error, cleanup_error)
         raise error from exc
     except BaseException as exc:
         primary_error = exc
         try:
             os.close(fd)
-        except OSError as cleanup_error:
+        except BaseException as cleanup_error:
             _note_lock_cleanup_failure(exc, cleanup_error)
         raise
     finally:
         try:
             os.close(parent_fd)
+        except (MemoryError, RecursionError) as cleanup_error:
+            if primary_error is not None:
+                _note_lock_cleanup_failure(primary_error, cleanup_error)
+            else:
+                try:
+                    os.close(fd)
+                except BaseException as fd_cleanup_error:
+                    _note_lock_cleanup_failure(cleanup_error, fd_cleanup_error)
+                raise OSError("blacklist lock directory could not be closed") from cleanup_error
         except OSError as cleanup_error:
             if primary_error is not None:
                 _note_lock_cleanup_failure(primary_error, cleanup_error)
@@ -610,6 +634,9 @@ def _release_blacklist_lock(fd: int) -> None:
     primary_error: BaseException | None = None
     try:
         fcntl.flock(fd, fcntl.LOCK_UN)
+    except (MemoryError, RecursionError) as exc:
+        primary_error = OSError("blacklist lock could not be released")
+        raise primary_error from exc
     except BaseException as exc:
         primary_error = exc
         raise
@@ -621,6 +648,11 @@ def _release_blacklist_lock(fd: int) -> None:
                 _note_lock_cleanup_failure(primary_error, cleanup_error)
             else:
                 raise
+        except (MemoryError, RecursionError) as cleanup_error:
+            if primary_error is not None:
+                _note_lock_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise OSError("blacklist lock could not be closed") from cleanup_error
         except BaseException as cleanup_error:
             if primary_error is not None:
                 _note_lock_cleanup_failure(primary_error, cleanup_error)
