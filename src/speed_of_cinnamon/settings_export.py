@@ -570,6 +570,9 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
     transaction_active = False
     primary_error: BaseException | None = None
 
+    class _RecoveryBackupChanged(OSError):
+        pass
+
     def _same_leaf_snapshot(first: os.stat_result, second: os.stat_result) -> bool:
         return (
             first.st_dev,
@@ -646,6 +649,48 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
             or not _same_leaf_identity(current_backup_stat, existing_stat)
         ):
             raise OSError("settings export recovery backup changed during rollback")
+
+    def _remove_recovery_backup_safely() -> None:
+        if not backup_moved or not backup_name or existing_stat is None:
+            raise _RecoveryBackupChanged("settings export recovery backup identity is unavailable")
+        current_backup_stat = os.stat(backup_name, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            not stat_module.S_ISREG(current_backup_stat.st_mode)
+            or getattr(current_backup_stat, "st_nlink", 1) != 1
+            or not _same_leaf_identity(current_backup_stat, existing_stat)
+        ):
+            raise _RecoveryBackupChanged("settings export recovery backup changed before cleanup")
+        for _ in range(100):
+            cleanup_name = f"{backup_name}.{secrets.token_hex(8)}.cleanup"
+            try:
+                _rename_without_replacing(
+                    backup_name,
+                    cleanup_name,
+                    directory_fd=parent_fd,
+                    field_name="settings export recovery backup cleanup",
+                )
+            except FileExistsError:
+                continue
+            try:
+                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                if not _same_leaf_identity(claimed_stat, existing_stat):
+                    raise _RecoveryBackupChanged("settings export recovery backup changed before cleanup")
+                os.unlink(cleanup_name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+            except BaseException as exc:
+                try:
+                    _rename_without_replacing(
+                        cleanup_name,
+                        backup_name,
+                        directory_fd=parent_fd,
+                        field_name="settings export recovery backup restore",
+                    )
+                    os.fsync(parent_fd)
+                except BaseException as restore_error:
+                    _note_cleanup_failure(exc, restore_error)
+                raise
+            return
+        raise _RecoveryBackupChanged("settings export recovery backup cleanup path could not be claimed")
 
     try:
         try:
@@ -779,14 +824,10 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
         os.fsync(parent_fd)
         transaction_active = False
         if backup_moved:
-            backup_stat = os.stat(backup_name, dir_fd=parent_fd, follow_symlinks=False)
-            if not stat_module.S_ISREG(backup_stat.st_mode) or getattr(backup_stat, "st_nlink", 1) != 1:
-                raise OSError("settings export recovery backup is not safe")
-            if existing_stat is None or not _same_leaf_identity(backup_stat, existing_stat):
-                raise OSError("settings export recovery backup changed before cleanup")
             try:
-                os.unlink(backup_name, dir_fd=parent_fd)
-                os.fsync(parent_fd)
+                _remove_recovery_backup_safely()
+            except _RecoveryBackupChanged:
+                raise
             except OSError:
                 pass
             except BaseException:

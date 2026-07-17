@@ -730,7 +730,7 @@ class SettingsExportTest(unittest.TestCase):
             with mock.patch.object(
                 settings_export_module.secrets,
                 "token_hex",
-                side_effect=["temp", "fixed", "free"],
+                side_effect=["temp", "fixed", "free", "cleanup"],
             ):
                 write_export(path, {"language": "de"})
 
@@ -1085,7 +1085,7 @@ class SettingsExportTest(unittest.TestCase):
             real_unlink = os.unlink
 
             def fail_backup_cleanup(name: object, *args: object, **kwargs: object) -> None:
-                if isinstance(name, str) and name.endswith(".bak"):
+                if isinstance(name, str) and name.endswith(".cleanup"):
                     raise OSError("backup cleanup failed")
                 real_unlink(name, *args, **kwargs)
 
@@ -1102,7 +1102,7 @@ class SettingsExportTest(unittest.TestCase):
             real_unlink = os.unlink
 
             def interrupt_backup_cleanup(name: object, *args: object, **kwargs: object) -> None:
-                if isinstance(name, str) and name.endswith(".bak"):
+                if isinstance(name, str) and name.endswith(".cleanup"):
                     raise KeyboardInterrupt("backup cleanup interrupted")
                 real_unlink(name, *args, **kwargs)
 
@@ -1111,6 +1111,44 @@ class SettingsExportTest(unittest.TestCase):
 
             self.assertEqual(read_export(path)["settings"]["language"], "de")
             self.assertEqual(len(list(Path(tmp).glob(".settings-export.json.*.bak"))), 1)
+
+    def test_write_export_preserves_changed_recovery_backup_during_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            replacement = Path(tmp) / "replacement.json"
+            path.write_text("old export\n", encoding="utf-8")
+            replacement.write_text("foreign export\n", encoding="utf-8")
+            replacement.chmod(0o600)
+            real_stat = settings_export_module.os.stat
+            backup_stat_calls = 0
+
+            def stat_then_swap_after_cleanup_check(
+                name: object,
+                *args: object,
+                **kwargs: object,
+            ) -> os.stat_result:
+                nonlocal backup_stat_calls
+                result = real_stat(name, *args, **kwargs)
+                if isinstance(name, str) and name.endswith(".bak"):
+                    backup_stat_calls += 1
+                    if backup_stat_calls == 2:
+                        backup_path = path.parent / name
+                        backup_path.unlink()
+                        replacement.replace(backup_path)
+                return result
+
+            with mock.patch.object(
+                settings_export_module.os,
+                "stat",
+                side_effect=stat_then_swap_after_cleanup_check,
+            ):
+                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+                    write_export(path, {"language": "de"})
+
+            self.assertEqual(read_export(path)["settings"]["language"], "de")
+            backups = list(Path(tmp).glob(".settings-export.json.*.bak"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_text(encoding="utf-8"), "foreign export\n")
 
     def test_write_export_rolls_back_after_activation_parent_fsync_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
