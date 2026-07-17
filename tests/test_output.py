@@ -851,6 +851,60 @@ class OutputTest(unittest.TestCase):
 
         self.assertFalse(live)
 
+    def test_output_capture_cleanup_kills_descendant_after_leader_exit(self) -> None:
+        invocations = (
+            (
+                "input",
+                lambda marker: _run_with_input(
+                    ["sh", "-c", f"sleep 30 & child=$!; echo $child > {marker}; exit 0"],
+                    "",
+                    timeout=2,
+                ),
+            ),
+            (
+                "stdout",
+                lambda marker: output_module._run_bounded_stdout_command(
+                    ["sh", "-c", f"sleep 30 & child=$!; echo $child > {marker}; exit 0"],
+                    timeout=2,
+                    runtime_command="/bin/sh",
+                ),
+            ),
+        )
+        for name, invoke in invocations:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                marker = Path(tmp) / "child.pid"
+                child_pid: int | None = None
+                try:
+                    if name == "input":
+                        with self.assertRaisesRegex(OutputError, "sh output capture failed"):
+                            invoke(marker)
+                    else:
+                        self.assertIsNone(invoke(marker))
+                    child_pid = int(marker.read_text(encoding="ascii").strip())
+
+                    deadline = time.monotonic() + 2
+                    while time.monotonic() < deadline:
+                        try:
+                            raw = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii")
+                            live = raw.rsplit(")", 1)[1].split()[0] not in {"Z", "X", "x"}
+                        except OSError:
+                            live = False
+                        if not live:
+                            break
+                        time.sleep(0.01)
+                    self.assertFalse(live)
+                finally:
+                    if child_pid is None:
+                        try:
+                            child_pid = int(marker.read_text(encoding="ascii").strip())
+                        except (FileNotFoundError, ValueError):
+                            child_pid = None
+                    if child_pid is not None:
+                        try:
+                            os.kill(child_pid, 9)
+                        except ProcessLookupError:
+                            pass
+
     def test_run_with_input_limits_output_size(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             stdout = cast(BinaryIO, kwargs["stdout"])

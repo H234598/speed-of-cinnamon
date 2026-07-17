@@ -1249,7 +1249,12 @@ def _run_with_input(
             raise
 
         try:
-            _finish_bounded_output_captures(stdout_capture, stderr_capture)
+            _finish_bounded_output_captures_after_process(
+                proc,
+                stdout_capture,
+                stderr_capture,
+                process_name=command,
+            )
         except (OSError, ValueError) as exc:
             raise OutputError(f"{command} output capture failed") from exc
         if stdout_capture is not None and stdout_capture.overflowed:
@@ -1422,6 +1427,30 @@ def _reap_timed_out_output_process(process: subprocess.Popen[bytes]) -> bool:
     return terminated
 
 
+def _finish_bounded_output_captures_after_process(
+    process: subprocess.Popen[bytes],
+    stdout_capture: _BoundedOutputCapture | None,
+    stderr_capture: _BoundedOutputCapture | None,
+    *,
+    process_name: str,
+) -> None:
+    try:
+        _finish_bounded_output_captures(stdout_capture, stderr_capture)
+    except BaseException as capture_error:
+        try:
+            terminated = _reap_timed_out_output_process(process)
+        except BaseException as cleanup_error:
+            capture_error.add_note(f"{process_name} process cleanup failed: {cleanup_error}")
+        else:
+            if not terminated:
+                capture_error.add_note(f"{process_name} process cleanup was incomplete")
+        try:
+            _finish_bounded_output_captures(stdout_capture, stderr_capture)
+        except BaseException as retry_error:
+            capture_error.add_note(f"{process_name} output capture cleanup failed: {retry_error}")
+        raise
+
+
 def _run_bounded_stdout_command(
     argv: list[str] | tuple[str, ...],
     *,
@@ -1475,7 +1504,12 @@ def _run_bounded_stdout_command(
             raise
         else:
             try:
-                _finish_bounded_output_captures(stdout_capture, stderr_capture)
+                _finish_bounded_output_captures_after_process(
+                    proc,
+                    stdout_capture,
+                    stderr_capture,
+                    process_name="bounded command",
+                )
             except (OSError, ValueError) as exc:
                 primary_error = exc
             else:
