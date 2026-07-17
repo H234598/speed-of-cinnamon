@@ -352,6 +352,31 @@ class PathSafetyTest(unittest.TestCase):
             self.assertEqual(list(Path(tmp).glob(".settings.json.*.bak")), [])
             self.assertEqual(list(Path(tmp).glob(".settings.json.*.tmp")), [])
 
+    def test_atomic_write_preserves_target_replacement_after_activation_inspection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            target.write_text("old", encoding="utf-8")
+            replacement = Path(tmp) / "replacement.json"
+            replacement.write_text("racing target", encoding="utf-8")
+            real_stat = os.stat
+            target_stats = 0
+
+            def stat_then_swap(path: object, *args: object, **kwargs: object) -> os.stat_result:
+                nonlocal target_stats
+                if path == target.name and kwargs.get("dir_fd") is not None:
+                    target_stats += 1
+                    if target_stats == 5:
+                        replacement.replace(target)
+                return real_stat(path, *args, **kwargs)
+
+            with mock.patch.object(path_safety.os, "stat", side_effect=stat_then_swap):
+                with self.assertRaisesRegex(OSError, "changed after activation"):
+                    path_safety.write_text_atomically_without_following_symlinks(target, "new")
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "racing target")
+            self.assertTrue(list(Path(tmp).glob(".settings.json.*.bak")))
+            self.assertFalse(list(Path(tmp).glob(".settings.json.*.tmp")))
+
     def test_atomic_write_fails_closed_when_temp_file_cannot_be_made_private(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "settings.json"

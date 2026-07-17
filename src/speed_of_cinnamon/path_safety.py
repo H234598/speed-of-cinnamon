@@ -655,9 +655,12 @@ def _write_atomically_without_following_symlinks(
         activation_completed = True
         temp_name = ""
         try:
-            activation_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            activated_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
         except OSError as stat_error:
             raise OSError(f"{field_name} could not be inspected after activation") from stat_error
+        if temporary_stat is None or not _same_leaf_identity(activated_stat, temporary_stat):
+            raise OSError(f"{field_name} changed after activation")
+        activation_stat = activated_stat
         os.fsync(parent_fd)
         transaction_active = False
         if backup_moved:
