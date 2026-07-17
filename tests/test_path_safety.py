@@ -386,8 +386,15 @@ class PathSafetyTest(unittest.TestCase):
     def test_atomic_write_preserves_primary_error_when_temp_cleanup_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "settings.json"
+            real_rename = path_safety._rename_without_replacing
+
+            def fail_activation(source: object, destination: object, *args: object, **kwargs: object) -> None:
+                if str(source).endswith(".tmp") and destination == target.name:
+                    raise OSError("disk full")
+                real_rename(source, destination, *args, **kwargs)
+
             with (
-                mock.patch.object(path_safety, "_rename_without_replacing", side_effect=OSError("disk full")),
+                mock.patch.object(path_safety, "_rename_without_replacing", side_effect=fail_activation),
                 mock.patch.object(path_safety.os, "unlink", side_effect=OSError("cleanup denied")),
             ):
                 with self.assertRaisesRegex(OSError, "disk full") as caught:
@@ -462,6 +469,36 @@ class PathSafetyTest(unittest.TestCase):
             self.assertEqual(target.read_text(encoding="utf-8"), "racing target")
             self.assertFalse(list(Path(tmp).glob(".settings.json.*.bak")))
 
+    def test_atomic_write_preserves_replaced_temp_after_activation_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            replacement = Path(tmp) / "replacement.tmp"
+            replacement.write_text("racing temp", encoding="utf-8")
+            real_rename = path_safety._rename_without_replacing
+
+            def fail_activation_after_temp_swap(
+                source: object,
+                destination: object,
+                *args: object,
+                **kwargs: object,
+            ) -> None:
+                if str(source).endswith(".tmp") and destination == target.name:
+                    replacement.replace(Path(tmp) / str(source))
+                    raise OSError("activation failed")
+                real_rename(source, destination, *args, **kwargs)
+
+            with mock.patch.object(
+                path_safety,
+                "_rename_without_replacing",
+                side_effect=fail_activation_after_temp_swap,
+            ):
+                with self.assertRaisesRegex(OSError, "activation failed"):
+                    path_safety.write_text_atomically_without_following_symlinks(target, "new")
+
+            leftovers = list(Path(tmp).glob(".settings.json.*.tmp"))
+            self.assertEqual(len(leftovers), 1)
+            self.assertEqual(leftovers[0].read_text(encoding="utf-8"), "racing temp")
+
     def test_atomic_write_does_not_clobber_target_created_during_rollback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "settings.json"
@@ -531,6 +568,7 @@ class PathSafetyTest(unittest.TestCase):
         with (
             mock.patch.object(path_safety, "ensure_directory_without_following_symlinks", return_value=456),
             mock.patch.object(path_safety.os, "open", return_value=123),
+            mock.patch.object(path_safety.os, "fstat", return_value=mock.Mock()),
             mock.patch.object(path_safety.os, "stat", side_effect=FileNotFoundError),
             mock.patch.object(path_safety.os, "fdopen", side_effect=ValueError("bad fd")),
             mock.patch.object(path_safety.os, "unlink"),
@@ -549,6 +587,7 @@ class PathSafetyTest(unittest.TestCase):
         with (
             mock.patch.object(path_safety, "ensure_directory_without_following_symlinks", return_value=456),
             mock.patch.object(path_safety.os, "open", return_value=123),
+            mock.patch.object(path_safety.os, "fstat", return_value=mock.Mock()),
             mock.patch.object(path_safety.os, "stat", side_effect=FileNotFoundError),
             mock.patch.object(path_safety.os, "fdopen", side_effect=KeyboardInterrupt),
             mock.patch.object(path_safety.os, "unlink"),
@@ -703,6 +742,7 @@ class PathSafetyTest(unittest.TestCase):
         with (
             mock.patch.object(path_safety, "ensure_directory_without_following_symlinks", return_value=456),
             mock.patch.object(path_safety.os, "open", return_value=123),
+            mock.patch.object(path_safety.os, "fstat", return_value=mock.Mock()),
             mock.patch.object(path_safety.os, "stat", side_effect=FileNotFoundError),
             mock.patch.object(path_safety.os, "fdopen", side_effect=ValueError("bad fd")),
             mock.patch.object(path_safety.os, "unlink"),
@@ -720,6 +760,7 @@ class PathSafetyTest(unittest.TestCase):
         with (
             mock.patch.object(path_safety, "ensure_directory_without_following_symlinks", return_value=456),
             mock.patch.object(path_safety.os, "open", return_value=123),
+            mock.patch.object(path_safety.os, "fstat", return_value=mock.Mock()),
             mock.patch.object(path_safety.os, "stat", side_effect=FileNotFoundError),
             mock.patch.object(path_safety.os, "fdopen", side_effect=ValueError("bad fd")),
             mock.patch.object(path_safety.os, "unlink"),

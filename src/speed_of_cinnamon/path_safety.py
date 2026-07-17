@@ -500,6 +500,16 @@ def _write_atomically_without_following_symlinks(
             try:
                 fd = os.open(candidate_name, flags, 0o600, dir_fd=parent_fd)
                 temp_name = candidate_name
+                try:
+                    temporary_stat = os.fstat(fd)
+                except (OSError, ValueError) as exc:
+                    try:
+                        os.close(fd)
+                    except OSError as cleanup_error:
+                        _note_cleanup_failure(exc, cleanup_error)
+                    except BaseException as cleanup_error:
+                        _note_cleanup_failure(exc, cleanup_error)
+                    raise OSError(f"{field_name} temporary file identity is unavailable") from exc
                 break
             except FileExistsError:
                 continue
@@ -537,6 +547,10 @@ def _write_atomically_without_following_symlinks(
             os.fsync(handle.fileno())
             temporary_stat = os.fstat(handle.fileno())
         except BaseException as exc:
+            try:
+                temporary_stat = os.fstat(handle.fileno())
+            except (OSError, ValueError) as stat_error:
+                _note_cleanup_failure(exc, stat_error)
             handle_primary_error = exc
             raise
         finally:
@@ -751,8 +765,14 @@ def _write_atomically_without_following_symlinks(
         cleanup_error: OSError | None = None
         if temp_name:
             try:
-                os.unlink(temp_name, dir_fd=parent_fd)
-                os.fsync(parent_fd)
+                if temporary_stat is None:
+                    raise OSError(f"{field_name} temporary file identity is unavailable")
+                if _unlink_leaf_safely(
+                    temp_name,
+                    temporary_stat,
+                    field_name=f"{field_name} temporary file",
+                ):
+                    os.fsync(parent_fd)
             except OSError as exc:
                 cleanup_error = exc
             except BaseException as cleanup_exception:
