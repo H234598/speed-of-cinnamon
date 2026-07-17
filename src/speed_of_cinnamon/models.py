@@ -291,7 +291,7 @@ def _load_model_checksum_cache() -> None:
             max_bytes=MAX_MODEL_CHECKSUM_JSON_BYTES,
             expected_stat=cache_stat,
         )
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, MemoryError):
         _remove_model_checksum_cache_file(cache_path)
         return
     if _contains_escaped_null(text):
@@ -299,7 +299,7 @@ def _load_model_checksum_cache() -> None:
         return
     try:
         payload = json.loads(text)
-    except (json.JSONDecodeError, RecursionError):
+    except (json.JSONDecodeError, RecursionError, MemoryError):
         _remove_model_checksum_cache_file(cache_path)
         return
 
@@ -373,7 +373,7 @@ def _write_model_checksum_cache() -> None:
             rendered,
             field_name="model checksum cache path",
         )
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, MemoryError):
         return
 
 
