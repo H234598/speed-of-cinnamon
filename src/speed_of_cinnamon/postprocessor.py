@@ -818,6 +818,8 @@ def _openai_compatible_headers(api_key: str = "") -> dict[str, str]:
     if _contains_http_header_control_chars(api_key):
         raise PostProcessError("openai-compatible API key contains invalid control character")
     api_key = api_key.strip()
+    if not api_key:
+        api_key = _coerce_environment_text("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY").strip()
     api_key = _assert_openai_compatible_text(api_key, field_name="openai-compatible API key", max_chars=MAX_OPENAI_COMPATIBLE_API_KEY_CHARS)
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"

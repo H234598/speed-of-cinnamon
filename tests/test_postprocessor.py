@@ -1081,6 +1081,14 @@ class PostProcessorTest(unittest.TestCase):
         self.assertEqual(headers["Content-Type"], "application/json")
         self.assertNotIn("Authorization", headers)
 
+    def test_openai_compatible_headers_uses_environment_key_for_whitespace_argument(self) -> None:
+        with mock.patch.dict(
+            "speed_of_cinnamon.postprocessor.os.environ",
+            {"SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY": "environment-secret"},
+        ):
+            headers = _openai_compatible_headers("   ")
+        self.assertEqual(headers["Authorization"], "Bearer environment-secret")
+
     def test_openai_compatible_backend_ignores_invalid_environment_key(self) -> None:
         requests = []
 
