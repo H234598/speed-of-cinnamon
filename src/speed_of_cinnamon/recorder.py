@@ -2060,7 +2060,17 @@ class _RecorderLogCapture:
                     continue
                 payload = chunk[: self._remaining_bytes]
                 try:
-                    self._log_file.write(payload)
+                    offset = 0
+                    while offset < len(payload):
+                        written = self._log_file.write(payload[offset:])
+                        if (
+                            not isinstance(written, int)
+                            or isinstance(written, bool)
+                            or written <= 0
+                            or written > len(payload) - offset
+                        ):
+                            raise OSError("recorder log capture sink made no progress")
+                        offset += written
                 except BaseException:
                     self._remaining_bytes = 0
                     continue

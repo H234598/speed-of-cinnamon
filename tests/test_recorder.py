@@ -1772,6 +1772,28 @@ class RecorderTest(unittest.TestCase):
 
             self.assertEqual(log_path.read_bytes(), b"start012")
 
+    def test_recorder_log_capture_completes_partial_sink_writes(self) -> None:
+        class PartialOutput:
+            def __init__(self) -> None:
+                self.payload = bytearray()
+
+            def write(self, payload: bytes) -> int:
+                self.payload.extend(payload[:1])
+                return 1
+
+            def flush(self) -> None:
+                return None
+
+            def close(self) -> None:
+                return None
+
+        output_file = PartialOutput()
+        capture = recorder_module._RecorderLogCapture(output_file, initial_size=0, max_bytes=3)  # type: ignore[arg-type]
+        os.write(capture.fileno(), b"abc")
+        capture.finish()
+
+        self.assertEqual(bytes(output_file.payload), b"abc")
+
     def test_cleanup_recording_temp_file_uses_proc_fd_stat_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             temp_path = Path(tmp) / "sample.trimmed.flac"
