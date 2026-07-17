@@ -11674,6 +11674,40 @@ class CliTest(unittest.TestCase):
         self.assertEqual(final_state.status, "idle")
         self.assertEqual(final_state.audio_path, "")
 
+    def test_cancel_cleanup_failure_preserves_transcript_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            transcripts_root = tmp_path / "speed-of-cinnamon" / "transcripts"
+            transcripts_root.mkdir(parents=True)
+            transcript = transcripts_root / "recorded.txt"
+            transcript.write_text("already inserted", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(
+                RecordingState(
+                    status="error",
+                    transcript="already inserted",
+                    transcript_path=str(transcript),
+                    inserted=True,
+                )
+            )
+            args = self._build_finalize_args(insert_method="none")
+            args.state_file = str(state_file)
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli._remove_transcript_file", return_value=False),
+            ):
+                result = cli.command_cancel(args)
+
+            final_state = store.read()
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(final_state.status, "error")
+        self.assertEqual(final_state.transcript, "already inserted")
+        self.assertEqual(final_state.transcript_path, str(transcript))
+        self.assertTrue(final_state.inserted)
+
     def test_cancel_persists_redacted_error_state_when_final_idle_write_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
