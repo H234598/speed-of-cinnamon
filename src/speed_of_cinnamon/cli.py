@@ -1370,6 +1370,8 @@ def _process_transcript(
         getattr(args, "openai_compatible_api_key", ""),
         getattr(args, "openai_compatible_flex_processing", True),
     )
+    if text.strip() and _coerce_bool(getattr(args, "soften_profanity", False), field_name="soften_profanity"):
+        text = soften_profanity_text(text)
     text, final_security_post_processing = _apply_security_mask_only(text)
     return text, _merge_security_post_processing(security_post_processing, final_security_post_processing)
 
@@ -4518,9 +4520,6 @@ def finalize_recording(
             security_post_processing = _empty_security_post_processing()
         else:
             text, security_post_processing = _process_transcript(text, args, language)
-        soften_profanity = _coerce_bool(getattr(args, "soften_profanity", False), field_name="soften_profanity")
-        if text.strip() and soften_profanity:
-            text = soften_profanity_text(text)
         stored_text_path, transcript_encryption = _write_stored_transcript(text_path, text.strip() + "\n", args)
         written_text_path = stored_text_path
         append_space = _coerce_bool(args.append_space, field_name="append_space")
@@ -6049,8 +6048,6 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         security_post_processing = _empty_security_post_processing()
     else:
         text, security_post_processing = _process_transcript(text, args, args.language)
-    if text.strip() and _coerce_bool(getattr(args, "soften_profanity", False), field_name="soften_profanity"):
-        text = soften_profanity_text(text)
     stored_text_path, transcript_encryption = _write_stored_transcript(text_path, text.strip() + "\n", args)
     keep_transcripts = _coerce_int(
         getattr(args, "keep_transcripts", DEFAULT_KEEP_TRANSCRIPTS),

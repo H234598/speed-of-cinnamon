@@ -2498,6 +2498,41 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["transcript"], "Das Wort [redacted blacklist item] steht im Protokoll.")
         self.assertEqual(payload["security"]["blacklist_hits"], 1)
 
+    @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="foo")
+    @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
+    def test_transcribe_file_masks_sensitive_text_introduced_by_profanity_replacement(
+        self,
+        mocked_validate: mock.Mock,
+        _mock_transcribe: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp, "XDG_STATE_HOME": tmp}):
+                profanity_path = cli._ensure_editable_profanity_filter_file()
+                profanity_path.write_text("foo -> token: secret\n", encoding="utf-8")
+                mocked_validate.return_value = audio
+                stdout = io.StringIO()
+                with redirect_stdout(stdout):
+                    code = cli.run([
+                        "transcribe-file",
+                        str(audio),
+                        "--transcriber",
+                        "command",
+                        "--transcriber-command",
+                        "printf foo",
+                        "--post-process-backend",
+                        "none",
+                        "--soften-profanity",
+                        "--confirm-plaintext-output",
+                        "--json",
+                    ])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["transcript"], "[redacted token]")
+        self.assertEqual(payload["security"]["redacted_words"], 1)
+
     @mock.patch("speed_of_cinnamon.cli._apply_security_mask_only")
     @mock.patch("speed_of_cinnamon.cli._apply_security_post_processing")
     @mock.patch("speed_of_cinnamon.cli.post_process_text")
