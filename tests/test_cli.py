@@ -7806,6 +7806,20 @@ class CliTest(unittest.TestCase):
 
         mocked_unlink.assert_called_once_with(456, lock_path, expected_stat=current)
 
+    def test_finalization_lock_release_when_current_identity_is_unreadable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            identity = cli._finalization_lock_identity_for_pid(os.getpid())
+            self.assertIsNotNone(identity)
+            lock_path.write_text(f"{os.getpid()}\n{identity}\n", encoding="ascii")
+            lock_path.chmod(0o600)
+
+            with mock.patch("speed_of_cinnamon.cli._finalization_lock_identity_for_pid", return_value=None):
+                cli._release_finalization_lock(lock_path)
+
+            self.assertFalse(lock_path.exists())
+
     def test_finalization_lock_acquire_fsyncs_lock_file(self) -> None:
         fsync_modes: list[int] = []
         real_fsync = os.fsync
@@ -11316,6 +11330,30 @@ class CliTest(unittest.TestCase):
         mocked_stop.assert_called_once_with(23456, expected_process_identity="proc-identity")
         self.assertEqual(artifacts, [])
 
+    def test_start_preserves_interrupt_and_cleans_artifacts_when_state_write_is_interrupted_and_process_is_gone(self) -> None:
+        proc = mock.Mock()
+        proc.pid = 23456
+        proc.poll.side_effect = [None, 1]
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.choose_recorder", return_value=RecorderCommand("test-recorder", [])),
+                mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=proc),
+                mock.patch("speed_of_cinnamon.cli.time.sleep"),
+                mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value="proc-identity"),
+                mock.patch("speed_of_cinnamon.cli.stop_process", return_value=False) as mocked_stop,
+                mock.patch("speed_of_cinnamon.cli.StateStore.write", side_effect=KeyboardInterrupt("state interrupted")),
+            ):
+                with self.assertRaises(KeyboardInterrupt) as context:
+                    cli.run(["start", "--state-file", str(state_file)])
+            artifacts = list(recordings.glob("*")) if recordings.exists() else []
+
+        self.assertEqual(str(context.exception), "state interrupted")
+        mocked_stop.assert_called_once_with(23456, expected_process_identity="proc-identity")
+        self.assertEqual(artifacts, [])
+
     def test_start_preserves_artifacts_when_state_write_cleanup_cannot_stop_recorder(self) -> None:
         proc = mock.Mock()
         proc.pid = 23456
@@ -11342,6 +11380,46 @@ class CliTest(unittest.TestCase):
         self.assertIn("could not be stopped safely", payload["error"])
         mocked_stop.assert_called_once_with(23456, expected_process_identity="proc-identity")
         self.assertTrue(artifacts)
+
+    def test_start_retains_lifecycle_lock_when_state_write_cleanup_cannot_stop_recorder(self) -> None:
+        proc = mock.Mock()
+        proc.pid = 23456
+        proc.poll.return_value = None
+
+        def fake_lock_identity(pid: int) -> str | None:
+            return "proc-identity" if pid == proc.pid else "cli-identity"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            first_stdout = io.StringIO()
+            second_stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.choose_recorder", return_value=RecorderCommand("test-recorder", [])) as mocked_choose,
+                mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=proc) as mocked_start,
+                mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value="proc-identity"),
+                mock.patch("speed_of_cinnamon.cli._finalization_lock_identity_for_pid", side_effect=fake_lock_identity),
+                mock.patch("speed_of_cinnamon.cli._process_is_running", side_effect=lambda pid: pid == proc.pid),
+                mock.patch("speed_of_cinnamon.cli.stop_process", return_value=False),
+                mock.patch("speed_of_cinnamon.cli.time.sleep"),
+                mock.patch("speed_of_cinnamon.cli.StateStore.write", side_effect=RuntimeError("state write failed")),
+            ):
+                with redirect_stdout(first_stdout):
+                    first_code = cli.run(["start", "--state-file", str(state_file), "--json"])
+                with redirect_stdout(second_stdout):
+                    second_code = cli.run(["start", "--state-file", str(state_file), "--json"])
+            first_payload = json.loads(first_stdout.getvalue())
+            second_payload = json.loads(second_stdout.getvalue())
+            lock_path = cli._finalization_lock_path(state_file)
+            lock_lines = lock_path.read_text(encoding="ascii").splitlines()
+
+        self.assertEqual(first_code, 1)
+        self.assertIn("could not be stopped safely", first_payload["error"])
+        self.assertEqual(second_code, 0)
+        self.assertEqual(second_payload["status"], "finalizing")
+        self.assertEqual(lock_lines, ["23456", "proc-identity"])
+        mocked_choose.assert_called_once()
+        mocked_start.assert_called_once()
 
     def test_start_preserves_artifacts_when_process_identity_cleanup_fails(self) -> None:
         proc = mock.Mock()

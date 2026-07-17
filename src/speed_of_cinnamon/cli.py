@@ -642,7 +642,7 @@ def _release_finalization_lock(lock_path: Path | None) -> None:
                 return
             owner_identity = _read_finalization_lock_identity(lock_path)
             current_identity = _finalization_lock_identity_for_pid(os.getpid())
-            if owner_identity is not None and owner_identity != current_identity:
+            if owner_identity is not None and current_identity is not None and owner_identity != current_identity:
                 return
             _unlink_finalization_lock_at(parent_fd, lock_path, expected_stat=current)
         except BaseException:
@@ -652,6 +652,48 @@ def _release_finalization_lock(lock_path: Path | None) -> None:
             os.close(parent_fd)
         except BaseException:
             pass
+
+
+def _retain_finalization_lock_for_process(
+    lock_path: Path | None,
+    pid: int,
+    process_identity: str | None = None,
+) -> bool:
+    if lock_path is None or isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return False
+    if process_identity is not None:
+        if isinstance(process_identity, bool) or not isinstance(process_identity, str):
+            return False
+        process_identity = process_identity.strip()
+        if not process_identity or "\n" in process_identity or "\r" in process_identity:
+            return False
+        try:
+            process_identity.encode("ascii")
+        except UnicodeEncodeError:
+            return False
+    try:
+        owner_pid = _read_finalization_lock_pid(lock_path)
+        if owner_pid != os.getpid():
+            return False
+        owner_identity = _read_finalization_lock_identity(lock_path)
+        current_identity = _finalization_lock_identity_for_pid(os.getpid())
+        if owner_identity is not None and owner_identity != current_identity:
+            return False
+        payload = f"{pid}\n"
+        if process_identity:
+            payload += f"{process_identity}\n"
+        write_text_atomically_without_following_symlinks(
+            lock_path,
+            payload,
+            field_name="finalization lock",
+            encoding="ascii",
+        )
+        if _read_finalization_lock_pid(lock_path) != pid:
+            return False
+        retained_identity = _read_finalization_lock_identity(lock_path)
+        return retained_identity == process_identity if process_identity else retained_identity is None
+    except (OSError, RuntimeError, UnicodeError, ValueError):
+        return False
 
 
 def _is_unsafe_env_var(name: str) -> bool:
@@ -3867,7 +3909,12 @@ def prune_recording_groups(
     return result
 
 
-def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[str, object]:
+def _command_start_locked(
+    args: argparse.Namespace,
+    store: StateStore,
+    *,
+    finalization_lock_path: Path | None = None,
+) -> dict[str, object]:
     current = store.read()
     _raise_if_state_unreadable(current)
     if current.status == "finalizing":
@@ -4005,11 +4052,23 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
                             artifacts_safe_to_remove = False
                             primary_error.add_note("recorder process could not be stopped safely")
                         else:
-                            artifacts_safe_to_remove = False
+                            artifacts_safe_to_remove = process_gone
                             if not process_gone:
                                 primary_error.add_note("recorder process could not be stopped safely")
                             else:
                                 primary_error.add_note("recorder process stop was not confirmed")
+            if not artifacts_safe_to_remove:
+                try:
+                    retained = _retain_finalization_lock_for_process(
+                        finalization_lock_path,
+                        process.pid,
+                        expected_process_identity,
+                    )
+                except BaseException as lock_error:
+                    retained = False
+                    primary_error.add_note(f"recorder lifecycle lock retention failed: {lock_error}")
+                if not retained:
+                    primary_error.add_note("recorder lifecycle lock could not be retained")
         if artifacts_safe_to_remove:
             try:
                 if not cleanup_started_artifacts():
@@ -4127,9 +4186,22 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
         try:
             stopped = stop_process(proc.pid, expected_process_identity=process_identity)
         except Exception as cleanup_error:
+            if not _retain_finalization_lock_for_process(
+                finalization_lock_path,
+                proc.pid,
+                process_identity,
+            ):
+                cleanup_error.add_note("recorder lifecycle lock could not be retained")
             raise RuntimeError(f"{state_error}; recorder process cleanup failed") from cleanup_error
         if not stopped and not recorder_process_is_gone():
-            raise RuntimeError(f"{state_error}; recorder process could not be stopped safely") from state_error
+            error = RuntimeError(f"{state_error}; recorder process could not be stopped safely")
+            if not _retain_finalization_lock_for_process(
+                finalization_lock_path,
+                proc.pid,
+                process_identity,
+            ):
+                error.add_note("recorder lifecycle lock could not be retained")
+            raise error from state_error
         if not cleanup_started_artifacts():
             raise RuntimeError(f"{state_error}; recorder artifacts could not be cleaned") from state_error
         raise
@@ -4169,7 +4241,7 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
             "message": "recording lifecycle in progress; wait for completion",
         }
     try:
-        return _command_start_locked(args, store)
+        return _command_start_locked(args, store, finalization_lock_path=lock_path)
     finally:
         _release_finalization_lock(lock_path)
 
