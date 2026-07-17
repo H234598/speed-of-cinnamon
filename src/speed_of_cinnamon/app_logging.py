@@ -51,6 +51,15 @@ def _note_cleanup_failure(primary: BaseException, cleanup_error: BaseException) 
     primary.add_note(f"log cleanup failed: {cleanup_error}")
 
 
+def _fsync_fd(fd: int) -> None:
+    while True:
+        try:
+            os.fsync(fd)
+            return
+        except InterruptedError:
+            continue
+
+
 _DAILY_LOG_RE = re.compile(r"^speed-of-cinnamon-(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.log$")
 _DAILY_GZ_RE = re.compile(r"^speed-of-cinnamon-(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.log\.gz$")
 _MONTHLY_GZ_RE = re.compile(r"^speed-of-cinnamon-(\d{4}-\d{2})\.log\.gz$")
@@ -818,7 +827,7 @@ def _unlink_log_temp(
                 if not _same_log_temp_identity(claimed_stat, expected_stat):
                     raise RuntimeError("log temporary file changed before cleanup")
                 os.unlink(cleanup_name, dir_fd=parent_fd)
-                os.fsync(parent_fd)
+                _fsync_fd(parent_fd)
             except BaseException as exc:
                 try:
                     _rename_without_replacing(
@@ -827,7 +836,7 @@ def _unlink_log_temp(
                         directory_fd=parent_fd,
                         field_name="log temporary file cleanup restore",
                     )
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                 except BaseException as restore_error:
                     _note_cleanup_failure(exc, restore_error)
                 raise
@@ -868,7 +877,7 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
                 except FileExistsError:
                     continue
                 candidate_linked = True
-                os.fsync(parent_fd)
+                _fsync_fd(parent_fd)
                 current_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
                 if (
                     current_stat.st_dev != rotation_stat.st_dev
@@ -905,7 +914,7 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
                 if not _same_log_inode(claimed_source_stat, rotation_stat):
                     raise RuntimeError("active log changed during rotation")
                 os.unlink(source_cleanup_name, dir_fd=parent_fd)
-                os.fsync(parent_fd)
+                _fsync_fd(parent_fd)
             except BaseException as exc:
                 primary_error = exc
                 if source_claimed and source_cleanup_name is not None:
@@ -923,7 +932,7 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
                                 directory_fd=parent_fd,
                                 field_name="active log cleanup restore",
                             )
-                            os.fsync(parent_fd)
+                            _fsync_fd(parent_fd)
                         except BaseException as cleanup_error:
                             _note_cleanup_failure(primary_error, cleanup_error)
                 if candidate_linked and not source_unlink_attempted:
@@ -935,7 +944,7 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
                             and candidate_stat.st_mode == rotation_stat.st_mode
                         ):
                             os.unlink(candidate.name, dir_fd=parent_fd)
-                            os.fsync(parent_fd)
+                            _fsync_fd(parent_fd)
                     except FileNotFoundError:
                         pass
                     except BaseException as cleanup_error:
@@ -1032,7 +1041,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
                 if archive_block_error is not None:
                     raise archive_block_error
                 raw_output.flush()
-                os.fsync(raw_output.fileno())
+                _fsync_fd(raw_output.fileno())
                 if not _log_temp_name_matches_fd(parent_fd, temp_name, raw_output.fileno()):
                     raise RuntimeError("monthly log temporary archive was replaced")
             except BaseException as exc:
@@ -1090,7 +1099,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
                         ):
                             raise RuntimeError("monthly log archive disappeared before activation")
                         archive_backup_moved = True
-                        os.fsync(parent_fd)
+                        _fsync_fd(parent_fd)
                         break
                     except BaseException as exc:
                         if not archive_backup_moved:
@@ -1109,7 +1118,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
                                             candidate_stat,
                                             field_name="monthly log archive backup cleanup",
                                         ):
-                                            os.fsync(parent_fd)
+                                            _fsync_fd(parent_fd)
                                 except FileNotFoundError:
                                     pass
                                 except BaseException as cleanup_error:
@@ -1126,7 +1135,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
             )
             temp_name = ""
             archive_activation_stat = os.stat(archive.name, dir_fd=parent_fd, follow_symlinks=False)
-            os.fsync(parent_fd)
+            _fsync_fd(parent_fd)
             source_cleanup_errors: list[BaseException] = []
             for path in paths:
                 try:
@@ -1157,7 +1166,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
                             field_name="monthly log source",
                         )
                         archive_rollback_safe = False
-                        os.fsync(parent_fd)
+                        _fsync_fd(parent_fd)
                         moved_stat = _assert_regular_unlinked_file(
                             path.with_name(cleanup_name),
                             field_name="monthly log source",
@@ -1202,7 +1211,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
                             field_name="monthly log source quarantine",
                         ):
                             raise RuntimeError("monthly log source quarantine disappeared before cleanup")
-                        os.fsync(parent_fd)
+                        _fsync_fd(parent_fd)
                     except OSError as cleanup_error:
                         archive_rollback_safe = False
                         if not isinstance(delete_error, OSError):
@@ -1225,7 +1234,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
                         source_cleanup_errors.append(delete_error)
                     continue
                 try:
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                 except BaseException as source_error:
                     archive_rollback_safe = False
                     source_cleanup_errors.append(source_error)
@@ -1285,7 +1294,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
                                 field_name="monthly log archive rollback",
                             ):
                                 raise RuntimeError("monthly log archive disappeared during rollback")
-                            os.fsync(parent_fd)
+                            _fsync_fd(parent_fd)
                     if archive_backup_moved and archive_backup_name is not None:
                         try:
                             os.stat(archive.name, dir_fd=parent_fd, follow_symlinks=False)
@@ -1303,7 +1312,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
                                 directory_fd=parent_fd,
                                 field_name="monthly log archive",
                             )
-                            os.fsync(parent_fd)
+                            _fsync_fd(parent_fd)
                         else:
                             raise RuntimeError("monthly log archive target exists during rollback")
                 except BaseException as rollback_error:
@@ -1456,7 +1465,7 @@ def _unlink_log_file_with_parent_fsync(path: Path, expected_stat: os.stat_result
                 if not stat_module.S_ISREG(claimed_stat.st_mode) or not _same_log_claim_identity(claimed_stat, current_stat):
                     raise RuntimeError(f"{field_name} changed before deletion: {path}")
                 os.unlink(cleanup_name, dir_fd=parent_fd)
-                os.fsync(parent_fd)
+                _fsync_fd(parent_fd)
             except BaseException as exc:
                 try:
                     _rename_without_replacing(
@@ -1465,7 +1474,7 @@ def _unlink_log_file_with_parent_fsync(path: Path, expected_stat: os.stat_result
                         directory_fd=parent_fd,
                         field_name=f"{field_name} cleanup restore",
                     )
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                 except BaseException as restore_error:
                     _note_cleanup_failure(exc, restore_error)
                 raise
@@ -1546,7 +1555,7 @@ def _gzip_file(source: Path, target: Path) -> None:
                 if not _same_target_inode(claimed_stat, target_backup_stat):
                     raise RuntimeError("log target backup changed before cleanup")
                 os.unlink(cleanup_name, dir_fd=parent_fd)
-                os.fsync(parent_fd)
+                _fsync_fd(parent_fd)
             except BaseException as exc:
                 try:
                     _rename_without_replacing(
@@ -1555,7 +1564,7 @@ def _gzip_file(source: Path, target: Path) -> None:
                         directory_fd=parent_fd,
                         field_name="log target backup restore",
                     )
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                 except BaseException as restore_error:
                     _note_cleanup_failure(exc, restore_error)
                 raise
@@ -1604,7 +1613,7 @@ def _gzip_file(source: Path, target: Path) -> None:
                     field_name="log target rollback",
                 ):
                     raise RuntimeError("log target disappeared during rollback")
-                os.fsync(parent_fd)
+                _fsync_fd(parent_fd)
         if target_backup_created:
             if not activation_visible:
                 if target_removed:
@@ -1621,14 +1630,14 @@ def _gzip_file(source: Path, target: Path) -> None:
                         target_backup_created = False
                         target_backup_name = ""
                         target_removed = False
-                        os.fsync(parent_fd)
+                        _fsync_fd(parent_fd)
                     else:
                         raise RuntimeError("log target exists during activation rollback")
                 else:
                     _unlink_target_backup()
                     target_backup_created = False
                     target_backup_name = ""
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
             else:
                 try:
                     os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
@@ -1643,7 +1652,7 @@ def _gzip_file(source: Path, target: Path) -> None:
                     target_backup_created = False
                     target_backup_name = ""
                     target_removed = False
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                 else:
                     raise RuntimeError("log target exists during activation rollback")
 
@@ -1770,7 +1779,7 @@ def _gzip_file(source: Path, target: Path) -> None:
             if block_error is not None:
                 raise block_error
             raw_output.flush()
-            os.fsync(raw_output.fileno())
+            _fsync_fd(raw_output.fileno())
             if not _log_temp_name_matches_fd(parent_fd, temp_name, raw_output.fileno()):
                 raise RuntimeError("log temporary archive was replaced")
         except BaseException as exc:
@@ -1841,7 +1850,7 @@ def _gzip_file(source: Path, target: Path) -> None:
                                 candidate_stat,
                                 field_name="log target backup cleanup",
                             ):
-                                os.fsync(parent_fd)
+                                _fsync_fd(parent_fd)
                     except FileNotFoundError:
                         pass
                     except BaseException as cleanup_error:
@@ -1849,7 +1858,7 @@ def _gzip_file(source: Path, target: Path) -> None:
                     raise
             if not target_backup_created:
                 raise RuntimeError("failed to allocate log target backup")
-            os.fsync(parent_fd)
+            _fsync_fd(parent_fd)
         target_activation_attempted = True
         if target_backup_created:
             current_target_stat = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
@@ -1869,13 +1878,13 @@ def _gzip_file(source: Path, target: Path) -> None:
         )
         temp_name = ""
         target_activation_stat = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
-        os.fsync(parent_fd)
+        _fsync_fd(parent_fd)
         if target_backup_created:
             _unlink_target_backup()
             target_backup_created = False
             target_backup_name = ""
             target_transaction_active = False
-            os.fsync(parent_fd)
+            _fsync_fd(parent_fd)
         target_transaction_active = False
         _assert_same_log_file_identity(source, source_stat, field_name="log source file")
         _unlink_log_file_with_parent_fsync(source, source_stat, field_name="log source file")

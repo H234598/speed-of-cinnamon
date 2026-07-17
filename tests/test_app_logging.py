@@ -18,6 +18,12 @@ from speed_of_cinnamon import app_logging
 
 
 class AppLoggingTest(unittest.TestCase):
+    def test_fsync_retries_interrupted_calls(self) -> None:
+        with mock.patch.object(app_logging.os, "fsync", side_effect=[InterruptedError(), None]) as mocked_fsync:
+            app_logging._fsync_fd(123)
+
+        self.assertEqual(mocked_fsync.call_args_list, [mock.call(123), mock.call(123)])
+
     def test_sanitize_error_message_redacts_tokens_and_commands(self) -> None:
         self.assertEqual(
             app_logging.sanitize_error_message("Bearer sk-secret token=abc123", max_chars=120),
