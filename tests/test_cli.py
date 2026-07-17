@@ -8257,7 +8257,6 @@ class CliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
-            transcript_root = tmp_path / "speed-of-cinnamon" / "transcripts"
             recordings_root.mkdir(parents=True)
             audio = recordings_root / "recording.wav"
             log = recordings_root / "recording.log"
