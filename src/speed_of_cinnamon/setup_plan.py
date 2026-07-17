@@ -143,12 +143,17 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
             value in {"whisper-cpp", "faster-whisper", "auto"}
             and ("model not found" in detail_lower or "model path" in detail_lower)
         ):
+            model_download_command = (
+                "speed-of-cinnamon download-model base --json"
+                if value == "whisper-cpp"
+                else "speed-of-cinnamon download-model ct2-base-int8 --json"
+            )
             _add_step(
                 steps,
                 "voice-model",
                 "Download or select a voice model",
                 detail,
-                ["speed-of-cinnamon download-model ct2-base-int8 --json"],
+                [model_download_command],
             )
         elif language_error:
             _add_step(steps, "language", "Configure a valid language code", detail)

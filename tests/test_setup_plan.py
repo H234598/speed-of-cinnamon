@@ -220,6 +220,8 @@ class SetupPlanTest(unittest.TestCase):
         }
         plan = build_setup_plan(payload)
         self.assertEqual(plan["steps"][0]["id"], "voice-model")
+        self.assertIn("speed-of-cinnamon download-model base --json", plan["commands"])
+        self.assertNotIn("speed-of-cinnamon download-model ct2-base-int8 --json", plan["commands"])
 
     def test_invalid_language_gets_language_step(self) -> None:
         payload = {
