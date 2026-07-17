@@ -66,6 +66,15 @@ def _fsync_fd(fd: int) -> None:
             continue
 
 
+def _flock_retry(fd: int, operation: int) -> None:
+    while True:
+        try:
+            fcntl.flock(fd, operation)
+            return
+        except InterruptedError:
+            continue
+
+
 @contextmanager
 def _locked_model_operation(root: Path) -> Iterator[None]:
     if isinstance(root, bool) or not isinstance(root, Path):
@@ -105,7 +114,7 @@ def _locked_model_operation(root: Path) -> Iterator[None]:
                 field_name="model operation lock file",
                 require_private_mode=True,
             )
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            _flock_retry(lock_fd, fcntl.LOCK_EX)
             assert_fd_is_regular_private_file(
                 lock_fd,
                 field_name="model operation lock file",
@@ -121,7 +130,7 @@ def _locked_model_operation(root: Path) -> Iterator[None]:
         cleanup_errors: list[BaseException] = []
         if lock_fd is not None:
             try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                _flock_retry(lock_fd, fcntl.LOCK_UN)
             except BaseException as cleanup_error:
                 cleanup_errors.append(cleanup_error)
             try:

@@ -64,6 +64,24 @@ def file_sha1s_for(files: tuple[str, ...], data: bytes) -> tuple[tuple[str, str]
 
 
 class ModelsTest(unittest.TestCase):
+    def test_model_operation_lock_retries_interrupted_exclusive_lock(self) -> None:
+        operations: list[int] = []
+
+        def interrupt_first_lock(_fd: int, operation: int) -> None:
+            operations.append(operation)
+            if len(operations) == 1:
+                raise InterruptedError()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(models.fcntl, "flock", side_effect=interrupt_first_lock):
+                with models._locked_model_operation(Path(tmp) / "models"):
+                    pass
+
+        self.assertEqual(
+            operations,
+            [models.fcntl.LOCK_EX, models.fcntl.LOCK_EX, models.fcntl.LOCK_UN],
+        )
+
     def test_fsync_retries_interrupted_calls(self) -> None:
         with mock.patch.object(models.os, "fsync", side_effect=[InterruptedError(), None]) as mocked_fsync:
             models._fsync_fd(123)
