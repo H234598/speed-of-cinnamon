@@ -1197,7 +1197,7 @@ def _secret_tool_process_group_has_live_descendants(process_group_id: int) -> bo
             raw = proc_entry.joinpath("stat").read_text(encoding="ascii").strip()
         except FileNotFoundError:
             continue
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             scan_incomplete = True
             continue
         try:
@@ -1225,7 +1225,7 @@ def _secret_tool_leader_is_gone_or_zombie(process_id: int) -> bool:
         process_state = raw[close + 2 :].split()[0]
     except FileNotFoundError:
         return True
-    except (OSError, IndexError, ValueError):
+    except (OSError, UnicodeDecodeError, IndexError, ValueError):
         return False
     return process_state in {"Z", "X", "x"}
 

@@ -1213,6 +1213,19 @@ class ArtifactCryptoTest(unittest.TestCase):
         process.kill.assert_not_called()
         process.wait.assert_not_called()
 
+    def test_secret_tool_process_state_decode_errors_fail_closed(self) -> None:
+        decode_error = UnicodeDecodeError("ascii", b"\xff", 0, 1, "invalid byte")
+        proc_entry = mock.Mock()
+        proc_entry.name = "1234"
+        stat_entry = mock.Mock()
+        stat_entry.read_text.side_effect = decode_error
+        proc_entry.joinpath.return_value = stat_entry
+
+        with mock.patch.object(artifact_crypto.Path, "iterdir", return_value=(proc_entry,)):
+            self.assertIsNone(artifact_crypto._secret_tool_process_group_has_live_descendants(1234))
+        with mock.patch.object(artifact_crypto.Path, "read_text", side_effect=decode_error):
+            self.assertFalse(artifact_crypto._secret_tool_leader_is_gone_or_zombie(1234))
+
     def test_secret_tool_rejects_oversized_output(self) -> None:
         fake_proc_holder: dict[str, object] = {}
 
