@@ -10421,6 +10421,7 @@ class CliTest(unittest.TestCase):
                     audio_path=str(audio),
                     log_path=str(log),
                     error="cleanup failed",
+                    inserted=True,
                 )
             )
             stdout = io.StringIO()
@@ -10441,6 +10442,7 @@ class CliTest(unittest.TestCase):
         self.assertIn("identity", payload["message"])
         self.assertEqual(final_state.status, "error")
         self.assertEqual(final_state.process_identity, "owner-identity")
+        self.assertTrue(final_state.inserted)
         self.assertTrue(audio_exists)
         self.assertTrue(log_exists)
         mocked_stop.assert_not_called()

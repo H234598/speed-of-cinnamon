@@ -5131,7 +5131,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 store.update(
                     status=state.status,
                     error=error_text,
-                    inserted=False,
+                    inserted=state.inserted,
                 )
                 return {"status": state.status, "message": error_text, "error": error_text}
             stopped = stop_process(
@@ -5143,7 +5143,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 store.update(
                     status=state.status,
                     error=error_text,
-                    inserted=False,
+                    inserted=state.inserted,
                 )
                 return {"status": state.status, "message": error_text, "error": error_text}
 
