@@ -80,6 +80,20 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         print_result.assert_called_once()
 
+    def test_run_preserves_json_output_when_logging_setup_fails(self) -> None:
+        stdout = io.StringIO()
+        with (
+            mock.patch.object(cli, "configure_logging", side_effect=RuntimeError("log setup failed")),
+            mock.patch.object(cli, "log_event"),
+            redirect_stdout(stdout),
+        ):
+            code = cli.run(["status", "--json"])
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["error"], "log setup failed")
+
     def test_temporary_benchmark_path_preserves_result_on_fd_close_failure(self) -> None:
         file_stat = os.stat(__file__)
         with (

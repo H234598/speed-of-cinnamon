@@ -6418,8 +6418,8 @@ def run(argv: list[str] | None = None) -> int:
     json_output = False
     command_name = str(getattr(args, "command", "unknown"))
     try:
-        configure_logging(getattr(args, "log_level", DEFAULT_LOG_LEVEL))
         json_output = _coerce_bool(getattr(args, "json", False), field_name="json")
+        configure_logging(getattr(args, "log_level", DEFAULT_LOG_LEVEL))
         log_event("info", "command_start", command=command_name)
         payload = _redact_error_payload(args.handler(args))
         status = str(payload.get("status", "ok"))
