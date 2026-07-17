@@ -433,6 +433,10 @@ class NextVersionTest(unittest.TestCase):
         with self.assertRaises(next_version.UserInputError):
             next_version.parse_version("1.-2.3")
 
+    def test_parse_version_rejects_integer_digit_limit_overflow(self) -> None:
+        with self.assertRaises(next_version.UserInputError):
+            next_version.parse_version(("9" * 5_000) + ".0.0")
+
     def test_parse_version_rejects_double_prefix(self) -> None:
         with self.assertRaises(next_version.UserInputError):
             next_version.parse_version("Vv1.2.3")

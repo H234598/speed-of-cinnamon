@@ -62,7 +62,10 @@ def parse_version(value: str) -> tuple[int, int, int]:
     match = VERSION_PATTERN.fullmatch(value)
     if match is None:
         raise UserInputError(f"invalid version format: {value}")
-    major, minor, patch = (int(x) for x in match.groups())
+    try:
+        major, minor, patch = (int(x) for x in match.groups())
+    except ValueError as exc:
+        raise UserInputError(f"invalid version format: {value}") from exc
     return _assert_version_tuple((major, minor, patch))
 
 
