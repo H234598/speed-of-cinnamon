@@ -618,8 +618,12 @@ def _write_atomically_without_following_symlinks(
                                     backup_name = candidate_name
                                     backup_moved = True
                                 else:
-                                    os.unlink(candidate_name, dir_fd=parent_fd)
-                                    os.fsync(parent_fd)
+                                    if _unlink_leaf_safely(
+                                        candidate_name,
+                                        candidate_stat,
+                                        field_name=f"{field_name} recovery backup candidate",
+                                    ):
+                                        os.fsync(parent_fd)
                         except FileNotFoundError:
                             pass
                         except BaseException as cleanup_error:
@@ -672,7 +676,12 @@ def _write_atomically_without_following_symlinks(
                                 and target_stat is not None
                                 and _same_leaf_identity(claimed_stat, target_stat)
                             ):
-                                os.unlink(cleanup_name, dir_fd=parent_fd)
+                                if not _unlink_leaf_safely(
+                                    cleanup_name,
+                                    claimed_stat,
+                                    field_name=f"{field_name} recovery backup cleanup",
+                                ):
+                                    raise OSError(f"{field_name} recovery backup disappeared during cleanup")
                                 os.fsync(parent_fd)
                             else:
                                 _rename_without_replacing(

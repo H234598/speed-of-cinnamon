@@ -274,7 +274,7 @@ class PathSafetyTest(unittest.TestCase):
             with mock.patch.object(
                 path_safety.secrets,
                 "token_hex",
-                side_effect=["temp", "fixed", "free", "target-cleanup", "cleanup"],
+                side_effect=["temp", "fixed", "free", "target-cleanup", "cleanup", "final-cleanup"],
             ):
                 path_safety.write_text_atomically_without_following_symlinks(target, "new")
 
