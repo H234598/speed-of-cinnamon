@@ -2719,6 +2719,12 @@ Source #13
 
         self.assertFalse(result)
 
+    def test_recording_process_stat_decode_errors_fail_closed(self) -> None:
+        error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid process name")
+        with mock.patch.object(recorder_module.Path, "read_text", side_effect=error):
+            self.assertIsNone(recorder_module._recording_process_stat_fields(1234))
+            self.assertIsNone(recorder_module._recording_process_identity_for_pid(1234))
+
     def test_process_group_scan_ignores_foreign_session(self) -> None:
         entries = (Path("/proc/100"),)
         with (

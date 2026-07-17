@@ -472,7 +472,7 @@ def _recording_process_stat_fields(pid: int) -> list[str] | None:
         return None
     try:
         raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").strip()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
     try:
         close = raw.rindex(")")
@@ -487,7 +487,7 @@ def _recording_process_identity_for_pid(pid: int) -> str | None:
         return None
     try:
         boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
     start_time = rest[19]
     if not boot_id or not start_time:
