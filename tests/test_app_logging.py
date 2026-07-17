@@ -2053,7 +2053,7 @@ class AppLoggingTest(unittest.TestCase):
 
             def unlink_then_interrupt(name: object, *args: object, **kwargs: object) -> None:
                 nonlocal interrupted
-                if name == target.name and not interrupted:
+                if isinstance(name, str) and name.endswith(".cleanup") and not interrupted:
                     interrupted = True
                     real_unlink(name, *args, **kwargs)
                     raise KeyboardInterrupt
@@ -2068,6 +2068,32 @@ class AppLoggingTest(unittest.TestCase):
             with gzip.open(target, "rt", encoding="utf-8") as handle:
                 self.assertEqual(handle.read(), "old content\n")
             self.assertEqual(list(log_dir.glob("*.backup")), [])
+
+    def test_gzip_file_preserves_target_replacement_after_target_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "source.log"
+            target = log_dir / "target.log.gz"
+            replacement = log_dir / "replacement.target"
+            source.write_text("new content\n", encoding="utf-8")
+            source.chmod(0o600)
+            with gzip.open(target, "wt", encoding="utf-8") as handle:
+                handle.write("old content\n")
+            target.chmod(0o600)
+            replacement.write_text("must survive\n", encoding="utf-8")
+            real_rename = app_logging._rename_without_replacing
+
+            def rename_then_swap(src: object, dst: object, *args: object, **kwargs: object) -> None:
+                if src == target.name and str(dst).endswith(".cleanup"):
+                    target.unlink()
+                    replacement.replace(target)
+                real_rename(src, dst, *args, **kwargs)
+
+            with mock.patch.object(app_logging, "_rename_without_replacing", side_effect=rename_then_swap):
+                with self.assertRaisesRegex(RuntimeError, "log target changed before deletion"):
+                    app_logging._gzip_file(source, target)
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "must survive\n")
 
     def test_gzip_file_rejects_target_swap_during_backup_activation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2244,7 +2270,7 @@ class AppLoggingTest(unittest.TestCase):
             real_unlink = app_logging.os.unlink
 
             def fail_backup_unlink(name: object, *args: object, **kwargs: object) -> None:
-                if isinstance(name, str) and name.endswith(".cleanup"):
+                if isinstance(name, str) and ".backup." in name and name.endswith(".cleanup"):
                     raise PermissionError("backup cleanup failed")
                 real_unlink(name, *args, **kwargs)
 
@@ -2314,7 +2340,7 @@ class AppLoggingTest(unittest.TestCase):
             real_unlink = app_logging.os.unlink
 
             def unlink_then_fail(name: object, *args: object, **kwargs: object) -> None:
-                if isinstance(name, str) and name.endswith(".cleanup"):
+                if isinstance(name, str) and ".backup." in name and name.endswith(".cleanup"):
                     real_unlink(name, *args, **kwargs)
                     raise OSError("backup unlink outcome unknown")
                 real_unlink(name, *args, **kwargs)

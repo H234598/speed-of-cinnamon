@@ -1816,9 +1816,9 @@ def _gzip_file(source: Path, target: Path) -> None:
                 or not _same_target_inode(current_target_stat, target_existing_stat)
             ):
                 raise RuntimeError("log target changed before activation")
-            os.unlink(target.name, dir_fd=parent_fd)
+            if not _unlink_log_file_with_parent_fsync(target, current_target_stat, field_name="log target"):
+                raise RuntimeError("log target disappeared before activation")
             target_removed = True
-            os.fsync(parent_fd)
         _rename_without_replacing(
             temp_name,
             target.name,
