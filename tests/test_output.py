@@ -2455,6 +2455,12 @@ class OutputTest(unittest.TestCase):
             ):
                 self.assertFalse(output_module._clipboard_lock_pid_is_running(1234))
 
+    def test_clipboard_lock_proc_decode_errors_fail_closed(self) -> None:
+        error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid process name")
+        with mock.patch.object(output_module.Path, "read_text", side_effect=error):
+            self.assertFalse(output_module._clipboard_lock_pid_is_zombie(1234))
+            self.assertIsNone(output_module._clipboard_lock_identity_for_pid(1234))
+
     def test_clipboard_dedupe_lock_closes_fd_when_creation_stat_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with (

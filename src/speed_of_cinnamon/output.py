@@ -372,7 +372,7 @@ def _clipboard_lock_pid_is_zombie(pid: int) -> bool:
         raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").strip()
         close = raw.rindex(")")
         rest = raw[close + 2 :].split()
-    except (OSError, ValueError):
+    except (OSError, UnicodeDecodeError, ValueError):
         return False
     return bool(rest and rest[0] in {"Z", "X", "x"})
 
@@ -398,7 +398,7 @@ def _clipboard_lock_identity_for_pid(pid: int) -> str | None:
         return None
     try:
         raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").strip()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
     try:
         close = raw.rindex(")")
@@ -410,7 +410,7 @@ def _clipboard_lock_identity_for_pid(pid: int) -> str | None:
     boot_id = None
     try:
         boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
     if not boot_id:
         return None
