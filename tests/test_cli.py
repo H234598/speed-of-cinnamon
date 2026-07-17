@@ -80,6 +80,39 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         print_result.assert_called_once()
 
+    def test_run_returns_controlled_error_when_json_error_output_runs_out_of_memory(self) -> None:
+        parser = argparse.ArgumentParser()
+        parser.parse_args = mock.Mock(
+            return_value=argparse.Namespace(
+                command="test",
+                json=True,
+                log_level="INFO",
+                handler=lambda _args: {"status": "done"},
+            )
+        )
+        stdout = io.StringIO()
+        with (
+            mock.patch.object(cli, "build_parser", return_value=parser),
+            mock.patch.object(cli, "configure_logging"),
+            mock.patch.object(cli, "log_event"),
+            mock.patch.object(cli.json, "dumps", side_effect=MemoryError("render exhausted")),
+            redirect_stdout(stdout),
+        ):
+            code = cli.run([])
+
+        self.assertEqual(code, 1)
+        self.assertEqual(stdout.getvalue(), '{"status":"error","error":"result could not be rendered"}\n')
+
+    def test_assert_json_payload_size_wraps_render_memory_error(self) -> None:
+        with mock.patch.object(cli.json, "dumps", side_effect=MemoryError("render exhausted")):
+            with self.assertRaisesRegex(RuntimeError, "output JSON could not be rendered"):
+                cli._assert_json_payload_size({"status": "ok"}, max_bytes=1_000)
+
+    def test_write_json_atomic_wraps_render_memory_error(self) -> None:
+        with mock.patch.object(cli.json, "dumps", side_effect=MemoryError("render exhausted")):
+            with self.assertRaisesRegex(RuntimeError, "output JSON could not be rendered"):
+                cli._write_json_atomic(Path("/tmp/result.json"), {"status": "ok"}, max_bytes=1_000)
+
     def test_run_preserves_json_output_when_logging_setup_fails(self) -> None:
         stdout = io.StringIO()
         with (

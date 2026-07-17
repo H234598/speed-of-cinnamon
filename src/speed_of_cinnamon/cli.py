@@ -2440,18 +2440,24 @@ def _normalized_state_recording_artifact_path(
 
 
 def _assert_json_payload_size(payload: dict[str, object], *, max_bytes: int) -> None:
-    rendered = json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    try:
+        rendered = json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    except (MemoryError, RecursionError) as exc:
+        raise RuntimeError("output JSON could not be rendered") from exc
     if len(rendered.encode("utf-8")) > max_bytes:
         raise RuntimeError(f"output JSON is too large (max {max_bytes} bytes)")
 
 
 def _write_json_atomic(path: Path, payload: dict[str, object], *, max_bytes: int) -> None:
-    content = json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    try:
+        content = json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    except (MemoryError, RecursionError) as exc:
+        raise RuntimeError("output JSON could not be rendered") from exc
     if len(content.encode("utf-8")) > max_bytes:
         raise RuntimeError(f"output JSON is too large (max {max_bytes} bytes)")
     try:
         write_text_atomically_without_following_symlinks(path, content, field_name="JSON output path")
-    except (OSError, RuntimeError) as exc:
+    except (OSError, RuntimeError, MemoryError) as exc:
         raise RuntimeError(f"failed to write JSON output: {path}") from exc
 
 
@@ -6489,7 +6495,18 @@ def run(argv: list[str] | None = None) -> int:
             error_message=error_message,
         )
         payload = {"status": "error", "error": error_message}
-        print_result(payload, json_output)
+        try:
+            print_result(payload, json_output)
+        except (MemoryError, RecursionError):
+            fallback = (
+                '{"status":"error","error":"result could not be rendered"}\n'
+                if json_output
+                else f"{APP_NAME}: result could not be rendered\n"
+            )
+            try:
+                sys.stdout.write(fallback)
+            except (BrokenPipeError, OSError, MemoryError):
+                pass
         return 1
 
 
