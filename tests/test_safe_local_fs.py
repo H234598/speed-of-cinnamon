@@ -86,6 +86,80 @@ class SafeLocalFsTest(unittest.TestCase):
             self.assertFalse(link.exists())
             self.assertTrue(target.exists())
 
+    def test_atomic_write_preserves_replaced_temp_during_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = SAFE_LOCAL_FS
+            root = Path(tmp)
+            target = root / "target.txt"
+
+            def replace_then_fail(src: str, _dst: str, **kwargs: object) -> None:
+                parent = Path(f"/proc/self/fd/{kwargs['src_dir_fd']}")
+                replacement = parent / src
+                replacement.unlink()
+                replacement.write_bytes(b"replacement\n")
+                raise OSError("activation failed")
+
+            with mock.patch.object(module.os, "replace", side_effect=replace_then_fail):
+                with self.assertRaisesRegex(OSError, "activation failed"):
+                    module._write_bytes_atomic(target, b"new\n", 0o600, action="test")
+
+            temporary_files = list(root.glob(".target.txt.*.tmp"))
+            self.assertEqual(len(temporary_files), 1)
+            self.assertEqual(temporary_files[0].read_bytes(), b"replacement\n")
+
+    def test_atomic_copy_preserves_replaced_temp_during_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = SAFE_LOCAL_FS
+            root = Path(tmp)
+            source = root / "source.txt"
+            target = root / "target.txt"
+            source.write_bytes(b"source\n")
+
+            def replace_then_fail(src: str, _dst: str, **kwargs: object) -> None:
+                parent = Path(f"/proc/self/fd/{kwargs['src_dir_fd']}")
+                replacement = parent / src
+                replacement.unlink()
+                replacement.write_bytes(b"replacement\n")
+                raise OSError("activation failed")
+
+            args = module.argparse.Namespace(
+                action="test",
+                src=str(source),
+                dst=str(target),
+                mode="0600",
+                dst_must_not_exist=False,
+            )
+            with mock.patch.object(module.os, "replace", side_effect=replace_then_fail):
+                with self.assertRaisesRegex(OSError, "activation failed"):
+                    module.cmd_copy_file(args)
+
+            temporary_files = list(root.glob(".target.txt.*.tmp"))
+            self.assertEqual(len(temporary_files), 1)
+            self.assertEqual(temporary_files[0].read_bytes(), b"replacement\n")
+
+    def test_atomic_write_rejects_target_created_during_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = SAFE_LOCAL_FS
+            root = Path(tmp)
+            target = root / "target.txt"
+            real_lstat_at = module._lstat_at
+            injected = False
+
+            def lstat_and_create_target(parent_fd: int, name: str) -> os.stat_result | None:
+                nonlocal injected
+                result = real_lstat_at(parent_fd, name)
+                if name == target.name and result is None and not injected:
+                    injected = True
+                    target.write_bytes(b"raced target\n")
+                return result
+
+            with mock.patch.object(module, "_lstat_at", side_effect=lstat_and_create_target):
+                with self.assertRaisesRegex(OSError, "destination changed"):
+                    module._write_bytes_atomic(target, b"new\n", 0o600, action="test")
+
+            self.assertEqual(target.read_bytes(), b"raced target\n")
+            self.assertEqual(list(root.glob(".target.txt.*.tmp")), [])
+
     def test_install_tree_rejects_fifo_source_entry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

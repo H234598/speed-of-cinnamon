@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import errno
 import hashlib
 import os
@@ -109,6 +110,103 @@ def _same_identity(left: os.stat_result | None, right: os.stat_result | None) ->
     return left is not None and right is not None and _stat_identity(left) == _stat_identity(right)
 
 
+def _rename_without_replacing(
+    source_name: str,
+    target_name: str,
+    *,
+    directory_fd: int,
+    action: str,
+) -> None:
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        renameat2 = libc.renameat2
+    except (AttributeError, OSError) as exc:
+        raise OSError(errno.ENOTSUP, f"no-clobber rename is not supported during {action}") from exc
+    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        directory_fd,
+        os.fsencode(source_name),
+        directory_fd,
+        os.fsencode(target_name),
+        1,
+    )
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), target_name)
+
+
+def _cleanup_temporary_file(
+    parent_fd: int,
+    temporary_name: str,
+    expected_stat: os.stat_result | None,
+    *,
+    action: str,
+) -> None:
+    if expected_stat is None:
+        return
+    current_stat = _lstat_at(parent_fd, temporary_name)
+    if current_stat is None or not _same_identity(current_stat, expected_stat):
+        return
+    for _ in range(100):
+        cleanup_name = f"{temporary_name}.{secrets.token_hex(8)}.cleanup"
+        try:
+            _rename_without_replacing(
+                temporary_name,
+                cleanup_name,
+                directory_fd=parent_fd,
+                action=f"{action} temporary cleanup",
+            )
+        except FileExistsError:
+            continue
+        except FileNotFoundError:
+            return
+        try:
+            claimed_stat = _lstat_at(parent_fd, cleanup_name)
+            if claimed_stat is None:
+                return
+            if not _same_identity(claimed_stat, expected_stat):
+                with context_suppress():
+                    _rename_without_replacing(
+                        cleanup_name,
+                        temporary_name,
+                        directory_fd=parent_fd,
+                        action=f"{action} temporary restore",
+                    )
+                    os.fsync(parent_fd)
+                return
+            os.unlink(cleanup_name, dir_fd=parent_fd)
+            os.fsync(parent_fd)
+        except BaseException:
+            with context_suppress():
+                _rename_without_replacing(
+                    cleanup_name,
+                    temporary_name,
+                    directory_fd=parent_fd,
+                    action=f"{action} temporary restore",
+                )
+                os.fsync(parent_fd)
+            raise
+        return
+    raise OSError(f"failed to claim temporary file cleanup path during {action}")
+
+
+def _assert_target_unchanged(
+    parent_fd: int,
+    name: str,
+    expected_stat: os.stat_result | None,
+    *,
+    action: str,
+) -> None:
+    current_stat = _lstat_at(parent_fd, name)
+    if expected_stat is None:
+        if current_stat is not None:
+            raise OSError(f"destination changed during {action}")
+        return
+    if current_stat is None or not _same_identity(current_stat, expected_stat):
+        raise OSError(f"destination changed during {action}")
+
+
 def _check_leaf(parent_fd: int, name: str, path: Path, *, action: str, kind: str, must_exist: bool) -> None:
     stat_result = _lstat_at(parent_fd, name)
     if stat_result is None:
@@ -210,18 +308,25 @@ def _write_bytes_atomic(dst: Path, data: bytes, mode: int, *, action: str) -> No
     tmp_name = f".{leaf}.{secrets.token_hex(8)}.tmp"
     fd: int | None = None
     tmp_stat: os.stat_result | None = None
+    target_stat: os.stat_result | None = None
     try:
         existing = _lstat_at(parent_fd, leaf)
         if existing is not None and stat_is_symlink_no_follow(existing.st_mode):
             fail(f"refusing to follow symlink during {action}: {dst}")
-        fd = os.open(tmp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=parent_fd)
+        target_stat = existing
+        fd = os.open(tmp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent_fd)
+        tmp_stat = os.fstat(fd)
         with os.fdopen(fd, "wb", closefd=True) as handle:
             fd = None
             handle.write(data)
             handle.flush()
             os.fchmod(handle.fileno(), mode)
             os.fsync(handle.fileno())
-        tmp_stat = _lstat_at(parent_fd, tmp_name)
+            tmp_stat = os.fstat(handle.fileno())
+        staged_stat = _lstat_at(parent_fd, tmp_name)
+        if staged_stat is None or not _same_identity(staged_stat, tmp_stat):
+            raise OSError(f"temporary file changed during {action}: {dst}")
+        _assert_target_unchanged(parent_fd, leaf, target_stat, action=action)
         os.replace(tmp_name, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         if not _same_identity(tmp_stat, _lstat_at(parent_fd, leaf)):
             fail(f"destination changed during {action}: {dst}")
@@ -231,8 +336,7 @@ def _write_bytes_atomic(dst: Path, data: bytes, mode: int, *, action: str) -> No
         with context_suppress():
             if fd is not None:
                 os.close(fd)
-            os.unlink(tmp_name, dir_fd=parent_fd)
-            os.fsync(parent_fd)
+            _cleanup_temporary_file(parent_fd, tmp_name, tmp_stat, action=action)
         raise
     finally:
         os.close(parent_fd)
@@ -280,13 +384,16 @@ def _copy_file_atomically_from_checked_source(
     tmp_name = f".{leaf}.{secrets.token_hex(8)}.tmp"
     fd: int | None = None
     tmp_stat: os.stat_result | None = None
+    target_stat: os.stat_result | None = None
     try:
         existing = _lstat_at(parent_fd, leaf)
         if existing is not None and dst_must_not_exist:
             fail(f"destination already exists during {action}: {dst}")
         if existing is not None and stat_is_symlink_no_follow(existing.st_mode):
             fail(f"refusing to follow symlink during {action}: {dst}")
-        fd = os.open(tmp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=parent_fd)
+        target_stat = existing
+        fd = os.open(tmp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent_fd)
+        tmp_stat = os.fstat(fd)
         copied_hasher = hashlib.sha256()
         with os.fdopen(fd, "wb", closefd=True) as output:
             fd = None
@@ -299,8 +406,8 @@ def _copy_file_atomically_from_checked_source(
             output.flush()
             os.fchmod(output.fileno(), mode)
             os.fsync(output.fileno())
+            tmp_stat = os.fstat(output.fileno())
         copied_digest = copied_hasher.hexdigest()
-        tmp_stat = _lstat_at(parent_fd, tmp_name)
         source_after_fd = os.fstat(source_handle.fileno())
         source_after = _lstat_at(source_parent_fd, source_name)
         if source_after is None:
@@ -311,6 +418,10 @@ def _copy_file_atomically_from_checked_source(
             fail(f"source changed during {action}: {src}")
         if copied_digest != source_digest:
             fail(f"source changed during {action}: {src}")
+        staged_stat = _lstat_at(parent_fd, tmp_name)
+        if staged_stat is None or not _same_identity(staged_stat, tmp_stat):
+            raise OSError(f"temporary file changed during {action}: {dst}")
+        _assert_target_unchanged(parent_fd, leaf, target_stat, action=action)
         os.replace(tmp_name, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         if not _same_identity(tmp_stat, _lstat_at(parent_fd, leaf)):
             fail(f"destination changed during {action}: {dst}")
@@ -320,8 +431,7 @@ def _copy_file_atomically_from_checked_source(
         with context_suppress():
             if fd is not None:
                 os.close(fd)
-            os.unlink(tmp_name, dir_fd=parent_fd)
-            os.fsync(parent_fd)
+            _cleanup_temporary_file(parent_fd, tmp_name, tmp_stat, action=action)
         raise
     finally:
         os.close(parent_fd)
