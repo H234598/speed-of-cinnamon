@@ -1100,8 +1100,12 @@ def _merge_old_months(directory: Path, today: date) -> None:
                                 try:
                                     candidate_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
                                     if _same_log_inode(candidate_stat, archive_stat):
-                                        os.unlink(candidate_name, dir_fd=parent_fd)
-                                        os.fsync(parent_fd)
+                                        if _unlink_log_file_with_parent_fsync(
+                                            directory / candidate_name,
+                                            candidate_stat,
+                                            field_name="monthly log archive backup cleanup",
+                                        ):
+                                            os.fsync(parent_fd)
                                 except FileNotFoundError:
                                     pass
                                 except BaseException as cleanup_error:
@@ -1828,8 +1832,12 @@ def _gzip_file(source: Path, target: Path) -> None:
                     try:
                         candidate_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
                         if _same_target_inode(candidate_stat, target_existing_stat):
-                            os.unlink(candidate_name, dir_fd=parent_fd)
-                            os.fsync(parent_fd)
+                            if _unlink_log_file_with_parent_fsync(
+                                target.parent / candidate_name,
+                                candidate_stat,
+                                field_name="log target backup cleanup",
+                            ):
+                                os.fsync(parent_fd)
                     except FileNotFoundError:
                         pass
                     except BaseException as cleanup_error:
