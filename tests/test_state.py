@@ -596,6 +596,16 @@ class StateStoreTest(unittest.TestCase):
             ):
                 store.write(RecordingState(status="done"))
 
+    def test_write_wraps_json_recursion_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            store = StateStore(path)
+            with (
+                mock.patch("speed_of_cinnamon.state.json.dumps", side_effect=RecursionError("too deep")),
+                self.assertRaisesRegex(RuntimeError, "state payload could not be rendered"),
+            ):
+                store.write(RecordingState(status="done"))
+
     def test_write_rejects_oversized_state(self) -> None:
         long_value = "Y" * (MAX_STATE_STRING_CHARS + 5)
         with tempfile.TemporaryDirectory() as tmp:

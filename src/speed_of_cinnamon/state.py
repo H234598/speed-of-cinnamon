@@ -366,7 +366,7 @@ class StateStore:
         normalized_payload = StateStore._normalize_state_data(payload)
         try:
             rendered = json.dumps(normalized_payload, indent=2, sort_keys=True) + "\n"
-        except MemoryError as exc:
+        except (MemoryError, RecursionError) as exc:
             raise RuntimeError("state payload could not be rendered") from exc
         try:
             rendered_size = _utf8_byte_count(rendered, field_name="state payload")
