@@ -12,6 +12,12 @@ from speed_of_cinnamon import path_safety
 
 
 class PathSafetyTest(unittest.TestCase):
+    def test_fsync_retries_interrupted_calls(self) -> None:
+        with mock.patch.object(path_safety.os, "fsync", side_effect=[InterruptedError(), None]) as mocked_fsync:
+            path_safety._fsync_fd(123)
+
+        self.assertEqual(mocked_fsync.call_args_list, [mock.call(123), mock.call(123)])
+
     def test_open_file_without_following_symlinks_rejects_relative_paths(self) -> None:
         with self.assertRaisesRegex(OSError, "must be absolute"):
             path_safety.open_file_without_following_symlinks(Path("settings.json"), os.O_RDONLY)

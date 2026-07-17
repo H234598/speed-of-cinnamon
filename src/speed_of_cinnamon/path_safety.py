@@ -15,6 +15,15 @@ def _note_cleanup_failure(primary: BaseException, cleanup_error: BaseException) 
     primary.add_note(f"secure path cleanup failed: {cleanup_error}")
 
 
+def _fsync_fd(fd: int) -> None:
+    while True:
+        try:
+            os.fsync(fd)
+            return
+        except InterruptedError:
+            continue
+
+
 def _rename_without_replacing(
     source_name: str,
     target_name: str,
@@ -489,7 +498,7 @@ def _write_atomically_without_following_symlinks(
                 if not _same_leaf_identity(claimed_stat, expected_stat):
                     raise OSError(f"{field_name} changed before cleanup")
                 os.unlink(cleanup_name, dir_fd=parent_fd)
-                os.fsync(parent_fd)
+                _fsync_fd(parent_fd)
             except BaseException as exc:
                 try:
                     _rename_without_replacing(
@@ -498,7 +507,7 @@ def _write_atomically_without_following_symlinks(
                         directory_fd=parent_fd,
                         field_name=f"{field_name} restore",
                     )
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                 except BaseException as restore_error:
                     _note_cleanup_failure(exc, restore_error)
                 raise
@@ -583,7 +592,7 @@ def _write_atomically_without_following_symlinks(
                 raise OSError(f"{field_name} temporary file could not be made private") from exc
             handle.write(payload)
             handle.flush()
-            os.fsync(handle.fileno())
+            _fsync_fd(handle.fileno())
             temporary_stat = os.fstat(handle.fileno())
         except (MemoryError, RecursionError) as exc:
             try:
@@ -665,7 +674,7 @@ def _write_atomically_without_following_symlinks(
                         raise OSError(f"{field_name} disappeared before activation")
                     backup_name = candidate_name
                     backup_moved = True
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                     break
                 except BaseException as exc:
                     if not backup_moved:
@@ -683,7 +692,7 @@ def _write_atomically_without_following_symlinks(
                                         candidate_stat,
                                         field_name=f"{field_name} recovery backup candidate",
                                     ):
-                                        os.fsync(parent_fd)
+                                        _fsync_fd(parent_fd)
                         except FileNotFoundError:
                             pass
                         except BaseException as cleanup_error:
@@ -707,7 +716,7 @@ def _write_atomically_without_following_symlinks(
         if temporary_stat is None or not _same_leaf_identity(activated_stat, temporary_stat):
             raise OSError(f"{field_name} changed after activation")
         activation_stat = activated_stat
-        os.fsync(parent_fd)
+        _fsync_fd(parent_fd)
         transaction_active = False
         if backup_moved:
             try:
@@ -745,7 +754,7 @@ def _write_atomically_without_following_symlinks(
                                     field_name=f"{field_name} recovery backup cleanup",
                                 ):
                                     raise OSError(f"{field_name} recovery backup disappeared during cleanup")
-                                os.fsync(parent_fd)
+                                _fsync_fd(parent_fd)
                             else:
                                 _rename_without_replacing(
                                     cleanup_name,
@@ -753,7 +762,7 @@ def _write_atomically_without_following_symlinks(
                                     directory_fd=parent_fd,
                                     field_name=f"{field_name} recovery backup restore",
                                 )
-                                os.fsync(parent_fd)
+                                _fsync_fd(parent_fd)
                         except BaseException:
                             try:
                                 _rename_without_replacing(
@@ -762,7 +771,7 @@ def _write_atomically_without_following_symlinks(
                                     directory_fd=parent_fd,
                                     field_name=f"{field_name} recovery backup restore",
                                 )
-                                os.fsync(parent_fd)
+                                _fsync_fd(parent_fd)
                             except BaseException:
                                 pass
                         break
@@ -795,7 +804,7 @@ def _write_atomically_without_following_symlinks(
                             field_name=f"{field_name} rollback",
                         ):
                             raise OSError(f"{field_name} disappeared during rollback")
-                        os.fsync(parent_fd)
+                        _fsync_fd(parent_fd)
                 if backup_moved:
                     try:
                         os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
@@ -806,7 +815,7 @@ def _write_atomically_without_following_symlinks(
                             directory_fd=parent_fd,
                             field_name=field_name,
                         )
-                        os.fsync(parent_fd)
+                        _fsync_fd(parent_fd)
                     else:
                         raise OSError(f"{field_name} target exists during rollback")
             except BaseException as rollback_error:
@@ -821,7 +830,7 @@ def _write_atomically_without_following_symlinks(
                     temporary_stat,
                     field_name=f"{field_name} temporary file",
                 ):
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
             except OSError as exc:
                 cleanup_error = exc
             except BaseException as cleanup_exception:
