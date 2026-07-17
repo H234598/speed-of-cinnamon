@@ -1616,34 +1616,50 @@ def _run_pactl_command(command: list[str] | tuple[str, ...], *, required: bool) 
     runtime_command = [_command_path(pactl), *command[1:]]
     try:
         with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+            stdout_capture = _BoundedOutputCapture(stdout_file, MAX_PACTL_OUTPUT_CHARS)
+            stderr_capture = _BoundedOutputCapture(stderr_file, MAX_PACTL_OUTPUT_CHARS)
+            primary_error: BaseException | None = None
             try:
-                proc = subprocess.Popen(  # nosec B603
-                    args=runtime_command,
-                    stdout=stdout_file,
-                    stderr=stderr_file,
-                    shell=False,
-                    env=_filtered_environment(),
-                    start_new_session=True,
-                )
-                _communicate_recorder_process_bounded(
-                    proc,
-                    timeout=MAX_PACTL_TIMEOUT_SECONDS,
-                    process_name="pactl",
-                )
-            except FileNotFoundError as exc:
-                raise RecorderError(f"{pactl} command not found") from exc
+                try:
+                    proc = subprocess.Popen(  # nosec B603
+                        args=runtime_command,
+                        stdout=stdout_capture,
+                        stderr=stderr_capture,
+                        shell=False,
+                        env=_filtered_environment(),
+                        start_new_session=True,
+                    )
+                    _communicate_recorder_process_bounded(
+                        proc,
+                        timeout=MAX_PACTL_TIMEOUT_SECONDS,
+                        process_name="pactl",
+                    )
+                except FileNotFoundError as exc:
+                    raise RecorderError(f"{pactl} command not found") from exc
 
-            if _file_size(stdout_file) > MAX_PACTL_OUTPUT_CHARS:
-                raise RecorderError(f"pactl command output exceeded {MAX_PACTL_OUTPUT_CHARS} bytes")
+                _finish_bounded_output_captures(stdout_capture, stderr_capture)
+                if stdout_capture.overflowed or stderr_capture.overflowed:
+                    raise RecorderError(f"pactl command output exceeded {MAX_PACTL_OUTPUT_CHARS} bytes")
 
-            if proc.returncode != 0:
-                if not required:
-                    return ""
-                stderr = _sanitize_pactl_error_detail(_ensure_file_head(stderr_file, 2048))
-                stdout = _sanitize_pactl_error_detail(_ensure_file_head(stdout_file, 2048))
-                raise RecorderError(stderr or stdout or "pactl failed")
+                if proc.returncode != 0:
+                    if not required:
+                        return ""
+                    stderr = _sanitize_pactl_error_detail(_ensure_file_head(stderr_file, 2048))
+                    stdout = _sanitize_pactl_error_detail(_ensure_file_head(stdout_file, 2048))
+                    raise RecorderError(stderr or stdout or "pactl failed")
 
-            return _ensure_file_head(stdout_file, MAX_PACTL_OUTPUT_CHARS).strip()
+                return _ensure_file_head(stdout_file, MAX_PACTL_OUTPUT_CHARS).strip()
+            except BaseException as exc:
+                primary_error = exc
+                raise
+            finally:
+                try:
+                    _finish_bounded_output_captures(stdout_capture, stderr_capture)
+                except BaseException as cleanup_error:
+                    if primary_error is not None:
+                        primary_error.add_note(f"pactl output capture cleanup failed: {cleanup_error}")
+                    else:
+                        raise
     except subprocess.TimeoutExpired as exc:
         raise RecorderError(f"pactl command timed out after {MAX_PACTL_TIMEOUT_SECONDS}s") from exc
     except OSError as exc:

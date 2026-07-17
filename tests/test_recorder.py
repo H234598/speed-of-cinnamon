@@ -2288,6 +2288,17 @@ class RecorderTest(unittest.TestCase):
         self.assertNotIn("\x1b", str(raised.exception))
         self.assertNotIn("\x07", str(raised.exception))
 
+    def test_run_pactl_bounds_live_output(self) -> None:
+        with (
+            mock.patch.object(recorder_module, "MAX_PACTL_OUTPUT_CHARS", 64),
+            mock.patch.object(recorder_module, "_command_path", return_value="/bin/sh"),
+        ):
+            with self.assertRaisesRegex(RecorderError, "pactl command output exceeded 64 bytes"):
+                recorder_module._run_pactl_command(
+                    ["pactl", "-c", "printf '%0100000d' 0"],
+                    required=False,
+                )
+
     def test_run_pactl_command_redacts_sensitive_error_detail(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             command = args[0] if args else kwargs["args"]
