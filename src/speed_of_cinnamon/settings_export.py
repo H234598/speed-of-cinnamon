@@ -692,44 +692,49 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
             return
         raise _RecoveryBackupChanged("settings export recovery backup cleanup path could not be claimed")
 
-    def _unlink_target_safely(expected_stat: os.stat_result) -> bool:
+    def _unlink_leaf_safely(
+        leaf_name: str,
+        expected_stat: os.stat_result,
+        *,
+        field_name: str,
+    ) -> bool:
         try:
-            current_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            current_stat = os.stat(leaf_name, dir_fd=parent_fd, follow_symlinks=False)
         except FileNotFoundError:
             return False
         if not _same_leaf_snapshot(current_stat, expected_stat):
-            raise OSError("settings export path changed before cleanup")
+            raise OSError(f"{field_name} changed before cleanup")
         for _ in range(100):
-            cleanup_name = f"{path.name}.{secrets.token_hex(8)}.cleanup"
+            cleanup_name = f"{leaf_name}.{secrets.token_hex(8)}.cleanup"
             try:
                 _rename_without_replacing(
-                    path.name,
+                    leaf_name,
                     cleanup_name,
                     directory_fd=parent_fd,
-                    field_name="settings export target cleanup",
+                    field_name=f"{field_name} cleanup",
                 )
             except FileExistsError:
                 continue
             try:
                 claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
                 if not _same_leaf_identity(claimed_stat, expected_stat):
-                    raise OSError("settings export path changed before cleanup")
+                    raise OSError(f"{field_name} changed before cleanup")
                 os.unlink(cleanup_name, dir_fd=parent_fd)
                 os.fsync(parent_fd)
             except BaseException as exc:
                 try:
                     _rename_without_replacing(
                         cleanup_name,
-                        path.name,
+                        leaf_name,
                         directory_fd=parent_fd,
-                        field_name="settings export target restore",
+                        field_name=f"{field_name} restore",
                     )
                     os.fsync(parent_fd)
                 except BaseException as restore_error:
                     _note_cleanup_failure(exc, restore_error)
                 raise
             return True
-        raise OSError("settings export target cleanup path could not be claimed")
+        raise OSError(f"{field_name} cleanup path could not be claimed")
 
     try:
         try:
@@ -822,7 +827,11 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                     ):
                         raise OSError("settings export path changed during backup activation")
                     backup_name = candidate_name
-                    if not _unlink_target_safely(current_target_stat):
+                    if not _unlink_leaf_safely(
+                        path.name,
+                        current_target_stat,
+                        field_name="settings export path",
+                    ):
                         raise OSError("settings export path disappeared before activation")
                     backup_moved = True
                     os.fsync(parent_fd)
@@ -839,8 +848,12 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                             try:
                                 candidate_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
                                 if _same_leaf_inode(candidate_stat, existing_stat):
-                                    os.unlink(candidate_name, dir_fd=parent_fd)
-                                    os.fsync(parent_fd)
+                                    if _unlink_leaf_safely(
+                                        candidate_name,
+                                        candidate_stat,
+                                        field_name="settings export recovery backup candidate",
+                                    ):
+                                        os.fsync(parent_fd)
                             except FileNotFoundError:
                                 pass
                             except BaseException as cleanup_error:
@@ -886,7 +899,11 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                     if current_target_stat is not None:
                         if expected_activation_stat is None or not _same_leaf_identity(current_target_stat, expected_activation_stat):
                             raise OSError("settings export target changed during rollback")
-                        if not _unlink_target_safely(current_target_stat):
+                        if not _unlink_leaf_safely(
+                            path.name,
+                            current_target_stat,
+                            field_name="settings export target",
+                        ):
                             raise OSError("settings export target disappeared during rollback")
                         os.fsync(parent_fd)
                 if backup_moved:
