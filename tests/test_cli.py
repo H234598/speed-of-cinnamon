@@ -5356,7 +5356,9 @@ class CliTest(unittest.TestCase):
                 wav_file.setframerate(16000)
                 wav_file.writeframes(b"\x00\x00" * 32)
             state_file = state_dir / "state.json"
-            StateStore(state_file).write(RecordingState(status="recording", audio_path="recordings/active.wav"))
+            StateStore(state_file).write(
+                RecordingState(status="recording", pid=999999999, audio_path="recordings/active.wav")
+            )
             stdout = io.StringIO()
             with (
                 mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
@@ -11283,6 +11285,28 @@ class CliTest(unittest.TestCase):
         self.assertEqual(final_state.status, "recording")
         self.assertTrue(audio_exists)
 
+    def test_cancel_preserves_recording_state_without_pid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "recording.wav"
+            audio.write_bytes(b"audio")
+            state_file = tmp_path / "state.json"
+            StateStore(state_file).write(RecordingState(status="recording", audio_path=str(audio)))
+            args = argparse.Namespace(state_file=str(state_file))
+
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}):
+                result = cli.command_cancel(args)
+
+            final_state = StateStore(state_file).read()
+            audio_exists = audio.exists()
+
+        self.assertEqual(result["status"], "recording")
+        self.assertIn("pid is missing", result["error"])
+        self.assertEqual(final_state.status, "recording")
+        self.assertTrue(audio_exists)
+
     def test_status_reports_exited_recording_without_audio_as_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "state.json"
@@ -11292,6 +11316,45 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["status"], "error")
         self.assertEqual(payload["message"], "recording exited before audio was saved")
         self.assertFalse(payload["inserted"])
+
+    def test_status_preserves_recording_state_without_pid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "recording.wav"
+            audio.write_bytes(b"audio")
+            state_file = tmp_path / "state.json"
+            StateStore(state_file).write(RecordingState(status="recording", audio_path=str(audio)))
+
+            payload = cli.command_status(argparse.Namespace(state_file=str(state_file)))
+            audio_exists = audio.exists()
+
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("pid is missing", payload["error"])
+        self.assertTrue(audio_exists)
+
+    def test_stop_preserves_recording_state_without_pid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "recording.wav"
+            audio.write_bytes(b"audio")
+            state_file = tmp_path / "state.json"
+            StateStore(state_file).write(RecordingState(status="recording", audio_path=str(audio)))
+            args = argparse.Namespace(state_file=str(state_file))
+
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}):
+                result = cli.command_stop(args)
+
+            final_state = StateStore(state_file).read()
+            audio_exists = audio.exists()
+
+        self.assertEqual(result["status"], "recording")
+        self.assertIn("pid is missing", result["error"])
+        self.assertEqual(final_state.status, "recording")
+        self.assertTrue(audio_exists)
 
     def test_status_redacts_microphone_level_errors(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

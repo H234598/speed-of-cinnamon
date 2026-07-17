@@ -5143,6 +5143,10 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
             if state.status in {"recorded", "processing"}:
                 return finalize_recording(args, store, state, finalization_lock_path=lock_path)
             return {"status": state.status, "message": "not recording"}
+        if state.pid is None:
+            error_text = "recording process pid is missing; recording state preserved"
+            store.update(status="recording", error=error_text, inserted=False)
+            return {"status": "recording", "message": error_text, "error": error_text}
         process_verified_alive = _recording_process_verified_alive(state)
         current_process_identity = None
         if (
@@ -5215,6 +5219,10 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
         _raise_if_state_unreadable(state)
         initial_status = state.status
         if state.status == "recording":
+            if state.pid is None:
+                error_text = "recording process pid is missing; recording state preserved"
+                store.update(status="recording", error=error_text, inserted=False)
+                return {"status": "recording", "message": error_text, "error": error_text}
             process_verified_alive = _recording_process_verified_alive(state)
             if (
                 not str(state.process_identity or "").strip()
@@ -5520,6 +5528,13 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
         payload["error"] = ""
         return payload
     if state.status == "recording":
+        if state.pid is None:
+            error_text = "recording process pid is missing; recording state preserved"
+            payload["status"] = "error"
+            payload["message"] = error_text
+            payload["error"] = error_text
+            payload["inserted"] = False
+            return payload
         try:
             verified_alive = _recording_process_verified_active(state)
         except RuntimeError as exc:
