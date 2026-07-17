@@ -1971,6 +1971,25 @@ class ModelsTest(unittest.TestCase):
                 )
             self.assertEqual([], list(Path(tmp).iterdir()))
 
+    def test_download_url_rejects_none_response_chunks(self) -> None:
+        class InvalidChunkResponse(FakeResponse):
+            def read(self, size: int = -1) -> object:
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.object(models, "_open_model_download_url", return_value=InvalidChunkResponse(b"")),
+                self.assertRaisesRegex(models.ModelError, "response chunk must be bytes"),
+            ):
+                models._download_url_to_file(
+                    models.HUGGING_FACE_BASE_URL + "/ggml-test.bin",
+                    Path(tmp),
+                    1024,
+                    "test",
+                    prefix=".test.",
+                )
+            self.assertEqual([], list(Path(tmp).iterdir()))
+
     def test_download_url_does_not_remove_replaced_temporary_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)

@@ -1925,10 +1925,10 @@ def _download_url_to_file_with_fd(
                 downloaded = 0
                 while True:
                     chunk = response.read(MAX_MODEL_DOWNLOAD_CHUNK_BYTES)
-                    if not chunk:
-                        break
                     if not isinstance(chunk, bytes):
                         raise ModelError("model download response chunk must be bytes")
+                    if not chunk:
+                        break
                     downloaded += len(chunk)
                     if downloaded > size_limit:
                         raise ModelError(f"downloaded model too large for {model_name}: {downloaded} > {size_limit}")
