@@ -23,6 +23,7 @@ from .path_safety import (
     assert_no_symlink_ancestors,
     ensure_directory_without_following_symlinks,
     open_file_without_following_symlinks,
+    _fsync_fd,
     _rename_without_replacing,
 )
 
@@ -312,12 +313,7 @@ def _scrub_temp_settings_export_file(
                     break
                 remaining -= written
             try:
-                while True:
-                    try:
-                        os.fsync(fd)
-                        break
-                    except InterruptedError:
-                        continue
+                _fsync_fd(fd)
             except OSError:
                 pass
         while True:
@@ -327,12 +323,7 @@ def _scrub_temp_settings_export_file(
             except InterruptedError:
                 continue
         try:
-            while True:
-                try:
-                    os.fsync(fd)
-                    break
-                except InterruptedError:
-                    continue
+            _fsync_fd(fd)
         except OSError:
             pass
     except BaseException as exc:
@@ -653,7 +644,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
         ):
             raise OSError("settings export temporary file changed before cleanup")
         os.unlink(temp_name, dir_fd=parent_fd)
-        os.fsync(parent_fd)
+        _fsync_fd(parent_fd)
 
     def _scrub_temp_if_same() -> None:
         if temporary_stat is None:
@@ -701,7 +692,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                 if not _same_leaf_identity(claimed_stat, existing_stat):
                     raise _RecoveryBackupChanged("settings export recovery backup changed before cleanup")
                 os.unlink(cleanup_name, dir_fd=parent_fd)
-                os.fsync(parent_fd)
+                _fsync_fd(parent_fd)
             except BaseException as exc:
                 try:
                     _rename_without_replacing(
@@ -710,7 +701,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                         directory_fd=parent_fd,
                         field_name="settings export recovery backup restore",
                     )
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                 except BaseException as restore_error:
                     _note_cleanup_failure(exc, restore_error)
                 raise
@@ -745,7 +736,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                 if not _same_leaf_identity(claimed_stat, expected_stat):
                     raise OSError(f"{field_name} changed before cleanup")
                 os.unlink(cleanup_name, dir_fd=parent_fd)
-                os.fsync(parent_fd)
+                _fsync_fd(parent_fd)
             except BaseException as exc:
                 try:
                     _rename_without_replacing(
@@ -754,7 +745,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                         directory_fd=parent_fd,
                         field_name=f"{field_name} restore",
                     )
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                 except BaseException as restore_error:
                     _note_cleanup_failure(exc, restore_error)
                 raise
@@ -794,7 +785,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                 pass
             handle.write(rendered)
             handle.flush()
-            os.fsync(handle.fileno())
+            _fsync_fd(handle.fileno())
             temporary_stat = os.fstat(handle.fileno())
         except BaseException as exc:
             handle_primary_error = exc
@@ -859,7 +850,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                     ):
                         raise OSError("settings export path disappeared before activation")
                     backup_moved = True
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                     break
                 except BaseException as exc:
                     if not backup_moved:
@@ -878,7 +869,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                                         candidate_stat,
                                         field_name="settings export recovery backup candidate",
                                     ):
-                                        os.fsync(parent_fd)
+                                        _fsync_fd(parent_fd)
                             except FileNotFoundError:
                                 pass
                             except BaseException as cleanup_error:
@@ -899,7 +890,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
             activation_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
         except OSError as stat_error:
             raise OSError("settings export could not be inspected after activation") from stat_error
-        os.fsync(parent_fd)
+        _fsync_fd(parent_fd)
         transaction_active = False
         if backup_moved:
             try:
@@ -930,7 +921,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                             field_name="settings export target",
                         ):
                             raise OSError("settings export target disappeared during rollback")
-                        os.fsync(parent_fd)
+                        _fsync_fd(parent_fd)
                 if backup_moved:
                     try:
                         os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
@@ -941,7 +932,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                             directory_fd=parent_fd,
                             field_name="settings export path",
                         )
-                        os.fsync(parent_fd)
+                        _fsync_fd(parent_fd)
                     else:
                         raise OSError("settings export target exists during rollback")
             except BaseException as rollback_error:

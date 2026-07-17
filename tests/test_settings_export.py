@@ -33,6 +33,16 @@ from speed_of_cinnamon import settings_export as settings_export_module
 
 
 class SettingsExportTest(unittest.TestCase):
+    def test_fsync_retries_interrupted_calls(self) -> None:
+        with mock.patch.object(
+            settings_export_module.os,
+            "fsync",
+            side_effect=[InterruptedError(), None],
+        ) as mocked_fsync:
+            settings_export_module._fsync_fd(123)
+
+        self.assertEqual(mocked_fsync.call_args_list, [mock.call(123), mock.call(123)])
+
     def test_write_export_rejects_null_byte_path(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "invalid null byte"):
             write_export(Path("settings\x00.json"), {"language": "en"})
