@@ -594,14 +594,16 @@ def _write_atomically_without_following_symlinks(
         os.fsync(parent_fd)
         transaction_active = False
         if backup_moved:
-            backup_stat = os.stat(backup_name, dir_fd=parent_fd, follow_symlinks=False)
-            if not stat.S_ISREG(backup_stat.st_mode) or getattr(backup_stat, "st_nlink", 1) != 1:
-                raise OSError(f"{field_name} recovery backup is not safe")
-            if target_stat is None or not _same_leaf_identity(backup_stat, target_stat):
-                raise OSError(f"{field_name} recovery backup changed before cleanup")
             try:
-                os.unlink(backup_name, dir_fd=parent_fd)
-                os.fsync(parent_fd)
+                backup_stat = os.stat(backup_name, dir_fd=parent_fd, follow_symlinks=False)
+                if (
+                    stat.S_ISREG(backup_stat.st_mode)
+                    and getattr(backup_stat, "st_nlink", 1) == 1
+                    and target_stat is not None
+                    and _same_leaf_identity(backup_stat, target_stat)
+                ):
+                    os.unlink(backup_name, dir_fd=parent_fd)
+                    os.fsync(parent_fd)
             except OSError:
                 pass
             except BaseException:

@@ -893,6 +893,35 @@ class PathSafetyTest(unittest.TestCase):
             self.assertEqual(target.read_text(encoding="utf-8"), "new")
             self.assertEqual(len(list(Path(tmp).glob(".settings.json.*.bak"))), 1)
 
+    def test_atomic_write_preserves_success_when_recovery_backup_changes_after_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            target.write_text("old", encoding="utf-8")
+            replacement = Path(tmp) / "replacement.txt"
+            replacement.write_text("foreign backup", encoding="utf-8")
+            real_stat = path_safety.os.stat
+            backup_stats = 0
+
+            def stat_then_replace(name: object, *args: object, **kwargs: object) -> os.stat_result:
+                nonlocal backup_stats
+                result = real_stat(name, *args, **kwargs)
+                if isinstance(name, str) and name.endswith(".bak"):
+                    backup_stats += 1
+                    if backup_stats == 2:
+                        backup_path = Path(tmp) / name
+                        backup_path.unlink()
+                        replacement.replace(backup_path)
+                        return real_stat(name, *args, **kwargs)
+                return result
+
+            with mock.patch.object(path_safety.os, "stat", side_effect=stat_then_replace):
+                path_safety.write_text_atomically_without_following_symlinks(target, "new")
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "new")
+            backups = list(Path(tmp).glob(".settings.json.*.bak"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_text(encoding="utf-8"), "foreign backup")
+
     def test_read_text_with_max_bytes_rejects_larger_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.txt"
