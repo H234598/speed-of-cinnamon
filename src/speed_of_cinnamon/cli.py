@@ -4193,6 +4193,7 @@ def finalize_recording(
     written_text_path: Path | None = None
     artifact_encryption = ARTIFACT_ENCRYPTION_OFF
     preserve_written_text_on_error = False
+    silent_transcript_state_cleared = False
     cleanup_rollback_backups: list[tuple[Path, Path, os.stat_result, os.stat_result]] = []
     cleanup_backup_restore_failed = False
     preserve_recording_artifacts_after_cleanup_failure = False
@@ -4456,7 +4457,9 @@ def finalize_recording(
                     done_log_path = None
             state.audio_path = done_audio_path
             state.log_path = done_log_path
+            silent_transcript_state_cleared = True
             state.transcript_path = ""
+            state.transcript = ""
             artifact_cleanup = _enforce_recording_artifact_cap(state, state_path=store.path)
             cleanup_failures: list[tuple[str, str, str]] = []
             if not keep_recording_artifacts:
@@ -4830,7 +4833,10 @@ def finalize_recording(
                 error_update["audio_path"] = ""
             if log_deleted and persisted_log_path:
                 error_update["log_path"] = ""
-            if written_text_path is not None and not preserve_written_text_on_error:
+            if silent_transcript_state_cleared:
+                error_update["transcript"] = ""
+                error_update["transcript_path"] = ""
+            elif written_text_path is not None and not preserve_written_text_on_error:
                 try:
                     _remove_transcript_file(written_text_path)
                 except BaseException as cleanup_exc:
