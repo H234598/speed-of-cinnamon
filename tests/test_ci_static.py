@@ -370,7 +370,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("rpm -qp --scripts", verify_script)
         self.assertIn("rpm -qp --triggers", verify_script)
         self.assertIn("{FILECAPS}", verify_script)
-        self.assertRegex(verify_script, r"mode\s*&\s*0o6000")
+        self.assertRegex(verify_script, r"permissions\s*&\s*0o7000")
 
     def test_runtime_code_does_not_read_full_environment(self) -> None:
         src_root = REPO_ROOT / "src"
@@ -1017,6 +1017,8 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("%{FILELINKTOS}", rpm_verifier)
         self.assertIn("RPM package contains unsupported file type", rpm_verifier)
         self.assertIn("RPM package contains unsupported link target", rpm_verifier)
+        self.assertIn("RPM package contains group/world-writable file mode", rpm_verifier)
+        self.assertIn("RPM package contains disallowed executable mode", rpm_verifier)
         self.assertIn("RPM package file metadata does not match file listing", rpm_verifier)
         self.assertIn('rpm2cpio "${rpm_snapshot}" | cpio -idmu --no-absolute-filenames --quiet', rpm_verifier)
         self.assertIn("python3 -m compileall -q", rpm_verifier)

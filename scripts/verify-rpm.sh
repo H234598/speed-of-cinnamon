@@ -285,13 +285,26 @@ for raw in Path(sys.argv[2]).read_text(encoding="utf-8").split("\n"):
         mode = int(mode_text, 8)
     except ValueError:
         raise SystemExit(f"RPM package contains malformed file mode for {entry}: {mode_text!r}") from None
-    if mode & 0o6000:
+    permissions = stat.S_IMODE(mode)
+    if permissions & 0o7000:
         raise SystemExit(f"RPM package contains privileged file mode for {entry}: {mode_text!r}")
+    if permissions & 0o022:
+        raise SystemExit(f"RPM package contains group/world-writable file mode for {entry}: {mode_text!r}")
     if file_caps.strip() not in {"", "(none)"}:
         raise SystemExit(f"RPM package contains file capabilities on {entry}: {file_caps!r}")
     file_type = stat.S_IFMT(mode)
     if file_type not in (stat.S_IFREG, stat.S_IFDIR):
         raise SystemExit(f"RPM package contains unsupported file type: {entry}")
+    if file_type == stat.S_IFDIR:
+        if permissions & 0o777 > 0o755:
+            raise SystemExit(f"RPM package contains disallowed directory mode for {entry}: {mode_text!r}")
+    else:
+        file_permissions = permissions & 0o777
+        if file_permissions & 0o111:
+            if file_permissions != 0o755:
+                raise SystemExit(f"RPM package contains disallowed executable mode for {entry}: {mode_text!r}")
+        elif file_permissions > 0o644:
+            raise SystemExit(f"RPM package contains disallowed file mode for {entry}: {mode_text!r}")
     if link_target:
         raise SystemExit(f"RPM package contains unsupported link target: {entry} -> {link_target}")
     try:
