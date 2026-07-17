@@ -4197,6 +4197,8 @@ def finalize_recording(
     cleanup_backup_restore_failed = False
     preserve_recording_artifacts_after_cleanup_failure = False
     preserved_encrypted_audio_path: Path | None = None
+    persisted_audio_path = state.audio_path
+    persisted_log_path = state.log_path
 
     def _backup_cleanup_file(path_text: str | None, *, suffix: str) -> Path | None:
         nonlocal audio_deleted, log_deleted, preserve_recording_artifacts_after_cleanup_failure
@@ -4824,9 +4826,9 @@ def finalize_recording(
                 and (stabilized_audio_deleted or _recording_artifact_stat(stabilized_audio_path) is None)
             ):
                 error_update["audio_path"] = ""
-            if audio_deleted and state.audio_path:
+            if audio_deleted and persisted_audio_path:
                 error_update["audio_path"] = ""
-            if log_deleted and state.log_path:
+            if log_deleted and persisted_log_path:
                 error_update["log_path"] = ""
             if written_text_path is not None and not preserve_written_text_on_error:
                 try:
@@ -4851,12 +4853,13 @@ def finalize_recording(
             ):
                 if (
                     audio_suffix
+                    and not audio_deleted
                     and _recording_artifact_stat(audio_path) is not None
                     and (not cleanup_plaintext_recording_artifacts or audio_suffix in {".wav", ".flac"})
                 ):
                     cleanup_clear_update["audio_path"] = ""
                     cleanup_targets.append(("audio_path", str(audio_path), audio_suffix))
-                if state.log_path:
+                if state.log_path and not log_deleted:
                     cleanup_clear_update["log_path"] = ""
                     cleanup_targets.append(("log_path", str(log_path) if log_path else state.log_path, ".log"))
             try:

@@ -9923,6 +9923,45 @@ class CliTest(unittest.TestCase):
         mocked_transcribe.assert_not_called()
         mocked_insert.assert_not_called()
 
+    def test_finalize_clears_silent_deleted_paths_when_done_state_write_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "silent.wav"
+            log = recordings_root / "silent.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=False)
+            args.skip_silent_auto_relisten = True
+            silence = cli.SilenceDetectionResult(True, True, 3.0, 3.0, 0.0, 0.0, "silent recording")
+            real_update = store.update
+
+            def fail_done_update(**kwargs: object) -> RecordingState:
+                if kwargs.get("status") == "done":
+                    raise RuntimeError("done write failed")
+                return real_update(**kwargs)
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch.object(store, "update", side_effect=fail_done_update),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=silence),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "done write failed"):
+                    cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+
+        self.assertEqual(final_state.status, "error")
+        self.assertEqual(final_state.audio_path, "")
+        self.assertEqual(final_state.log_path, "")
+        self.assertFalse(audio.exists())
+        self.assertFalse(log.exists())
+
     def test_finalize_keeps_silent_auto_relisten_artifacts_when_requested(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
