@@ -1840,6 +1840,18 @@ def _process_is_gone(process_target: str) -> bool:
     return False
 
 
+def _recording_process_is_absent(pid: int) -> bool:
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except (OSError, OverflowError, ValueError):
+        return False
+    return False
+
+
 def _process_group_has_recorder_session(process_group_id: int) -> bool | None:
     if process_group_id <= 0:
         return False
@@ -2215,7 +2227,7 @@ def stop_process(
         if (
             process_group_target
             and expected_process_identity
-            and _process_is_gone(str(pid))
+            and _recording_process_is_absent(pid)
             and _process_group_exists(pid)
             and _process_group_has_recorder_session(pid) is True
         ):
