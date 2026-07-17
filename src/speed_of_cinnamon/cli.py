@@ -4215,8 +4215,12 @@ def finalize_recording(
                     else:
                         if not _same_leaf_identity(current_original_stat, expected_original_stat):
                             raise RuntimeError(f"recording cleanup original changed before rollback: {original_path}")
-                        os.unlink(backup_path.name, dir_fd=parent_fd)
-                        os.fsync(parent_fd)
+                        if not _unlink_regular_leaf_with_parent_fsync(
+                            backup_path,
+                            field_name="recording cleanup backup",
+                            expected_stat=expected_backup_stat,
+                        ):
+                            raise RuntimeError(f"recording cleanup backup disappeared during rollback: {backup_path}")
                 finally:
                     try:
                         os.close(parent_fd)
