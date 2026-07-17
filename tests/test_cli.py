@@ -10104,14 +10104,26 @@ class CliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            transcripts_root = tmp_path / "speed-of-cinnamon" / "transcripts"
             recordings_root.mkdir(parents=True)
+            transcripts_root.mkdir(parents=True)
             audio = recordings_root / "silent.wav"
             log = recordings_root / "silent.log"
+            transcript = transcripts_root / "old.txt"
             audio.write_bytes(b"silent-audio")
             log.write_text("recorder log", encoding="utf-8")
+            transcript.write_text("old transcript\n", encoding="utf-8")
             state_file = tmp_path / "state.json"
             store = StateStore(state_file)
-            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            store.write(
+                RecordingState(
+                    status="processing",
+                    audio_path=str(audio),
+                    log_path=str(log),
+                    transcript="old transcript",
+                    transcript_path=str(transcript),
+                )
+            )
             args = self._build_finalize_args(keep_recording_artifacts=True)
             args.skip_silent_auto_relisten = True
             args.artifact_encryption = "passphrase"
@@ -10148,6 +10160,8 @@ class CliTest(unittest.TestCase):
         self.assertFalse(original_audio_exists)
         self.assertEqual(final_state.audio_path, str(encrypted_audio))
         self.assertEqual(final_log_path, "")
+        self.assertEqual(final_state.transcript, "")
+        self.assertEqual(final_state.transcript_path, "")
 
     def test_finalize_skips_silent_initial_recording_without_transcribing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1680,6 +1680,7 @@ def _persist_cleanup_failure_state(
     failed_paths: list[str],
     *,
     artifact_state: RecordingState | None = None,
+    clear_transcript: bool = False,
 ) -> None:
     if not failed_paths:
         return
@@ -1701,6 +1702,8 @@ def _persist_cleanup_failure_state(
                     "inserted": artifact_state.inserted,
                 }
             )
+            if clear_transcript:
+                updates["transcript"] = ""
         store.update(**updates)
     except Exception as exc:
         update_error = _redact_error_for_user(str(exc))
@@ -4489,7 +4492,12 @@ def finalize_recording(
             cleanup_failed_paths = _cleanup_failed_paths(artifact_cleanup)
             message = "silent recording skipped"
             if cleanup_failed_paths:
-                _persist_cleanup_failure_state(store, cleanup_failed_paths, artifact_state=state)
+                _persist_cleanup_failure_state(
+                    store,
+                    cleanup_failed_paths,
+                    artifact_state=state,
+                    clear_transcript=silent_transcript_state_cleared,
+                )
                 message = f"{message}; {_cleanup_failure_error(cleanup_failed_paths)}"
                 return {
                     "status": "error",
