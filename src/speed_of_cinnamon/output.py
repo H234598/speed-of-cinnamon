@@ -295,7 +295,7 @@ def _read_clipboard_dedup_state_entry() -> tuple[bool, tuple[str, float], bool]:
         return False, ("", 0.0), False
     try:
         payload = json.loads(raw)
-    except (TypeError, ValueError, RecursionError):
+    except (TypeError, ValueError, RecursionError, MemoryError):
         return False, ("", 0.0), False
     if not isinstance(payload, dict):
         return False, ("", 0.0), False
@@ -357,7 +357,7 @@ def _write_clipboard_dedup_fingerprint_state(fingerprint: str, at: float, *, pen
             json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
             field_name="clipboard dedupe state",
         )
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, MemoryError):
         return False
     return True
 

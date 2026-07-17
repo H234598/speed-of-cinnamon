@@ -226,6 +226,29 @@ class OutputTest(unittest.TestCase):
                 (False, ("", 0.0), False),
             )
 
+    def test_clipboard_dedup_state_fails_closed_when_json_read_runs_out_of_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp)
+            (state_root / output_module.CLIPBOARD_DEDUP_STATE_FILE).write_text("{}", encoding="utf-8")
+            with (
+                mock.patch("speed_of_cinnamon.output.state_dir", return_value=state_root),
+                mock.patch.object(output_module.json, "loads", side_effect=MemoryError("parse exhausted")),
+            ):
+                self.assertEqual(
+                    output_module._read_clipboard_dedup_state_entry(),
+                    (False, ("", 0.0), False),
+                )
+
+    def test_clipboard_dedup_state_write_returns_false_when_json_render_runs_out_of_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp)
+            fingerprint = output_module._clipboard_text_fingerprint("secret text")
+            with (
+                mock.patch("speed_of_cinnamon.output.state_dir", return_value=state_root),
+                mock.patch.object(output_module.json, "dumps", side_effect=MemoryError("render exhausted")),
+            ):
+                self.assertFalse(output_module._write_clipboard_dedup_fingerprint_state(fingerprint, 123.0))
+
     def test_set_clipboard_prefers_xclip(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.output.shutil.which") as mocked_which,
