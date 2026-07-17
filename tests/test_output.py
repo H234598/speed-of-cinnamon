@@ -595,6 +595,32 @@ class OutputTest(unittest.TestCase):
         self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", captured_env)
         self.assertIn("PATH", captured_env)
 
+    def test_run_with_input_skips_unencodable_environment_values(self) -> None:
+        captured_env: dict[str, str] = {}
+
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            env = kwargs.get("env")
+            if isinstance(env, dict):
+                captured_env.update(env)
+            return subprocess.CompletedProcess(["echo"], 0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch.object(output_module.os, "environ", {"HOME": "bad\ud800"}),
+            mock.patch("speed_of_cinnamon.output.subprocess.Popen", side_effect=_popen_from_run(fake_run)),
+        ):
+            _run_with_input(["echo"], "hello")
+
+        self.assertNotIn("HOME", captured_env)
+        self.assertIn("PATH", captured_env)
+
+    def test_filtered_environment_rejects_unencodable_base_values(self) -> None:
+        with self.assertRaisesRegex(OutputError, "environment value contains invalid UTF-8"):
+            output_module._filtered_environment(base={"SAFE_KEY": "bad\ud800"})
+
+    def test_filtered_environment_rejects_unencodable_base_keys(self) -> None:
+        with self.assertRaisesRegex(OutputError, "environment key contains invalid UTF-8"):
+            output_module._filtered_environment(base={"BAD\ud800": "value"})
+
     def test_run_with_input_rejects_missing_command_when_resolved_path_missing(self) -> None:
         with mock.patch("speed_of_cinnamon.output.shutil.which", return_value="/usr/bin/missing"):
             with mock.patch("speed_of_cinnamon.output.subprocess.Popen", side_effect=FileNotFoundError("missing")):
