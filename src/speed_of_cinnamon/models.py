@@ -1801,17 +1801,21 @@ def _download_url_to_file_with_fd(
         try:
             output = os.fdopen(tmp_fd, "wb")
         except (OSError, ValueError) as exc:
+            try:
+                temporary_stat = os.fstat(tmp_fd)
+            except (OSError, ValueError):
+                pass
             raise OSError("failed to open temporary model file") from exc
         tmp_fd = None
         with output:
             try:
-                temporary_stat = os.fstat(output.fileno())
-            except (OSError, ValueError) as exc:
-                raise OSError("failed to inspect temporary model file") from exc
-            try:
                 os.fchmod(output.fileno(), 0o600)
             except OSError:
                 pass
+            try:
+                temporary_stat = os.fstat(output.fileno())
+            except (OSError, ValueError) as exc:
+                raise OSError("failed to inspect temporary model file") from exc
             with _open_model_download_response(
                 url,
                 allowed_hosts=allowed_hosts,

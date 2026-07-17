@@ -1676,6 +1676,7 @@ class ModelsTest(unittest.TestCase):
             self.assertEqual(len(created_fds), 1)
             with self.assertRaises(OSError):
                 os.fstat(created_fds[0])
+            self.assertEqual([], list(Path(tmp).glob("*.tmp")))
 
     def test_download_url_closes_temporary_file_when_identity_inspection_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
