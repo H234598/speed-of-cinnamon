@@ -8653,6 +8653,24 @@ class CliTest(unittest.TestCase):
 
             self.assertFalse(backup.exists())
 
+    def test_cleanup_backup_copy_retries_interrupted_reads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "recording.wav"
+            backup = root / ".cleanup.recording.bak"
+            source.write_bytes(b"payload")
+
+            with mock.patch.object(cli.os, "read", side_effect=[InterruptedError(), b"payload", b""]):
+                cli._copy_recording_artifact_to_backup(source, backup, expected_stat=source.lstat())
+
+            self.assertEqual(backup.read_bytes(), b"payload")
+
+    def test_finalization_lock_write_retries_interrupted_writes(self) -> None:
+        with mock.patch.object(cli.os, "write", side_effect=[InterruptedError(), 3]) as mocked_write:
+            cli._write_all(123, b"abc", field_name="finalization lock")
+
+        self.assertEqual(mocked_write.call_count, 2)
+
     def test_finalize_removes_partial_cleanup_backup_when_backup_copy_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

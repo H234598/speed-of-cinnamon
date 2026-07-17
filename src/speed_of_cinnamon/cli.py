@@ -365,7 +365,10 @@ def _write_all(fd: int, payload: bytes, *, field_name: str) -> None:
     view = memoryview(payload)
     offset = 0
     while offset < len(view):
-        written = os.write(fd, view[offset:])
+        try:
+            written = os.write(fd, view[offset:])
+        except InterruptedError:
+            continue
         if written <= 0:
             raise OSError(f"short write to {field_name}")
         offset += written
@@ -1934,7 +1937,10 @@ def _copy_recording_artifact_to_backup(
         )
         os.fchmod(backup_fd, 0o600)
         while True:
-            chunk = os.read(source_fd, 1024 * 1024)
+            try:
+                chunk = os.read(source_fd, 1024 * 1024)
+            except InterruptedError:
+                continue
             if not chunk:
                 break
             _write_all(backup_fd, chunk, field_name="recording cleanup backup")
