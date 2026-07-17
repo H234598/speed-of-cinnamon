@@ -312,12 +312,27 @@ def _scrub_temp_settings_export_file(
                     break
                 remaining -= written
             try:
-                os.fsync(fd)
+                while True:
+                    try:
+                        os.fsync(fd)
+                        break
+                    except InterruptedError:
+                        continue
             except OSError:
                 pass
-        os.ftruncate(fd, 0)
+        while True:
+            try:
+                os.ftruncate(fd, 0)
+                break
+            except InterruptedError:
+                continue
         try:
-            os.fsync(fd)
+            while True:
+                try:
+                    os.fsync(fd)
+                    break
+                except InterruptedError:
+                    continue
         except OSError:
             pass
     except BaseException as exc:

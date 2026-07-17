@@ -1109,6 +1109,31 @@ class SettingsExportTest(unittest.TestCase):
 
         self.assertEqual(mocked_write.call_count, 2)
 
+    def test_scrub_temp_file_retries_interrupted_sync_and_truncate(self) -> None:
+        with (
+            mock.patch.object(settings_export_module.os, "open", return_value=123),
+            mock.patch.object(
+                settings_export_module.os,
+                "fstat",
+                return_value=mock.Mock(st_mode=stat.S_IFREG, st_size=0),
+            ),
+            mock.patch.object(
+                settings_export_module.os,
+                "ftruncate",
+                side_effect=[InterruptedError(), None],
+            ) as mocked_ftruncate,
+            mock.patch.object(
+                settings_export_module.os,
+                "fsync",
+                side_effect=[InterruptedError(), None],
+            ) as mocked_fsync,
+            mock.patch.object(settings_export_module.os, "close"),
+        ):
+            settings_export_module._scrub_temp_settings_export_file(456, ".settings.tmp")
+
+        self.assertEqual(mocked_ftruncate.call_count, 2)
+        self.assertEqual(mocked_fsync.call_count, 2)
+
     def test_write_export_reports_parent_close_failure_after_successful_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
