@@ -2581,7 +2581,11 @@ MyApplet.prototype = {
           return false;
         }
         if (!currentProcessGroupIdentity && processIdentifier) {
-          if (this._processGroupState(processGroupIdentity) === "stopped") {
+          let groupState = this._processGroupState(processGroupIdentity);
+          if (groupState === "stopped") {
+            return true;
+          }
+          if (groupState === "live" && this._killProcessGroup(process, processGroupIdentity)) {
             return true;
           }
           return false;

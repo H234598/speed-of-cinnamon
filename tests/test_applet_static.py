@@ -4556,9 +4556,23 @@ class AppletStaticTest(unittest.TestCase):
             '      }',
             block,
         )
-        self.assertIn('if (this._processGroupState(processGroupIdentity) === "stopped") {\n            return true;', block)
+        self.assertIn('let groupState = this._processGroupState(processGroupIdentity);', block)
+        self.assertIn('if (groupState === "stopped") {\n            return true;', block)
         self.assertIn("return true;", block)
         self.assertIn("return false;", block)
+
+    def test_process_termination_kills_live_private_session_after_leader_exit(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_terminateProcess: function(process)")
+        end = source.index("\n  _terminateAllProcesses:", start)
+        block = source[start:end]
+
+        leader_exit_start = block.index("if (!currentProcessGroupIdentity && processIdentifier)")
+        leader_exit_end = block.index("\n        }", leader_exit_start) + len("\n        }")
+        leader_exit_block = block[leader_exit_start:leader_exit_end]
+        self.assertIn('let groupState = this._processGroupState(processGroupIdentity);', leader_exit_block)
+        self.assertIn('if (groupState === "stopped") {', leader_exit_block)
+        self.assertIn('if (groupState === "live" && this._killProcessGroup(process, processGroupIdentity)) {', leader_exit_block)
 
     def test_subprocess_tree_cleanup_uses_identity_checked_private_session(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
