@@ -11091,6 +11091,23 @@ class CliTest(unittest.TestCase):
         self.assertEqual(final_state.status, "recording")
         mocked_finalize.assert_not_called()
 
+    def test_stop_reports_lifecycle_lock_when_state_is_idle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            identity = cli._finalization_lock_identity_for_pid(os.getpid())
+            self.assertIsNotNone(identity)
+            lock_path.write_text(f"{os.getpid()}\n{identity}\n", encoding="ascii")
+            lock_path.chmod(0o600)
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = cli.run(["stop", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "finalizing")
+        self.assertIn("lifecycle in progress", payload["message"])
+
     def test_cancel_preserves_reaped_recording_when_group_lives_without_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"

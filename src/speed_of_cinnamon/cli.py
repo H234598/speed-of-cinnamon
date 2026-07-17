@@ -5091,6 +5091,8 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
             return _finalize_non_recording_state_with_lock(args, store)
         if state.status == "finalizing":
             return _finalize_non_recording_state_with_lock(args, store)
+        if _is_finalization_lock_active(store.path):
+            return {"status": "finalizing", "message": "recording lifecycle in progress; wait for completion"}
         return {"status": state.status, "message": "not recording"}
 
     lock_path = _acquire_finalization_lock(store.path)
