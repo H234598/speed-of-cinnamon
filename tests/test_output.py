@@ -4,6 +4,7 @@ import json
 import os
 import stat
 import subprocess
+import threading
 import unittest
 import tempfile
 import time
@@ -807,6 +808,35 @@ class OutputTest(unittest.TestCase):
             output_file.seek(0)
             self.assertEqual(output_file.read(), b"abc")
             self.assertTrue(capture.overflowed)
+
+    def test_bounded_output_capture_keeps_draining_after_sink_failure(self) -> None:
+        class FailingOutput:
+            def write(self, _payload: bytes) -> int:
+                raise OSError("sink failed")
+
+            def flush(self) -> None:
+                return None
+
+        capture = output_module._BoundedOutputCapture(FailingOutput(), 3)
+        write_errors: list[BaseException] = []
+
+        def write_output() -> None:
+            try:
+                capture.write(b"x" * (1024 * 1024))
+            except BaseException as exc:
+                write_errors.append(exc)
+
+        writer = threading.Thread(target=write_output)
+        writer.start()
+        writer.join(timeout=1.0)
+        if writer.is_alive():
+            capture.close_writer()
+            writer.join(timeout=1.0)
+        with self.assertRaisesRegex(OSError, "bounded output capture failed"):
+            capture.finish()
+
+        self.assertFalse(writer.is_alive())
+        self.assertEqual(write_errors, [])
 
     def test_run_stdout_bounds_live_process_output(self) -> None:
         with mock.patch("speed_of_cinnamon.output.MAX_OUTPUT_CHARS", 64):

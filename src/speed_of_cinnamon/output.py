@@ -1050,10 +1050,15 @@ class _BoundedOutputCapture:
                 if not chunk:
                     break
                 remaining = self._max_bytes - self._captured_bytes
-                if remaining > 0:
+                if remaining > 0 and self._error is None:
                     captured = chunk[:remaining]
-                    self._output_file.write(captured)
-                    self._captured_bytes += len(captured)
+                    try:
+                        self._output_file.write(captured)
+                    except BaseException as exc:
+                        self._error = exc
+                        self._captured_bytes = self._max_bytes
+                    else:
+                        self._captured_bytes += len(captured)
                 if len(chunk) > max(remaining, 0):
                     self.overflowed = True
             self._output_file.flush()
