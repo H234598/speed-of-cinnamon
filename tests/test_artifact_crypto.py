@@ -1101,6 +1101,28 @@ class ArtifactCryptoTest(unittest.TestCase):
         self.assertTrue(getattr(fake_proc_holder["proc"], "killed"))
         self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 1)
 
+    def test_secret_tool_pipe_reader_retries_interrupted_reads(self) -> None:
+        class DummyStream:
+            def __init__(self, fd: int) -> None:
+                self._fd = fd
+
+            def fileno(self) -> int:
+                return self._fd
+
+        process = mock.Mock(stdout=DummyStream(10), stderr=DummyStream(11))
+        with (
+            mock.patch.object(artifact_crypto.os, "set_blocking"),
+            mock.patch.object(
+                artifact_crypto.os,
+                "read",
+                side_effect=[InterruptedError(), b"", b""],
+            ) as mocked_read,
+        ):
+            result = artifact_crypto._read_secret_tool_pipes_bounded(process, deadline=artifact_crypto.time.monotonic() + 1)
+
+        self.assertEqual(result, (b"", b""))
+        self.assertEqual(mocked_read.call_count, 3)
+
     def test_secret_tool_environment_skips_control_character_values(self) -> None:
         with mock.patch.dict(
             os.environ,

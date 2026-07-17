@@ -1311,6 +1311,8 @@ def _read_secret_tool_pipes_bounded(
                 chunk = os.read(fd, 8192)
             except BlockingIOError:
                 continue
+            except InterruptedError:
+                continue
             except Exception as exc:
                 _stop_secret_tool_process(proc)
                 raise ArtifactCryptoError("Secret Service keyring helper output could not be captured safely") from exc
