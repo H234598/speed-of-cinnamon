@@ -15,7 +15,7 @@ import urllib.request
 from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, cast
 
 from .http_safety import is_loopback_hostname
 from .paths import ctranslate2_models_dir, models_dir
@@ -143,8 +143,8 @@ def _locked_model_operation(root: Path) -> Iterator[None]:
             cleanup_errors.append(cleanup_error)
         if cleanup_errors:
             if primary_error is not None:
-                for cleanup_error in cleanup_errors:
-                    _note_cleanup_failure(primary_error, cleanup_error)
+                for additional_error in cleanup_errors:
+                    _note_cleanup_failure(primary_error, additional_error)
             else:
                 raise ModelError("failed to release model operation lock") from cleanup_errors[0]
 
@@ -193,7 +193,7 @@ def _contains_http_header_control_chars(value: str) -> bool:
     return False
 
 
-def _is_valid_checksum(value: str) -> bool:
+def _is_valid_checksum(value: object) -> bool:
     return (
         isinstance(value, str)
         and len(value) == MAX_MODEL_CHECKSUM_CHARS
@@ -839,7 +839,7 @@ def _model_download_redirect_target(exc: urllib.error.HTTPError, base_url: str) 
     return urllib.parse.urljoin(base_url, location.strip())
 
 
-def _open_model_download_url(url: str, *, timeout: int = 30) -> object:
+def _open_model_download_url(url: str, *, timeout: int = 30) -> Any:
     return _MODEL_DOWNLOAD_OPENER.open(url, timeout=timeout)
 
 
@@ -849,7 +849,7 @@ def _open_model_download_response(
     allowed_hosts: set[str],
     redirect_allowed_hosts: set[str],
     allowed_urls: set[str] | None,
-) -> object:
+) -> Any:
     current_url = url
     for _ in range(MAX_MODEL_DOWNLOAD_REDIRECTS + 1):
         try:
@@ -1628,7 +1628,6 @@ def model_status(model: ModelSpec, verify: bool = False) -> dict[str, object]:
     if not isinstance(verify, bool):
         raise ModelError("verify must be a boolean")
     path = model_path(model)
-    exists = path.exists()
     downloaded = _model_is_downloaded(model, path)
     checksum = ""
     verification_failed = False
@@ -1763,7 +1762,8 @@ def _model_file_sha1s(model: ModelSpec) -> dict[str, str]:
 
 
 def _download_url_to_file(url: str, tmp_dir: Path, size_limit: int, model_name: str, *, prefix: str) -> tuple[Path, int]:
-    return _download_url_to_file_with_fd(url, tmp_dir, None, size_limit, model_name, prefix=prefix)
+    result = _download_url_to_file_with_fd(url, tmp_dir, None, size_limit, model_name, prefix=prefix)
+    return cast(tuple[Path, int], result)
 
 
 def _unlink_temporary_download_name(
@@ -2048,13 +2048,16 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
             target_parent_fd = _open_model_parent_directory(target, root, field_name="model file path")
             try:
                 _assert_model_path_for_atomic_replace(target, root, field_name="model file path")
-                tmp_path, downloaded = _download_url_to_file_with_fd(
-                    url,
-                    target.parent,
-                    target_parent_fd,
-                    remaining_size_limit,
-                    model.name,
-                    prefix=f".{target.name}.",
+                tmp_path, downloaded = cast(
+                    tuple[Path, int],
+                    _download_url_to_file_with_fd(
+                        url,
+                        target.parent,
+                        target_parent_fd,
+                        remaining_size_limit,
+                        model.name,
+                        prefix=f".{target.name}.",
+                    ),
                 )
             finally:
                 try:
@@ -2369,14 +2372,17 @@ def _download_model_transaction(name: str, force: bool = False) -> dict[str, obj
     try:
         parent_fd = _open_model_parent_directory(path, root, field_name="model path")
         try:
-            tmp_path, _, tmp_stat = _download_url_to_file_with_fd(
-                model.url,
-                path.parent,
-                parent_fd,
-                size_limit,
-                model.name,
-                prefix=f".{path.name}.",
-                include_stat=True,
+            tmp_path, _, tmp_stat = cast(
+                tuple[Path, int, os.stat_result],
+                _download_url_to_file_with_fd(
+                    model.url,
+                    path.parent,
+                    parent_fd,
+                    size_limit,
+                    model.name,
+                    prefix=f".{path.name}.",
+                    include_stat=True,
+                ),
             )
         finally:
             try:
