@@ -49,6 +49,15 @@ def _note_lock_cleanup_failure(primary: BaseException, cleanup_error: BaseExcept
     primary.add_note(f"alarm store lock cleanup failed: {cleanup_error}")
 
 
+def _flock_retry(fd: int, operation: int) -> None:
+    while True:
+        try:
+            fcntl.flock(fd, operation)
+            return
+        except InterruptedError:
+            continue
+
+
 def _assert_clean_path(path: Path, *, field_name: str) -> None:
     if not isinstance(path, Path):
         raise RuntimeError(f"{field_name} path must be a path")
@@ -114,7 +123,7 @@ def _locked_alarm_store(path: Path | None = None) -> Iterator[Path]:
     primary_error: BaseException | None = None
     try:
         assert_fd_is_regular_private_file(fd, field_name="alarm store lock file", require_private_mode=True)
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        _flock_retry(fd, fcntl.LOCK_EX)
         assert_fd_is_regular_private_file(fd, field_name="alarm store lock file", require_private_mode=True)
         yield store_path
     except BaseException as exc:
@@ -123,7 +132,7 @@ def _locked_alarm_store(path: Path | None = None) -> Iterator[Path]:
     finally:
         cleanup_errors: list[BaseException] = []
         try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            _flock_retry(fd, fcntl.LOCK_UN)
         except BaseException as cleanup_error:
             cleanup_errors.append(cleanup_error)
         try:

@@ -38,6 +38,22 @@ from speed_of_cinnamon.alarms import (
 
 
 class AlarmTest(unittest.TestCase):
+    def test_alarm_store_lock_retries_interrupted_exclusive_lock(self) -> None:
+        operations: list[int] = []
+
+        def interrupt_first_lock(_fd: int, operation: int) -> None:
+            operations.append(operation)
+            if len(operations) == 1:
+                raise InterruptedError()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            with mock.patch.object(alarm_module.fcntl, "flock", side_effect=interrupt_first_lock):
+                with alarm_module._locked_alarm_store(path):
+                    pass
+
+        self.assertEqual(operations, [fcntl.LOCK_EX, fcntl.LOCK_EX, fcntl.LOCK_UN])
+
     def test_load_alarm_store_rejects_null_byte_path(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "invalid null byte"):
             load_alarm_store(Path("alarms\x00.json"))
