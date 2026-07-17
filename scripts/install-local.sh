@@ -209,7 +209,6 @@ activate_staged() {
   local kind="$3"
   local label="$4"
   local backup_path="${rollback_root}/.${label}"
-  local had_existing=0
 
   if [[ -L "${target}" ]]; then
     rollback_staged_items
@@ -222,30 +221,22 @@ activate_staged() {
     activated_backups+=("${backup_path}")
     activated_kinds+=("${kind}")
     activated_had_existing+=("1")
-    had_existing=1
     if ! "${safe_fs_cmd[@]}" replace install "${target}" "${backup_path}" --src-kind "${kind}"; then
       rollback_staged_items
       printf 'failed to back up existing %s\n' "${label}" >&2
       exit 1
     fi
+  else
+    activated_targets+=("${target}")
+    activated_backups+=("${backup_path}")
+    activated_kinds+=("${kind}")
+    activated_had_existing+=("0")
   fi
 
   if ! "${safe_fs_cmd[@]}" replace install "${source}" "${target}" --src-kind "${kind}"; then
-    if [[ "${had_existing}" == "0" ]]; then
-      if ! "${safe_fs_cmd[@]}" remove install "${target}" --kind "${kind}"; then
-        printf 'rollback failed for %s\n' "${target}" >&2
-      fi
-    fi
     rollback_staged_items
     printf 'failed to activate staged %s\n' "${label}" >&2
     exit 1
-  fi
-
-  if [[ "${had_existing}" == "0" ]]; then
-    activated_targets+=("${target}")
-    activated_backups+=("")
-    activated_kinds+=("${kind}")
-    activated_had_existing+=("0")
   fi
 }
 
@@ -255,14 +246,23 @@ rollback_staged_items() {
   local kind
   local index
 
+  if [[ "${rollback_attempted}" == "1" ]]; then
+    return 0
+  fi
+  rollback_attempted=1
+
   for ((index = ${#activated_targets[@]} - 1; index >= 0; index--)); do
     target="${activated_targets[index]}"
     backup="${activated_backups[index]}"
     kind="${activated_kinds[index]}"
 
     if [[ "${activated_had_existing[index]}" == "1" ]]; then
-      if ! "${safe_fs_cmd[@]}" replace install "${backup}" "${target}" --src-kind "${kind}"; then
-        printf 'rollback failed for %s\n' "${target}" >&2
+      if [[ -e "${backup}" || -L "${backup}" ]]; then
+        if ! "${safe_fs_cmd[@]}" replace install "${backup}" "${target}" --src-kind "${kind}"; then
+          printf 'rollback failed for %s\n' "${target}" >&2
+        fi
+      elif [[ ! -e "${target}" && ! -L "${target}" ]]; then
+        printf 'rollback failed for %s: backup is missing\n' "${target}" >&2
       fi
     else
       if ! "${safe_fs_cmd[@]}" remove-leaf install "${target}"; then
@@ -278,6 +278,16 @@ install_workspace_cleanup() {
       printf 'failed to clean install staging workspace: %s\n' "${staged_workspace}" >&2
     fi
   fi
+}
+
+install_exit_cleanup() {
+  local exit_code="$?"
+
+  if [[ "${install_complete}" != "1" ]]; then
+    rollback_staged_items
+  fi
+  install_workspace_cleanup
+  return "${exit_code}"
 }
 
 validate_staged_workspace() {
@@ -315,18 +325,20 @@ reject_unsafe_file "${repo_dir}/docs/man/speed-of-cinnamon.1" "man page source"
 reject_unsafe_file "${repo_dir}/docs/man/speed-of-cinnamon-alarms.1" "man page source"
 
 resolve_tmp_root >/dev/null
+activated_targets=()
+activated_backups=()
+activated_kinds=()
+activated_had_existing=()
+rollback_attempted=0
+install_complete=0
 staged_workspace="$(mktemp -d "${app_data}/install-stage-XXXXXX")"
-trap install_workspace_cleanup EXIT
+trap install_exit_cleanup EXIT
 validate_staged_workspace
 rollback_root="${staged_workspace}/rollback"
 safe_fs mkdirs install "${rollback_root}"
 
 staging_root="$(write_staging_dir "${repo_dir}" "${staged_workspace}")"
 
-activated_targets=()
-activated_backups=()
-activated_kinds=()
-activated_had_existing=()
 wrapper_target="${bin_dir}/speed-of-cinnamon"
 
 activate_staged "${staging_root}/speed-of-cinnamon/share/${uuid}" "${applet_target}" "dir" "applet"
@@ -334,6 +346,7 @@ activate_staged "${staging_root}/speed-of-cinnamon/python/speed_of_cinnamon" "${
 activate_staged "${staging_root}/speed-of-cinnamon/bin/speed-of-cinnamon" "${wrapper_target}" "file" "wrapper"
 activate_staged "${staging_root}/man/man1/speed-of-cinnamon.1" "${man_dir}/speed-of-cinnamon.1" "file" "man-page"
 activate_staged "${staging_root}/man/man1/speed-of-cinnamon-alarms.1" "${man_dir}/speed-of-cinnamon-alarms.1" "file" "man-page-alarms"
+install_complete=1
 
 printf 'Installed %s to %s\n' "${uuid}" "${applet_target}"
 printf 'Installed backend command to %s/speed-of-cinnamon\n' "${bin_dir}"
