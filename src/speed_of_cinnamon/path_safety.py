@@ -439,6 +439,50 @@ def _write_atomically_without_following_symlinks(
     def _same_leaf_inode(first: os.stat_result, second: os.stat_result) -> bool:
         return (first.st_dev, first.st_ino, first.st_mode) == (second.st_dev, second.st_ino, second.st_mode)
 
+    def _unlink_leaf_safely(
+        leaf_name: str,
+        expected_stat: os.stat_result,
+        *,
+        field_name: str,
+    ) -> bool:
+        try:
+            current_stat = os.stat(leaf_name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        if not _same_leaf_snapshot(current_stat, expected_stat):
+            raise OSError(f"{field_name} changed before cleanup")
+        for _ in range(100):
+            cleanup_name = f"{leaf_name}.{secrets.token_hex(8)}.cleanup"
+            try:
+                _rename_without_replacing(
+                    leaf_name,
+                    cleanup_name,
+                    directory_fd=parent_fd,
+                    field_name=f"{field_name} cleanup",
+                )
+            except FileExistsError:
+                continue
+            try:
+                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                if not _same_leaf_identity(claimed_stat, expected_stat):
+                    raise OSError(f"{field_name} changed before cleanup")
+                os.unlink(cleanup_name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+            except BaseException as exc:
+                try:
+                    _rename_without_replacing(
+                        cleanup_name,
+                        leaf_name,
+                        directory_fd=parent_fd,
+                        field_name=f"{field_name} restore",
+                    )
+                    os.fsync(parent_fd)
+                except BaseException as restore_error:
+                    _note_cleanup_failure(exc, restore_error)
+                raise
+            return True
+        raise OSError(f"{field_name} cleanup path could not be claimed")
+
     try:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag
         try:
@@ -553,7 +597,12 @@ def _write_atomically_without_following_symlinks(
                         or not _same_leaf_inode(current_target_stat, target_stat)
                     ):
                         raise OSError(f"{field_name} path changed during backup activation")
-                    os.unlink(path.name, dir_fd=parent_fd)
+                    if not _unlink_leaf_safely(
+                        path.name,
+                        current_target_stat,
+                        field_name=field_name,
+                    ):
+                        raise OSError(f"{field_name} disappeared before activation")
                     backup_name = candidate_name
                     backup_moved = True
                     os.fsync(parent_fd)
@@ -668,7 +717,12 @@ def _write_atomically_without_following_symlinks(
                             same_activation = _same_leaf_identity
                         if expected_activation_stat is None or not same_activation(current_target_stat, expected_activation_stat):
                             raise OSError(f"{field_name} target changed during rollback")
-                        os.unlink(path.name, dir_fd=parent_fd)
+                        if not _unlink_leaf_safely(
+                            path.name,
+                            current_target_stat,
+                            field_name=f"{field_name} rollback",
+                        ):
+                            raise OSError(f"{field_name} disappeared during rollback")
                         os.fsync(parent_fd)
                 if backup_moved:
                     try:

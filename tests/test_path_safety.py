@@ -274,7 +274,7 @@ class PathSafetyTest(unittest.TestCase):
             with mock.patch.object(
                 path_safety.secrets,
                 "token_hex",
-                side_effect=["temp", "fixed", "free", "cleanup"],
+                side_effect=["temp", "fixed", "free", "target-cleanup", "cleanup"],
             ):
                 path_safety.write_text_atomically_without_following_symlinks(target, "new")
 
@@ -314,7 +314,7 @@ class PathSafetyTest(unittest.TestCase):
 
             def unlink_then_interrupt(name: object, *args: object, **kwargs: object) -> None:
                 nonlocal interrupted
-                if name == target.name and not interrupted:
+                if isinstance(name, str) and name.endswith(".cleanup") and not interrupted:
                     interrupted = True
                     real_unlink(name, *args, **kwargs)
                     raise KeyboardInterrupt
@@ -340,7 +340,7 @@ class PathSafetyTest(unittest.TestCase):
                 nonlocal target_stats
                 if path == target.name and kwargs.get("dir_fd") is not None:
                     target_stats += 1
-                    if target_stats == 4:
+                    if target_stats == 5:
                         raise OSError("post-activation inspection failed")
                 return real_stat(path, *args, **kwargs)
 
@@ -435,6 +435,32 @@ class PathSafetyTest(unittest.TestCase):
             self.assertEqual(target.read_text(encoding="utf-8"), "racing target")
             self.assertTrue(list(Path(tmp).glob(".settings.json.*.bak")))
             self.assertFalse(list(Path(tmp).glob(".settings.json.*.tmp")))
+
+    def test_atomic_write_preserves_target_replacement_after_backup_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            target.write_text("old", encoding="utf-8")
+            replacement = Path(tmp) / "replacement.json"
+            replacement.write_text("racing target", encoding="utf-8")
+            real_rename = path_safety._rename_without_replacing
+
+            def rename_then_swap(
+                source: object,
+                destination: object,
+                *args: object,
+                **kwargs: object,
+            ) -> None:
+                if source == target.name and str(destination).endswith(".cleanup"):
+                    target.unlink()
+                    replacement.replace(target)
+                real_rename(source, destination, *args, **kwargs)
+
+            with mock.patch.object(path_safety, "_rename_without_replacing", side_effect=rename_then_swap):
+                with self.assertRaisesRegex(OSError, "changed before cleanup"):
+                    path_safety.write_text_atomically_without_following_symlinks(target, "new")
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "racing target")
+            self.assertFalse(list(Path(tmp).glob(".settings.json.*.bak")))
 
     def test_atomic_write_does_not_clobber_target_created_during_rollback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -866,7 +892,7 @@ class PathSafetyTest(unittest.TestCase):
             real_unlink = path_safety.os.unlink
 
             def fail_backup_cleanup(name: object, *args: object, **kwargs: object) -> None:
-                if isinstance(name, str) and name.endswith(".cleanup"):
+                if isinstance(name, str) and ".bak." in name and name.endswith(".cleanup"):
                     raise OSError("backup cleanup failed")
                 real_unlink(name, *args, **kwargs)
 
@@ -883,7 +909,7 @@ class PathSafetyTest(unittest.TestCase):
             real_unlink = path_safety.os.unlink
 
             def interrupt_backup_cleanup(name: object, *args: object, **kwargs: object) -> None:
-                if isinstance(name, str) and name.endswith(".cleanup"):
+                if isinstance(name, str) and ".bak." in name and name.endswith(".cleanup"):
                     raise KeyboardInterrupt("backup cleanup interrupted")
                 real_unlink(name, *args, **kwargs)
 
