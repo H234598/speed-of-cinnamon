@@ -43,6 +43,34 @@ class SafeLocalFsTest(unittest.TestCase):
             os.close(fd)
             self.assertTrue(target.is_dir())
 
+    def test_copy_file_opens_source_without_blocking_on_fifo_race(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.txt"
+            target = root / "target.txt"
+            source.write_text("safe\n", encoding="utf-8")
+            real_open = SAFE_LOCAL_FS.os.open
+            source_flags: list[int] = []
+
+            def record_source_flags(path: object, flags: int, *args: object, **kwargs: object) -> int:
+                if path == source.name:
+                    source_flags.append(flags)
+                return real_open(path, flags, *args, **kwargs)
+
+            args = SAFE_LOCAL_FS.argparse.Namespace(
+                action="test",
+                src=str(source),
+                dst=str(target),
+                mode="0644",
+                dst_must_not_exist=False,
+            )
+            with mock.patch.object(SAFE_LOCAL_FS.os, "open", side_effect=record_source_flags):
+                SAFE_LOCAL_FS.cmd_copy_file(args)
+
+            self.assertTrue(source_flags)
+            self.assertTrue(source_flags[0] & getattr(SAFE_LOCAL_FS.os, "O_NONBLOCK", 0))
+            self.assertEqual(target.read_text(encoding="utf-8"), "safe\n")
+
     def test_remove_leaf_unlinks_symlink_leaf_without_following_it(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

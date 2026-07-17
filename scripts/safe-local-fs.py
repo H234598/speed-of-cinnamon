@@ -338,7 +338,11 @@ def cmd_copy_file(args: argparse.Namespace) -> None:
         source_checked = _lstat_at(src_fd, src_name)
         if source_checked is None:
             fail(f"source file missing during {args.action}: {src}")
-        with os.fdopen(os.open(src_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=src_fd), "rb") as handle:
+        nonblock_flag = getattr(os, "O_NONBLOCK", 0)
+        with os.fdopen(
+            os.open(src_name, os.O_RDONLY | os.O_NOFOLLOW | nonblock_flag, dir_fd=src_fd),
+            "rb",
+        ) as handle:
             source_before = os.fstat(handle.fileno())
             if _source_file_signature(source_checked) != _source_file_signature(source_before):
                 fail(f"source changed during {args.action}: {src}")
@@ -364,7 +368,8 @@ def cmd_copy_file(args: argparse.Namespace) -> None:
 
 def _hash_file(path: Path) -> str:
     hasher = hashlib.sha256()
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    nonblock_flag = getattr(os, "O_NONBLOCK", 0)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | nonblock_flag)
     with os.fdopen(fd, "rb", closefd=True) as handle:
         for chunk in iter(lambda: handle.read(COPY_CHUNK_SIZE), b""):
             hasher.update(chunk)
