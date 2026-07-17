@@ -3751,6 +3751,48 @@ class ModelsTest(unittest.TestCase):
             self.assertEqual(list(path.parent.glob(f".{path.name}.*.backup")), [])
             self.assertEqual(list(path.parent.glob(f".{path.name}.*.tmp")), [])
 
+    def test_download_model_rejects_temp_change_after_checksum(self) -> None:
+        data = b"trusted model"
+        spec = models.ModelSpec(
+            name="temp-change-after-checksum",
+            filename="ggml-temp-change-after-checksum.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(data).hexdigest(),
+            description="temp change after checksum",
+        )
+        real_replace = models._replace_model_sibling_path
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
+        ):
+            def replace_after_temp_mutation(
+                source: Path,
+                target: Path,
+                root: Path,
+                *,
+                field_name: str = "model path",
+                expected_source_stat: os.stat_result | None = None,
+            ) -> None:
+                if target == models.model_path(spec) and source.name.startswith(f".{spec.filename}."):
+                    source.write_bytes(b"tampered model")
+                real_replace(
+                    source,
+                    target,
+                    root,
+                    field_name=field_name,
+                    expected_source_stat=expected_source_stat,
+                )
+
+            with mock.patch.object(models, "_replace_model_sibling_path", side_effect=replace_after_temp_mutation):
+                with self.assertRaisesRegex(models.ModelError, "source changed before activation"):
+                    models.download_model(spec.name)
+
+            self.assertFalse(models.model_path(spec).exists())
+            self.assertFalse(list(models.model_path(spec).parent.glob(f".{spec.filename}.*.tmp")))
+
     def test_download_model_preserves_backup_when_target_becomes_dangling_symlink(self) -> None:
         old_data = b"old model"
         new_data = b"new model"

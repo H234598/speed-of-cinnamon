@@ -2255,7 +2255,7 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
         checksum = sha1_file(tmp_path)
         if checksum != model.sha1:
             raise ModelError(f"downloaded checksum mismatch for {model.name}: {checksum}")
-        tmp_stat = tmp_path.stat()
+        tmp_stat = tmp_path.stat(follow_symlinks=False)
         try:
             _assert_model_path_for_atomic_replace(path, root, field_name="model path")
             if path.exists():
@@ -2286,7 +2286,13 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
             _assert_model_path_for_atomic_replace(path, root, field_name="model path")
             # The helper can raise after activation when the parent fsync fails.
             try:
-                _replace_model_sibling_path(tmp_path, path, root, field_name="model path")
+                _replace_model_sibling_path(
+                    tmp_path,
+                    path,
+                    root,
+                    field_name="model path",
+                    expected_source_stat=tmp_stat,
+                )
             except (OSError, ModelError):
                 replaced_path = tmp_path is not None and not tmp_path.exists()
                 raise
