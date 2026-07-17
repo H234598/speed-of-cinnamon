@@ -13298,6 +13298,12 @@ class CliTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "append_space must be a boolean"):
             cli.append_space_if_needed("hello", "yes")  # type: ignore[arg-type]
 
+    def test_fsync_retries_interrupted_calls(self) -> None:
+        with mock.patch.object(cli.os, "fsync", side_effect=[InterruptedError(), None]) as mocked_fsync:
+            cli._fsync_fd(123)
+
+        self.assertEqual(mocked_fsync.call_count, 2)
+
     def test_prepare_output_text_rejects_non_bool_sanitize_flag(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "sanitize must be a boolean"):
             cli.prepare_output_text("hello", True, "yes")  # type: ignore[arg-type]

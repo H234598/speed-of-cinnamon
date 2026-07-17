@@ -374,6 +374,15 @@ def _write_all(fd: int, payload: bytes, *, field_name: str) -> None:
         offset += written
 
 
+def _fsync_fd(fd: int) -> None:
+    while True:
+        try:
+            os.fsync(fd)
+            return
+        except InterruptedError:
+            continue
+
+
 def _same_finalization_lock_snapshot(
     first: os.stat_result,
     second: os.stat_result,
@@ -438,7 +447,7 @@ def _unlink_finalization_lock_at(
             if expected_stat is not None and not _same_finalization_lock_identity(claimed, expected_stat):
                 raise RuntimeError("finalization lock changed before cleanup")
             os.unlink(cleanup_name, dir_fd=parent_fd)
-            os.fsync(parent_fd)
+            _fsync_fd(parent_fd)
         except BaseException as exc:
             try:
                 _rename_without_replacing(
@@ -447,7 +456,7 @@ def _unlink_finalization_lock_at(
                     directory_fd=parent_fd,
                     field_name="finalization lock cleanup restore",
                 )
-                os.fsync(parent_fd)
+                _fsync_fd(parent_fd)
             except BaseException as restore_error:
                 exc.add_note(f"finalization lock cleanup restore failed: {restore_error}")
             if isinstance(exc, RuntimeError) and str(exc) == "finalization lock changed before cleanup":
@@ -554,7 +563,7 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                     _write_all(fd, f"{os.getpid()}\n".encode("ascii"), field_name="finalization lock")
                 else:
                     _write_all(fd, f"{os.getpid()}\n{identity}\n".encode("ascii"), field_name="finalization lock")
-                os.fsync(fd)
+                _fsync_fd(fd)
             except OSError:
                 try:
                     os.close(fd)
@@ -1875,7 +1884,7 @@ def _unlink_regular_leaf_with_parent_fsync(
                 if not _same_leaf_claim_identity(claimed, current):
                     raise RuntimeError(f"{field_name} changed before deletion: {path}")
                 os.unlink(cleanup_name, dir_fd=parent_fd)
-                os.fsync(parent_fd)
+                _fsync_fd(parent_fd)
             except BaseException as exc:
                 try:
                     _rename_without_replacing(
@@ -1884,7 +1893,7 @@ def _unlink_regular_leaf_with_parent_fsync(
                         directory_fd=parent_fd,
                         field_name=f"{field_name} cleanup restore",
                     )
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                 except BaseException as restore_error:
                     exc.add_note(f"{field_name} cleanup restore failed: {restore_error}")
                 raise
@@ -1944,7 +1953,7 @@ def _copy_recording_artifact_to_backup(
             if not chunk:
                 break
             _write_all(backup_fd, chunk, field_name="recording cleanup backup")
-        os.fsync(backup_fd)
+        _fsync_fd(backup_fd)
         assert_fd_is_regular_private_file(
             backup_fd,
             field_name="recording cleanup backup",
@@ -1953,7 +1962,7 @@ def _copy_recording_artifact_to_backup(
         current_source_stat = os.stat(source.name, dir_fd=parent_fd, follow_symlinks=False)
         if not _same_leaf_identity(current_source_stat, expected_stat):
             raise RuntimeError("recording cleanup source changed during backup copy")
-        os.fsync(parent_fd)
+        _fsync_fd(parent_fd)
     except BaseException as exc:
         primary_error = exc
         raise
@@ -3240,7 +3249,7 @@ def _stabilize_recording_artifact_path(
                 if not same_artifact_identity(claimed_stat, expected_stat):
                     raise RuntimeError(f"{field_name} changed before cleanup: {stable_path}")
                 os.unlink(cleanup_name, dir_fd=parent_fd)
-                os.fsync(parent_fd)
+                _fsync_fd(parent_fd)
             except BaseException as exc:
                 try:
                     _rename_without_replacing(
@@ -3249,7 +3258,7 @@ def _stabilize_recording_artifact_path(
                         directory_fd=parent_fd,
                         field_name=f"{field_name} restore",
                     )
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                 except BaseException as restore_error:
                     exc.add_note(f"stable recording artifact cleanup restore failed: {restore_error}")
                 raise
@@ -3289,7 +3298,7 @@ def _stabilize_recording_artifact_path(
                     field_name="stable recording artifact backup",
                 ):
                     raise RuntimeError(f"stable recording artifact backup disappeared during cleanup: {stable_path}")
-                os.fsync(parent_fd)
+                _fsync_fd(parent_fd)
             except BaseException as exc:
                 try:
                     _rename_without_replacing(
@@ -3298,7 +3307,7 @@ def _stabilize_recording_artifact_path(
                         directory_fd=parent_fd,
                         field_name="stable recording artifact backup restore",
                     )
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                 except BaseException as restore_error:
                     exc.add_note(f"stable recording artifact backup restore failed: {restore_error}")
                 raise
@@ -3323,7 +3332,7 @@ def _stabilize_recording_artifact_path(
                     directory_fd=parent_fd,
                     field_name="recording artifact path",
                 )
-                os.fsync(parent_fd)
+                _fsync_fd(parent_fd)
                 return
             if backup_name:
                 try:
@@ -3335,7 +3344,7 @@ def _stabilize_recording_artifact_path(
                         directory_fd=parent_fd,
                         field_name="recording artifact path",
                     )
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                     return
             if not unlink_artifact_leaf_safely(
                 stable_path.name,
@@ -3343,7 +3352,7 @@ def _stabilize_recording_artifact_path(
                 field_name="stable recording artifact rollback",
             ):
                 raise RuntimeError(f"stable recording artifact disappeared during rollback: {stable_path}")
-            os.fsync(parent_fd)
+            _fsync_fd(parent_fd)
         elif target_removed and current_target_stat is not None:
             raise RuntimeError(f"stable recording artifact changed during rollback: {stable_path}")
         elif not target_removed and target_stat is not None and (
@@ -3366,7 +3375,7 @@ def _stabilize_recording_artifact_path(
                     )
                     backup_name = ""
                     target_removed = False
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                     return
             raise RuntimeError(f"stable recording artifact exists during rollback: {stable_path}")
         backup_stat = os.stat(backup_name, dir_fd=parent_fd, follow_symlinks=False)
@@ -3379,7 +3388,7 @@ def _stabilize_recording_artifact_path(
         ):
             raise RuntimeError(f"stable recording artifact backup disappeared during rollback: {stable_path}")
         backup_name = ""
-        os.fsync(parent_fd)
+        _fsync_fd(parent_fd)
 
     try:
         assert_no_symlink_ancestors(stable_path, field_name="recording artifact path")
@@ -3432,7 +3441,7 @@ def _stabilize_recording_artifact_path(
                                 candidate_stat,
                                 field_name="stable recording artifact backup candidate",
                             ):
-                                os.fsync(parent_fd)
+                                _fsync_fd(parent_fd)
                     except FileNotFoundError:
                         pass
                     except BaseException as cleanup_error:
@@ -3451,7 +3460,7 @@ def _stabilize_recording_artifact_path(
             ):
                 raise RuntimeError(f"stable recording artifact disappeared before replacement: {stable_path}")
             target_removed = True
-            os.fsync(parent_fd)
+            _fsync_fd(parent_fd)
         transaction_active = True
         _rename_without_replacing(
             artifact_path.name,
@@ -3462,7 +3471,7 @@ def _stabilize_recording_artifact_path(
         activated_stat = os.stat(stable_path.name, dir_fd=parent_fd, follow_symlinks=False)
         if not same_artifact_identity(activated_stat, source_stat):
             raise RuntimeError(f"stable recording artifact changed during activation: {stable_path}")
-        os.fsync(parent_fd)
+        _fsync_fd(parent_fd)
         if backup_name:
             remove_backup_safely()
         transaction_active = False
@@ -4274,7 +4283,7 @@ def finalize_recording(
                             directory_fd=parent_fd,
                             field_name="recording cleanup rollback artifact",
                         )
-                        os.fsync(parent_fd)
+                        _fsync_fd(parent_fd)
                     else:
                         if not _same_leaf_identity(current_original_stat, expected_original_stat):
                             raise RuntimeError(f"recording cleanup original changed before rollback: {original_path}")
