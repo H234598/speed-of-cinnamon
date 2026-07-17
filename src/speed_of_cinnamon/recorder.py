@@ -1824,8 +1824,38 @@ def _unlink_recorder_log_if_same(log_path: Path, expected_stat: os.stat_result) 
         except FileNotFoundError:
             return
         if _same_file_identity(current, expected_stat):
-            os.unlink(log_path.name, dir_fd=parent_fd)
-            os.fsync(parent_fd)
+            for _ in range(100):
+                cleanup_name = f"{log_path.name}.{secrets.token_hex(8)}.cleanup"
+                try:
+                    _rename_without_replacing(
+                        log_path.name,
+                        cleanup_name,
+                        directory_fd=parent_fd,
+                        field_name="recorder log cleanup",
+                    )
+                except FileExistsError:
+                    continue
+                try:
+                    claimed = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                    if not _same_file_identity(claimed, expected_stat):
+                        raise OSError("recorder log changed before cleanup")
+                    os.unlink(cleanup_name, dir_fd=parent_fd)
+                    os.fsync(parent_fd)
+                except BaseException:
+                    try:
+                        _rename_without_replacing(
+                            cleanup_name,
+                            log_path.name,
+                            directory_fd=parent_fd,
+                            field_name="recorder log cleanup restore",
+                        )
+                        os.fsync(parent_fd)
+                    except BaseException:
+                        pass
+                    raise
+                break
+            else:
+                raise OSError("recorder log cleanup path could not be claimed")
     except OSError:
         return
     finally:

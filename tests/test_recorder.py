@@ -2127,6 +2127,38 @@ class RecorderTest(unittest.TestCase):
             self.assertEqual(log_path.read_bytes(), b"replaced")
         mocked_popen.assert_called_once()
 
+    def test_unlink_recorder_log_preserves_replacement_during_cleanup(self) -> None:
+        from speed_of_cinnamon import recorder as recorder_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "session.log"
+            replacement = Path(tmp) / "replacement.log"
+            log_path.write_bytes(b"owned log")
+            replacement.write_bytes(b"foreign log")
+            expected_stat = log_path.stat()
+            real_stat = recorder_module.os.stat
+            log_stat_calls = 0
+
+            def stat_then_replace(
+                name: object,
+                *args: object,
+                **kwargs: object,
+            ) -> os.stat_result:
+                nonlocal log_stat_calls
+                result = real_stat(name, *args, **kwargs)
+                if name == log_path.name and kwargs.get("dir_fd") is not None:
+                    log_stat_calls += 1
+                    if log_stat_calls == 1:
+                        log_path.unlink()
+                        replacement.replace(log_path)
+                return result
+
+            with mock.patch.object(recorder_module.os, "stat", side_effect=stat_then_replace):
+                recorder_module._unlink_recorder_log_if_same(log_path, expected_stat)
+
+            self.assertEqual(log_path.read_bytes(), b"foreign log")
+            self.assertFalse(list(Path(tmp).glob("session.log.*.cleanup")))
+
     def test_run_pactl_command_rejects_empty_command(self) -> None:
         with self.assertRaisesRegex(RecorderError, "empty pactl command"):
             _run_pactl_command([], required=True)
