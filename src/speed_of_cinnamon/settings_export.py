@@ -560,7 +560,10 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
     if not path.is_absolute():
         raise SettingsExportError("settings export path must be absolute")
     payload = build_export(settings, alarm_store)
-    rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    try:
+        rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    except MemoryError as exc:
+        raise SettingsExportError("settings export could not be rendered") from exc
     if _utf8_byte_count(rendered, field_name="settings export payload") > MAX_SETTINGS_EXPORT_BYTES:
         raise SettingsExportError(f"settings export is too large: {path}")
     parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name="settings export directory")
@@ -1015,7 +1018,7 @@ def read_export(path: Path) -> dict[str, Any]:
         _assert_json_value_budget(payload)
     except FileNotFoundError as exc:
         raise SettingsExportError(f"settings export not found: {path}") from exc
-    except (OSError, ValueError, RecursionError, UnicodeDecodeError) as exc:
+    except (OSError, ValueError, RecursionError, UnicodeDecodeError, MemoryError) as exc:
         raise SettingsExportError(f"settings export could not be read: {path}") from exc
 
     if not isinstance(payload, dict):
