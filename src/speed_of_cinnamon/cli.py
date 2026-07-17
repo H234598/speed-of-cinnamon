@@ -4201,6 +4201,7 @@ def finalize_recording(
 
     state_marked_finalizing = False
     written_text_path: Path | None = None
+    stored_transcript_text: str | None = None
     artifact_encryption = ARTIFACT_ENCRYPTION_OFF
     preserve_written_text_on_error = False
     silent_transcript_state_cleared = False
@@ -4214,6 +4215,7 @@ def finalize_recording(
 
     def _backup_cleanup_file(path_text: str | None, *, suffix: str) -> Path | None:
         nonlocal audio_deleted, log_deleted, preserve_recording_artifacts_after_cleanup_failure
+        nonlocal preserve_written_text_on_error
         if not path_text:
             return None
         source = Path(path_text)
@@ -4250,6 +4252,7 @@ def finalize_recording(
             except BaseException as cleanup_exc:
                 exc.add_note(f"cleanup backup removal failed: {cleanup_exc}")
             preserve_recording_artifacts_after_cleanup_failure = True
+            preserve_written_text_on_error = True
             audio_deleted = False
             log_deleted = False
             try:
@@ -4613,6 +4616,7 @@ def finalize_recording(
             text, security_post_processing = _process_transcript(text, args, language)
         stored_text_path, transcript_encryption = _write_stored_transcript(text_path, text.strip() + "\n", args)
         written_text_path = stored_text_path
+        stored_transcript_text = text
         append_space = _coerce_bool(args.append_space, field_name="append_space")
         sanitize_special_chars = _coerce_bool(
             args.sanitize_special_chars,
@@ -4623,6 +4627,8 @@ def finalize_recording(
             text_to_insert = prepare_output_text(text, append_space, sanitize_special_chars)
         typing_delay_ms = _coerce_int(args.typing_delay_ms, field_name="typing-delay-ms", max_value=MAX_TYPING_DELAY_MS)
         inserted = bool(text_to_insert) and bool(insert_text(text_to_insert, args.insert_method, typing_delay_ms))
+        if inserted:
+            preserve_written_text_on_error = True
 
         cleanup_audio_path: Path | None = None
         cleanup_log_path: str | None = None
@@ -4689,6 +4695,7 @@ def finalize_recording(
             audio_deleted = False
             log_deleted = False
             preserve_recording_artifacts_after_cleanup_failure = True
+            preserve_written_text_on_error = True
             _restore_cleanup_backups()
             _raise_recording_cleanup_failure(store, cleanup_failures, inserted=inserted)
 
@@ -4857,6 +4864,11 @@ def finalize_recording(
             if silent_transcript_state_cleared:
                 error_update["transcript"] = ""
                 error_update["transcript_path"] = ""
+            elif written_text_path is not None and preserve_written_text_on_error:
+                error_update["transcript"] = (
+                    stored_transcript_text if transcript_encryption == ARTIFACT_ENCRYPTION_OFF else ""
+                )
+                error_update["transcript_path"] = str(written_text_path)
             elif written_text_path is not None and not preserve_written_text_on_error:
                 try:
                     _remove_transcript_file(written_text_path)

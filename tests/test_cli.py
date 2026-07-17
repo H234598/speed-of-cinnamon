@@ -8991,8 +8991,13 @@ class CliTest(unittest.TestCase):
             self.assertEqual(final_state.status, "error")
             self.assertEqual(final_state.audio_path, "")
             self.assertEqual(final_state.log_path, "")
+            transcript_path = Path(final_state.transcript_path)
+            transcript_exists = transcript_path.exists()
             self.assertFalse(audio.exists())
             self.assertFalse(log.exists())
+
+        self.assertTrue(final_state.transcript_path)
+        self.assertTrue(transcript_exists)
 
     def test_finalize_transient_cleanup_failure_does_not_persist_done_if_error_state_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -9412,6 +9417,9 @@ class CliTest(unittest.TestCase):
             self.assertEqual(final_state.status, "error")
             self.assertEqual(final_state.audio_path, "")
             self.assertEqual(final_state.log_path, "")
+            transcript_path = Path(final_state.transcript_path)
+            self.assertTrue(final_state.transcript_path)
+            self.assertTrue(transcript_path.exists())
             self.assertFalse(audio.exists())
             self.assertFalse(log.exists())
 
@@ -9464,6 +9472,8 @@ class CliTest(unittest.TestCase):
             encrypted_audio_exists = encrypted_audio.exists()
             plaintext_audio_exists = audio.exists()
             log_exists = log.exists()
+            transcript_path = Path(final_state.transcript_path)
+            transcript_exists = transcript_path.exists()
 
         self.assertEqual(final_state.status, "error")
         self.assertEqual(final_state.audio_path, str(encrypted_audio))
@@ -9471,6 +9481,8 @@ class CliTest(unittest.TestCase):
         self.assertFalse(plaintext_audio_exists)
         self.assertEqual(final_state.log_path, str(log))
         self.assertTrue(log_exists)
+        self.assertTrue(final_state.transcript_path)
+        self.assertTrue(transcript_exists)
 
     def test_cleanup_counts_and_deletes_stable_final_recording_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
