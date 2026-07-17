@@ -5360,6 +5360,8 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
             else:
                 payload["status"] = "recorded"
                 payload["message"] = "recording process has exited; run stop to transcribe"
+                payload["error"] = ""
+                payload["inserted"] = False
     if payload.get("status") in {"recording", "recorded"}:
         microphone_level = _recording_level_payload(state, state_path=store.path)
         if microphone_level is not None:

@@ -8118,7 +8118,15 @@ class CliTest(unittest.TestCase):
             audio = recordings / "processing.wav"
             audio.write_bytes(b"audio")
             state_file = Path(tmp) / "state.json"
-            StateStore(state_file).write(RecordingState(status="recording", pid=999999999, audio_path=str(audio)))
+            StateStore(state_file).write(
+                RecordingState(
+                    status="recording",
+                    pid=999999999,
+                    audio_path=str(audio),
+                    error="previous stop failed",
+                    inserted=True,
+                )
+            )
             stdout = io.StringIO()
             with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
                 code = cli.run([
@@ -10914,6 +10922,8 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(payload["status"], "recorded")
+        self.assertEqual(payload["error"], "")
+        self.assertFalse(payload["inserted"])
         self.assertEqual(payload["microphone_level"]["percent"], 50)
         self.assertEqual(payload["microphone_level"]["source"], "recording-file")
 
