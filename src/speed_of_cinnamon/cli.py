@@ -5690,6 +5690,7 @@ def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
     dry_run = _coerce_bool(args.dry_run, field_name="dry-run")
     store = build_store(args)
     state = store.read()
+    _raise_if_state_unreadable(state)
     active_paths = active_artifact_paths(state, state_path=store.path)
     try:
         transcript_files = _safe_transcript_artifact_files()

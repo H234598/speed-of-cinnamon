@@ -4950,6 +4950,40 @@ class CliTest(unittest.TestCase):
         self.assertTrue(encrypted_exists)
         self.assertTrue(plaintext_exists)
 
+    def test_cleanup_fails_closed_when_state_is_unreadable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            state_dir = tmp_path / "speed-of-cinnamon"
+            recordings = state_dir / "recordings"
+            state_dir.mkdir(parents=True)
+            state_dir.chmod(0o700)
+            recordings.mkdir()
+            stale = recordings / "active.wav"
+            stale.write_bytes(b"audio")
+            os.utime(stale, (100, 100))
+            state_file = state_dir / "state.json"
+            state_file.write_text("{broken", encoding="utf-8")
+            state_file.chmod(0o600)
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run([
+                    "cleanup",
+                    "--state-file",
+                    str(state_file),
+                    "--keep-transcripts",
+                    "0",
+                    "--keep-recordings",
+                    "0",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+            stale_exists = stale.exists()
+
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("state file could not be read", payload["error"])
+        self.assertTrue(stale_exists)
+
     def test_cleanup_keeps_relative_recording_artifacts_under_state_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
