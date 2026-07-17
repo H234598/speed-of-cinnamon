@@ -12547,6 +12547,32 @@ class CliTest(unittest.TestCase):
         self.assertEqual(final_state.status, "processing")
         self.assertIn("could not be stopped safely", final_state.error)
 
+    def test_finalize_refuses_active_process_in_finalizing_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            store = StateStore(state_file)
+            store.write(
+                RecordingState(
+                    status="finalizing",
+                    pid=1234,
+                    process_identity="owner-identity",
+                )
+            )
+            args = self._build_finalize_args(insert_method="none")
+
+            with (
+                mock.patch("speed_of_cinnamon.cli._recording_process_verified_alive", return_value=True),
+                mock.patch("speed_of_cinnamon.cli.stop_process", return_value=False) as mocked_stop,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "could not be stopped safely"):
+                    cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+
+        mocked_stop.assert_called_once_with(1234, expected_process_identity="owner-identity")
+        self.assertEqual(final_state.status, "finalizing")
+        self.assertIn("could not be stopped safely", final_state.error)
+
     def test_toggle_processing_without_audio_path_does_not_start_recording(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "state.json"

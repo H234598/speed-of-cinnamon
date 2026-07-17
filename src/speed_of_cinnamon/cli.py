@@ -4380,7 +4380,7 @@ def finalize_recording(
         persisted_log_path = state.log_path
         if state.status in {"done", "error", "idle"}:
             return {"status": state.status, "message": state.error or f"recording already {state.status}"}
-        if state.status in {"recorded", "processing"} and (state.pid is not None or state.process_identity):
+        if state.status in {"recorded", "processing", "finalizing"} and (state.pid is not None or state.process_identity):
             if state.pid is None or not str(state.process_identity or "").strip():
                 error_text = "recording process identity is incomplete; recording state preserved"
                 store.update(status=state.status, error=error_text)
