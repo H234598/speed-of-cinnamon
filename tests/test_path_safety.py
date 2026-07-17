@@ -608,6 +608,52 @@ class PathSafetyTest(unittest.TestCase):
         mocked_close.assert_any_call(123)
         mocked_close.assert_any_call(456)
 
+    def test_atomic_write_wraps_fdopen_memory_error(self) -> None:
+        with (
+            mock.patch.object(path_safety, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(path_safety.os, "open", return_value=123),
+            mock.patch.object(path_safety.os, "fstat", return_value=mock.Mock()),
+            mock.patch.object(path_safety.os, "stat", side_effect=FileNotFoundError),
+            mock.patch.object(path_safety.os, "fdopen", side_effect=MemoryError("open exhausted")),
+            mock.patch.object(path_safety.os, "unlink"),
+            mock.patch.object(path_safety.os, "fsync"),
+            mock.patch.object(path_safety.os, "close"),
+        ):
+            with self.assertRaisesRegex(OSError, "temporary file could not be opened"):
+                path_safety.write_text_atomically_without_following_symlinks(
+                    Path("/does-not-matter.txt"), "{}"
+                )
+
+    def test_atomic_write_wraps_temporary_write_memory_error(self) -> None:
+        class _FailingHandle:
+            def __init__(self, fd: int) -> None:
+                self.fd = fd
+
+            def fileno(self) -> int:
+                return self.fd
+
+            def write(self, _payload: str) -> int:
+                raise MemoryError("write exhausted")
+
+            def flush(self) -> None:
+                return None
+
+            def close(self) -> None:
+                os.close(self.fd)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+
+            def fdopen(fd: int, _mode: str, **_kwargs: object) -> _FailingHandle:
+                return _FailingHandle(fd)
+
+            with mock.patch.object(path_safety.os, "fdopen", side_effect=fdopen):
+                with self.assertRaisesRegex(OSError, "temporary file could not be written"):
+                    path_safety.write_text_atomically_without_following_symlinks(target, "{}")
+
+            self.assertFalse(target.exists())
+            self.assertEqual(list(Path(tmp).glob(".settings.json.*.tmp")), [])
+
     def test_atomic_write_closes_fd_when_fdopen_is_interrupted(self) -> None:
         with (
             mock.patch.object(path_safety, "ensure_directory_without_following_symlinks", return_value=456),
@@ -651,6 +697,22 @@ class PathSafetyTest(unittest.TestCase):
                 path_safety.read_text_without_following_symlinks(Path("/does-not-matter.txt"))
 
         mocked_close.assert_not_called()
+
+    def test_read_text_wraps_read_memory_error(self) -> None:
+        class _FailingHandle:
+            def read(self, _size: int = -1):
+                raise MemoryError("read exhausted")
+
+            def close(self):
+                return None
+
+        with (
+            mock.patch.object(path_safety, "open_file_without_following_symlinks", return_value=123),
+            mock.patch.object(path_safety, "assert_fd_is_regular_private_file"),
+            mock.patch.object(path_safety.os, "fdopen", return_value=_FailingHandle()),
+        ):
+            with self.assertRaisesRegex(OSError, "could not be read"):
+                path_safety.read_text_without_following_symlinks(Path("/does-not-matter.txt"))
 
     def test_read_text_preserves_read_interrupt_when_handle_close_fails(self) -> None:
         class _FailingHandle:
@@ -726,6 +788,16 @@ class PathSafetyTest(unittest.TestCase):
                 path_safety.read_text_without_following_symlinks(Path("/does-not-matter.txt"))
 
         mocked_close.assert_called_once_with(123)
+
+    def test_read_text_wraps_fdopen_memory_error(self) -> None:
+        with (
+            mock.patch.object(path_safety, "open_file_without_following_symlinks", return_value=123),
+            mock.patch.object(path_safety, "assert_fd_is_regular_private_file"),
+            mock.patch.object(path_safety.os, "fdopen", side_effect=MemoryError("open exhausted")),
+            mock.patch.object(path_safety.os, "close"),
+        ):
+            with self.assertRaisesRegex(OSError, "could not be opened"):
+                path_safety.read_text_without_following_symlinks(Path("/does-not-matter.txt"))
 
     def test_read_text_closes_fd_when_fdopen_is_interrupted(self) -> None:
         with (

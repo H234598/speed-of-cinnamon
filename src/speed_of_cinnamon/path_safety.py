@@ -280,6 +280,8 @@ def read_text_without_following_symlinks(
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     try:
         fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name=field_name)
+    except (MemoryError, RecursionError) as exc:
+        raise OSError(f"{field_name} could not be opened") from exc
     except OSError as exc:
         raise OSError(str(exc)) from exc
     try:
@@ -315,6 +317,15 @@ def read_text_without_following_symlinks(
             ):
                 raise OSError(f"{field_name} changed before reading")
         handle = os.fdopen(fd, "rb")
+    except (MemoryError, RecursionError) as exc:
+        error = OSError(f"{field_name} could not be opened")
+        try:
+            os.close(fd)
+        except OSError as cleanup_error:
+            _note_cleanup_failure(error, cleanup_error)
+        except BaseException as cleanup_error:
+            _note_cleanup_failure(error, cleanup_error)
+        raise error from exc
     except Exception as exc:
         try:
             os.close(fd)
@@ -356,6 +367,9 @@ def read_text_without_following_symlinks(
                 or final_path_stat.st_mode != final_stat.st_mode
             ):
                 raise OSError(f"{field_name} changed while reading")
+    except (MemoryError, RecursionError) as exc:
+        primary_error = OSError(f"{field_name} could not be read")
+        raise primary_error from exc
     except Exception as exc:
         primary_error = exc
         raise
@@ -365,6 +379,11 @@ def read_text_without_following_symlinks(
     finally:
         try:
             handle.close()
+        except (MemoryError, RecursionError) as cleanup_error:
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise OSError(f"{field_name} could not be closed") from cleanup_error
         except BaseException as cleanup_error:
             if primary_error is not None:
                 _note_cleanup_failure(primary_error, cleanup_error)
@@ -372,7 +391,10 @@ def read_text_without_following_symlinks(
                 raise
     if len(payload) > effective_max_bytes:
         raise OSError(f"{field_name} is too large")
-    return payload.decode(encoding)
+    try:
+        return payload.decode(encoding)
+    except (MemoryError, RecursionError) as exc:
+        raise OSError(f"{field_name} could not be decoded") from exc
 
 
 def _write_atomically_without_following_symlinks(
@@ -520,6 +542,15 @@ def _write_atomically_without_following_symlinks(
             handle_kwargs["encoding"] = encoding
         try:
             handle = os.fdopen(fd, mode, **handle_kwargs)
+        except (MemoryError, RecursionError) as exc:
+            error = OSError(f"{field_name} temporary file could not be opened")
+            try:
+                os.close(fd)
+            except OSError as cleanup_error:
+                _note_cleanup_failure(error, cleanup_error)
+            except BaseException as cleanup_error:
+                _note_cleanup_failure(error, cleanup_error)
+            raise error from exc
         except Exception as exc:
             try:
                 os.close(fd)
@@ -546,6 +577,13 @@ def _write_atomically_without_following_symlinks(
             handle.flush()
             os.fsync(handle.fileno())
             temporary_stat = os.fstat(handle.fileno())
+        except (MemoryError, RecursionError) as exc:
+            try:
+                temporary_stat = os.fstat(handle.fileno())
+            except BaseException as stat_error:
+                _note_cleanup_failure(exc, stat_error)
+            handle_primary_error = OSError(f"{field_name} temporary file could not be written")
+            raise handle_primary_error from exc
         except BaseException as exc:
             try:
                 temporary_stat = os.fstat(handle.fileno())
@@ -782,7 +820,8 @@ def _write_atomically_without_following_symlinks(
                 _note_cleanup_failure(primary_error, cleanup_exception)
         if cleanup_error is not None:
             _note_cleanup_failure(primary_error, cleanup_error)
-            raise
+        if isinstance(primary_error, (MemoryError, RecursionError)):
+            raise OSError(f"{field_name} could not be written") from primary_error
         raise
     finally:
         try:
