@@ -1698,6 +1698,7 @@ def _persist_cleanup_failure_state(
                 {
                     "audio_path": artifact_state.audio_path,
                     "log_path": artifact_state.log_path,
+                    "transcript": artifact_state.transcript,
                     "transcript_path": artifact_state.transcript_path,
                     "inserted": artifact_state.inserted,
                 }

@@ -12794,6 +12794,7 @@ class CliTest(unittest.TestCase):
         self.assertIn("failed to scan or delete 1 cleanup artifact", final_state.error)
         self.assertEqual(final_state.audio_path, str(audio))
         self.assertEqual(final_state.log_path, str(log))
+        self.assertEqual(final_state.transcript, "transcript")
         self.assertTrue(final_state.transcript_path)
         self.assertFalse(stale_exists)
         self.assertTrue(owner_is_symlink)
