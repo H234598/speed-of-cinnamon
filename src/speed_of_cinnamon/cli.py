@@ -4030,7 +4030,7 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
         except Exception:
             return False
 
-    process_identity = _recording_process_identity_for_pid(proc.pid)
+    process_identity = candidate_process_identity or _recording_process_identity_for_pid(proc.pid)
     if process_identity is None:
         identity_error = RuntimeError(
             "recording process identity could not be verified; recorder artifacts were preserved"

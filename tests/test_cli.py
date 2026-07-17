@@ -10631,6 +10631,32 @@ class CliTest(unittest.TestCase):
         self.assertEqual(state.language, "en")
         self.assertEqual(state.process_identity, "proc-identity")
 
+    def test_start_reuses_verified_process_identity_when_later_proc_read_fails(self) -> None:
+        proc = mock.Mock()
+        proc.pid = 12345
+        proc.poll.return_value = None
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.choose_recorder", return_value=RecorderCommand("test-recorder", [])),
+                mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=proc),
+                mock.patch(
+                    "speed_of_cinnamon.cli._recording_process_identity_for_pid",
+                    side_effect=["proc-identity", None],
+                ) as mocked_identity,
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["start", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            state = StateStore(state_file).read()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "recording")
+        self.assertEqual(state.process_identity, "proc-identity")
+        mocked_identity.assert_called_once_with(12345)
+
     def test_start_prepares_audio_artifact_with_private_permissions(self) -> None:
         proc = mock.Mock()
         proc.pid = 23456
