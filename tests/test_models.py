@@ -64,6 +64,12 @@ def file_sha1s_for(files: tuple[str, ...], data: bytes) -> tuple[tuple[str, str]
 
 
 class ModelsTest(unittest.TestCase):
+    def test_fsync_retries_interrupted_calls(self) -> None:
+        with mock.patch.object(models.os, "fsync", side_effect=[InterruptedError(), None]) as mocked_fsync:
+            models._fsync_fd(123)
+
+        self.assertEqual(mocked_fsync.call_count, 2)
+
     def test_model_download_opener_disables_environment_proxies(self) -> None:
         opener = mock.Mock()
         with mock.patch("speed_of_cinnamon.models.urllib.request.build_opener", return_value=opener) as build_opener:

@@ -57,6 +57,15 @@ def _note_cleanup_failure(primary: BaseException, cleanup_error: BaseException) 
     primary.add_note(f"model artifact cleanup failed: {cleanup_error}")
 
 
+def _fsync_fd(fd: int) -> None:
+    while True:
+        try:
+            os.fsync(fd)
+            return
+        except InterruptedError:
+            continue
+
+
 @contextmanager
 def _locked_model_operation(root: Path) -> Iterator[None]:
     if isinstance(root, bool) or not isinstance(root, Path):
@@ -236,7 +245,7 @@ def _remove_model_checksum_cache_file(cache_path: Path) -> bool:
                 if not _same_model_artifact_identity(claimed_stat, file_stat):
                     raise OSError("model checksum cache changed before cleanup")
                 os.unlink(cleanup_name, dir_fd=parent_fd)
-                os.fsync(parent_fd)
+                _fsync_fd(parent_fd)
             except BaseException as exc:
                 try:
                     _rename_without_replacing(
@@ -245,7 +254,7 @@ def _remove_model_checksum_cache_file(cache_path: Path) -> bool:
                         directory_fd=parent_fd,
                         field_name="model checksum cache cleanup restore",
                     )
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                 except BaseException as restore_error:
                     _note_cleanup_failure(exc, restore_error)
                 raise
@@ -1197,7 +1206,7 @@ def _replace_model_sibling_path(
                 raise ModelError(f"{field_name} source must be a regular file or directory: {source}")
             if not _same_model_path_identity(source_stat, source_path_stat):
                 raise ModelError(f"{field_name} source changed before activation: {source}")
-            os.fsync(source_fd)
+            _fsync_fd(source_fd)
         except BaseException as exc:
             source_primary_error = exc
             raise
@@ -1218,7 +1227,7 @@ def _replace_model_sibling_path(
             directory_fd=parent_fd,
             field_name=field_name,
         )
-        os.fsync(parent_fd)
+        _fsync_fd(parent_fd)
     finally:
         try:
             os.close(parent_fd)
@@ -1274,7 +1283,7 @@ def _unlink_model_file_leaf(
                 if not _same_model_artifact_identity(claimed_stat, file_stat):
                     raise ModelError(f"{field_name} changed before cleanup: {path}")
                 os.unlink(cleanup_name, dir_fd=parent_fd)
-                os.fsync(parent_fd)
+                _fsync_fd(parent_fd)
             except BaseException as exc:
                 try:
                     _rename_without_replacing(
@@ -1283,7 +1292,7 @@ def _unlink_model_file_leaf(
                         directory_fd=parent_fd,
                         field_name=f"{field_name} cleanup restore",
                     )
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                 except BaseException as restore_error:
                     _note_cleanup_failure(exc, restore_error)
                 raise
@@ -1335,7 +1344,7 @@ def _unlink_model_file_if_same(
                 if not _same_model_artifact_identity(claimed_stat, current_stat):
                     raise ModelError(f"{field_name} changed before cleanup: {path}")
                 os.unlink(cleanup_name, dir_fd=parent_fd)
-                os.fsync(parent_fd)
+                _fsync_fd(parent_fd)
             except BaseException as exc:
                 try:
                     _rename_without_replacing(
@@ -1344,7 +1353,7 @@ def _unlink_model_file_if_same(
                         directory_fd=parent_fd,
                         field_name=f"{field_name} cleanup restore",
                     )
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                 except BaseException as restore_error:
                     _note_cleanup_failure(exc, restore_error)
                 raise
@@ -1413,7 +1422,7 @@ def _remove_model_directory_leaf(
                 if not _same_model_directory_identity(claimed_stat, file_stat):
                     raise ModelError(f"{field_name} changed before cleanup: {path}")
                 shutil.rmtree(cleanup_name, dir_fd=parent_fd)
-                os.fsync(parent_fd)
+                _fsync_fd(parent_fd)
             except BaseException as exc:
                 try:
                     _rename_without_replacing(
@@ -1422,7 +1431,7 @@ def _remove_model_directory_leaf(
                         directory_fd=parent_fd,
                         field_name=f"{field_name} cleanup restore",
                     )
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                 except BaseException as restore_error:
                     _note_cleanup_failure(exc, restore_error)
                 raise
@@ -1478,7 +1487,7 @@ def _remove_model_directory_if_same(
                 if not _same_model_directory_identity(claimed_stat, current_stat):
                     raise ModelError(f"{field_name} changed before cleanup: {path}")
                 shutil.rmtree(cleanup_name, dir_fd=parent_fd)
-                os.fsync(parent_fd)
+                _fsync_fd(parent_fd)
             except BaseException as exc:
                 try:
                     _rename_without_replacing(
@@ -1487,7 +1496,7 @@ def _remove_model_directory_if_same(
                         directory_fd=parent_fd,
                         field_name=f"{field_name} cleanup restore",
                     )
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                 except BaseException as restore_error:
                     _note_cleanup_failure(exc, restore_error)
                 raise
@@ -1776,7 +1785,7 @@ def _unlink_temporary_download_name(
                 if not _same_model_temporary_identity(claimed_stat, expected_stat):
                     raise ModelError("temporary model file changed before cleanup")
                 os.unlink(cleanup_name, dir_fd=parent_fd)
-                os.fsync(parent_fd)
+                _fsync_fd(parent_fd)
             except BaseException as exc:
                 try:
                     _rename_without_replacing(
@@ -1785,7 +1794,7 @@ def _unlink_temporary_download_name(
                         directory_fd=parent_fd,
                         field_name="temporary model file cleanup restore",
                     )
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                 except BaseException as restore_error:
                     _note_cleanup_failure(exc, restore_error)
                 raise
@@ -1936,7 +1945,7 @@ def _download_url_to_file_with_fd(
                 if content_length is not None and downloaded != content_length:
                     raise ModelError(f"downloaded model size mismatch for {model_name}: {downloaded} != {content_length}")
                 output.flush()
-                os.fsync(output.fileno())
+                _fsync_fd(output.fileno())
                 try:
                     temporary_stat = os.fstat(output.fileno())
                 except (OSError, ValueError) as exc:
