@@ -1614,7 +1614,13 @@ def model_status(model: ModelSpec, verify: bool = False) -> dict[str, object]:
     path = model_path(model)
     exists = path.exists()
     downloaded = _model_is_downloaded(model, path)
-    checksum = _sha1_file_without_cache(path) if verify and downloaded and path.is_file() and model.sha1 else ""
+    checksum = ""
+    verification_failed = False
+    if verify and downloaded and path.is_file() and model.sha1:
+        try:
+            checksum = _sha1_file_without_cache(path)
+        except ModelError:
+            verification_failed = True
     return {
         **asdict(model),
         "url": model.url,
@@ -1622,7 +1628,7 @@ def model_status(model: ModelSpec, verify: bool = False) -> dict[str, object]:
         "path": str(path),
         "downloadable": _model_is_downloadable(model),
         "downloaded": downloaded,
-        "verified": _model_is_verified(model, path, checksum) if verify else False,
+        "verified": _model_is_verified(model, path, checksum) if verify and not verification_failed else False,
         "checksum": checksum,
     }
 
@@ -1702,7 +1708,10 @@ def _model_is_verified(model: ModelSpec, path: Path, checksum: str = "") -> bool
             except ModelError:
                 return False
         return True
-    current_checksum = checksum or _sha1_file_without_cache(path)
+    try:
+        current_checksum = checksum or _sha1_file_without_cache(path)
+    except ModelError:
+        return False
     return bool(model.sha1 and current_checksum == model.sha1)
 
 

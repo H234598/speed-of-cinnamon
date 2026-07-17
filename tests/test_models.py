@@ -296,6 +296,49 @@ class ModelsTest(unittest.TestCase):
             self.assertTrue(status["verified"])
             self.assertEqual(status["checksum"], spec.sha1)
 
+    def test_model_status_verify_fails_closed_when_file_changes_before_checksum(self) -> None:
+        spec = models.ModelSpec(
+            name="status-verify-race",
+            filename="ggml-status-verify-race.bin",
+            size="1 KiB",
+            sha1="a" * 40,
+            description="status checksum race",
+        )
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"model")
+            with mock.patch.object(
+                models,
+                "_sha1_file_without_cache",
+                side_effect=[models.ModelError("model file changed during checksum"), spec.sha1],
+            ) as mocked_hash:
+                status = models.model_status(spec, verify=True)
+
+        self.assertFalse(status["verified"])
+        self.assertEqual(status["checksum"], "")
+        mocked_hash.assert_called_once()
+
+    def test_model_verification_fails_closed_when_file_changes_before_checksum(self) -> None:
+        spec = models.ModelSpec(
+            name="verification-race",
+            filename="ggml-verification-race.bin",
+            size="1 KiB",
+            sha1="a" * 40,
+            description="verification checksum race",
+        )
+        path = Path("/tmp/ggml-verification-race.bin")
+        with mock.patch.object(
+            models,
+            "_model_is_downloaded",
+            return_value=True,
+        ), mock.patch.object(
+            models,
+            "_sha1_file_without_cache",
+            side_effect=models.ModelError("model file changed during checksum"),
+        ):
+            self.assertFalse(models._model_is_verified(spec, path))
+
     def test_model_checksum_cache_recovers_from_invalid_json(self) -> None:
         data = b"cached model"
         spec = models.ModelSpec(
