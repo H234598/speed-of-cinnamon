@@ -496,6 +496,7 @@ def _run_ffmpeg_bounded(
             MAX_FFMPEG_OUTPUT_BYTES,
         )
         primary_error: BaseException | None = None
+        proc: subprocess.Popen[bytes] | None = None
         try:
             proc = subprocess.Popen(  # nosec B603
                 command,
@@ -507,7 +508,21 @@ def _run_ffmpeg_bounded(
                 start_new_session=True,
             )
             _communicate_recorder_process_bounded(proc, timeout=timeout, process_name="ffmpeg")
-            _finish_bounded_output_captures(stdout_capture, stderr_capture)
+            try:
+                _finish_bounded_output_captures(stdout_capture, stderr_capture)
+            except BaseException as capture_error:
+                try:
+                    terminated = _reap_timed_out_recorder_process(proc)
+                except BaseException as cleanup_error:
+                    capture_error.add_note(f"ffmpeg process cleanup failed: {cleanup_error}")
+                else:
+                    if not terminated:
+                        capture_error.add_note("ffmpeg process cleanup was incomplete")
+                try:
+                    _finish_bounded_output_captures(stdout_capture, stderr_capture)
+                except BaseException as retry_error:
+                    capture_error.add_note(f"ffmpeg output capture cleanup failed: {retry_error}")
+                raise
             if stdout_capture.overflowed:
                 raise RecorderError("ffmpeg command stdout exceeded safe output limit")
             if stderr_capture.overflowed:

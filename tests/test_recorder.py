@@ -206,6 +206,31 @@ class RecorderTest(unittest.TestCase):
         self.assertIs(raised.exception, timeout)
         self.assertIn("cleanup interrupted", "\n".join(timeout.__notes__))
 
+    def test_run_ffmpeg_cleans_descendant_when_leader_exits_with_pipe_open(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            child_pid_path = Path(tmp) / "child.pid"
+            command = [
+                "/bin/sh",
+                "-c",
+                f"sleep 30 & child=$!; echo $child > {child_pid_path}; exit 0",
+            ]
+            with self.assertRaisesRegex(OSError, "bounded output capture failed"):
+                recorder_module._run_ffmpeg_bounded(command, timeout=2, pass_fds=())
+
+            child_pid = int(child_pid_path.read_text(encoding="utf-8").strip())
+
+            def child_is_live() -> bool:
+                stat_fields = recorder_module._recording_process_stat_fields(child_pid)
+                return stat_fields is not None and stat_fields[0] not in {"Z", "X", "x"}
+
+            try:
+                self.assertFalse(child_is_live())
+            finally:
+                try:
+                    os.kill(child_pid, 9)
+                except ProcessLookupError:
+                    pass
+
     def _write_wav(self, path: Path, samples: list[int]) -> None:
         with wave.open(str(path), "wb") as handle:
             handle.setnchannels(1)
