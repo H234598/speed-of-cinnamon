@@ -3274,7 +3274,10 @@ class AppletStaticTest(unittest.TestCase):
         error_end = source.index("let hasTranscript", error_index)
         error_block = source[error_index:error_end]
 
-        self.assertIn('let preserveActiveRecordingState = typeof statusRefreshToken === "number" && this._hasActiveRecordingState();', error_block)
+        self.assertIn('let preserveRecordingOnError = arguments.length > 2 && arguments[2] === true;', error_block)
+        self.assertIn('let preserveActiveRecordingState = (preserveRecordingOnError && (', error_block)
+        self.assertIn('payload.transport_error === true ||', error_block)
+        self.assertIn('(typeof statusRefreshToken === "number" && this._hasActiveRecordingState());', error_block)
         self.assertIn('this._setStatusPreservingRecording("error", errorMessage, this.lastTranscript);', error_block)
         self.assertIn("this._scheduleStatusPoll();", error_block)
         self.assertIn('this._setStatus("error", errorMessage, this.lastTranscript);', error_block)
@@ -3286,6 +3289,29 @@ class AppletStaticTest(unittest.TestCase):
             error_block.index("if (preserveActiveRecordingState)"),
             error_block.index("this.cancelPendingWhileCommandRunning = false;")
         )
+
+    def test_recording_command_errors_keep_active_lifecycle_polling(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        toggle_start = source.index("_toggleRecording: function()")
+        toggle_end = source.index("\n  _restartApplet:", toggle_start)
+        toggle_block = source[toggle_start:toggle_end]
+        self.assertIn("let hasExistingRecordingWork = this._hasActiveRecordingState();", toggle_block)
+        self.assertIn("hasExistingRecordingWork || this.cancelPendingWhileCommandRunning", toggle_block)
+        self.assertIn("this._applyPayloadSafely(", toggle_block)
+        self.assertIn("undefined,\n        hasExistingRecordingWork || this.cancelPendingWhileCommandRunning", toggle_block)
+
+        cancel_start = source.index("_cancelRecording: function(statusOverride)")
+        cancel_end = source.index("\n  _invalidateBackgroundCallbacksForRecording:", cancel_start)
+        cancel_block = source[cancel_start:cancel_end]
+        self.assertIn("this._applyPayloadSafely(payload, undefined, true);", cancel_block)
+
+        apply_start = source.index("_applyPayload: function(payload, statusRefreshToken)")
+        apply_end = source.index("\n  _artifactEncryptionWarningKey:", apply_start)
+        error_block = source[apply_start:apply_end]
+        self.assertIn("if (arguments.length > 2) {", source[source.index("_applyPayloadSafely:"):apply_start])
+        self.assertIn("payload.transport_error === true", error_block)
+        self.assertIn("this._scheduleStatusPoll();", error_block)
 
     def test_status_refresh_error_does_not_clear_active_recording_metrics(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -5299,11 +5325,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let callbackFn = this._guardStateCallback("backend-json", callback, undefined) || function() {};', source)
         self.assertIn("let done = false;", source)
         self.assertIn("if (done) {", source)
-        self.assertIn('callbackFn({ status: "error", error: "Backend response is too large" });', source)
+        self.assertIn('callbackFn({ status: "error", error: "Backend response is too large", transport_error: true });', source)
         self.assertIn("callbackFn(this._parseSpawnOutput(stdout));", source)
         self.assertIn("if (args.length > MAX_CLI_ARG_COUNT) {", source)
         self.assertIn("this._scheduleTrackedTimer(timeoutKey", source)
-        self.assertIn('callbackFn({ status: "error", error: "Backend command timed out" });', source)
+        self.assertIn('callbackFn({ status: "error", error: "Backend command timed out", transport_error: true });', source)
 
     def test_text_output_is_hardened_before_keyboard_typing(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

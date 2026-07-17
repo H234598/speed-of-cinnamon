@@ -5904,7 +5904,11 @@ MyApplet.prototype = {
       }
       this._recordingCommandToken = null;
       this.isCommandRunning = false;
-      this._applyPayloadSafely(payload);
+      this._applyPayloadSafely(
+        payload,
+        undefined,
+        hasExistingRecordingWork || this.cancelPendingWhileCommandRunning
+      );
     });
   },
 
@@ -6010,7 +6014,7 @@ MyApplet.prototype = {
       }
       this._recordingCommandToken = null;
       this.isCommandRunning = false;
-      this._applyPayloadSafely(payload);
+      this._applyPayloadSafely(payload, undefined, true);
     });
   },
 
@@ -10641,16 +10645,16 @@ MyApplet.prototype = {
   _parseSpawnOutput: function(stdout) {
     let output = String(stdout || "");
     if (utf8ByteLength(output) > MAX_SPAWN_JSON_BYTES) {
-      return { status: "error", error: "Backend response is too large" };
+      return { status: "error", error: "Backend response is too large", transport_error: true };
     }
     try {
       let parsed = JSON.parse(output || "{}");
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return { status: "error", error: "Invalid backend response: expected JSON object" };
+        return { status: "error", error: "Invalid backend response: expected JSON object", transport_error: true };
       }
       return parsed;
     } catch (err) {
-      return { status: "error", error: "Invalid backend response: " + err };
+      return { status: "error", error: "Invalid backend response: " + err, transport_error: true };
     }
   },
 
@@ -11161,19 +11165,19 @@ MyApplet.prototype = {
       return this._runWithBackendEnvironment(this._shouldExposeOpenAiCompatibleApiKeyToBackend(normalizedArgs), (backendEnv) => {
         return this._spawnJsonWithBackendEnvironment(normalizedArgs, backendEnv || {}, (stdout, result) => {
           if (result && result.timedOut) {
-            callbackFn({ status: "error", error: "Backend command timed out" });
+            callbackFn({ status: "error", error: "Backend command timed out", transport_error: true });
             return;
           }
           if (result && result.outputTooLarge) {
-            callbackFn({ status: "error", error: "Backend response is too large" });
+            callbackFn({ status: "error", error: "Backend response is too large", transport_error: true });
             return;
           }
           if (result && result.error) {
-            callbackFn({ status: "error", error: "Backend command failed" });
+            callbackFn({ status: "error", error: "Backend command failed", transport_error: true });
             return;
           }
           if (String(stdout || "").trim() === "") {
-            callbackFn({ status: "error", error: "Backend returned no response" });
+            callbackFn({ status: "error", error: "Backend returned no response", transport_error: true });
             return;
           }
           callbackFn(this._parseSpawnOutput(stdout));
@@ -11186,7 +11190,7 @@ MyApplet.prototype = {
       });
     } catch (error) {
       this._recordLifecycleError("backend-json-spawn", error);
-      callbackFn({ status: "error", error: this._lifecycleErrorText(error) });
+      callbackFn({ status: "error", error: this._lifecycleErrorText(error), transport_error: true });
       return null;
     }
   },
@@ -11223,7 +11227,11 @@ MyApplet.prototype = {
 
   _applyPayloadSafely: function(payload, statusRefreshToken) {
     try {
-      this._applyPayload(payload, statusRefreshToken);
+      if (arguments.length > 2) {
+        this._applyPayload(payload, statusRefreshToken, arguments[2]);
+      } else {
+        this._applyPayload(payload, statusRefreshToken);
+      }
     } catch (err) {
       let safeError = this._sanitizeErrorMessage(err);
       this._setStatusPreservingRecording("error", _("Backend response handling failed: ") + safeError, this.lastTranscript);
@@ -11240,7 +11248,14 @@ MyApplet.prototype = {
     let status = this._normalizePayloadStatus(payload.status, Boolean(payload.error));
     if (payload.error || status === "error") {
       let errorMessage = this._payloadErrorMessage(payload, _("Backend reported an error"));
-      let preserveActiveRecordingState = typeof statusRefreshToken === "number" && this._hasActiveRecordingState();
+      let preserveRecordingOnError = arguments.length > 2 && arguments[2] === true;
+      let preserveActiveRecordingState = (preserveRecordingOnError && (
+        payload.transport_error === true ||
+        status === "recording" ||
+        status === "recorded" ||
+        status === "processing"
+      )) ||
+        (typeof statusRefreshToken === "number" && this._hasActiveRecordingState());
       if (preserveActiveRecordingState) {
         this._setStatusPreservingRecording("error", errorMessage, this.lastTranscript);
         this._scheduleStatusPoll();
