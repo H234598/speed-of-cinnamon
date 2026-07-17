@@ -11840,6 +11840,42 @@ class CliTest(unittest.TestCase):
         mocked_stop.assert_not_called()
         self.assertTrue(artifacts)
 
+    def test_start_retains_lock_for_immediate_exit_without_process_identity(self) -> None:
+        failed_proc = mock.Mock()
+        failed_proc.pid = 23456
+        failed_proc.poll.return_value = 1
+        failed_proc.returncode = 1
+        first_stdout = io.StringIO()
+        second_stdout = io.StringIO()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch(
+                    "speed_of_cinnamon.cli.choose_recorder",
+                    return_value=RecorderCommand("pw-record", ["pw-record"]),
+                ) as mocked_choose,
+                mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=failed_proc) as mocked_start,
+                mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value=None),
+                mock.patch("speed_of_cinnamon.cli._process_is_running", side_effect=lambda pid: pid == failed_proc.pid),
+                mock.patch("speed_of_cinnamon.cli.process_group_has_live_processes", return_value=True),
+                mock.patch("speed_of_cinnamon.cli.time.sleep"),
+            ):
+                with redirect_stdout(first_stdout):
+                    first_code = cli.run(["start", "--state-file", str(state_file), "--json"])
+                with redirect_stdout(second_stdout):
+                    second_code = cli.run(["start", "--state-file", str(state_file), "--json"])
+            first_payload = json.loads(first_stdout.getvalue())
+            second_payload = json.loads(second_stdout.getvalue())
+
+        self.assertEqual(first_code, 1)
+        self.assertIn("process identity could not be verified", first_payload["error"])
+        self.assertEqual(second_code, 0)
+        self.assertEqual(second_payload["status"], "finalizing")
+        mocked_choose.assert_called_once()
+        mocked_start.assert_called_once()
+
     def test_start_auto_removes_artifacts_when_all_recorders_fail(self) -> None:
         failed_processes = []
         for returncode in (1, 2, 3):

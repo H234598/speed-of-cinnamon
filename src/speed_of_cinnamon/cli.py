@@ -4149,10 +4149,13 @@ def _command_start_locked(
         detail = read_log_excerpt(log_path) or f"exit code {candidate_proc.returncode}"
         startup_errors.append(f"{candidate.name} exited immediately: {detail}")
         if candidate_process_identity is None:
-            raise RuntimeError(
+            error = RuntimeError(
                 f"{startup_errors[-1]}; recorder process identity could not be verified; "
                 "recorder artifacts were preserved"
             )
+            if not _retain_finalization_lock_for_process(finalization_lock_path, candidate_proc.pid):
+                error.add_note("recorder lifecycle lock could not be retained")
+            raise error
         try:
             stopped = stop_process(
                 candidate_proc.pid,
