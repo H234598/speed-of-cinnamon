@@ -1975,6 +1975,23 @@ class RecorderTest(unittest.TestCase):
         self.assertNotIn("LANG", env)
         self.assertIn("PATH", env)
 
+    def test_filtered_environment_skips_unencodable_environment_values(self) -> None:
+        from speed_of_cinnamon.recorder import _filtered_environment as recorder_filtered_environment
+
+        with mock.patch.object(recorder_module.os, "environ", {"HOME": "bad\ud800"}):
+            env = recorder_filtered_environment()
+
+        self.assertNotIn("HOME", env)
+        self.assertIn("PATH", env)
+
+    def test_filtered_environment_rejects_unencodable_base_values(self) -> None:
+        with self.assertRaisesRegex(RecorderError, "environment value contains invalid UTF-8"):
+            recorder_module._filtered_environment(base={"SAFE_KEY": "bad\ud800"})
+
+    def test_filtered_environment_rejects_unencodable_base_keys(self) -> None:
+        with self.assertRaisesRegex(RecorderError, "environment key contains invalid UTF-8"):
+            recorder_module._filtered_environment(base={"BAD\ud800": "value"})
+
     def test_start_recorder_sets_private_log_permissions(self) -> None:
         command = RecorderCommand(name="noop", argv=["true"])
         with tempfile.TemporaryDirectory() as tmp:

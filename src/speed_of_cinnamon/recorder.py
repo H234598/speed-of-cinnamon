@@ -99,6 +99,10 @@ def _coerce_environment_value(name: str) -> str | None:
         return None
     if _contains_escaped_null(value) or _contains_http_header_control_chars(value):
         return None
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
     return value
 
 
@@ -200,6 +204,14 @@ def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
                 raise RecorderError("environment key contains invalid control character")
             if _contains_escaped_null(value) or _contains_http_header_control_chars(value):
                 raise RecorderError("environment value contains invalid control character")
+            try:
+                key.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise RecorderError("environment key contains invalid UTF-8") from exc
+            try:
+                value.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise RecorderError("environment value contains invalid UTF-8") from exc
             if _is_unsafe_env_var(key):
                 raise RecorderError(f"environment key is not allowed: {key}")
             env[key] = value
