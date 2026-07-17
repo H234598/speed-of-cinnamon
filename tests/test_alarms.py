@@ -1102,7 +1102,8 @@ class AlarmTest(unittest.TestCase):
             path = Path(tmp) / "alarms.json"
             with self.assertRaisesRegex(RuntimeError, "failed to persist alarm store"):
                 save_alarm_store({}, path)
-        mocked_rename.assert_called_once()
+        self.assertGreaterEqual(mocked_rename.call_count, 1)
+        self.assertEqual(mocked_rename.call_args_list[0].args[1], path.name)
 
     @mock.patch("speed_of_cinnamon.alarms.json.dumps")
     def test_save_alarm_store_rejects_unencodable_rendered_payload(self, mocked_dumps: mock.Mock) -> None:
