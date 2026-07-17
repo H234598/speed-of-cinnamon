@@ -1602,7 +1602,12 @@ class AppLoggingTest(unittest.TestCase):
             real_rename = app_logging._rename_without_replacing
 
             def fail_source_unlink(name: object, *args: object, **kwargs: object) -> None:
-                if isinstance(name, str) and name.endswith(".cleanup") and kwargs.get("dir_fd") is not None:
+                if (
+                    isinstance(name, str)
+                    and name.startswith(f"{source.name}.")
+                    and name.endswith(".cleanup")
+                    and kwargs.get("dir_fd") is not None
+                ):
                     raise PermissionError("source unlink failed")
                 real_unlink(name, *args, **kwargs)
 

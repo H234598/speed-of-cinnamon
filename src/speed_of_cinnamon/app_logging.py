@@ -1271,7 +1271,12 @@ def _merge_old_months(directory: Path, today: date) -> None:
                                 != getattr(archive_activation_stat, "st_nlink", 1)
                             ):
                                 raise RuntimeError("monthly log archive changed during activation rollback")
-                            os.unlink(archive.name, dir_fd=parent_fd)
+                            if not _unlink_log_file_with_parent_fsync(
+                                archive,
+                                archive_activation_stat,
+                                field_name="monthly log archive rollback",
+                            ):
+                                raise RuntimeError("monthly log archive disappeared during rollback")
                             os.fsync(parent_fd)
                     if archive_backup_moved and archive_backup_name is not None:
                         try:
@@ -1585,7 +1590,12 @@ def _gzip_file(source: Path, target: Path) -> None:
                 current_stat = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
                 if expected_stat is None or not _same_activated_target(current_stat, expected_stat):
                     raise RuntimeError("log target changed during activation rollback")
-                os.unlink(target.name, dir_fd=parent_fd)
+                if not _unlink_log_file_with_parent_fsync(
+                    target,
+                    expected_stat,
+                    field_name="log target rollback",
+                ):
+                    raise RuntimeError("log target disappeared during rollback")
                 os.fsync(parent_fd)
         if target_backup_created:
             if not activation_visible:
