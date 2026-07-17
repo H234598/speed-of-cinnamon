@@ -2039,7 +2039,12 @@ def _raise_transcription_cleanup_failure(
     raise transcription_error.with_traceback(transcription_error.__traceback__)
 
 
-def _raise_recording_cleanup_failure(store: StateStore, failures: list[tuple[str, str, str]]) -> None:
+def _raise_recording_cleanup_failure(
+    store: StateStore,
+    failures: list[tuple[str, str, str]],
+    *,
+    inserted: bool = False,
+) -> None:
     if not failures:
         return
     failed_labels = ", ".join(label for _, _, label in failures)
@@ -2050,6 +2055,7 @@ def _raise_recording_cleanup_failure(store: StateStore, failures: list[tuple[str
         "process_identity": "",
         "stopped_at": now_iso(),
         "error": error_text,
+        "inserted": inserted,
     }
     for field_name, path_text, _label in failures:
         error_update[field_name] = path_text
@@ -4197,6 +4203,7 @@ def finalize_recording(
     artifact_encryption = ARTIFACT_ENCRYPTION_OFF
     preserve_written_text_on_error = False
     silent_transcript_state_cleared = False
+    inserted = False
     cleanup_rollback_backups: list[tuple[Path, Path, os.stat_result, os.stat_result]] = []
     cleanup_backup_restore_failed = False
     preserve_recording_artifacts_after_cleanup_failure = False
@@ -4363,6 +4370,8 @@ def finalize_recording(
         _raise_if_state_unreadable(state)
         if state.status in {"done", "error", "idle"}:
             return {"status": state.status, "message": state.error or f"recording already {state.status}"}
+        if state.status == "finalizing":
+            inserted = bool(state.inserted)
 
         if not state.audio_path:
             store.update(
@@ -4428,9 +4437,11 @@ def finalize_recording(
                 inserted=False,
             )
             state_marked_finalizing = True
+            inserted = False
         else:
             if state.pid is not None or state.process_identity:
                 state = store.update(pid=None, process_identity="")
+            inserted = bool(state.inserted)
             state_marked_finalizing = True
         audio_deleted = False
         log_deleted = False
@@ -4488,7 +4499,7 @@ def finalize_recording(
                 log_deleted = False
                 preserve_recording_artifacts_after_cleanup_failure = True
                 _restore_cleanup_backups()
-            _raise_recording_cleanup_failure(store, cleanup_failures)
+            _raise_recording_cleanup_failure(store, cleanup_failures, inserted=inserted)
             cleanup_failed_paths = _cleanup_failed_paths(artifact_cleanup)
             message = "silent recording skipped"
             if cleanup_failed_paths:
@@ -4678,7 +4689,7 @@ def finalize_recording(
             log_deleted = False
             preserve_recording_artifacts_after_cleanup_failure = True
             _restore_cleanup_backups()
-        _raise_recording_cleanup_failure(store, cleanup_failures)
+            _raise_recording_cleanup_failure(store, cleanup_failures, inserted=inserted)
 
         done_candidate = RecordingState(
             status="done",
@@ -4743,7 +4754,7 @@ def finalize_recording(
                     post_done_cleanup_failures.append(
                         ("audio_path", str(preserved_audio_path), "original recording artifact")
                     )
-            _raise_recording_cleanup_failure(store, post_done_cleanup_failures)
+            _raise_recording_cleanup_failure(store, post_done_cleanup_failures, inserted=inserted)
             state = done
             status = done.status
             _discard_cleanup_backups()
@@ -4825,6 +4836,7 @@ def finalize_recording(
                 "process_identity": "",
                 "stopped_at": now_iso(),
                 "error": error_text,
+                "inserted": inserted,
             }
             if (
                 preserved_encrypted_audio_path is not None

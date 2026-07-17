@@ -9711,6 +9711,7 @@ class CliTest(unittest.TestCase):
                 mock.patch.object(cli, "detect_silent_recording", return_value=silence),
                 mock.patch.object(cli, "transcribe", return_value="transcript"),
                 mock.patch.object(cli, "trim_recording_silence", return_value=audio),
+                mock.patch.object(cli, "insert_text", return_value=True),
                 mock.patch.object(store, "update", side_effect=fail_done),
             ):
                 with self.assertRaisesRegex(RuntimeError, "state backend unavailable"):
@@ -9720,6 +9721,7 @@ class CliTest(unittest.TestCase):
             backup_files = sorted(recordings_root.glob(".cleanup.*.bak"))
 
         self.assertEqual(final_state.status, "error")
+        self.assertTrue(final_state.inserted)
         self.assertFalse(audio.exists())
         self.assertFalse(log.exists())
         self.assertEqual(backup_files, [])
