@@ -54,6 +54,16 @@ class ArtifactCryptoTest(unittest.TestCase):
         with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "ciphertext is invalid"):
             artifact_crypto.decrypt_bytes(tampered, kind="transcript")
 
+    def test_decryption_rejects_boolean_envelope_version(self) -> None:
+        with mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: STRONG_PASSPHRASE}, clear=False):
+            encrypted, _mode = artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
+            envelope = json.loads(encrypted.decode("utf-8"))
+            envelope["version"] = True
+            tampered = (json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "version is unsupported"):
+                artifact_crypto.decrypt_bytes(tampered, kind="transcript")
+
     def test_passphrase_encrypts_and_decrypts_payload(self) -> None:
         with mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: STRONG_PASSPHRASE}, clear=False):
             encrypted, mode = artifact_crypto.encrypt_bytes(b"private transcript", "passphrase", kind="transcript")

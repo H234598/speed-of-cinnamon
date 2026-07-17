@@ -1544,7 +1544,13 @@ def decrypt_bytes(payload: bytes, *, kind: str, require_encrypted: bool = True) 
         raise ArtifactCryptoError("encrypted artifact envelope is malformed") from exc
     if not isinstance(envelope, dict):
         raise ArtifactCryptoError("encrypted artifact envelope must be an object")
-    if envelope.get("magic") != ENVELOPE_MAGIC or envelope.get("version") != ENVELOPE_VERSION:
+    version = envelope.get("version")
+    if (
+        envelope.get("magic") != ENVELOPE_MAGIC
+        or isinstance(version, bool)
+        or not isinstance(version, int)
+        or version != ENVELOPE_VERSION
+    ):
         raise ArtifactCryptoError("encrypted artifact envelope version is unsupported")
     if envelope.get("algorithm") != ENVELOPE_ALGORITHM:
         raise ArtifactCryptoError("encrypted artifact algorithm is unsupported")
