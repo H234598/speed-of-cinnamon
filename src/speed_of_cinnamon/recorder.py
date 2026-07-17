@@ -444,11 +444,19 @@ def _communicate_recorder_process_bounded(
     try:
         process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as exc:
-        if not _reap_timed_out_recorder_process(process):
-            exc.add_note(f"{process_name} process cleanup was incomplete")
+        try:
+            terminated = _reap_timed_out_recorder_process(process)
+        except BaseException as cleanup_error:
+            exc.add_note(f"{process_name} process cleanup failed: {cleanup_error}")
+        else:
+            if not terminated:
+                exc.add_note(f"{process_name} process cleanup was incomplete")
         raise
-    except BaseException:
-        _reap_timed_out_recorder_process(process)
+    except BaseException as exc:
+        try:
+            _reap_timed_out_recorder_process(process)
+        except BaseException as cleanup_error:
+            exc.add_note(f"{process_name} process cleanup failed: {cleanup_error}")
         raise
 
 

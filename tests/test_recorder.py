@@ -170,6 +170,23 @@ class RecorderTest(unittest.TestCase):
                 pass
             process.communicate()
 
+    def test_bounded_communicate_preserves_timeout_when_cleanup_is_interrupted(self) -> None:
+        process = mock.Mock()
+        timeout = subprocess.TimeoutExpired(cmd=["ffmpeg"], timeout=1)
+        process.communicate.side_effect = timeout
+        cleanup_error = KeyboardInterrupt("cleanup interrupted")
+
+        with mock.patch.object(recorder_module, "_reap_timed_out_recorder_process", side_effect=cleanup_error):
+            with self.assertRaises(subprocess.TimeoutExpired) as raised:
+                recorder_module._communicate_recorder_process_bounded(
+                    process,
+                    timeout=1,
+                    process_name="ffmpeg",
+                )
+
+        self.assertIs(raised.exception, timeout)
+        self.assertIn("cleanup interrupted", "\n".join(timeout.__notes__))
+
     def _write_wav(self, path: Path, samples: list[int]) -> None:
         with wave.open(str(path), "wb") as handle:
             handle.setnchannels(1)
