@@ -467,6 +467,13 @@ def _validate_openai_compatible_http_url(url: str) -> str:
 def _read_json(request: urllib.request.Request, timeout: int) -> object:
     if not isinstance(timeout, int) or isinstance(timeout, bool):
         raise PostProcessError("timeout must be an integer")
+    if timeout <= 0:
+        raise PostProcessError("timeout must be positive")
+    try:
+        if not math.isfinite(timeout):
+            raise PostProcessError("timeout must be positive")
+    except OverflowError as exc:
+        raise PostProcessError("timeout must be positive") from exc
     with _open_http_request(request, timeout=timeout, field_name="postprocess request") as response:
         raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES, timeout=timeout)
     try:
